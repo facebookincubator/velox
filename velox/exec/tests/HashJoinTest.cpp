@@ -8260,5 +8260,99 @@ TEST_F(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
       << result->size() << " rows";
 }
 
+DEBUG_ONLY_TEST_F(
+    HashJoinTest,
+    hashProbeShouldYieldWhenFilterConsistentlyRejectAll) {
+  const uint32_t kProbeSize = 100;
+  const uint32_t kBuildSize = 10'000;
+  const uint64_t kDriverCpuTimeSliceLimitMs = 1'000;
+  const std::string kLargeBatchSize =
+      folly::to<std::string>(kProbeSize * kBuildSize);
+
+  struct {
+    uint32_t numGetOutputCalls;
+    bool hasDelay;
+    std::string debugString() const {
+      return fmt::format(
+          "numGetOutputCalls: {}, hasDelay: {}", numGetOutputCalls, hasDelay);
+    }
+  } testSettings[] = {{0, false}, {0, true}};
+
+  // Create probe data with keys 0-99 and an additional filter column
+  const auto probeData = makeRowVector(
+      {"t_k1", "t_filter"},
+      {
+          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              kProbeSize,
+              [](/*row=*/auto) { return 1; }), // All rows have value 1
+      });
+
+  const auto buildData = makeRowVector(
+      {"u_k1"},
+      {
+          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {probeData});
+  createDuckDbTable("u", {buildData});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData})
+          .hashJoin(
+              {"t_k1"},
+              {"u_k1"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              // Filter that DOES find join matches but then rejects all of them
+              // This ensures numOut > 0 after listJoinResults, but == 0 after
+              // evalFilter All probe rows have t_filter=1, so the condition
+              // t_filter > 100000 rejects all
+              "t_filter > 100000",
+              {"t_k1", "u_k1"},
+              core::JoinType::kInner)
+          .planNode();
+
+  for (auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    std::atomic_int hashProbeGetOutputCalls{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::getOutput",
+        std::function<void(Operator*)>([&](Operator* op) {
+          if (op->operatorType() == "HashProbe") {
+            // Inject delay on the 2nd getOutput call when hasDelay is true
+            // This simulates the scenario where:
+            // 1. First getOutput: Probe data added via addInput
+            // 2. Second getOutput: Join finds matches, filter rejects all
+            //    During this call, we inject delay INSIDE the processing
+            //    to simulate CPU-intensive work in the loop
+            if (hashProbeGetOutputCalls.fetch_add(1) == 1 &&
+                testData.hasDelay) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(2 * kDriverCpuTimeSliceLimitMs));
+            }
+          }
+        }));
+
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({
+            {core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+             folly::to<std::string>(kDriverCpuTimeSliceLimitMs)},
+            {core::QueryConfig::kPreferredOutputBatchRows, kLargeBatchSize},
+        }));
+
+    AssertQueryBuilder(planNode, duckDbQueryRunner_)
+        .queryCtx(queryCtx)
+        .maxDrivers(1)
+        .assertResults(
+            "SELECT t_k1, u_k1 FROM t, u WHERE t_k1 = u_k1 AND t_filter > 100000");
+    testData.numGetOutputCalls = hashProbeGetOutputCalls.load();
+  }
+  ASSERT_LT(
+      testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
+}
+
 } // namespace
 } // namespace facebook::velox::exec
