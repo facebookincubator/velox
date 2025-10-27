@@ -346,12 +346,13 @@ TEST_F(TDigestTest, merge) {
   std::vector<double> values;
   std::string buf;
   auto test = [&](int numDigests, int size, double mean, double stddev) {
-    SCOPED_TRACE(fmt::format(
-        "numDigests={} size={} mean={} stddev={}",
-        numDigests,
-        size,
-        mean,
-        stddev));
+    SCOPED_TRACE(
+        fmt::format(
+            "numDigests={} size={} mean={} stddev={}",
+            numDigests,
+            size,
+            mean,
+            stddev));
     values.clear();
     values.reserve(numDigests * size);
     std::normal_distribution<> dist(mean, stddev);

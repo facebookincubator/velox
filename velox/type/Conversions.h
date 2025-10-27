@@ -127,8 +127,9 @@ Expected<bool> castToBoolean(const char* data, size_t len) {
     }
   }
 
-  return folly::makeUnexpected(Status::UserError(
-      "Cannot cast {} to BOOLEAN", std::string_view(data, len)));
+  return folly::makeUnexpected(
+      Status::UserError(
+          "Cannot cast {} to BOOLEAN", std::string_view(data, len)));
 }
 
 namespace detail {
@@ -140,8 +141,9 @@ Expected<T> callFollyTo(const F& v) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
     }
-    return folly::makeUnexpected(Status::UserError(
-        "{}", folly::makeConversionError(result.error(), "").what()));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "{}", folly::makeConversionError(result.error(), "").what()));
   }
 
   return result.value();
@@ -235,8 +237,9 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   }
 
   static Expected<T> tryCast(const Timestamp&) {
-    return folly::makeUnexpected(Status::UserError(
-        "Conversion of Timestamp to Boolean is not supported"));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Conversion of Timestamp to Boolean is not supported"));
   }
 };
 
@@ -271,8 +274,9 @@ struct Converter<
     int index = 0;
     int len = v.size();
     if (len == 0) {
-      return folly::makeUnexpected(Status::UserError(
-          "Cannot cast an empty string to an integral value."));
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Cannot cast an empty string to an integral value."));
     }
 
     // Setting negative flag
@@ -281,8 +285,9 @@ struct Converter<
     bool decimalPoint = false;
     if (v[0] == '-' || v[0] == '+') {
       if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(
-            "Cannot cast an '{}' string to an integral value.", v[0]));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Cannot cast an '{}' string to an integral value.", v[0]));
       }
       negative = v[0] == '-';
       index = 1;
@@ -555,8 +560,9 @@ struct Converter<
   }
 
   static Expected<T> tryCast(const Timestamp&) {
-    return folly::makeUnexpected(Status::UserError(
-        "Conversion of Timestamp to Real or Double is not supported"));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Conversion of Timestamp to Real or Double is not supported"));
   }
 };
 

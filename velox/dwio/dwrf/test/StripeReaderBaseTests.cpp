@@ -93,8 +93,8 @@ class StripeLoadKeysTest : public Test {
 
     handler_ = std::move(handler);
 
-    enc_ = const_cast<TestEncryption*>(
-        std::addressof(dynamic_cast<const TestEncryption&>(
+    enc_ = const_cast<TestEncryption*>(std::addressof(
+        dynamic_cast<const TestEncryption&>(
             handler_->getEncryptionProviderByIndex(0))));
   }
 

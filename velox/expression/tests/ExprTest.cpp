@@ -2617,8 +2617,9 @@ TEST_F(ExprTest, constantEqualsNullConsistency) {
 // of a Vector.
 TEST_F(ExprTest, constantToStringEqualsHashConsistency) {
   auto testValue = [&](const TypePtr& type, const Variant& value) {
-    SCOPED_TRACE(fmt::format(
-        "Type: {}, Value: {}", type->toString(), value.toJson(type)));
+    SCOPED_TRACE(
+        fmt::format(
+            "Type: {}, Value: {}", type->toString(), value.toJson(type)));
 
     auto a = std::make_shared<core::ConstantTypedExpr>(type, value);
 
@@ -2818,9 +2819,10 @@ TEST_P(ParameterizedExprTest, constantToSql) {
   ASSERT_EQ(toSql(variant::null(TypeKind::ARRAY)), "NULL");
 
   ASSERT_EQ(
-      toSqlComplex(makeMapVector<int32_t, int32_t>({
-          {{1, 10}, {2, 20}, {3, 30}},
-      })),
+      toSqlComplex(
+          makeMapVector<int32_t, int32_t>({
+              {{1, 10}, {2, 20}, {3, 30}},
+          })),
       "map(ARRAY['1'::INTEGER, '2'::INTEGER, '3'::INTEGER], ARRAY['10'::INTEGER, '20'::INTEGER, '30'::INTEGER])");
   ASSERT_EQ(
       toSqlComplex(
@@ -2831,8 +2833,9 @@ TEST_P(ParameterizedExprTest, constantToSql) {
           1),
       "map(ARRAY['1'::INTEGER, '2'::INTEGER, '3'::INTEGER], ARRAY['10'::INTEGER, '20'::INTEGER, '30'::INTEGER])");
   ASSERT_EQ(
-      toSqlComplex(BaseVector::createNullConstant(
-          MAP(INTEGER(), VARCHAR()), 10, pool())),
+      toSqlComplex(
+          BaseVector::createNullConstant(
+              MAP(INTEGER(), VARCHAR()), 10, pool())),
       "NULL::MAP(INTEGER, VARCHAR)");
 
   ASSERT_EQ(
@@ -2842,14 +2845,17 @@ TEST_P(ParameterizedExprTest, constantToSql) {
       })),
       "row_constructor('1'::INTEGER, TRUE)");
   ASSERT_EQ(
-      toSqlComplex(BaseVector::createNullConstant(
-          ROW({"a", "b"}, {BOOLEAN(), DOUBLE()}), 10, pool())),
+      toSqlComplex(
+          BaseVector::createNullConstant(
+              ROW({"a", "b"}, {BOOLEAN(), DOUBLE()}), 10, pool())),
       "NULL::STRUCT(a BOOLEAN, b DOUBLE)");
   ASSERT_EQ(
-      toSqlComplex(BaseVector::createNullConstant(
-          ROW({"a", "b"}, {BOOLEAN(), ROW({"c", "d"}, {DOUBLE(), VARCHAR()})}),
-          10,
-          pool())),
+      toSqlComplex(
+          BaseVector::createNullConstant(
+              ROW({"a", "b"},
+                  {BOOLEAN(), ROW({"c", "d"}, {DOUBLE(), VARCHAR()})}),
+              10,
+              pool())),
       "NULL::STRUCT(a BOOLEAN, b STRUCT(c DOUBLE, d VARCHAR))");
 }
 
@@ -4421,8 +4427,9 @@ TEST_F(ExprTest, commonSubExpressionWithPeeling) {
       // is evaluated twice.
       auto queryCtx = velox::core::QueryCtx::create(
           nullptr,
-          core::QueryConfig(std::unordered_map<std::string, std::string>{
-              {core::QueryConfig::kMaxSharedSubexprResultsCached, "1"}}));
+          core::QueryConfig(
+              std::unordered_map<std::string, std::string>{
+                  {core::QueryConfig::kMaxSharedSubexprResultsCached, "1"}}));
       core::ExecCtx execCtx(pool_.get(), queryCtx.get());
       auto results = makeRowVector(evaluateMultiple(
           {expr1, expr2, expr1, expr2}, data, std::nullopt, &execCtx));

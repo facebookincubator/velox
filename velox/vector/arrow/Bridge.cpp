@@ -846,13 +846,15 @@ void exportViews(
       if (i == 0 ||
           (currAddr - bufferAddrCache) >
               rawVariadicBufferSizes[bufferIdxCache]) {
-        auto it = std::prev(std::upper_bound(
-            stringBufferVec.begin(),
-            stringBufferVec.end(),
-            currAddr,
-            [&out](const auto& lhs, const auto& rhs) {
-              return lhs < (reinterpret_cast<uint64_t*>(&out.buffers[2]))[rhs];
-            }));
+        auto it = std::prev(
+            std::upper_bound(
+                stringBufferVec.begin(),
+                stringBufferVec.end(),
+                currAddr,
+                [&out](const auto& lhs, const auto& rhs) {
+                  return lhs <
+                      (reinterpret_cast<uint64_t*>(&out.buffers[2]))[rhs];
+                }));
         bufferAddrCache = (reinterpret_cast<uint64_t*>(&out.buffers[2]))[*it];
         bufferIdxCache = *it;
       }

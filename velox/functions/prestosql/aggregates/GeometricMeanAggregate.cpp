@@ -30,9 +30,8 @@ class GeometricMeanAggregate {
  public:
   using InputType = Row<TInput>;
 
-  using IntermediateType =
-      Row</*logSum*/ double,
-          /*count*/ int64_t>;
+  using IntermediateType = Row</*logSum*/ double,
+                               /*count*/ int64_t>;
 
   using OutputType = TResult;
 
@@ -94,19 +93,21 @@ void registerGeometricMeanAggregate(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"bigint", "double"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(double,bigint)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(double,bigint)")
+            .argumentType(inputType)
+            .build());
   }
 
   // Register for real input type.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("real")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("real")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("real")
+          .intermediateType("row(double,bigint)")
+          .argumentType("real")
+          .build());
 
   exec::registerAggregateFunction(
       name,

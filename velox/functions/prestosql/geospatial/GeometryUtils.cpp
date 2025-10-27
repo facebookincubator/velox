@@ -155,14 +155,15 @@ Status validateLatitudeLongitude(double latitude, double longitude) {
           longitude < BingTileType::kMinLongitude ||
           longitude > BingTileType::kMaxLongitude || std::isnan(latitude) ||
           std::isnan(longitude))) {
-    return Status::UserError(fmt::format(
-        "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
-        kRealMinLatitude,
-        kRealMaxLatitude,
-        BingTileType::kMinLongitude,
-        BingTileType::kMaxLongitude,
-        latitude,
-        longitude));
+    return Status::UserError(
+        fmt::format(
+            "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
+            kRealMinLatitude,
+            kRealMaxLatitude,
+            BingTileType::kMinLongitude,
+            BingTileType::kMaxLongitude,
+            latitude,
+            longitude));
   }
   return Status::OK();
 }
@@ -175,18 +176,20 @@ FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
   if (FOLLY_UNLIKELY(
           latitude > BingTileType::kMaxLatitude ||
           latitude < BingTileType::kMinLatitude)) {
-    VELOX_USER_FAIL(fmt::format(
-        "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-        BingTileType::kMinLatitude,
-        BingTileType::kMaxLatitude));
+    VELOX_USER_FAIL(
+        fmt::format(
+            "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
+            BingTileType::kMinLatitude,
+            BingTileType::kMaxLatitude));
   }
   if (FOLLY_UNLIKELY(
           longitude > BingTileType::kMaxLongitude ||
           longitude < BingTileType::kMinLongitude)) {
-    VELOX_USER_FAIL(fmt::format(
-        "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-        BingTileType::kMinLongitude,
-        BingTileType::kMaxLongitude));
+    VELOX_USER_FAIL(
+        fmt::format(
+            "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
+            BingTileType::kMinLongitude,
+            BingTileType::kMaxLongitude));
   }
 }
 

@@ -490,21 +490,23 @@ void makeAlternativePlansWithValues(
     const std::vector<core::ExprPtr>& projections,
     std::vector<core::PlanNodePtr>& plans) {
   // Partial -> final aggregation plan.
-  plans.push_back(PlanBuilder()
-                      .values(inputVectors)
-                      .projectExpressions(projections)
-                      .partialAggregation(groupingKeys, aggregates, masks)
-                      .finalAggregation()
-                      .planNode());
+  plans.push_back(
+      PlanBuilder()
+          .values(inputVectors)
+          .projectExpressions(projections)
+          .partialAggregation(groupingKeys, aggregates, masks)
+          .finalAggregation()
+          .planNode());
 
   // Partial -> intermediate -> final aggregation plan.
-  plans.push_back(PlanBuilder()
-                      .values(inputVectors)
-                      .projectExpressions(projections)
-                      .partialAggregation(groupingKeys, aggregates, masks)
-                      .intermediateAggregation()
-                      .finalAggregation()
-                      .planNode());
+  plans.push_back(
+      PlanBuilder()
+          .values(inputVectors)
+          .projectExpressions(projections)
+          .partialAggregation(groupingKeys, aggregates, masks)
+          .intermediateAggregation()
+          .finalAggregation()
+          .planNode());
 
   // Partial -> local exchange -> final aggregation plan.
   auto numSources = std::min<size_t>(4, inputVectors.size());
@@ -550,23 +552,25 @@ void makeAlternativePlansWithTableScan(
 // the false negatives.
 #ifndef TSAN_BUILD
   // Partial -> final aggregation plan.
-  plans.push_back(PlanBuilder()
-                      .tableScan(inputRowType)
-                      .projectExpressions(projections)
-                      .partialAggregation(groupingKeys, aggregates, masks)
-                      .localPartition(groupingKeys)
-                      .finalAggregation()
-                      .planNode());
+  plans.push_back(
+      PlanBuilder()
+          .tableScan(inputRowType)
+          .projectExpressions(projections)
+          .partialAggregation(groupingKeys, aggregates, masks)
+          .localPartition(groupingKeys)
+          .finalAggregation()
+          .planNode());
 
   // Partial -> intermediate -> final aggregation plan.
-  plans.push_back(PlanBuilder()
-                      .tableScan(inputRowType)
-                      .projectExpressions(projections)
-                      .partialAggregation(groupingKeys, aggregates, masks)
-                      .localPartition(groupingKeys)
-                      .intermediateAggregation()
-                      .finalAggregation()
-                      .planNode());
+  plans.push_back(
+      PlanBuilder()
+          .tableScan(inputRowType)
+          .projectExpressions(projections)
+          .partialAggregation(groupingKeys, aggregates, masks)
+          .localPartition(groupingKeys)
+          .intermediateAggregation()
+          .finalAggregation()
+          .planNode());
 #endif
 }
 
@@ -578,17 +582,18 @@ void makeStreamingPlansWithValues(
     const std::vector<core::ExprPtr>& projections,
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
-  plans.push_back(PlanBuilder()
-                      .values(inputVectors)
-                      .projectExpressions(projections)
-                      .orderBy(groupingKeys, false)
-                      .streamingAggregation(
-                          groupingKeys,
-                          aggregates,
-                          masks,
-                          core::AggregationNode::Step::kSingle,
-                          false)
-                      .planNode());
+  plans.push_back(
+      PlanBuilder()
+          .values(inputVectors)
+          .projectExpressions(projections)
+          .orderBy(groupingKeys, false)
+          .streamingAggregation(
+              groupingKeys,
+              aggregates,
+              masks,
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode());
 
   // Partial -> final aggregation plan.
   plans.push_back(
@@ -643,17 +648,18 @@ void makeStreamingPlansWithTableScan(
     const std::vector<core::ExprPtr>& projections,
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
-  plans.push_back(PlanBuilder()
-                      .tableScan(inputRowType)
-                      .projectExpressions(projections)
-                      .orderBy(groupingKeys, false)
-                      .streamingAggregation(
-                          groupingKeys,
-                          aggregates,
-                          masks,
-                          core::AggregationNode::Step::kSingle,
-                          false)
-                      .planNode());
+  plans.push_back(
+      PlanBuilder()
+          .tableScan(inputRowType)
+          .projectExpressions(projections)
+          .orderBy(groupingKeys, false)
+          .streamingAggregation(
+              groupingKeys,
+              aggregates,
+              masks,
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode());
 
   // Partial -> final aggregation plan.
   plans.push_back(

@@ -189,8 +189,9 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   if (inputFiles.has_value()) {
     for (const auto& inputFile : *inputFiles) {
-      splits.push_back(std::make_shared<connector::hive::HiveConnectorSplit>(
-          connectorId, inputFile.filePath(), inputFile.fileFormat()));
+      splits.push_back(
+          std::make_shared<connector::hive::HiveConnectorSplit>(
+              connectorId, inputFile.filePath(), inputFile.fileFormat()));
     }
   }
 
@@ -360,8 +361,9 @@ PyPlanBuilder& PyPlanBuilder::tpchGen(
   // Generate one split per part.
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   for (size_t i = 0; i < numParts; ++i) {
-    splits.push_back(std::make_shared<connector::tpch::TpchConnectorSplit>(
-        connectorId, numParts, i));
+    splits.push_back(
+        std::make_shared<connector::tpch::TpchConnectorSplit>(
+            connectorId, numParts, i));
   }
 
   planContext_->scanFiles[planBuilder_.planNode()->id()] = std::move(splits);

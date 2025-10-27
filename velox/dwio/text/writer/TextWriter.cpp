@@ -70,13 +70,15 @@ TextWriter::TextWriter(
     const std::shared_ptr<text::WriterOptions>& options,
     const SerDeOptions& serDeOptions)
     : schema_(std::move(schema)),
-      bufferedWriterSink_(std::make_unique<BufferedWriterSink>(
-          std::move(sink),
-          options->memoryPool->addLeafChild(fmt::format(
-              "{}.text_writer_node.{}",
-              options->memoryPool->name(),
-              folly::to<std::string>(folly::Random::rand64()))),
-          options->defaultFlushCount)),
+      bufferedWriterSink_(
+          std::make_unique<BufferedWriterSink>(
+              std::move(sink),
+              options->memoryPool->addLeafChild(
+                  fmt::format(
+                      "{}.text_writer_node.{}",
+                      options->memoryPool->name(),
+                      folly::to<std::string>(folly::Random::rand64()))),
+              options->defaultFlushCount)),
       headerLineCount_(options->headerLineCount),
       serDeOptions_(serDeOptions) {
   VELOX_CHECK_LE(headerLineCount_, 1, "Header line count must be <= 1");

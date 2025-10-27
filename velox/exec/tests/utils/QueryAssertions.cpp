@@ -102,8 +102,9 @@ template <>
     vector_size_t index) {
   auto type = vector->type();
   if (type->isDate()) {
-    return ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
-        vector->as<SimpleVector<int32_t>>()->valueAt(index)));
+    return ::duckdb::Value::DATE(
+        ::duckdb::Date::EpochDaysToDate(
+            vector->as<SimpleVector<int32_t>>()->valueAt(index)));
   }
   return ::duckdb::Value(vector->as<SimpleVector<int32_t>>()->valueAt(index));
 }
@@ -218,9 +219,10 @@ template <>
   const auto& mapValues = mapVector->mapValues();
   auto offset = mapVector->offsetAt(mapRow);
   auto size = mapVector->sizeAt(mapRow);
-  auto mapType = ::duckdb::ListType::GetChildType(::duckdb::LogicalType::MAP(
-      duckdb::fromVeloxType(mapKeys->type()),
-      duckdb::fromVeloxType(mapValues->type())));
+  auto mapType = ::duckdb::ListType::GetChildType(
+      ::duckdb::LogicalType::MAP(
+          duckdb::fromVeloxType(mapKeys->type()),
+          duckdb::fromVeloxType(mapValues->type())));
   if (size == 0) {
     return ::duckdb::Value::MAP(mapType, ::duckdb::vector<::duckdb::Value>());
   }
@@ -437,12 +439,14 @@ std::vector<MaterializedRow> materialize(
       } else if (type->isDecimal()) {
         row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
       } else if (type->isIntervalDayTime()) {
-        auto value = variant(::duckdb::Interval::GetMicro(
-            dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
+        auto value = variant(
+            ::duckdb::Interval::GetMicro(
+                dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
         row.push_back(value);
       } else if (type->isDate()) {
-        auto value = variant(::duckdb::Date::EpochDays(
-            dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
+        auto value = variant(
+            ::duckdb::Date::EpochDays(
+                dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
         row.push_back(value);
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(

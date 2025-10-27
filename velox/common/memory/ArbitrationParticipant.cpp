@@ -441,8 +441,9 @@ ArbitrationTimedLock::ArbitrationTimedLock(
     uint64_t timeoutNs)
     : mutex_(mutex) {
   if (!mutex_.try_lock_for(std::chrono::nanoseconds(timeoutNs))) {
-    VELOX_MEM_ARBITRATION_TIMEOUT(fmt::format(
-        "Memory arbitration lock timed out when reclaiming from arbitration participant."));
+    VELOX_MEM_ARBITRATION_TIMEOUT(
+        fmt::format(
+            "Memory arbitration lock timed out when reclaiming from arbitration participant."));
   }
 }
 

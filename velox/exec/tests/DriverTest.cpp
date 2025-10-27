@@ -124,8 +124,9 @@ class DriverTest : public OperatorTestBase {
       bool addTestingPauser = false) {
     std::vector<RowVectorPtr> batches;
     for (int32_t i = 0; i < numBatches; ++i) {
-      batches.push_back(std::dynamic_pointer_cast<RowVector>(
-          BatchMaker::createBatch(rowType, rowsInBatch, *pool_)));
+      batches.push_back(
+          std::dynamic_pointer_cast<RowVector>(
+              BatchMaker::createBatch(rowType, rowsInBatch, *pool_)));
     }
     if (filterFunc) {
       int32_t hits = 0;
@@ -468,10 +469,11 @@ TEST_F(DriverTest, error) {
   EXPECT_EQ(numRead, 0);
   EXPECT_TRUE(stateFutures_.at(0).isReady());
   // Realized immediately since task not running.
-  EXPECT_TRUE(tasks_[0]
-                  ->taskCompletionFuture()
-                  .within(std::chrono::microseconds(1'000'000))
-                  .isReady());
+  EXPECT_TRUE(
+      tasks_[0]
+          ->taskCompletionFuture()
+          .within(std::chrono::microseconds(1'000'000))
+          .isReady());
   EXPECT_EQ(tasks_[0]->state(), TaskState::kFailed);
 }
 
@@ -799,8 +801,9 @@ TEST_F(DriverTest, pauserNode) {
   // all its Tasks in the test instance to create inter-Task pauses.
   static DriverTest* testInstance;
   testInstance = this;
-  Operator::registerOperator(std::make_unique<PauserNodeFactory>(
-      kThreadsPerTask, sequence, testInstance));
+  Operator::registerOperator(
+      std::make_unique<PauserNodeFactory>(
+          kThreadsPerTask, sequence, testInstance));
 
   std::vector<CursorParameters> params(kNumTasks);
   int32_t hits{0};

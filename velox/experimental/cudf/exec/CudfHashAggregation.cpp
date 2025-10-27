@@ -836,8 +836,9 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    resultColumns.push_back(aggregators_[i]->doReduce(
-        tbl->view(), outputType_->childAt(i), stream));
+    resultColumns.push_back(
+        aggregators_[i]->doReduce(
+            tbl->view(), outputType_->childAt(i), stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(

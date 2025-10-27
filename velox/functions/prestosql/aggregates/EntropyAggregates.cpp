@@ -348,11 +348,12 @@ void registerEntropyAggregate(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {"smallint", "integer", "bigint"};
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(double,double)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(double,double)")
+            .argumentType(inputType)
+            .build());
   }
 
   auto name = prefix + kEntropy;

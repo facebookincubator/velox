@@ -159,10 +159,11 @@ TEST_F(TopNRowNumberTest, largeOutput) {
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-        .assertResults(fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (order by s) as rn FROM tmp) "
-            " WHERE rn <= {}",
-            limit));
+        .assertResults(
+            fmt::format(
+                "SELECT * FROM (SELECT *, row_number() over (order by s) as rn FROM tmp) "
+                " WHERE rn <= {}",
+                limit));
   };
 
   testLimit(1);

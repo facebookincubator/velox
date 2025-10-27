@@ -211,8 +211,10 @@ void CudfHashJoinBuild::noMoreInput() {
       operatorCtx_->driverCtx()->splitGroupId, planNodeId());
   auto cudfHashJoinBridge =
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
-  cudfHashJoinBridge->setHashTable(std::make_optional(
-      std::make_pair(std::shared_ptr(std::move(tbl)), std::move(hashObject))));
+  cudfHashJoinBridge->setHashTable(
+      std::make_optional(
+          std::make_pair(
+              std::shared_ptr(std::move(tbl)), std::move(hashObject))));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {

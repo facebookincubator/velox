@@ -213,10 +213,11 @@ Writer::Writer(
     : Writer{
           std::move(sink),
           options,
-          options.memoryPool->addAggregateChild(fmt::format(
-              "{}.dwrf.{}",
-              options.memoryPool->name(),
-              folly::to<std::string>(folly::Random::rand64())))} {}
+          options.memoryPool->addAggregateChild(
+              fmt::format(
+                  "{}.dwrf.{}",
+                  options.memoryPool->name(),
+                  folly::to<std::string>(folly::Random::rand64())))} {}
 
 void Writer::setMemoryReclaimers(
     const std::shared_ptr<memory::MemoryPool>& pool) {

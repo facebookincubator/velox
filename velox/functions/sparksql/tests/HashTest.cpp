@@ -174,8 +174,9 @@ TEST_F(HashTest, array) {
 
   assertEqualVectors(
       makeFlatVector<int32_t>({-559580957, 1765031574, 42}),
-      hash(makeNullableArrayVector<int32_t>(
-          {{1, std::nullopt}, {std::nullopt, 2}, {std::nullopt}})));
+      hash(
+          makeNullableArrayVector<int32_t>(
+              {{1, std::nullopt}, {std::nullopt, 2}, {std::nullopt}})));
 
   // Nested array.
   {
@@ -269,10 +270,11 @@ TEST_F(HashTest, unknown) {
 
   assertEqualVectors(
       makeFlatVector<int32_t>({42, 42}),
-      hash(makeNullableArrayVector<UnknownValue>({
-          {std::nullopt, std::nullopt},
-          {std::nullopt, std::nullopt, std::nullopt},
-      })));
+      hash(
+          makeNullableArrayVector<UnknownValue>({
+              {std::nullopt, std::nullopt},
+              {std::nullopt, std::nullopt, std::nullopt},
+          })));
 
   auto mapVector = makeNullableMapVector<UnknownValue, UnknownValue>({
       std::nullopt,

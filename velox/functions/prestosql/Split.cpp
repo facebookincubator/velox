@@ -42,20 +42,22 @@ class SplitFunction : public exec::VectorFunction {
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
 
     // varchar, varchar -> array(varchar)
-    signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                .returnType("array(varchar)")
-                                .argumentType("varchar")
-                                .argumentType("varchar")
-                                .build());
+    signatures.emplace_back(
+        exec::FunctionSignatureBuilder()
+            .returnType("array(varchar)")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .build());
 
     // varchar, varchar, integer|bigint -> array(varchar)
     for (const auto& limitType : {"integer", "bigint"}) {
-      signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                  .returnType("array(varchar)")
-                                  .argumentType("varchar")
-                                  .argumentType("varchar")
-                                  .argumentType(limitType)
-                                  .build());
+      signatures.emplace_back(
+          exec::FunctionSignatureBuilder()
+              .returnType("array(varchar)")
+              .argumentType("varchar")
+              .argumentType("varchar")
+              .argumentType(limitType)
+              .build());
     }
     return signatures;
   }
