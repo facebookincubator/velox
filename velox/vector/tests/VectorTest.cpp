@@ -4461,5 +4461,70 @@ TEST_F(VectorTest, transferOrCopyTo) {
   }
 }
 
+TEST_F(VectorTest, rowVectorSortIndices) {
+  const auto data = makeRowVector({
+      makeFlatVector<int16_t>({5, 1, 3, 2, 11, 1, 3, 2}),
+      makeFlatVector<int32_t>({5, 1, 3, 2, 11, 11, 33, 22}),
+      makeFlatVector<std::string>(
+          {"5,5", "1,1", "3,3", "2,2", "11,11", "1,11", "3,33", "2,22"}),
+  });
+
+  const auto numRows = data->size();
+  std::vector<vector_size_t> sortIndices(numRows, 0);
+  for (auto i = 0; i < data->size(); ++i) {
+    sortIndices[i] = i;
+  }
+  data->sortIndicesByKeys(
+      sortIndices, {0, 1}, {CompareFlags{}, CompareFlags{}});
+  BufferPtr indices = allocateIndices(data->size(), pool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (size_t i = 0; i < numRows; ++i) {
+    rawIndices[i] = sortIndices[i];
+  }
+  auto dictVector =
+      BaseVector::wrapInDictionary(nullptr, indices, numRows, data);
+  auto expectedVector = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 3, 3, 5, 11}),
+      makeFlatVector<int32_t>({1, 11, 2, 22, 3, 33, 5, 11}),
+      makeFlatVector<std::string>(
+          {"1,1", "1,11", "2,2", "2,22", "3,3", "3,33", "5,5", "11,11"}),
+  });
+  std::vector<vector_size_t> expectedIndices{1, 5, 3, 7, 2, 6, 0, 4};
+  ASSERT_EQ(sortIndices.size(), expectedIndices.size());
+  for (auto i = 0; i < numRows; ++i) {
+    ASSERT_EQ(sortIndices[i], expectedIndices[i]);
+  }
+  ASSERT_EQ(data->size(), expectedVector->size());
+  ASSERT_EQ(dictVector->size(), expectedVector->size());
+  for (auto i = 0; i < numRows; ++i) {
+    ASSERT_TRUE(dictVector->equalValueAt(expectedVector.get(), i, i));
+  }
+
+  data->sortIndicesByKeys(
+      sortIndices, {0, 1}, {CompareFlags{}, CompareFlags{.ascending = false}});
+  indices = allocateIndices(data->size(), pool_.get());
+  rawIndices = indices->asMutable<vector_size_t>();
+  for (size_t i = 0; i < numRows; ++i) {
+    rawIndices[i] = sortIndices[i];
+  }
+  dictVector = BaseVector::wrapInDictionary(nullptr, indices, numRows, data);
+  expectedVector = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 3, 3, 5, 11}),
+      makeFlatVector<int32_t>({11, 1, 22, 2, 33, 3, 5, 11}),
+      makeFlatVector<std::string>(
+          {"1,11", "1,1", "2,22", "2,2", "3,33", "3,3", "5,5", "11,11"}),
+  });
+  expectedIndices = {5, 1, 7, 3, 6, 2, 0, 4};
+  ASSERT_EQ(sortIndices.size(), expectedIndices.size());
+  for (auto i = 0; i < numRows; ++i) {
+    ASSERT_EQ(sortIndices[i], expectedIndices[i]);
+  }
+  ASSERT_EQ(data->size(), expectedVector->size());
+  ASSERT_EQ(dictVector->size(), expectedVector->size());
+  for (auto i = 0; i < numRows; ++i) {
+    ASSERT_TRUE(dictVector->equalValueAt(expectedVector.get(), i, i));
+  }
+}
+
 } // namespace
 } // namespace facebook::velox

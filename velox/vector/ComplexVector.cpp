@@ -481,6 +481,34 @@ BaseVector* RowVector::loadedVector() {
   return this;
 }
 
+void RowVector::sortIndicesByKeys(
+    std::vector<vector_size_t>& indices,
+    const std::vector<vector_size_t>& keys,
+    const std::vector<CompareFlags>& flags) const {
+  VELOX_CHECK_LE(keys.size(), this->childrenSize());
+  VELOX_CHECK_EQ(keys.size(), flags.size());
+  std::vector<BaseVector*> keyColumns;
+  keyColumns.reserve(keys.size());
+  for (const auto& key : keys) {
+    keyColumns.push_back(childAt(key).get());
+  }
+  std::sort(
+      indices.begin(),
+      indices.end(),
+      [&](vector_size_t left, vector_size_t right) {
+        for (auto i = 0; i < keys.size(); i++) {
+          const auto result =
+              keyColumns[i]
+                  ->compare(keyColumns[i], left, right, flags[i])
+                  .value();
+          if (result != 0) {
+            return result < 0;
+          }
+        }
+        return false;
+      });
+}
+
 void RowVector::updateContainsLazyNotLoaded() const {
   childrenLoaded_ = false;
   containsLazyNotLoaded_ = false;

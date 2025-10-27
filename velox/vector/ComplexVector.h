@@ -231,6 +231,17 @@ class RowVector : public BaseVector {
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
+  /// Sorts the rows of this RowVector by the specified key columns and writes
+  /// the corresponding sort order into 'indices'.
+  ///
+  /// @param indices Output row indices in sorted order.
+  /// @param keys Key column indices used for sorting.
+  /// @param flags Per-key compare options aligned with 'keys'.
+  void sortIndicesByKeys(
+      std::vector<vector_size_t>& indices,
+      const std::vector<vector_size_t>& keys,
+      const std::vector<CompareFlags>& flags) const;
+
   bool containsLazyNotLoaded() const {
     return containsLazyNotLoaded_;
   }
