@@ -336,14 +336,12 @@ bool CompileState::compile(bool allow_cpu_fallback) {
             keepOperator,
             replaceOp.size());
       }
-#if 0
       std::printf(
           "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
           oper->operatorId(),
           oper->toString().c_str(),
           keepOperator,
           replaceOp.size());
-#endif
       auto GpuReplacedOperator = [](const exec::Operator* op) {
         return isAnyOf<
             exec::OrderBy,
@@ -358,24 +356,17 @@ bool CompileState::compile(bool allow_cpu_fallback) {
             exec::FilterProject,
             exec::AssignUniqueId>(op);
       };
-      auto GpuRetainedOperator = [](const exec::Operator* op) {
-        return isAnyOf<exec::Values, exec::TableScan, exec::CallbackSink>(op);
+      auto GpuRetainedOperator = [isTableScanSupported](const exec::Operator* op) {
+        return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(op) || (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
       };
-#if 0
-      std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
-                << std::endl;
-      std::cout << "GpuRetainedOperator = " << GpuRetainedOperator(oper)
-                << std::endl;
-#endif
       // If GPU operator is supported, then replaceOp should be non-empty and
       // the operator should not be retained Else the velox operator is retained
       // as-is
       auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
                         keepOperator == 0) ||
           (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
-#if 0
+      std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper) << ", GpuRetainedOperator = " << GpuRetainedOperator(oper) << std::endl;
       std::cout << "condition = " << condition << std::endl;
-#endif
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
     }
 
