@@ -100,6 +100,9 @@ Task Execution
      - Histogram
      - Tracks task barrier execution time in range of [0, 30s] with 30 buckets
        and each bucket with time window of 1s. We report P50, P90, P99, and P100.
+   * - task_splits_count
+     - Count
+     - The total number of splits received by all tasks.
 
 Memory Management
 -----------------
@@ -160,9 +163,6 @@ Memory Management
    * - task_memory_reclaim_wait_timeout_count
      - Count
      - The number of times that the task memory reclaim wait timeouts.
-   * - task_splits_count
-     - Count
-     - The total number of splits received by all tasks.
    * - memory_non_reclaimable_count
      - Count
      - The number of times that the memory reclaim fails because the operator is executing a
