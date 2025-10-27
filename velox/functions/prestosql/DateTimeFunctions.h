@@ -1939,7 +1939,10 @@ struct ParseDurationFunction {
     re2::StringPiece valueStr;
     re2::StringPiece unit;
     if (!RE2::FullMatch(
-            std::string_view{amountUnit}, *durationRegex_, &valueStr, &unit)) {
+            re2::StringPiece(amountUnit.data(), amountUnit.size()),
+            *durationRegex_,
+            &valueStr,
+            &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
@@ -1947,7 +1950,7 @@ struct ParseDurationFunction {
     double value{};
     try {
       size_t pos = 0;
-      // Create temporary string from StringPiece for stod
+      // Create temporary string from re2::StringPiece for stod
       std::string valueString(valueStr.data(), valueStr.size());
       value = std::stod(valueString, &pos);
       if (pos != valueString.size()) {
