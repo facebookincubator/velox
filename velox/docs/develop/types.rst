@@ -179,6 +179,7 @@ IPADDRESS                 HUGEINT
 IPPREFIX                  ROW(HUGEINT,TINYINT)
 BINGTILE                  BIGINT
 GEOMETRY                  VARBINARY
+SPHERICALGEOGRAPHY        VARBINARY
 TDIGEST                   VARBINARY
 QDIGEST                   VARBINARY
 BIGINT_ENUM               BIGINT
@@ -261,6 +262,10 @@ GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.
 Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
 are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
 `Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+
+SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
+way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
+as opposed to the units of the coordinate space.
 
 Spark Types
 ~~~~~~~~~~~~
