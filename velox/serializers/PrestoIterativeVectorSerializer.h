@@ -43,7 +43,7 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
     return &streams_[i];
   }
 
-  void appendNumRows(int32_t numRows) {
+  void appendNumRows(int32_t numRows) override {
     numRows_ += numRows;
   }
 
