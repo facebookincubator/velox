@@ -23,7 +23,11 @@ class JoinSpillInputBenchmarkBase : public SpillerBenchmarkBase {
   JoinSpillInputBenchmarkBase() = default;
 
   /// Sets up the test.
-  void setUp() override;
+  void setUp(
+      RowTypePtr rowType =
+          ROW({"c0", "c1", "c2", "c3", "c4"},
+              {INTEGER(), BIGINT(), VARCHAR(), VARBINARY(), DOUBLE()}),
+      int32_t stringMaxLength = 10) override;
 
   /// Runs the test.
   void run() override;

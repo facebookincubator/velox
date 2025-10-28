@@ -29,8 +29,10 @@ namespace {
 const int numSampleVectors = 100;
 } // namespace
 
-void JoinSpillInputBenchmarkBase::setUp() {
-  SpillerBenchmarkBase::setUp();
+void JoinSpillInputBenchmarkBase::setUp(
+    RowTypePtr rowType,
+    int32_t stringMaxLength) {
+  SpillerBenchmarkBase::setUp(rowType, stringMaxLength);
   common::SpillConfig spillConfig;
   spillConfig.getSpillDirPathCb = [&]() -> std::string_view {
     return spillDir_;
