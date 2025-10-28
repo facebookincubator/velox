@@ -1125,6 +1125,7 @@ TEST_F(OperatorTraceTest, canTrace) {
       {"Unnest", true},
       {"RowNumber", false},
       {"OrderBy", true},
+      {"TopNRowNumber", true},
       {"PartialAggregation", true},
       {"Aggregation", true},
       {"TableWrite", true},

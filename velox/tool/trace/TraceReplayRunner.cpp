@@ -50,6 +50,7 @@
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 #include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
+#include "velox/tool/trace/TopNRowNumberReplayer.h"
 #include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
 
@@ -413,6 +414,16 @@ TraceReplayRunner::createReplayer() const {
         cpuExecutor_.get());
   } else if (traceNodeName == "OrderBy") {
     replayer = std::make_unique<tool::trace::OrderByReplayer>(
+        FLAGS_root_dir,
+        FLAGS_query_id,
+        FLAGS_task_id,
+        FLAGS_node_id,
+        traceNodeName,
+        FLAGS_driver_ids,
+        queryCapacityBytes,
+        cpuExecutor_.get());
+  } else if (traceNodeName == "TopNRowNumber") {
+    replayer = std::make_unique<tool::trace::TopNRowNumberReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
         FLAGS_task_id,
