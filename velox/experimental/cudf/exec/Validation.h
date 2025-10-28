@@ -33,14 +33,14 @@ namespace facebook::velox::cudf_velox {
 ///
 /// LOG_VALIDATION_MSG("The Sort merge join is not supported");
 /// LOG_VALIDATION_MSG("The expression {} is not supported", name);
-#define LOG_VALIDATION_MSG(...)                                                                                              \
-  do {                                                                                                                       \
-    if (CudfConfig::getInstance().logValidationFailure) {                                                                    \
-      auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                                           \
-      LOG(WARNING) << fmt::format(                                                                                           \
+#define LOG_VALIDATION_MSG(...)                                                                          \
+  do {                                                                                                   \
+    if (CudfConfig::getInstance().logValidationFailure) {                                                \
+      auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                       \
+      LOG(WARNING) << fmt::format(                                                                       \
           "Validation failed at function: {}, reason: Operation is not supported in cuDF execution: {}", \
-          __FUNCTION__,                                                                                                      \
-          message);                                                                                                          \
-    }                                                                                                                        \
+          __FUNCTION__,                                                                                  \
+          message);                                                                                      \
+    }                                                                                                    \
   } while (0)
 } // namespace facebook::velox::cudf_velox
