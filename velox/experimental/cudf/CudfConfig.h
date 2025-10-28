@@ -30,6 +30,8 @@ struct CudfConfig {
   static constexpr const char* kCudfFunctionNamePrefix{
       "cudf.function_name_prefix"};
   static constexpr const char* kCudfForceReplace{"cudf.force_replace"};
+  static constexpr const char* kCudfLogValidationFailure{
+      "cudf.log_validation_failure"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -58,6 +60,9 @@ struct CudfConfig {
 
   /// Force replacement of operators. Throws an error if a replacement fails.
   bool forceReplace{false};
+
+  /// Whether to log validation failure messages.
+  bool logValidationFailure{true};
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -467,6 +467,9 @@ void CudfConfig::initialize(
   if (config.find(kCudfForceReplace) != config.end()) {
     forceReplace = folly::to<bool>(config[kCudfForceReplace]);
   }
+  if (config.find(kCudfLogValidationFailure) != config.end()) {
+    logValidationFailure = folly::to<bool>(config[kCudfLogValidationFailure]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

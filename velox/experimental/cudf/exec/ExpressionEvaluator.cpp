@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
@@ -311,6 +312,8 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
     case core::ExprKind::kCast: {
       const auto* cast = expr->asUnchecked<core::CastTypedExpr>();
       if (cast->isTryCast()) {
+        LOG_VALIDATION_MSG(
+            "The expression try_cast is not supported in cuDF execution");
         return false;
       }
       return canBeEvaluated(cast->inputs()[0]);
@@ -325,6 +328,8 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
         return std::all_of(
             call->inputs().begin(), call->inputs().end(), canBeEvaluated);
       }
+      LOG_VALIDATION_MSG(
+          "The expression {} is not supported in cuDF execution", name);
       return false;
     }
 
@@ -337,6 +342,9 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
     case core::ExprKind::kConcat:
     case core::ExprKind::kLambda:
     default:
+      LOG_VALIDATION_MSG(
+          "The expression {} is not supported in cuDF execution",
+          core::ExprKindName::toName(expr->kind()));
       return false;
   }
 }
