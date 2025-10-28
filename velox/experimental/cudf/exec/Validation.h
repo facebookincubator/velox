@@ -22,8 +22,8 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Log a validation failure message if
-/// CudfConfig::getInstance().logValidationFailure is enabled. It captures the
+/// Log a reason for falling back to Velox CPU execution if
+/// CudfConfig::getInstance().logFallback is enabled. It captures the
 /// file name, line number, function name, and reason for the failure. The
 /// validation failure introduces extra data format conversion which can
 /// negatively impact the performance, so log the messgage to notify the
@@ -36,7 +36,7 @@ namespace facebook::velox::cudf_velox {
 /// LOG_FALLBACK("Cast from {} to {}", fromType->toString(), toType->toString());
 #define LOG_FALLBACK(...)                                                                          \
   do {                                                                                                   \
-    if (CudfConfig::getInstance().logValidationFailure) {                                                \
+    if (CudfConfig::getInstance().logFallback) {                                                \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                       \
       LOG(WARNING) << fmt::format(                                                                       \
           "Validation failed at function: {}, reason: Operation is not supported in cuDF execution: {}", \

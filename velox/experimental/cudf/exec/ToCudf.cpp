@@ -467,8 +467,8 @@ void CudfConfig::initialize(
   if (config.find(kCudfForceReplace) != config.end()) {
     forceReplace = folly::to<bool>(config[kCudfForceReplace]);
   }
-  if (config.find(kCudfLogValidationFailure) != config.end()) {
-    logValidationFailure = folly::to<bool>(config[kCudfLogValidationFailure]);
+  if (config.find(kCudfLogFallback) != config.end()) {
+    logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }
 }
 
