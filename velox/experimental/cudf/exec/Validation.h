@@ -22,12 +22,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-namespace detail {
-inline const char* extractFileName(const char* file) {
-  return strrchr(file, '/') ? strrchr(file, '/') + 1 : file;
-}
-} // namespace detail
-
 /// Log a validation failure message if
 /// CudfConfig::getInstance().logValidationFailure is enabled. It captures the
 /// file name, line number, function name, and reason for the failure. The
@@ -44,9 +38,7 @@ inline const char* extractFileName(const char* file) {
     if (CudfConfig::getInstance().logValidationFailure) {                                                                    \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                                           \
       LOG(WARNING) << fmt::format(                                                                                           \
-          "Validation failed at file: {}, line: {}, function: {}, reason: Operation is not supported in cuDF execution: {}", \
-          ::facebook::velox::cudf_velox::detail::extractFileName(__FILE__),                                                  \
-          __LINE__,                                                                                                          \
+          "Validation failed at function: {}, reason: Operation is not supported in cuDF execution: {}", \
           __FUNCTION__,                                                                                                      \
           message);                                                                                                          \
     }                                                                                                                        \
