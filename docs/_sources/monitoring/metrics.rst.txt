@@ -93,7 +93,7 @@ Task Execution
        30 buckets. It is configured to report the latency at P50, P90, P99,
        and P100 percentiles.
    * - task_batch_process_time_ms
-     - Average
+     - Avg
      - Tracks the averaged task batch processing time. This only applies for
        sequential task execution mode.
    * - task_barrier_process_time_ms
@@ -226,11 +226,11 @@ Memory Management
        arbitration operation in range of [0, 600s] with 20 buckets. It is configured
        to report the latency at P50, P90, P99 and P100 percentiles.
    * - arbitrator_free_capacity_bytes
-     - Average
+     - Avg
      - The average of total free memory capacity which is managed by the
        memory arbitrator.
    * - arbitrator_free_reserved_capacity_bytes
-     - Average
+     - Avg
      - The average of free memory capacity reserved to ensure each query has
        the minimal required capacity to run.
    * - memory_pool_initial_capacity_bytes
@@ -637,10 +637,10 @@ Table Scan
      - Type
      - Description
    * - table_scan_batch_process_time_ms
-     - Average
+     - Avg
      - Tracks the averaged table scan batch processing time in milliseconds.
    * - table_scan_batch_bytes
-     - Average
+     - Avg
      - Tracks the averaged table scan output batch size in bytes.
        with 512 buckets and reports P50, P90, P99, and P100
 
