@@ -41,7 +41,7 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     auto inputColumns = cudfTable->release();
     auto filterColumns = filterEvaluator.compute(
         inputColumns, stream, cudf::get_current_device_resource_ref());
-    auto filterColumnView = filterColumns[0]->mutable_view();
+    auto filterColumnView = filterColumns[0]->view();
     cudf::table_view resultTable({filterColumnView});
     auto result = velox::cudf_velox::with_arrow::toVeloxColumn(
         resultTable, pool_.get(), "", stream);
