@@ -29,6 +29,14 @@
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
+struct PartitionField {
+  // Index of column in RowType, start from 0.
+  int32_t id;
+  TransformType type;
+  // Optional parameter of transform.
+  std::optional<int32_t> parameter;
+};
+
 class IcebergTestBase : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override;
@@ -44,19 +52,32 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<IcebergDataSink> createIcebergDataSink(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<std::string>& partitionTransforms = {});
+      const std::vector<PartitionField>& partitionFields = {});
+
+  std::shared_ptr<IcebergDataSink> createDataSinkAndAppendData(
+      const RowTypePtr& rowType,
+      const std::vector<RowVectorPtr>& vectors,
+      const std::string& dataPath,
+      const std::vector<PartitionField>& partitionFields = {});
 
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
+      const std::vector<PartitionField>& transformSpecs,
+      const RowTypePtr& rowType);
+
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::PARQUET};
+  std::shared_ptr<memory::MemoryPool> opPool_;
+  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
 
  private:
   IcebergInsertTableHandlePtr createIcebergInsertTableHandle(
       const RowTypePtr& rowType,
-      const std::string& outputDirectoryPath);
+      const std::string& outputDirectoryPath,
+      const std::vector<PartitionField>& partitionTransforms = {});
 
   std::vector<std::string> listPartitionDirectories(
       const std::string& dataPath);
@@ -64,11 +85,10 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   void setupMemoryPools();
 
   std::shared_ptr<memory::MemoryPool> root_;
-  std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;
-  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
   VectorFuzzer::Options fuzzerOptions_;
   std::unique_ptr<VectorFuzzer> fuzzer_;
 };

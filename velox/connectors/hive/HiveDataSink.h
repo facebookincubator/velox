@@ -530,7 +530,10 @@ class HiveDataSink : public DataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       uint32_t bucketCount,
-      std::unique_ptr<core::PartitionFunction> bucketFunction);
+      std::unique_ptr<core::PartitionFunction> bucketFunction,
+      const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels,
+      std::unique_ptr<PartitionIdGenerator> partitionIdGenerator);
 
   void appendData(RowVectorPtr input) override;
 
@@ -631,7 +634,7 @@ class HiveDataSink : public DataSink {
   // to each corresponding (bucketed) partition based on the partition and
   // bucket ids calculated by 'computePartitionAndBucketIds'. The function also
   // ensures that there is a writer created for each (bucketed) partition.
-  void splitInputRowsAndEnsureWriters();
+  virtual void splitInputRowsAndEnsureWriters(const RowVectorPtr& input);
 
   // Makes sure to create one writer for the given writer id. The function
   // returns the corresponding index in 'writers_'.
@@ -641,9 +644,36 @@ class HiveDataSink : public DataSink {
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
 
+  // Creates and configures WriterOptions based on file format.
+  // Sets up compression, schema, and other writer configuration based on the
+  // insert table handle and connector settings.
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
+      const;
+
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
+
+  // Constructs the full partition directory path by combining the table
+  // directory with an optional partition subdirectory. If partitionSubdirectory
+  // is provided, returns tableDirectory/partitionSubdirectory; otherwise,
+  // returns tableDirectory unchanged (for non-partitioned tables).
+  std::string makePartitionDirectory(
+      const std::string& tableDirectory,
+      const std::optional<std::string>& partitionSubdirectory) const;
+
+  // Records a row index for a specific partition. This method maintains the
+  // mapping of which input rows belong to which partition by storing row
+  // indices in partition-specific buffers. If the buffer for the partition
+  // doesn't exist or is too small, it allocates/reallocates the buffer to
+  // accommodate all rows.
+  void
+  updatePartitionRows(uint32_t index, vector_size_t numRows, vector_size_t row);
+
+  // Allocates buffer space for a new partition by extending the partition
+  // tracking vectors. This is called when a new writer is created for a
+  // partition to ensure there's space to track row indices for that partition.
+  void reservePartitionBuffers();
 
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,

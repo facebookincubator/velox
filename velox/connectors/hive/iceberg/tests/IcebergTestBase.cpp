@@ -15,8 +15,12 @@
  */
 
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+
 #include <filesystem>
+
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
@@ -45,6 +49,7 @@ void IcebergTestBase::SetUp() {
 void IcebergTestBase::TearDown() {
   fuzzer_.reset();
   connectorQueryCtx_.reset();
+  queryCtx_.reset();
   connectorPool_.reset();
   opPool_.reset();
   root_.reset();
@@ -56,6 +61,7 @@ void IcebergTestBase::setupMemoryPools() {
   opPool_.reset();
   connectorPool_.reset();
   connectorQueryCtx_.reset();
+  queryCtx_.reset();
 
   root_ = memory::memoryManager()->addRootPool(
       "IcebergTest", 1L << 30, exec::MemoryReclaimer::create());
@@ -63,13 +69,17 @@ void IcebergTestBase::setupMemoryPools() {
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
 
+  queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
+  auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
+      queryCtx_.get(), opPool_.get());
+
   connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
       opPool_.get(),
       connectorPool_.get(),
       connectorSessionProperties_.get(),
       nullptr,
       common::PrefixSortConfig(),
-      nullptr,
+      std::move(expressionEvaluator),
       nullptr,
       "query.IcebergTest",
       "task.IcebergTest",
@@ -99,42 +109,94 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
   return vectors;
 }
 
-IcebergInsertTableHandlePtr IcebergTestBase::createIcebergInsertTableHandle(
+std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
+    const std::vector<PartitionField>& partitionFields,
+    const RowTypePtr& rowType) {
+  std::vector<IcebergPartitionSpec::Field> fields;
+  for (const auto& partitionField : partitionFields) {
+    fields.push_back(
+        IcebergPartitionSpec::Field{
+            rowType->nameOf(partitionField.id),
+            rowType->childAt(partitionField.id),
+            partitionField.type,
+            partitionField.parameter});
+  }
+
+  return std::make_shared<IcebergPartitionSpec>(1, fields);
+}
+
+void addColumnHandles(
     const RowTypePtr& rowType,
-    const std::string& outputDirectoryPath) {
-  std::vector<HiveColumnHandlePtr> columnHandles;
+    const std::vector<PartitionField>& partitionFields,
+    std::vector<HiveColumnHandlePtr>& columnHandles) {
+  std::unordered_set<int32_t> partitionColumnIds;
+  for (const auto& field : partitionFields) {
+    partitionColumnIds.insert(field.id);
+  }
+
+  columnHandles.reserve(rowType->size());
   for (auto i = 0; i < rowType->size(); ++i) {
-    auto columnName = rowType->nameOf(i);
-    auto columnType = HiveColumnHandle::ColumnType::kRegular;
+    const auto columnType = partitionColumnIds.contains(i)
+        ? HiveColumnHandle::ColumnType::kPartitionKey
+        : HiveColumnHandle::ColumnType::kRegular;
+
     columnHandles.push_back(
         std::make_shared<HiveColumnHandle>(
-            columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
+            rowType->nameOf(i),
+            columnType,
+            rowType->childAt(i),
+            rowType->childAt(i)));
   }
+}
+
+IcebergInsertTableHandlePtr IcebergTestBase::createIcebergInsertTableHandle(
+    const RowTypePtr& rowType,
+    const std::string& outputDirectoryPath,
+    const std::vector<PartitionField>& partitionFields) {
+  std::vector<HiveColumnHandlePtr> columnHandles;
+  addColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(
       outputDirectoryPath,
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
+  auto partitionSpec = createPartitionSpec(partitionFields, rowType);
+
   return std::make_shared<const IcebergInsertTableHandle>(
-      columnHandles,
-      locationHandle,
-      fileFormat_,
-      common::CompressionKind::CompressionKind_ZSTD);
+      /*inputColumns=*/columnHandles,
+      /*locationHandle=*/locationHandle,
+      /*tableStorageFormat=*/fileFormat_,
+      /*partitionSpec=*/partitionSpec,
+      /*compressionKind=*/common::CompressionKind::CompressionKind_ZSTD);
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<std::string>& partitionTransforms) {
-  auto tableHandle =
-      createIcebergInsertTableHandle(rowType, outputDirectoryPath);
+    const std::vector<PartitionField>& partitionFields) {
+  auto tableHandle = createIcebergInsertTableHandle(
+      rowType, outputDirectoryPath, partitionFields);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,
       connectorQueryCtx_.get(),
       connector::CommitStrategy::kNoCommit,
       connectorConfig_);
+}
+
+std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
+    const RowTypePtr& rowType,
+    const std::vector<RowVectorPtr>& vectors,
+    const std::string& dataPath,
+    const std::vector<PartitionField>& partitionFields) {
+  auto dataSink = createIcebergDataSink(rowType, dataPath, partitionFields);
+
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  EXPECT_TRUE(dataSink->finish());
+  return dataSink;
 }
 
 std::vector<std::string> IcebergTestBase::listFiles(
@@ -161,6 +223,24 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
 
   auto files = listFiles(directory);
   for (const auto& filePath : files) {
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+
+    // Extract partition keys from path if any.
+    std::vector<std::string> pathComponents;
+    folly::split("/", filePath, pathComponents);
+    for (const auto& component : pathComponents) {
+      if (component.find('=') != std::string::npos) {
+        std::vector<std::string> keys;
+        folly::split('=', component, keys);
+        if (keys.size() == 2) {
+          partitionKeys[keys[0]] = keys[1];
+          if (keys[1] == "null") {
+            partitionKeys[keys[0]] = std::nullopt;
+          }
+        }
+      }
+    }
+
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
     splits.push_back(
@@ -170,7 +250,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
             fileFormat_,
             0,
             file->size(),
-            std::unordered_map<std::string, std::optional<std::string>>{},
+            partitionKeys,
             std::nullopt,
             customSplitInfo,
             nullptr,

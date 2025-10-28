@@ -38,10 +38,12 @@ class PartitionIdGenerator {
       memory::MemoryPool* pool,
       bool partitionPathAsLowerCase);
 
+  virtual ~PartitionIdGenerator() = default;
+
   /// Generate sequential partition IDs for input vector.
   /// @param input Input RowVector.
   /// @param result Generated integer IDs indexed by input row number.
-  void run(const RowVectorPtr& input, raw_vector<uint64_t>& result);
+  virtual void run(const RowVectorPtr& input, raw_vector<uint64_t>& result);
 
   /// Return the total number of distinct partitions processed so far.
   uint64_t numPartitions() const {
@@ -52,15 +54,51 @@ class PartitionIdGenerator {
   /// style. It is derived from the partitionValues_ at index partitionId.
   /// Partition keys appear in the order of partition columns in the table
   /// schema.
-  std::string partitionName(uint64_t partitionId) const;
+  virtual std::string partitionName(uint32_t partitionId) const;
 
- private:
-  static constexpr const int32_t kHasherReservePct = 20;
+ protected:
+  PartitionIdGenerator(
+      std::vector<column_index_t> partitionChannels,
+      uint32_t maxPartitions,
+      memory::MemoryPool* pool,
+      bool partitionPathAsLowerCase);
 
   // Computes value IDs using VectorHashers for all rows in 'input'.
   void computeValueIds(
       const RowVectorPtr& input,
       raw_vector<uint64_t>& valueIds);
+
+  // Computes value IDs, maps them to sequential partition IDs, and saves
+  // partition values for each partition.
+  // Each unique value ID gets a sequential partition ID (0, 1, 2, ...).
+  // Reuses existing partition IDs for duplicate value IDs.
+  // Saves partition values for new partitions for later partition name
+  // generation.
+  //
+  // @param input RowVector containing the partition column values (either
+  // original or transformed).
+  // @param result Output vector to store partition IDs, indexed by row number.
+  void computeAndSavePartitionIds(
+      const RowVectorPtr& input,
+      raw_vector<uint64_t>& result);
+
+  const std::vector<column_index_t> partitionChannels_;
+
+  const uint32_t maxPartitions_;
+
+  std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
+
+  // A vector holding unique partition key values. One row per partition. Row
+  // numbers match partition IDs.
+  RowVectorPtr partitionValues_;
+
+  // A mapping from value ID produced by VectorHashers to a partition ID.
+  std::unordered_map<uint64_t, uint64_t> partitionIds_;
+
+  const bool partitionPathAsLowerCase_;
+
+ private:
+  static constexpr const int32_t kHasherReservePct = 20;
 
   // In case of rehash (when value IDs produced by VectorHashers change), we
   // update value id for pre-existing partitions while keeping partition ids.
@@ -70,28 +108,14 @@ class PartitionIdGenerator {
 
   // Copies partition values of 'row' from 'input' into 'partitionId' row in
   // 'partitionValues_'.
-  void savePartitionValues(
-      uint64_t partitionId,
+  virtual void savePartitionValues(
+      uint32_t partitionId,
       const RowVectorPtr& input,
       vector_size_t row);
 
   memory::MemoryPool* const pool_;
 
-  const std::vector<column_index_t> partitionChannels_;
-
-  const uint32_t maxPartitions_;
-
-  const bool partitionPathAsLowerCase_;
-
-  std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
   bool hasMultiplierSet_ = false;
-
-  // A mapping from value ID produced by VectorHashers to a partition ID.
-  std::unordered_map<uint64_t, uint64_t> partitionIds_;
-
-  // A vector holding unique partition key values. One row per partition. Row
-  // numbers match partition IDs.
-  RowVectorPtr partitionValues_;
 
   // All rows are set valid to compute partition IDs for all input rows.
   SelectivityVector allRows_;

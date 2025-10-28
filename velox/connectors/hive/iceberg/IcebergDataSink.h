@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -32,6 +33,10 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param locationHandle Contains the target location information including:
   /// - Base directory path where data files will be written.
   /// - File naming scheme and temporary directory paths.
+  /// @param tableStorageFormat File format to use for writing data files.
+  /// @param partitionSpec Optional partition specification defining how to
+  /// partition the data. If nullptr, the table is unpartitioned and all data
+  /// is written to a single directory.
   /// @param compressionKind Optional compression to apply to data files.
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
@@ -39,8 +44,16 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::vector<HiveColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
+      IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
+
+  const IcebergPartitionSpecPtr& partitionSpec() const {
+    return partitionSpec_;
+  }
+
+ private:
+  const IcebergPartitionSpecPtr partitionSpec_;
 };
 
 using IcebergInsertTableHandlePtr =
@@ -54,6 +67,8 @@ class IcebergDataSink : public HiveDataSink {
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
+
+  void appendData(RowVectorPtr input) override;
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -76,6 +91,29 @@ class IcebergDataSink : public HiveDataSink {
   /// @return Vector of JSON strings, one per writer, formatted according to
   /// Presto and Spark Iceberg commit protocol.
   std::vector<std::string> commitMessage() const override;
+
+ private:
+  IcebergDataSink(
+      RowTypePtr inputType,
+      IcebergInsertTableHandlePtr insertTableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels);
+
+  void splitInputRowsAndEnsureWriters(const RowVectorPtr& input) override;
+
+  HiveWriterId getIcebergWriterId(size_t row) const;
+
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
+      const override;
+
+  std::vector<folly::dynamic> extractPartitionValues(uint32_t writerIndex);
+
+  // Below are structures for partitions from all inputs. partitionData_
+  // is indexed by partitionId.
+  std::vector<std::vector<folly::dynamic>> partitionData_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
