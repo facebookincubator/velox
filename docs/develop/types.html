@@ -283,19 +283,22 @@ The table below shows the supported Presto types.</p>
 <tr class="row-odd"><td><p>GEOMETRY</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
-<tr class="row-even"><td><p>TDIGEST</p></td>
+<tr class="row-even"><td><p>SPHERICALGEOGRAPHY</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
-<tr class="row-odd"><td><p>QDIGEST</p></td>
+<tr class="row-odd"><td><p>TDIGEST</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
-<tr class="row-even"><td><p>BIGINT_ENUM</p></td>
+<tr class="row-even"><td><p>QDIGEST</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-odd"><td><p>BIGINT_ENUM</p></td>
 <td><p>BIGINT</p></td>
 </tr>
-<tr class="row-odd"><td><p>VARCHAR_ENUM</p></td>
+<tr class="row-even"><td><p>VARCHAR_ENUM</p></td>
 <td><p>VARCHAR</p></td>
 </tr>
-<tr class="row-even"><td><p>TIME WITH TIME ZONE</p></td>
+<tr class="row-odd"><td><p>TIME WITH TIME ZONE</p></td>
 <td><p>BIGINT</p></td>
 </tr>
 </tbody>
@@ -363,6 +366,9 @@ It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixe
 Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
 are often stored as <a class="reference external" href="https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry">Well-Known Text</a> or
 <a class="reference external" href="https://en.wikipedia.org/wiki/Well-known_binary">Well-Known Binary</a>.</p>
+<p>SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
+way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
+as opposed to the units of the coordinate space.</p>
 </section>
 <section id="spark-types">
 <h2>Spark Types<a class="headerlink" href="#spark-types" title="Link to this heading">¶</a></h2>
