@@ -29,7 +29,7 @@ struct CudfConfig {
   static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
   static constexpr const char* kCudfFunctionNamePrefix{
       "cudf.function_name_prefix"};
-  static constexpr const char* kCudfForceReplace{"cudf.force_replace"};
+  static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -45,6 +45,9 @@ struct CudfConfig {
   /// Enable debug printing.
   bool debugEnabled{false};
 
+  /// Allow fallback to CPU operators if GPU operator replacement fails.
+  bool allowCpuFallback{true};
+
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
   std::string memoryResource{"async"};
@@ -55,9 +58,6 @@ struct CudfConfig {
 
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
-
-  /// Force replacement of operators. Throws an error if a replacement fails.
-  bool forceReplace{false};
 };
 
 } // namespace facebook::velox::cudf_velox
