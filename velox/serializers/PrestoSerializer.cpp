@@ -245,7 +245,8 @@ void PrestoVectorSerde::serializeSingleColumn(
       vector->size(),
       prestoOptions);
   Scratch scratch;
-  detail::serializeColumn(vector, folly::Range(&range, 1), stream.get(), scratch);
+  detail::serializeColumn(
+      vector, folly::Range(&range, 1), stream.get(), scratch);
 
   PrestoOutputStreamListener listener;
   OStreamOutputStream outputStream(output, &listener);

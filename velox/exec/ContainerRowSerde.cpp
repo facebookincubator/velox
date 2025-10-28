@@ -15,10 +15,10 @@
  */
 
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
-#include "velox/common/memory/HashStringAllocator.h"
 
 namespace facebook::velox::exec {
 
@@ -266,8 +266,7 @@ void deserializeString(
     serializer::presto::VectorStream* out) {
   auto size = in.read<int32_t>();
   out->appendLength(size);
-  auto& hashStringStream =
-      dynamic_cast<HashStringAllocator::InputStream&>(in);
+  auto& hashStringStream = dynamic_cast<HashStringAllocator::InputStream&>(in);
   // No intermediate copy.
   hashStringStream.readBytes(out->getValueSteam(), size);
 }
@@ -424,8 +423,7 @@ void deserializeOne<TypeKind::ARRAY>(
     ByteInputStream& in,
     serializer::presto::VectorStream* out,
     TypePtr type) {
-  const auto arrayType =
-      std::dynamic_pointer_cast<const ArrayType>(type);
+  const auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
   auto elementType = arrayType->elementType();
   auto size = in.read<int32_t>();
   out->appendLength(size);
@@ -465,8 +463,7 @@ void deserializeOne<TypeKind::MAP>(
     ByteInputStream& in,
     serializer::presto::VectorStream* out,
     TypePtr type) {
-  const auto mapType =
-      std::dynamic_pointer_cast<const MapType>(type);
+  const auto mapType = std::dynamic_pointer_cast<const MapType>(type);
   auto keyType = mapType->keyType();
   auto valueType = mapType->valueType();
   auto keySize = in.read<int32_t>();

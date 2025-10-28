@@ -246,4 +246,4 @@ void VectorStream::append(folly::Range<const bool*> values);
 
 template <>
 void VectorStream::append(folly::Range<const int128_t*> values);
-} // namespace facebook::velox::serializer::presto::detail
+} // namespace facebook::velox::serializer::presto

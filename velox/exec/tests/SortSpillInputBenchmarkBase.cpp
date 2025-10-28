@@ -1,18 +1,18 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-*     http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "velox/exec/tests/SortSpillInputBenchmarkBase.h"
 #include <gflags/gflags.h>
@@ -28,10 +28,7 @@ std::unique_ptr<RowContainer> makeRowContainer(
     const std::vector<TypePtr>& keyTypes,
     const std::vector<TypePtr>& dependentTypes,
     std::shared_ptr<velox::memory::MemoryPool>& pool) {
-  return std::make_unique<RowContainer>(
-      keyTypes,
-      dependentTypes,
-      pool.get());
+  return std::make_unique<RowContainer>(keyTypes, dependentTypes, pool.get());
 }
 
 std::unique_ptr<RowContainer> setupSpillContainer(
@@ -47,9 +44,12 @@ std::unique_ptr<RowContainer> setupSpillContainer(
   }
   return makeRowContainer(keys, dependents, pool);
 }
-}
+} // namespace
 
-void SortSpillInputBenchmarkBase::setUp(RowTypePtr rowType, bool serializeRowContainer, int32_t stringMaxLength) {
+void SortSpillInputBenchmarkBase::setUp(
+    RowTypePtr rowType,
+    bool serializeRowContainer,
+    int32_t stringMaxLength) {
   SpillerBenchmarkBase::setUp(rowType, stringMaxLength);
   serializeRowContainer_ = serializeRowContainer;
   rowContainer_ = setupSpillContainer(
@@ -84,13 +84,11 @@ void SortSpillInputBenchmarkBase::writeSpillData() {
 
 void SortSpillInputBenchmarkBase::run() {
   MicrosecondTimer timer(&executionTimeUs_);
-  auto sortInputSpiller =
-      dynamic_cast<SortInputSpiller*>(spiller_.get());
+  auto sortInputSpiller = dynamic_cast<SortInputSpiller*>(spiller_.get());
   VELOX_CHECK_NOT_NULL(sortInputSpiller);
   sortInputSpiller->spill();
   rowContainer_->clear();
 }
-
 
 std::unique_ptr<SpillerBase> SortSpillInputBenchmarkBase::makeSpiller() {
   common::SpillConfig spillConfig;
@@ -102,8 +100,7 @@ std::unique_ptr<SpillerBase> SortSpillInputBenchmarkBase::makeSpiller() {
   spillConfig.writeBufferSize = FLAGS_spiller_benchmark_write_buffer_size;
   spillConfig.executor = executor_.get();
 
-  spillConfig.compressionKind =
-      common::CompressionKind::CompressionKind_LZ4;
+  spillConfig.compressionKind = common::CompressionKind::CompressionKind_LZ4;
   spillConfig.prefixSortConfig = PrefixSortConfig();
 
   spillConfig.maxSpillRunRows = 0;
@@ -113,11 +110,7 @@ std::unique_ptr<SpillerBase> SortSpillInputBenchmarkBase::makeSpiller() {
   const auto sortingKeys = SpillState::makeSortingKeys(
       std::vector<CompareFlags>(rowContainer_->keyTypes().size()));
   return std::make_unique<SortInputSpiller>(
-      rowContainer_.get(),
-      rowType_,
-      sortingKeys,
-      &spillConfig,
-      &spillStats_);
+      rowContainer_.get(), rowType_, sortingKeys, &spillConfig, &spillStats_);
 }
 
 void SortSpillInputBenchmarkBase::printStats() const {
@@ -133,4 +126,4 @@ void SortSpillInputBenchmarkBase::printStats() const {
   spiller_->finishSpill(partitionSet);
   VELOX_CHECK_EQ(partitionSet.size(), 1);
 }
-}
+} // namespace facebook::velox::exec::test

@@ -16,9 +16,9 @@
 #pragma once
 
 #include "velox/common/memory/ByteStream.h"
+#include "velox/serializers/VectorStream.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
-#include "velox/serializers/VectorStream.h"
 
 namespace facebook::velox::exec {
 

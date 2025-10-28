@@ -108,9 +108,7 @@ SpillFiles SpillWriter::finish() {
   return spillFiles;
 }
 
-uint64_t SpillWriter::write(
-    const SpillRows& rows,
-    RowContainer* container) {
+uint64_t SpillWriter::write(const SpillRows& rows, RowContainer* container) {
   if (rows.size() == 0) {
     return 0;
   }
@@ -129,7 +127,8 @@ uint64_t SpillWriter::write(
     batch_->appendNumRows(rows.size());
     const auto& types = container->columnTypes();
     for (auto i = 0; i < types.size(); ++i) {
-      container->extractColumn(rows.data(),rows.size(), i, types[i], batch_->streamAt(i));
+      container->extractColumn(
+          rows.data(), rows.size(), i, types[i], batch_->streamAt(i));
     }
   }
   updateAppendStats(rows.size(), timeNs);
