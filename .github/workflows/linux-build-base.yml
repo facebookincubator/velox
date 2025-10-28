@@ -71,6 +71,8 @@ jobs:
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
           fi
+          # Install GCC14 until it is also available in the dependency image.
+          dnf install -y gcc-toolset-14
 
       - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -86,8 +88,8 @@ jobs:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
-          # Set compiler to GCC 12
-          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-12/root/usr/bin
+          # Set compiler to GCC 14
+          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
@@ -113,6 +115,7 @@ jobs:
             # Investigate issues with remote function service: Issue #13897
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
+          source /opt/rh/gcc-toolset-14/enable
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 
       - name: Ccache after
