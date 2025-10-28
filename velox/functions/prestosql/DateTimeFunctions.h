@@ -1927,8 +1927,8 @@ struct ParseDurationFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    static const LazyRE2 kDurationRegex{
-        R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)", {}};
+    static const LazyRE2 kDurationRegex(
+        R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
     // TODO: Remove re2::StringPiece != std::string_view hacks.
     // It's needed because for some systems in CI,
     // re2 and abseil libraries are old.
