@@ -129,23 +129,44 @@ TEST(S3UtilTest, isDomainExcludedFromProxy) {
 
 TEST(S3UtilTest, parseAWSRegion) {
   // bucket.s3.[region]
-  EXPECT_EQ(
-      parseAWSStandardRegionName("foo.s3.region.amazonaws.com"), "region");
-  EXPECT_EQ(
-      parseAWSStandardRegionName("foo.s3.region.amazonaws.com/"), "region");
+  EXPECT_EQ(parseStandardRegionName("foo.s3.region.amazonaws.com"), "region");
+  EXPECT_EQ(parseStandardRegionName("foo.s3.region.amazonaws.com/"), "region");
   // bucket.s3-[region]
-  EXPECT_EQ(
-      parseAWSStandardRegionName("foo.s3-region.amazonaws.com"), "region");
-  EXPECT_EQ(
-      parseAWSStandardRegionName("foo.s3-region.amazonaws.com/"), "region");
+  EXPECT_EQ(parseStandardRegionName("foo.s3-region.amazonaws.com"), "region");
+  EXPECT_EQ(parseStandardRegionName("foo.s3-region.amazonaws.com/"), "region");
   // service.[region]
-  EXPECT_EQ(parseAWSStandardRegionName("foo.a3-reg.amazonaws.com"), "a3-reg");
-  EXPECT_EQ(parseAWSStandardRegionName("foo.a3-reg.amazonaws.com/"), "a3-reg");
+  EXPECT_EQ(parseStandardRegionName("foo.a3-reg.amazonaws.com"), "a3-reg");
+  EXPECT_EQ(parseStandardRegionName("foo.a3-reg.amazonaws.com/"), "a3-reg");
   // Not the right suffix
+  EXPECT_EQ(parseStandardRegionName("foo.a3-region.amazon.com"), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName(""), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName("velox"), std::nullopt);
+}
+
+TEST(S3UtilTest, parseOCIRegion) {
   EXPECT_EQ(
-      parseAWSStandardRegionName("foo.a3-region.amazon.com"), std::nullopt);
-  EXPECT_EQ(parseAWSStandardRegionName(""), std::nullopt);
-  EXPECT_EQ(parseAWSStandardRegionName("velox"), std::nullopt);
+      parseStandardRegionName("foo.objectstorage.uk-london.oraclecloud.com"),
+      "uk-london");
+  EXPECT_EQ(
+      parseStandardRegionName("foo.objectstorage.uk-london.oraclecloud.com/"),
+      "uk-london");
+  EXPECT_EQ(
+      parseStandardRegionName(
+          "bar.baz.objectstorage.ca-toronto-1.oraclecloud.com"),
+      "ca-toronto-1");
+  EXPECT_EQ(
+      parseStandardRegionName(
+          "bar.baz.objectstorage.ca-toronto-1.oraclecloud.com/"),
+      "ca-toronto-1");
+  EXPECT_EQ(
+      parseStandardRegionName(
+          "service.subservice.objectstorage.us-ashburn-1.oraclecloud.com"),
+      "us-ashburn-1");
+  EXPECT_EQ(
+      parseStandardRegionName("foo.objectstorage.us-ashburn-1.oracle.com"),
+      std::nullopt);
+  EXPECT_EQ(parseStandardRegionName(""), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName("velox"), std::nullopt);
 }
 
 TEST(S3UtilTest, isIpExcludedFromProxy) {

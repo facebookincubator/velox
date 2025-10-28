@@ -70,6 +70,15 @@ S3Config::S3Config(
       }
     }
   }
+
+  // Check if using OCI and not AWS.
+  // If OCI is used, path-style-access must be set to true.
+  auto endpointValue = endpoint();
+  if (endpointValue.has_value() &&
+      endpointValue.value().find(kOCIHostSuffix) != std::string::npos) {
+    config_[Keys::kPathStyleAccess] = "true";
+  }
+
   payloadSigningPolicy_ =
       properties->get<std::string>(kS3PayloadSigningPolicy, "Never");
 }
@@ -77,11 +86,11 @@ S3Config::S3Config(
 std::optional<std::string> S3Config::endpointRegion() const {
   auto region = config_.find(Keys::kEndpointRegion)->second;
   if (!region.has_value()) {
-    // If region is not set, try inferring from the endpoint value for AWS
-    // endpoints.
+    // If region is not set, try inferring from the endpoint value for AWS or
+    // OCI endpoints.
     auto endpointValue = endpoint();
     if (endpointValue.has_value()) {
-      region = parseAWSStandardRegionName(endpointValue.value());
+      region = parseStandardRegionName(endpointValue.value());
     }
   }
   return region;
