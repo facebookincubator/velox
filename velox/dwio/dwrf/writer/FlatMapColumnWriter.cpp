@@ -61,7 +61,8 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
       valueType_{*type.childAt(1)},
       maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
       collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
-  auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+  auto options = StatisticsBuilderOptions::fromConfig(
+      context.getConfigs(), context.fileFormat());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
           dynamic_cast<typename TypeInfo<K>::StatisticsBuilder*>(
@@ -85,9 +86,13 @@ template <TypeKind K>
 void FlatMapColumnWriter<K>::setEncoding(
     ColumnEncodingWriteWrapper& encoding) const {
   BaseColumnWriter::setEncoding(encoding);
-  auto columnEncodingKind =
-      proto::ColumnEncoding_Kind::ColumnEncoding_Kind_MAP_FLAT;
-  encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+  if (encoding.format() == DwrfFormat::kDwrf) {
+    auto columnEncodingKind =
+        proto::ColumnEncoding_Kind::ColumnEncoding_Kind_MAP_FLAT;
+    encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+  } else {
+    VELOX_FAIL("setEncoding ERROR {}.", encoding.format());
+  }
 }
 
 template <TypeKind K>

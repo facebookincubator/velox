@@ -39,10 +39,9 @@ class WriterSink {
   WriterSink(
       dwio::common::FileSink& sink,
       memory::MemoryPool& pool,
-      const Config& configs)
+      const Config& configs,
+      dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF)
       : sink_{&sink},
-        checksum_{
-            ChecksumFactory::create(configs.get(Config::CHECKSUM_ALGORITHM))},
         cacheMode_{configs.get(Config::STRIPE_CACHE_MODE)},
         shouldBuffer_{!sink_->isBuffered()},
         maxCacheSize_{configs.get(Config::STRIPE_CACHE_SIZE)},
@@ -50,7 +49,12 @@ class WriterSink {
         size_{0},
         cacheHolder_{pool, SLICE_SIZE, SLICE_SIZE},
         cacheBuffer_{pool},
-        exceedsLimit_{false} {}
+        exceedsLimit_{false} {
+    if (fileFormat_ == dwio::common::FileFormat::DWRF) {
+      checksum_ =
+          ChecksumFactory::create(configs.get(Config::CHECKSUM_ALGORITHM));
+    }
+  }
 
   ~WriterSink() {
     if (!buffers_.empty() || size_ != 0) {
@@ -166,7 +170,7 @@ class WriterSink {
   }
 
   dwio::common::FileSink* const sink_;
-  const std::unique_ptr<Checksum> checksum_;
+  std::unique_ptr<Checksum> checksum_;
   const StripeCacheMode cacheMode_;
   const bool shouldBuffer_;
   const uint32_t maxCacheSize_;

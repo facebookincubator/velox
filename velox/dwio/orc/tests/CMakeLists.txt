@@ -44,4 +44,42 @@ target_link_libraries(
   GTest::gmock
 )
 
+add_executable(velox_orc_e2e_writer_test E2EWriterTest.cpp)
+add_test(velox_orc_e2e_writer_test velox_orc_e2e_writer_test)
+
+target_link_libraries(
+  velox_orc_e2e_writer_test
+  velox_dwrf_test_utils
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_link_libs
+  Folly::folly
+  fmt::fmt
+  lz4::lz4
+  zstd::zstd
+  ZLIB::ZLIB
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
+add_executable(velox_orc_e2e_filter_test E2EFilterTest.cpp)
+add_test(velox_orc_e2e_filter_test velox_orc_e2e_filter_test)
+
+target_link_libraries(
+  velox_orc_e2e_filter_test
+  velox_dwio_common_test_utils
+  velox_dwrf_test_utils
+  velox_link_libs
+  velox_test_util
+  Folly::folly
+  fmt::fmt
+  lz4::lz4
+  zstd::zstd
+  ZLIB::ZLIB
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

@@ -52,6 +52,21 @@ class StatisticsBuilderUtils {
       const DecodedVector& vector,
       const common::Ranges& ranges);
 
+  static void addValues(
+      DateStatisticsBuilder& builder,
+      const VectorPtr& vector,
+      const common::Ranges& ranges);
+
+  static void addValues(
+      DateStatisticsBuilder& builder,
+      const DecodedVector& vector,
+      const common::Ranges& ranges);
+
+  static void addValues(
+      TimestampStatisticsBuilder& builder,
+      const DecodedVector& vector,
+      const common::Ranges& ranges);
+
   template <typename FLOAT>
   static void addValues(
       DoubleStatisticsBuilder& builder,

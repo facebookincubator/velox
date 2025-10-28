@@ -156,8 +156,9 @@ uint8_t orcWriterZSTDCompressionLevel(
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
     const WriterOptions& options,
-    std::shared_ptr<memory::MemoryPool> pool)
-    : writerBase_(std::make_unique<WriterBase>(std::move(sink))),
+    std::shared_ptr<memory::MemoryPool> pool,
+    dwio::common::FileFormat fileFormat)
+    : writerBase_(std::make_unique<WriterBase>(std::move(sink), fileFormat)),
       schema_{dwio::common::TypeWithId::create(options.schema)},
       spillConfig_{options.spillConfig},
       nonReclaimableSection_(options.nonReclaimableSection) {
@@ -209,7 +210,8 @@ Writer::Writer(
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options)
+    const WriterOptions& options,
+    dwio::common::FileFormat fileFormat)
     : Writer{
           std::move(sink),
           options,
@@ -217,7 +219,8 @@ Writer::Writer(
               fmt::format(
                   "{}.dwrf.{}",
                   options.memoryPool->name(),
-                  folly::to<std::string>(folly::Random::rand64())))} {}
+                  folly::to<std::string>(folly::Random::rand64()))),
+          fileFormat} {}
 
 void Writer::setMemoryReclaimers(
     const std::shared_ptr<memory::MemoryPool>& pool) {
@@ -520,7 +523,7 @@ void Writer::flushStripe(bool close) {
   TestValue::adjust("facebook::velox::dwrf::Writer::flushStripe", this);
 
   const auto& handler = context.getEncryptionHandler();
-  EncodingManager encodingManager{handler};
+  EncodingManager encodingManager{handler, context.fileFormat()};
 
   writer_->flush([&](uint32_t nodeId) -> ColumnEncodingWriteWrapper {
     return encodingManager.addEncodingToFooter(nodeId);
@@ -564,11 +567,15 @@ void Writer::flushStripe(bool close) {
     writerBase_->validateStreamSize(stream, out.size());
 
     s.setKind(stream.kind());
-    s.setNode(nodeId);
-    s.setColumn(stream.column());
-    s.setSequence(stream.encodingKey().sequence());
+    if (context.fileFormat() == dwio::common::FileFormat::DWRF) {
+      s.setNode(nodeId);
+      s.setColumn(stream.column());
+      s.setSequence(stream.encodingKey().sequence());
+      s.setUseVints(context.getConfig(Config::USE_VINTS));
+    } else {
+      s.setColumn(nodeId);
+    }
     s.setLength(out.size());
-    s.setUseVints(context.getConfig(Config::USE_VINTS));
     offset += out.size();
 
     context.recordPhysicalSize(stream, out.size());
@@ -578,7 +585,8 @@ void Writer::flushStripe(bool close) {
   // deals with streams
   uint64_t indexLength = 0;
   sink.setMode(WriterSink::Mode::Index);
-  auto result = layoutPlanner_->plan(encodingManager, getStreamList(context));
+  auto result = layoutPlanner_->plan(
+      context.fileFormat(), encodingManager, getStreamList(context));
   result.iterateIndexStreams(
       [&](const DwrfStreamIdentifier& streamId, DataBufferHolder& content) {
         VELOX_CHECK(
@@ -625,6 +633,19 @@ void Writer::flushStripe(bool close) {
   writerBase_->writeProto(&encodingManager.getFooter());
   sink.setMode(WriterSink::Mode::None);
 
+  // Only orc format has Metadata
+  if (context.fileFormat() == dwio::common::FileFormat::ORC) {
+    auto& metadata = writerBase_->getMetadata();
+    auto stripeStats = metadata.add_stripestats();
+    std::vector<proto::orc::ColumnStatistics> colStats;
+    writer_->getStripeStatistics(colStats);
+    for (const auto& colStat : colStats) {
+      *stripeStats->add_colstats() = colStat;
+    }
+
+    writer_->resetStripeStats();
+  }
+
   auto stripe = writerBase_->addStripeInfo();
   stripe.setOffset(stripeOffset);
   stripe.setIndexLength(indexLength);
@@ -632,7 +653,9 @@ void Writer::flushStripe(bool close) {
   stripe.setFooterLength(sink.size() - footerOffset);
 
   // set encryption key metadata
-  if (handler.isEncrypted() && context.stripeIndex() == 0) {
+  // TODO: ORC file format implements encryption
+  if (context.fileFormat() == dwio::common::FileFormat::DWRF &&
+      handler.isEncrypted() && context.stripeIndex() == 0) {
     for (uint32_t i = 0; i < handler.getEncryptionGroupCount(); ++i) {
       *stripe.addKeyMetadata() =
           handler.getEncryptionProviderByIndex(i).getKey();
@@ -697,7 +720,8 @@ void Writer::flushInternal(bool close) {
       proto::Encryption* encryption = nullptr;
 
       // initialize encryption related metadata only when there is data written
-      if (handler.isEncrypted() && footer->stripesSize() > 0) {
+      if (context.fileFormat() == dwio::common::FileFormat::DWRF &&
+          handler.isEncrypted() && footer->stripesSize() > 0) {
         const auto count = handler.getEncryptionGroupCount();
         stats.resize(count);
         encryption = footer->mutableEncryption();
@@ -715,6 +739,11 @@ void Writer::flushInternal(bool close) {
           [&](uint32_t nodeId) -> ColumnStatisticsWriteWrapper {
             auto entry = footer->addStatistics();
             if (!encryption || !handler.isEncrypted(nodeId)) {
+              return entry;
+            }
+
+            // The ORC file format does not yet implement encryption
+            if (context.fileFormat() == dwio::common::FileFormat::ORC) {
               return entry;
             }
 
@@ -763,8 +792,8 @@ void Writer::flushInternal(bool close) {
           }
         }
       }
-
-      writerBase_->writeFooter(*schema_->type());
+      auto metadataLength = writerBase_->writeMetadata();
+      writerBase_->writeFooter(*schema_->type(), metadataLength);
     }
 
     // flush to sink

@@ -78,13 +78,16 @@ struct StatisticsBuilderOptions {
   explicit StatisticsBuilderOptions(
       uint32_t stringLengthLimit,
       std::optional<uint64_t> initialSize = std::nullopt,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
       bool countDistincts = false,
       HashStringAllocator* allocator = nullptr)
-      : stringLengthLimit{stringLengthLimit},
+      : fileFormat{fileFormat},
+        stringLengthLimit{stringLengthLimit},
         initialSize{initialSize},
         countDistincts(countDistincts),
         allocator(allocator) {}
 
+  dwio::common::FileFormat fileFormat;
   uint32_t stringLengthLimit;
   std::optional<uint64_t> initialSize;
   bool countDistincts{false};
@@ -94,8 +97,11 @@ struct StatisticsBuilderOptions {
     return StatisticsBuilderOptions(stringLengthLimit, initialSize);
   }
 
-  static StatisticsBuilderOptions fromConfig(const Config& config) {
-    return StatisticsBuilderOptions{config.get(Config::STRING_STATS_LIMIT)};
+  static StatisticsBuilderOptions fromConfig(
+      const Config& config,
+      dwio::common::FileFormat fileFormat) {
+    return StatisticsBuilderOptions{
+        config.get(Config::STRING_STATS_LIMIT), std::nullopt, fileFormat};
   }
 };
 
@@ -183,7 +189,8 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
 
   static std::unique_ptr<StatisticsBuilder> create(
       const Type& type,
-      const StatisticsBuilderOptions& options);
+      const StatisticsBuilderOptions& options,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   // for the given type tree, create the a list of stat builders
   static void createTree(
@@ -280,6 +287,131 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
     min_ = std::numeric_limits<int64_t>::max();
     max_ = std::numeric_limits<int64_t>::min();
     sum_ = 0;
+  }
+};
+
+class DateStatisticsBuilder : public StatisticsBuilder,
+                              public dwio::common::DateColumnStatistics {
+ public:
+  explicit DateStatisticsBuilder(const StatisticsBuilderOptions& options)
+      : StatisticsBuilder{options} {
+    init();
+  }
+
+  ~DateStatisticsBuilder() override = default;
+
+  void addValues(int32_t value, uint64_t count = 1) {
+    increaseValueCount(count);
+    if (min_.has_value() && value < min_.value()) {
+      min_ = value;
+    }
+    if (max_.has_value() && value > max_.value()) {
+      max_ = value;
+    }
+  }
+
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
+
+  void reset() override {
+    StatisticsBuilder::reset();
+    init();
+  }
+
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
+
+ private:
+  void init() {
+    min_ = std::numeric_limits<int32_t>::max();
+    max_ = std::numeric_limits<int32_t>::min();
+  }
+};
+
+class TimestampStatisticsBuilder
+    : public StatisticsBuilder,
+      public dwio::common::TimestampColumnStatistics {
+ public:
+  explicit TimestampStatisticsBuilder(const StatisticsBuilderOptions& options)
+      : StatisticsBuilder{options} {
+    init();
+  }
+
+  ~TimestampStatisticsBuilder() override = default;
+
+  void addValues(int64_t value, uint64_t count = 1) {
+    increaseValueCount(count);
+    if (min_.has_value() && value < min_.value()) {
+      min_ = value;
+    }
+    if (max_.has_value() && value > max_.value()) {
+      max_ = value;
+    }
+  }
+
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
+
+  void reset() override {
+    StatisticsBuilder::reset();
+    init();
+  }
+
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
+
+ private:
+  void init() {
+    min_ = std::numeric_limits<int64_t>::max();
+    max_ = std::numeric_limits<int64_t>::min();
+  }
+};
+
+class DecimalStatisticsBuilder : public StatisticsBuilder,
+                                 public dwio::common::DecimalColumnStatistics {
+ public:
+  explicit DecimalStatisticsBuilder(
+      const StatisticsBuilderOptions& options,
+      const Type& type)
+      : StatisticsBuilder{options}, type_(type) {
+    init();
+  }
+
+  ~DecimalStatisticsBuilder() override = default;
+
+  void addValues(int128_t value, uint64_t count = 1) {
+    auto isSelfEmpty = isEmpty(*this);
+    increaseValueCount(count);
+    if (isSelfEmpty) {
+      min_ = value;
+      max_ = value;
+    } else if (min_.has_value() && value < min_.value()) {
+      min_ = value;
+    }
+    if (max_.has_value() && value > max_.value()) {
+      max_ = value;
+    }
+  }
+
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
+
+  void reset() override {
+    StatisticsBuilder::reset();
+    init();
+  }
+
+  const Type& getType() const;
+
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
+
+ private:
+  const Type& type_;
+
+  void init() {
+    min_.reset();
+    max_.reset();
   }
 };
 

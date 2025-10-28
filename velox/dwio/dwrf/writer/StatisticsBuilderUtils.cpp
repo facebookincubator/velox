@@ -118,4 +118,65 @@ void StatisticsBuilderUtils::addValues(
   }
 }
 
+void StatisticsBuilderUtils::addValues(
+    DateStatisticsBuilder& builder,
+    const VectorPtr& vector,
+    const common::Ranges& ranges) {
+  auto nulls = vector->rawNulls();
+  auto vals = vector->asFlatVector<int32_t>()->rawValues();
+  if (vector->mayHaveNulls()) {
+    for (auto& pos : ranges) {
+      if (bits::isBitNull(nulls, pos)) {
+        builder.setHasNull();
+      } else {
+        builder.addValues(vals[pos]);
+      }
+    }
+  } else {
+    for (auto& pos : ranges) {
+      builder.addValues(vals[pos]);
+    }
+  }
+}
+
+void StatisticsBuilderUtils::addValues(
+    DateStatisticsBuilder& builder,
+    const DecodedVector& vector,
+    const common::Ranges& ranges) {
+  if (vector.mayHaveNulls()) {
+    for (auto& pos : ranges) {
+      if (vector.isNullAt(pos)) {
+        builder.setHasNull();
+      } else {
+        builder.addValues(vector.valueAt<int32_t>(pos));
+      }
+    }
+  } else {
+    for (auto& pos : ranges) {
+      builder.addValues(vector.valueAt<int32_t>(pos));
+    }
+  }
+}
+
+void StatisticsBuilderUtils::addValues(
+    TimestampStatisticsBuilder& builder,
+    const DecodedVector& vector,
+    const common::Ranges& ranges) {
+  if (vector.mayHaveNulls()) {
+    for (auto& pos : ranges) {
+      if (vector.isNullAt(pos)) {
+        builder.setHasNull();
+      } else {
+        auto ts = vector.valueAt<Timestamp>(pos);
+        builder.addValues(ts.toMillis());
+      }
+    }
+  } else {
+    for (auto& pos : ranges) {
+      auto ts = vector.valueAt<Timestamp>(pos);
+      builder.addValues(ts.toMillis());
+    }
+  }
+}
+
 } // namespace facebook::velox::dwrf

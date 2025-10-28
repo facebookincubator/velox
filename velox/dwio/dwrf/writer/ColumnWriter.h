@@ -71,19 +71,40 @@ class ColumnWriter {
     VELOX_NYI();
   }
 
+  /**
+   * Get the stripe statistics for this column.
+   * @param stats vector to store the returned stripe statistics
+   */
+  virtual void getStripeStatistics(
+      std::vector<proto::orc::ColumnStatistics>& stats) const = 0;
+
+  virtual void resetStripeStats() = 0;
+
   virtual bool tryAbandonDictionaries(bool force) = 0;
 
  protected:
   ColumnWriter(
       WriterContext& context,
       const uint32_t id,
-      const uint32_t sequence)
-      : id_{id}, sequence_{sequence}, context_{context} {}
+      const uint32_t sequence,
+      RleVersion rleVersion)
+      : id_{id},
+        sequence_{sequence},
+        context_{context},
+        rleVersion_{rleVersion} {}
 
   virtual void setEncoding(ColumnEncodingWriteWrapper& columnEncoding) const {
-    auto columnEncodingKind =
-        proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
-    columnEncoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+    if (columnEncoding.format() == DwrfFormat::kDwrf) {
+      auto columnEncodingKind =
+          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
+      columnEncoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+    } else {
+      auto columnEncodingKind = rleVersion_ == RleVersion_1
+          ? proto::orc::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT
+          : proto::orc::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2;
+      columnEncoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+    }
+
     columnEncoding.setDictionarySize(0);
     columnEncoding.setNode(id_);
     columnEncoding.setSequence(sequence_);
@@ -92,6 +113,7 @@ class ColumnWriter {
   const uint32_t id_;
   const uint32_t sequence_;
   WriterContext& context_;
+  RleVersion rleVersion_;
 };
 
 class BaseColumnWriter : public ColumnWriter {
@@ -103,6 +125,7 @@ class BaseColumnWriter : public ColumnWriter {
     // We cannot determine the physical size of columns/nodes until flush
     // time, yet we need to maintain and aggregate logical stats.
     fileStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
+    stripeStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
     indexBuilder_->addEntry(*indexStatsBuilder_);
     indexStatsBuilder_->reset();
     recordPosition();
@@ -153,6 +176,29 @@ class BaseColumnWriter : public ColumnWriter {
     return size;
   }
 
+  void getStripeStatistics(
+      std::vector<proto::orc::ColumnStatistics>& stats) const override {
+    auto columnStatistics =
+        google::protobuf::Arena::CreateMessage<proto::orc::ColumnStatistics>(
+            arena_.get());
+    auto csw = ColumnStatisticsWriteWrapper(columnStatistics);
+    stripeStatsBuilder_->toProto(csw);
+    stats.push_back(*reinterpret_cast<const proto::orc::ColumnStatistics*>(
+        csw.rawProtoPtr()));
+
+    for (auto& child : children_) {
+      child->getStripeStatistics(stats);
+    }
+  }
+
+  void resetStripeStats() override {
+    stripeStatsBuilder_->reset();
+
+    for (auto& child : children_) {
+      child->resetStripeStats();
+    }
+  }
+
   /// Determines whether dictionary is the right encoding to use when writing
   /// the first stripe. We will continue using the same decision for all
   /// subsequent stripes. Returns true if an encoding change is performed, false
@@ -173,28 +219,33 @@ class BaseColumnWriter : public ColumnWriter {
       WriterContext& context,
       const dwio::common::TypeWithId& type,
       const uint32_t sequence = 0,
-      std::function<void(IndexBuilder&)> onRecordPosition = nullptr,
-      DwrfFormat format = DwrfFormat::kDwrf);
+      std::function<void(IndexBuilder&)> onRecordPosition = nullptr);
 
  protected:
   BaseColumnWriter(
       WriterContext& context,
       const dwio::common::TypeWithId& type,
       uint32_t sequence,
-      std::function<void(IndexBuilder&)> onRecordPosition)
-      : ColumnWriter{context, type.id(), sequence},
+      std::function<void(IndexBuilder&)> onRecordPosition,
+      RleVersion rleVersion = RleVersion_1)
+      : ColumnWriter{context, type.id(), sequence, rleVersion},
         type_{type},
         indexBuilder_{context_.newIndexBuilder(
             newStream(StreamKind::StreamKind_ROW_INDEX))},
+        arena_(std::make_unique<google::protobuf::Arena>()),
         onRecordPosition_{std::move(onRecordPosition)} {
     if (!isRoot()) {
       present_ =
           createBooleanRleEncoder(newStream(StreamKind::StreamKind_PRESENT));
     }
-    const auto options =
-        StatisticsBuilderOptions::fromConfig(context.getConfigs());
-    indexStatsBuilder_ = StatisticsBuilder::create(*type.type(), options);
-    fileStatsBuilder_ = StatisticsBuilder::create(*type.type(), options);
+    const auto options = StatisticsBuilderOptions::fromConfig(
+        context.getConfigs(), context.fileFormat());
+    indexStatsBuilder_ =
+        StatisticsBuilder::create(*type.type(), options, context_.fileFormat());
+    fileStatsBuilder_ =
+        StatisticsBuilder::create(*type.type(), options, context_.fileFormat());
+    stripeStatsBuilder_ =
+        StatisticsBuilder::create(*type.type(), options, context_.fileFormat());
   }
 
   uint64_t writeNulls(const VectorPtr& slice, const common::Ranges& ranges) {
@@ -285,7 +336,9 @@ class BaseColumnWriter : public ColumnWriter {
   std::unique_ptr<IndexBuilder> indexBuilder_;
   std::unique_ptr<StatisticsBuilder> indexStatsBuilder_;
   std::unique_ptr<StatisticsBuilder> fileStatsBuilder_;
+  std::unique_ptr<StatisticsBuilder> stripeStatsBuilder_;
   std::unique_ptr<ByteRleEncoder> present_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
   bool hasNull_ = false;
   // callback used to inject the logic that captures positions for flat map
   // in_map stream

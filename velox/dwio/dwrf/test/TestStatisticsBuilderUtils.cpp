@@ -65,7 +65,12 @@ class TestStatisticsBuilderUtils : public testing::Test {
       memory::memoryManager()->addLeafPool();
   std::unique_ptr<HashStringAllocator> allocator_ =
       std::make_unique<HashStringAllocator>(pool_.get());
-  StatisticsBuilderOptions options{16, 100, true, allocator_.get()};
+  StatisticsBuilderOptions options{
+      16,
+      100,
+      dwio::common::FileFormat::DWRF,
+      true,
+      allocator_.get()};
 };
 
 TEST_F(TestStatisticsBuilderUtils, addIntegerValues) {

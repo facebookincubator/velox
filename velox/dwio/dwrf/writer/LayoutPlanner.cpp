@@ -124,13 +124,22 @@ EncodingIter::pointer EncodingIter::operator->() const {
 }
 
 EncodingManager::EncodingManager(
-    const encryption::EncryptionHandler& encryptionHandler)
+    const encryption::EncryptionHandler& encryptionHandler,
+    dwio::common::FileFormat fileFormat)
     : encryptionHandler_{encryptionHandler},
       arena_{std::make_unique<google::protobuf::Arena>()} {
   initEncryptionGroups();
-  auto dwrfStripeFooter =
-      google::protobuf::Arena::CreateMessage<proto::StripeFooter>(arena_.get());
-  footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
+  if (fileFormat == dwio::common::FileFormat::DWRF) {
+    auto dwrfStripeFooter =
+        google::protobuf::Arena::CreateMessage<proto::StripeFooter>(
+            arena_.get());
+    footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
+  } else {
+    auto orcStripeFooter =
+        google::protobuf::Arena::CreateMessage<proto::orc::StripeFooter>(
+            arena_.get());
+    footer_ = std::make_unique<StripeFooterWriteWrapper>(orcStripeFooter);
+  }
 }
 
 ColumnEncodingWriteWrapper EncodingManager::addEncodingToFooter(
@@ -241,6 +250,7 @@ LayoutPlanner::LayoutPlanner(const dwio::common::TypeWithId& schema) {
 }
 
 LayoutResult LayoutPlanner::plan(
+    dwio::common::FileFormat fileFormat,
     const EncodingContainer& encoding,
     StreamList streams) const {
   // place index before data
@@ -248,7 +258,11 @@ LayoutResult LayoutPlanner::plan(
     return isIndexStream(stream.first->kind());
   });
   const size_t indexCount = iter - streams.begin();
-  auto flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
+
+  folly::F14FastSet<uint32_t> flatMapCols;
+  if (fileFormat == dwio::common::FileFormat::DWRF) {
+    flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
+  }
 
   // sort streams
   sortBySize(streams.begin(), iter, flatMapCols);
