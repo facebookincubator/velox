@@ -643,8 +643,7 @@ TEST_P(SpillTest, spillTimestamp) {
   ASSERT_TRUE(state.isPartitionSpilled(partitionId));
   ASSERT_FALSE(
       state.testingNonEmptySpilledPartitionIdSet().contains(partitionId));
-  state.appendToPartition(
-      partitionId, rv);
+  state.appendToPartition(partitionId, rv);
   state.finishFile(partitionId);
   EXPECT_TRUE(
       state.testingNonEmptySpilledPartitionIdSet().contains(partitionId));
@@ -1430,9 +1429,7 @@ TEST_P(SpillTest, validatePerSpillWriteSize) {
   state.setPartitionSpilled(partitionId);
   ASSERT_TRUE(state.isPartitionSpilled(partitionId));
   VELOX_ASSERT_THROW(
-      state.appendToPartition(
-          partitionId, rv),
-      "Spill bytes will overflow");
+      state.appendToPartition(partitionId, rv), "Spill bytes will overflow");
 }
 
 namespace {
