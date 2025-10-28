@@ -33,10 +33,11 @@ namespace facebook::velox::cudf_velox {
 ///
 /// LOG_FALLBACK("Sort merge join");
 /// LOG_FALLBACK(functionName);
-/// LOG_FALLBACK("Cast from {} to {}", fromType->toString(), toType->toString());
-#define LOG_FALLBACK(...)                                                                          \
+/// LOG_FALLBACK("Cast from {} to {}", fromType->toString(),
+/// toType->toString());
+#define LOG_FALLBACK(...)                                                                                \
   do {                                                                                                   \
-    if (CudfConfig::getInstance().logFallback) {                                                \
+    if (CudfConfig::getInstance().logFallback) {                                                         \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                       \
       LOG(WARNING) << fmt::format(                                                                       \
           "Validation failed at function: {}, reason: Operation is not supported in cuDF execution: {}", \
