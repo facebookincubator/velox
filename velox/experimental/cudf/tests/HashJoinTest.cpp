@@ -59,7 +59,8 @@ class HashJoinTest : public CudfHashJoinTestBase {
 
   void SetUp() override {
     CudfHashJoinTestBase::SetUp();
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().setAllowCpuFallback(false);
     cudf_velox::registerCudf();
   }
 
@@ -77,6 +78,18 @@ class MultiThreadedHashJoinTest
 
   static std::vector<CudfTestParam> getTestParams() {
     return std::vector<CudfTestParam>({CudfTestParam{1}, CudfTestParam{3}});
+  }
+
+  void SetUp() override {
+    CudfHashJoinTestBase::SetUp();
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().setAllowCpuFallback(false);
+    cudf_velox::registerCudf();
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    CudfHashJoinTestBase::TearDown();
   }
 };
 
@@ -986,7 +999,10 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
 
   CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
-      .inputSplits(splitInput)
+      .inputSplits({
+            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
+        })
       .checkSpillStats(false)
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
@@ -994,7 +1010,10 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
   CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
+      .inputSplits({
+            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
+        })
       .checkSpillStats(false)
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
@@ -1024,7 +1043,10 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
 
   CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
-      .inputSplits(splitInput)
+      .inputSplits({
+            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
+        })
       .checkSpillStats(false)
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
@@ -1033,7 +1055,10 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
   CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
+      .inputSplits({
+            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
+        })
       .checkSpillStats(false)
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
@@ -2620,6 +2645,108 @@ TEST_F(HashJoinTest, DISABLED_nullAwareRightSemiProjectOverScan) {
   }
 }
 
+#if 0
+TEST_P(MultiThreadedHashJoinTest, duplicateJoinKeysDebug) {
+  auto leftVectors = makeBatches(3, [&](int32_t /*unused*/) {
+    return makeRowVector({
+        makeNullableFlatVector<int64_t>(
+            {1, 2, 2, 3, 3, std::nullopt, 4, 5, 5, 6, 7}),
+        makeNullableFlatVector<int64_t>(
+            {1, 2, 2, std::nullopt, 3, 3, 4, 5, 5, 6, 8}),
+    });
+  });
+
+  auto rightVectors = makeBatches(3, [&](int32_t /*unused*/) {
+    return makeRowVector({
+        makeNullableFlatVector<int64_t>({1, 1, 3, 4, std::nullopt, 5, 7, 8}),
+        makeNullableFlatVector<int64_t>({1, 1, 3, 4, 5, std::nullopt, 7, 8}),
+    });
+  });
+
+  {
+    auto testLeftVectors = leftVectors;
+    auto testRightVectors = rightVectors;
+    // Duplicate keys on the build side.
+    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .numDrivers(numDrivers_)
+        .buildKeys({"u0", "u0"})
+        .buildVectors(std::move(testRightVectors))
+        .buildProjections({"c0 AS u0"})
+        .probeKeys({"t0", "t1"})
+        .probeVectors(std::move(testLeftVectors))
+        .probeProjections({"c0 AS t0", "c1 as t1"})
+        .joinType(core::JoinType::kInner)
+        .joinOutputLayout({"t0", "t1", "u0"})
+        .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0 FROM t INNER JOIN u ON t.c0 = u.c0 and t.c1 = u.c0")
+        .run();
+  }
+
+  {
+    auto testLeftVectors = leftVectors;
+    auto testRightVectors = rightVectors;
+    // Duplicated keys on the probe side.
+    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .numDrivers(numDrivers_)
+        .buildKeys({"u0", "u1"})
+        .buildVectors(std::move(testRightVectors))
+        .buildProjections({"c0 AS u0", "c1 AS u1"})
+        .probeKeys({"t0", "t0"})
+        .probeVectors(std::move(testLeftVectors))
+        .probeProjections({"c0 AS t0"})
+        .joinType(core::JoinType::kInner)
+        .joinOutputLayout({"t0", "u0", "u1"})
+        .referenceQuery(
+          "SELECT t.c0, u.c0, u.c1 FROM t INNER JOIN u ON t.c0 = u.c0 and t.c0 = u.c1")
+        .run();
+  }
+
+  {
+    auto testLeftVectors = leftVectors;
+    auto testRightVectors = rightVectors;
+    // Duplicate keys on the build side.
+    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .buildKeys({"u0", "u0"})
+        .buildVectors(std::move(testRightVectors))
+        .buildProjections({"c0 AS u0"})
+        .probeKeys({"t0", "t1"})
+        .probeVectors(std::move(testLeftVectors))
+        .probeProjections({"c0 AS t0", "c1 as t1"})
+        .joinType(core::JoinType::kFull)
+        .joinOutputLayout({"t0", "t1", "u0"})
+        .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 and t.c1 = u.c0")
+        .run();
+  }
+
+  {
+    auto testLeftVectors = leftVectors;
+    auto testRightVectors = rightVectors;
+    // Duplicated keys on the probe side.
+    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .buildKeys({"u0", "u1"})
+        .buildVectors(std::move(testRightVectors))
+        .buildProjections({"c0 AS u0", "c1 AS u1"})
+        .probeKeys({"t0", "t0"})
+        .probeVectors(std::move(testLeftVectors))
+        .probeProjections({"c0 AS t0"})
+        .joinType(core::JoinType::kFull)
+        .joinOutputLayout({"t0", "u0", "u1"})
+        .referenceQuery(
+          "SELECT t.c0, u.c0, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 and t.c0 = u.c1")
+        .run();
+  }
+}
+#endif
+
 TEST_F(HashJoinTest, duplicateJoinKeys) {
   auto leftVectors = makeBatches(3, [&](int32_t /*unused*/) {
     return makeRowVector({
@@ -2664,10 +2791,10 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
                         outputLayout,
                         joinType)
                     .planNode();
-    std::cout << query << std::endl;
     if (throwType) {
       VELOX_ASSERT_THROW(
           CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+              .config(cudf_velox::CudfConfig::kCudfEnabled, "true")
               .planNode(std::move(plan))
               .injectSpill(false)
               .checkSpillStats(false)
@@ -2676,6 +2803,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
           "Replacement with cuDF operator failed");
     } else {
       CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .config(cudf_velox::CudfConfig::kCudfEnabled, "true")
           .planNode(std::move(plan))
           .injectSpill(false)
           .checkSpillStats(false)

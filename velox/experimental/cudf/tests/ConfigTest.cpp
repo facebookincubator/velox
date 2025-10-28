@@ -31,11 +31,11 @@ TEST(ConfigTest, CudfConfig) {
 
   CudfConfig config;
   config.initialize(std::move(options));
-  ASSERT_EQ(config.enabled, false);
-  ASSERT_EQ(config.debugEnabled, true);
+  ASSERT_EQ(config.isEnabled(), false);
+  ASSERT_EQ(config.isDebugEnabled(), true);
   ASSERT_EQ(config.memoryResource, "arena");
   ASSERT_EQ(config.memoryPercent, 25);
   ASSERT_EQ(config.functionNamePrefix, "presto");
-  ASSERT_EQ(config.allowCpuFallback, false);
+  ASSERT_EQ(config.isCpuFallbackAllowed(), false);
 }
 } // namespace facebook::velox::cudf_velox::test
