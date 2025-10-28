@@ -31,9 +31,10 @@ namespace facebook::velox::cudf_velox {
 ///
 /// Usage:
 ///
-/// LOG_VALIDATION_MSG("The Sort merge join is not supported");
-/// LOG_VALIDATION_MSG("The expression {} is not supported", name);
-#define LOG_VALIDATION_MSG(...)                                                                          \
+/// LOG_FALLBACK("Sort merge join");
+/// LOG_FALLBACK(functionName);
+/// LOG_FALLBACK("Cast from {} to {}", fromType->toString(), toType->toString());
+#define LOG_FALLBACK(...)                                                                          \
   do {                                                                                                   \
     if (CudfConfig::getInstance().logValidationFailure) {                                                \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                       \

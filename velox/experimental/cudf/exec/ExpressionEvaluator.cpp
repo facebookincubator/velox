@@ -312,7 +312,7 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
     case core::ExprKind::kCast: {
       const auto* cast = expr->asUnchecked<core::CastTypedExpr>();
       if (cast->isTryCast()) {
-        LOG_VALIDATION_MSG("try_cast");
+        LOG_FALLBACK("try_cast");
         return false;
       }
       return canBeEvaluated(cast->inputs()[0]);
@@ -327,7 +327,7 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
         return std::all_of(
             call->inputs().begin(), call->inputs().end(), canBeEvaluated);
       }
-      LOG_VALIDATION_MSG(name);
+      LOG_FALLBACK(name);
       return false;
     }
 
@@ -340,7 +340,7 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
     case core::ExprKind::kConcat:
     case core::ExprKind::kLambda:
     default:
-      LOG_VALIDATION_MSG(core::ExprKindName::toName(expr->kind()));
+      LOG_FALLBACK(core::ExprKindName::toName(expr->kind()));
       return false;
   }
 }
