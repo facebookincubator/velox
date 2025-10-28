@@ -20,9 +20,10 @@ add_executable(
   IndexLookupJoinReplayerTest.cpp
   OrderByReplayerTest.cpp
   PartitionedOutputReplayerTest.cpp
-  TraceFileToolTest.cpp
   TableScanReplayerTest.cpp
   TableWriterReplayerTest.cpp
+  TopNRowNumberReplayerTest.cpp
+  TraceFileToolTest.cpp
   UnnestReplayerTest.cpp
 )
 

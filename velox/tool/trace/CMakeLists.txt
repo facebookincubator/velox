@@ -23,6 +23,7 @@ add_library(
   PartitionedOutputReplayer.cpp
   TableScanReplayer.cpp
   TableWriterReplayer.cpp
+  TopNRowNumberReplayer.cpp
   TraceReplayRunner.cpp
   TraceReplayTaskRunner.cpp
   UnnestReplayer.cpp

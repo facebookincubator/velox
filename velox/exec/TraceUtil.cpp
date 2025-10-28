@@ -253,6 +253,7 @@ bool canTrace(const std::string& operatorType) {
       "PartitionedOutput",
       "TableScan",
       "TableWrite",
+      "TopNRowNumber",
       "Unnest"};
   if (kSupportedOperatorTypes.count(operatorType) > 0 ||
       traceNodeRegistry().count(operatorType) > 0) {
@@ -417,6 +418,23 @@ core::PlanNodePtr getTraceNode(
         orderByNode->isPartial(),
         std::make_shared<DummySourceNode>(
             orderByNode->sources().front()->outputType()));
+  }
+
+  if (const auto* topNRowNumberNode =
+          dynamic_cast<const core::TopNRowNumberNode*>(traceNode)) {
+    const auto generateRowNumber = topNRowNumberNode->generateRowNumber();
+    return std::make_shared<core::TopNRowNumberNode>(
+        nodeId,
+        topNRowNumberNode->rankFunction(),
+        topNRowNumberNode->partitionKeys(),
+        topNRowNumberNode->sortingKeys(),
+        topNRowNumberNode->sortingOrders(),
+        generateRowNumber ? std::make_optional(
+                                topNRowNumberNode->outputType()->names().back())
+                          : std::nullopt,
+        topNRowNumberNode->limit(),
+        std::make_shared<DummySourceNode>(
+            topNRowNumberNode->sources().front()->outputType()));
   }
 
   for (const auto& factory : traceNodeRegistry()) {
