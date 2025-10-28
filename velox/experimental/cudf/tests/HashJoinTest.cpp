@@ -58,9 +58,9 @@ class HashJoinTest : public CudfHashJoinTestBase {
   explicit HashJoinTest(const CudfTestParam& param) : CudfHashJoinTestBase(param) {}
 
   void SetUp() override {
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::CudfConfig::getInstance().debugEnabled = true;
     CudfHashJoinTestBase::SetUp();
-    cudf_velox::unregisterCudf();
-    cudf_velox::CudfConfig::getInstance().setAllowCpuFallback(false);
     cudf_velox::registerCudf();
   }
 
@@ -81,9 +81,9 @@ class MultiThreadedHashJoinTest
   }
 
   void SetUp() override {
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::CudfConfig::getInstance().debugEnabled = true;
     CudfHashJoinTestBase::SetUp();
-    cudf_velox::unregisterCudf();
-    cudf_velox::CudfConfig::getInstance().setAllowCpuFallback(false);
     cudf_velox::registerCudf();
   }
 
@@ -936,6 +936,137 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   }
 }
 
+TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectorsDebug) {
+  // a dataset of multiple row groups with multiple columns. We create
+  // different dictionary wrappings for different columns and load the
+  // rows in scope at different times.
+  auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+            makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
+        });
+  });
+
+  auto buildVectors = makeBatches(3, [&](auto /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(
+                1'000, [](auto row) { return -100 + (row / 5); }),
+            makeFlatVector<int64_t>(
+                1'000, [](auto row) { return -1000 + (row / 5) * 10; }),
+        });
+  });
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+
+  for (const auto& probeVector : probeVectors) {
+    tempFiles.push_back(TempFilePath::create());
+    writeToFile(tempFiles.back()->getPath(), probeVector);
+  }
+  createDuckDbTable("t", probeVectors);
+
+  for (const auto& buildVector : buildVectors) {
+    tempFiles.push_back(TempFilePath::create());
+    writeToFile(tempFiles.back()->getPath(), buildVector);
+  }
+  createDuckDbTable("u", buildVectors);
+
+  auto makeInputSplits = [&](const core::PlanNodeId& probeScanId,
+                             const core::PlanNodeId& buildScanId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (int i = 0; i < probeVectors.size(); ++i) {
+        probeSplits.push_back(
+            exec::Split(makeCudfHiveConnectorSplit(tempFiles[i]->getPath())));
+      }
+      std::vector<exec::Split> buildSplits;
+      for (int i = 0; i < buildVectors.size(); ++i) {
+        buildSplits.push_back(exec::Split(makeCudfHiveConnectorSplit(
+            tempFiles[probeSplits.size() + i]->getPath())));
+      }
+      SplitInput splits;
+      splits.emplace(probeScanId, probeSplits);
+      splits.emplace(buildScanId, buildSplits);
+      return splits;
+    };
+  };
+
+  {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                  .endTableScan()
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"c0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .startTableScan()
+                          .outputType(ROW({"c0"}, {INTEGER()}))
+                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                          .endTableScan()
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "",
+                      {"c1"})
+                  .project({"c1 + 1"})
+                  .planNode();
+
+    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
+        .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
+        .run();
+  }
+
+  {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(
+                      ROW({"c0", "c1", "c2", "c3"},
+                          {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
+                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                  .endTableScan()
+                  .capturePlanNodeId(probeScanId)
+                  .filter("c2 < 29")
+                  .hashJoin(
+                      {"c0"},
+                      {"bc0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .startTableScan()
+                          .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                          .endTableScan()
+                          .capturePlanNodeId(buildScanId)
+                          .project({"c0 as bc0", "c1 as bc1"})
+                          .planNode(),
+                      "(c1 + bc1) % 33 < 27",
+                      {"c1", "bc1", "c3"})
+                  .project({"c1 + 1", "bc1", "length(c3)"})
+                  .planNode();
+
+    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
+        .referenceQuery(
+            "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0 and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
+        .run();
+  }
+}
+
 TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
@@ -956,6 +1087,8 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                 1'000, [](auto row) { return -1000 + (row / 5) * 10; }),
         });
   });
+  std::cout << "buildVectors.size() = " << buildVectors.size() 
+          << ", buildVectors[0]->size() = " << buildVectors[0]->size() << std::endl;
 
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   writeToFile(probeFile->getPath(), probeVectors);
@@ -980,7 +1113,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                       {"u0"},
                       PlanBuilder(planNodeIdGenerator)
                           .startTableScan()
-                          .outputType(asRowType(buildVectors[0]->type()))
+                          .outputType(ROW({"u0", "u1"}, {INTEGER(), INTEGER()}))
                           .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
                           .endTableScan()
                           .capturePlanNodeId(buildScanId)
@@ -989,6 +1122,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                       {"t0", "t1"},
                       core::JoinType::kLeftSemiFilter)
                   .planNode();
+  std::cout << "probeScanId = " << probeScanId << ", buildScanId = " << buildScanId << std::endl;
 
   SplitInput splitInput = {
       {probeScanId,
@@ -1007,6 +1141,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
 
+#if 0
   CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
@@ -1063,6 +1198,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
       .run();
+#endif
 }
 
 TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {

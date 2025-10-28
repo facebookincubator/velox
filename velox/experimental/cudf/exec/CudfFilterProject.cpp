@@ -165,7 +165,7 @@ void CudfFilterProject::initialize() {
                                   : filter_->sources()[0]->outputType();
 
   // convert to AST
-  if (CudfConfig::getInstance().isDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
     for (const auto& expr : expr->exprs()) {
       std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
@@ -215,7 +215,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   stream.synchronize();
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
-  if (CudfConfig::getInstance().isDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "cudfProject Output: " << size << " rows, " << numColumns
               << " columns " << std::endl;
   }

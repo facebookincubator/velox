@@ -69,23 +69,15 @@ bool isAnyOf(const Base* p) {
 bool CompileState::compile(bool allow_cpu_fallback) {
   auto operators = driver_.operators();
 
-  if (CudfConfig::getInstance().isDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Operators before adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
       std::cout << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
+    std::cout << "allow_cpu_fallback = " << allow_cpu_fallback << std::endl;
   }
-#if 0
-  std::cout << "Operators before adapting for cuDF: count ["
-            << operators.size() << "]" << std::endl;
-  for (auto& op : operators) {
-    std::cout << "  Operator: ID " << op->operatorId() << ": "
-              << op->toString() << std::endl;
-  }
-  std::cout << "allow_cpu_fallback = " << allow_cpu_fallback << std::endl;
-#endif
 
   bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
@@ -337,7 +329,7 @@ bool CompileState::compile(bool allow_cpu_fallback) {
     }
 
     if (!allow_cpu_fallback) {
-      if (CudfConfig::getInstance().isDebugEnabled()) {
+      if (CudfConfig::getInstance().debugEnabled) {
         std::printf(
             "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
             oper->operatorId(),
@@ -345,14 +337,6 @@ bool CompileState::compile(bool allow_cpu_fallback) {
             keepOperator,
             replaceOp.size());
       }
-#if 0
-      std::printf(
-          "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
-          oper->operatorId(),
-          oper->toString().c_str(),
-          keepOperator,
-          replaceOp.size());
-#endif
       auto GpuReplacedOperator = [](const exec::Operator* op) {
         return isAnyOf<
             exec::OrderBy,
@@ -376,10 +360,10 @@ bool CompileState::compile(bool allow_cpu_fallback) {
       auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
                         keepOperator == 0) ||
           (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
-#if 0
-      std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper) << ", GpuRetainedOperator = " << GpuRetainedOperator(oper) << std::endl;
-      std::cout << "condition = " << condition << std::endl;
-#endif
+      if (CudfConfig::getInstance().debugEnabled) {
+        std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper) << ", GpuRetainedOperator = " << GpuRetainedOperator(oper) << std::endl;
+        std::cout << "GPU operator condition = " << condition << std::endl;
+      }
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
     }
 
@@ -395,7 +379,7 @@ bool CompileState::compile(bool allow_cpu_fallback) {
     }
   }
 
-  if (CudfConfig::getInstance().isDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
     std::cout << "Operators after adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
@@ -419,7 +403,7 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     if (!driver.driverCtx()->queryConfig().get<bool>(
-            CudfConfig::kCudfEnabled, CudfConfig::getInstance().isEnabled()) && allow_cpu_fallback_) {
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) && allow_cpu_fallback_) {
       return false;
     }
     auto state = CompileState(factory, driver);
@@ -452,7 +436,7 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{CudfConfig::getInstance().isCpuFallbackAllowed()};
+  CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;
