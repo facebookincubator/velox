@@ -29,8 +29,6 @@ class TimeWithTimezoneType final : public BigintType {
   TimeWithTimezoneType() = default;
 
  public:
-  static constexpr int16_t kTimeZoneBias = 840;
-  static constexpr int16_t kMinutesInHour = 60;
   static constexpr int16_t kTimeWithTimezoneToVarcharRowSize = 18;
 
   static std::shared_ptr<const TimeWithTimezoneType> get() {
@@ -67,21 +65,6 @@ class TimeWithTimezoneType final : public BigintType {
 
   bool isComparable() const override {
     return true;
-  }
-
-  /// Encodes the timezone offset in the upper bits of the bigint.
-  /// The timezone offset is encoded as an integer in the range [-840, 840]
-  /// representing the number of minutes from UTC. The bias is added to the
-  /// timezone offset to ensure that the timezone offset is positive.
-  /// Typically called before a call to pack which will encode the timezone
-  /// offset along with the time value.
-  static inline int16_t biasEncode(int16_t timeZoneOffsetMinutes) {
-    VELOX_CHECK(
-        -kTimeZoneBias <= timeZoneOffsetMinutes &&
-            timeZoneOffsetMinutes <= kTimeZoneBias,
-        "Timezone offset must be between -840 and 840 minutes. Got: ",
-        timeZoneOffsetMinutes);
-    return timeZoneOffsetMinutes + kTimeZoneBias;
   }
 };
 
