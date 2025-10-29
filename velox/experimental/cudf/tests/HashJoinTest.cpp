@@ -2591,27 +2591,28 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .startTableScan()
+            .outputType(asRowType(probe->type()))
+            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+            .endTableScan()
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"t0"},
+                {"u0"},
+                PlanBuilder(planNodeIdGenerator)
                     .startTableScan()
-                    .outputType(asRowType(probe->type()))
+                    .outputType(asRowType(build->type()))
                     .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
                     .endTableScan()
-                    .capturePlanNodeId(probeScanId)
-                    .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .startTableScan()
-                            .outputType(asRowType(build->type()))
-                            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                            .endTableScan()
-                            .capturePlanNodeId(buildScanId)
-                            .planNode(),
-                        "",
-                        {"u0", "match"},
-                        core::JoinType::kRightSemiProject,
-                        true /*nullAware*/)
-                    .planNode();
+                    .capturePlanNodeId(buildScanId)
+                    .planNode(),
+                "",
+                {"u0", "match"},
+                core::JoinType::kRightSemiProject,
+                true /*nullAware*/)
+            .planNode();
 
     SplitInput splitInput = {
         {probeScanId,
@@ -3465,26 +3466,27 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(asRowType(probeVectors[0]->type()))
+          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator)
                   .startTableScan()
-                  .outputType(asRowType(probeVectors[0]->type()))
+                  .outputType(asRowType(buildVectors[0]->type()))
                   .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
                   .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(asRowType(buildVectors[0]->type()))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"t0", "t1", "match"},
-                      core::JoinType::kLeftSemiProject)
-                  .planNode();
+                  .capturePlanNodeId(buildScanId)
+                  .planNode(),
+              "",
+              {"t0", "t1", "match"},
+              core::JoinType::kLeftSemiProject)
+          .planNode();
 
   SplitInput splitInput = {
       {probeScanId,
