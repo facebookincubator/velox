@@ -776,6 +776,8 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   explicit HashJoinTestBase(const TestParam& param)
       : numDrivers_(param.numDrivers) {}
 
+  virtual ~HashJoinTestBase() = default;
+
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
 
@@ -792,7 +794,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   }
 
   // Make splits with each plan node having a number of source files.
-  SplitInput makeSplitInput(
+  virtual SplitInput makeSplitInput(
       const std::vector<core::PlanNodeId>& nodeIds,
       const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files) {
     VELOX_CHECK_EQ(nodeIds.size(), files.size());
@@ -808,7 +810,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
     return splitInput;
   }
 
-  void testLazyVectorsWithFilter(
+  virtual void testLazyVectorsWithFilter(
       const core::JoinType joinType,
       const std::string& filter,
       const std::vector<std::string>& outputLayout,
