@@ -66,17 +66,17 @@ bool isAnyOf(const Base* p) {
 
 } // namespace
 
-bool CompileState::compile(bool allow_cpu_fallback) {
+bool CompileState::compile(bool allowCpuFallback) {
   auto operators = driver_.operators();
 
   if (CudfConfig::getInstance().debugEnabled) {
-    std::cout << "Operators before adapting for cuDF: count ["
+    LOG(INFO) << "Operators before adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
-    std::cout << "allow_cpu_fallback = " << allow_cpu_fallback << std::endl;
+    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback << std::endl;
   }
 
   bool replacementsMade = false;
@@ -332,48 +332,51 @@ bool CompileState::compile(bool allow_cpu_fallback) {
               id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
     }
 
-    if (!allow_cpu_fallback) {
-      if (CudfConfig::getInstance().debugEnabled) {
-        std::printf(
-            "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
-            oper->operatorId(),
-            oper->toString().c_str(),
-            keepOperator,
-            replaceOp.size());
-      }
-      auto GpuReplacedOperator = [](const exec::Operator* op) {
-        return isAnyOf<
-            exec::OrderBy,
-            exec::TopN,
-            exec::HashAggregation,
-            exec::HashProbe,
-            exec::HashBuild,
-            exec::StreamingAggregation,
-            exec::Limit,
-            exec::LocalPartition,
-            exec::LocalExchange,
-            exec::FilterProject,
-            exec::AssignUniqueId>(op);
-      };
-      auto GpuRetainedOperator = [isTableScanSupported](
-                                     const exec::Operator* op) {
-        return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(
-                   op) ||
-            (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
-      };
-      // If GPU operator is supported, then replaceOp should be non-empty and
-      // the operator should not be retained Else the velox operator is retained
-      // as-is
-      auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
-                        keepOperator == 0) ||
-          (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
-      if (CudfConfig::getInstance().debugEnabled) {
-        std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
-                  << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
-                  << std::endl;
-        std::cout << "GPU operator condition = " << condition << std::endl;
-      }
+    if (CudfConfig::getInstance().debugEnabled) {
+      std::printf(
+          "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
+          oper->operatorId(),
+          oper->toString().c_str(),
+          keepOperator,
+          replaceOp.size());
+    }
+    auto GpuReplacedOperator = [](const exec::Operator* op) {
+      return isAnyOf<
+          exec::OrderBy,
+          exec::TopN,
+          exec::HashAggregation,
+          exec::HashProbe,
+          exec::HashBuild,
+          exec::StreamingAggregation,
+          exec::Limit,
+          exec::LocalPartition,
+          exec::LocalExchange,
+          exec::FilterProject,
+          exec::AssignUniqueId>(op);
+    };
+    auto GpuRetainedOperator =
+        [isTableScanSupported](const exec::Operator* op) {
+          return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(
+                     op) ||
+              (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
+        };
+    // If GPU operator is supported, then replaceOp should be non-empty and
+    // the operator should not be retained Else the velox operator is retained
+    // as-is
+    auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
+                      keepOperator == 0) ||
+        (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
+    if (CudfConfig::getInstance().debugEnabled) {
+      LOG(INFO) << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
+                << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
+                << std::endl;
+      LOG(INFO) << "GPU operator condition = " << condition << std::endl;
+    }
+    if (!allowCpuFallback) {
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
+    } else {
+      LOG(WARNING)
+          << "Replacement with cuDF operator failed. Falling back to CPU execution";
     }
 
     if (not replaceOp.empty()) {
@@ -390,10 +393,10 @@ bool CompileState::compile(bool allow_cpu_fallback) {
 
   if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
-    std::cout << "Operators after adapting for cuDF: count ["
+    LOG(INFO) << "Operators after adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
   }
@@ -404,20 +407,20 @@ bool CompileState::compile(bool allow_cpu_fallback) {
 std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 struct CudfDriverAdapter {
-  bool allow_cpu_fallback_;
+  bool allowCpuFallback_;
 
-  CudfDriverAdapter(bool allow_cpu_fallback)
-      : allow_cpu_fallback_{allow_cpu_fallback} {}
+  CudfDriverAdapter(bool allowCpuFallback)
+      : allowCpuFallback_{allowCpuFallback} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     if (!driver.driverCtx()->queryConfig().get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
-        allow_cpu_fallback_) {
+        allowCpuFallback_) {
       return false;
     }
     auto state = CompileState(factory, driver);
-    auto res = state.compile(allow_cpu_fallback_);
+    auto res = state.compile(allowCpuFallback_);
     return res;
   }
 };
