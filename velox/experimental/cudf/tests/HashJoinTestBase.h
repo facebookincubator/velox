@@ -58,24 +58,22 @@ class CudfHashJoinTestBase : public CudfHiveConnectorTestBase,
 
   void SetUp() override {
     CudfHiveConnectorTestBase::SetUp();
+    // Initialize the probeType_, buildType_, and fuzzerOpts_ that would
+    // normally be initialized by HashJoinTestBase::SetUp(). We can't call
+    // HashJoinTestBase::SetUp() directly because it would cause
+    // OperatorTestBase::SetUp() to be invoked twice (once through
+    // CudfHiveConnectorTestBase and once through HiveConnectorTestBase).
+    HashJoinTestBase::MemberSetUp();
   }
 
-  // Make splits with each plan node having a number of source files.
-  SplitInput makeSplitInput(
-      const std::vector<core::PlanNodeId>& nodeIds,
-      const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files)
-      override {
-    VELOX_CHECK_EQ(nodeIds.size(), files.size());
-    SplitInput splitInput;
-    for (int i = 0; i < nodeIds.size(); ++i) {
-      std::vector<Split> splits;
-      splits.reserve(files[i].size());
-      for (const auto& file : files[i]) {
-        splits.push_back(Split(makeCudfHiveConnectorSplit(file->getPath())));
-      }
-      splitInput.emplace(nodeIds[i], std::move(splits));
+  std::vector<Split> makeSplit(
+      const std::vector<std::shared_ptr<TempFilePath>>& files) override {
+    std::vector<Split> splits;
+    splits.reserve(files.size());
+    for (const auto& file : files) {
+      splits.push_back(Split(makeCudfHiveConnectorSplit(file->getPath())));
     }
-    return splitInput;
+    return splits;
   }
 
   void testLazyVectorsWithFilter(
