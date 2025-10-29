@@ -58,6 +58,21 @@ class CudfHashJoinTestBase : public CudfHiveConnectorTestBase,
 
   void SetUp() override {
     CudfHiveConnectorTestBase::SetUp();
+    // Initialize the probeType_, buildType_, and fuzzerOpts_ that would
+    // normally be initialized by HashJoinTestBase::SetUp(). We can't call
+    // HashJoinTestBase::SetUp() directly because it would cause
+    // OperatorTestBase::SetUp() to be invoked twice (once through
+    // CudfHiveConnectorTestBase and once through HiveConnectorTestBase).
+    probeType_ =
+        ROW({{"t_k1", INTEGER()}, {"t_k2", VARCHAR()}, {"t_v1", VARCHAR()}});
+    buildType_ =
+        ROW({{"u_k1", INTEGER()}, {"u_k2", VARCHAR()}, {"u_v1", INTEGER()}});
+    fuzzerOpts_ = {
+        .vectorSize = 1024,
+        .nullRatio = 0.1,
+        .stringLength = 1024,
+        .stringVariableLength = false,
+        .allowLazyVector = false};
   }
 
   std::vector<Split> makeSplit(
