@@ -298,7 +298,6 @@ bool CompileState::compile(bool allowCpuFallback) {
       if (CudfLocalPartition::shouldReplace(planNode)) {
         replaceOp.push_back(
             std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else {
         // Round Robin batch-wise Partitioning is supported by CPU operator with
         // GPU Vector.
@@ -319,7 +318,6 @@ bool CompileState::compile(bool allowCpuFallback) {
               planNode,
               planNode->taskUniqueId(),
               planNode->uniqueIdCounter()));
-      replaceOp.back()->initialize();
     } else {
       keepOperator = 1;
     }
@@ -374,7 +372,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     }
     if (!allowCpuFallback) {
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
-    } else {
+    } else if (!condition) {
       LOG(WARNING)
           << "Replacement with cuDF operator failed. Falling back to CPU execution";
     }
