@@ -1115,7 +1115,7 @@ Tracing
        execution. This is used for crash debugging.
 
 Cudf-specific Configuration (Experimental)
---------
+------------------------------------------
 These configurations are available when [compiled with cuDF](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf).
 Note: These configurations are experimental and subject to change.
 
