@@ -188,8 +188,9 @@ class DateAddFunction : public CudfFunction {
     VELOX_CHECK(
         expr->inputs()[0]->type()->isDate(),
         "First argument to date_add must be a date");
-    VELOX_CHECK_NULL(std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-        expr->inputs()[0]));
+    VELOX_CHECK_NULL(
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[0]));
     // The date_add second argument could be int8_t, int16_t, int32_t.
     value_ = makeScalarFromConstantExpr(
         expr->inputs()[1], cudf::type_id::DURATION_DAYS);
