@@ -635,7 +635,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       sources.push_back(source);
       streams.push_back(
           std::make_unique<exec::test::TestingSpillMergeStream>(
-                way, sortKeys, source));
+              way, sortKeys, source));
     }
     auto mergeTree =
         std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
