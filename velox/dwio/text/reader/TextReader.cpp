@@ -35,6 +35,9 @@ using folly::StringPiece;
 constexpr const char* kTextfileCompressionExtensionGzip = ".gz";
 constexpr const char* kTextfileCompressionExtensionDeflate = ".deflate";
 constexpr const char* kTextfileCompressionExtensionZst = ".zst";
+constexpr const char* kTextfileCompressionExtensionLz4 = ".lz4";
+constexpr const char* kTextfileCompressionExtensionLzo = ".lzo";
+constexpr const char* kTextfileCompressionExtensionSnappy = ".snappy";
 
 static std::string emptyString = std::string();
 
@@ -101,6 +104,11 @@ void setCompressionSettings(
     const std::string& filename,
     CompressionKind& kind,
     dwio::common::compression::CompressionOptions& compressionOptions) {
+  if (endsWith(filename, kTextfileCompressionExtensionLz4) ||
+      endsWith(filename, kTextfileCompressionExtensionLzo) ||
+      endsWith(filename, kTextfileCompressionExtensionSnappy)) {
+    VELOX_FAIL("Unsupported compression extension for file: {}", filename);
+  }
   if (endsWith(filename, kTextfileCompressionExtensionGzip)) {
     kind = CompressionKind::CompressionKind_GZIP;
     compressionOptions.format.zlib.windowBits =
