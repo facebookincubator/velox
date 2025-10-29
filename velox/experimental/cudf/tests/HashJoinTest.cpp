@@ -56,13 +56,13 @@ class HashJoinTest : public CudfHashJoinTestBase {
 
   void SetUp() override {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
-    HashJoinTestBase::SetUp();
+    CudfHashJoinTestBase::SetUp();
     cudf_velox::registerCudf();
   }
 
   void TearDown() override {
     cudf_velox::unregisterCudf();
-    HashJoinTestBase::TearDown();
+    CudfHashJoinTestBase::TearDown();
   }
 };
 
@@ -3585,7 +3585,7 @@ TEST_F(HashJoinTest, memory) {
   EXPECT_GT(40'000'000, params.queryCtx->pool()->stats().cumulativeBytes);
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectors) {
+TEST_F(HashJoinTest, lazyVectors) {
   // a dataset of multiple row groups with multiple columns. We create
   // different dictionary wrappings for different columns and load the
   // rows in scope at different times.
@@ -3629,12 +3629,12 @@ TEST_F(HashJoinTest, DISABLED_lazyVectors) {
       std::vector<exec::Split> probeSplits;
       for (int i = 0; i < probeVectors.size(); ++i) {
         probeSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(tempFiles[i]->getPath())));
+            exec::Split(makeCudfHiveConnectorSplit(tempFiles[i]->getPath())));
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
         buildSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(
+            exec::Split(makeCudfHiveConnectorSplit(
                 tempFiles[probeSplits.size() + i]->getPath())));
       }
       SplitInput splits;
@@ -3648,20 +3648,27 @@ TEST_F(HashJoinTest, DISABLED_lazyVectors) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"c0"},
-                      {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(ROW({"c0"}, {INTEGER()}))
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"c1"})
-                  .project({"c1 + 1"})
-                  .planNode();
+    auto op =
+        PlanBuilder(planNodeIdGenerator)
+            .startTableScan()
+            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+            .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+            .endTableScan()
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"c0"},
+                {"c0"},
+                PlanBuilder(planNodeIdGenerator)
+                    .startTableScan()
+                    .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                    .outputType(ROW({"c0"}, {INTEGER()}))
+                    .endTableScan()
+                    .capturePlanNodeId(buildScanId)
+                    .planNode(),
+                "",
+                {"c1"})
+            .project({"c1 + 1"})
+            .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
@@ -3676,24 +3683,31 @@ TEST_F(HashJoinTest, DISABLED_lazyVectors) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(
-                      ROW({"c0", "c1", "c2", "c3"},
-                          {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
-                  .capturePlanNodeId(probeScanId)
-                  .filter("c2 < 29")
-                  .hashJoin(
-                      {"c0"},
-                      {"bc0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                          .capturePlanNodeId(buildScanId)
-                          .project({"c0 as bc0", "c1 as bc1"})
-                          .planNode(),
-                      "(c1 + bc1) % 33 < 27",
-                      {"c1", "bc1", "c3"})
-                  .project({"c1 + 1", "bc1", "length(c3)"})
-                  .planNode();
+    auto op =
+        PlanBuilder(planNodeIdGenerator)
+            .startTableScan()
+            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+            .outputType(
+                ROW({"c0", "c1", "c2", "c3"},
+                    {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
+            .endTableScan()
+            .capturePlanNodeId(probeScanId)
+            .filter("c2 < 29")
+            .hashJoin(
+                {"c0"},
+                {"bc0"},
+                PlanBuilder(planNodeIdGenerator)
+                    .startTableScan()
+                    .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                    .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                    .endTableScan()
+                    .capturePlanNodeId(buildScanId)
+                    .project({"c0 as bc0", "c1 as bc1"})
+                    .planNode(),
+                "(c1 + bc1) % 33 < 27",
+                {"c1", "bc1", "c3"})
+            .project({"c1 + 1", "bc1", "length(c3)"})
+            .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
@@ -3706,7 +3720,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectors) {
   }
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorNotLoadedInFilter) {
+TEST_F(HashJoinTest, lazyVectorNotLoadedInFilter) {
   // Ensure that if lazy vectors are temporarily wrapped during a filter's
   // execution and remain unloaded, the temporary wrap is promptly
   // discarded. This precaution prevents the generation of the probe's output
@@ -3724,7 +3738,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorNotLoadedInFilter) {
       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftJoin) {
+TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3735,7 +3749,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftJoin) {
       "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterFullJoin) {
+TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3749,9 +3763,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterFullJoin) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(
-    HashJoinTest,
-    DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
+TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3765,7 +3777,7 @@ TEST_F(
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterAntiJoin) {
+TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterAntiJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3776,7 +3788,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterAntiJoin) {
       "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0))");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterInnerJoin) {
+TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterInnerJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3787,7 +3799,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterInnerJoin) {
       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2 >= 0)");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
+TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
