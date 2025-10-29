@@ -61,7 +61,7 @@ HashTable<ignoreNullKeys>::HashTable(
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
-    if (!VectorHasher::typeKindSupportsValueIds(hasher->typeKind())) {
+    if (!hasher->typeSupportsValueIds()) {
       hashMode_ = HashMode::kHash;
     }
   }
@@ -358,8 +358,13 @@ bool HashTable<ignoreNullKeys>::compareKeys(
   int32_t i = 0;
   do {
     auto& hasher = lookup.hashers[i];
-    if (!rows_->equals<!ignoreNullKeys>(
-            group, rows_->columnAt(i), hasher->decodedVector(), row)) {
+    if (rows_->compare<!ignoreNullKeys>(
+            group,
+            rows_->columnAt(i),
+            hasher->decodedVector(),
+            row,
+            CompareFlags::equality(
+                CompareFlags::NullHandlingMode::kNullAsValue)) != 0) {
       return false;
     }
   } while (++i < numKeys);
