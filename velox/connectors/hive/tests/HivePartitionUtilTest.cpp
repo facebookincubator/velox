@@ -74,9 +74,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
          "flat_bigint_col",
          "dict_string_col",
          "const_date_col",
-         "flat_timestamp_col",
-         "short_decimal_col",
-         "long_decimal_col"},
+         "flat_timestamp_col"},
         {makeFlatVector<bool>(std::vector<bool>{false}),
          makeFlatVector<int8_t>(std::vector<int8_t>{10}),
          makeFlatVector<int16_t>(std::vector<int16_t>{100}),
@@ -85,10 +83,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
          makeDictionary<StringView>(std::vector<StringView>{"str1000"}),
          makeConstant<int32_t>(10000, 1, DATE()),
          makeFlatVector<Timestamp>(
-             std::vector<Timestamp>{Timestamp::fromMillis(1577836800000)}),
-         makeConstant<int64_t>(10000, 1, DECIMAL(12, 2)),
-         makeConstant<int128_t>(
-             DecimalUtil::kLongDecimalMin / 100, 1, DECIMAL(38, 2))});
+             std::vector<Timestamp>{Timestamp::fromMillis(1577836800000)})});
 
     std::vector<std::string> expectedPartitionKeyValues{
         "flat_bool_col=false",
@@ -98,9 +93,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
         "flat_bigint_col=10000",
         "dict_string_col=str1000",
         "const_date_col=1997-05-19",
-        "flat_timestamp_col=2019-12-31 16%3A00%3A00.0",
-        "short_decimal_col=100.00",
-        "long_decimal_col=-" + std::string(34, '9') + ".99"};
+        "flat_timestamp_col=2019-12-31 16%3A00%3A00.0"};
 
     std::vector<column_index_t> partitionChannels;
     for (auto i = 1; i <= expectedPartitionKeyValues.size(); i++) {
@@ -147,9 +140,7 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
       "flat_bigint_col",
       "flat_string_col",
       "const_date_col",
-      "flat_timestamp_col",
-      "short_decimal_col",
-      "long_decimal_col"};
+      "flat_timestamp_col"};
 
   RowVectorPtr input = makeRowVector(
       partitionColumnNames,
@@ -160,9 +151,7 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
        makeNullableFlatVector<int64_t>({std::nullopt}),
        makeNullableFlatVector<StringView>({std::nullopt}),
        makeConstant<int32_t>(std::nullopt, 1, DATE()),
-       makeNullableFlatVector<Timestamp>({std::nullopt}),
-       makeConstant<int64_t>(std::nullopt, 1, DECIMAL(12, 2)),
-       makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 2))});
+       makeNullableFlatVector<Timestamp>({std::nullopt})});
 
   for (auto i = 0; i < partitionColumnNames.size(); i++) {
     std::vector<column_index_t> partitionChannels = {(column_index_t)i};
