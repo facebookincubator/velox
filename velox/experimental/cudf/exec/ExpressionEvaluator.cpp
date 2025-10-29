@@ -1089,17 +1089,13 @@ class CoalesceFunction : public CudfFunction {
     numColumnsBeforeLiteral_ = expr->inputs().size();
     for (size_t i = 0; i < expr->inputs().size(); ++i) {
       const auto& input = expr->inputs()[i];
-      if (input->name() == "literal") {
-        auto c = std::dynamic_pointer_cast<ConstantExpr>(input);
-        if (c && c->value()) {
-          std::vector<std::unique_ptr<cudf::scalar>> scalars;
-          (void)createLiteral(c->value(), scalars);
-          if (!scalars.empty()) {
-            literalScalar_ = std::move(scalars.back());
-            numColumnsBeforeLiteral_ = i;
-          }
+      if (auto c =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+        if (!c->value()->isNullAt(0)) {
+          literalScalar_ = makeScalarFromConstantExpr(c);
+          numColumnsBeforeLiteral_ = i;
+          break;
         }
-        break;
       }
     }
   }
