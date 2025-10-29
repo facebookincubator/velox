@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
@@ -50,6 +51,16 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
+DEFINE_string(
+    cudf_memory_resource,
+    "async",
+    "Memory resource for cudf operators.");
+
+DEFINE_int32(
+    cudf_memory_percent,
+    50,
+    "Percentage of GPU memory to allocate for cudf operators.");
+
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
 class CudfTpchBenchmark : public TpchBenchmark {
@@ -84,6 +95,11 @@ class CudfTpchBenchmark : public TpchBenchmark {
           ioExecutor_.get());
       facebook::velox::connector::registerConnector(cudfHiveConnector);
     }
+
+    cudf_velox::CudfConfig::getInstance().memoryResource =
+        FLAGS_cudf_memory_resource;
+    cudf_velox::CudfConfig::getInstance().memoryPercent =
+        FLAGS_cudf_memory_percent;
 
     // Enable cuDF operators
     cudf_velox::registerCudf();
