@@ -169,7 +169,6 @@ void CudfHashJoinBuild::noMoreInput() {
     return;
   }
   // Collect results from peers
-  std::cout << "peers.size() = " << peers.size() << std::endl;
   for (auto& peer : peers) {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);

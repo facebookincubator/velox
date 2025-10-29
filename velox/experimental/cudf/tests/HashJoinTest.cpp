@@ -30,6 +30,7 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HashJoinTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
@@ -59,7 +60,7 @@ class HashJoinTest : public CudfHashJoinTestBase {
 
   void SetUp() override {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
-    cudf_velox::CudfConfig::getInstance().debugEnabled = true;
+    cudf_velox::CudfConfig::getInstance().debugEnabled = false;
     CudfHashJoinTestBase::SetUp();
     cudf_velox::registerCudf();
   }
@@ -82,7 +83,7 @@ class MultiThreadedHashJoinTest
 
   void SetUp() override {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
-    cudf_velox::CudfConfig::getInstance().debugEnabled = true;
+    cudf_velox::CudfConfig::getInstance().debugEnabled = false;
     CudfHashJoinTestBase::SetUp();
     cudf_velox::registerCudf();
   }
@@ -94,7 +95,7 @@ class MultiThreadedHashJoinTest
 };
 
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT()})
@@ -106,7 +107,7 @@ TEST_P(MultiThreadedHashJoinTest, bigintArray) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, outOfJoinKeyColumnOrder) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeType(probeType_)
@@ -122,7 +123,7 @@ TEST_P(MultiThreadedHashJoinTest, outOfJoinKeyColumnOrder) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, joinWithCancellation) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT()})
@@ -140,7 +141,7 @@ TEST_P(MultiThreadedHashJoinTest, joinWithCancellation) {
 
 TEST_P(MultiThreadedHashJoinTest, testJoinWithSpillenabledCancellation) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT()})
       .probeVectors(1600, 5)
@@ -159,7 +160,7 @@ TEST_P(MultiThreadedHashJoinTest, emptyBuild) {
   for (const auto finishOnEmpty : finishOnEmptys) {
     SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
@@ -192,7 +193,7 @@ TEST_P(MultiThreadedHashJoinTest, emptyBuild) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, emptyProbe) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT()})
@@ -229,7 +230,7 @@ TEST_P(MultiThreadedHashJoinTest, emptyProbe) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, normalizedKey) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT(), VARCHAR()})
@@ -241,7 +242,7 @@ TEST_P(MultiThreadedHashJoinTest, normalizedKey) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, normalizedKeyOverflow) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .keyTypes({BIGINT(), VARCHAR(), BIGINT(), BIGINT(), BIGINT(), BIGINT()})
       .probeVectors(1600, 5)
@@ -256,7 +257,7 @@ DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, parallelJoinBuildCheck) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::HashTable::parallelJoinBuild",
       std::function<void(void*)>([&](void*) { isParallelBuild = true; }));
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT(), VARCHAR()})
       .probeVectors(1600, 5)
@@ -286,7 +287,7 @@ DEBUG_ONLY_TEST_P(
         task->requestAbort();
       }));
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .keyTypes({BIGINT(), VARCHAR()})
           .probeVectors(1600, 5)
@@ -299,7 +300,7 @@ DEBUG_ONLY_TEST_P(
 }
 
 TEST_P(MultiThreadedHashJoinTest, allTypes) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .keyTypes(
           {BIGINT(),
@@ -317,7 +318,7 @@ TEST_P(MultiThreadedHashJoinTest, allTypes) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, filter) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT()})
@@ -350,7 +351,7 @@ DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, filterSpillOnFirstProbeInput) {
         ASSERT_EQ(op->pool()->reservedBytes(), 1048576);
       }));
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT()})
       .numDrivers(1)
@@ -400,7 +401,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithNull) {
         makeBatches(5, 6, buildType_, pool_.get(), 0.0),
         makeBatches(5, 6, buildType_, pool_.get(), testData.buildNullRatio));
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .probeType(probeType_)
         .probeKeys({"t_k2"})
@@ -439,7 +440,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithLargeOutput) {
              makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"t0"})
@@ -492,7 +493,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_arrayBasedLookup) {
       makeRowVector(
           {makeFlatVector<int32_t>(100, [](auto row) { return row; })})};
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"c0"})
@@ -559,7 +560,7 @@ TEST_P(MultiThreadedHashJoinTest, joinSidesDifferentSchema) {
       //"  u.c2 > 10 AND ltrim(t.c1) = 'aaa'";
       "  u.c2 > 10";
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"t_c0"})
@@ -598,7 +599,7 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithEmptyBuild) {
               nullEvery(7))});
         });
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
@@ -633,7 +634,7 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithEmptyBuild) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilter) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeType(probeType_)
@@ -669,7 +670,7 @@ TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithEmptyBuild) {
           });
         });
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
@@ -712,7 +713,7 @@ TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithExtraFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"t0"})
@@ -729,7 +730,7 @@ TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithExtraFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"t0"})
@@ -746,7 +747,7 @@ TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithExtraFilter) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilter) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeType(probeType_)
@@ -787,7 +788,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyBuild) {
               });
         });
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
@@ -846,7 +847,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithAllMatches) {
              makeFlatVector<int32_t>(314, [](auto row) { return row; })});
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"t0"})
@@ -882,7 +883,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"t0"})
@@ -901,7 +902,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"t0"})
@@ -920,7 +921,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"t0"})
@@ -932,137 +933,6 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
         .joinOutputLayout({"u0", "u1"})
         .referenceQuery(
             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0 AND t1 % 5 = 0)")
-        .run();
-  }
-}
-
-TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectorsDebug) {
-  // a dataset of multiple row groups with multiple columns. We create
-  // different dictionary wrappings for different columns and load the
-  // rows in scope at different times.
-  auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
-    return makeRowVector(
-        {"t0", "t1"},
-        {
-            makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
-            makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
-        });
-  });
-
-  auto buildVectors = makeBatches(3, [&](auto /*unused*/) {
-    return makeRowVector(
-        {"u0", "u1"},
-        {
-            makeFlatVector<int32_t>(
-                1'000, [](auto row) { return -100 + (row / 5); }),
-            makeFlatVector<int64_t>(
-                1'000, [](auto row) { return -1000 + (row / 5) * 10; }),
-        });
-  });
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
-
-  for (const auto& probeVector : probeVectors) {
-    tempFiles.push_back(TempFilePath::create());
-    writeToFile(tempFiles.back()->getPath(), probeVector);
-  }
-  createDuckDbTable("t", probeVectors);
-
-  for (const auto& buildVector : buildVectors) {
-    tempFiles.push_back(TempFilePath::create());
-    writeToFile(tempFiles.back()->getPath(), buildVector);
-  }
-  createDuckDbTable("u", buildVectors);
-
-  auto makeInputSplits = [&](const core::PlanNodeId& probeScanId,
-                             const core::PlanNodeId& buildScanId) {
-    return [&] {
-      std::vector<exec::Split> probeSplits;
-      for (int i = 0; i < probeVectors.size(); ++i) {
-        probeSplits.push_back(
-            exec::Split(makeCudfHiveConnectorSplit(tempFiles[i]->getPath())));
-      }
-      std::vector<exec::Split> buildSplits;
-      for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeCudfHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
-      }
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-      splits.emplace(buildScanId, buildSplits);
-      return splits;
-    };
-  };
-
-  {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId probeScanId;
-    core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .startTableScan()
-                  .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                  .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"c0"},
-                      {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(ROW({"c0"}, {INTEGER()}))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"c1"})
-                  .project({"c1 + 1"})
-                  .planNode();
-
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .injectSpill(false)
-        .checkSpillStats(false)
-        .planNode(std::move(op))
-        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
-        .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
-        .run();
-  }
-
-  {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId probeScanId;
-    core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .startTableScan()
-                  .outputType(
-                      ROW({"c0", "c1", "c2", "c3"},
-                          {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
-                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                  .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .filter("c2 < 29")
-                  .hashJoin(
-                      {"c0"},
-                      {"bc0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .project({"c0 as bc0", "c1 as bc1"})
-                          .planNode(),
-                      "(c1 + bc1) % 33 < 27",
-                      {"c1", "bc1", "c3"})
-                  .project({"c1 + 1", "bc1", "length(c3)"})
-                  .planNode();
-
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .injectSpill(false)
-        .checkSpillStats(false)
-        .planNode(std::move(op))
-        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
-        .referenceQuery(
-            "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0 and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
         .run();
   }
 }
@@ -1131,7 +1001,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
        {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}},
   };
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
       .inputSplits({
             {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
@@ -1142,7 +1012,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .run();
 
 #if 0
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
       .inputSplits({
@@ -1176,7 +1046,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                  core::JoinType::kLeftSemiFilter)
              .planNode();
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
       .inputSplits({
             {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
@@ -1187,7 +1057,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
       .run();
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
       .inputSplits({
@@ -1223,7 +1093,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
         .probeVectors(std::move(testProbeVectors))
@@ -1243,7 +1113,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
         .probeVectors(std::move(testProbeVectors))
@@ -1282,7 +1152,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilter) {
 
   // null-anti join with filter not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .probeKeys({"t0"})
           .probeVectors(std::move(probeVectors))
@@ -1338,7 +1208,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAndEmptyBuild) {
 
     // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
             .numDrivers(numDrivers_)
             .probeKeys({"t0"})
@@ -1401,7 +1271,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAndNullKey) {
     auto testBuildVectors = buildVectors;
     // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .probeKeys({"t0"})
             .probeVectors(std::move(testProbeVectors))
@@ -1464,7 +1334,7 @@ TEST_P(
     auto testBuildVectors = buildVectors;
     // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .probeKeys({"t0"})
             .probeVectors(std::move(testProbeVectors))
@@ -1505,7 +1375,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
     });
     // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .probeKeys({"t0"})
             .probeVectors(std::move(probeVectors))
@@ -1558,7 +1428,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
     });
     // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .probeKeys({"t0"})
             .probeVectors(std::move(probeVectors))
@@ -1607,7 +1477,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
             makeFlatVector<int32_t>({0, 2, 3}),
         });
   });
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .checkSpillStats(false)
       .numDrivers(numDrivers_)
@@ -1639,7 +1509,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
       // "contains(array[1, 2, NULL], 1)",
   });
   for (const std::string& filter : filters) {
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .numDrivers(numDrivers_)
@@ -1679,7 +1549,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoinWithFilterAndEmptyBuild) {
           });
     });
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
         .probeKeys({"t0"})
@@ -1754,7 +1624,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
         });
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"c0"})
@@ -1810,7 +1680,7 @@ TEST_P(MultiThreadedHashJoinTest, nullStatsWithEmptyBuild) {
         });
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .probeKeys({"c0"})
       .probeVectors(std::move(probeVectors))
@@ -1894,7 +1764,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithEmptyBuild) {
           });
         });
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
@@ -1956,7 +1826,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithNoJoin) {
         });
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"c0"})
@@ -2015,7 +1885,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithAllMatch) {
         });
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
       .probeKeys({"c0"})
@@ -2079,7 +1949,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
@@ -2099,7 +1969,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
@@ -2152,7 +2022,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithNullableFilter) {
             })});
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .checkSpillStats(false)
       .numDrivers(numDrivers_)
@@ -2205,7 +2075,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoin) {
         });
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .injectSpill(false)
       .probeKeys({"c0"})
@@ -2277,7 +2147,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithEmptyBuild) {
           });
         });
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
         .numDrivers(numDrivers_)
         .injectSpill(false)
@@ -2331,7 +2201,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithAllMatch) {
         });
       });
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .injectSpill(false)
       .probeKeys({"c0"})
@@ -2387,7 +2257,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .injectSpill(false)
         .probeKeys({"c0"})
@@ -2407,7 +2277,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .injectSpill(false)
         .probeKeys({"c0"})
@@ -2463,7 +2333,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoin) {
 
   // full join not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .injectSpill(false)
           .probeKeys({"c0"})
@@ -2521,7 +2391,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithEmptyBuild) {
 
     // full join not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
             .numDrivers(numDrivers_)
             .injectSpill(false)
@@ -2579,7 +2449,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithNoMatch) {
 
   // full join not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .injectSpill(false)
           .probeKeys({"c0"})
@@ -2638,7 +2508,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
     auto testBuildVectors = buildVectors;
     // full join not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .injectSpill(false)
             .probeKeys({"c0"})
@@ -2661,7 +2531,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
     auto testBuildVectors = buildVectors;
     // full join not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .injectSpill(false)
             .probeKeys({"c0"})
@@ -2680,7 +2550,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, noSpillLevelLimit) {
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .injectSpill(false)
       .keyTypes({INTEGER()})
@@ -2771,7 +2641,7 @@ TEST_F(HashJoinTest, DISABLED_nullAwareRightSemiProjectOverScan) {
 
     // right semi project not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
             .inputSplits(splitInput)
             .checkSpillStats(false)
@@ -2803,7 +2673,7 @@ TEST_P(MultiThreadedHashJoinTest, duplicateJoinKeysDebug) {
     auto testLeftVectors = leftVectors;
     auto testRightVectors = rightVectors;
     // Duplicate keys on the build side.
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .numDrivers(numDrivers_)
@@ -2824,7 +2694,7 @@ TEST_P(MultiThreadedHashJoinTest, duplicateJoinKeysDebug) {
     auto testLeftVectors = leftVectors;
     auto testRightVectors = rightVectors;
     // Duplicated keys on the probe side.
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .numDrivers(numDrivers_)
@@ -2845,7 +2715,7 @@ TEST_P(MultiThreadedHashJoinTest, duplicateJoinKeysDebug) {
     auto testLeftVectors = leftVectors;
     auto testRightVectors = rightVectors;
     // Duplicate keys on the build side.
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .buildKeys({"u0", "u0"})
@@ -2865,7 +2735,7 @@ TEST_P(MultiThreadedHashJoinTest, duplicateJoinKeysDebug) {
     auto testLeftVectors = leftVectors;
     auto testRightVectors = rightVectors;
     // Duplicated keys on the probe side.
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .buildKeys({"u0", "u1"})
@@ -2929,7 +2799,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
                     .planNode();
     if (throwType) {
       VELOX_ASSERT_THROW(
-          CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
               .config(cudf_velox::CudfConfig::kCudfEnabled, "true")
               .planNode(std::move(plan))
               .injectSpill(false)
@@ -2938,7 +2808,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
               .run(),
           "Replacement with cuDF operator failed");
     } else {
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .config(cudf_velox::CudfConfig::kCudfEnabled, "true")
           .planNode(std::move(plan))
           .injectSpill(false)
@@ -3048,7 +2918,7 @@ TEST_F(HashJoinTest, semiProject) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3059,7 +2929,7 @@ TEST_F(HashJoinTest, semiProject) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3087,7 +2957,7 @@ TEST_F(HashJoinTest, semiProject) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3098,7 +2968,7 @@ TEST_F(HashJoinTest, semiProject) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3127,7 +2997,7 @@ TEST_F(HashJoinTest, semiProject) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3140,7 +3010,7 @@ TEST_F(HashJoinTest, semiProject) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3209,7 +3079,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3220,7 +3090,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3233,7 +3103,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3243,7 +3113,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3256,7 +3126,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3267,7 +3137,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3280,7 +3150,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3291,7 +3161,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3305,7 +3175,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3316,7 +3186,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3329,7 +3199,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(plan)
@@ -3340,7 +3210,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
           .checkSpillStats(false)
           .planNode(flipJoinSides(plan))
@@ -3354,7 +3224,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3365,7 +3235,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3378,7 +3248,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3389,7 +3259,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3403,7 +3273,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3414,7 +3284,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3427,7 +3297,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3438,7 +3308,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
           .injectSpill(false)
           .checkSpillStats(false)
@@ -3497,7 +3367,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
 
     // left semi project not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
             .referenceQuery(fmt::format(
                 "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
@@ -3512,7 +3382,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     // these values.
     // left semi project not supported
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
             .referenceQuery(fmt::format(
                 "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
@@ -3591,7 +3461,7 @@ TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
                     .planNode();
     if (throwType) {
       VELOX_ASSERT_RUNTIME_THROW(
-          CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
               .planNode(plan)
               .config(core::QueryConfig::kPreferredOutputBatchRows, "5")
               .referenceQuery(query)
@@ -3599,7 +3469,7 @@ TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
               .run(),
           "Replacement with cuDF operator failed");
     } else {
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
           .config(core::QueryConfig::kPreferredOutputBatchRows, "5")
           .referenceQuery(query)
@@ -3738,7 +3608,7 @@ TEST_F(HashJoinTest, DISABLED_semiProjectOverLazyVectors) {
   };
 
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
           .inputSplits(splitInput)
           .checkSpillStats(false)
@@ -3748,7 +3618,7 @@ TEST_F(HashJoinTest, DISABLED_semiProjectOverLazyVectors) {
 
   // right semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(flipJoinSides(plan))
           .inputSplits(splitInput)
           .checkSpillStats(false)
@@ -3775,7 +3645,7 @@ TEST_F(HashJoinTest, DISABLED_semiProjectOverLazyVectors) {
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
           .inputSplits(splitInput)
           .checkSpillStats(false)
@@ -3786,7 +3656,7 @@ TEST_F(HashJoinTest, DISABLED_semiProjectOverLazyVectors) {
 
   // right semi project not supported
   VELOX_ASSERT_THROW(
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(flipJoinSides(plan))
           .inputSplits(splitInput)
           .checkSpillStats(false)
@@ -3922,7 +3792,7 @@ TEST_F(HashJoinTest, lazyVectors) {
                   .project({"c1 + 1"})
                   .planNode();
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .planNode(std::move(op))
@@ -3960,7 +3830,7 @@ TEST_F(HashJoinTest, lazyVectors) {
                   .project({"c1 + 1", "bc1", "length(c3)"})
                   .planNode();
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
         .checkSpillStats(false)
         .planNode(std::move(op))
@@ -4143,7 +4013,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
                 .capturePlanNodeId(joinId2)
                 .project({"c0", "c1 + 1", "c1 + u_c1"})
                 .planNode();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .makeInputSplits(makeInputSplits(probeScanId))
       .injectSpill(false)
@@ -4205,7 +4075,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
 
   SplitInput splitInput = {
       {scanNodeId, {Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}}};
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .inputSplits(splitInput)
       .injectSpill(false)
@@ -4311,7 +4181,7 @@ TEST_F(HashJoinTest, memoryUsage) {
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(std::move(plan))
       .referenceQuery("SELECT 30000")
@@ -4371,7 +4241,7 @@ TEST_F(HashJoinTest, smallOutputBatchSize) {
 
   // Use small output batch size to trigger logic for calculating set of
   // probe-side rows to load lazy vectors for.
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(plan))
       .config(core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
       .referenceQuery("SELECT c0, u_c1 FROM t, u WHERE c0 = u_c0 AND c1 < u_c1")
@@ -4383,7 +4253,7 @@ TEST_F(HashJoinTest, DISABLED_spillFileSize) {
   const std::vector<uint64_t> maxSpillFileSizes({0, 1, 1'000'000'000});
   for (const auto spillFileSize : maxSpillFileSizes) {
     SCOPED_TRACE(fmt::format("spillFileSize: {}", spillFileSize));
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .keyTypes({BIGINT()})
         .probeVectors(100, 3)
@@ -4418,7 +4288,7 @@ TEST_F(HashJoinTest, DISABLED_spillFileSize) {
 // Spilling is not supported for cudfHashJoin.
 TEST_F(HashJoinTest, DISABLED_spillPartitionBitsOverlap) {
   auto builder =
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .keyTypes({BIGINT(), BIGINT()})
           .probeVectors(2'000, 3)
@@ -4526,7 +4396,7 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
           .planNode();
   SplitInput splits = {{probeScanId, {exec::Split(split)}}};
 
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .inputSplits(splits)
       .referenceQuery("select t.c0 from t, u where t.c0 = 0")
@@ -4626,7 +4496,7 @@ TEST_F(HashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {
                     .capturePlanNodeId(joinNodeId)
                     .planNode();
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(plan))
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "8192")
         .injectSpill(false)
@@ -4733,7 +4603,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
         })));
 
     std::thread taskThread([&]() {
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .planNode(plan)
           .queryPool(std::move(queryPool))
@@ -4888,7 +4758,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
           })));
 
   std::thread taskThread([&]() {
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .planNode(plan)
         .queryPool(std::move(queryPool))
@@ -5021,7 +4891,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
             })));
 
     std::thread taskThread([&]() {
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .planNode(plan)
           .queryPool(std::move(queryPool))
@@ -5140,7 +5010,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
         })));
 
     std::thread taskThread([&]() {
-      CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .planNode(plan)
           .queryPool(std::move(queryPool))
@@ -5287,7 +5157,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
       })));
 
   std::thread taskThread([&]() {
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .planNode(plan)
         .queryPool(std::move(queryPool))
@@ -5405,7 +5275,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
         })));
 
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .planNode(plan)
             .injectSpill(false)
@@ -5481,7 +5351,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
         })));
 
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .planNode(plan)
             .injectSpill(false)
@@ -5559,7 +5429,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
             })));
 
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .planNode(plan)
             .injectSpill(false)
@@ -5632,7 +5502,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
         })));
 
     VELOX_ASSERT_THROW(
-        CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
             .planNode(plan)
             .injectSpill(false)
@@ -5671,7 +5541,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
                         core::JoinType::kLeft)
                     .planNode();
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
         .injectSpill(false)
         .checkSpillStats(false)
@@ -5722,7 +5592,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
                         core::JoinType::kLeft)
                     .planNode();
 
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
         .injectSpill(false)
         .checkSpillStats(false)
@@ -5833,7 +5703,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
         })));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .planNode(plan)
         .injectSpill(false)
@@ -5895,7 +5765,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
         Operator::ReclaimableSectionGuard guard(hashBuild);
         testingRunArbitration(hashBuild->pool());
       })));
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .planNode(plan)
       // Always trigger spilling.
@@ -6234,7 +6104,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
       }));
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(4)
       .planNode(plan)
       .injectSpill(false)
@@ -6463,7 +6333,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
         memory::testingRunArbitration(op->pool());
       })));
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .injectSpill(false)
       .spillDirectory(tempDirectory->getPath())
@@ -6814,7 +6684,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpill) {
     auto probeVectors = createVectors(10, probeType_, fuzzerOpts_);
     auto buildVectors = createVectors(20, buildType_, fuzzerOpts_);
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .spillDirectory(spillDirectory->getPath())
         .probeKeys({"t_k1"})
@@ -6870,7 +6740,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfLastOutputProcessing) {
   auto buildVectors = createVectors(20, buildType_, fuzzerOpts_);
 
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .spillDirectory(spillDirectory->getPath())
       .probeKeys({"t_k1"})
@@ -6943,7 +6813,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfOutputProcessing) {
     auto buildVectors = createVectors(20, buildType_, fuzzerOpts_);
 
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .spillDirectory(spillDirectory->getPath())
         .probeKeys({"t_k1"})
@@ -7001,7 +6871,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillWhenOneOfProbeFinish) {
 
   std::thread queryThread([&]() {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers, true, true)
         .spillDirectory(spillDirectory->getPath())
         .keyTypes({BIGINT()})
@@ -7052,7 +6922,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
     }
 
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .spillDirectory(spillDirectory->getPath())
         .probeKeys({"t_k1"})
@@ -7119,7 +6989,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillUnderNonReclaimableSection) {
       }));
 
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .spillDirectory(spillDirectory->getPath())
       .keyTypes({BIGINT()})
@@ -7174,7 +7044,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillOutputWithRightSemiJoins) {
     }
 
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .spillDirectory(spillDirectory->getPath())
         .probeType(probeType_)
@@ -7292,7 +7162,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
       }));
 
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .makeInputSplits(makeInputSplits(probeScanId))
       .spillDirectory(spillDirectory->getPath())
@@ -7334,7 +7204,7 @@ DEBUG_ONLY_TEST_F(
       })));
 
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .spillDirectory(spillDirectory->getPath())
       .probeKeys({"t_k1"})
@@ -7553,7 +7423,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, buildReclaimedMemoryReport) {
           })));
 
   std::thread taskThread([&]() {
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers)
         .planNode(plan)
         .queryPool(std::move(queryPool))
@@ -7658,7 +7528,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
       })));
 
   std::thread taskThread([&]() {
-    CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .planNode(plan)
         .queryPool(std::move(queryPool))
@@ -7740,7 +7610,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
                   .planNode();
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  CudfHashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .planNode(plan)
       .injectSpill(false)
