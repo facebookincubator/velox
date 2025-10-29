@@ -577,20 +577,21 @@ TEST(TypeTest, rowParametersMultiThreaded) {
   }
   auto type = ROW(std::move(names), std::move(types));
   constexpr int kNumThreads = 72;
-  const std::vector<TypeParameter>* parameters[kNumThreads];
+  std::span<const TypeParameter> parameters[kNumThreads];
   std::vector<std::thread> threads;
   for (int i = 0; i < kNumThreads; ++i) {
-    threads.emplace_back([&, i] { parameters[i] = &type->parameters(); });
+    threads.emplace_back([&, i] { parameters[i] = type->parameters(); });
   }
   for (auto& thread : threads) {
     thread.join();
   }
   for (int i = 1; i < kNumThreads; ++i) {
-    ASSERT_TRUE(parameters[i] == parameters[0]);
+    ASSERT_TRUE(parameters[i].data() == parameters[0].data());
+    ASSERT_TRUE(parameters[i].size() == parameters[0].size());
   }
-  ASSERT_EQ(parameters[0]->size(), type->size());
-  for (int i = 0; i < parameters[0]->size(); ++i) {
-    ASSERT_TRUE((*parameters[0])[i].type.get() == type->childAt(i).get());
+  ASSERT_EQ(parameters[0].size(), type->size());
+  for (int i = 0; i < parameters[0].size(); ++i) {
+    ASSERT_TRUE(parameters[0][i].type.get() == type->childAt(i).get());
   }
 }
 

@@ -22,15 +22,6 @@
 
 namespace facebook::velox::exec {
 
-/// Given a name of aggregate function and argument types, returns a pair of the
-/// return type and intermediate type if the function exists. Throws if function
-/// doesn't exist or doesn't support specified argument types.
-///
-/// @return a pair of {finalType, intermediateType}
-std::pair<TypePtr, TypePtr> resolveAggregateFunction(
-    const std::string& name,
-    const std::vector<TypePtr>& argTypes);
-
 /// Given a name of aggregate function and argument types, returns the result
 /// type if the function exists. Throws if function doesn't exist or doesn't
 /// support specified argument types. Since aggregate functions can be
