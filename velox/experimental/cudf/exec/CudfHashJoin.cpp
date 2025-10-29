@@ -173,8 +173,6 @@ void CudfHashJoinBuild::noMoreInput() {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    std::cout << "build->inputs_.size() = " << build->inputs_.size()
-              << std::endl;
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
 

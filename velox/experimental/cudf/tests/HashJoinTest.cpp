@@ -1026,7 +1026,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
       .run();
 }
 
-TEST_P(MultiThreadedHashJoinTest, DISABLED_nullAwareAntiJoin) {
+TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(5, [&](uint32_t /*unused*/) {
         return makeRowVector({
@@ -1047,7 +1047,8 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_nullAwareAntiJoin) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+    // FilterProject expression evaluation is not yet supported on GPU
+    VELOX_ASSERT_THROW(HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .probeKeys({"c0"})
         .probeVectors(std::move(testProbeVectors))
@@ -1060,7 +1061,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_nullAwareAntiJoin) {
         .referenceQuery(
             "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 IS NOT NULL)")
         .checkSpillStats(false)
-        .run();
+        .run(), "Replacement with cuDF operator failed");
   }
 
   // Empty build side.
