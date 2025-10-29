@@ -55,7 +55,7 @@ class HashJoinTest : public HashJoinTestBase {
 
   void SetUp() override {
     HashJoinTestBase::SetUp();
-    cudf_velox::CudfConfig::getInstance().forceReplace = true;
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

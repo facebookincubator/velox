@@ -1143,10 +1143,10 @@ Note: These configurations are experimental and subject to change.
      - string
      - ""
      - The prefix to use for the function names in cuDF.
-   * - cudf.force_replace
+   * - cudf.allow_cpu_fallback
      - bool
-     - false
-     - If true, force replacement of CPU operators with cuDF operators.
+     - true
+     - If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.
    * - cudf.debug_enabled
      - bool
      - false
