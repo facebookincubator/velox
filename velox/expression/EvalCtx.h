@@ -429,8 +429,8 @@ class EvalCtx {
     return &isFinalSelection_;
   }
 
-  const SelectivityVector* FOLLY_NULLABLE* FOLLY_NONNULL
-  mutableFinalSelection() {
+  const SelectivityVector * FOLLY_NULLABLE *
+      FOLLY_NONNULL mutableFinalSelection() {
     return &finalSelection_;
   }
 

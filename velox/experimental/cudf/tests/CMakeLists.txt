@@ -105,7 +105,6 @@ set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_dri
 
 target_link_libraries(
   velox_cudf_hash_join_test
-  velox_cudf_hive_connector
   velox_cudf_exec_test_lib
   velox_cudf_exec
   velox_exec
@@ -181,6 +180,7 @@ target_link_libraries(
   velox_cudf_exec
   velox_exec
   velox_exec_test_lib
+  velox_functions_test_lib
   velox_test_util
   gtest
   gtest_main

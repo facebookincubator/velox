@@ -112,12 +112,13 @@ class MergeJoinTest : public HiveConnectorTestBase {
     for (const auto& row : input) {
       std::vector<VectorPtr> children;
       for (const auto& child : row->children()) {
-        children.push_back(std::make_shared<LazyVector>(
-            pool(),
-            child->type(),
-            child->size(),
-            std::make_unique<MySimpleVectorLoader>(
-                batchId, counter, [=, this](RowSet) { return child; })));
+        children.push_back(
+            std::make_shared<LazyVector>(
+                pool(),
+                child->type(),
+                child->size(),
+                std::make_unique<MySimpleVectorLoader>(
+                    batchId, counter, [=, this](RowSet) { return child; })));
       }
 
       data.push_back(makeRowVector(children));
@@ -870,10 +871,11 @@ TEST_F(MergeJoinTest, lazyVectors) {
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
         .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
-        .assertResults(fmt::format(
-            "SELECT c0, rc0, c1, rc1, c2, c3 FROM t {} JOIN u "
-            "ON t.c0 = u.rc0 AND c1 + rc1 < 30",
-            core::JoinTypeName::toName(joinType)));
+        .assertResults(
+            fmt::format(
+                "SELECT c0, rc0, c1, rc1, c2, c3 FROM t {} JOIN u "
+                "ON t.c0 = u.rc0 AND c1 + rc1 < 30",
+                core::JoinTypeName::toName(joinType)));
   }
 }
 

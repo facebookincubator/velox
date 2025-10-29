@@ -637,8 +637,9 @@ folly::dynamic SerializedTypeCache::serialize() {
   // populated.
   std::vector<std::pair<int32_t, const folly::dynamic*>> cacheEntries;
   for (const auto& [_, pair] : cache_) {
-    cacheEntries.emplace_back(std::make_pair<int32_t, const folly::dynamic*>(
-        (int32_t)pair.first, &pair.second));
+    cacheEntries.emplace_back(
+        std::make_pair<int32_t, const folly::dynamic*>(
+            (int32_t)pair.first, &pair.second));
   }
 
   std::sort(cacheEntries.begin(), cacheEntries.end(), [](auto& a, auto& b) {

@@ -27,7 +27,7 @@ namespace facebook::velox::exec::test {
 
 static const std::string kHiveConnectorId = "test-hive";
 
-class HiveConnectorTestBase : public OperatorTestBase {
+class HiveConnectorTestBase : virtual public OperatorTestBase {
  public:
   HiveConnectorTestBase();
 

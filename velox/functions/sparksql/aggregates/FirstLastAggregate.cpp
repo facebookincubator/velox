@@ -444,13 +444,14 @@ AggregateRegistrationResult registerFirstLast(
           .returnType("T")
           .build()};
 
-  signatures.push_back(AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("DECIMAL(a_precision, a_scale)")
-                           .returnType("DECIMAL(a_precision, a_scale)")
-                           .build());
+  signatures.push_back(
+      AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("DECIMAL(a_precision, a_scale)")
+          .returnType("DECIMAL(a_precision, a_scale)")
+          .build());
 
   return registerAggregateFunction(
       name,

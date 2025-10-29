@@ -14,6 +14,7 @@
 add_executable(
   velox_functions_iceberg_test
   BucketFunctionTest.cpp
+  DateTimeFunctionsTest.cpp
   Murmur3Hash32Test.cpp
   TruncateTest.cpp
 )

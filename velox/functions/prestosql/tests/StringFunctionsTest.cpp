@@ -1737,10 +1737,11 @@ TEST_F(StringFunctionsTest, toUtf8) {
   // during execution) to a vector of size 2 and passed on to to_utf8(). Here,
   // if the intermediate flat vector is created for a size > 2 then the function
   // throws.
-  EXPECT_NO_THROW(evaluateSimplified<FlatVector<bool>>(
-      "to_utf8(c0) = to_utf8('this')",
-      makeRowVector({makeNullableFlatVector<StringView>(
-          {std::nullopt, "test"_sv, std::nullopt})})));
+  EXPECT_NO_THROW(
+      evaluateSimplified<FlatVector<bool>>(
+          "to_utf8(c0) = to_utf8('this')",
+          makeRowVector({makeNullableFlatVector<StringView>(
+              {std::nullopt, "test"_sv, std::nullopt})})));
 }
 
 namespace {

@@ -23,14 +23,32 @@
 namespace facebook::velox::cudf_velox {
 
 struct CudfConfig {
+  /// Keys used by the initialize() method.
+  static constexpr const char* kCudfEnabled{"cudf.enabled"};
+  static constexpr const char* kCudfDebugEnabled{"cudf.debug_enabled"};
+  static constexpr const char* kCudfMemoryResource{"cudf.memory_resource"};
+  static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
+  static constexpr const char* kCudfFunctionNamePrefix{
+      "cudf.function_name_prefix"};
+  static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
+  static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
   static CudfConfig& getInstance();
-  CudfConfig& operator=(CudfConfig const&) = delete;
-  CudfConfig(CudfConfig const&) = delete;
   
   /// Initialize from a map with the above keys.
   void initialize(std::unordered_map<std::string, std::string>&&);
+
+  /// Enable cudf by default.
+  /// Clients can disable here and enable it via the QueryConfig as well.
+  bool enabled{true};
+
+  /// Enable debug printing.
+  bool debugEnabled{false};
+
+  /// Allow fallback to CPU operators if GPU operator replacement fails.
+  bool allowCpuFallback{true};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
@@ -43,61 +61,8 @@ struct CudfConfig {
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
   
-  /// Enable cudf by default.
-  /// Clients can disable here and enable it via the QueryConfig as well.
-  bool enabled{true};
-
-  /// Enable debug printing.
-  bool debugEnabled{false};
-
-  /// Force replacement of operators. Throws an error if a replacement fails.
-  bool allowCpuFallback{true};
-
-  /// Keys used by the initialize() method.
-  static constexpr const char* kCudfEnabled{"cudf.enabled"};
-  static constexpr const char* kCudfDebugEnabled{"cudf.debug_enabled"};
-  static constexpr const char* kCudfMemoryResource{"cudf.memory_resource"};
-  static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
-  static constexpr const char* kCudfFunctionNamePrefix{
-      "cudf.function_name_prefix"};
-  static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
-
-  CudfConfig() {}
-
- private:
-
-  bool isEnabled() {
-    std::lock_guard<std::mutex> lock(kMutex);
-    return enabled;
-  }
-
-  void setEnabled(bool val) {
-    std::lock_guard<std::mutex> lock(kMutex);
-    enabled = val;
-  }
-
-  bool isDebugEnabled() {
-    std::lock_guard<std::mutex> lock(kMutex);
-    return debugEnabled;
-  }
-
-  void setDebugEnabled(bool val) {
-    std::lock_guard<std::mutex> lock(kMutex);
-    debugEnabled = val;
-  }
-
-  bool isCpuFallbackAllowed() {
-    std::lock_guard<std::mutex> lock(kMutex);
-    return allowCpuFallback;
-  }
-
-  void setAllowCpuFallback(bool val) {
-    std::lock_guard<std::mutex> lock(kMutex);
-    allowCpuFallback = val;
-  }
-  
-
-  std::mutex kMutex; // Mutex for thread safety
+  /// Whether to log a reason for falling back to Velox CPU execution.
+  bool logFallback{true};
 };
 
 } // namespace facebook::velox::cudf_velox

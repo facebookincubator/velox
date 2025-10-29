@@ -87,7 +87,7 @@ SignatureMapType filterSignatures(
   SignatureMapType output;
   if (!onlyFunctions.empty()) {
     // Parse, lower case and trim it.
-    std::vector<folly::StringPiece> nameList;
+    std::vector<std::string_view> nameList;
     folly::split(',', onlyFunctions, nameList);
     std::unordered_set<std::string> nameSet;
     for (const auto& it : nameList) {

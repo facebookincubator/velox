@@ -66,24 +66,24 @@ struct SyCLPlatform {
   inline T max(T lhs, T rhs) {
     return cl::sycl::max(lhs, rhs);
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline T atomic_load(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, T> address) {
     return cl::sycl::atomic<T>{cl::sycl::global_ptr<T>{address.data()}}.load();
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline void atomic_store(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, T> address,
       T value) {
     cl::sycl::atomic<T>{cl::sycl::global_ptr<T>{address.data()}}.store(value);
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline T atomic_cas(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, T> address,
       T compare, T value) {
@@ -91,18 +91,18 @@ struct SyCLPlatform {
         .compare_exchange_strong(compare, value);
     return compare;
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline T atomic_add(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, T> address,
       T value) {
     return cl::sycl::atomic<T>{cl::sycl::global_ptr<T>{address.data()}}
         .fetch_add(value);
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline T atomic_add(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, T> address,
       T value) {
@@ -110,18 +110,18 @@ struct SyCLPlatform {
         cl::sycl::local_ptr<T>{address.data()}}
         .fetch_add(value);
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline void atomic_min(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, T> address,
       T value) {
     cl::sycl::atomic<T>{cl::sycl::global_ptr<T>{address.data()}}.fetch_min(
         value);
   }
-  template <typename T, template <breeze::utils::AddressSpace,
-                                  breeze::utils::DataArrangement, typename>
-                        typename SliceT>
+  template <typename T,
+            template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> typename SliceT>
   inline void atomic_max(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, T> address,
       T value) {

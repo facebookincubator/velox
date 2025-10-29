@@ -1112,8 +1112,9 @@ class CudaTest : public testing::Test {
     auto start = getCurrentTimeMicro();
     for (auto i = 0; i < numStreams; ++i) {
       streams.push_back(std::make_unique<TestStream>());
-      ints.push_back(reinterpret_cast<int32_t*>(
-          allocator_->allocate(opSize * sizeof(int32_t))));
+      ints.push_back(
+          reinterpret_cast<int32_t*>(
+              allocator_->allocate(opSize * sizeof(int32_t))));
       auto last = ints.back();
       auto data = initVector;
       for (auto i = 0; i < opSize; i += kBatch) {
@@ -1380,8 +1381,9 @@ class CudaTest : public testing::Test {
           runs.push_back(std::make_unique<RoundtripThread>(0, arenas.get()));
         }
         for (int32_t i = 0; i < numThreads; ++i) {
-          threads.push_back(std::thread(
-              [i, &runs, &threadStats]() { runs[i]->run(threadStats[i]); }));
+          threads.push_back(std::thread([i, &runs, &threadStats]() {
+            runs[i]->run(threadStats[i]);
+          }));
         }
         for (auto i = 0; i < numThreads; ++i) {
           threads[i].join();

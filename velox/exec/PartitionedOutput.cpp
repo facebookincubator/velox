@@ -246,17 +246,18 @@ void PartitionedOutput::initializeDestinations() {
   if (destinations_.empty()) {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
-      destinations_.push_back(std::make_unique<detail::Destination>(
-          taskId,
-          i,
-          serde_,
-          serdeOptions_.get(),
-          pool(),
-          eagerFlush_,
-          [&](uint64_t bytes, uint64_t rows) {
-            auto lockedStats = stats_.wlock();
-            lockedStats->addOutputVector(bytes, rows);
-          }));
+      destinations_.push_back(
+          std::make_unique<detail::Destination>(
+              taskId,
+              i,
+              serde_,
+              serdeOptions_.get(),
+              pool(),
+              eagerFlush_,
+              [&](uint64_t bytes, uint64_t rows) {
+                auto lockedStats = stats_.wlock();
+                lockedStats->addOutputVector(bytes, rows);
+              }));
     }
   }
 }

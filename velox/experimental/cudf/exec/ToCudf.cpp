@@ -220,8 +220,9 @@ bool CompileState::compile(bool allow_cpu_fallback) {
     auto id = oper->operatorId();
     if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfFromVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+      replaceOp.push_back(
+          std::make_unique<CudfFromVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
     }
     if (not replaceOp.empty()) {
       // from-velox only, because need to inserted before current operator.
@@ -281,8 +282,9 @@ bool CompileState::compile(bool allow_cpu_fallback) {
       // project node id, so we need FilterProject to report the FilterNode.
       auto filterPlanNode = filterProjectOp->filterNode();
       VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, filterPlanNode, projectPlanNode));
+      replaceOp.push_back(
+          std::make_unique<CudfFilterProject>(
+              id, ctx, filterPlanNode, projectPlanNode));
     } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LimitNode>(
           getPlanNode(limitOp->planNodeId()));
@@ -310,12 +312,13 @@ bool CompileState::compile(bool allow_cpu_fallback) {
       auto planNode = std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
           getPlanNode(assignUniqueIdOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfAssignUniqueId>(
-          id,
-          ctx,
-          planNode,
-          planNode->taskUniqueId(),
-          planNode->uniqueIdCounter()));
+      replaceOp.push_back(
+          std::make_unique<CudfAssignUniqueId>(
+              id,
+              ctx,
+              planNode,
+              planNode->taskUniqueId(),
+              planNode->uniqueIdCounter()));
       replaceOp.back()->initialize();
     } else {
       keepOperator = 1;
@@ -324,8 +327,9 @@ bool CompileState::compile(bool allow_cpu_fallback) {
     if (producesGpuOutput(oper) and
         (nextOperatorIsNotGpu or isLastOperatorOfTask)) {
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfToVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
+      replaceOp.push_back(
+          std::make_unique<CudfToVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
     }
 
     if (!allow_cpu_fallback) {
@@ -351,8 +355,11 @@ bool CompileState::compile(bool allow_cpu_fallback) {
             exec::FilterProject,
             exec::AssignUniqueId>(op);
       };
-      auto GpuRetainedOperator = [isTableScanSupported](const exec::Operator* op) {
-        return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(op) || (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
+      auto GpuRetainedOperator = [isTableScanSupported](
+                                     const exec::Operator* op) {
+        return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(
+                   op) ||
+            (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
       };
       // If GPU operator is supported, then replaceOp should be non-empty and
       // the operator should not be retained Else the velox operator is retained
@@ -361,7 +368,9 @@ bool CompileState::compile(bool allow_cpu_fallback) {
                         keepOperator == 0) ||
           (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
       if (CudfConfig::getInstance().debugEnabled) {
-        std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper) << ", GpuRetainedOperator = " << GpuRetainedOperator(oper) << std::endl;
+        std::cout << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
+                  << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
+                  << std::endl;
         std::cout << "GPU operator condition = " << condition << std::endl;
       }
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
@@ -403,7 +412,8 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     if (!driver.driverCtx()->queryConfig().get<bool>(
-            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) && allow_cpu_fallback_) {
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
+        allow_cpu_fallback_) {
       return false;
     }
     auto state = CompileState(factory, driver);
@@ -480,6 +490,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
+  }
+  if (config.find(kCudfLogFallback) != config.end()) {
+    logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }
 }
 

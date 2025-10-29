@@ -24,7 +24,7 @@ namespace facebook::velox::dwio::common {
 class MetricsLog {
  public:
   static constexpr std::string_view LIB_VERSION_STRING{"1.1"};
-  static constexpr folly::StringPiece WRITE_OPERATION{"WRITE"};
+  static constexpr std::string_view WRITE_OPERATION{"WRITE"};
 
   enum class MetricsType {
     HEADER,

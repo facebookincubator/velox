@@ -60,8 +60,9 @@ std::vector<core::TypedExprPtr> getExpressions(
     const std::string& functionName) {
   std::vector<core::TypedExprPtr> inputs;
   for (size_t i = 0; i < inputType->size(); ++i) {
-    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-        inputType->childAt(i), inputType->nameOf(i)));
+    inputs.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            inputType->childAt(i), inputType->nameOf(i)));
   }
 
   return {std::make_shared<core::CallTypedExpr>(

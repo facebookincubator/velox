@@ -352,18 +352,19 @@ TEST_F(ArbitraryTest, interval) {
 }
 
 TEST_F(ArbitraryTest, longDecimal) {
-  auto data = makeRowVector({// Grouping key.
-                             makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
-                             makeNullableFlatVector<int128_t>(
-                                 {HugeInt::build(10, 100),
-                                  HugeInt::build(10, 100),
-                                  HugeInt::build(10, 200),
-                                  HugeInt::build(10, 200),
-                                  std::nullopt,
-                                  std::nullopt,
-                                  std::nullopt,
-                                  HugeInt::build(10, 400)},
-                                 DECIMAL(38, 8))});
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       makeNullableFlatVector<int128_t>(
+           {HugeInt::build(10, 100),
+            HugeInt::build(10, 100),
+            HugeInt::build(10, 200),
+            HugeInt::build(10, 200),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            HugeInt::build(10, 400)},
+           DECIMAL(38, 8))});
 
   auto expectedResult = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4}),
@@ -379,18 +380,19 @@ TEST_F(ArbitraryTest, longDecimal) {
 }
 
 TEST_F(ArbitraryTest, shortDecimal) {
-  auto data = makeRowVector({// Grouping key.
-                             makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
-                             makeNullableFlatVector<int64_t>(
-                                 {10000000000000000,
-                                  10000000000000000,
-                                  20000000000000000,
-                                  20000000000000000,
-                                  std::nullopt,
-                                  std::nullopt,
-                                  std::nullopt,
-                                  40000000000000000},
-                                 DECIMAL(15, 2))});
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       makeNullableFlatVector<int64_t>(
+           {10000000000000000,
+            10000000000000000,
+            20000000000000000,
+            20000000000000000,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            40000000000000000},
+           DECIMAL(15, 2))});
 
   auto expectedResult = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4}),
@@ -491,8 +493,12 @@ TEST_F(ArbitraryTest, clusteredInput) {
       }
       auto plan = builder.finalAggregation().planNode();
       for (int32_t flushRows : {0, 1}) {
-        SCOPED_TRACE(fmt::format(
-            "mask={} batchRows={} flushRows={}", mask, batchRows, flushRows));
+        SCOPED_TRACE(
+            fmt::format(
+                "mask={} batchRows={} flushRows={}",
+                mask,
+                batchRows,
+                flushRows));
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
             .config(

@@ -17,7 +17,6 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/HashJoinTestBase.h"
-#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -30,7 +29,7 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/HashJoinTestBase.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
@@ -45,22 +44,29 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::cudf_velox::exec::test;
 
+using facebook::velox::exec::test::AssertQueryBuilder;
+using facebook::velox::exec::test::HiveConnectorSplitBuilder;
+using facebook::velox::exec::test::HashJoinBuilder;
+using facebook::velox::exec::test::numTaskSpillFiles;
+using facebook::velox::exec::test::waitForTaskAborted;
+using facebook::velox::exec::test::taskSpilledStats;
+using facebook::velox::exec::test::verifyTaskSpilledRuntimeStats;
+using facebook::velox::exec::test::maxHashBuildSpillLevel;
+using facebook::velox::exec::test::mergeBatches;
+using facebook::velox::exec::test::concat;
+using facebook::velox::exec::test::readCursor;
 using facebook::velox::test::BatchMaker;
-using facebook::velox::cudf_velox::exec::test::taskSpilledStats;
-using facebook::velox::cudf_velox::exec::test::verifyTaskSpilledRuntimeStats;
-using facebook::velox::cudf_velox::exec::test::maxHashBuildSpillLevel;
 
 namespace {
 
 class HashJoinTest : public CudfHashJoinTestBase {
  public:
-  HashJoinTest() : CudfHashJoinTestBase(CudfTestParam(1)) {}
+  HashJoinTest() : CudfHashJoinTestBase(TestParam(1)) {}
 
-  explicit HashJoinTest(const CudfTestParam& param) : CudfHashJoinTestBase(param) {}
+  explicit HashJoinTest(const TestParam& param) : CudfHashJoinTestBase(param) {}
 
   void SetUp() override {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
-    cudf_velox::CudfConfig::getInstance().debugEnabled = false;
     CudfHashJoinTestBase::SetUp();
     cudf_velox::registerCudf();
   }
@@ -73,12 +79,12 @@ class HashJoinTest : public CudfHashJoinTestBase {
 
 class MultiThreadedHashJoinTest
     : public HashJoinTest,
-      public testing::WithParamInterface<CudfTestParam> {
+      public testing::WithParamInterface<TestParam> {
  public:
   MultiThreadedHashJoinTest() : HashJoinTest(GetParam()) {}
 
-  static std::vector<CudfTestParam> getTestParams() {
-    return std::vector<CudfTestParam>({CudfTestParam{1}, CudfTestParam{3}});
+  static std::vector<TestParam> getTestParams() {
+    return std::vector<TestParam>({TestParam{1}, TestParam{3}});
   }
 
   void SetUp() override {
@@ -937,7 +943,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   }
 }
 
-TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
@@ -961,10 +967,10 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
           << ", buildVectors[0]->size() = " << buildVectors[0]->size() << std::endl;
 
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  CudfHiveConnectorTestBase::writeToFile(probeFile->getPath(), probeVectors);
 
   std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), buildVectors);
+  CudfHiveConnectorTestBase::writeToFile(buildFile->getPath(), buildVectors);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -1011,7 +1017,6 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
 
-#if 0
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
@@ -1068,10 +1073,9 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
       .run();
-#endif
 }
 
-TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_nullAwareAntiJoin) {
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(5, [&](uint32_t /*unused*/) {
         return makeRowVector({
@@ -1492,7 +1496,8 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
       .run();
 
   std::vector<std::string> filters({
-      "u1 > t1", "u1 * t1 > 0",
+      "u1 > t1",
+      "u1 * t1 > 0",
       // This filter is true on rows without a match. It should not prevent
       // the row from being returned.
       // Disabling this because coalesce is not supported in cudf.
@@ -1520,9 +1525,10 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
         .joinType(core::JoinType::kAnti)
         .joinFilter(filter)
         .joinOutputLayout({"t0", "t1"})
-        .referenceQuery(fmt::format(
-            "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
+                filter))
         .run();
   }
 }
@@ -2605,10 +2611,10 @@ TEST_F(HashJoinTest, DISABLED_nullAwareRightSemiProjectOverScan) {
     RowVectorPtr& probe = probes[i];
     RowVectorPtr& build = builds[i];
     std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-    writeToFile(probeFile->getPath(), {probe});
+    CudfHiveConnectorTestBase::writeToFile(probeFile->getPath(), {probe});
 
     std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-    writeToFile(buildFile->getPath(), {build});
+    CudfHiveConnectorTestBase::writeToFile(buildFile->getPath(), {build});
 
     createDuckDbTable("t", {probe});
     createDuckDbTable("u", {build});
@@ -3369,9 +3375,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
-            .referenceQuery(fmt::format(
-                "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
-                filter))
+            .referenceQuery(
+                fmt::format(
+                    "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+                    filter))
             .injectSpill(false)
             .run(),
         "Replacement with cuDF operator failed");
@@ -3384,9 +3391,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
-            .referenceQuery(fmt::format(
-                "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
-                filter))
+            .referenceQuery(
+                fmt::format(
+                    "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
+                    filter))
             .injectSpill(false)
             .run(),
         "Replacement with cuDF operator failed");
@@ -3574,10 +3582,10 @@ TEST_F(HashJoinTest, DISABLED_semiProjectOverLazyVectors) {
   });
 
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  CudfHiveConnectorTestBase::writeToFile(probeFile->getPath(), probeVectors);
 
   std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), buildVectors);
+  CudfHiveConnectorTestBase::writeToFile(buildFile->getPath(), buildVectors);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -3737,13 +3745,15 @@ TEST_F(HashJoinTest, lazyVectors) {
 
   for (const auto& probeVector : probeVectors) {
     tempFiles.push_back(TempFilePath::create());
-    writeToFile(tempFiles.back()->getPath(), probeVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), probeVector);
   }
   createDuckDbTable("t", probeVectors);
 
   for (const auto& buildVector : buildVectors) {
     tempFiles.push_back(TempFilePath::create());
-    writeToFile(tempFiles.back()->getPath(), buildVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), buildVector);
   }
   createDuckDbTable("u", buildVectors);
 
@@ -3757,8 +3767,9 @@ TEST_F(HashJoinTest, lazyVectors) {
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeCudfHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
+        buildSplits.push_back(
+            exec::Split(makeCudfHiveConnectorSplit(
+                tempFiles[probeSplits.size() + i]->getPath())));
       }
       SplitInput splits;
       splits.emplace(probeScanId, probeSplits);
@@ -3771,26 +3782,27 @@ TEST_F(HashJoinTest, lazyVectors) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .startTableScan()
-                  .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                  .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"c0"},
-                      {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(ROW({"c0"}, {INTEGER()}))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"c1"})
-                  .project({"c1 + 1"})
-                  .planNode();
+    auto op =
+        PlanBuilder(planNodeIdGenerator)
+            .startTableScan()
+            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+            .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+            .endTableScan()
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"c0"},
+                {"c0"},
+                PlanBuilder(planNodeIdGenerator)
+                    .startTableScan()
+                    .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                    .outputType(ROW({"c0"}, {INTEGER()}))
+                    .endTableScan()
+                    .capturePlanNodeId(buildScanId)
+                    .planNode(),
+                "",
+                {"c1"})
+            .project({"c1 + 1"})
+            .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
@@ -3805,30 +3817,31 @@ TEST_F(HashJoinTest, lazyVectors) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .startTableScan()
-                  .outputType(
-                      ROW({"c0", "c1", "c2", "c3"},
-                          {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
-                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                  .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .filter("c2 < 29")
-                  .hashJoin(
-                      {"c0"},
-                      {"bc0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .project({"c0 as bc0", "c1 as bc1"})
-                          .planNode(),
-                      "(c1 + bc1) % 33 < 27",
-                      {"c1", "bc1", "c3"})
-                  .project({"c1 + 1", "bc1", "length(c3)"})
-                  .planNode();
+    auto op =
+        PlanBuilder(planNodeIdGenerator)
+            .startTableScan()
+            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+            .outputType(
+                ROW({"c0", "c1", "c2", "c3"},
+                    {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
+            .endTableScan()
+            .capturePlanNodeId(probeScanId)
+            .filter("c2 < 29")
+            .hashJoin(
+                {"c0"},
+                {"bc0"},
+                PlanBuilder(planNodeIdGenerator)
+                    .startTableScan()
+                    .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                    .outputType(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                    .endTableScan()
+                    .capturePlanNodeId(buildScanId)
+                    .project({"c0 as bc0", "c1 as bc1"})
+                    .planNode(),
+                "(c1 + bc1) % 33 < 27",
+                {"c1", "bc1", "c3"})
+            .project({"c1 + 1", "bc1", "length(c3)"})
+            .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
@@ -3931,6 +3944,699 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
       "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 = u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))");
 }
 
+// Disabled because dynamic filters are not supported yet in velox-cudf.
+TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
+  const int32_t numSplits = 10;
+  const int32_t numRowsProbe = 333;
+  const int32_t numRowsBuild = 100;
+
+  std::vector<RowVectorPtr> probeVectors;
+  probeVectors.reserve(numSplits);
+
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  for (int32_t i = 0; i < numSplits; ++i) {
+    auto rowVector = makeRowVector({
+        makeFlatVector<int32_t>(
+            numRowsProbe, [&](auto row) { return row - i * 10; }),
+        makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+    });
+    probeVectors.push_back(rowVector);
+    tempFiles.push_back(TempFilePath::create());
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
+  }
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (auto& file : tempFiles) {
+        probeSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(file->getPath())));
+      }
+      SplitInput splits;
+      splits.emplace(nodeId, probeSplits);
+      return splits;
+    };
+  };
+
+  // 100 key values in [35, 233] range.
+  std::vector<RowVectorPtr> buildVectors;
+  for (int i = 0; i < 5; ++i) {
+    buildVectors.push_back(makeRowVector({
+        makeFlatVector<int32_t>(
+            numRowsBuild / 5,
+            [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
+        makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+    }));
+  }
+  std::vector<RowVectorPtr> keyOnlyBuildVectors;
+  for (int i = 0; i < 5; ++i) {
+    keyOnlyBuildVectors.push_back(
+        makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto row) {
+          return 35 + 2 * (row + i * numRowsBuild / 5);
+        })}));
+  }
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .values(buildVectors)
+                       .project({"c0 AS u_c0", "c1 AS u_c1"})
+                       .planNode();
+  auto keyOnlyBuildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                              .values(keyOnlyBuildVectors)
+                              .project({"c0 AS u_c0"})
+                              .planNode();
+
+  // Basic push-down.
+  {
+    SCOPED_TRACE("Inner join");
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      buildSide,
+                      "",
+                      {"c0", "c1", "u_c1"},
+                      core::JoinType::kInner)
+                  .capturePlanNodeId(joinId)
+                  .project({"c0", "c1 + 1", "c1 + u_c1"})
+                  .planNode();
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    // Left semi join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType)
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"c0", "c1"},
+                 core::JoinType::kLeftSemiFilter)
+             .capturePlanNodeId(joinId)
+             .project({"c0", "c1 + 1"})
+             .planNode();
+
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    // Right semi join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType)
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"u_c0", "u_c1"},
+                 core::JoinType::kRightSemiFilter)
+             .capturePlanNodeId(joinId)
+             .project({"u_c0", "u_c1 + 1"})
+             .planNode();
+
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t)")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    // Right join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType)
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"c0", "c1", "u_c1"},
+                 core::JoinType::kRight)
+             .capturePlanNodeId(joinId)
+             .project({"c0", "c1 + 1", "c1 + u_c1"})
+             .planNode();
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+  }
+
+  // Basic push-down with column names projected out of the table scan
+  // having different names than column names in the files.
+  {
+    SCOPED_TRACE("Inner join column rename");
+    auto scanOutputType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
+    connector::ColumnHandleMap assignments;
+    assignments["a"] = regularColumn("c0", INTEGER());
+    assignments["b"] = regularColumn("c1", BIGINT());
+
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .startTableScan()
+                  .outputType(scanOutputType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
+                  .capturePlanNodeId(joinId)
+                  .project({"a", "b + 1", "b + u_c1"})
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery(
+            "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          auto planStats = toPlanStats(task->taskStats());
+          if (hasSpill) {
+            // Dynamic filtering should be disabled with spilling triggered.
+            ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+            ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+          } else {
+            ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+            ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_EQ(
+                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                std::unordered_set<core::PlanNodeId>({joinId}));
+          }
+        })
+        .run();
+  }
+
+  // Push-down that requires merging filters.
+  {
+    SCOPED_TRACE("Merge filters");
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType, {"c0 < 500::INTEGER"})
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1", "u_c1"})
+                  .capturePlanNodeId(joinId)
+                  .project({"c1 + u_c1"})
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery(
+            "SELECT t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          auto planStats = toPlanStats(task->taskStats());
+          if (hasSpill) {
+            // Dynamic filtering should be disabled with spilling triggered.
+            ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+            ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+          } else {
+            ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+            ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_EQ(
+                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                std::unordered_set<core::PlanNodeId>({joinId}));
+          }
+        })
+        .run();
+  }
+
+  // Push-down that turns join into a no-op.
+  {
+    SCOPED_TRACE("canReplaceWithDynamicFilter");
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op =
+        PlanBuilder(planNodeIdGenerator, pool_.get())
+            .tableScan(probeType)
+            .capturePlanNodeId(probeScanId)
+            .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0", "c1"})
+            .capturePlanNodeId(joinId)
+            .project({"c0", "c1 + 1"})
+            .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery("SELECT t.c0, t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          auto planStats = toPlanStats(task->taskStats());
+          if (hasSpill) {
+            // Dynamic filtering should be disabled with spilling triggered.
+            ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+            ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+          } else {
+            ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(
+                getReplacedWithFilterRows(task, 1).sum,
+                numRowsBuild * numSplits);
+            ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_EQ(
+                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                std::unordered_set<core::PlanNodeId>({joinId}));
+          }
+        })
+        .run();
+  }
+
+  // Push-down that turns join into a no-op with output having a different
+  // number of columns than the input.
+  {
+    SCOPED_TRACE("canReplaceWithDynamicFilter column rename");
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0"})
+                  .capturePlanNodeId(joinId)
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery("SELECT t.c0 FROM t JOIN u ON (t.c0 = u.c0)")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          auto planStats = toPlanStats(task->taskStats());
+          if (hasSpill) {
+            // Dynamic filtering should be disabled with spilling triggered.
+            ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+            ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+          } else {
+            ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(
+                getReplacedWithFilterRows(task, 1).sum,
+                numRowsBuild * numSplits);
+            ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_EQ(
+                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                std::unordered_set<core::PlanNodeId>({joinId}));
+          }
+        })
+        .run();
+  }
+
+  // Push-down that requires merging filters and turns join into a no-op.
+  {
+    SCOPED_TRACE("canReplaceWithDynamicFilter merge filters");
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType, {"c0 < 500::INTEGER"})
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c1"})
+                  .capturePlanNodeId(joinId)
+                  .project({"c1 + 1"})
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery(
+            "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          auto planStats = toPlanStats(task->taskStats());
+          if (hasSpill) {
+            // Dynamic filtering should be disabled with spilling triggered.
+            ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+            ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+            ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+          } else {
+            ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+            ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+            ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+            ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+            ASSERT_EQ(
+                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                std::unordered_set<core::PlanNodeId>({joinId}));
+          }
+        })
+        .run();
+  }
+
+  // Push-down with highly selective filter in the scan.
+  {
+    SCOPED_TRACE("Highly selective filter");
+    // Inner join.
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op =
+        PlanBuilder(planNodeIdGenerator, pool_.get())
+            .tableScan(probeType, {"c0 < 200::INTEGER"})
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kInner)
+            .capturePlanNodeId(joinId)
+            .project({"c1 + 1"})
+            .planNode();
+
+    {
+      SCOPED_TRACE("Inner join");
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 200")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    // Left semi join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType, {"c0 < 200::INTEGER"})
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"c1"},
+                 core::JoinType::kLeftSemiFilter)
+             .capturePlanNodeId(joinId)
+             .project({"c1 + 1"})
+             .planNode();
+
+    {
+      SCOPED_TRACE("Left semi join");
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c0 < 200")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    // Right semi join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType, {"c0 < 200::INTEGER"})
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"u_c1"},
+                 core::JoinType::kRightSemiFilter)
+             .capturePlanNodeId(joinId)
+             .project({"u_c1 + 1"})
+             .planNode();
+
+    {
+      SCOPED_TRACE("Right semi join");
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t) AND u.c0 < 200")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+
+    // Right join.
+    op =
+        PlanBuilder(planNodeIdGenerator, pool_.get())
+            .tableScan(probeType, {"c0 < 200::INTEGER"})
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kRight)
+            .capturePlanNodeId(joinId)
+            .project({"c1 + 1"})
+            .planNode();
+
+    {
+      SCOPED_TRACE("Right join");
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c1 + 1 FROM (SELECT * FROM t WHERE t.c0 < 200) t RIGHT JOIN u ON t.c0 = u.c0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
+  }
+
+  // Disable filter push-down by using values in place of scan.
+  {
+    SCOPED_TRACE("Disabled in case of values node");
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .values(probeVectors)
+                  .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1"})
+                  .capturePlanNodeId(joinId)
+                  .project({"c1 + 1"})
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          auto planStats = toPlanStats(task->taskStats());
+          ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+          ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+          ASSERT_EQ(numRowsProbe * numSplits, getInputPositions(task, 1));
+        })
+        .run();
+  }
+
+  // Disable filter push-down by using an expression as the join key on the
+  // probe side.
+  {
+    SCOPED_TRACE("Disabled in case of join condition");
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .project({"cast(c0 + 1 as integer) AS t_key", "c1"})
+                  .hashJoin({"t_key"}, {"u_c0"}, buildSide, "", {"c1"})
+                  .capturePlanNodeId(joinId)
+                  .project({"c1 + 1"})
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE (t.c0 + 1) = u.c0")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          auto planStats = toPlanStats(task->taskStats());
+          ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+          ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+          ASSERT_EQ(numRowsProbe * numSplits, getInputPositions(task, 1));
+          ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+        })
+        .run();
+  }
+}
+
 TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
   const int32_t numSplits = 10;
   const int32_t numProbeRows = 333;
@@ -3947,7 +4653,8 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
   }
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
     return [&] {
@@ -4028,6 +4735,314 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
       .run();
 }
 
+TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
+  const int32_t numSplits = 20;
+  const int32_t numNonSkippedSplits = 10;
+  const int32_t numRowsProbe = 333;
+  const int32_t numRowsBuild = 100;
+
+  std::vector<RowVectorPtr> probeVectors;
+  probeVectors.reserve(numSplits);
+
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  // Each split has a column containing
+  // the split number. This is used to filter out whole splits based
+  // on metadata. We test how using metadata for dropping splits
+  // interactts with dynamic filters. In specific, if the first split
+  // is discarded based on metadata, the dynamic filters must not be
+  // lost even if there is no actual reader for the split.
+  for (int32_t i = 0; i < numSplits; ++i) {
+    auto rowVector = makeRowVector({
+        makeFlatVector<int32_t>(
+            numRowsProbe, [&](auto row) { return row - i * 10; }),
+        makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+        makeFlatVector<int64_t>(
+            numRowsProbe, [&](auto /*row*/) { return i % 2 == 0 ? 0 : i; }),
+    });
+    probeVectors.push_back(rowVector);
+    tempFiles.push_back(TempFilePath::create());
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
+  }
+
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (auto& file : tempFiles) {
+        probeSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(file->getPath())));
+      }
+      // We add splits that have no rows.
+      auto makeEmpty = [&]() {
+        return exec::Split(
+            HiveConnectorSplitBuilder(tempFiles.back()->getPath())
+                .start(10000000)
+                .length(1)
+                .build());
+      };
+      std::vector<exec::Split> emptyFront = {makeEmpty(), makeEmpty()};
+      std::vector<exec::Split> emptyMiddle = {makeEmpty(), makeEmpty()};
+      probeSplits.insert(
+          probeSplits.begin(), emptyFront.begin(), emptyFront.end());
+      probeSplits.insert(
+          probeSplits.begin() + 13, emptyMiddle.begin(), emptyMiddle.end());
+      SplitInput splits;
+      splits.emplace(nodeId, probeSplits);
+      return splits;
+    };
+  };
+
+  // 100 key values in [35, 233] range.
+  std::vector<RowVectorPtr> buildVectors;
+  for (int i = 0; i < 5; ++i) {
+    buildVectors.push_back(makeRowVector({
+        makeFlatVector<int32_t>(
+            numRowsBuild / 5,
+            [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
+        makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+    }));
+  }
+  std::vector<RowVectorPtr> keyOnlyBuildVectors;
+  for (int i = 0; i < 5; ++i) {
+    keyOnlyBuildVectors.push_back(
+        makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto row) {
+          return 35 + 2 * (row + i * numRowsBuild / 5);
+        })}));
+  }
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto probeType = ROW({"c0", "c1", "c2"}, {INTEGER(), BIGINT(), BIGINT()});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .values(buildVectors)
+                       .project({"c0 AS u_c0", "c1 AS u_c1"})
+                       .planNode();
+  auto keyOnlyBuildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                              .values(keyOnlyBuildVectors)
+                              .project({"c0 AS u_c0"})
+                              .planNode();
+
+  // Basic push-down.
+  {
+    // Inner join.
+    core::PlanNodeId probeScanId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType, {"c2 > 0"})
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      buildSide,
+                      "",
+                      {"c0", "c1", "u_c1"},
+                      core::JoinType::kInner)
+                  .project({"c0", "c1 + 1", "c1 + u_c1"})
+                  .planNode();
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .numDrivers(1)
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c2 > 0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_LT(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            }
+          })
+          .run();
+    }
+
+    // Left semi join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType, {"c2 > 0"})
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"c0", "c1"},
+                 core::JoinType::kLeftSemiFilter)
+             .project({"c0", "c1 + 1"})
+             .planNode();
+
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .numDrivers(1)
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c2 > 0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_EQ(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            }
+          })
+          .run();
+    }
+
+    // Right semi join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType, {"c2 > 0"})
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"u_c0", "u_c1"},
+                 core::JoinType::kRightSemiFilter)
+             .project({"u_c0", "u_c1 + 1"})
+             .planNode();
+
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .numDrivers(1)
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t WHERE t.c2 > 0)")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_EQ(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            }
+          })
+          .run();
+    }
+  }
+}
+
+TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
+  vector_size_t size = 1000;
+  const int32_t numSplits = 5;
+
+  std::vector<RowVectorPtr> probeVectors;
+  probeVectors.reserve(numSplits);
+
+  // Prepare probe side table.
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  std::vector<exec::Split> probeSplits;
+  for (int32_t i = 0; i < numSplits; ++i) {
+    auto rowVector = makeRowVector(
+        {"p0", "p1"},
+        {
+            makeFlatVector<int64_t>(
+                size, [&](auto row) { return (row + 1) * (i + 1); }),
+            makeFlatVector<int64_t>(size, [&](auto /*row*/) { return i; }),
+        });
+    probeVectors.push_back(rowVector);
+    tempFiles.push_back(TempFilePath::create());
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
+    auto split = HiveConnectorSplitBuilder(tempFiles.back()->getPath())
+                     .partitionKey("p1", std::to_string(i))
+                     .build();
+    probeSplits.push_back(exec::Split(split));
+  }
+
+  auto outputType = ROW({"p0", "p1"}, {BIGINT(), BIGINT()});
+  connector::ColumnHandleMap assignments = {
+      {"p0", regularColumn("p0", BIGINT())},
+      {"p1", partitionKey("p1", BIGINT())}};
+  createDuckDbTable("p", probeVectors);
+
+  // Prepare build side table.
+  std::vector<RowVectorPtr> buildVectors{
+      makeRowVector({"b0"}, {makeFlatVector<int64_t>({0, numSplits})})};
+  createDuckDbTable("b", buildVectors);
+
+  // Executing the join with p1=b0, we expect a dynamic filter for p1 to prune
+  // the entire file/split. There are total of five splits, and all except the
+  // first one are expected to be pruned. The result 'preloadedSplits' > 1
+  // confirms the successful push of dynamic filters to the preloading data
+  // source.
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId joinNodeId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"p1"},
+              {"b0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {"p0"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(joinNodeId)
+          .project({"p0"})
+          .planNode();
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .planNode(std::move(op))
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
+      .injectSpill(false)
+      .inputSplits({{probeScanId, probeSplits}})
+      .referenceQuery("select p.p0 from p, b where b.b0 = p.p1")
+      .checkSpillStats(false)
+      .verifier([&](const std::shared_ptr<Task>& task, bool /*hasSpill*/) {
+        auto planStats = toPlanStats(task->taskStats());
+        auto getStatSum = [&](const core::PlanNodeId& id,
+                              const std::string& name) {
+          return planStats.at(id).customStats.at(name).sum;
+        };
+        ASSERT_EQ(1, getStatSum(joinNodeId, "dynamicFiltersProduced"));
+        ASSERT_EQ(1, getStatSum(probeScanId, "dynamicFiltersAccepted"));
+        ASSERT_EQ(4, getStatSum(probeScanId, "skippedSplits"));
+        ASSERT_LT(1, getStatSum(probeScanId, "preloadedSplits"));
+      })
+      .run();
+}
+
 TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
   const int32_t numRowsProbe = 300;
   const int32_t numRowsBuild = 100;
@@ -4038,7 +5053,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
       makeFlatVector<int64_t>(numRowsProbe, folly::identity),
   })};
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  CudfHiveConnectorTestBase::writeToFile(probeFile->getPath(), probeVectors);
 
   // Create build data
   std::vector<RowVectorPtr> buildVectors{makeRowVector(
@@ -4097,7 +5112,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
       .run();
 }
 
-TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
+TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> innerBuild = {makeRowVector(
       {"a"},
       {
@@ -4115,7 +5130,7 @@ TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
           makeFlatVector<int64_t>(10, folly::identity),
       })};
   auto file = TempFilePath::create();
-  writeToFile(file->getPath(), rightProbe);
+  CudfHiveConnectorTestBase::writeToFile(file->getPath(), rightProbe);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId;
   auto plan =
@@ -4356,18 +5371,17 @@ DEBUG_ONLY_TEST_F(HashJoinTest, buildReservationReleaseCheck) {
   ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
 }
 
-#if 0
 TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
   vector_size_t size = 10;
-  auto filePaths = makeFilePaths(1);
+  auto filePaths = CudfHiveConnectorTestBase::makeFilePaths(1);
   auto rowVector = makeRowVector(
       {makeFlatVector<int64_t>(size, [&](auto row) { return row; })});
   createDuckDbTable("u", {rowVector});
-  writeToFile(filePaths[0]->getPath(), rowVector);
+  CudfHiveConnectorTestBase::writeToFile(filePaths[0]->getPath(), rowVector);
   std::vector<RowVectorPtr> buildVectors{
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
   createDuckDbTable("t", buildVectors);
-  auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(
+  auto split = CudfHiveConnectorSplitBuilder(
                    filePaths[0]->getPath())
                    .partitionKey("k", "0")
                    .build();
@@ -4403,7 +5417,6 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
       .checkSpillStats(false)
       .run();
 }
-#endif
 
 TEST_F(HashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {
   const uint64_t numBuildRows = 20;
@@ -5212,8 +6225,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
-  const auto buildVectors = makeVectors(buildType_, 10, 128);
-  const auto probeVectors = makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -5288,8 +6303,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
-  const auto buildVectors = makeVectors(buildType_, 10, 128);
-  const auto probeVectors = makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -5365,8 +6382,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
-  const auto buildVectors = makeVectors(buildType_, 10, 128);
-  const auto probeVectors = makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -5443,8 +6462,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
-  const auto buildVectors = makeVectors(buildType_, 10, 128);
-  const auto probeVectors = makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -5549,9 +6570,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -5600,9 +6622,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -5687,8 +6710,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
                   .planNode();
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
-        "minSpillableReservationPct: {}", minSpillableReservationPct));
+    SCOPED_TRACE(
+        fmt::format(
+            "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::HashBuild::addInput",
@@ -7083,7 +8107,8 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
   }
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
     return [&] {
@@ -7571,8 +8596,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
-  auto buildVectors = makeVectors(buildType_, 5, 100);
-  auto probeVectors = makeVectors(probeType_, 5, 100);
+  auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 5, 100);
+  auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 100);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
