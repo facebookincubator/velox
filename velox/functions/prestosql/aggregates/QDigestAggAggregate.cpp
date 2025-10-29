@@ -180,24 +180,27 @@ void registerQDigestAggAggregate(const std::string& prefix, bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& type : {"bigint", "real", "double"}) {
     const auto digestType = fmt::format("qdigest({})", type);
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(digestType)
-                             .intermediateType("varbinary")
-                             .argumentType(type)
-                             .build());
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(digestType)
-                             .intermediateType("varbinary")
-                             .argumentType(type)
-                             .argumentType("bigint")
-                             .build());
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(digestType)
-                             .intermediateType("varbinary")
-                             .argumentType(type)
-                             .argumentType("bigint")
-                             .argumentType("double")
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(digestType)
+            .intermediateType("varbinary")
+            .argumentType(type)
+            .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(digestType)
+            .intermediateType("varbinary")
+            .argumentType(type)
+            .argumentType("bigint")
+            .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(digestType)
+            .intermediateType("varbinary")
+            .argumentType(type)
+            .argumentType("bigint")
+            .argumentType("double")
+            .build());
   }
 
   auto name = prefix + kQDigestAgg;

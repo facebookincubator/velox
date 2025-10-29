@@ -459,8 +459,8 @@ TEST_F(BingTileFunctionsTest, bingTileChildrenZoom) {
   VELOX_ASSERT_USER_THROW(
       testBingTileChildren(0, 0, 2, 1), "Child zoom 1 must be >= tile zoom 2");
   VELOX_ASSERT_USER_THROW(
-      testBingTileChildren(0, 0, 1, 7),
-      "Difference between parent zoom (1) and child zoom (7) must be <= 5");
+      testBingTileChildren(0, 0, 1, 8),
+      "Difference between parent zoom (1) and child zoom (8) must be <= 6");
 
   {
     RowVectorPtr input = makeSingleXYZoomZoomRow(0, 0, 1, 7);
@@ -473,7 +473,7 @@ TEST_F(BingTileFunctionsTest, bingTileChildrenZoom) {
         evaluate("bing_tile_children(bing_tile(c0, c1, c2), c3)", input),
         "Difference between parent zoom (1) and child zoom (15) must be <= 10");
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "5"}});
+        {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "6"}});
   }
 }
 

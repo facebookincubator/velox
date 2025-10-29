@@ -15,12 +15,16 @@
  */
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -1035,6 +1039,29 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
           {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
+ protected:
+  static void SetUpTestCase() {
+    parse::registerTypeResolver();
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::registerCudf();
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterCudf();
+  }
+};
+
+TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
+  auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
+  EXPECT_EQ(castValue, 12);
+  auto tryCast =
+      evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
+  EXPECT_EQ(tryCast, -214);
 }
 
 } // namespace

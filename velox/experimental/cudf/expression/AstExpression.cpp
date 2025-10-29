@@ -386,7 +386,11 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else if (expr->type()->kind() == TypeKind::DOUBLE) {
       return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
     } else {
-      VELOX_FAIL("Unsupported type for cast operation");
+      // TODO (dm): Similar to else block in switch/if, remove this once
+      // ASTEvaluator provides type based canEvaluate
+      auto node =
+          createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
+      return addPrecomputeInstructionOnSide(0, 0, name, "", node);
     }
   } else if (name == "switch" || name == "if") {
     VELOX_CHECK_EQ(len, 3);

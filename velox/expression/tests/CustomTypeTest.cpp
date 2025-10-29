@@ -236,6 +236,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "BINGTILE",
       "TDIGEST",
       "QDIGEST",
+      "SETDIGEST",
       "SFMSKETCH",
       "BIGINT_ENUM",
       "VARCHAR_ENUM",
@@ -243,6 +244,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "TIME WITH TIME ZONE"};
 #ifdef VELOX_ENABLE_GEO
   expectedTypes.insert("GEOMETRY");
+  expectedTypes.insert("SPHERICALGEOGRAPHY");
 #endif
   ASSERT_EQ(expectedTypes, getCustomTypeNames());
 

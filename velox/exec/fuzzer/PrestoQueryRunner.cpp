@@ -132,8 +132,9 @@ class ServerResponse {
     std::vector<TypePtr> types;
     for (const auto& column : response_["columns"]) {
       names.push_back(column["name"].asString());
-      types.push_back(facebook::velox::functions::prestosql::parseType(
-          column["type"].asString()));
+      types.push_back(
+          facebook::velox::functions::prestosql::parseType(
+              column["type"].asString()));
     }
 
     auto rowType = ROW(std::move(names), std::move(types));
@@ -243,8 +244,9 @@ PrestoQueryRunner::inputProjections(
         children[batchIndex].push_back(input[batchIndex]->childAt(childIndex));
       }
 
-      projections.push_back(std::make_shared<core::FieldAccessExpr>(
-          names[childIndex], names[childIndex]));
+      projections.push_back(
+          std::make_shared<core::FieldAccessExpr>(
+              names[childIndex], names[childIndex]));
     }
   }
 
@@ -258,12 +260,13 @@ PrestoQueryRunner::inputProjections(
   std::vector<RowVectorPtr> output;
   output.reserve(input.size());
   for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
-    output.push_back(std::make_shared<RowVector>(
-        input[batchIndex]->pool(),
-        rowType,
-        input[batchIndex]->nulls(),
-        input[batchIndex]->size(),
-        std::move(children[batchIndex])));
+    output.push_back(
+        std::make_shared<RowVector>(
+            input[batchIndex]->pool(),
+            rowType,
+            input[batchIndex]->nulls(),
+            input[batchIndex]->size(),
+            std::move(children[batchIndex])));
   }
 
   return std::make_pair(output, projections);
@@ -380,11 +383,12 @@ std::string PrestoQueryRunner::createTable(
 
   execute(fmt::format("DROP TABLE IF EXISTS {}", name));
 
-  execute(fmt::format(
-      "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
-      name,
-      folly::join(", ", inputType->names()),
-      nullValues.str()));
+  execute(
+      fmt::format(
+          "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
+          name,
+          folly::join(", ", inputType->names()),
+          nullValues.str()));
 
   // Query Presto to find out table's location on disk.
   auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));

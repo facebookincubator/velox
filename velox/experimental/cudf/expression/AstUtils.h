@@ -71,8 +71,11 @@ variant getVariant(const VectorPtr& vector, size_t atIndex = 0) {
 }
 
 template <typename T>
-std::unique_ptr<cudf::scalar>
-makeScalarFromValue(const TypePtr& type, T value, bool isNull) {
+std::unique_ptr<cudf::scalar> makeScalarFromValue(
+    const TypePtr& type,
+    T value,
+    bool isNull,
+    std::optional<cudf::type_id> toType = std::nullopt) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
@@ -101,6 +104,13 @@ makeScalarFromValue(const TypePtr& type, T value, bool isNull) {
         return std::make_unique<cudf::timestamp_scalar<CudfDateType>>(
             value, !isNull, stream, mr);
       }
+    } else if (toType.has_value()) {
+      if (toType == cudf::type_id::DURATION_DAYS) {
+        return std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
+            value, !isNull, stream, mr);
+      }
+      VELOX_FAIL(
+          "Unsupported result type {}", static_cast<int32_t>(toType.value()));
     } else {
       return std::make_unique<cudf::numeric_scalar<T>>(
           value, !isNull, stream, mr);
@@ -117,11 +127,22 @@ makeScalarFromValue(const TypePtr& type, T value, bool isNull) {
 
 template <TypeKind Kind>
 static std::unique_ptr<cudf::scalar> createCudfScalar(
-    const velox::VectorPtr& value) {
+    const velox::VectorPtr& value,
+    std::optional<cudf::type_id> toType = std::nullopt) {
   using T = typename TypeTraits<Kind>::NativeType;
   auto vector = value->as<velox::ConstantVector<T>>();
   return makeScalarFromValue<T>(
-      vector->type(), vector->value(), vector->isNullAt(0));
+      vector->type(), vector->value(), vector->isNullAt(0), toType);
+}
+
+inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    std::optional<cudf::type_id> toType = std::nullopt) {
+  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
+  VELOX_CHECK_NOT_NULL(constExpr);
+  auto constValue = constExpr->value();
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      createCudfScalar, constValue->typeKind(), constValue, toType);
 }
 
 template <TypeKind kind>

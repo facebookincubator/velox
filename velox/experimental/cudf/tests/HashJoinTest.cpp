@@ -1464,7 +1464,8 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
       .run();
 
   std::vector<std::string> filters({
-      "u1 > t1", "u1 * t1 > 0",
+      "u1 > t1",
+      "u1 * t1 > 0",
       // This filter is true on rows without a match. It should not prevent
       // the row from being returned.
       // Disabling this because coalesce is not supported in cudf.
@@ -1492,9 +1493,10 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
         .joinType(core::JoinType::kAnti)
         .joinFilter(filter)
         .joinOutputLayout({"t0", "t1"})
-        .referenceQuery(fmt::format(
-            "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
+                filter))
         .run();
   }
 }
@@ -3238,9 +3240,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
-            .referenceQuery(fmt::format(
-                "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
-                filter))
+            .referenceQuery(
+                fmt::format(
+                    "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+                    filter))
             .injectSpill(false)
             .run(),
         "Replacement with cuDF operator failed");
@@ -3253,9 +3256,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
-            .referenceQuery(fmt::format(
-                "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
-                filter))
+            .referenceQuery(
+                fmt::format(
+                    "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
+                    filter))
             .injectSpill(false)
             .run(),
         "Replacement with cuDF operator failed");
@@ -3626,8 +3630,9 @@ TEST_F(HashJoinTest, lazyVectors) {
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
+        buildSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(
+                tempFiles[probeSplits.size() + i]->getPath())));
       }
       SplitInput splits;
       splits.emplace(probeScanId, probeSplits);
@@ -6399,9 +6404,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6450,9 +6456,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6537,8 +6544,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
                   .planNode();
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
-        "minSpillableReservationPct: {}", minSpillableReservationPct));
+    SCOPED_TRACE(
+        fmt::format(
+            "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::HashBuild::addInput",

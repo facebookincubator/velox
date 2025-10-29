@@ -100,8 +100,9 @@ struct FromUnixtimeFunction {
       const arg_type<double>& unixtime,
       const arg_type<int64_t>& hours,
       const arg_type<int64_t>& minutes) {
-    int16_t timezoneId = tzID_.value_or(tz::getTimeZoneID(
-        checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes)));
+    int16_t timezoneId = tzID_.value_or(
+        tz::getTimeZoneID(
+            checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes)));
     result = pack(fromUnixtime(unixtime).toMillis(), timezoneId);
   }
 
@@ -607,18 +608,19 @@ class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>>
   signaturesPlus() {
-    return {// Signature 1: (time, interval year to month) -> time
-            exec::FunctionSignatureBuilder()
-                .returnType("time")
-                .argumentType("time")
-                .argumentType("interval year to month")
-                .build(),
-            // Signature 2: (interval year to month, time) -> time
-            exec::FunctionSignatureBuilder()
-                .returnType("time")
-                .argumentType("interval year to month")
-                .argumentType("time")
-                .build()};
+    return {
+        // Signature 1: (time, interval year to month) -> time
+        exec::FunctionSignatureBuilder()
+            .returnType("time")
+            .argumentType("time")
+            .argumentType("interval year to month")
+            .build(),
+        // Signature 2: (interval year to month, time) -> time
+        exec::FunctionSignatureBuilder()
+            .returnType("time")
+            .argumentType("interval year to month")
+            .argumentType("time")
+            .build()};
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>>
@@ -1937,7 +1939,10 @@ struct ParseDurationFunction {
     re2::StringPiece valueStr;
     re2::StringPiece unit;
     if (!RE2::FullMatch(
-            std::string_view{amountUnit}, *durationRegex_, &valueStr, &unit)) {
+            re2::StringPiece(amountUnit.data(), amountUnit.size()),
+            *durationRegex_,
+            &valueStr,
+            &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
@@ -1945,7 +1950,7 @@ struct ParseDurationFunction {
     double value{};
     try {
       size_t pos = 0;
-      // Create temporary string from StringPiece for stod
+      // Create temporary string from re2::StringPiece for stod
       std::string valueString(valueStr.data(), valueStr.size());
       value = std::stod(valueString, &pos);
       if (pos != valueString.size()) {

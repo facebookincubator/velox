@@ -149,8 +149,9 @@ TEST_F(FilterSerDeTest, multiFilter) {
   std::vector<int64_t> values{3, 7, 18};
   filters.emplace_back(
       std::make_unique<BigintValuesUsingHashTable>(1, 10, values, true));
-  filters.emplace_back(std::make_unique<BytesRange>(
-      "ABCD", true, true, "FFFF", false, true, false));
+  filters.emplace_back(
+      std::make_unique<BytesRange>(
+          "ABCD", true, true, "FFFF", false, true, false));
 
   MultiRange multiRange(std::move(filters), true);
   testSerde(multiRange);

@@ -168,7 +168,8 @@ Result HiveTypeParser::parseType() {
         return Result{velox::ARRAY(resultList.typelist.at(0))};
       }
       default:
-        VELOX_FAIL("Unsupported kind: '{}'", mapTypeKindToName(nt.typeKind()));
+        VELOX_FAIL(
+            "Unsupported kind: '{}'", TypeKindName::toName(nt.typeKind()));
     }
   }
 }

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <boost/regex.hpp>
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -52,8 +51,10 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
+    const auto formattedJsonPath =
+        jsonPath_.has_value() ? jsonPath_.value() : normalizeJsonPath(jsonPath);
     // jsonPath is "$".
-    if (jsonPath.size() == 1) {
+    if (formattedJsonPath.empty()) {
       result.append(json);
       return true;
     }
@@ -62,8 +63,6 @@ struct GetJsonObjectFunction {
     if (simdjsonParseIncomplete(paddedJson).get(jsonDoc)) {
       return false;
     }
-    const auto formattedJsonPath =
-        jsonPath_.has_value() ? jsonPath_.value() : normalizeJsonPath(jsonPath);
     try {
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
@@ -100,8 +99,7 @@ struct GetJsonObjectFunction {
   // such single quotes to adapt to simdjson lib, e.g., converts "['a']['b']" to
   // "[a][b]".
   std::string removeSingleQuotes(StringView jsonPath) {
-    // Skip the initial "$".
-    std::string result(jsonPath.data() + 1, jsonPath.size() - 1);
+    std::string result(jsonPath.data(), jsonPath.size());
     size_t pairEnd = 0;
     while (true) {
       auto pairBegin = result.find("['", pairEnd);
@@ -120,20 +118,81 @@ struct GetJsonObjectFunction {
     return result;
   }
 
-  // Normalizes the JSON path to be Spark-compatible:
-  // - Removes single quotes in bracket notation
-  // - Removes spaces after dots (e.g., "$. a" -> "$.a")
+  // Normalizes the JSON path to be Spark-compatible.
+  //
+  // Rules applied:
+  // 1. Removes single quotes in bracket notation (e.g., "$['a']" -> "$[a]").
+  // 2. Removes spaces after dots (e.g., "$. a" -> "$.a").
+  // 3. Removes trailing spaces after root symbol (e.g., "$ " -> "$").
+  // 4. Invalid cases return "-1":
+  //    - Empty path or path not starting with '$'.
+  //    - Space between $ and dot (e.g., "$ .a").
+  //    - Consecutive dots (e.g., "$..a").
+  //    - Dot at the end (e.g., "$.a. ").
   std::string normalizeJsonPath(StringView jsonPath) {
     // First, remove single quotes for bracket notation
-    const std::string& path = removeSingleQuotes(jsonPath);
-    if (path == "-1") {
-      return path;
+    std::string path = removeSingleQuotes(jsonPath);
+    if (path.empty() || path[0] != '$') {
+      return "-1";
     }
 
-    // Use Boost regex to find and remove spaces after dots
-    // Pattern: "dot + one or more spaces" -> "dot"
-    static const boost::regex dotSpaceRegex("\\.\\s+");
-    return boost::regex_replace(path, dotSpaceRegex, ".");
+    enum class State {
+      kAfterDollar,
+      kAfterDot,
+      kToken
+    } state = State::kAfterDollar;
+
+    std::string normalized;
+    normalized.reserve(path.size() - 1);
+
+    for (size_t i = 1; i < path.size(); ++i) {
+      const char c = path[i];
+      if (c == ' ') {
+        if (state == State::kToken) {
+          // Spaces within tokens are preserved.
+          normalized.push_back(c);
+        }
+        continue;
+      }
+      switch (state) {
+        case State::kAfterDollar: {
+          if (c == '.') {
+            state = State::kAfterDot;
+            if (path[i - 1] == ' ') {
+              // Spaces between '$' and '.' are invalid.
+              return "-1";
+            }
+          }
+          normalized.push_back(c);
+          break;
+        }
+        case State::kAfterDot: {
+          if (c == '.') {
+            // Consecutive dots are invalid.
+            return "-1";
+          }
+          normalized.push_back(c);
+          state = State::kToken;
+          break;
+        }
+        case State::kToken: {
+          if (c == '.') {
+            normalized.push_back(c);
+            state = State::kAfterDot;
+          } else {
+            normalized.push_back(c);
+          }
+          break;
+        }
+      }
+    }
+
+    if (state == State::kAfterDot) {
+      // Trailing dot is invalid.
+      return "-1";
+    }
+
+    return normalized;
   }
 
   // Extracts a string representation from a simdjson result. Handles various

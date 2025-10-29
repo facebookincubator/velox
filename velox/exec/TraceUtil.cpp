@@ -248,11 +248,13 @@ bool canTrace(const std::string& operatorType) {
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
-      "Unnest",
+      "OrderBy",
       "PartialAggregation",
       "PartitionedOutput",
       "TableScan",
-      "TableWrite"};
+      "TableWrite",
+      "TopNRowNumber",
+      "Unnest"};
   if (kSupportedOperatorTypes.count(operatorType) > 0 ||
       traceNodeRegistry().count(operatorType) > 0) {
     return true;
@@ -405,6 +407,34 @@ core::PlanNodePtr getTraceNode(
         unnestNode->markerName(),
         std::make_shared<DummySourceNode>(
             unnestNode->sources().front()->outputType()));
+  }
+
+  if (const auto* orderByNode =
+          dynamic_cast<const core::OrderByNode*>(traceNode)) {
+    return std::make_shared<core::OrderByNode>(
+        nodeId,
+        orderByNode->sortingKeys(),
+        orderByNode->sortingOrders(),
+        orderByNode->isPartial(),
+        std::make_shared<DummySourceNode>(
+            orderByNode->sources().front()->outputType()));
+  }
+
+  if (const auto* topNRowNumberNode =
+          dynamic_cast<const core::TopNRowNumberNode*>(traceNode)) {
+    const auto generateRowNumber = topNRowNumberNode->generateRowNumber();
+    return std::make_shared<core::TopNRowNumberNode>(
+        nodeId,
+        topNRowNumberNode->rankFunction(),
+        topNRowNumberNode->partitionKeys(),
+        topNRowNumberNode->sortingKeys(),
+        topNRowNumberNode->sortingOrders(),
+        generateRowNumber ? std::make_optional(
+                                topNRowNumberNode->outputType()->names().back())
+                          : std::nullopt,
+        topNRowNumberNode->limit(),
+        std::make_shared<DummySourceNode>(
+            topNRowNumberNode->sources().front()->outputType()));
   }
 
   for (const auto& factory : traceNodeRegistry()) {

@@ -213,8 +213,9 @@ bool CompileState::compile(bool force_replace) {
     auto id = oper->operatorId();
     if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfFromVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+      replaceOp.push_back(
+          std::make_unique<CudfFromVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
     }
     if (not replaceOp.empty()) {
       // from-velox only, because need to inserted before current operator.
@@ -274,8 +275,9 @@ bool CompileState::compile(bool force_replace) {
       // project node id, so we need FilterProject to report the FilterNode.
       auto filterPlanNode = filterProjectOp->filterNode();
       VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, filterPlanNode, projectPlanNode));
+      replaceOp.push_back(
+          std::make_unique<CudfFilterProject>(
+              id, ctx, filterPlanNode, projectPlanNode));
     } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LimitNode>(
           getPlanNode(limitOp->planNodeId()));
@@ -303,20 +305,22 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
           getPlanNode(assignUniqueIdOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfAssignUniqueId>(
-          id,
-          ctx,
-          planNode,
-          planNode->taskUniqueId(),
-          planNode->uniqueIdCounter()));
+      replaceOp.push_back(
+          std::make_unique<CudfAssignUniqueId>(
+              id,
+              ctx,
+              planNode,
+              planNode->taskUniqueId(),
+              planNode->uniqueIdCounter()));
       replaceOp.back()->initialize();
     }
 
     if (producesGpuOutput(oper) and
         (nextOperatorIsNotGpu or isLastOperatorOfTask)) {
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfToVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
+      replaceOp.push_back(
+          std::make_unique<CudfToVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
     }
 
     if (force_replace) {
@@ -465,6 +469,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfForceReplace) != config.end()) {
     forceReplace = folly::to<bool>(config[kCudfForceReplace]);
+  }
+  if (config.find(kCudfLogFallback) != config.end()) {
+    logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }
 }
 

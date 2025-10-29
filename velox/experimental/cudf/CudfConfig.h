@@ -34,6 +34,7 @@ struct CudfConfig {
       "cudf.ast_expression_enabled"};
   static constexpr const char* kCudfAstExpressionPriority{
       "cudf.ast_expression_priority"};
+  static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -74,6 +75,8 @@ struct CudfConfig {
   /// by both, AST will be chosen as replacement for cudf execution, if AST
   /// priority is 25 then standalone cudf function is chosen.
   int astExpressionPriority{100};
+  /// Whether to log a reason for falling back to Velox CPU execution.
+  bool logFallback{true};
 };
 
 } // namespace facebook::velox::cudf_velox

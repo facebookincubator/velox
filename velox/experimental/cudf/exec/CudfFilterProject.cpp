@@ -244,25 +244,30 @@ void CudfFilterProject::filter(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
   // Evaluate the Filter
-  auto filterColumns = filterEvaluator_->eval(
+  auto filterColumn = filterEvaluator_->eval(
       inputTableColumns, stream, cudf::get_current_device_resource_ref(), true);
-  auto filterColumn = asView(filterColumns);
-  // is all true in filter_column
-  auto isAllTrue = cudf::reduce(
-      filterColumn,
-      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
-      cudf::data_type(cudf::type_id::BOOL8),
-      stream,
-      cudf::get_current_device_resource_ref());
-  using ScalarType = cudf::scalar_type_t<bool>;
-  auto result = static_cast<ScalarType*>(isAllTrue.get());
-  // If filter is not all true, apply the filter
-  if (!(result->is_valid(stream) && result->value(stream))) {
-    // Apply the Filter
+  auto filterColumnView = asView(filterColumn);
+  bool shouldApplyFilter = [&]() {
+    if (filterColumnView.has_nulls()) {
+      return true;
+    }
+    // check if all values in filterColumnView are true
+    auto isAllTrue = cudf::reduce(
+        filterColumnView,
+        *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        cudf::get_current_device_resource_ref());
+    using ScalarType = cudf::scalar_type_t<bool>;
+    auto result = static_cast<ScalarType*>(isAllTrue.get());
+    // If filter is not all true, apply the filter
+    return !(result->is_valid(stream) && result->value(stream));
+  }();
+  if (shouldApplyFilter) {
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
     auto filteredTable =
-        cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
+        cudf::apply_boolean_mask(*filterTable, filterColumnView, stream);
     inputTableColumns = filteredTable->release();
   }
 }

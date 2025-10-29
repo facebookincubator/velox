@@ -79,8 +79,9 @@ class GeometrySerializer {
       double yMax,
       StringWriter& stringWriter) {
     VarbinaryWriter writer(stringWriter);
-    writer.write(static_cast<uint8_t>(
-        common::geospatial::GeometrySerializationType::ENVELOPE));
+    writer.write(
+        static_cast<uint8_t>(
+            common::geospatial::GeometrySerializationType::ENVELOPE));
     writer.write(xMin);
     writer.write(yMin);
     writer.write(xMax);
@@ -178,8 +179,9 @@ class GeometrySerializer {
   static void writePoint(
       const geos::geom::Geometry& point,
       VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(
-        common::geospatial::GeometrySerializationType::POINT));
+    writer.write(
+        static_cast<uint8_t>(
+            common::geospatial::GeometrySerializationType::POINT));
     if (!point.isEmpty()) {
       writeCoordinates(point.getCoordinates(), writer);
     } else {
@@ -192,8 +194,9 @@ class GeometrySerializer {
   static void writeMultiPoint(
       const geos::geom::Geometry& geometry,
       VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(
-        common::geospatial::GeometrySerializationType::MULTI_POINT));
+    writer.write(
+        static_cast<uint8_t>(
+            common::geospatial::GeometrySerializationType::MULTI_POINT));
     writer.write(
         static_cast<int32_t>(common::geospatial::EsriShapeType::MULTI_POINT));
     writeEnvelope(geometry, writer);
@@ -211,12 +214,14 @@ class GeometrySerializer {
 
     if (multiType) {
       numParts = geometry.getNumGeometries();
-      writer.write(static_cast<uint8_t>(
-          common::geospatial::GeometrySerializationType::MULTI_LINE_STRING));
+      writer.write(
+          static_cast<uint8_t>(common::geospatial::GeometrySerializationType::
+                                   MULTI_LINE_STRING));
     } else {
       numParts = (numPoints > 0) ? 1 : 0;
-      writer.write(static_cast<uint8_t>(
-          common::geospatial::GeometrySerializationType::LINE_STRING));
+      writer.write(
+          static_cast<uint8_t>(
+              common::geospatial::GeometrySerializationType::LINE_STRING));
     }
 
     writer.write(
@@ -261,11 +266,13 @@ class GeometrySerializer {
     }
 
     if (multiType) {
-      writer.write(static_cast<uint8_t>(
-          common::geospatial::GeometrySerializationType::MULTI_POLYGON));
+      writer.write(
+          static_cast<uint8_t>(
+              common::geospatial::GeometrySerializationType::MULTI_POLYGON));
     } else {
-      writer.write(static_cast<uint8_t>(
-          common::geospatial::GeometrySerializationType::POLYGON));
+      writer.write(
+          static_cast<uint8_t>(
+              common::geospatial::GeometrySerializationType::POLYGON));
     }
 
     writer.write(
@@ -316,8 +323,9 @@ class GeometrySerializer {
   static void writeGeometryCollection(
       const geos::geom::Geometry& collection,
       VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(
-        common::geospatial::GeometrySerializationType::GEOMETRY_COLLECTION));
+    writer.write(
+        static_cast<uint8_t>(common::geospatial::GeometrySerializationType::
+                                 GEOMETRY_COLLECTION));
 
     for (size_t geometryIndex = 0;
          geometryIndex < collection.getNumGeometries();
@@ -364,10 +372,11 @@ class GeometryDeserializer {
     double lastY = std::numeric_limits<double>::signaling_NaN();
     for (int i = 0; i < input.size(); i++) {
       if (!input[i].has_value()) {
-        VELOX_USER_FAIL(fmt::format(
-            "Invalid input to {}: input array contains null at index {}.",
-            functionName,
-            i));
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Invalid input to {}: input array contains null at index {}.",
+                functionName,
+                i));
       }
 
       StringView view = *input[i];
@@ -377,22 +386,27 @@ class GeometryDeserializer {
           inputStream.read<common::geospatial::GeometrySerializationType>();
       if (geometryType !=
           common::geospatial::GeometrySerializationType::POINT) {
-        VELOX_USER_FAIL(fmt::format(
-            "Non-point geometry in {} input at index {}.", functionName, i));
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Non-point geometry in {} input at index {}.",
+                functionName,
+                i));
       }
       auto x = inputStream.read<double>();
       auto y = inputStream.read<double>();
       if (std::isnan(x) || std::isnan(y)) {
-        VELOX_USER_FAIL(fmt::format(
-            "Empty point in {} input at index {}.", functionName, i));
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Empty point in {} input at index {}.", functionName, i));
       }
       if (forbidDuplicates && x == lastX && y == lastY) {
-        VELOX_USER_FAIL(fmt::format(
-            "Repeated point sequence in {}: point {},{} at index {}.",
-            functionName,
-            x,
-            y,
-            i));
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Repeated point sequence in {}: point {},{} at index {}.",
+                functionName,
+                x,
+                y,
+                i));
       }
       lastX = x;
       lastY = y;

@@ -54,8 +54,9 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
 
   exec::Split makeTpchSplit(size_t totalParts = 1, size_t partNumber = 0)
       const {
-    return exec::Split(std::make_shared<TpchConnectorSplit>(
-        kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber));
+    return exec::Split(
+        std::make_shared<TpchConnectorSplit>(
+            kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber));
   }
 
   RowVectorPtr getResults(
@@ -132,8 +133,9 @@ TEST_F(TpchConnectorTest, singleColumnWithAlias) {
       PlanBuilder()
           .startTableScan()
           .outputType(outputType)
-          .tableHandle(std::make_shared<TpchTableHandle>(
-              kTpchConnectorId, Table::TBL_NATION))
+          .tableHandle(
+              std::make_shared<TpchTableHandle>(
+                  kTpchConnectorId, Table::TBL_NATION))
           .assignments({
               {aliasedName, std::make_shared<TpchColumnHandle>("n_name")},
               {"other_name", std::make_shared<TpchColumnHandle>("n_name")},
@@ -158,8 +160,9 @@ void TpchConnectorTest::runScaleFactorTest(double scaleFactor) {
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(ROW({}, {}))
-                  .tableHandle(std::make_shared<TpchTableHandle>(
-                      kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor))
+                  .tableHandle(
+                      std::make_shared<TpchTableHandle>(
+                          kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor))
                   .endTableScan()
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
@@ -187,8 +190,9 @@ TEST_F(TpchConnectorTest, lineitemTinyRowCount) {
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(ROW({}, {}))
-                  .tableHandle(std::make_shared<TpchTableHandle>(
-                      kTpchConnectorId, Table::TBL_LINEITEM, 0.01))
+                  .tableHandle(
+                      std::make_shared<TpchTableHandle>(
+                          kTpchConnectorId, Table::TBL_LINEITEM, 0.01))
                   .endTableScan()
                   .singleAggregation({}, {"count(1)"})
                   .planNode();

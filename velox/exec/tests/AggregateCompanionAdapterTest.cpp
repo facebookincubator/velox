@@ -77,8 +77,8 @@ class AggregateCompanionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& intermediateType,
       const TypePtr& resultType) {
-    const auto& [resolvedResult, resolveIntermediate] =
-        resolveAggregateFunction(name, argTypes);
+    const auto& resolvedResult = resolveResultType(name, argTypes);
+    const auto& resolveIntermediate = resolveIntermediateType(name, argTypes);
     checkEqual(resolvedResult, resultType);
     checkEqual(resolveIntermediate, intermediateType);
   }
@@ -414,22 +414,27 @@ TEST_F(
 TEST_F(
     AggregateCompanionRegistryTest,
     resultTypeNotResolvableFromIntermediateType) {
-  // We only register companion functions for original signatures whose result
-  // type can be resolved from its intermediate type.
+  // We only register partial, merge and merge_extract companion functions for
+  // original signatures whose result type cannot be resolved from its
+  // intermediate type.
   std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures{
       AggregateFunctionSignatureBuilder()
-          .typeVariable("T")
-          .returnType("array(T)")
-          .intermediateType("varbinary")
-          .argumentType("T")
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("i_precision", "min(38, a_precision + 10)")
+          .integerVariable("r_precision", "min(38, a_precision + 4)")
+          .integerVariable("r_scale", "min(38, a_scale + 4)")
+          .returnType("DECIMAL(r_precision, r_scale)")
+          .intermediateType("ROW(DECIMAL(i_precision, a_scale), bigint)")
+          .argumentType("DECIMAL(a_precision, a_scale)")
           .build()};
   registerDummyAggregateFunction("aggregateFunc6", signatures);
 
-  checkAggregateSignaturesCount("aggregateFunc6_partial", 0);
+  checkAggregateSignaturesCount("aggregateFunc6_partial", 1);
 
-  checkAggregateSignaturesCount("aggregateFunc6_merge", 0);
+  checkAggregateSignaturesCount("aggregateFunc6_merge", 1);
 
-  checkAggregateSignaturesCount("aggregateFunc6_merge_extract", 0);
+  checkAggregateSignaturesCount("aggregateFunc6_merge_extract", 1);
 
   checkScalarSignaturesCount("aggregateFunc6_extract", 0);
 }

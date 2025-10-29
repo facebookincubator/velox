@@ -64,8 +64,9 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
 
       // Generate key with a small number of unique values from a small range
       // (0-16).
-      children.emplace_back(makeFlatVector<int32_t>(
-          kRowsPerVector, [](auto row) { return row % 17; }));
+      children.emplace_back(
+          makeFlatVector<int32_t>(
+              kRowsPerVector, [](auto row) { return row % 17; }));
 
       // Generate key with a small number of unique values from a large range
       // (300 total values).

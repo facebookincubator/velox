@@ -55,11 +55,12 @@ exec::AggregateRegistrationResult registerSum(
         "integer",
         "bigint",
         INTERVAL_DAY_TIME()->name()}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("bigint")
-                             .intermediateType("bigint")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("bigint")
+            .intermediateType("bigint")
+            .argumentType(inputType)
+            .build());
   }
 
   return exec::registerAggregateFunction(

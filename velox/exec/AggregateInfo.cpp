@@ -84,7 +84,7 @@ std::vector<AggregateInfo> toAggregateInfo(
     const auto& name = aggregate.call->name();
 
     info.intermediateType =
-        resolveAggregateFunction(name, aggregate.rawInputTypes).second;
+        resolveIntermediateType(name, aggregate.rawInputTypes);
 
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.

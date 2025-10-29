@@ -173,9 +173,7 @@ std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
       return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
     }
   } else {
-    VELOX_FAIL(
-        "Unsupported type for buildBigintRangeExpr: {}",
-        mapTypeKindToName(Kind));
+    VELOX_FAIL("Unsupported type for buildBigintRangeExpr: {}", Kind);
   }
 }
 
@@ -300,9 +298,7 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
     }
     return std::ref(*result);
   } else {
-    VELOX_FAIL(
-        "Unsupported type for buildIntegerInListExpr: {}",
-        mapTypeKindToName(Kind));
+    VELOX_FAIL("Unsupported type for buildIntegerInListExpr: {}", Kind);
   }
 }
 
