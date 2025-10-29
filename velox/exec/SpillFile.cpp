@@ -119,7 +119,7 @@ uint64_t SpillWriter::write(const SpillRows& rows, RowContainer* container) {
   {
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
-      batch_->createStreamTree(type_, 1'000, serdeOptions_.get());
+      batch_->createStreamTree(type_, rows.size(), serdeOptions_.get());
     }
     batch_->appendNumRows(rows.size());
     const auto& types = container->columnTypes();
