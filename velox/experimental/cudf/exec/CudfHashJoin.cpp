@@ -200,7 +200,8 @@ void CudfHashJoinBuild::noMoreInput() {
 
   if (CudfConfig::getInstance().debugEnabled) {
     if (hashObject != nullptr) {
-      LOG(INFO) << "hashObject is not nullptr " << hashObject.get() << std::endl;
+      LOG(INFO) << "hashObject is not nullptr " << hashObject.get()
+                << std::endl;
     } else {
       LOG(INFO) << "hashObject is *** nullptr" << std::endl;
     }
@@ -211,10 +212,8 @@ void CudfHashJoinBuild::noMoreInput() {
       operatorCtx_->driverCtx()->splitGroupId, planNodeId());
   auto cudfHashJoinBridge =
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
-  cudfHashJoinBridge->setHashTable(
-      std::make_optional(
-          std::make_pair(
-              std::shared_ptr(std::move(tbl)), std::move(hashObject))));
+  cudfHashJoinBridge->setHashTable(std::make_optional(
+      std::make_pair(std::shared_ptr(std::move(tbl)), std::move(hashObject))));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
@@ -499,11 +498,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   VELOX_CHECK_NOT_NULL(rightTable);
   if (CudfConfig::getInstance().debugEnabled) {
     if (rightTable != nullptr)
-    LOG(INFO) << "right_table is not nullptr " << rightTable.get()
-              << " hasValue(" << hashObject_.has_value() << ")" << std::endl;
-    if (hb != nullptr)
-      LOG(INFO) << "hb is not nullptr " << hb.get()
+      LOG(INFO) << "right_table is not nullptr " << rightTable.get()
                 << " hasValue(" << hashObject_.has_value() << ")" << std::endl;
+    if (hb != nullptr)
+      LOG(INFO) << "hb is not nullptr " << hb.get() << " hasValue("
+                << hashObject_.has_value() << ")" << std::endl;
   }
 
   // Special case for null-aware anti join where
