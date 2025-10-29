@@ -437,8 +437,9 @@ SpillFileInfo mergeFiles(
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files.size());
   for (const auto& fileInfo : files) {
-    streams.push_back(FileSpillMergeStream::create(
-        SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
+    streams.push_back(
+        FileSpillMergeStream::create(
+            SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
   }
   const auto batchRows = estimateOutputBatchRows(
       streams, bufferParams.maxBatchRows, bufferParams.maxBatchBytes);
