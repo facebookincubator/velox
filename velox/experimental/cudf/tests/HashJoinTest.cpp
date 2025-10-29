@@ -921,6 +921,8 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   }
 }
 
+// Test disabled until issue
+// https://github.com/facebookincubator/velox/issues/15324 is resolved
 TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
