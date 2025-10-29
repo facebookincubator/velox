@@ -2591,13 +2591,19 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
     core::PlanNodeId buildScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(asRowType(probe->type()))
+                    .startTableScan()
+                    .outputType(asRowType(probe->type()))
+                    .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                    .endTableScan()
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
                         {"t0"},
                         {"u0"},
                         PlanBuilder(planNodeIdGenerator)
-                            .tableScan(asRowType(build->type()))
+                            .startTableScan()
+                            .outputType(asRowType(build->type()))
+                            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                            .endTableScan()
                             .capturePlanNodeId(buildScanId)
                             .planNode(),
                         "",
@@ -2608,9 +2614,9 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
 
     SplitInput splitInput = {
         {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+         {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
         {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+         {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}},
     };
 
     // right semi project not supported
