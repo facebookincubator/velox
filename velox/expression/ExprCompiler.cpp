@@ -16,8 +16,8 @@
 
 #include "velox/expression/ExprCompiler.h"
 #include "velox/expression/ConstantExpr.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/ExprUtils.h"
 #include "velox/expression/FieldReference.h"
@@ -125,7 +125,7 @@ ExprPtr getAlreadyCompiled(
 ExprPtr compileExpression(
     const TypedExprPtr& expr,
     Scope* scope,
-    const core::QueryConfig& config,
+    core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding);
@@ -133,7 +133,7 @@ ExprPtr compileExpression(
 std::vector<ExprPtr> compileInputs(
     const TypedExprPtr& expr,
     Scope* scope,
-    const core::QueryConfig& config,
+    core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
@@ -152,7 +152,7 @@ std::vector<ExprPtr> compileInputs(
           compiledInputs.push_back(compileExpression(
               input_2,
               scope,
-              config,
+              queryCtx,
               pool,
               flatteningCandidates,
               enableConstantFolding));
@@ -161,7 +161,7 @@ std::vector<ExprPtr> compileInputs(
         compiledInputs.push_back(compileExpression(
             input,
             scope,
-            config,
+            queryCtx,
             pool,
             flatteningCandidates,
             enableConstantFolding));
@@ -217,7 +217,7 @@ void captureFieldReference(
 std::shared_ptr<Expr> compileLambda(
     const core::LambdaTypedExpr* lambda,
     Scope* scope,
-    const core::QueryConfig& config,
+    core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
@@ -227,7 +227,7 @@ std::shared_ptr<Expr> compileLambda(
   auto body = compileExpression(
       lambda->body(),
       &lambdaScope,
-      config,
+      queryCtx,
       pool,
       flatteningCandidates,
       enableConstantFolding);
@@ -238,7 +238,8 @@ std::shared_ptr<Expr> compileLambda(
   captureReferences.reserve(lambdaScope.capture.size());
   for (auto i = 0; i < lambdaScope.capture.size(); ++i) {
     auto expr = lambdaScope.captureFieldAccesses[i];
-    auto reference = getAlreadyCompiled(expr, config, &scope->visited);
+    auto reference =
+        getAlreadyCompiled(expr, queryCtx->queryConfig(), &scope->visited);
     if (!reference) {
       auto inner = lambdaScope.captureReferences[i];
       reference = std::make_shared<FieldReference>(
@@ -256,48 +257,7 @@ std::shared_ptr<Expr> compileLambda(
       std::move(signature),
       std::move(captureReferences),
       std::move(body),
-      config.exprTrackCpuUsage());
-}
-
-ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
-  if (expr->isConstantExpr() && scope->exprSet->execCtx()) {
-    try {
-      auto rowType = ROW({}, {});
-      auto execCtx = scope->exprSet->execCtx();
-      auto row = BaseVector::create<RowVector>(rowType, 1, execCtx->pool());
-      EvalCtx context(execCtx, scope->exprSet, row.get());
-      VectorPtr result;
-      SelectivityVector rows(1);
-      expr->eval(rows, context, result);
-      auto constantVector = BaseVector::wrapInConstant(1, 0, std::move(result));
-
-      auto resultExpr = std::make_shared<ConstantExpr>(constantVector);
-      if (expr->stats().defaultNullRowsSkipped ||
-          std::any_of(
-              expr->inputs().begin(),
-              expr->inputs().end(),
-              [](const ExprPtr& input) {
-                return input->stats().defaultNullRowsSkipped;
-              })) {
-        resultExpr->setDefaultNullRowsSkipped(true);
-      }
-      return resultExpr;
-    }
-    // Constant folding has a subtle gotcha: if folding a constant expression
-    // deterministically throws, we can't throw at expression compilation time
-    // yet because we can't guarantee that this expression would actually need
-    // to be evaluated.
-    //
-    // So, here, if folding an expression throws an exception, we just ignore it
-    // and leave the expression as-is. If this expression is hit at execution
-    // time and needs to be evaluated, it will throw and fail the query anyway.
-    // If not, in case this expression is never hit at execution time (for
-    // instance, if other arguments are all null in a function with default null
-    // behavior), the query won't fail.
-    catch (const VeloxUserError&) {
-    }
-  }
-  return expr;
+      queryCtx->queryConfig().exprTrackCpuUsage());
 }
 
 /// Returns a vector aligned with exprs vector where elements that correspond to
@@ -421,12 +381,12 @@ ExprPtr compileCast(
 ExprPtr compileRewrittenExpression(
     const TypedExprPtr& expr,
     Scope* scope,
-    const core::QueryConfig& config,
+    core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
   ExprPtr alreadyCompiled =
-      getAlreadyCompiled(expr.get(), config, &scope->visited);
+      getAlreadyCompiled(expr.get(), queryCtx->queryConfig(), &scope->visited);
   if (alreadyCompiled) {
     if (!alreadyCompiled->isMultiplyReferenced()) {
       scope->exprSet->addToReset(alreadyCompiled);
@@ -439,17 +399,17 @@ ExprPtr compileRewrittenExpression(
     return alreadyCompiled;
   }
 
-  const bool trackCpuUsage = config.exprTrackCpuUsage();
+  const bool trackCpuUsage = queryCtx->queryConfig().exprTrackCpuUsage();
 
   const auto& resultType = expr->type();
   auto compiledInputs = compileInputs(
-      expr, scope, config, pool, flatteningCandidates, enableConstantFolding);
+      expr, scope, queryCtx, pool, flatteningCandidates, enableConstantFolding);
 
   ExprPtr result;
   switch (expr->kind()) {
     case core::ExprKind::kConcat: {
       result = getSpecialForm(
-          config,
+          queryCtx->queryConfig(),
           expression::kRowConstructor,
           resultType,
           std::move(compiledInputs),
@@ -457,11 +417,13 @@ ExprPtr compileRewrittenExpression(
       break;
     }
     case core::ExprKind::kCast: {
-      result = compileCast(expr, compiledInputs, trackCpuUsage, config);
+      result = compileCast(
+          expr, compiledInputs, trackCpuUsage, queryCtx->queryConfig());
       break;
     }
     case core::ExprKind::kCall: {
-      result = compileCall(expr, compiledInputs, trackCpuUsage, config);
+      result = compileCall(
+          expr, compiledInputs, trackCpuUsage, queryCtx->queryConfig());
       break;
     }
     case core::ExprKind::kFieldAccess: {
@@ -494,7 +456,7 @@ ExprPtr compileRewrittenExpression(
       result = compileLambda(
           expr->asUnchecked<core::LambdaTypedExpr>(),
           scope,
-          config,
+          queryCtx,
           pool,
           flatteningCandidates,
           enableConstantFolding);
@@ -506,39 +468,27 @@ ExprPtr compileRewrittenExpression(
   }
 
   result->computeMetadata();
-
-  ExprPtr compiled;
-  // If the expression is constant folding it is redundant.
-  if (enableConstantFolding && !result->isConstant()) {
-    compiled = tryFoldIfConstant(result, scope);
-    // Constant folding uses an uninitialized ExprSet for eval. This breaks the
-    // invariant that 'memoizingExprs_' relies on, which is that the Expr
-    // pointers will be alive for the lifetime of the ExprSet. Clear the
-    // execution state of the ExprSet to avoid this.
-    scope->exprSet->clear();
-  } else {
-    compiled = result;
-  }
-
-  scope->visited[expr.get()] = compiled;
-  return compiled;
+  scope->visited[expr.get()] = result;
+  return result;
 }
 
 ExprPtr compileExpression(
     const TypedExprPtr& expr,
     Scope* scope,
-    const core::QueryConfig& config,
+    core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
-  auto rewritten = expression::ExprRewriteRegistry::instance().rewrite(expr);
+  auto rewritten = enableConstantFolding
+      ? expression::optimize(expr, queryCtx, pool)
+      : expression::ExprRewriteRegistry::instance().rewrite(expr);
   if (rewritten.get() != expr.get()) {
     scope->rewrittenExpressions.push_back(rewritten);
   }
   return compileRewrittenExpression(
       rewritten == nullptr ? expr : rewritten,
       scope,
-      config,
+      queryCtx,
       pool,
       flatteningCandidates,
       enableConstantFolding);
@@ -599,7 +549,7 @@ std::vector<std::shared_ptr<Expr>> compileExpressions(
     exprs.push_back(compileExpression(
         source,
         &scope,
-        execCtx->queryCtx()->queryConfig(),
+        execCtx->queryCtx(),
         execCtx->pool(),
         flatteningCandidates,
         enableConstantFolding));
