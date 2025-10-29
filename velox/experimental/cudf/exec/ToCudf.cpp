@@ -491,6 +491,9 @@ void CudfConfig::initialize(
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
   }
+  if (config.find(kCudfLogFallback) != config.end()) {
+    logFallback = folly::to<bool>(config[kCudfLogFallback]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox
