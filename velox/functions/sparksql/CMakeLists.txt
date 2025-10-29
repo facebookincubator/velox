@@ -25,6 +25,7 @@ velox_add_library(
   DecimalCompare.cpp
   Hash.cpp
   In.cpp
+  JsonPathNormalizer.cpp
   LeastGreatest.cpp
   MakeTimestamp.cpp
   Map.cpp
