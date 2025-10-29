@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Time.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -64,14 +66,15 @@ StringView TimeWithTimezoneType::valueToString(
   VELOX_CHECK_LE(
       timezoneMinutes, 1680, "Timezone offset is greater than +14:00");
 
-  auto decodedMinutes = timezoneMinutes >= kTimeZoneBias
-      ? timezoneMinutes - kTimeZoneBias
-      : kTimeZoneBias - timezoneMinutes;
+  auto decodedMinutes = timezoneMinutes >= util::kTimeZoneBias
+      ? timezoneMinutes - util::kTimeZoneBias
+      : util::kTimeZoneBias - timezoneMinutes;
 
-  const auto isBehindUTCString = timezoneMinutes >= kTimeZoneBias ? "+" : "-";
+  const auto isBehindUTCString =
+      timezoneMinutes >= util::kTimeZoneBias ? "+" : "-";
 
-  int16_t offsetHours = decodedMinutes / kMinutesInHour;
-  int16_t remainingOffsetMinutes = decodedMinutes % kMinutesInHour;
+  int16_t offsetHours = decodedMinutes / util::kMinutesInHour;
+  int16_t remainingOffsetMinutes = decodedMinutes % util::kMinutesInHour;
 
   fmt::format_to_n(
       startPos,
@@ -111,6 +114,27 @@ void castToString(
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
 }
 
+void castFromString(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  auto* flatResult = result.asFlatVector<int64_t>();
+  DecodedVector decoded(input, rows);
+
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    const auto stringValue = decoded.valueAt<StringView>(row);
+
+    auto parseResult = util::fromTimeWithTimezoneString(stringValue);
+    if (parseResult.hasError()) {
+      context.setStatus(row, parseResult.error());
+      return;
+    }
+
+    flatResult->set(row, parseResult.value());
+  });
+}
+
 class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
   TimeWithTimeZoneCastOperator() = default;
 
@@ -131,20 +155,29 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
 
   bool isSupportedFromType(const TypePtr& other) const override {
     switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        return true;
       default:
         return false;
     }
   }
 
   void castTo(
-      const BaseVector& /*input*/,
-      exec::EvalCtx& /*context*/,
-      const SelectivityVector& /*rows*/,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
       const TypePtr& resultType,
-      VectorPtr& /*result*/) const override {
-    VELOX_NYI(
-        "Cast to TIME WITH TIME ZONE from {} not yet supported",
-        resultType->toString());
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+    switch (input.typeKind()) {
+      case TypeKind::VARCHAR:
+        castFromString(input, context, rows, *result);
+        break;
+      default:
+        VELOX_UNREACHABLE(
+            "Cast to TIME WITH TIME ZONE from {} not yet supported",
+            input.type()->toString());
+    }
   }
 
   void castFrom(
