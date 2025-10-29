@@ -43,8 +43,8 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::cudf_velox::exec::test;
 
-using facebook::velox::test::BatchMaker;
 using facebook::velox::exec::test::HashJoinBuilder;
+using facebook::velox::test::BatchMaker;
 
 namespace {
 
@@ -3611,13 +3611,15 @@ TEST_F(HashJoinTest, DISABLED_lazyVectors) {
 
   for (const auto& probeVector : probeVectors) {
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), probeVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), probeVector);
   }
   createDuckDbTable("t", probeVectors);
 
   for (const auto& buildVector : buildVectors) {
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), buildVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), buildVector);
   }
   createDuckDbTable("u", buildVectors);
 
@@ -3814,7 +3816,8 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
   }
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
     return [&] {
@@ -4504,7 +4507,8 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
   }
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
     return [&] {
@@ -4611,7 +4615,8 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
   }
 
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
@@ -4827,7 +4832,8 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
         });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
     auto split = HiveConnectorSplitBuilder(tempFiles.back()->getPath())
                      .partitionKey("p1", std::to_string(i))
                      .build();
@@ -6070,8 +6076,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
-  const auto buildVectors = CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
-  const auto probeVectors = CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -6146,8 +6154,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
-  const auto buildVectors = CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
-  const auto probeVectors = CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -6223,8 +6233,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
-  const auto buildVectors = CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
-  const auto probeVectors = CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -6301,8 +6313,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
-  const auto buildVectors = CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
-  const auto probeVectors = CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
+  const auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 10, 128);
+  const auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 128);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -7944,7 +7958,8 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
-    CudfHiveConnectorTestBase::writeToFile(tempFiles.back()->getPath(), rowVector);
+    CudfHiveConnectorTestBase::writeToFile(
+        tempFiles.back()->getPath(), rowVector);
   }
   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
     return [&] {
@@ -8432,8 +8447,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
-  auto buildVectors = CudfHiveConnectorTestBase::makeVectors(buildType_, 5, 100);
-  auto probeVectors = CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 100);
+  auto buildVectors =
+      CudfHiveConnectorTestBase::makeVectors(buildType_, 5, 100);
+  auto probeVectors =
+      CudfHiveConnectorTestBase::makeVectors(probeType_, 5, 100);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);

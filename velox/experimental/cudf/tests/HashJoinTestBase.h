@@ -18,9 +18,6 @@
 
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
-#include <re2/re2.h>
-
-#include <fmt/format.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
@@ -38,19 +35,22 @@
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+#include <fmt/format.h>
+#include <re2/re2.h>
+
 namespace facebook::velox::cudf_velox::exec::test {
 
-using facebook::velox::exec::test::HashJoinTestBase;
-using facebook::velox::exec::test::HashJoinBuilder;
 using facebook::velox::exec::Split;
-using SplitInput =
-    std::unordered_map<core::PlanNodeId, std::vector<Split>>;
-using facebook::velox::exec::test::TestParam;
-using facebook::velox::exec::test::TempFilePath;
+using facebook::velox::exec::test::HashJoinBuilder;
+using facebook::velox::exec::test::HashJoinTestBase;
+using SplitInput = std::unordered_map<core::PlanNodeId, std::vector<Split>>;
 using facebook::velox::exec::test::makeBatches;
 using facebook::velox::exec::test::PlanBuilder;
+using facebook::velox::exec::test::TempFilePath;
+using facebook::velox::exec::test::TestParam;
 
-class CudfHashJoinTestBase : public CudfHiveConnectorTestBase, public HashJoinTestBase {
+class CudfHashJoinTestBase : public CudfHiveConnectorTestBase,
+                             public HashJoinTestBase {
  protected:
   CudfHashJoinTestBase() : HashJoinTestBase(TestParam(1)) {}
 
@@ -63,7 +63,8 @@ class CudfHashJoinTestBase : public CudfHiveConnectorTestBase, public HashJoinTe
   // Make splits with each plan node having a number of source files.
   SplitInput makeSplitInput(
       const std::vector<core::PlanNodeId>& nodeIds,
-      const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files) override {
+      const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files)
+      override {
     VELOX_CHECK_EQ(nodeIds.size(), files.size());
     SplitInput splitInput;
     for (int i = 0; i < nodeIds.size(); ++i) {
@@ -111,26 +112,27 @@ class CudfHashJoinTestBase : public CudfHiveConnectorTestBase, public HashJoinTe
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .startTableScan()
-                  .outputType(asRowType(probeVectors[0]->type()))
-                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                  .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"c0"},
-                      {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(asRowType(buildVectors[0]->type()))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      filter,
-                      outputLayout,
-                      joinType)
-                  .planNode();
+    auto op =
+        PlanBuilder(planNodeIdGenerator)
+            .startTableScan()
+            .outputType(asRowType(probeVectors[0]->type()))
+            .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+            .endTableScan()
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"c0"},
+                {"c0"},
+                PlanBuilder(planNodeIdGenerator)
+                    .startTableScan()
+                    .outputType(asRowType(buildVectors[0]->type()))
+                    .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                    .endTableScan()
+                    .capturePlanNodeId(buildScanId)
+                    .planNode(),
+                filter,
+                outputLayout,
+                joinType)
+            .planNode();
     SplitInput splitInput = {
         {probeScanId,
          {Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
@@ -150,4 +152,4 @@ class CudfHashJoinTestBase : public CudfHiveConnectorTestBase, public HashJoinTe
   }
 };
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::cudf_velox::exec::test
