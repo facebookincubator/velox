@@ -49,6 +49,7 @@ extern void registerMapAllowingDuplicates(
 extern void registerBingTileFunctions(const std::string& prefix);
 #ifdef VELOX_ENABLE_GEO
 extern void registerGeometryFunctions(const std::string& prefix);
+extern void registerSphericalGeographyFunctions();
 #endif
 extern void registerInternalArrayFunctions();
 
@@ -115,6 +116,10 @@ void registerBingTileFunctions(const std::string& prefix) {
 void registerGeometryFunctions(const std::string& prefix) {
   functions::registerGeometryFunctions(prefix);
 }
+
+void registerSphericalGeographyFunctions() {
+  functions::registerSphericalGeographyFunctions();
+}
 #endif
 
 void registerGeneralFunctions(const std::string& prefix) {
@@ -162,6 +167,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerBingTileFunctions(prefix);
 #ifdef VELOX_ENABLE_GEO
   registerGeometryFunctions(prefix);
+  registerSphericalGeographyFunctions();
 #endif
   registerGeneralFunctions(prefix);
   registerDateTimeFunctions(prefix);

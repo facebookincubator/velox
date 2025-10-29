@@ -54,11 +54,6 @@ class BigintTypeWithCustomComparison final : public BigintType {
     return "BIGINT TYPE WITH CUSTOM COMPARISON";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
-  }
-
   std::string toString() const override {
     return name();
   }
@@ -97,11 +92,6 @@ class BigintTypeWithInvalidCustomComparison final : public BigintType {
 
   const char* name() const override {
     return "BIGINT TYPE WITH INVALID CUSTOM COMPARISON";
-  }
-
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
   }
 
   std::string toString() const override {

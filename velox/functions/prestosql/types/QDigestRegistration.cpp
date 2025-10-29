@@ -37,7 +37,7 @@ class QDigestTypeFactory : public CustomTypeFactory {
   AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const override {
     VELOX_USER_CHECK_NOT_NULL(config.type_, "QDigest Type must be provided");
-    const auto& parameters = config.type_->parameters();
+    auto parameters = config.type_->parameters();
 
     VELOX_USER_CHECK(
         parameters.size() == 1 &&

@@ -127,9 +127,8 @@ class IPPrefixType final : public RowType {
     return obj;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
+  std::span<const TypeParameter> parameters() const override {
+    return {};
   }
 };
 
