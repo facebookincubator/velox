@@ -1527,9 +1527,9 @@ const cudf::ast::expression& createRangeExpr(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
   };
 
-  // If RangeT is BytesValues and it's a single value, return a simple
-  // equality expression. This is an early return for the single-value IN-list
-  // filter on bytes.
+  // If RangeT is BytesValues and it's a single value, return a simple equality
+  // expression. This is an early return for the single-value IN-list filter on
+  // bytes.
   if constexpr (std::is_same_v<RangeT, facebook::velox::common::BytesRange>) {
     if (range->isSingleValue()) {
       // Only one value in the IN-list, so just compare for equality.
