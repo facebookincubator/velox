@@ -396,6 +396,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_exec
     velox_exec_test_lib
     velox_spiller_sort_benchmark_base
+    Folly::follybenchmark
   )
 endif()
 

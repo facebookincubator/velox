@@ -68,8 +68,8 @@ SpillerBase::SpillerBase(
           spillConfig->fileCreateConfig) {
   TestValue::adjust("facebook::velox::exec::SpillerBase", this);
 
-  serializeRowContainer_ =
-      spillConfig->serializeRowContainer && container_->supportSerializeRows();
+  serializeRowContainer_ = spillConfig->serializeRowContainer &&
+      container_ != nullptr && container_->supportSerializeRows();
 }
 
 void SpillerBase::spill(const RowContainerIterator* startRowIter) {

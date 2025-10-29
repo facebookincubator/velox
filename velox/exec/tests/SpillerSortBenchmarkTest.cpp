@@ -16,6 +16,7 @@
 
 #include "SortSpillInputBenchmarkBase.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include <folly/Benchmark.h>
 
 #include <gflags/gflags.h>
 
@@ -36,36 +37,78 @@ bool containsString(TypePtr type) {
 }
 
 void runTest(RowTypePtr rowType, bool serializeRowContainer, int strLength) {
+  folly::BenchmarkSuspender suspender;
   auto test = std::make_unique<test::SortSpillInputBenchmarkBase>();
   test->setUp(rowType, serializeRowContainer, strLength);
+  suspender.dismiss();
   test->run();
+  suspender.rehire();
   test->printStats();
   test->cleanup();
 }
 
-void doTest(RowTypePtr rowType) {
-  LOG(INFO) << "=====================BENCHMARK===========================";
-  bool conf[] = {false, true};
-  int strLength[] = {10, 50, 100};
-  LOG(INFO) << "row type: " << rowType->toString();
-  for (auto serializeRowContainer : conf) {
-    if (containsString(rowType)) {
-      for (auto length : strLength) {
-        LOG(INFO)
-            << "-----------------------------------------------------------";
-        LOG(INFO) << "serializeRowContainer: "
-                  << (serializeRowContainer ? "true" : "false")
-                  << " string max length: " << length;
-        runTest(rowType, serializeRowContainer, length);
-      }
-    } else {
-      LOG(INFO)
-          << "-----------------------------------------------------------";
-      LOG(INFO) << "serializeRowContainer: "
-                << (serializeRowContainer ? "true" : "false");
-      runTest(rowType, serializeRowContainer, 0);
-    }
-  }
+BENCHMARK(integer_type) {
+  runTest(ROW({"c0"}, {INTEGER()}), false, 0);
+}
+
+BENCHMARK_RELATIVE(integer_type_serialize_rows) {
+  runTest(ROW({"c0"}, {INTEGER()}), true, 0);
+}
+
+BENCHMARK(bigint_type) {
+  runTest(ROW({"c0"}, {BIGINT()}), false, 0);
+}
+
+BENCHMARK_RELATIVE(bigint_type_serialize_rows) {
+  runTest(ROW({"c0"}, {BIGINT()}), true, 0);
+}
+
+BENCHMARK(string_type_10bytes) {
+  runTest(ROW({"c0"}, {VARBINARY()}), false, 10);
+}
+
+BENCHMARK_RELATIVE(string_type_10bytes_serialize_rows) {
+  runTest(ROW({"c0"}, {VARBINARY()}), true, 10);
+}
+
+BENCHMARK(string_type_50bytes) {
+  runTest(ROW({"c0"}, {VARBINARY()}), false, 50);
+}
+
+BENCHMARK_RELATIVE(string_type_50bytes_long_serialize_rows) {
+  runTest(ROW({"c0"}, {VARBINARY()}), true, 50);
+}
+
+BENCHMARK(array_of_integer_type) {
+  runTest(ROW({"c0"}, {ARRAY(INTEGER())}), false, 10);
+}
+
+BENCHMARK_RELATIVE(array_of_integer_type_serialize_rows) {
+  runTest(ROW({"c0"}, {ARRAY(INTEGER())}), true, 10);
+}
+
+BENCHMARK(array_of_10bytes_varbinary_type) {
+  runTest(ROW({"c0"}, {ARRAY(VARBINARY())}), false, 10);
+}
+
+BENCHMARK_RELATIVE(array_of_10bytes_varbinary_type_serialize_rows) {
+  runTest(ROW({"c0"}, {ARRAY(VARBINARY())}), true, 10);
+}
+
+BENCHMARK(array_of_50bytes_varbinary_type) {
+  runTest(ROW({"c0"}, {ARRAY(VARBINARY())}), false, 50);
+}
+
+BENCHMARK_RELATIVE(array_of_50bytes_varbinary_type_serialize_rows) {
+  runTest(ROW({"c0"}, {ARRAY(VARBINARY())}), true, 50);
+}
+
+BENCHMARK(array_of_100bytes_varbinary_type) {
+  runTest(ROW({"c0"}, {ARRAY(VARBINARY())}), false, 100);
+}
+
+BENCHMARK_RELATIVE(array_of_100bytes_varbinary_type_serialize_rows) {
+  runTest(ROW({"c0"}, {ARRAY(VARBINARY())}), true, 100);
 }
 
 int main(int argc, char* argv[]) {
@@ -75,19 +118,6 @@ int main(int argc, char* argv[]) {
   serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   filesystems::registerLocalFileSystem();
 
-  RowTypePtr rowTypes[] = {
-      ROW({"c0", "c1", "c2"}, {INTEGER(), BIGINT(), INTEGER()}),
-      ROW({"c0", "c1", "c2"}, {INTEGER(), BIGINT(), VARBINARY()}),
-      ROW({"c0", "c1", "c2"}, {INTEGER(), BIGINT(), ARRAY(INTEGER())}),
-      ROW({"c0", "c1", "c2"}, {INTEGER(), BIGINT(), ARRAY(VARBINARY())}),
-      ROW({"c0", "c1", "c2"},
-          {INTEGER(), BIGINT(), MAP(INTEGER(), VARBINARY())}),
-      ROW({"c0", "c1", "c2"},
-          {INTEGER(),
-           BIGINT(),
-           ROW({"int", "str"}, {INTEGER(), VARBINARY()})})};
-  for (auto rowType : rowTypes) {
-    doTest(rowType);
-  }
+  folly::runBenchmarks();
   return 0;
 }

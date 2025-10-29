@@ -52,7 +52,7 @@ DEFINE_uint32(
     "The number of vectors for spilling");
 DEFINE_uint32(
     spiller_benchmark_num_key_columns,
-    2,
+    1,
     "The number of key columns");
 DEFINE_uint32(
     spiller_benchmark_spill_executor_size,
@@ -93,7 +93,7 @@ void SpillerBenchmarkBase::setUp(RowTypePtr rowType, int32_t stringMaxLength) {
     options.vectorSize = inputVectorSize_;
     options.nullRatio = 0.1;
     options.stringLength = stringMaxLength;
-    options.stringVariableLength = true;
+    options.stringVariableLength = false;
     vectorFuzzer_ = std::make_unique<VectorFuzzer>(options, pool_.get());
   }
   rowVectors_.reserve(numInputVectors_);

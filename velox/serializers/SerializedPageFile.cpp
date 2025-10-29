@@ -151,7 +151,7 @@ uint64_t SerializedPageFileWriter::write(
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
       batch_->createStreamTree(
           std::static_pointer_cast<const RowType>(rows->type()),
-          rows->size(),
+          1'000,
           serdeOptions_.get());
     }
     batch_->append(rows, indices);
