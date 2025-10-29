@@ -30,7 +30,12 @@ class Config;
 
 namespace facebook::velox::core {
 
-using ConnectorConfigs = std::unordered_map<std::string, config::ConfigPtr>;
+using ConnectorConfigs =
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>;
+#else
+    std::unordered_map<std::string, config::ConfigPtr>;
+#endif
 
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
@@ -55,19 +60,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<QueryCtx> create(
-      folly::Executor* executor,
-      QueryConfig&& queryConfig,
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-          connectorConfigsOld,
-      cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
-      std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      folly::Executor* spillExecutor = nullptr,
-      const std::string& queryId = "",
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
-#endif
-
   static std::string generatePoolName(const std::string& queryId);
 
   memory::MemoryPool* pool() const {
@@ -90,8 +82,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryConfig_;
   }
 
-  const config::IConfig* connectorSessionProperties(
-      const std::string& connectorId) const {
+  // Replace auto* with const IConfig* once backward compatibility is removed.
+  auto* connectorSessionProperties(const std::string& connectorId) const {
     auto it = connectorSessionProperties_.find(connectorId);
     if (it == connectorSessionProperties_.end()) {
       return getEmptyConfig();
@@ -206,11 +198,17 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     memory::MemoryPool* const pool_;
   };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  static config::ConfigBase* getEmptyConfig() {
+    static config::ConfigBase gEmptyConfig{{}};
+    return &gEmptyConfig;
+  }
+#else
   static const config::IConfig* getEmptyConfig() {
-    static const config::ConfigBase kEmptyConfig{
-        std::unordered_map<std::string, std::string>{}};
+    static const config::ConfigBase kEmptyConfig{{}};
     return &kEmptyConfig;
   }
+#endif
 
   void initPool(const std::string& queryId) {
     if (pool_ == nullptr) {

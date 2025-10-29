@@ -23,7 +23,12 @@
 namespace facebook::velox::config {
 
 class IConfig;
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+class ConfigBase;
+using ConfigPtr = std::shared_ptr<const ConfigBase>;
+#else
 using ConfigPtr = std::shared_ptr<const IConfig>;
+#endif
 
 } // namespace facebook::velox::config
 

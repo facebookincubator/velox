@@ -918,8 +918,8 @@ DwrfWriterFactory::createWriterOptions() {
 }
 
 void WriterOptions::processConfigs(
-    const config::IConfig& connectorConfig,
-    const config::IConfig& session) {
+    const config::OldConfig& connectorConfig,
+    const config::OldConfig& session) {
   auto dwrfWriterOptions = dynamic_cast<dwrf::WriterOptions*>(this);
   VELOX_CHECK_NOT_NULL(
       dwrfWriterOptions, "Expected a DWRF WriterOptions object.");

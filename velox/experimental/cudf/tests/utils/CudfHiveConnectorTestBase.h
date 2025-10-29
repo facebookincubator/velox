@@ -44,8 +44,7 @@ class CudfHiveConnectorTestBase
   void SetUp() override;
   void TearDown() override;
 
-  void resetCudfHiveConnector(
-      const std::shared_ptr<const facebook::velox::config::ConfigBase>& config);
+  void resetCudfHiveConnector(const facebook::velox::config::ConfigPtr& config);
 
   void writeToFile(
       const std::string& filePath,

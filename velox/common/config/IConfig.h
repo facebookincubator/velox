@@ -65,6 +65,8 @@ class IConfig {
   virtual std::optional<std::string> access(const std::string& key) const = 0;
 };
 
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 using ConfigPtr = std::shared_ptr<const IConfig>;
+#endif
 
 } // namespace facebook::velox::config

@@ -18,11 +18,6 @@
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
-namespace facebook::velox::config {
-class IConfig;
-using ConfigPtr = std::shared_ptr<const IConfig>;
-} // namespace facebook::velox::config
-
 namespace facebook::velox::filesystems {
 
 /// We are using the DFS (Data Lake Storage) endpoint for Azure Blob File write

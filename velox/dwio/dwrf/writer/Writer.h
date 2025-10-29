@@ -47,8 +47,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
   DwrfFormat format{DwrfFormat::kDwrf};
 
   void processConfigs(
-      const config::IConfig& connectorConfig,
-      const config::IConfig& session) override;
+      const config::OldConfig& connectorConfig,
+      const config::OldConfig& session) override;
 };
 
 class Writer : public dwio::common::Writer {

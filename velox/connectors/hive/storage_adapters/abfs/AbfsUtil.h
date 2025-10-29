@@ -26,9 +26,6 @@ constexpr std::string_view kAbfsScheme{"abfs://"};
 constexpr std::string_view kAbfssScheme{"abfss://"};
 } // namespace
 
-class IConfig;
-using ConfigPtr = std::shared_ptr<const IConfig>;
-
 struct CacheKey {
   const std::string accountName;
   const std::string authType;

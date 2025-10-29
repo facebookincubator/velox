@@ -556,8 +556,8 @@ ParquetWriterFactory::createWriterOptions() {
 }
 
 void WriterOptions::processConfigs(
-    const config::IConfig& connectorConfig,
-    const config::IConfig& session) {
+    const config::OldConfig& connectorConfig,
+    const config::OldConfig& session) {
   auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
   VELOX_CHECK_NOT_NULL(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");

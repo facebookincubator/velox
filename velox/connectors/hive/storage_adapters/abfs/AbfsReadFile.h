@@ -18,11 +18,6 @@
 
 #include "velox/common/file/File.h"
 
-namespace facebook::velox::config {
-class IConfig;
-using ConfigPtr = std::shared_ptr<const IConfig>;
-} // namespace facebook::velox::config
-
 namespace facebook::velox::filesystems {
 class AbfsReadFile final : public ReadFile {
  public:
