@@ -290,7 +290,7 @@ void SortWindowBuild::noMoreInput() {
     SpillPartitionSet spillPartitionSet;
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
-    merge_ = spillPartitionSet.begin()->second->createOrderedReaderWithPreMerge(
+    merge_ = spillPartitionSet.begin()->second->createOrderedReader(
         spillConfig_->numMaxMergeFiles,
         spillConfig_->readBufferSize,
         spillConfig_->writeBufferSize,

@@ -164,7 +164,8 @@ struct SpillConfig {
   /// a single ordered stream. 0 means unlimited. This is used to reduce memory
   /// pressure by capping the number of open files when merging spilled sorted
   /// files to avoid using too much memory and causing OOM. Note that this is
-  /// only applicable for ordered spill.
+  /// only applicable for ordered spill, is not applicable for spill scenarios
+  /// that don't need sorting, e.g. HashJoin.
   uint32_t numMaxMergeFiles;
 
   /// Prefix sort config when spilling, enable prefix sort when this config is

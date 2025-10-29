@@ -483,15 +483,14 @@ void SortBuffer::prepareOutputWithSpill() {
   }
 
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
-  spillMerger_ =
-      spillPartitionSet_.begin()->second->createOrderedReaderWithPreMerge(
-          spillConfig_->numMaxMergeFiles,
-          spillConfig_->readBufferSize,
-          spillConfig_->writeBufferSize,
-          spillConfig_->updateAndCheckSpillLimitCb,
-          pool(),
-          spillStats_,
-          spillConfig_->fileCreateConfig);
+  spillMerger_ = spillPartitionSet_.begin()->second->createOrderedReader(
+      spillConfig_->numMaxMergeFiles,
+      spillConfig_->readBufferSize,
+      spillConfig_->writeBufferSize,
+      spillConfig_->updateAndCheckSpillLimitCb,
+      pool(),
+      spillStats_,
+      spillConfig_->fileCreateConfig);
   spillPartitionSet_.clear();
 }
 } // namespace facebook::velox::exec

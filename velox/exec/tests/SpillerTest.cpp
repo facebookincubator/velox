@@ -714,7 +714,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       auto* spillPartition = spillPartitionEntry.second.get();
       // We make a merge reader that merges the spill files and the rows that
       // are still in the RowContainer.
-      auto merge = spillPartition->createOrderedReaderWithPreMerge(
+      auto merge = spillPartition->createOrderedReader(
           spillConfig_.numMaxMergeFiles,
           spillConfig_.readBufferSize,
           spillConfig_.writeBufferSize,
@@ -724,7 +724,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           spillConfig_.fileCreateConfig);
       ASSERT_TRUE(merge != nullptr);
       ASSERT_TRUE(
-          spillPartition->createOrderedReaderWithPreMerge(
+          spillPartition->createOrderedReader(
               spillConfig_.numMaxMergeFiles,
               spillConfig_.readBufferSize,
               spillConfig_.writeBufferSize,
@@ -1587,7 +1587,13 @@ TEST_P(AggregationOutputOnly, basic) {
       ASSERT_EQ(spillPartitionSet.size(), 1);
       auto spillPartition = std::move(spillPartitionSet.begin()->second);
       auto merge = spillPartition->createOrderedReader(
-          spillConfig_.readBufferSize, pool(), &spillStats_);
+          spillConfig_.numMaxMergeFiles,
+          spillConfig_.readBufferSize,
+          spillConfig_.writeBufferSize,
+          spillConfig_.updateAndCheckSpillLimitCb,
+          pool(),
+          &spillStats_,
+          spillConfig_.fileCreateConfig);
 
       for (auto i = 0; i < expectedNumSpilledRows; ++i) {
         auto* stream = merge->next();
@@ -1701,7 +1707,13 @@ TEST_P(SortOutputOnly, basic) {
 
     const int expectedNumSpilledRows = numListedRows;
     auto merge = spillPartition->createOrderedReader(
-        spillConfig_.readBufferSize, pool(), &spillStats_);
+        spillConfig_.numMaxMergeFiles,
+        spillConfig_.readBufferSize,
+        spillConfig_.writeBufferSize,
+        spillConfig_.updateAndCheckSpillLimitCb,
+        pool(),
+        &spillStats_,
+        spillConfig_.fileCreateConfig);
     if (expectedNumSpilledRows == 0) {
       ASSERT_TRUE(merge == nullptr);
     } else {
