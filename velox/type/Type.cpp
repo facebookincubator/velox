@@ -278,7 +278,7 @@ const TypePtr& ArrayType::childAt(uint32_t idx) const {
 }
 
 ArrayType::ArrayType(TypePtr child)
-    : child_{std::move(child)}, parameters_{{TypeParameter(child_)}} {}
+    : child_{std::move(child)}, parameter_{child_} {}
 
 bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
@@ -339,7 +339,7 @@ const char* MapType::nameOf(uint32_t idx) const {
 MapType::MapType(TypePtr keyType, TypePtr valueType)
     : keyType_{std::move(keyType)},
       valueType_{std::move(valueType)},
-      parameters_{{TypeParameter(keyType_), TypeParameter(valueType_)}} {}
+      parameters_{TypeParameter(keyType_), TypeParameter(valueType_)} {}
 
 std::string MapType::toString() const {
   return "MAP<" + keyType()->toString() + "," + valueType()->toString() + ">";
