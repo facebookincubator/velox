@@ -1230,6 +1230,8 @@ class RowContainer {
         stream->appendNonNull();
         if constexpr (std::is_same_v<T, bool>) {
           stream->appendOne<uint8_t>(valueAt<T>(row, offset) ? 1 : 0);
+        } else if constexpr (std::is_same_v<T, StringView>) {
+          extractString(valueAt<StringView>(row, offset), stream);
         } else {
           stream->appendOne(valueAt<T>(row, offset));
         }
@@ -1253,6 +1255,8 @@ class RowContainer {
         stream->appendNonNull();
         if constexpr (std::is_same_v<T, bool>) {
           stream->appendOne<uint8_t>(valueAt<T>(row, offset) ? 1 : 0);
+        } else if constexpr (std::is_same_v<T, StringView>) {
+          extractString(valueAt<StringView>(row, offset), stream);
         } else {
           stream->appendOne(valueAt<T>(row, offset));
         }
@@ -1521,6 +1525,10 @@ class RowContainer {
       StringView value,
       FlatVector<StringView>* values,
       vector_size_t index);
+
+  static void extractString(
+      StringView value,
+      serializer::presto::VectorStream* stream);
 
   static int32_t compareStringAsc(
       StringView left,

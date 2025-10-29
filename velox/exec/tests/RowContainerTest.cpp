@@ -1164,6 +1164,16 @@ TEST_F(RowContainerTest, serialize) {
   roundTripSerde(input);
 }
 
+TEST_F(RowContainerTest, serializeLongString) {
+  facebook::velox::test::VectorMaker vectorMaker{pool_.get()};
+  int32_t vecSize = 1000;
+  auto input = vectorMaker.rowVector(
+      {"str"}, {vectorMaker.flatVector<StringView>(vecSize, [&](auto row) {
+        return "l&1mjT4i6'Y#!&7We|o2YtImnZ},I?R~svBP>/<HcLin:t.7%YCY.:y+*jTRp-MNpo6^N(]M>ky)XYEl5gslT%`#5X%[MBbE&%{`5)~5a]5)wJh[!Um3UKkf3gnji.Z\\\\";
+      })});
+  roundTripSerde(input);
+}
+
 TEST_F(RowContainerTest, types) {
   constexpr int32_t kNumRows = 100;
   auto batch = makeDataset(

@@ -148,7 +148,7 @@ void SpillState::initPartitionWriter(const SpillPartitionId& id) {
       lockedWriters.emplace(
           id,
           std::make_unique<SpillWriter>(
-              std::static_pointer_cast<const RowType>(type_),
+              type_,
               sortingKeys_,
               compressionKind_,
               fmt::format(
