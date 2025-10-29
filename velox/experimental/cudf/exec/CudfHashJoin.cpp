@@ -1327,8 +1327,6 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   }
   hashObject_ = std::move(hashObject);
 
-  buildStream_ = cudfJoinBridge->getBuildStream();
-
   // Lazy initialize matched flags only when build side is done
   if (joinNode_->isRightJoin()) {
     auto& rightTablesInit = hashObject_.value().first;
