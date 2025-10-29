@@ -954,26 +954,33 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"t0", "t1"},
-                      core::JoinType::kLeftSemiFilter)
-                  .planNode();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(asRowType(probeVectors[0]->type()))
+          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(asRowType(buildVectors[0]->type()))
+                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                  .endTableScan()
+                  .capturePlanNodeId(buildScanId)
+                  .planNode(),
+              "",
+              {"t0", "t1"},
+              core::JoinType::kLeftSemiFilter)
+          .planNode();
 
   SplitInput splitInput = {
       {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+       {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
       {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+       {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}},
   };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -1048,20 +1055,22 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
     // FilterProject expression evaluation is not yet supported on GPU
-    VELOX_ASSERT_THROW(HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .numDrivers(numDrivers_)
-        .probeKeys({"c0"})
-        .probeVectors(std::move(testProbeVectors))
-        .buildKeys({"c0"})
-        .buildVectors(std::move(testBuildVectors))
-        .buildFilter("c0 IS NOT NULL")
-        .joinType(core::JoinType::kAnti)
-        .nullAware(true)
-        .joinOutputLayout({"c1"})
-        .referenceQuery(
-            "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 IS NOT NULL)")
-        .checkSpillStats(false)
-        .run(), "Replacement with cuDF operator failed");
+    VELOX_ASSERT_THROW(
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+            .numDrivers(numDrivers_)
+            .probeKeys({"c0"})
+            .probeVectors(std::move(testProbeVectors))
+            .buildKeys({"c0"})
+            .buildVectors(std::move(testBuildVectors))
+            .buildFilter("c0 IS NOT NULL")
+            .joinType(core::JoinType::kAnti)
+            .nullAware(true)
+            .joinOutputLayout({"c1"})
+            .referenceQuery(
+                "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 IS NOT NULL)")
+            .checkSpillStats(false)
+            .run(),
+        "Replacement with cuDF operator failed");
   }
 
   // Empty build side.
@@ -5000,7 +5009,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
       .run();
 }
 
-TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
+TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> innerBuild = {makeRowVector(
       {"a"},
       {
@@ -5023,7 +5032,10 @@ TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   core::PlanNodeId scanNodeId;
   auto plan =
       PlanBuilder(planNodeIdGenerator)
-          .tableScan(asRowType(rightProbe[0]->type()))
+          .startTableScan()
+          .outputType(asRowType(rightProbe[0]->type()))
+          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+          .endTableScan()
           .capturePlanNodeId(scanNodeId)
           .hashJoin(
               {"bb"},
@@ -5040,7 +5052,7 @@ TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
               {"aa"})
           .planNode();
   AssertQueryBuilder(plan)
-      .split(scanNodeId, Split(makeHiveConnectorSplit(file->getPath())))
+      .split(scanNodeId, Split(makeCudfHiveConnectorSplit(file->getPath())))
       .assertResults(
           BaseVector::create<RowVector>(innerBuild[0]->type(), 0, pool_.get()));
 }
