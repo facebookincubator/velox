@@ -38,10 +38,15 @@ namespace {
 
 class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
  public:
-  static void SetUpTestCase() {
+  static void SetUpTestSuite() {
+    S3Test::SetUpTestSuite();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
-  static void TearDownTestCase() {
+
+  static void TearDownTestSuite() {
+    parquet::unregisterParquetReaderFactory();
+    parquet::unregisterParquetWriterFactory();
+    S3Test::TearDownTestSuite();
     filesystems::finalizeS3FileSystem();
   }
 
@@ -73,12 +78,6 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
         ioExecutor_.get());
     connector::registerConnector(hiveConnector1);
     connector::registerConnector(hiveConnector2);
-  }
-
-  void TearDown() override {
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
-    S3Test::TearDown();
   }
 
   folly::dynamic writeData(

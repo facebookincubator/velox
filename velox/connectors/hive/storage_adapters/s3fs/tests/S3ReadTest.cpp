@@ -33,7 +33,8 @@ namespace {
 
 class S3ReadTest : public S3Test, public ::test::VectorTestBase {
  protected:
-  static void SetUpTestCase() {
+  static void SetUpTestSuite() {
+    S3Test::SetUpTestSuite();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 

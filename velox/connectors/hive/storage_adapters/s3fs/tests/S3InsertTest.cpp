@@ -26,7 +26,8 @@ namespace {
 
 class S3InsertTest : public S3Test, public test::InsertTest {
  protected:
-  static void SetUpTestCase() {
+  static void SetUpTestSuite() {
+    S3Test::SetUpTestSuite();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
