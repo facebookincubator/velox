@@ -173,7 +173,8 @@ void CudfHashJoinBuild::noMoreInput() {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    std::cout << "build->inputs_.size() = " << build->inputs_.size() << std::endl;
+    std::cout << "build->inputs_.size() = " << build->inputs_.size()
+              << std::endl;
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
 
@@ -188,14 +189,14 @@ void CudfHashJoinBuild::noMoreInput() {
 
   if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "CudfHashJoinBuild: build batches" << std::endl;
-    std::cout << "Build batches number of columns: " << inputs_[0]->getTableView().num_columns()
-              << std::endl;
+    std::cout << "Build batches number of columns: "
+              << inputs_[0]->getTableView().num_columns() << std::endl;
     for (auto i = 0; i < inputs_.size(); i++) {
       std::cout << "Build batch " << i
-                << ": number of rows: " << inputs_[i]->getTableView().num_rows() << std::endl;
+                << ": number of rows: " << inputs_[i]->getTableView().num_rows()
+                << std::endl;
     }
   }
-
 
   auto stream = cudfGlobalStreamPool().get_stream();
   auto tbls = getConcatenatedTableBatched(
@@ -265,8 +266,9 @@ void CudfHashJoinBuild::noMoreInput() {
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
 
   cudfHashJoinBridge->setBuildStream(stream);
-  cudfHashJoinBridge->setHashTable(std::make_optional(
-      std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
+  cudfHashJoinBridge->setHashTable(
+      std::make_optional(
+          std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
@@ -806,8 +808,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
           for (auto col = leftColsSize; col < joinedCols.size(); col++) {
             nullScalars.emplace_back(
                 cudf::make_empty_scalar_like(joinedCols[col]->view(), stream));
-            nullScalarRefs.push_back(std::reference_wrapper<cudf::scalar const>(
-                *(nullScalars.back())));
+            nullScalarRefs.push_back(
+                std::reference_wrapper<cudf::scalar const>(
+                    *(nullScalars.back())));
             rightColViews.push_back(joinedCols[col]->view());
           }
           auto nullifiedRightTable = cudf::scatter(

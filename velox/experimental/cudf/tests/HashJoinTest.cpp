@@ -45,16 +45,16 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::cudf_velox::exec::test;
 
 using facebook::velox::exec::test::AssertQueryBuilder;
-using facebook::velox::exec::test::HiveConnectorSplitBuilder;
+using facebook::velox::exec::test::concat;
 using facebook::velox::exec::test::HashJoinBuilder;
-using facebook::velox::exec::test::numTaskSpillFiles;
-using facebook::velox::exec::test::waitForTaskAborted;
-using facebook::velox::exec::test::taskSpilledStats;
-using facebook::velox::exec::test::verifyTaskSpilledRuntimeStats;
+using facebook::velox::exec::test::HiveConnectorSplitBuilder;
 using facebook::velox::exec::test::maxHashBuildSpillLevel;
 using facebook::velox::exec::test::mergeBatches;
-using facebook::velox::exec::test::concat;
+using facebook::velox::exec::test::numTaskSpillFiles;
 using facebook::velox::exec::test::readCursor;
+using facebook::velox::exec::test::taskSpilledStats;
+using facebook::velox::exec::test::verifyTaskSpilledRuntimeStats;
+using facebook::velox::exec::test::waitForTaskAborted;
 using facebook::velox::test::BatchMaker;
 
 namespace {
@@ -963,8 +963,9 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
                 1'000, [](auto row) { return -1000 + (row / 5) * 10; }),
         });
   });
-  std::cout << "buildVectors.size() = " << buildVectors.size() 
-          << ", buildVectors[0]->size() = " << buildVectors[0]->size() << std::endl;
+  std::cout << "buildVectors.size() = " << buildVectors.size()
+            << ", buildVectors[0]->size() = " << buildVectors[0]->size()
+            << std::endl;
 
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   CudfHiveConnectorTestBase::writeToFile(probeFile->getPath(), probeVectors);
@@ -978,27 +979,29 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(asRowType(probeVectors[0]->type()))
+          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator)
                   .startTableScan()
-                  .outputType(asRowType(probeVectors[0]->type()))
+                  .outputType(ROW({"u0", "u1"}, {INTEGER(), INTEGER()}))
                   .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
                   .endTableScan()
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .startTableScan()
-                          .outputType(ROW({"u0", "u1"}, {INTEGER(), INTEGER()}))
-                          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
-                          .endTableScan()
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"t0", "t1"},
-                      core::JoinType::kLeftSemiFilter)
-                  .planNode();
-  std::cout << "probeScanId = " << probeScanId << ", buildScanId = " << buildScanId << std::endl;
+                  .capturePlanNodeId(buildScanId)
+                  .planNode(),
+              "",
+              {"t0", "t1"},
+              core::JoinType::kLeftSemiFilter)
+          .planNode();
+  std::cout << "probeScanId = " << probeScanId
+            << ", buildScanId = " << buildScanId << std::endl;
 
   SplitInput splitInput = {
       {probeScanId,
@@ -1009,10 +1012,11 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
-      .inputSplits({
-            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
-            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
-        })
+      .inputSplits(
+          {{probeScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+           {buildScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}})
       .checkSpillStats(false)
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
@@ -1020,10 +1024,11 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
-      .inputSplits({
-            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
-            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
-        })
+      .inputSplits(
+          {{probeScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+           {buildScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}})
       .checkSpillStats(false)
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
@@ -1053,10 +1058,11 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
-      .inputSplits({
-            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
-            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
-        })
+      .inputSplits(
+          {{probeScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+           {buildScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}})
       .checkSpillStats(false)
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
@@ -1065,10 +1071,11 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
-      .inputSplits({
-            {probeScanId, {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
-            {buildScanId, {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}
-        })
+      .inputSplits(
+          {{probeScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(probeFile->getPath()))}},
+           {buildScanId,
+            {exec::Split(makeCudfHiveConnectorSplit(buildFile->getPath()))}}})
       .checkSpillStats(false)
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
@@ -2845,7 +2852,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
         false,
         "SELECT t.c0, t.c1, u.c0 FROM t " + joinTypeSql +
             " u ON t.c0 = u.c0 and t.c1 = u.c0");
-    
+
     // Duplicated keys on the probe side.
     assertPlan(
         {"c0 AS t0"}, // leftProject
@@ -5381,8 +5388,7 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
   std::vector<RowVectorPtr> buildVectors{
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
   createDuckDbTable("t", buildVectors);
-  auto split = CudfHiveConnectorSplitBuilder(
-                   filePaths[0]->getPath())
+  auto split = CudfHiveConnectorSplitBuilder(filePaths[0]->getPath())
                    .partitionKey("k", "0")
                    .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});

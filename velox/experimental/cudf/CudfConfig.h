@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include <mutex>
 #include <string>
 #include <unordered_map>
-#include <mutex>
 
 namespace facebook::velox::cudf_velox {
 
@@ -36,7 +36,7 @@ struct CudfConfig {
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
   static CudfConfig& getInstance();
-  
+
   /// Initialize from a map with the above keys.
   void initialize(std::unordered_map<std::string, std::string>&&);
 
@@ -60,7 +60,7 @@ struct CudfConfig {
 
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
-  
+
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
 };
