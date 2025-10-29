@@ -336,7 +336,7 @@ class FunctionBaseTest : public testing::Test,
     return std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
   }
 
-  VectorPtr evaluate(
+  virtual VectorPtr evaluate(
       exec::ExprSet& exprSet,
       const RowVectorPtr& input,
       const std::optional<SelectivityVector>& rows = std::nullopt) {

@@ -16,18 +16,19 @@
 
 #pragma once
 
+#include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
 
-class GeometryType final : public VarbinaryType {
-  GeometryType() = default;
+class SphericalGeographyType final : public VarbinaryType {
+  SphericalGeographyType() = default;
 
  public:
-  static std::shared_ptr<const GeometryType> get() {
-    VELOX_CONSTEXPR_SINGLETON GeometryType kInstance;
-    return {std::shared_ptr<const GeometryType>{}, &kInstance};
+  static std::shared_ptr<const SphericalGeographyType> get() {
+    VELOX_CONSTEXPR_SINGLETON SphericalGeographyType kInstance;
+    return {std::shared_ptr<const SphericalGeographyType>{}, &kInstance};
   }
 
   bool equivalent(const Type& other) const override {
@@ -36,7 +37,7 @@ class GeometryType final : public VarbinaryType {
   }
 
   const char* name() const override {
-    return "GEOMETRY";
+    return "SPHERICALGEOGRAPHY";
   }
 
   std::string toString() const override {
@@ -55,21 +56,22 @@ class GeometryType final : public VarbinaryType {
   }
 };
 
-FOLLY_ALWAYS_INLINE bool isGeometryType(const TypePtr& type) {
+FOLLY_ALWAYS_INLINE bool isSphericalGeographyType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
-  return GeometryType::get() == type;
+  return SphericalGeographyType::get() == type;
 }
 
-FOLLY_ALWAYS_INLINE std::shared_ptr<const GeometryType> GEOMETRY() {
-  return GeometryType::get();
+FOLLY_ALWAYS_INLINE std::shared_ptr<const SphericalGeographyType>
+SPHERICAL_GEOGRAPHY() {
+  return SphericalGeographyType::get();
 }
 
 // Type used for function registration.
-struct GeometryT {
+struct SphericalGeographyT {
   using type = Varbinary;
-  static constexpr const char* typeName = "geometry";
+  static constexpr const char* typeName = "sphericalgeography";
 };
 
-using Geometry = CustomType<GeometryT>;
+using SphericalGeography = CustomType<SphericalGeographyT>;
 
 } // namespace facebook::velox
