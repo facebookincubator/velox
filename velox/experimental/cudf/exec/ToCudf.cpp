@@ -298,7 +298,6 @@ bool CompileState::compile(bool allow_cpu_fallback) {
       if (CudfLocalPartition::shouldReplace(planNode)) {
         replaceOp.push_back(
             std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else {
         // Round Robin batch-wise Partitioning is supported by CPU operator with
         // GPU Vector.

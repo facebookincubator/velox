@@ -43,7 +43,7 @@ class tzdb_list::__impl {
 
   [[nodiscard]] const tzdb& __load() {
 #if _LIBCPP_HAS_THREADS
-    unique_lock __lock{__mutex_};
+    std::unique_lock __lock{__mutex_};
 #endif
     __load_no_lock();
     return __tzdb_.front();
@@ -53,14 +53,14 @@ class tzdb_list::__impl {
 
   const tzdb& __front() const noexcept {
 #if _LIBCPP_HAS_THREADS
-    unique_lock __lock{__mutex_};
+    std::unique_lock __lock{__mutex_};
 #endif
     return __tzdb_.front();
   }
 
   const_iterator __erase_after(const_iterator __p) {
 #if _LIBCPP_HAS_THREADS
-    unique_lock __lock{__mutex_};
+    std::unique_lock __lock{__mutex_};
 #endif
 
     __rules_.erase_after(
@@ -70,7 +70,7 @@ class tzdb_list::__impl {
 
   const_iterator __begin() const noexcept {
 #if _LIBCPP_HAS_THREADS
-    unique_lock __lock{__mutex_};
+    std::unique_lock __lock{__mutex_};
 #endif
     return __tzdb_.begin();
   }
@@ -88,7 +88,7 @@ class tzdb_list::__impl {
   }
 
 #if _LIBCPP_HAS_THREADS
-  mutable mutex __mutex_;
+  mutable std::mutex __mutex_;
 #endif
   std::forward_list<tzdb> __tzdb_;
 
