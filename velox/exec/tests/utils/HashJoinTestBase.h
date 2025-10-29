@@ -778,9 +778,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
 
   virtual ~HashJoinTestBase() = default;
 
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-
+  void MemberSetUp() {
     probeType_ =
         ROW({{"t_k1", INTEGER()}, {"t_k2", VARCHAR()}, {"t_v1", VARCHAR()}});
     buildType_ =
@@ -791,6 +789,11 @@ class HashJoinTestBase : public HiveConnectorTestBase {
         .stringLength = 1024,
         .stringVariableLength = false,
         .allowLazyVector = false};
+  }
+
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    MemberSetUp();
   }
 
   virtual std::vector<exec::Split> makeSplit(

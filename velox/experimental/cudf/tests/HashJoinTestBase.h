@@ -63,16 +63,7 @@ class CudfHashJoinTestBase : public CudfHiveConnectorTestBase,
     // HashJoinTestBase::SetUp() directly because it would cause
     // OperatorTestBase::SetUp() to be invoked twice (once through
     // CudfHiveConnectorTestBase and once through HiveConnectorTestBase).
-    probeType_ =
-        ROW({{"t_k1", INTEGER()}, {"t_k2", VARCHAR()}, {"t_v1", VARCHAR()}});
-    buildType_ =
-        ROW({{"u_k1", INTEGER()}, {"u_k2", VARCHAR()}, {"u_v1", INTEGER()}});
-    fuzzerOpts_ = {
-        .vectorSize = 1024,
-        .nullRatio = 0.1,
-        .stringLength = 1024,
-        .stringVariableLength = false,
-        .allowLazyVector = false};
+    HashJoinTestBase::MemberSetUp();
   }
 
   std::vector<Split> makeSplit(
