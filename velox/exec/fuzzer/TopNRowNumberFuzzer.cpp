@@ -96,7 +96,7 @@ TopNRowNumberFuzzer::generateKeys(const std::string& prefix) {
 }
 
 std::string TopNRowNumberFuzzer::generateRankFunction() {
-  int32_t rankFunction = randInt(0, 2); // 0: ROW_NUMBER, 1: RANK, 2: DENSE_RANK
+  int32_t rankFunction = randInt(0, 2);
   switch (rankFunction) {
     case 0:
       return "row_number";
@@ -199,7 +199,6 @@ TopNRowNumberFuzzer::makeDefaultPlan(
   projectFields.emplace_back("row_number");
 
   int32_t limit = randInt(1, FLAGS_batch_size);
-  int32_t rankFunction = randInt(0, 2); // 0: ROW_NUMBER, 1: RANK, 2: DENSE_RANK
   auto plan =
       test::PlanBuilder()
           .values(input)

@@ -22,20 +22,58 @@
 namespace facebook::velox::exec {
 class TopNRowNumberSpiller;
 
-/// Partitions the input using specified partitioning keys, sorts rows within
-/// partitions using specified sorting keys, assigns row numbers and returns up
-/// to specified number of rows per partition.
+/// TopNRowNumber is an optimized version of a Window operator with a
+/// single row_number or rank or dense_rank window function followed by a
+/// rank <= N filter. N must be >= 0. If the TopNRowNumber has no partition
+/// keys, then all the rows belong to a single partition. However, the
+/// TopNRowNumber should have at least one sorting key specified.
 ///
-/// It is allowed to not specify partitioning keys. In this case the whole input
-/// is treated as a single partition.
+/// TopNRowNumber is more efficient than a general Window operator as it does
+/// not store all rows of a partition. Instead, it only keeps the top N
+/// rows of the partition at any point.
 ///
-/// At least one sorting key must be specified.
+/// The operator partitions the input using specified partitioning keys,
+/// and maintains a TopRows structure per partition in a HashTable. The TopRows
+/// maintains a priority queue of row pointers. The priority queue is
+/// kept ordered by sorting keys of the TopNRowNumber. The TopRows only retains
+/// rows whose ranks satisfy the filter condition (so rank <= N). N is also
+/// called the limit of the operator. To aid this filtering, the TopRows tracks
+/// the greatest rank seen for each partition.
 ///
-/// The limit (maximum number of rows to return per partition) must be greater
-/// than zero.
+/// The operator processes all input rows before beginning to output rows.
 ///
-/// This is an optimized version of a Window operator with a single row_number
-/// window function followed by a row_number <= N filter.
+/// For each input row, it retrieves the TopRows corresponding to the partition
+/// keys. The TopRows is first filled until it has N rows. Thereafter, new rows
+/// are compared with the top row in the TopRows priority queue.
+/// If the new rows order by values are less than (for ASC) or greater than
+/// (for DESC) so row rank <= topRank, then the row is added to TopRows.
+/// For each outcome, the greatest rank of the TopRows is updated as per the
+/// ranking function logic.
+/// For each function type, the rank maintenance logic is in:
+/// - processRowWithinLimit() function when the TopRows is filling the first
+///   N rows.
+/// - processRowExceedingLimit() function when the TopRows already has N rows.
+///
+/// After processing all the input rows, the operator proceeds to output the
+/// rows. The rows might all be in memory or spilled to disk if memory
+/// reclamation was triggered during processing.
+///
+/// If the rows are in memory, then the operator iterates over each partition
+/// in the HashTable, and starts outputting rows from the partition. The
+/// TopRows structure maintains the rows in descending order of their ranks
+/// (greatest rank at the top of the priority queue). So when outputting,
+/// the operator first fixes the top rank of the partition using fixTopRank()
+/// and then computes the ranks of each row using computeNextRankInMemory().
+/// The logic of the next rank differs based on the ranking function.
+///
+/// If the rows are in the spill, then the spiller iterates over each spilled
+/// partition in order of the ranks. For each row from the spill, the next
+/// rank is computed using computeNextRankInSpill() function. The logic of
+/// the next rank differs based on the ranking function.
+/// Note : The spill could have > limit rows for a partition as each spill
+/// resets the TopRows for the partition. So stop outputting rows after
+/// reaching the limit for each partition.
+
 class TopNRowNumber : public Operator {
  public:
   TopNRowNumber(
@@ -71,7 +109,23 @@ class TopNRowNumber : public Operator {
       override;
 
  private:
-  // A priority queue to keep track of top 'limit' rows for a given partition.
+  // This structure holds the top rows for a partition. It uses a priority
+  // queue to maintain the top rows in order of their ranks. Note the rank
+  // logic depends on the respective function (row_number, rank or dense_rank).
+  // However, a common requirement across all three is to maintain the rows in
+  // order of their sort keys so that the greatest rank row is always at the top
+  // of the queue. This ordering is done using the RowComparator passed to the
+  // TopRows.
+  //
+  // The number of rows in TopRows are limited to 'limit' specified for the
+  // operator. The greatest rank of the rows in TopRows is maintained in the
+  // 'topRank' variable.
+  //
+  // The TopRows structure is first filled in order to collect 'limit'
+  // rows. Thereafter, new rows are compared with the top row and either kept
+  // or discarded and the new top rank is updated. The rank computation differs
+  // based on the ranking function. This structure has methods for abstractions
+  // used for the top rank maintenance algorithms.
   struct TopRows {
     struct Compare {
       RowComparator& comparator;
@@ -86,19 +140,21 @@ class TopNRowNumber : public Operator {
 
     RowComparator& rowComparator;
 
-    // This is the highest rank (this code will be enhanced for rank, dense_rank
-    // soon) seen so far in the input rows. It is compared
-    // with the limit for the operator.
+    // This is the greatest rank seen so far in the input rows. Note: rank is
+    // the result of the respective function computation (row_number, rank or
+    // dense_rank). It is compared with the expected limit for the operator.
     int64_t topRank = 0;
 
     // Number of rows with the highest rank in the partition.
     vector_size_t numTopRankRows();
 
     // Remove all rows with the highest rank in the partition.
+    // Returns a pointer to the last removed row.
     char* removeTopRankRows();
 
-    // Returns true if the row at decodedVectors[index] has the same order by
-    // keys as another row in the partition's top rows.
+    // Returns true if the row at position index in decodedVectors
+    // has the same order by keys as another row in the TopRows
+    // priority_vector.
     bool isDuplicate(
         const std::vector<DecodedVector>& decodedVectors,
         vector_size_t index);
@@ -127,7 +183,7 @@ class TopNRowNumber : public Operator {
   template <core::TopNRowNumberNode::RankFunction TRank>
   char* processRowExceedingLimit(vector_size_t index, TopRows& partition);
 
-  // Loop to add each row to a partition or discard the row.
+  // Loop to process the numInput input rows received by the operator.
   template <core::TopNRowNumberNode::RankFunction TRank>
   void processInputRowLoop(vector_size_t numInput);
 
@@ -152,8 +208,8 @@ class TopNRowNumber : public Operator {
       const TopRows& partition,
       vector_size_t rowIndex);
 
-  // Appends numRows of the output partition the output. Note: The rows are
-  // popped in reverse order of the row_number.
+  // Appends numRows of the current partition to the output. Note: The rows are
+  // popped in reverse order of the rank.
   // NOTE: This function erases the yielded output rows from the partition
   // and the next call starts with the remaining rows.
   template <core::TopNRowNumberNode::RankFunction TRank>
@@ -186,10 +242,10 @@ class TopNRowNumber : public Operator {
       vector_size_t index,
       const SpillMergeStream* next);
 
-  // Returns true if 'next' row is a new peer (rows differ on order by keys)
+  // Returns true if 'next' row is a new rank (rows differ on order by keys)
   // of the previous row in the partition (at output[index] of the
   // output block).
-  bool isNewPeer(
+  bool isNewRank(
       const RowVectorPtr& output,
       vector_size_t index,
       const SpillMergeStream* next);

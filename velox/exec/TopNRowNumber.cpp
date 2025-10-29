@@ -415,14 +415,14 @@ void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
     // This row has the same value as the top rank row. row_number rejects
     // such rows, but are added to the queue for rank and dense_rank. The top
     // rank remains unchanged.
-    if (result == 0) {
+    else if (result == 0) {
       if (rankFunction_ == core::TopNRowNumberNode::RankFunction::kRowNumber) {
         return;
       }
       newRow = data_->newRow();
     }
 
-    if (result < 0) {
+    else if (result < 0) {
       newRow = processRowExceedingLimit<TRank>(index, partition);
     }
   }
@@ -488,6 +488,24 @@ void TopNRowNumber::updateEstimatedOutputRowSize() {
   }
 }
 
+// This function handles a special case when determining the starting
+// rank value for the 'rank' function.
+// If there are many peer rows for the highest rank, then topRank could
+// oscillate between the two cases of topRank < limit and topRank > limit
+// as rows are added
+// E.g. If the input rows are 0, 0, 0, 5, 0, 0, 6 and we want rank <= 5, then
+// at 0, 0, 0, 5 :
+// topRows.pq - 0, 0, 0, 5 topRank -> 4
+// 0 is added.
+// topRows.pq - 0, 0, 0, 0, 5 topRank -> 5
+// topRank = limit now.
+// So when the next 0 is added, the last 5 is popped from TopRows and 0 is added
+// topRows.pq - 0, 0, 0, 0, 0, topRank -> 1
+// This makes topRank < 5 and so when 6 comes by, 6 is pushed
+// topRows.pq - 0, 0, 0, 0, 0, 6 topRank -> 6
+// So when doing getOutput, we need to adjust this case.
+// Since topRank > limit, then the highest rank is popped and the
+// topRank is adjusted as length(pq) - number_of_duplicates_of_new_top_row + 1.
 vector_size_t TopNRowNumber::fixTopRank(TopRows& partition) {
   if (rankFunction_ == core::TopNRowNumberNode::RankFunction::kRank) {
     if (partition.topRank > limit_) {
@@ -657,9 +675,8 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
       }
     }
 
-    auto numOutputRowsLeft = outputBatchSize_ - offset;
+    const auto numOutputRowsLeft = outputBatchSize_ - offset;
     if (outputPartition_->rows.size() > numOutputRowsLeft) {
-      // Only a partial partition can be output in this getOutput() call.
       // Output as many rows as possible.
       RANK_FUNCTION_DISPATCH(
           appendPartitionRows,
@@ -673,7 +690,7 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
     }
 
     // Add all partition rows.
-    auto numPartitionRows = outputPartition_->rows.size();
+    const auto numPartitionRows = outputPartition_->rows.size();
     RANK_FUNCTION_DISPATCH(
         appendPartitionRows,
         rankFunction_,
@@ -736,7 +753,7 @@ bool TopNRowNumber::isNewPartition(
 }
 
 // Compares the sorting keys for determining peers.
-bool TopNRowNumber::isNewPeer(
+bool TopNRowNumber::isNewRank(
     const RowVectorPtr& output,
     vector_size_t index,
     const SpillMergeStream* next) {
@@ -768,7 +785,7 @@ void TopNRowNumber::computeNextRankInSpill(
   // This row belongs to the same partition as the previous row. However,
   // it should be determined if it is a peer row as well. If its a peer,
   // then increase numPeers_ but the rank remains unchanged.
-  if (!isNewPeer(output, index, next)) {
+  if (!isNewRank(output, index, next)) {
     numPeers_ += 1;
     return;
   }
