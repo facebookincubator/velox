@@ -20,6 +20,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox {
 
@@ -91,6 +92,26 @@ StringView TimeWithTimezoneType::valueToString(
 }
 
 namespace {
+void castToTime(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  auto* flatResult = result.asFlatVector<int64_t>();
+  if (input.isConstantEncoding()) {
+    const auto timeWithTimezone =
+        input.as<ConstantVector<int64_t>>()->valueAt(0);
+    const auto unpacked = unpackMillisUtc(timeWithTimezone);
+    context.applyToSelectedNoThrow(
+        rows, [&](vector_size_t row) { flatResult->set(row, unpacked); });
+    return;
+  }
+  const auto timeWithTimezones = input.as<FlatVector<int64_t>>();
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    const auto timeWithTimezone = timeWithTimezones->valueAt(row);
+    flatResult->set(row, unpackMillisUtc(timeWithTimezone));
+  });
+}
 
 void castToString(
     const BaseVector& input,
@@ -148,6 +169,8 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     switch (other->kind()) {
       case TypeKind::VARCHAR:
         return true;
+      case TypeKind::BIGINT:
+        return other->isTime();
       default:
         return false;
     }
@@ -190,6 +213,10 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     switch (resultType->kind()) {
       case TypeKind::VARCHAR:
         castToString(input, context, rows, *result);
+        break;
+      case TypeKind::BIGINT:
+        VELOX_CHECK(resultType->isTime());
+        castToTime(input, context, rows, *result);
         break;
       default:
         VELOX_UNREACHABLE(

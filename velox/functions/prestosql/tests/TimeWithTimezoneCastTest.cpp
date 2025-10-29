@@ -25,6 +25,15 @@ using facebook::velox::util::pack;
 namespace facebook::velox {
 namespace {
 
+inline int64_t getUTCMillis(
+    int64_t hours,
+    int64_t minutes = 0,
+    int64_t seconds = 0,
+    int64_t millis = 0) {
+  return hours * util::kMillisInHour + minutes * util::kMillisInMinute +
+      seconds * util::kMillisInSecond + millis;
+}
+
 class TimeWithTimezoneCastTest : public functions::test::CastBaseTest {};
 
 TEST_F(TimeWithTimezoneCastTest, toVarchar) {
@@ -33,44 +42,27 @@ TEST_F(TimeWithTimezoneCastTest, toVarchar) {
   auto input = makeNullableFlatVector<int64_t>(
       {
           // Basic time with UTC.
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(0)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(0)),
           // Same time with negative offset (EST).
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(-5 * 60)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(-5 * 60)),
           // Same time with positive offset including half-hour (IST).
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(5 * 60 + 30)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(5 * 60 + 30)),
           // Boundary: Midnight.
           pack(0, biasEncode(0)),
           // Boundary: Almost end of day.
-          pack(
-              23 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond +
-                  999,
-              biasEncode(0)),
+          pack(getUTCMillis(23, 59, 59, 999), biasEncode(0)),
           // Null value.
           std::nullopt,
           // Boundary: Maximum positive timezone offset (+14:00).
-          pack(12 * kMillisInHour, biasEncode(14 * 60)),
+          pack(getUTCMillis(12), biasEncode(14 * 60)),
           // Boundary: Maximum negative timezone offset (-14:00).
-          pack(12 * kMillisInHour, biasEncode(-14 * 60)),
+          pack(getUTCMillis(12), biasEncode(-14 * 60)),
           // Edge case: 1 millisecond after midnight.
           pack(1, biasEncode(0)),
           // Various time components with negative offset including minutes.
-          pack(
-              12 * kMillisInHour + 34 * kMillisInMinute + 56 * kMillisInSecond +
-                  789,
-              biasEncode(-4 * 60 - 30)),
+          pack(getUTCMillis(12, 34, 56, 789), biasEncode(-4 * 60 - 30)),
           // Time with no milliseconds component.
-          pack(
-              9 * kMillisInHour + 8 * kMillisInMinute + 7 * kMillisInSecond,
-              biasEncode(5 * 60 + 45)),
+          pack(getUTCMillis(9, 8, 7), biasEncode(5 * 60 + 45)),
           // Another null value.
           std::nullopt,
       },
@@ -142,95 +134,55 @@ TEST_F(TimeWithTimezoneCastTest, fromVarchar) {
   auto expected = makeNullableFlatVector<int64_t>(
       {
           // 6:11:37.123+00:00
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(0)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(0)),
           // 6:11:37.123-05:00
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(-5 * 60)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(-5 * 60)),
           // 6:11:37.123+05:30
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(5 * 60 + 30)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(5 * 60 + 30)),
           // 12:34:56+01:00
-          pack(
-              12 * kMillisInHour + 34 * kMillisInMinute + 56 * kMillisInSecond,
-              biasEncode(1 * 60)),
+          pack(getUTCMillis(12, 34, 56), biasEncode(1 * 60)),
           // 12:34:56-08:00
-          pack(
-              12 * kMillisInHour + 34 * kMillisInMinute + 56 * kMillisInSecond,
-              biasEncode(-8 * 60)),
+          pack(getUTCMillis(12, 34, 56), biasEncode(-8 * 60)),
           // 1:30+05:30
-          pack(
-              1 * kMillisInHour + 30 * kMillisInMinute,
-              biasEncode(5 * 60 + 30)),
+          pack(getUTCMillis(1, 30), biasEncode(5 * 60 + 30)),
           // 23:45-07:00
-          pack(23 * kMillisInHour + 45 * kMillisInMinute, biasEncode(-7 * 60)),
+          pack(getUTCMillis(23, 45), biasEncode(-7 * 60)),
           // 14:22:11.456 +02:00
-          pack(
-              14 * kMillisInHour + 22 * kMillisInMinute + 11 * kMillisInSecond +
-                  456,
-              biasEncode(2 * 60)),
+          pack(getUTCMillis(14, 22, 11, 456), biasEncode(2 * 60)),
           // 9:15:30.789 -04:30
-          pack(
-              9 * kMillisInHour + 15 * kMillisInMinute + 30 * kMillisInSecond +
-                  789,
-              biasEncode(-4 * 60 - 30)),
+          pack(getUTCMillis(9, 15, 30, 789), biasEncode(-4 * 60 - 30)),
           // 3:4:5+0709
-          pack(
-              3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond,
-              biasEncode(7 * 60 + 9)),
+          pack(getUTCMillis(3, 4, 5), biasEncode(7 * 60 + 9)),
           // 15:45:30-0800
-          pack(
-              15 * kMillisInHour + 45 * kMillisInMinute + 30 * kMillisInSecond,
-              biasEncode(-8 * 60)),
+          pack(getUTCMillis(15, 45, 30), biasEncode(-8 * 60)),
           // 8:30:00+05
-          pack(8 * kMillisInHour + 30 * kMillisInMinute, biasEncode(5 * 60)),
+          pack(getUTCMillis(8, 30), biasEncode(5 * 60)),
           // 16:45:30-08
-          pack(
-              16 * kMillisInHour + 45 * kMillisInMinute + 30 * kMillisInSecond,
-              biasEncode(-8 * 60)),
+          pack(getUTCMillis(16, 45, 30), biasEncode(-8 * 60)),
           // 0:0:0.000+00:00
           pack(0, biasEncode(0)),
           // 23:59:59.999+00:00
-          pack(
-              23 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond +
-                  999,
-              biasEncode(0)),
+          pack(getUTCMillis(23, 59, 59, 999), biasEncode(0)),
           // 12:00:00.000+14:00
-          pack(12 * kMillisInHour, biasEncode(14 * 60)),
+          pack(getUTCMillis(12), biasEncode(14 * 60)),
           // 12:00:00.000-14:00
-          pack(12 * kMillisInHour, biasEncode(-14 * 60)),
+          pack(getUTCMillis(12), biasEncode(-14 * 60)),
           // 0:0:0.001+00:00
           pack(1, biasEncode(0)),
           // 9:8:7.000+05:45
-          pack(
-              9 * kMillisInHour + 8 * kMillisInMinute + 7 * kMillisInSecond,
-              biasEncode(5 * 60 + 45)),
+          pack(getUTCMillis(9, 8, 7), biasEncode(5 * 60 + 45)),
           // 1:2:3+01:30
-          pack(
-              1 * kMillisInHour + 2 * kMillisInMinute + 3 * kMillisInSecond,
-              biasEncode(1 * 60 + 30)),
+          pack(getUTCMillis(1, 2, 3), biasEncode(1 * 60 + 30)),
           // Null value
           std::nullopt,
           // 7:30 +03
-          pack(7 * kMillisInHour + 30 * kMillisInMinute, biasEncode(3 * 60)),
+          pack(getUTCMillis(7, 30), biasEncode(3 * 60)),
           // 18:45 -06
-          pack(18 * kMillisInHour + 45 * kMillisInMinute, biasEncode(-6 * 60)),
+          pack(getUTCMillis(18, 45), biasEncode(-6 * 60)),
           // 06:11:37.123+00:00
-          pack(
-              6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond +
-                  123,
-              biasEncode(0)),
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(0)),
           // 12:34:56.789-04:30
-          pack(
-              12 * kMillisInHour + 34 * kMillisInMinute + 56 * kMillisInSecond +
-                  789,
-              biasEncode(-4 * 60 - 30)),
+          pack(getUTCMillis(12, 34, 56, 789), biasEncode(-4 * 60 - 30)),
       },
       TIME_WITH_TIME_ZONE());
 
@@ -297,5 +249,66 @@ TEST_F(TimeWithTimezoneCastTest, fromVarcharInvalid) {
   // Invalid: IANA/Named timezones not supported (e.g., Asia/Tokyo)
   testInvalidCast("09:15:30.123 Asia/Tokyo", "missing timezone offset");
 }
+
+TEST_F(TimeWithTimezoneCastTest, toTime) {
+  // Test casting TIME WITH TIME ZONE to TIME extracts only the time component
+  // (milliseconds UTC), discarding the timezone information.
+  auto input = makeNullableFlatVector<int64_t>(
+      {
+          // Basic time with UTC.
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(0)),
+          // Same time with negative offset (EST) - should extract same time.
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(-5 * 60)),
+          // Same time with positive offset (IST) - should extract same time.
+          pack(getUTCMillis(6, 11, 37, 123), biasEncode(5 * 60 + 30)),
+          // Boundary: Midnight.
+          pack(0, biasEncode(0)),
+          // Boundary: Almost end of day.
+          pack(getUTCMillis(23, 59, 59, 999), biasEncode(0)),
+          // Null value.
+          std::nullopt,
+          // With maximum positive timezone offset.
+          pack(getUTCMillis(12, 30), biasEncode(14 * 60)),
+          // With maximum negative timezone offset.
+          pack(getUTCMillis(12, 30), biasEncode(-14 * 60)),
+          // Edge case: 1 millisecond after midnight.
+          pack(1, biasEncode(0)),
+          // Various time with different timezone.
+          pack(getUTCMillis(15, 45, 30, 500), biasEncode(-8 * 60)),
+          // Another null value.
+          std::nullopt,
+      },
+      TIME_WITH_TIME_ZONE());
+
+  auto expected = makeNullableFlatVector<int64_t>(
+      {
+          getUTCMillis(6, 11, 37, 123),
+          getUTCMillis(6, 11, 37, 123),
+          getUTCMillis(6, 11, 37, 123),
+          0,
+          getUTCMillis(23, 59, 59, 999),
+          std::nullopt,
+          getUTCMillis(12, 30),
+          getUTCMillis(12, 30),
+          1,
+          getUTCMillis(15, 45, 30, 500),
+          std::nullopt,
+      },
+      TIME());
+
+  testCast(input, expected);
+
+  const int64_t timeWithTz =
+      pack(getUTCMillis(14, 22, 11, 456), biasEncode(5 * 60 + 30));
+
+  auto inputConstantVector =
+      makeConstant(timeWithTz, 10, TIME_WITH_TIME_ZONE());
+
+  const int64_t expectedTime = getUTCMillis(14, 22, 11, 456);
+  auto expectedConstantVector = makeConstant(expectedTime, 10, TIME());
+
+  testCast(inputConstantVector, expectedConstantVector);
+}
+
 } // namespace
 } // namespace facebook::velox
