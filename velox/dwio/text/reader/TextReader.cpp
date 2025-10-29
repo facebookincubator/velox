@@ -39,6 +39,7 @@ constexpr const char* kTextfileCompressionExtensionZst = ".zst";
 static std::string emptyString = std::string();
 
 namespace {
+constexpr const int32_t kDecompressionBufferFactor = 3;
 
 void resizeVector(
     BaseVector* FOLLY_NULLABLE data,
@@ -191,34 +192,15 @@ TextRowReader::TextRowReader(
     }
     limit_ = std::numeric_limits<uint64_t>::max();
 
-    /**
-     * The output buffer for decompression is allocated based on the
-     * uncompressed length of the stream.
-     *
-     * For decompressors other than ZlibDecompressor, the uncompressed length is
-     * obtained via getDecompressedLength, and blockSize serves only as a
-     * fallbak when getDecompressedLength fails to return a valid length.
-     *
-     * ZlibDecompressor does not implement getDecompressedLength because the
-     * DEFLATE algorithm used by zlib does not inherently includes the
-     * uncompressed length in the compressed stream. As a result, blockSize is
-     * used to set z_stream.avail_out during decompression to ensure enough
-     * buffer allocated for the output. Since zlib requires avail_out to be a
-     * uInt (unsigned int), blockSize is set to std::numeric_limits<unsigned
-     * int>::max() for full compatibility.
-     */
-    const auto blockSize =
-        (contents_->compression == CompressionKind::CompressionKind_ZLIB ||
-         contents_->compression == CompressionKind::CompressionKind_GZIP)
-        ? std::numeric_limits<unsigned int>::max()
-        : std::numeric_limits<uint64_t>::max();
-
     contents_->inputStream = contents_->input->loadCompleteFile();
     auto name = contents_->inputStream->getName();
     contents_->decompressedInputStream = createDecompressor(
         contents_->compression,
         std::move(contents_->inputStream),
-        blockSize,
+        // An estimated value used as the output buffer size for the zlib
+        // decompressor, and as the fallback value of the decompressed length
+        // for other decompressors.
+        kDecompressionBufferFactor * contents_->fileLength,
         contents_->pool,
         contents_->compressionOptions,
         fmt::format("Text Reader: Stream {}", name),
@@ -557,6 +539,24 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
   }
 
   return th.ownedString_;
+}
+
+template <class T>
+void TextRowReader::setValueFromString(
+    const std::string& str,
+    BaseVector* data,
+    vector_size_t insertionRow,
+    std::function<std::optional<T>(const std::string&)> convert) {
+  if ((atEOF_ && atSOL_) || data == nullptr) {
+    return;
+  }
+  auto flatVector = data->asChecked<FlatVector<T>>();
+  auto result = str.empty() ? std::nullopt : convert(str);
+  if (result) {
+    flatVector->set(insertionRow, *result);
+  } else {
+    flatVector->setNull(insertionRow, true);
+  }
 }
 
 uint8_t TextRowReader::getByte(DelimType& delim) {
@@ -1052,8 +1052,19 @@ void TextRowReader::readElement(
               getInteger<int32_t>, data, insertionRow, delim);
           break;
         case TypeKind::INTEGER:
-          putValue<int32_t, int32_t>(
-              getInteger<int32_t>, data, insertionRow, delim);
+          if (reqT->isDate()) {
+            const std::string& str = getString(*this, isNull, delim);
+            setValueFromString<int32_t>(
+                str,
+                data,
+                insertionRow,
+                [](const std::string& s) -> std::optional<int32_t> {
+                  return DATE()->toDays(s);
+                });
+          } else {
+            putValue<int32_t, int32_t>(
+                getInteger<int32_t>, data, insertionRow, delim);
+          }
           break;
         default:
           VELOX_FAIL(
@@ -1065,10 +1076,61 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::BIGINT:
-      putValue<int64_t, int64_t>(
-          getInteger<int64_t>, data, insertionRow, delim);
+      if (reqT->isShortDecimal()) {
+        const std::string& str = getString(*this, isNull, delim);
+        auto decimalParams = getDecimalPrecisionScale(*reqT);
+        const auto precision = decimalParams.first;
+        const auto scale = decimalParams.second;
+        setValueFromString<int64_t>(
+            str,
+            data,
+            insertionRow,
+            [precision, scale](const std::string& s) -> std::optional<int64_t> {
+              int64_t v = 0;
+              const auto status = DecimalUtil::castFromString(
+                  StringView(s.data(), static_cast<int32_t>(s.size())),
+                  precision,
+                  scale,
+                  v);
+              return status.ok() ? std::optional<int64_t>(v) : std::nullopt;
+            });
+      } else {
+        putValue<int64_t, int64_t>(
+            getInteger<int64_t>, data, insertionRow, delim);
+      }
       break;
 
+    case TypeKind::HUGEINT: {
+      const std::string& str = getString(*this, isNull, delim);
+      if (reqT->isLongDecimal()) {
+        auto decimalParams = getDecimalPrecisionScale(*reqT);
+        const auto precision = decimalParams.first;
+        const auto scale = decimalParams.second;
+        setValueFromString<int128_t>(
+            str,
+            data,
+            insertionRow,
+            [precision,
+             scale](const std::string& s) -> std::optional<int128_t> {
+              int128_t v = 0;
+              const auto status = DecimalUtil::castFromString(
+                  StringView(s.data(), static_cast<int32_t>(s.size())),
+                  precision,
+                  scale,
+                  v);
+              return status.ok() ? std::optional<int128_t>(v) : std::nullopt;
+            });
+      } else {
+        setValueFromString<int128_t>(
+            str,
+            data,
+            insertionRow,
+            [](const std::string& s) -> std::optional<int128_t> {
+              return HugeInt::parse(s);
+            });
+      }
+      break;
+    }
     case TypeKind::SMALLINT:
       switch (reqT->kind()) {
         case TypeKind::BIGINT:
@@ -1637,19 +1699,6 @@ std::unique_ptr<RowReader> TextReader::createRowReader(
 
 uint64_t TextReader::getFileLength() const {
   return contents_->fileLength;
-}
-
-uint64_t TextReader::getMemoryUse() {
-  uint64_t memory = std::min(
-      uint64_t(contents_->fileLength),
-      contents_->input->getInputStream()->getNaturalReadSize());
-
-  // Decompressor needs a buffer.
-  if (contents_->compression != CompressionKind::CompressionKind_NONE) {
-    memory *= 3;
-  }
-
-  return memory;
 }
 
 } // namespace facebook::velox::text

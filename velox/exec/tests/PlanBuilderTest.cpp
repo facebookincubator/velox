@@ -17,6 +17,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
@@ -347,6 +349,103 @@ TEST_F(PlanBuilderTest, commitStrategyParameter) {
 
   // Test with no explicit commit strategy (should default to kNoCommit)
   testCommitStrategy(connector::CommitStrategy::kNoCommit);
+}
+
+TEST_F(PlanBuilderTest, indexLookupJoinBuilder) {
+  auto leftType = ROW({"t0", "t1"}, {BIGINT(), ARRAY(BIGINT())});
+  auto rightType = ROW({"u0", "u1"}, {BIGINT(), BIGINT()});
+
+  // Create a TestIndexTableHandle that supports index lookup
+  auto indexTableHandle = std::make_shared<TestIndexTableHandle>(
+      kTestIndexConnectorName, nullptr, false);
+
+  // Create column handles for the index table
+  connector::ColumnHandleMap columnHandles;
+  for (const auto& name : rightType->names()) {
+    columnHandles[name] = std::make_shared<TestIndexColumnHandle>(name);
+  }
+
+  auto rightScan = std::make_shared<core::TableScanNode>(
+      "right_scan", rightType, indexTableHandle, columnHandles);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(leftType)
+                  .startIndexLookupJoin()
+                  .leftKeys({"t0"})
+                  .rightKeys({"u0"})
+                  .indexSource(rightScan)
+                  .joinConditions({"contains(t1, u1)"})
+                  .hasMarker(false)
+                  .outputLayout({"t0", "u1"})
+                  .joinType(core::JoinType::kInner)
+                  .filter("t0 > 0")
+                  .endIndexLookupJoin()
+                  .planNode();
+
+  auto indexJoinNode =
+      std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+  ASSERT_NE(indexJoinNode, nullptr);
+  ASSERT_EQ(indexJoinNode->joinType(), core::JoinType::kInner);
+  ASSERT_EQ(indexJoinNode->leftKeys().size(), 1);
+  ASSERT_EQ(indexJoinNode->rightKeys().size(), 1);
+  ASSERT_EQ(indexJoinNode->leftKeys()[0]->name(), "t0");
+  ASSERT_EQ(indexJoinNode->rightKeys()[0]->name(), "u0");
+  ASSERT_EQ(indexJoinNode->joinConditions().size(), 1);
+  ASSERT_FALSE(indexJoinNode->hasMarker());
+  ASSERT_EQ(indexJoinNode->outputType()->names().size(), 2);
+  ASSERT_EQ(indexJoinNode->outputType()->names()[0], "t0");
+  ASSERT_EQ(indexJoinNode->outputType()->names()[1], "u1");
+  ASSERT_EQ(indexJoinNode->filter()->toString(), "gt(ROW[\"t0\"],0)");
+}
+
+TEST_F(PlanBuilderTest, insertTableHandleParameter) {
+  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto directory = "/some/test/directory";
+
+  // Lambda to create a plan with given insertableHandle and verify it
+  auto testInsertTableHandle =
+      [&](std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
+        // Create a plan with insertTableHandle
+        auto planBuilder = PlanBuilder().values({data}).tableWrite(
+            directory,
+            {},
+            0,
+            {},
+            {},
+            dwio::common::FileFormat::DWRF,
+            {},
+            PlanBuilder::kHiveDefaultConnectorId,
+            {},
+            nullptr,
+            "",
+            common::CompressionKind_NONE,
+            nullptr,
+            false,
+            connector::CommitStrategy::kNoCommit,
+            insertTableHandle);
+
+        // Verify the plan node has the correct insert Table Handle.
+        auto tableWriteNode =
+            std::dynamic_pointer_cast<const core::TableWriteNode>(
+                planBuilder.planNode());
+        ASSERT_NE(tableWriteNode, nullptr);
+        ASSERT_EQ(tableWriteNode->insertTableHandle(), insertTableHandle);
+      };
+
+  auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), INTEGER(), SMALLINT()});
+  auto hiveHandle = HiveConnectorTestBase::makeHiveInsertTableHandle(
+      rowType->names(),
+      rowType->children(),
+      {rowType->names()[0]}, // partitionedBy
+      nullptr, // bucketProperty
+      HiveConnectorTestBase::makeLocationHandle(
+          "/path/to/test",
+          std::nullopt,
+          connector::hive::LocationHandle::TableType::kNew));
+
+  auto insertHandle = std::make_shared<core::InsertTableHandle>(
+      std::string(PlanBuilder::kHiveDefaultConnectorId), hiveHandle);
+  testInsertTableHandle(insertHandle);
 }
 
 } // namespace facebook::velox::exec::test

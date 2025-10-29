@@ -28,8 +28,7 @@
 
 #include <vector>
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 namespace dwio::common {
 class ColumnStatistics;
 }
@@ -149,7 +148,9 @@ class ScanSpec {
   }
 
   void setSubscript(int64_t subscript) {
-    subscript_ = subscript;
+    if (subscript_ != subscript) {
+      subscript_ = subscript;
+    }
   }
 
   // True if the value is returned from scan.  A runtime pushdown of a filter
@@ -510,8 +511,7 @@ bool testFilter(
     const TypePtr& type);
 
 } // namespace common
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox
 
 template <>
 struct fmt::formatter<facebook::velox::common::ScanSpec::ColumnType>

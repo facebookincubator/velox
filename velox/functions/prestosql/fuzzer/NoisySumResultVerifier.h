@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <boost/algorithm/string/join.hpp>
+#include <fmt/ranges.h>
 #include <cstdint>
 #include <string>
 #include "velox/core/PlanNode.h"
@@ -239,8 +241,8 @@ class NoisySumResultVerifier : public ResultVerifier {
     // Build partition by clause for window function
     std::string partitionBy;
     if (!partitionKeys.empty()) {
-      partitionBy =
-          fmt::format("partition by {}", fmt::join(partitionKeys, ", "));
+      partitionBy = fmt::format(
+          "partition by {}", boost::algorithm::join(partitionKeys, ", "));
     }
 
     // Use row_number() window function to identify first occurrence of each

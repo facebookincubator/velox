@@ -132,8 +132,9 @@ class HashTableTest : public testing::TestWithParam<bool>,
       std::vector<RowVectorPtr> batches;
       std::vector<std::unique_ptr<VectorHasher>> keyHashers;
       for (auto channel = 0; channel < numKeys; ++channel) {
-        keyHashers.emplace_back(std::make_unique<VectorHasher>(
-            buildType->childAt(channel), channel));
+        keyHashers.emplace_back(
+            std::make_unique<VectorHasher>(
+                buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
           std::move(keyHashers), dependentTypes, true, false, 1'000, pool());
@@ -431,8 +432,9 @@ class HashTableTest : public testing::TestWithParam<bool>,
       TypePtr buildType,
       std::vector<RowVectorPtr>& batches) {
     for (auto i = 0; i < numBatches; ++i) {
-      batches.push_back(std::static_pointer_cast<RowVector>(
-          makeVector(buildType, batchSize, sequence)));
+      batches.push_back(
+          std::static_pointer_cast<RowVector>(
+              makeVector(buildType, batchSize, sequence)));
       sequence += batchSize;
     }
   }

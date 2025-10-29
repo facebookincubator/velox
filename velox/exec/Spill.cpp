@@ -119,10 +119,11 @@ void SpillState::validateSpillBytesSize(uint64_t bytes) {
   static constexpr uint64_t kMaxSpillBytesPerWrite =
       std::numeric_limits<int32_t>::max();
   if (bytes >= kMaxSpillBytesPerWrite) {
-    VELOX_GENERIC_SPILL_FAILURE(fmt::format(
-        "Spill bytes will overflow. Bytes {}, kMaxSpillBytesPerWrite: {}",
-        bytes,
-        kMaxSpillBytesPerWrite));
+    VELOX_GENERIC_SPILL_FAILURE(
+        fmt::format(
+            "Spill bytes will overflow. Bytes {}, kMaxSpillBytesPerWrite: {}",
+            bytes,
+            kMaxSpillBytesPerWrite));
   }
 }
 
@@ -283,8 +284,9 @@ SpillPartition::createUnorderedReader(
   std::vector<std::unique_ptr<BatchStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(FileSpillBatchStream::create(
-        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+    streams.push_back(
+        FileSpillBatchStream::create(
+            SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
   }
   files_.clear();
   return std::make_unique<UnorderedStreamReader<BatchStream>>(
@@ -299,8 +301,9 @@ SpillPartition::createOrderedReader(
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(FileSpillMergeStream::create(
-        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+    streams.push_back(
+        FileSpillMergeStream::create(
+            SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
   }
   files_.clear();
   // Check if the partition is empty or not.
@@ -436,6 +439,8 @@ std::unique_ptr<BatchStream> ConcatFilesSpillBatchStream::create(
 }
 
 bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
+  TestValue::adjust(
+      "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch", nullptr);
   VELOX_CHECK_NULL(batch);
   VELOX_CHECK(!atEnd_);
   for (; fileIndex_ < spillFiles_.size(); ++fileIndex_) {
@@ -454,10 +459,11 @@ bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
 SpillPartitionId::SpillPartitionId(uint32_t partitionNumber)
     : encodedId_(partitionNumber) {
   if (FOLLY_UNLIKELY(partitionNumber >= (1 << kMaxPartitionBits))) {
-    VELOX_FAIL(fmt::format(
-        "Partition number {} exceeds max partition number {}",
-        partitionNumber,
-        1 << kMaxPartitionBits));
+    VELOX_FAIL(
+        fmt::format(
+            "Partition number {} exceeds max partition number {}",
+            partitionNumber,
+            1 << kMaxPartitionBits));
   }
 }
 
@@ -466,10 +472,11 @@ SpillPartitionId::SpillPartitionId(
     uint32_t partitionNumber) {
   const auto childSpillLevel = parent.spillLevel() + 1;
   if (FOLLY_UNLIKELY(childSpillLevel > kMaxSpillLevel)) {
-    VELOX_FAIL(fmt::format(
-        "Spill level {} exceeds max spill level {}",
-        childSpillLevel,
-        kMaxSpillLevel));
+    VELOX_FAIL(
+        fmt::format(
+            "Spill level {} exceeds max spill level {}",
+            childSpillLevel,
+            kMaxSpillLevel));
   }
   encodedId_ = parent.encodedId_;
   encodedId_ = encodedId_ & ~kSpillLevelBitMask;

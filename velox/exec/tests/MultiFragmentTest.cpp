@@ -109,8 +109,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
     auto queryCtx = core::QueryCtx::create(
         executor ? executor : executor_.get(),
         core::QueryConfig(std::move(configCopy)));
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
@@ -127,7 +128,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
       std::unordered_map<std::string, std::string>& extraQueryConfigs,
       int destination = 0,
       Consumer consumer = nullptr,
-      int64_t maxMemory = memory::kMaxMemory) const {
+      int64_t maxMemory = memory::kMaxMemory,
+      const std::optional<common::SpillDiskOptions>& diskSpillOpts =
+          std::nullopt) const {
     auto configCopy = configSettings_;
     for (const auto& [k, v] : extraQueryConfigs) {
       configCopy[k] = v;
@@ -139,8 +142,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
         nullptr,
         nullptr,
         executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
@@ -148,7 +152,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
         destination,
         std::move(queryCtx),
         Task::ExecutionMode::kParallel,
-        std::move(consumer));
+        std::move(consumer),
+        /*memoryArbitrationPriority=*/0,
+        diskSpillOpts);
   }
 
   std::vector<RowVectorPtr> makeVectors(int count, int rowsPerVector) {
@@ -917,11 +923,17 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
             .capturePlanNodeId(partitionNodeId)
             .planNode();
     localMergeNodeIds.push_back(localMergeNodeId);
-    auto sortTask =
-        makeTask(sortTaskId, partialSortPlan, spillMergeConfigs, tasks.size());
     spillDirectories.push_back(TempDirectoryPath::create());
-    sortTask->setSpillDirectory(
-        spillDirectories[numPartialSortTasks]->getPath());
+    common::SpillDiskOptions spillOpts;
+    spillOpts.spillDirPath = spillDirectories[numPartialSortTasks]->getPath();
+    auto sortTask = makeTask(
+        sortTaskId,
+        partialSortPlan,
+        spillMergeConfigs,
+        tasks.size(),
+        /*consumer=*/nullptr,
+        memory::kMaxMemory,
+        spillOpts);
     tasks.push_back(sortTask);
     sortTask->start(4);
 
@@ -2915,8 +2927,8 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
   } else {
     test(1, 1'000);
     test(1'000, 72);
-    test(10'000, 7);
-    test(100'000, 1);
+    test(10'000, 8);
+    test(100'000, 2);
   }
 }
 
@@ -3093,7 +3105,9 @@ TEST_P(MultiFragmentTest, compression) {
       test("local://t1", 0.7, false);
     }
     SCOPED_TRACE(fmt::format("minCompressionRatio 0.0000001"));
-    { test("local://t2", 0.0000001, true); }
+    {
+      test("local://t2", 0.0000001, true);
+    }
   }
 }
 

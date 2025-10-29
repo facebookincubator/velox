@@ -129,10 +129,11 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
     } else {
       // No memory to cover 'this'.
       release();
-      VELOX_CACHE_ERROR(fmt::format(
-          "Failed to allocate {} pages for cache: {}",
-          sizePages,
-          cache->allocator()->getAndClearFailureMessage()));
+      VELOX_CACHE_ERROR(
+          fmt::format(
+              "Failed to allocate {} pages for cache: {}",
+              sizePages,
+              cache->allocator()->getAndClearFailureMessage()));
     }
   }
 }
@@ -151,7 +152,7 @@ std::string AsyncDataCacheEntry::toString() const {
       numPins_);
 }
 
-std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntry() {
+std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntryLocked() {
   std::unique_ptr<AsyncDataCacheEntry> newEntry;
   if (freeEntries_.empty()) {
     newEntry = std::make_unique<AsyncDataCacheEntry>(this);
@@ -176,7 +177,7 @@ CachePin CacheShard::findOrCreate(
       if (foundEntry->isExclusive()) {
         ++numWaitExclusive_;
         if (wait != nullptr) {
-          *wait = foundEntry->getFuture();
+          *wait = foundEntry->getFutureLocked();
         }
         return CachePin();
       }
@@ -212,7 +213,7 @@ CachePin CacheShard::findOrCreate(
       entryMap_.erase(it);
     }
 
-    auto newEntry = getFreeEntry();
+    auto newEntry = getFreeEntryLocked();
     // Initialize the members that must be set inside 'mutex_'.
     newEntry->numPins_ = AsyncDataCacheEntry::kExclusive;
     newEntry->promise_ = nullptr;
@@ -336,7 +337,7 @@ std::unique_ptr<folly::SharedPromise<bool>> CacheShard::removeEntry(
   removeEntryLocked(entry);
   // After the entry is removed from the hash table, a promise can no longer
   // be made. It is safe to move the promise and realize it.
-  return entry->movePromise();
+  return entry->movePromiseLocked();
 }
 
 void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
@@ -409,7 +410,7 @@ uint64_t CacheShard::evict(
           eventCounter_ > entries_.size() / 4 ||
           numChecked > entries_.size() / 8) {
         now = accessTime();
-        calibrateThreshold();
+        calibrateThresholdLocked();
         numChecked = 0;
         eventCounter_ = 0;
       }
@@ -490,7 +491,7 @@ void CacheShard::freeAllocations(std::vector<memory::Allocation>& allocations) {
   allocations.clear();
 }
 
-void CacheShard::calibrateThreshold() {
+void CacheShard::calibrateThresholdLocked() {
   auto numSamples = std::min<int32_t>(10, entries_.size());
   auto now = accessTime();
   auto entryIndex = (clockHand_ % entries_.size());
@@ -537,11 +538,15 @@ void CacheShard::updateStats(CacheStats& stats) {
     }
 
     ++stats.numEntries;
-    stats.tinySize += entry->tinyData_.size();
-    stats.tinyPadding += entry->tinyData_.capacity() - entry->tinyData_.size();
     if (entry->tinyData_.empty()) {
       stats.largeSize += entry->size_;
       stats.largePadding += entry->data_.byteSize() - entry->size_;
+      ++stats.numLargeEntries;
+    } else {
+      stats.tinySize += entry->tinyData_.size();
+      stats.tinyPadding +=
+          entry->tinyData_.capacity() - entry->tinyData_.size();
+      ++stats.numTinyEntries;
     }
   }
   stats.numHit += numHit_;
@@ -658,7 +663,7 @@ CacheStats CacheStats::operator-(const CacheStats& other) const {
 AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache)
-    : AsyncDataCache({}, allocator, std::move(ssdCache)){};
+    : AsyncDataCache({}, allocator, std::move(ssdCache)) {}
 
 AsyncDataCache::AsyncDataCache(
     const Options& options,
@@ -875,7 +880,7 @@ bool AsyncDataCache::canTryAllocate(
     return true;
   }
   return numPages - acquired.numPages() <=
-      (memory::AllocationTraits::numPages(allocator_->capacity())) -
+      memory::AllocationTraits::numPages(allocator_->capacity()) -
       allocator_->numAllocated();
 }
 
@@ -1064,8 +1069,9 @@ CoalesceIoStats readPins(
       [&](int32_t size, std::vector<folly::Range<char*>>& ranges) {
         // This hack allows us to store the size of the gap in the Range,
         // without actually allocating a buffer for it.
-        ranges.push_back(folly::Range<char*>(
-            nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
+        ranges.push_back(
+            folly::Range<char*>(
+                nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
       },
       std::move(readFunc));
 }

@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 #include <chrono>
 
+#include "velox/common/base/Macros.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ProcessBase.h"
 
@@ -29,8 +30,13 @@ struct CpuWallTiming {
   uint64_t wallNanos = 0;
   uint64_t cpuNanos = 0;
 
+  auto operator<=>(const CpuWallTiming&) const = default;
+
   void add(const CpuWallTiming& other) {
+    // Suppress spurious warnings in GCC 13.
+    VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
     count += other.count;
+    VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
     cpuNanos += other.cpuNanos;
     wallNanos += other.wallNanos;
   }

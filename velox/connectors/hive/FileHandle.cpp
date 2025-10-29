@@ -58,6 +58,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
       options.fileSize = properties->fileSize;
       options.readRangeHint = properties->readRangeHint;
       options.extraFileInfo = properties->extraFileInfo;
+      options.fileReadOps = properties->fileReadOps;
     }
     const auto& filename = key.filename;
     fileHandle->file = filesystems::getFileSystem(filename, properties_)

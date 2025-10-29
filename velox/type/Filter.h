@@ -1684,10 +1684,10 @@ class BytesRange final : public AbstractRange {
   /// the filter.
   /// @param nullAllowed Null values are passing the filter if true.
   BytesRange(
-      const std::string& lower,
+      std::string lower,
       bool lowerUnbounded,
       bool lowerExclusive,
-      const std::string& upper,
+      std::string upper,
       bool upperUnbounded,
       bool upperExclusive,
       bool nullAllowed)
@@ -1698,8 +1698,8 @@ class BytesRange final : public AbstractRange {
             upperExclusive,
             nullAllowed,
             FilterKind::kBytesRange),
-        lower_(lower),
-        upper_(upper),
+        lower_(std::move(lower)),
+        upper_(std::move(upper)),
         singleValue_(
             !lowerExclusive_ && !upperExclusive_ && !lowerUnbounded_ &&
             !upperUnbounded_ && lower_ == upper_) {
@@ -1816,19 +1816,19 @@ class NegatedBytesRange final : public Filter {
   /// the filter.
   /// @param nullAllowed Null values are passing the filter if true.
   NegatedBytesRange(
-      const std::string& lower,
+      std::string lower,
       bool lowerUnbounded,
       bool lowerExclusive,
-      const std::string& upper,
+      std::string upper,
       bool upperUnbounded,
       bool upperExclusive,
       bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kNegatedBytesRange) {
     nonNegated_ = std::make_unique<BytesRange>(
-        lower,
+        std::move(lower),
         lowerUnbounded,
         lowerExclusive,
-        upper,
+        std::move(upper),
         upperUnbounded,
         upperExclusive,
         nullAllowed);
@@ -2250,7 +2250,7 @@ static inline bool applyFilter(TFilter& filter, const std::string& value) {
 }
 
 template <typename TFilter>
-static inline bool applyFilter(TFilter& filter, folly::StringPiece value) {
+static inline bool applyFilter(TFilter& filter, std::string_view value) {
   return filter.testBytes(value.data(), value.size());
 }
 

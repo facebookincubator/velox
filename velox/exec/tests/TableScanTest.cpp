@@ -1870,6 +1870,15 @@ TEST_F(TableScanTest, partitionedTableDoubleKey) {
   testPartitionedTable(filePath->getPath(), DOUBLE(), "3.5");
 }
 
+TEST_F(TableScanTest, partitionedTableDecimalKey) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+  testPartitionedTable(filePath->getPath(), DECIMAL(20, 4), "3.5123");
+}
+
 TEST_F(TableScanTest, partitionedTableDateKey) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
   auto vectors = makeVectors(10, 1'000, rowType);
@@ -1963,8 +1972,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT {}, * FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
 
     expect(true);
@@ -1990,9 +2001,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT c0, {}, c1 FROM tmp",
-              asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT c0, {}, c1 FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2017,9 +2029,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT c0, c1, {} FROM tmp",
-              asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT c0, c1, {} FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2044,8 +2057,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT {} FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2092,8 +2107,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT {}, * FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -6110,6 +6127,29 @@ TEST_F(TableScanTest, duplicateFieldProject) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .split(makeHiveConnectorSplit(file->getPath()))
       .assertResults("SELECT id, id FROM tmp WHERE name = 'John'");
+}
+
+TEST_F(TableScanTest, parallelUnitLoader) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      vectors,
+      std::make_shared<facebook::velox::dwrf::Config>(),
+      []() { return std::make_unique<dwrf::DefaultFlushPolicy>(1000, 0); });
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+  auto task =
+      AssertQueryBuilder(plan)
+          .splits(makeHiveConnectorSplits({filePath}))
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::kParallelUnitLoadCountSession,
+              std::to_string(3))
+          .assertTypeAndNumRows(rowType_, 10'000);
+  auto stats = getTableScanRuntimeStats(task);
+  // Verify that parallel unit loader is enabled.
+  ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
 }
 
 } // namespace

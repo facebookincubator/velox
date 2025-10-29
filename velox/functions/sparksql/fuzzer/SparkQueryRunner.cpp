@@ -150,10 +150,11 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         writeToFile(filePath, input, writerPool.get());
         // Create temporary view for this table in Spark by reading the
         // generated Parquet file.
-        execute(fmt::format(
-            "CREATE OR REPLACE TEMPORARY VIEW {} AS (SELECT * from parquet.`file://{}`);",
-            tableName,
-            filePath));
+        execute(
+            fmt::format(
+                "CREATE OR REPLACE TEMPORARY VIEW {} AS (SELECT * from parquet.`file://{}`);",
+                tableName,
+                filePath));
       }
 
       // Run the query.

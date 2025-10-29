@@ -124,12 +124,9 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
           driverIds,
           queryCapacity,
           executor),
-      originalNode_(dynamic_cast<const core::PartitionedOutputNode*>(
-          core::PlanNode::findFirstNode(
-              planFragment_.get(),
-              [this](const core::PlanNode* node) {
-                return node->id() == nodeId_;
-              }))),
+      originalNode_(
+          dynamic_cast<const core::PartitionedOutputNode*>(
+              core::PlanNode::findNodeById(planFragment_.get(), nodeId_))),
       serdeKind_(serdeKind),
       consumerCb_(consumerCb) {
   VELOX_CHECK_NOT_NULL(originalNode_);
@@ -144,7 +141,8 @@ RowVectorPtr PartitionedOutputReplayer::run(bool /*unused*/) {
       core::PlanFragment{createPlan()},
       0,
       createQueryContext(queryConfigs_, executor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(driverIds_.size());
 
   consumeAllData(

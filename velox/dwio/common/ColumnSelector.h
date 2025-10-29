@@ -388,8 +388,10 @@ class ColumnSelector {
     // expect a runtime_error rather than fault.
     // Do-Not change the message as expected by client in failure case
     if (!notFound.empty()) {
-      throw std::runtime_error(folly::to<std::string>(
-          "Columns not found in hive table: ", folly::join(", ", notFound)));
+      throw std::runtime_error(
+          folly::to<std::string>(
+              "Columns not found in hive table: ",
+              folly::join(", ", notFound)));
     }
   }
 

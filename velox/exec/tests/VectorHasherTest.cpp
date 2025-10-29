@@ -462,14 +462,15 @@ TEST_F(VectorHasherTest, stringDistinctOverflow) {
   for (auto i = 0; i < 7; ++i) {
     auto& stringVec = strings[i];
     stringVec.resize(numRows);
-    batches.emplace_back(makeFlatVector<StringView>(
-        numRows, [&i, &stringVec, numRows](vector_size_t row) {
-          const auto num = numRows * i + row;
-          stringVec[row] = (row != 0)
-              ? fmt::format("abcdefghijabcdefghij{}", num)
-              : fmt::format("s{}", num);
-          return StringView(stringVec[row]);
-        }));
+    batches.emplace_back(
+        makeFlatVector<StringView>(
+            numRows, [&i, &stringVec, numRows](vector_size_t row) {
+              const auto num = numRows * i + row;
+              stringVec[row] = (row != 0)
+                  ? fmt::format("abcdefghijabcdefghij{}", num)
+                  : fmt::format("s{}", num);
+              return StringView(stringVec[row]);
+            }));
   }
 
   SelectivityVector rows(numRows, true);
@@ -718,6 +719,11 @@ TEST_F(VectorHasherTest, merge) {
   // Check all values have distinct id. -1 to account for null that
   // does not occur in the data.
   EXPECT_EQ(numDistinct - 1, ids.size());
+}
+
+TEST_F(VectorHasherTest, computeValueIdsHugeInt) {
+  testComputeValueIds<int128_t>(false);
+  testComputeValueIds<int128_t>(true);
 }
 
 TEST_F(VectorHasherTest, computeValueIdsBigint) {

@@ -552,6 +552,25 @@ TEST_F(DecompressionTest, testInflate) {
   }
 }
 
+TEST_F(DecompressionTest, testSmallBufferInflate) {
+  const unsigned char buffer[] = {
+      0xe, 0x0, 0x0, 0x63, 0x60, 0x64, 0x62, 0xc0, 0x8d, 0x0};
+  const std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
+      CompressionKind_ZLIB,
+      std::make_unique<SeekableArrayInputStream>(buffer, std::size(buffer)),
+      1 // blockSize 1 to test multiple inflate calls during decompression.
+  );
+  const void* ptr;
+  int32_t length;
+  ASSERT_EQ(true, result->Next(&ptr, &length));
+  ASSERT_EQ(30, length);
+  for (int32_t i = 0; i < 10; ++i) {
+    for (int32_t j = 0; j < 3; ++j) {
+      EXPECT_EQ(j, static_cast<const char*>(ptr)[i * 3 + j]);
+    }
+  }
+}
+
 TEST_F(DecompressionTest, testInflateSequence) {
   const unsigned char buffer[] = {0xe,  0x0,  0x0,  0x63, 0x60, 0x64, 0x62,
                                   0xc0, 0x8d, 0x0,  0xe,  0x0,  0x0,  0x63,

@@ -109,7 +109,8 @@ class OutputBufferManagerTest : public testing::Test {
         std::move(planFragment),
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
 
     bufferManager_->initializeTask(task, kind, numDestinations, numDrivers);
     return task;
@@ -375,8 +376,9 @@ class OutputBufferManagerTest : public testing::Test {
               std::vector<std::unique_ptr<folly::IOBuf>> pages,
               int64_t inSequence,
               std::vector<int64_t> remainingBytes) {
-            promise.setValue(Response{
-                std::move(pages), inSequence, std::move(remainingBytes)});
+            promise.setValue(
+                Response{
+                    std::move(pages), inSequence, std::move(remainingBytes)});
           });
       future.wait();
       ASSERT_TRUE(future.isReady());

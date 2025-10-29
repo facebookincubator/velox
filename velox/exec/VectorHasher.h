@@ -291,6 +291,7 @@ class VectorHasher {
       case TypeKind::SMALLINT:
       case TypeKind::INTEGER:
       case TypeKind::BIGINT:
+      case TypeKind::HUGEINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
@@ -434,6 +435,25 @@ class VectorHasher {
           setDistinctOverflow();
         }
       }
+    }
+  }
+
+  // Specialization for int128_t: For types with custom comparison (IPADDRESS,
+  // UUID), force hash mode by blocking both range and distinct modes. For other
+  // int128_t types (HUGEINT, DECIMAL), use generic path which may use range
+  // mode for small values.
+  void analyzeValue(int128_t value) {
+    if (type_->providesCustomComparison()) {
+      // Force hash mode by disabling both range and distinct optimizations
+      if (!rangeOverflow_) {
+        setRangeOverflow();
+      }
+      if (!distinctOverflow_) {
+        setDistinctOverflow();
+      }
+    } else {
+      // Use generic analysis for regular int128_t types (HUGEINT, DECIMAL)
+      analyzeValue<int64_t>(toInt64(value));
     }
   }
 

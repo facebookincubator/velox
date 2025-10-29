@@ -32,10 +32,8 @@ namespace facebook::velox {
 // Constant used in comparison of REAL and DOUBLE values.
 constexpr double kEpsilon{0.00001};
 
-// note: while this is not intended for use in real critical code paths,
-//       it's probably worthwhile to make it not completely suck
-// todo(youknowjack): make this class not completely suck
-
+/// NOTE: Variants are not intended to be used in real critical code paths. For
+/// these cases, use Vectors instead.
 class Variant;
 
 namespace detail {
@@ -78,7 +76,7 @@ struct VariantTypeTraits<
     std::enable_if_t<
         KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY,
         void>> {
-  using native_type = folly::StringPiece;
+  using native_type = std::string_view;
   using stored_type =
       TypeStorage<scalar_stored_type<KIND>, KIND, usesCustomComparison>;
   using value_type = scalar_stored_type<KIND>;
@@ -218,7 +216,7 @@ class Variant {
       typename detail::VariantTypeTraits<TypeKind::VARCHAR, false>::native_type
           v)
       : ptr_{new detail::VariantTypeTraits<TypeKind::VARCHAR, false>::
-                 stored_type{v.str()}},
+                 stored_type{std::string(v)}},
         kind_{TypeKind::VARCHAR},
         usesCustomComparison_{false} {}
 
@@ -321,7 +319,7 @@ class Variant {
   }
 
   Variant()
-      : ptr_{nullptr}, kind_{TypeKind::INVALID}, usesCustomComparison_(false) {}
+      : ptr_{nullptr}, kind_{TypeKind::UNKNOWN}, usesCustomComparison_(false) {}
 
   /* implicit */ Variant(TypeKind kind)
       : ptr_{nullptr}, kind_{kind}, usesCustomComparison_(false) {}
@@ -336,10 +334,10 @@ class Variant {
     }
   }
 
-  // Support construction from StringView as well as StringPiece.
-  /* implicit */ Variant(StringView view) : Variant{folly::StringPiece{view}} {}
+  // Support construction from velox::StringView as well as std::string_view.
+  /* implicit */ Variant(StringView view) : Variant{std::string_view{view}} {}
 
-  // Break ties between implicit conversions to StringView/StringPiece.
+  // Break ties between implicit conversions to StringView/std::string_view.
   /* implicit */ Variant(std::string str)
       : ptr_{new std::string{std::move(str)}},
         kind_{TypeKind::VARCHAR},
@@ -368,9 +366,9 @@ class Variant {
   }
 
   template <typename T>
-  static Variant create(const typename detail::VariantTypeTraits<
-                        CppToType<T>::typeKind,
-                        false>::value_type& v) {
+  static Variant create(
+      const typename detail::VariantTypeTraits<CppToType<T>::typeKind, false>::
+          value_type& v) {
     return create<CppToType<T>::typeKind>(v);
   }
 
@@ -427,6 +425,9 @@ class Variant {
   }
 
   std::string toJson(const TypePtr& type) const;
+
+  std::string toJson(const Type& type) const;
+
   std::string toJsonUnsafe(const TypePtr& type = nullptr) const;
 
   /// Used by python binding, do not change signature.

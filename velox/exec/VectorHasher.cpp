@@ -23,35 +23,38 @@
 
 namespace facebook::velox::exec {
 
-#define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)             \
-  [&]() {                                                                \
-    switch (typeKind) {                                                  \
-      case TypeKind::BOOLEAN: {                                          \
-        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::TINYINT: {                                          \
-        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::SMALLINT: {                                         \
-        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);           \
-      }                                                                  \
-      case TypeKind::INTEGER: {                                          \
-        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::BIGINT: {                                           \
-        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);             \
-      }                                                                  \
-      case TypeKind::VARCHAR:                                            \
-      case TypeKind::VARBINARY: {                                        \
-        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::TIMESTAMP: {                                        \
-        return TEMPLATE_FUNC<TypeKind::TIMESTAMP>(__VA_ARGS__);          \
-      }                                                                  \
-      default:                                                           \
-        VELOX_UNREACHABLE(                                               \
-            "Unsupported value ID type: ", mapTypeKindToName(typeKind)); \
-    }                                                                    \
+#define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
+  [&]() {                                                                   \
+    switch (typeKind) {                                                     \
+      case TypeKind::BOOLEAN: {                                             \
+        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::TINYINT: {                                             \
+        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::SMALLINT: {                                            \
+        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);              \
+      }                                                                     \
+      case TypeKind::INTEGER: {                                             \
+        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::BIGINT: {                                              \
+        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);                \
+      }                                                                     \
+      case TypeKind::HUGEINT: {                                             \
+        return TEMPLATE_FUNC<TypeKind::HUGEINT>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::VARCHAR:                                               \
+      case TypeKind::VARBINARY: {                                           \
+        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::TIMESTAMP: {                                           \
+        return TEMPLATE_FUNC<TypeKind::TIMESTAMP>(__VA_ARGS__);             \
+      }                                                                     \
+      default:                                                              \
+        VELOX_UNREACHABLE(                                                  \
+            "Unsupported value ID type: ", TypeKindName::toName(typeKind)); \
+    }                                                                       \
   }()
 
 namespace {
@@ -736,6 +739,7 @@ void extendRange(
       extendRange<int32_t>(reserve, min, max);
       break;
     case TypeKind::BIGINT:
+    case TypeKind::HUGEINT:
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
     case TypeKind::TIMESTAMP:

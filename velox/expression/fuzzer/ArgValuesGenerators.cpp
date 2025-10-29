@@ -137,11 +137,12 @@ std::vector<core::TypedExprPtr> PhoneNumberArgValuesGenerator::generate(
             seed, signature.args[0], nullRatio));
 
     VELOX_CHECK_GE(state.inputRowNames_.size(), 1);
-    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[0],
-        signature.args.size() == 1
-            ? state.inputRowNames_.back()
-            : state.inputRowNames_[state.inputRowNames_.size() - 2]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[0],
+            signature.args.size() == 1
+                ? state.inputRowNames_.back()
+                : state.inputRowNames_[state.inputRowNames_.size() - 2]));
 
     //  Populate state.customInputGenerators_ and inputExpressions with nullptr
     //  for inputs that do not require custom input generators
@@ -158,12 +159,13 @@ std::vector<core::TypedExprPtr> PhoneNumberArgValuesGenerator::generate(
             seed, signature.args[0], nullRatio));
 
     VELOX_CHECK_GE(state.inputRowNames_.size(), signature.args.size());
-    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[0],
-        signature.args.size() == 1
-            ? state.inputRowNames_.back()
-            : state.inputRowNames_
-                  [state.inputRowNames_.size() - signature.args.size()]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[0],
+            signature.args.size() == 1
+                ? state.inputRowNames_.back()
+                : state.inputRowNames_
+                      [state.inputRowNames_.size() - signature.args.size()]));
 
     for (int i = 1; i < signature.args.size(); i++) {
       if (i == 1) {
@@ -218,8 +220,9 @@ std::vector<core::TypedExprPtr> JsonExtractArgValuesGenerator::generate(
     state.inputRowTypes_.emplace_back(signature.args[i]);
     state.inputRowNames_.emplace_back(
         fmt::format("c{}", state.inputRowTypes_.size() - 1));
-    inputExpressions.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[i], state.inputRowNames_.back()));
+    inputExpressions.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[i], state.inputRowNames_.back()));
   }
 
   const auto nullRatio = options.nullRatio;
@@ -304,8 +307,9 @@ std::vector<core::TypedExprPtr> CastVarcharAndJsonArgValuesGenerator::generate(
     }
 
     VELOX_CHECK_GE(signature.args.size(), 1);
-    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[0], state.inputRowNames_.back()));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[0], state.inputRowNames_.back()));
   }
 
   return inputExpressions;
@@ -349,21 +353,23 @@ std::vector<core::TypedExprPtr> QDigestArgValuesGenerator::generate(
       std::make_shared<fuzzer::QDigestInputGenerator>(
           seed, signature.args[0], nullRatio, qDigestType()));
   VELOX_CHECK_GE(state.inputRowNames_.size(), signature.args.size());
-  inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-      signature.args[0],
-      signature.args.size() == 1
-          ? state.inputRowNames_.back()
-          : state.inputRowNames_
-                [state.inputRowNames_.size() - signature.args.size()]));
+  inputExpressions.emplace_back(
+      std::make_shared<core::FieldAccessTypedExpr>(
+          signature.args[0],
+          signature.args.size() == 1
+              ? state.inputRowNames_.back()
+              : state.inputRowNames_
+                    [state.inputRowNames_.size() - signature.args.size()]));
 
   // Add null generators for remaining arguments
   for (size_t i = 1; i < signature.args.size(); i++) {
     state.customInputGenerators_.emplace_back(nullptr);
     VELOX_CHECK_GE(state.inputRowNames_.size(), signature.args.size() - i);
-    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[i],
-        state.inputRowNames_
-            [state.inputRowNames_.size() + i - signature.args.size()]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[i],
+            state.inputRowNames_
+                [state.inputRowNames_.size() + i - signature.args.size()]));
   }
   return inputExpressions;
 }
@@ -400,17 +406,19 @@ std::vector<core::TypedExprPtr> URLArgValuesGenerator::generate(
                "url_extract_host"})));
 
   VELOX_CHECK_GE(signature.args.size(), 1);
-  inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-      signature.args[0], state.inputRowNames_.back()));
+  inputExpressions.emplace_back(
+      std::make_shared<core::FieldAccessTypedExpr>(
+          signature.args[0], state.inputRowNames_.back()));
 
   // Add null generators for remaining arguments
   for (size_t i = 1; i < signature.args.size(); i++) {
     state.customInputGenerators_.emplace_back(nullptr);
     VELOX_CHECK_GE(state.inputRowNames_.size(), signature.args.size() - i);
-    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[i],
-        state.inputRowNames_
-            [state.inputRowNames_.size() + i - signature.args.size()]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[i],
+            state.inputRowNames_
+                [state.inputRowNames_.size() + i - signature.args.size()]));
   }
 
   return inputExpressions;
@@ -441,12 +449,13 @@ std::vector<core::TypedExprPtr> TDigestArgValuesGenerator::generate(
         std::make_shared<fuzzer::TDigestInputGenerator>(
             seed, signature.args[0], nullRatio));
     VELOX_CHECK_GE(state.inputRowNames_.size(), signature.args.size());
-    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        signature.args[0],
-        signature.args.size() == 1
-            ? state.inputRowNames_.back()
-            : state.inputRowNames_
-                  [state.inputRowNames_.size() - signature.args.size()]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[0],
+            signature.args.size() == 1
+                ? state.inputRowNames_.back()
+                : state.inputRowNames_
+                      [state.inputRowNames_.size() - signature.args.size()]));
     // Add null generators for remaining arguments
     for (size_t i = 1; i < signature.args.size(); i++) {
       state.customInputGenerators_.emplace_back(nullptr);
@@ -477,6 +486,62 @@ std::vector<core::TypedExprPtr> UnifiedDigestArgValuesGenerator::generate(
   }
 
   VELOX_UNREACHABLE("Unsupported digest type");
+}
+
+std::vector<core::TypedExprPtr>
+FbDedupNormalizeTextArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_LE(signature.args.size(), 2);
+  populateInputTypesAndNames(signature, state);
+
+  const auto seed = static_cast<size_t>(rand<uint32_t>(rng));
+  const auto nullRatio = options.nullRatio;
+
+  // Add custom input generator for the first argument (text)
+  state.customInputGenerators_.emplace_back(
+      std::make_shared<RandomInputGenerator<StringView>>(
+          seed,
+          signature.args[0],
+          nullRatio,
+          20,
+          std::vector<UTF8CharList>{
+              UTF8CharList::ASCII,
+              UTF8CharList::UNICODE_CASE_SENSITIVE,
+              UTF8CharList::EXTENDED_UNICODE,
+              UTF8CharList::MATHEMATICAL_SYMBOLS},
+          RandomStrVariationOptions{
+              /*controlCharacterProbability=*/0.5,
+              /*escapeStringProbability=*/0.5,
+              /*truncateProbability=*/0.2,
+          }));
+
+  // Populate inputExpressions_ for the argument that requires custom
+  // generation. A nullptr should be added at inputExpressions[i] if the i-th
+  // argument does not require custom input generation.
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+
+  // First argument (text) - use FieldAccessTypedExpr
+  inputExpressions[0] = std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0], state.inputRowNames_.back());
+
+  // Second argument (normalization form) - Add an INVALID form
+  if (signature.args.size() > 1) {
+    // Add null generator for second argument if it exists
+    state.customInputGenerators_.emplace_back(nullptr);
+
+    static const std::vector<std::string> testForms = {
+        "NFC", "NFD", "NFKC", "NFKD", "INVALID"};
+
+    auto index = rand<uint64_t>(rng, 0, testForms.size() - 1);
+    inputExpressions[1] = std::make_shared<core::ConstantTypedExpr>(
+        VARCHAR(), variant(testForms[index]));
+  }
+
+  return inputExpressions;
 }
 
 } // namespace facebook::velox::fuzzer

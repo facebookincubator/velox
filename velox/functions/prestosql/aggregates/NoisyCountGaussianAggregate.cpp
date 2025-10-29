@@ -273,7 +273,7 @@ void registerNoisyCountGaussianAggregate(
 
         return std::make_unique<NoisyCountGaussianAggregate>(BIGINT());
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

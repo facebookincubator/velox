@@ -19,23 +19,24 @@
 
 namespace facebook::velox::connector::hive {
 
-#define PARTITION_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)               \
-  [&]() {                                                                   \
-    switch (typeKind) {                                                     \
-      case TypeKind::BOOLEAN:                                               \
-      case TypeKind::TINYINT:                                               \
-      case TypeKind::SMALLINT:                                              \
-      case TypeKind::INTEGER:                                               \
-      case TypeKind::BIGINT:                                                \
-      case TypeKind::VARCHAR:                                               \
-      case TypeKind::VARBINARY:                                             \
-      case TypeKind::TIMESTAMP:                                             \
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
-            TEMPLATE_FUNC, typeKind, __VA_ARGS__);                          \
-      default:                                                              \
-        VELOX_UNSUPPORTED(                                                  \
-            "Unsupported partition type: {}", mapTypeKindToName(typeKind)); \
-    }                                                                       \
+#define PARTITION_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                  \
+  [&]() {                                                                      \
+    switch (typeKind) {                                                        \
+      case TypeKind::BOOLEAN:                                                  \
+      case TypeKind::TINYINT:                                                  \
+      case TypeKind::SMALLINT:                                                 \
+      case TypeKind::INTEGER:                                                  \
+      case TypeKind::BIGINT:                                                   \
+      case TypeKind::HUGEINT:                                                  \
+      case TypeKind::VARCHAR:                                                  \
+      case TypeKind::VARBINARY:                                                \
+      case TypeKind::TIMESTAMP:                                                \
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                             \
+            TEMPLATE_FUNC, typeKind, __VA_ARGS__);                             \
+      default:                                                                 \
+        VELOX_UNSUPPORTED(                                                     \
+            "Unsupported partition type: {}", TypeKindName::toName(typeKind)); \
+    }                                                                          \
   }()
 
 namespace {
@@ -89,6 +90,22 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
         DATE()->toString(
             partitionVector->as<SimpleVector<int32_t>>()->valueAt(row)));
   }
+  if constexpr (Kind == TypeKind::BIGINT || Kind == TypeKind::HUGEINT) {
+    if (partitionVector->type()->isDecimal()) {
+      auto [precision, scale] =
+          getDecimalPrecisionScale(*partitionVector->type());
+      const auto maxStringSize =
+          DecimalUtil::maxStringViewSize(precision, scale);
+      std::vector<char> maxString(maxStringSize);
+      const auto size = DecimalUtil::castToString(
+          partitionVector->as<SimpleVector<T>>()->valueAt(row),
+          scale,
+          maxStringSize,
+          maxString.data());
+      return std::make_pair(name, std::string(maxString.data(), size));
+    }
+  }
+
   return std::make_pair(
       name,
       makePartitionValueString(

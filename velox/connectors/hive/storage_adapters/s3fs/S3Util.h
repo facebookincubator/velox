@@ -204,7 +204,7 @@ std::optional<std::string> parseAWSStandardRegionName(
 class S3ProxyConfigurationBuilder {
  public:
   S3ProxyConfigurationBuilder(const std::string& s3Endpoint)
-      : s3Endpoint_(s3Endpoint){};
+      : s3Endpoint_(s3Endpoint) {}
 
   S3ProxyConfigurationBuilder& useSsl(const bool& useSsl) {
     useSsl_ = useSsl;
@@ -237,7 +237,7 @@ class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
 
 template <>
 struct fmt::formatter<Aws::Http::HttpResponseCode> : formatter<int> {
-  auto format(Aws::Http::HttpResponseCode s, format_context& ctx) {
+  auto format(Aws::Http::HttpResponseCode s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

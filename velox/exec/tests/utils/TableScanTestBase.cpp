@@ -173,6 +173,11 @@ void TableScanTestBase::testPartitionedTableImpl(
   std::string partitionValueStr;
   partitionValueStr =
       partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
+  if (partitionValue.has_value() && partitionType->isDecimal()) {
+    auto [p, s] = getDecimalPrecisionScale(*partitionType);
+    partitionValueStr =
+        fmt::format("CAST({} AS DECIMAL({}, {}))", partitionValueStr, p, s);
+  }
   assertQuery(
       op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
 

@@ -51,31 +51,34 @@ CREATE_TYPE_TRAIT(ROW, STRUCT)
 
 void ProtoUtils::writeType(
     const Type& type,
-    proto::Footer& footer,
-    proto::Type* parent) {
-  auto self = footer.add_types();
+    FooterWriteWrapper& footer,
+    TypeWriteWrapper* parent) {
+  auto self = footer.addTypes();
   if (parent) {
-    parent->add_subtypes(footer.types_size() - 1);
+    parent->addSubtypes(footer.typesSize() - 1);
   }
+
   auto kind =
       VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(SchemaType, kind, type.kind());
-  self->set_kind(kind);
+  auto typeKindWrapper = TypeKindWrapper(&kind);
+  self.setKind(typeKindWrapper);
+
   switch (type.kind()) {
     case TypeKind::ROW: {
       auto& row = type.asRow();
       for (size_t i = 0; i < row.size(); ++i) {
-        self->add_fieldnames(row.nameOf(i));
-        writeType(*row.childAt(i), footer, self);
+        self.addFieldnames(row.nameOf(i));
+        writeType(*row.childAt(i), footer, &self);
       }
       break;
     }
     case TypeKind::ARRAY:
-      writeType(*type.asArray().elementType(), footer, self);
+      writeType(*type.asArray().elementType(), footer, &self);
       break;
     case TypeKind::MAP: {
       auto& map = type.asMap();
-      writeType(*map.keyType(), footer, self);
-      writeType(*map.valueType(), footer, self);
+      writeType(*map.keyType(), footer, &self);
+      writeType(*map.valueType(), footer, &self);
       break;
     }
     default:

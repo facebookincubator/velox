@@ -21,6 +21,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/SfmSketchRegistration.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::test {
@@ -235,12 +236,15 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "BINGTILE",
       "TDIGEST",
       "QDIGEST",
+      "SETDIGEST",
       "SFMSKETCH",
       "BIGINT_ENUM",
       "VARCHAR_ENUM",
-  };
+      "P4HYPERLOGLOG",
+      "TIME WITH TIME ZONE"};
 #ifdef VELOX_ENABLE_GEO
   expectedTypes.insert("GEOMETRY");
+  expectedTypes.insert("SPHERICALGEOGRAPHY");
 #endif
   ASSERT_EQ(expectedTypes, getCustomTypeNames());
 
@@ -398,5 +402,63 @@ TEST_F(CustomTypeTest, testOpaqueCustomTypeAutoCreation) {
       evaluate(
           "reduce_tuple(make_tuple_untyped(c0, c0))", makeRowVector({data})),
       "");
+}
+
+template <typename T>
+struct TimeWithTimezonePlusOneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<TimeWithTimezone>& out,
+      const arg_type<TimeWithTimezone>& input) {
+    out = input + 1;
+  }
+};
+
+template <typename T>
+struct ArrayTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<Array<TimeWithTimezone>>& out,
+      const arg_type<Array<TimeWithTimezone>>& input) {
+    for (int i = 0; i < input.size(); i++) {
+      if (input[i].has_value()) {
+        out.push_back(input[i].value());
+      }
+    }
+  }
+};
+
+TEST_F(CustomTypeTest, timeWithTimezoneTypeTest) {
+  registerFunction<
+      TimeWithTimezonePlusOneFunction,
+      TimeWithTimezone,
+      TimeWithTimezone>({"time_with_timezone_plus_one"});
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1000, 2000, 3000}, TIME_WITH_TIME_ZONE()),
+  });
+  auto result = evaluate("time_with_timezone_plus_one(c0)", data);
+  auto expected =
+      makeFlatVector<int64_t>({1001, 2001, 3001}, TIME_WITH_TIME_ZONE());
+  assertEqualVectors(expected, result);
+
+  // Test out TimeWithTimezone in complex type.
+  {
+    registerFunction<
+        ArrayTimeWithTimezoneFunction,
+        Array<TimeWithTimezone>,
+        Array<TimeWithTimezone>>({"array_time_with_timezone"});
+
+    auto data = makeRowVector({
+        makeArrayVector<int64_t>(
+            {{1000, 2000, 3000}, {4000, 5000, 6000}}, TIME_WITH_TIME_ZONE()),
+    });
+
+    auto result = evaluate("array_time_with_timezone(c0)", data);
+    auto expected = makeArrayVector<int64_t>(
+        {{1000, 2000, 3000}, {4000, 5000, 6000}}, TIME_WITH_TIME_ZONE());
+    assertEqualVectors(expected, result);
+  }
 }
 } // namespace facebook::velox::test

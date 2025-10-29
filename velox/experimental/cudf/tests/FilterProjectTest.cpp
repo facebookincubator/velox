@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -513,10 +517,10 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
   testYearFunction(vectors);
 }
 
+// The result mismatches.
 TEST_F(CudfFilterProjectTest, DISABLED_caseWhenOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
-  // failing because switch copies nulls too.
   createDuckDbTable(vectors);
 
   testCaseWhenOperation(vectors);
@@ -632,6 +636,32 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   createDuckDbTable(vectors);
 
   testMixedInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, round) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, simpleFilter) {
@@ -1046,6 +1076,48 @@ TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
                   .planNode();
 
   runTest(plan, "SELECT coalesce(c0, 100, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, switchExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<double>({45676567.78, 6789098767.90876, -2.34}),
+       makeFlatVector<double>({123.4, 124.5, 1678})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"CASE WHEN c0 > 0.0 THEN c0 / c1 ELSE cast(null as double) END AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<double>(
+          {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
+ protected:
+  static void SetUpTestCase() {
+    parse::registerTypeResolver();
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::registerCudf();
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterCudf();
+  }
+};
+
+TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
+  auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
+  EXPECT_EQ(castValue, 12);
+  auto tryCast =
+      evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
+  EXPECT_EQ(tryCast, -214);
 }
 
 } // namespace

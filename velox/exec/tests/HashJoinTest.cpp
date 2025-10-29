@@ -1440,9 +1440,10 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
         .joinType(core::JoinType::kAnti)
         .joinFilter(filter)
         .joinOutputLayout({"t0", "t1"})
-        .referenceQuery(fmt::format(
-            "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
+                filter))
         .run();
   }
 }
@@ -2965,8 +2966,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
-            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+                filter))
         .injectSpill(false)
         .run();
 
@@ -2976,9 +2979,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     // these values.
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
-            "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
+                filter))
         .injectSpill(false)
         .run();
   }
@@ -3322,8 +3326,9 @@ TEST_F(HashJoinTest, lazyVectors) {
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
+        buildSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(
+                tempFiles[probeSplits.size() + i]->getPath())));
       }
       SplitInput splits;
       splits.emplace(probeScanId, probeSplits);
@@ -6082,9 +6087,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6133,9 +6139,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6220,8 +6227,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
                   .planNode();
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
-        "minSpillableReservationPct: {}", minSpillableReservationPct));
+    SCOPED_TRACE(
+        fmt::format(
+            "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::HashBuild::addInput",
@@ -8150,6 +8158,200 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
       .run();
   ASSERT_TRUE(tableEmpty);
+}
+
+TEST_F(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
+  // This test corresponds to the SQL query:
+  // SELECT
+  //   LEFT_TABLE.ip_addr as ip_left_string,
+  //   RIGHT_TABLE.ip_addr as ip_right_string,
+  //   CAST(LEFT_TABLE.ip_addr AS IPADDRESS) as ip_left_ip_address_type,
+  //   CAST(RIGHT_TABLE.ip_addr AS IPADDRESS) as ip_right_ip_address_type,
+  //   CAST(LEFT_TABLE.ip_addr AS IPADDRESS) = CAST(RIGHT_TABLE.ip_addr AS
+  //   IPADDRESS) as are_equal_as_ip_address_type
+  // FROM
+  //   (VALUES ('2620:10d:c0a8:f0::37'), ('2620:10d:c053:33::37')) AS
+  //   LEFT_TABLE(ip_addr) INNER JOIN (VALUES ('2620:10d:c0a8:f0::37')) AS
+  //   RIGHT_TABLE(ip_addr) ON CAST(LEFT_TABLE.ip_addr AS IPADDRESS) =
+  //   CAST(RIGHT_TABLE.ip_addr AS IPADDRESS)
+  // LIMIT 1000
+
+  auto leftVectors = makeRowVector({makeFlatVector<StringView>(
+      {StringView("2620:10d:c0a8:f0::37"),
+       StringView("2620:10d:c053:33::37")})});
+
+  auto rightVectors = makeRowVector(
+      {makeFlatVector<StringView>({StringView("2620:10d:c0a8:f0::37")})});
+  createDuckDbTable("t", {leftVectors});
+  createDuckDbTable("u", {rightVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan = PlanBuilder(planNodeIdGenerator)
+                       .values({rightVectors})
+                       .project(
+                           {"c0 AS ip_addr_right",
+                            "CAST(c0 AS IPADDRESS) AS ip_addr_cast_right"})
+                       .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({leftVectors})
+          .project({"c0 AS ip_addr", "CAST(c0 AS IPADDRESS) AS ip_addr_cast"})
+          .hashJoin(
+              {"ip_addr_cast"},
+              {"ip_addr_cast_right"},
+              rightPlan,
+              "",
+              {"ip_addr", "ip_addr_cast"},
+              core::JoinType::kInner)
+          .limit(0, 1000, false)
+          .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto ipAddr = result->childAt(0)->as<SimpleVector<StringView>>();
+
+  // We expect 1 row (only the matching IPv6 address: 2620:10d:c0a8:f0::37)
+  ASSERT_EQ(ipAddr->valueAt(0), StringView("2620:10d:c0a8:f0::37"));
+
+  // Test that different IPADDRESS values correctly don't match in hash join.
+  leftVectors = makeRowVector({
+      makeFlatVector<StringView>({
+          "2620:10d:c053:33::37"_sv,
+      }),
+  });
+
+  rightVectors = makeRowVector({
+      makeFlatVector<StringView>({
+          "2620:10d:c0a8:f0::37"_sv,
+      }),
+  });
+
+  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  rightPlan = PlanBuilder(planNodeIdGenerator)
+                  .values({rightVectors})
+                  .project(
+                      {"c0 AS ip_addr_right",
+                       "CAST(c0 AS IPADDRESS) AS ip_addr_cast_right"})
+                  .planNode();
+
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({leftVectors})
+             .project(
+                 {"c0 AS ip_left",
+                  "CAST(c0 AS IPADDRESS) AS ip_left_cast",
+                  "CAST(c0 AS VARCHAR) AS ip_left_string"})
+             .hashJoin(
+                 {"ip_left_cast"},
+                 {"ip_addr_cast_right"},
+                 rightPlan,
+                 "",
+                 {"ip_left_cast", "ip_addr_cast_right", "ip_addr_right"},
+                 core::JoinType::kInner)
+             .planNode();
+
+  // Result should be empty since the IP addresses are different
+  result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 0)
+      << "Expected no matches between different IP addresses, but got "
+      << result->size() << " rows";
+}
+
+DEBUG_ONLY_TEST_F(
+    HashJoinTest,
+    hashProbeShouldYieldWhenFilterConsistentlyRejectAll) {
+  const uint32_t kProbeSize = 100;
+  const uint32_t kBuildSize = 10'000;
+  const uint64_t kDriverCpuTimeSliceLimitMs = 1'000;
+  const std::string kLargeBatchSize =
+      folly::to<std::string>(kProbeSize * kBuildSize);
+
+  struct {
+    uint32_t numGetOutputCalls;
+    bool hasDelay;
+    std::string debugString() const {
+      return fmt::format(
+          "numGetOutputCalls: {}, hasDelay: {}", numGetOutputCalls, hasDelay);
+    }
+  } testSettings[] = {{0, false}, {0, true}};
+
+  // Create probe data with keys 0-99 and an additional filter column
+  const auto probeData = makeRowVector(
+      {"t_k1", "t_filter"},
+      {
+          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              kProbeSize,
+              [](/*row=*/auto) { return 1; }), // All rows have value 1
+      });
+
+  const auto buildData = makeRowVector(
+      {"u_k1"},
+      {
+          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {probeData});
+  createDuckDbTable("u", {buildData});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData})
+          .hashJoin(
+              {"t_k1"},
+              {"u_k1"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              // Filter that DOES find join matches but then rejects all of them
+              // This ensures numOut > 0 after listJoinResults, but == 0 after
+              // evalFilter All probe rows have t_filter=1, so the condition
+              // t_filter > 100000 rejects all
+              "t_filter > 100000",
+              {"t_k1", "u_k1"},
+              core::JoinType::kInner)
+          .planNode();
+
+  for (auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    std::atomic_int hashProbeGetOutputCalls{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::getOutput",
+        std::function<void(Operator*)>([&](Operator* op) {
+          if (op->operatorType() == "HashProbe") {
+            // Inject delay on the 2nd getOutput call when hasDelay is true
+            // This simulates the scenario where:
+            // 1. First getOutput: Probe data added via addInput
+            // 2. Second getOutput: Join finds matches, filter rejects all
+            //    During this call, we inject delay INSIDE the processing
+            //    to simulate CPU-intensive work in the loop
+            if (hashProbeGetOutputCalls.fetch_add(1) == 1 &&
+                testData.hasDelay) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(2 * kDriverCpuTimeSliceLimitMs));
+            }
+          }
+        }));
+
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({
+            {core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+             folly::to<std::string>(kDriverCpuTimeSliceLimitMs)},
+            {core::QueryConfig::kPreferredOutputBatchRows, kLargeBatchSize},
+        }));
+
+    AssertQueryBuilder(planNode, duckDbQueryRunner_)
+        .queryCtx(queryCtx)
+        .maxDrivers(1)
+        .assertResults(
+            "SELECT t_k1, u_k1 FROM t, u WHERE t_k1 = u_k1 AND t_filter > 100000");
+    testData.numGetOutputCalls = hashProbeGetOutputCalls.load();
+  }
+  ASSERT_LT(
+      testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
 }
 
 } // namespace

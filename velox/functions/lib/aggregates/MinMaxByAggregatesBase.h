@@ -573,8 +573,12 @@ class MinMaxByAggregateBase : public exec::Aggregate {
 };
 
 template <
-    template <typename U, typename V, bool B1, class C, bool B2>
-    class Aggregate,
+    template <
+        typename U,
+        typename V,
+        bool B1,
+        class C,
+        bool B2> class Aggregate,
     bool isMaxFunc,
     class Comparator,
     bool compareTypeUsesCustomComparison,
@@ -682,8 +686,12 @@ std::unique_ptr<exec::Aggregate> create(
 }
 
 template <
-    template <typename U, typename V, bool B1, class C, bool B2>
-    class Aggregate,
+    template <
+        typename U,
+        typename V,
+        bool B1,
+        class C,
+        bool B2> class Aggregate,
     class Comparator,
     bool isMaxFunc,
     bool compareTypeUsesCustomComparison = false>

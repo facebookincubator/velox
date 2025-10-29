@@ -53,11 +53,6 @@ void DictionaryVector<T>::setInternalState() {
     }
   }
   initialized_ = true;
-
-  BaseVector::inMemoryBytes_ =
-      BaseVector::nulls_ ? BaseVector::nulls_->capacity() : 0;
-  BaseVector::inMemoryBytes_ += indices_->capacity();
-  BaseVector::inMemoryBytes_ += dictionaryValues_->inMemoryBytes();
 }
 
 template <typename T>
@@ -159,6 +154,7 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
       sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
@@ -174,6 +170,7 @@ xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     VELOX_UNREACHABLE();
   }
 }
+#endif
 
 template <typename T>
 VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)

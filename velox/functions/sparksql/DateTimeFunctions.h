@@ -955,6 +955,65 @@ struct MillisToTimestampFunction {
   }
 };
 
+template <typename TExec>
+struct SecondsToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(out_type<Timestamp>& result, T seconds) {
+    if constexpr (std::is_integral_v<T>) {
+      result = Timestamp(static_cast<int64_t>(seconds), 0);
+      return true;
+    } else {
+      if (FOLLY_UNLIKELY(!std::isfinite(seconds))) {
+        return false;
+      }
+
+      // Cast to double and check bounds to prevent ensuing overflow.
+      const double secondsD = static_cast<double>(seconds);
+
+      if (secondsD >= kMaxSecondsD) {
+        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
+      } else if (secondsD <= kMinSecondsD) {
+        result = Timestamp(kMinSeconds, kMinNanoseconds);
+      } else {
+        // Scale to microseconds and truncate toward zero.
+        const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
+        const int64_t micros = static_cast<int64_t>(microsD);
+
+        // Split into whole seconds and remaining microseconds.
+        int64_t wholeSeconds = micros / Timestamp::kMicrosecondsInSecond;
+        int64_t remainingMicros = micros % Timestamp::kMicrosecondsInSecond;
+        if (remainingMicros < 0) {
+          wholeSeconds -= 1;
+          remainingMicros += Timestamp::kMicrosecondsInSecond;
+        }
+
+        const int64_t nano =
+            remainingMicros * Timestamp::kNanosecondsInMicrosecond;
+        result = Timestamp(wholeSeconds, nano);
+      }
+      return true;
+    }
+  }
+
+ private:
+  static constexpr double kMaxMicrosD =
+      static_cast<double>(std::numeric_limits<int64_t>::max());
+  static constexpr double kMinMicrosD =
+      static_cast<double>(std::numeric_limits<int64_t>::min());
+  static constexpr double kMaxSecondsD =
+      kMaxMicrosD / Timestamp::kMicrosecondsInSecond;
+  static constexpr double kMinSecondsD =
+      kMinMicrosD / Timestamp::kMicrosecondsInSecond;
+
+  // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
+  static constexpr int64_t kMaxSeconds = 9223372036854LL;
+  static constexpr int64_t kMaxNanoseconds = 775807000LL;
+  static constexpr int64_t kMinSeconds = -9223372036855LL;
+  static constexpr int64_t kMinNanoseconds = 224192000LL;
+};
+
 template <typename T>
 struct TimestampDiffFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1024,6 +1083,62 @@ struct TimestampAddFunction {
  private:
   const tz::TimeZone* sessionTimeZone_ = nullptr;
   std::optional<DateTimeUnit> unit_ = std::nullopt;
+};
+
+template <typename TExec>
+struct MonthsBetweenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp1*/,
+      const arg_type<Timestamp>* /*timestamp2*/,
+      const arg_type<bool>* /*roundOff*/) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Timestamp>& timestamp1,
+      const arg_type<Timestamp>& timestamp2,
+      const arg_type<bool>& roundOff) {
+    const auto dateTime1 = getDateTime(timestamp1, sessionTimeZone_);
+    const auto dateTime2 = getDateTime(timestamp2, sessionTimeZone_);
+    result = monthsBetween(dateTime1, dateTime2, roundOff);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE bool isEndDayOfMonth(const std::tm& tm) {
+    return tm.tm_mday == util::getMaxDayOfMonth(getYear(tm), getMonth(tm));
+  }
+
+  FOLLY_ALWAYS_INLINE double
+  monthsBetween(const std::tm& tm1, const std::tm& tm2, bool roundOff) {
+    const double monthDiff =
+        (tm1.tm_year - tm2.tm_year) * kMonthInYear + tm1.tm_mon - tm2.tm_mon;
+    if (tm1.tm_mday == tm2.tm_mday ||
+        (isEndDayOfMonth(tm1) && isEndDayOfMonth(tm2))) {
+      return monthDiff;
+    }
+    const auto secondsInDay1 = tm1.tm_hour * kSecondsInHour +
+        tm1.tm_min * kSecondsInMinute + tm1.tm_sec;
+    const auto secondsInDay2 = tm2.tm_hour * kSecondsInHour +
+        tm2.tm_min * kSecondsInMinute + tm2.tm_sec;
+    const auto secondsDiff = (tm1.tm_mday - tm2.tm_mday) * kSecondsInDay +
+        secondsInDay1 - secondsInDay2;
+    const auto diff =
+        monthDiff + static_cast<double>(secondsDiff) / kSecondsInMonth;
+    if (roundOff) {
+      return round(diff * kRoundingPrecision) / kRoundingPrecision;
+    }
+    return diff;
+  }
+
+  // Precision factor for 8 decimal places rounding.
+  static constexpr int64_t kRoundingPrecision = 1e8;
+  static constexpr int64_t kSecondsInMonth = kSecondsInDay * 31;
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
 };
 
 } // namespace facebook::velox::functions::sparksql

@@ -27,7 +27,6 @@
 #include "velox/functions/prestosql/json/JsonPathTokenizer.h"
 
 namespace facebook::velox::functions {
-
 namespace {
 
 using JsonVector = std::vector<const folly::dynamic*>;
@@ -35,9 +34,9 @@ using JsonVector = std::vector<const folly::dynamic*>;
 class JsonExtractor {
  public:
   // Use this method to get an instance of JsonExtractor given a json path.
-  static JsonExtractor& getInstance(folly::StringPiece path) {
+  static JsonExtractor& getInstance(std::string_view path) {
     // Pre-process
-    auto trimedPath = folly::trimWhitespace(path).str();
+    std::string trimedPath = folly::trimWhitespace(path).str();
 
     std::shared_ptr<JsonExtractor> op;
     if (kExtractorCache.count(trimedPath)) {
@@ -184,8 +183,8 @@ bool isScalarType(const std::optional<folly::dynamic>& json) {
 } // namespace
 
 std::optional<folly::dynamic> jsonExtract(
-    folly::StringPiece json,
-    folly::StringPiece path) {
+    std::string_view json,
+    std::string_view path) {
   try {
     // If extractor fails to parse the path, this will throw a VeloxUserError,
     // and we want to let this exception bubble up to the client. We only catch
@@ -201,15 +200,9 @@ std::optional<folly::dynamic> jsonExtract(
   return std::nullopt;
 }
 
-std::optional<folly::dynamic> jsonExtract(
-    const std::string& json,
-    const std::string& path) {
-  return jsonExtract(folly::StringPiece(json), folly::StringPiece(path));
-}
-
-std::optional<folly::dynamic> jsonExtract(
+std::optional<folly::dynamic> jsonExtractFromDynamic(
     const folly::dynamic& json,
-    folly::StringPiece path) {
+    std::string_view path) {
   try {
     return JsonExtractor::getInstance(path).extract(json);
   } catch (const folly::json::parse_error&) {
@@ -218,8 +211,8 @@ std::optional<folly::dynamic> jsonExtract(
 }
 
 std::optional<std::string> jsonExtractScalar(
-    folly::StringPiece json,
-    folly::StringPiece path) {
+    std::string_view json,
+    std::string_view path) {
   auto res = jsonExtract(json, path);
   // Not a scalar value
   if (isScalarType(res)) {
@@ -230,15 +223,6 @@ std::optional<std::string> jsonExtractScalar(
     }
   }
   return std::nullopt;
-}
-
-std::optional<std::string> jsonExtractScalar(
-    const std::string& json,
-    const std::string& path) {
-  folly::StringPiece jsonPiece{json};
-  folly::StringPiece pathPiece{path};
-
-  return jsonExtractScalar(jsonPiece, pathPiece);
 }
 
 } // namespace facebook::velox::functions

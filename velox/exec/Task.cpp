@@ -320,8 +320,8 @@ std::shared_ptr<Task> Task::create(
     ExecutionMode mode,
     Consumer consumer,
     int32_t memoryArbitrationPriority,
+    std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError) {
-  VELOX_CHECK_NOT_NULL(planFragment.planNode);
   return Task::create(
       taskId,
       std::move(planFragment),
@@ -331,6 +331,7 @@ std::shared_ptr<Task> Task::create(
       (consumer ? [c = std::move(consumer)]() { return c; }
                 : ConsumerSupplier{}),
       memoryArbitrationPriority,
+      std::move(spillDiskOpts),
       std::move(onError));
 }
 
@@ -343,6 +344,7 @@ std::shared_ptr<Task> Task::create(
     ExecutionMode mode,
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
+    std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
   auto task = std::shared_ptr<Task>(new Task(
@@ -354,7 +356,7 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       memoryArbitrationPriority,
       std::move(onError)));
-  task->initTaskPool();
+  task->init(std::move(spillDiskOpts));
   task->addToTaskList();
   return task;
 }
@@ -469,6 +471,72 @@ void Task::ensureBarrierSupport() const {
       firstNodeNotSupportingBarrier_->name());
 }
 
+void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
+  VELOX_CHECK(driverFactories_.empty());
+  initTaskPool();
+
+  setSpillDiskConfig(std::move(spillDiskOpts));
+
+  if (mode_ != Task::ExecutionMode::kSerial) {
+    return;
+  }
+
+  // Create drivers.
+  VELOX_CHECK_NULL(
+      consumerSupplier_,
+      "Serial execution mode doesn't support delivering results to a "
+      "callback");
+
+  taskStats_.executionStartTimeMs = getCurrentTimeMs();
+  LocalPlanner::plan(
+      planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
+  exchangeClients_.resize(driverFactories_.size());
+
+  // In Task::next() we always assume ungrouped execution.
+  for (const auto& factory : driverFactories_) {
+    VELOX_CHECK(factory->supportsSerialExecution());
+    numDriversUngrouped_ += factory->numDrivers;
+    numTotalDrivers_ += factory->numTotalDrivers;
+    taskStats_.pipelineStats.emplace_back(
+        factory->inputDriver, factory->outputDriver);
+  }
+
+  // Create drivers.
+  createSplitGroupStateLocked(kUngroupedGroupId);
+  std::vector<std::shared_ptr<Driver>> drivers =
+      createDriversLocked(kUngroupedGroupId);
+  if (pool_->reservedBytes() != 0) {
+    VELOX_FAIL(
+        "Unexpected memory pool allocations during task[{}] driver initialization: {}",
+        taskId_,
+        pool_->treeMemoryUsage());
+  }
+
+  drivers_ = std::move(drivers);
+  driverBlockingStates_.reserve(drivers_.size());
+  for (auto i = 0; i < drivers_.size(); ++i) {
+    driverBlockingStates_.emplace_back(
+        std::make_unique<DriverBlockingState>(drivers_[i].get()));
+  }
+}
+
+void Task::setSpillDiskConfig(
+    std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
+  if (!spillDiskOpts.has_value()) {
+    return;
+  }
+  VELOX_CHECK(
+      !spillDiskOpts->spillDirPath.empty(), "Spill directory can't be empty");
+  VELOX_CHECK(
+      spillDiskOpts->spillDirCreated || spillDiskOpts->spillDirCreateCb);
+  VELOX_CHECK_NULL(spillDirectoryCallback_);
+  VELOX_CHECK(!spillDirectoryCreated_);
+  VELOX_CHECK(spillDirectory_.empty());
+  spillDirectory_ = std::move(spillDiskOpts->spillDirPath);
+  spillDirectoryCreated_ = spillDiskOpts->spillDirCreated;
+  spillDirectoryCallback_ = std::move(spillDiskOpts->spillDirCreateCb);
+}
+
 Task::TaskList& Task::taskList() {
   static TaskList taskList;
   return taskList;
@@ -547,7 +615,7 @@ bool Task::allNodesReceivedNoMoreSplitsMessageLocked() const {
 const std::string& Task::getOrCreateSpillDirectory() {
   VELOX_CHECK(
       !spillDirectory_.empty() || spillDirectoryCallback_,
-      "Spill directory or spill directory callback must be set ");
+      "Spill directory or spill directory callback must be set");
   if (spillDirectoryCreated_) {
     return spillDirectory_;
   }
@@ -681,8 +749,9 @@ velox::memory::MemoryPool* Task::addOperatorPool(
   } else {
     nodePool = getOrAddNodePool(planNodeId);
   }
-  childPools_.push_back(nodePool->addLeafChild(fmt::format(
-      "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
+  childPools_.push_back(nodePool->addLeafChild(
+      fmt::format(
+          "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
   return childPools_.back().get();
 }
 
@@ -693,13 +762,14 @@ velox::memory::MemoryPool* Task::addConnectorPoolLocked(
     const std::string& operatorType,
     const std::string& connectorId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addAggregateChild(fmt::format(
-      "op.{}.{}.{}.{}.{}",
-      planNodeId,
-      pipelineId,
-      driverId,
-      operatorType,
-      connectorId)));
+  childPools_.push_back(nodePool->addAggregateChild(
+      fmt::format(
+          "op.{}.{}.{}.{}.{}",
+          planNodeId,
+          pipelineId,
+          driverId,
+          operatorType,
+          connectorId)));
   return childPools_.back().get();
 }
 
@@ -769,48 +839,8 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     }
   }
 
-  // On first call, create the drivers.
-  if (driverFactories_.empty()) {
-    VELOX_CHECK_NULL(
-        consumerSupplier_,
-        "Serial execution mode doesn't support delivering results to a "
-        "callback");
-
-    taskStats_.executionStartTimeMs = getCurrentTimeMs();
-    LocalPlanner::plan(
-        planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
-    exchangeClients_.resize(driverFactories_.size());
-
-    // In Task::next() we always assume ungrouped execution.
-    for (const auto& factory : driverFactories_) {
-      VELOX_CHECK(factory->supportsSerialExecution());
-      numDriversUngrouped_ += factory->numDrivers;
-      numTotalDrivers_ += factory->numTotalDrivers;
-      taskStats_.pipelineStats.emplace_back(
-          factory->inputDriver, factory->outputDriver);
-    }
-
-    // Create drivers.
-    createSplitGroupStateLocked(kUngroupedGroupId);
-    std::vector<std::shared_ptr<Driver>> drivers =
-        createDriversLocked(kUngroupedGroupId);
-    if (pool_->reservedBytes() != 0) {
-      VELOX_FAIL(
-          "Unexpected memory pool allocations during task[{}] driver initialization: {}",
-          taskId_,
-          pool_->treeMemoryUsage());
-    }
-
-    drivers_ = std::move(drivers);
-    driverBlockingStates_.reserve(drivers_.size());
-    for (auto i = 0; i < drivers_.size(); ++i) {
-      driverBlockingStates_.emplace_back(
-          std::make_unique<DriverBlockingState>(drivers_[i].get()));
-    }
-    if (underBarrier()) {
-      startDriverBarriersLocked();
-    }
-  }
+  VELOX_CHECK_EQ(
+      state_, TaskState::kRunning, "Task has already finished processing.");
 
   // Run drivers one at a time. If a driver blocks, continue running the other
   // drivers. Running other drivers is expected to unblock some or all blocked
@@ -2339,7 +2369,7 @@ template <class TBridgeType, typename MemberType>
 std::shared_ptr<TBridgeType> Task::getJoinBridgeInternalLocked(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId,
-    MemberType SplitGroupState::*bridges_member) {
+    MemberType SplitGroupState::* bridges_member) {
   const auto& splitGroupState = splitGroupStates_[splitGroupId];
 
   auto it = (splitGroupState.*bridges_member).find(planNodeId);
@@ -3006,8 +3036,9 @@ void Task::createLocalExchangeQueuesLocked(
       queryCtx_->queryConfig().maxLocalExchangeBufferSize());
   exchange.queues.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    exchange.queues.emplace_back(std::make_shared<LocalExchangeQueue>(
-        exchange.memoryManager, exchange.vectorPool, i));
+    exchange.queues.emplace_back(
+        std::make_shared<LocalExchangeQueue>(
+            exchange.memoryManager, exchange.vectorPool, i));
   }
 
   const auto partitionNode =
@@ -3685,8 +3716,8 @@ bool Task::DriverBlockingState::blocked(ContinueFuture* future) {
     VELOX_CHECK(promises_.empty());
     return false;
   }
-  auto [blockPromise, blockFuture] =
-      makeVeloxContinuePromiseContract(fmt::format(
+  auto [blockPromise, blockFuture] = makeVeloxContinuePromiseContract(
+      fmt::format(
           "DriverBlockingState {} from task {}",
           driver_->driverCtx()->driverId,
           driver_->task()->taskId()));

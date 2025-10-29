@@ -39,29 +39,24 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
   void SetUp() override {
     FLAGS_velox_tpch_text_pool_size_mb = 10;
     OperatorTestBase::SetUp();
-    connector::registerConnectorFactory(
-        std::make_shared<connector::tpch::TpchConnectorFactory>());
-    auto tpchConnector =
-        connector::getConnectorFactory(
-            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(
-                kTpchConnectorId,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
+    connector::tpch::TpchConnectorFactory factory;
+    auto tpchConnector = factory.newConnector(
+        kTpchConnectorId,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(tpchConnector);
   }
 
   void TearDown() override {
     connector::unregisterConnector(kTpchConnectorId);
-    connector::unregisterConnectorFactory(
-        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
     OperatorTestBase::TearDown();
   }
 
   exec::Split makeTpchSplit(size_t totalParts = 1, size_t partNumber = 0)
       const {
-    return exec::Split(std::make_shared<TpchConnectorSplit>(
-        kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber));
+    return exec::Split(
+        std::make_shared<TpchConnectorSplit>(
+            kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber));
   }
 
   RowVectorPtr getResults(
@@ -138,8 +133,9 @@ TEST_F(TpchConnectorTest, singleColumnWithAlias) {
       PlanBuilder()
           .startTableScan()
           .outputType(outputType)
-          .tableHandle(std::make_shared<TpchTableHandle>(
-              kTpchConnectorId, Table::TBL_NATION))
+          .tableHandle(
+              std::make_shared<TpchTableHandle>(
+                  kTpchConnectorId, Table::TBL_NATION))
           .assignments({
               {aliasedName, std::make_shared<TpchColumnHandle>("n_name")},
               {"other_name", std::make_shared<TpchColumnHandle>("n_name")},
@@ -164,8 +160,9 @@ void TpchConnectorTest::runScaleFactorTest(double scaleFactor) {
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(ROW({}, {}))
-                  .tableHandle(std::make_shared<TpchTableHandle>(
-                      kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor))
+                  .tableHandle(
+                      std::make_shared<TpchTableHandle>(
+                          kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor))
                   .endTableScan()
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
@@ -193,8 +190,9 @@ TEST_F(TpchConnectorTest, lineitemTinyRowCount) {
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(ROW({}, {}))
-                  .tableHandle(std::make_shared<TpchTableHandle>(
-                      kTpchConnectorId, Table::TBL_LINEITEM, 0.01))
+                  .tableHandle(
+                      std::make_shared<TpchTableHandle>(
+                          kTpchConnectorId, Table::TBL_LINEITEM, 0.01))
                   .endTableScan()
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
@@ -446,12 +444,10 @@ TEST_F(TpchConnectorTest, orderDateCount) {
 TEST_F(TpchConnectorTest, config) {
   std::unordered_map<std::string, std::string> properties = {
       {"property", "value"}};
-  auto connector =
-      connector::getConnectorFactory(
-          connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-          ->newConnector(
-              kTpchConnectorId,
-              std::make_shared<config::ConfigBase>(std::move(properties)));
+  connector::tpch::TpchConnectorFactory factory;
+  auto connector = factory.newConnector(
+      kTpchConnectorId,
+      std::make_shared<config::ConfigBase>(std::move(properties)));
 
   const auto& config = connector->connectorConfig();
   auto val = config->get<std::string>("property");

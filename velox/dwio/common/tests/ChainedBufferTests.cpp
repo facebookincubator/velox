@@ -23,10 +23,7 @@
 
 using namespace ::testing;
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class ChainedBufferTests : public Test {
  protected:
@@ -64,8 +61,9 @@ TEST_F(ChainedBufferTests, testCreate) {
 
 TEST_F(ChainedBufferTests, testReserve) {
   for (const uint32_t initialCapacityBytes : {0, 16}) {
-    SCOPED_TRACE(fmt::format(
-        "initialCapacityBytes ", succinctBytes(initialCapacityBytes)));
+    SCOPED_TRACE(
+        fmt::format(
+            "initialCapacityBytes ", succinctBytes(initialCapacityBytes)));
     ChainedBuffer<int32_t> buf{*pool_, initialCapacityBytes, 1024};
     ASSERT_EQ(buf.capacity(), initialCapacityBytes);
     ASSERT_EQ(buf.size(), 0);
@@ -252,8 +250,9 @@ TEST_F(ChainedBufferTests, testTrailingZeros) {
 
 TEST_F(ChainedBufferTests, testClearAll) {
   for (const uint32_t initialCapacityBytes : {0, 128}) {
-    SCOPED_TRACE(fmt::format(
-        "initialCapacityBytes ", succinctBytes(initialCapacityBytes)));
+    SCOPED_TRACE(
+        fmt::format(
+            "initialCapacityBytes ", succinctBytes(initialCapacityBytes)));
     ChainedBuffer<int32_t> buf{*pool_, initialCapacityBytes, 1024};
     ASSERT_EQ(buf.capacity(), initialCapacityBytes);
     ASSERT_EQ(buf.size(), 0);
@@ -321,7 +320,5 @@ TEST_F(ChainedBufferTests, testClearAll) {
     ASSERT_EQ(buf.pages_.size(), 9);
   }
 }
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox::dwio::common
