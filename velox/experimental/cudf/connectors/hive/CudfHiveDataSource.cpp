@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -394,8 +395,10 @@ CudfHiveDataSource::createSplitReader() {
   auto sourceInfo = [&]() {
     // fileHandleFactory_ has a max size of 0 if the file handle cache is
     // disabled
-    if (fileHandleFactory_->maxSize() == 0) {
-      LOG(INFO) << "File handle cache is disabled, using fallback instead";
+    if (not cudfHiveConfig_->isUseAsyncDataCacheBufferedInputSession(
+            connectorQueryCtx_->sessionProperties()) or
+        fileHandleFactory_->maxSize() == 0) {
+      LOG(INFO) << "Using file data source for CudfHiveDataSource";
       return cudf::io::source_info{split_->filePath};
     }
 
@@ -410,9 +413,18 @@ CudfHiveDataSource::createSplitReader() {
       VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
     } catch (const VeloxRuntimeError& e) {
       LOG(WARNING) << fmt::format(
-          "Failed to generate file handle cache for file {}, using fallback instead",
+          "Failed to generate file handle cache for file {}, falling back to file data source for CudfHiveDataSource",
           split_->filePath);
       return cudf::io::source_info{split_->filePath};
+    }
+
+    // Here we keep adding new entries to CacheTTLController when new
+    // fileHandles
+    // are generated, if CacheTTLController was created. Creator of
+    // CacheTTLController needs to make sure a size control strategy was
+    // available such as removing aged out entries.
+    if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
+      cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
     }
 
     auto bufferedInput = velox::connector::hive::createBufferedInput(
@@ -424,7 +436,7 @@ CudfHiveDataSource::createSplitReader() {
         executor_);
     if (not bufferedInput) {
       LOG(WARNING) << fmt::format(
-          "Failed to create buffered input source for file {}, using fallback instead",
+          "Failed to create buffered input source for file {}, falling back to file data source for CudfHiveDataSource",
           split_->filePath);
       return cudf::io::source_info{split_->filePath};
     }

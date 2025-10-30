@@ -133,6 +133,17 @@ cudf::data_type CudfHiveConfig::timestampTypeSession(
   return cudf::data_type(cudf::type_id{unit});
 }
 
+bool CudfHiveConfig::isUseAsyncDataCacheBufferedInput() const {
+  return config_->get<bool>(kUseAsyncDataCacheBufferedInput, true);
+}
+
+bool CudfHiveConfig::isUseAsyncDataCacheBufferedInputSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kUseAsyncDataCacheBufferedInputSession,
+      config_->get<bool>(kUseAsyncDataCacheBufferedInput, true));
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

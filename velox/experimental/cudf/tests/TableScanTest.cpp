@@ -241,7 +241,7 @@ TEST_F(TableScanTest, allColumns) {
   }
 }
 
-TEST_F(TableScanTest, allColumnsWithoutFileHandleCache) {
+TEST_F(TableScanTest, allColumnsWithoutUsingAsyncDataCache) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
@@ -251,12 +251,13 @@ TEST_F(TableScanTest, allColumnsWithoutFileHandleCache) {
 
   const std::string duckDbSql = "SELECT * FROM tmp";
 
+  // Reset the CudfHiveConnector config to not use async data cache
   auto config = std::unordered_map<std::string, std::string>{
-      {facebook::velox::connector::hive::HiveConfig::kEnableFileHandleCache,
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseAsyncDataCacheBufferedInput,
        "false"}};
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));
-
   auto splits = makeCudfHiveConnectorSplits({filePath});
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .plan(plan)
