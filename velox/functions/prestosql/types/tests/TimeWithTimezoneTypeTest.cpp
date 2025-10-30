@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
+#include "velox/type/Time.h"
 
 namespace facebook::velox::test {
 
@@ -79,91 +80,91 @@ TEST_F(TimeWithTimezoneTypeTest, valueToString) {
   // Test basic time values - these should work based on the implementation
   // Test midnight (00:00:00.000)
   int64_t timeValue = 0;
-  int16_t timeZone = TimeWithTimezoneType::biasEncode(0); // UTC
-  auto value = pack(timeValue, timeZone);
+  int16_t timeZone = util::biasEncode(0); // UTC
+  auto value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "00:00:00.000+00:00");
 
   // Test 1 hour (01:00:00.000) at UTC
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  value = pack(3600000, timeZone);
+  value = util::pack(3600000, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "01:00:00.000+00:00");
 
   // Test 12:30:45.123 at UTC
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
   timeValue = 12 * 3600000 + 30 * 60000 + 45 * 1000 + 123;
-  value = pack(timeValue, timeZone);
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+00:00");
 
   // Test 12:30:45.123 at PST
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(-480); // PST
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(-480); // PST
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123-08:00");
 
   // Test 12:30:45.123 at EST
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(-300); // EST
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(-300); // EST
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123-05:00");
 
   // Test 12:30:45.123 at GMT
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(0); // GMT
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(0); // GMT
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+00:00");
 
   // Test 12:30:45.123 at BST
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(60); // BST
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(60); // BST
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+01:00");
 
   // Test 12:30:45.123 at JST
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(540); // JST
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(540); // JST
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+09:00");
 
   // Test 12:30:45.123 at AEST
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(600); // AEST
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(600); // AEST
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+10:00");
 
   // Test 12:30:45.123 at AEDT
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(660); // AEDT
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(660); // AEDT
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+11:00");
 
   // Test 12:30:45.123 at NZST
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(780); // NZST
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(780); // NZST
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+13:00");
 
   // Test 12:30:45.123 at NZDT
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(840); // NZDT
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(840); // NZDT
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123+14:00");
 
   // Test 12:30:45.123 at UTC-14:00
   std::memset(
       buffer, 0, TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize);
-  timeZone = TimeWithTimezoneType::biasEncode(-840); // UTC-14:00
-  value = pack(timeValue, timeZone);
+  timeZone = util::biasEncode(-840); // UTC-14:00
+  value = util::pack(timeValue, timeZone);
   ASSERT_EQ(type->valueToString(value, buffer), "12:30:45.123-14:00");
 }
 
