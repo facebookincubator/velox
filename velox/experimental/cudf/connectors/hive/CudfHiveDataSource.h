@@ -98,7 +98,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
       tableHandle_;
 
-  const std::shared_ptr<CudfHiveConfig> parquetConfig_;
+  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   facebook::velox::FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;

@@ -81,12 +81,6 @@ class CudfHiveConfig {
   static constexpr const char* kTimestampTypeSession =
       "parquet.reader.timestamp_type";
 
-  // Whether to use AsyncDataCache for IO using buffered input
-  static constexpr const char* kUseAsyncDataCacheBufferedInput =
-      "parquet.reader.use-async-data-cache-buffered-input";
-  static constexpr const char* kUseAsyncDataCacheBufferedInputSession =
-      "parquet.reader.use_async_data_cache_buffered_input";
-
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file

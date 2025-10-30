@@ -127,12 +127,12 @@ CudfHiveDataSource::CudfHiveDataSource(
     facebook::velox::FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<CudfHiveConfig>& parquetConfig)
+    const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241}, // CudfHive blue,
           std::nullopt,
           fmt::format("[{}]", tableHandle->name())),
-      parquetConfig_(parquetConfig),
+      cudfHiveConfig_(cudfHiveConfig),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
@@ -392,16 +392,20 @@ std::unique_ptr<cudf::io::chunked_parquet_reader>
 CudfHiveDataSource::createSplitReader() {
   // Build source info for the chunked parquet reader
   auto sourceInfo = [&]() {
-    if (not parquetConfig_->isUseAsyncDataCacheBufferedInput()) {
+    // fileHandleFactory_ has a max size of 0 if the file handle cache is
+    // disabled
+    if (fileHandleFactory_->maxSize() == 0) {
+      LOG(INFO) << "File handle cache is disabled, using fallback instead";
       return cudf::io::source_info{split_->filePath};
     }
 
+    auto fileHandleCachePtr = FileHandleCachedPtr{};
     try {
       const auto fileHandleKey = FileHandleKey{
           .filename = split_->filePath,
           .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
       auto fileProperties = FileProperties{};
-      const auto fileHandleCachePtr = fileHandleFactory_->generate(
+      fileHandleCachePtr = fileHandleFactory_->generate(
           fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
       VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
     } catch (const VeloxRuntimeError& e) {
@@ -432,17 +436,17 @@ CudfHiveDataSource::createSplitReader() {
   // Reader options
   auto readerOptions =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
-          .skip_rows(parquetConfig_->skipRows())
-          .use_pandas_metadata(parquetConfig_->isUsePandasMetadata())
-          .use_arrow_schema(parquetConfig_->isUseArrowSchema())
+          .skip_rows(cudfHiveConfig_->skipRows())
+          .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
+          .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
-              parquetConfig_->isAllowMismatchedCudfHiveSchemas())
-          .timestamp_type(parquetConfig_->timestampType())
+              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
+          .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
   // Set num_rows only if available
-  if (parquetConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(parquetConfig_->numRows().value());
+  if (cudfHiveConfig_->numRows().has_value()) {
+    readerOptions.set_num_rows(cudfHiveConfig_->numRows().value());
   }
 
   if (subfieldFilters_.size()) {
@@ -479,8 +483,8 @@ CudfHiveDataSource::createSplitReader() {
   stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
-      parquetConfig_->maxChunkReadLimit(),
-      parquetConfig_->maxPassReadLimit(),
+      cudfHiveConfig_->maxChunkReadLimit(),
+      cudfHiveConfig_->maxPassReadLimit(),
       readerOptions,
       stream_,
       cudf::get_current_device_resource_ref());
