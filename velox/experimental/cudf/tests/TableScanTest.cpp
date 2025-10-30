@@ -241,7 +241,7 @@ TEST_F(TableScanTest, allColumns) {
   }
 }
 
-TEST_F(TableScanTest, allColumnsWithoutUsingAsyncDataCache) {
+TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
