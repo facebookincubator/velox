@@ -16,8 +16,11 @@
 
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"
 
+#include "velox/dwio/common/Arena.h"
+
 namespace facebook::velox::dwrf {
 
+using dwio::common::ArenaCreate;
 using dwio::common::LogType;
 
 // preload is not considered or mutated if stripe has already been fetched. e.g.
@@ -95,9 +98,7 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
   };
 
   if (fileFooter.format() == DwrfFormat::kDwrf) {
-    auto* rawFooter =
-        google::protobuf::Arena::CreateMessage<proto::StripeFooter>(
-            arena.get());
+    auto* rawFooter = ArenaCreate<proto::StripeFooter>(arena.get());
     ProtoUtils::readProtoInto(
         reader_->createDecompressedStream(
             std::move(footerStream), streamDebugInfo),
@@ -110,9 +111,7 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
 
     return createStripeMetadata(std::move(stripeFooter));
   } else {
-    auto* rawFooter =
-        google::protobuf::Arena::CreateMessage<proto::orc::StripeFooter>(
-            arena.get());
+    auto* rawFooter = ArenaCreate<proto::orc::StripeFooter>(arena.get());
     ProtoUtils::readProtoInto(
         reader_->createDecompressedStream(
             std::move(footerStream), streamDebugInfo),
