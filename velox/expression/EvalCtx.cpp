@@ -474,4 +474,40 @@ VectorEncoding::Simple EvalCtx::wrapEncoding() const {
   return !peeledEncoding_ ? VectorEncoding::Simple::FLAT
                           : peeledEncoding_->wrapEncoding();
 }
+
+VectorPtr EvalCtx::applyDictionaryWrapToPeeledResult(
+    const TypePtr& outputType,
+    VectorPtr peeledResult,
+    const SelectivityVector& rows) {
+  VELOX_CHECK_NOT_NULL(wrap_);
+  BufferPtr nulls;
+  if (!rows.isAllSelected()) {
+    // The new base vector may be shorter than the original base vector
+    // (e.g. if positions at the end of the original vector were not
+    // selected for evaluation). In this case some original indices
+    // corresponding to non-selected rows may point past the end of the base
+    // vector. Disable these by setting corresponding positions to null.
+    nulls = AlignedBuffer::allocate<bool>(rows.size(), pool(), bits::kNull);
+    // Set the active rows to non-null.
+    rows.clearNulls(nulls);
+    if (wrapNulls_) {
+      // Add the nulls from the wrapping.
+      bits::andBits(
+          nulls->asMutable<uint64_t>(),
+          wrapNulls_->as<uint64_t>(),
+          rows.begin(),
+          rows.end());
+    }
+    // Reset nulls buffer if all positions happen to be non-null.
+    if (bits::isAllSet(nulls->as<uint64_t>(), 0, rows.end(), bits::kNotNull)) {
+      nulls.reset();
+    }
+  } else {
+    nulls = wrapNulls_;
+  }
+  VectorPtr wrappedResult;
+  wrappedResult = BaseVector::wrapInDictionary(
+      std::move(nulls), wrap_, rows.end(), std::move(peeledResult));
+  return wrappedResult;
+}
 } // namespace facebook::velox::exec

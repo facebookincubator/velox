@@ -259,6 +259,11 @@ class EvalCtx {
     return peeledFields_;
   }
 
+  void setDictionaryWrap(BufferPtr wrap, BufferPtr wrapNulls) {
+    wrap_ = std::move(wrap);
+    wrapNulls_ = std::move(wrapNulls);
+  }
+
   /// Used by peelEncodings.
   void saveAndReset(ContextSaver& saver, const SelectivityVector& rows);
 
@@ -353,6 +358,11 @@ class EvalCtx {
       VectorPtr& result);
 
   void deselectErrors(SelectivityVector& rows) const;
+
+  VectorPtr applyDictionaryWrapToPeeledResult(
+      const TypePtr& outputType,
+      VectorPtr peeledResult,
+      const SelectivityVector& rows);
 
   /// Returns the vector of errors or nullptr if no errors. This is
   /// intentionally a raw pointer to signify that the caller may not
@@ -590,6 +600,10 @@ class EvalCtx {
   // Set if peeling was successful, that is, common encodings from inputs were
   // peeled off.
   std::shared_ptr<PeeledEncoding> peeledEncoding_;
+
+  // The dictionary indices used to peel encodings. Only valid for CastExpr.
+  BufferPtr wrap_;
+  BufferPtr wrapNulls_;
 
   // True if nulls in the input vectors were pruned (removed from the current
   // selectivity vector). Only possible is all expressions have default null
