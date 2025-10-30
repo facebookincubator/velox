@@ -1116,7 +1116,7 @@ Tracing
 
 Cudf-specific Configuration (Experimental)
 ------------------------------------------
-These configurations are available when [compiled with cuDF](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf).
+These configurations are available when `compiled with cuDF <https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf>`_.
 Note: These configurations are experimental and subject to change.
 
 .. list-table::
