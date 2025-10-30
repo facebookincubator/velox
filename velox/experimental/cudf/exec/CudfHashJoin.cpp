@@ -248,7 +248,7 @@ void CudfHashJoinBuild::noMoreInput() {
         LOG(INFO) << "hashObject " << i << " is not nullptr "
                   << hashObjects.back().get() << "\n";
       } else {
-        LOG(INFO) << "hashObject " << i << " is *** nullptr\n"
+        LOG(INFO) << "hashObject " << i << " is *** nullptr\n";
       }
     }
   }
