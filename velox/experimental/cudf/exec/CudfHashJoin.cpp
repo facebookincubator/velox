@@ -245,10 +245,10 @@ void CudfHashJoinBuild::noMoreInput() {
     }
     if (CudfConfig::getInstance().debugEnabled) {
       if (hashObjects.back() != nullptr) {
-        printf(
-            "hashObject %d is not nullptr %p\n", i, hashObjects.back().get());
+        LOG(INFO) << "hashObject " << i << " is not nullptr "
+                  << hashObjects.back().get() << "\n";
       } else {
-        printf("hashObject %d is *** nullptr\n", i);
+        LOG(INFO) << "hashObject " << i << " is *** nullptr\n"
       }
     }
   }
@@ -1237,15 +1237,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     VELOX_CHECK_NOT_NULL(rightTable);
     if (CudfConfig::getInstance().debugEnabled) {
       if (rightTable != nullptr)
-        printf(
-            "right_table is not nullptr %p hasValue(%d)\n",
-            rightTable.get(),
-            hashObject_.has_value());
+        LOG(INFO) << "right_table is not nullptr " << rightTable.get()
+                  << " hasValue(" << hashObject_.has_value() << ")\n";
       if (hb != nullptr)
-        printf(
-            "hb is not nullptr %p hasValue(%d)\n",
-            hb.get(),
-            hashObject_.has_value());
+        LOG(INFO) << "hb is not nullptr " << hb.get() << " hasValue("
+                  << hashObject_.has_value() << ")\n";
     }
   }
 
