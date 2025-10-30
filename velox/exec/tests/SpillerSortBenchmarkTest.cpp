@@ -14,27 +14,13 @@
  * limitations under the License.
  */
 
-#include "SortSpillInputBenchmarkBase.h"
-#include "velox/serializers/PrestoSerializer.h"
 #include <folly/Benchmark.h>
+#include "SortSpillInputBenchmarkBase.h"
 
 #include <gflags/gflags.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
-
-bool containsString(TypePtr type) {
-  if (type->kind() == TypeKind::VARCHAR ||
-      type->kind() == TypeKind::VARBINARY) {
-    return true;
-  }
-  for (auto i = 0; i < type->size(); ++i) {
-    if (containsString(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
-}
 
 void runTest(RowTypePtr rowType, bool serializeRowContainer, int strLength) {
   folly::BenchmarkSuspender suspender;

@@ -117,6 +117,7 @@ uint64_t SpillWriter::write(const SpillRows& rows, RowContainer* container) {
 
   uint64_t timeNs{0};
   {
+    NanosecondTimer timer(&timeNs);
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
       batch_->createStreamTree(type_, rows.size(), serdeOptions_.get());
