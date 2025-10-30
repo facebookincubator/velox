@@ -393,9 +393,9 @@ std::unique_ptr<cudf::io::chunked_parquet_reader>
 CudfHiveDataSource::createSplitReader() {
   // Build source info for the chunked parquet reader
   auto sourceInfo = [&]() {
-    // fileHandleFactory_ has a max size of 0 if the file handle cache is
-    // disabled
-    if (not cudfHiveConfig_->isUseAsyncDataCacheBufferedInputSession(
+    // Use file data source if we don't want to use the buffered input or if the
+    // file handle cache has a max size of 0
+    if (not cudfHiveConfig_->isUseBufferedInputSession(
             connectorQueryCtx_->sessionProperties()) or
         fileHandleFactory_->maxSize() == 0) {
       LOG(INFO) << "Using file data source for CudfHiveDataSource";

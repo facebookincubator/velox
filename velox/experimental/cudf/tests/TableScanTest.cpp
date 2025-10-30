@@ -254,7 +254,7 @@ TEST_F(TableScanTest, allColumnsWithoutUsingAsyncDataCache) {
   // Reset the CudfHiveConnector config to not use async data cache
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-           kUseAsyncDataCacheBufferedInput,
+           kUseBufferedInput,
        "false"}};
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));

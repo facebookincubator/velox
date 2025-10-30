@@ -81,11 +81,11 @@ class CudfHiveConfig {
   static constexpr const char* kTimestampTypeSession =
       "parquet.reader.timestamp_type";
 
-  // Whether to use async data cache buffered input
-  static constexpr const char* kUseAsyncDataCacheBufferedInput =
-      "parquet.reader.use-async-data-cache-buffered-input";
-  static constexpr const char* kUseAsyncDataCacheBufferedInputSession =
-      "parquet.reader.use_async_data_cache_buffered_input";
+  // Whether to use async data cache aided buffered input source
+  static constexpr const char* kUseBufferedInput =
+      "parquet.reader.use-buffered-input";
+  static constexpr const char* kUseBufferedInputSession =
+      "parquet.reader.use_buffered_input";
 
   // Writer config options
 
@@ -154,9 +154,8 @@ class CudfHiveConfig {
   cudf::data_type timestampType() const;
   cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
 
-  bool isUseAsyncDataCacheBufferedInput() const;
-  bool isUseAsyncDataCacheBufferedInputSession(
-      const config::ConfigBase* session) const;
+  bool isUseBufferedInput() const;
+  bool isUseBufferedInputSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 
