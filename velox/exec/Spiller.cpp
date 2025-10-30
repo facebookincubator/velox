@@ -207,17 +207,16 @@ std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
   constexpr int32_t kTargetBatchRows = 64;
 
   RowVectorPtr spillVector;
-  SpillRows spillRows(*memory::spillMemoryPool());
   auto& run = spillRuns_.at(id);
   try {
     ensureSorted(run);
     size_t written = 0;
     while (written < run.rows.size()) {
       if (serializeRowContainer_) {
+        SpillRows spillRows(*memory::spillMemoryPool());
         extractSpillRows(
             run.rows, kTargetBatchRows, kTargetBatchBytes, spillRows, written);
         state_.appendToPartition(id, spillRows, container_);
-        spillRows.clear();
       } else {
         extractSpillVector(
             run.rows,
