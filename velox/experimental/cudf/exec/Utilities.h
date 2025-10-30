@@ -21,6 +21,7 @@
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/table/table.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <memory>
@@ -56,4 +57,25 @@ createMemoryResource(std::string_view mode, int percent);
     const TypePtr& tableType,
     rmm::cuda_stream_view stream);
 
+[[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
+getConcatenatedTableBatched(
+    std::vector<CudfVectorPtr>& tables,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view stream);
+
+class CudaEvent {
+ public:
+  explicit CudaEvent(unsigned int flags = 0);
+  ~CudaEvent();
+  CudaEvent(const CudaEvent&) = delete;
+  CudaEvent& operator=(const CudaEvent&) = delete;
+  CudaEvent(CudaEvent&& other) noexcept;
+
+  const CudaEvent& recordFrom(rmm::cuda_stream_view stream) const;
+
+  const CudaEvent& waitOn(rmm::cuda_stream_view stream) const;
+
+ private:
+  cudaEvent_t event_{};
+};
 } // namespace facebook::velox::cudf_velox
