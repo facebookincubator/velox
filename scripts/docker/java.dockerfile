@@ -15,7 +15,7 @@
 
 # Global arg default to share across stages
 ARG SPARK_VERSION=3.5.1
-ARG PRESTO_VERSION=0.293
+ARG PRESTO_VERSION=0.295
 
 #########################
 # Stage: Spark Download #
@@ -40,7 +40,7 @@ ARG PRESTO_VERSION
 RUN wget -O presto-server.tar.gz \
     https://repo1.maven.org/maven2/com/facebook/presto/presto-server/${PRESTO_VERSION}/presto-server-${PRESTO_VERSION}.tar.gz
 RUN wget -O presto-cli \
-    https://repo1.maven.org/maven2/com/facebook/presto/presto-cli/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
+    https://github.com/prestodb/presto/releases/download/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
 
 RUN tar -xzf presto-server.tar.gz
 
