@@ -669,18 +669,11 @@ class RowContainer {
 #endif
   void setProbedFlag(char** rows, int32_t numRows);
 
-  /// Returns true if 'row' at 'column' equals the value at 'index' in
-  /// 'decoded'. 'mayHaveNulls' specifies if nulls need to be checked. This is a
-  /// fast path for compare().
-  template <bool mayHaveNulls>
-  bool equals(
-      const char* row,
-      RowColumn column,
-      const DecodedVector& decoded,
-      vector_size_t index) const;
-
   /// Compares the value at 'column' in 'row' with the value at 'index' in
   /// 'decoded'. Returns 0 for equal, < 0 for 'row' < 'decoded', > 0 otherwise.
+  /// 'mayHaveNulls' specifies if nulls need to be checked. This is a fast path
+  /// for compare().
+  template <bool mayHaveNulls = true>
   int32_t compare(
       const char* row,
       RowColumn column,
@@ -1165,56 +1158,29 @@ class RowContainer {
       bool mix,
       uint64_t* result) const;
 
-  template <bool typeProvidesCustomComparison, TypeKind Kind>
-  inline bool equalsWithNulls(
+  template <bool mayHaveNulls, TypeKind Kind>
+  inline int compare(
       const char* row,
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
+      RowColumn column,
       const DecodedVector& decoded,
-      vector_size_t index) const {
-    bool rowIsNull = isNullAt(row, nullByte, nullMask);
-    bool indexIsNull = decoded.isNullAt(index);
-    if (rowIsNull || indexIsNull) {
-      return rowIsNull == indexIsNull;
-    }
-
-    return equalsNoNulls<typeProvidesCustomComparison, Kind>(
-        row, offset, decoded, index);
-  }
-
-  template <bool typeProvidesCustomComparison, TypeKind Kind>
-  inline bool equalsNoNulls(
-      const char* row,
-      int32_t offset,
-      const DecodedVector& decoded,
-      vector_size_t index) const {
-    using T = typename KindToFlatVector<Kind>::HashRowType;
-
-    if constexpr (
-        Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
-        Kind == TypeKind::MAP) {
-      return compareComplexType(row, offset, decoded, index) == 0;
-    } else if constexpr (
-        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
-      return compareStringAsc(
-                 valueAt<StringView>(row, offset), decoded, index) == 0;
-    } else if constexpr (typeProvidesCustomComparison) {
-      return SimpleVector<T>::template comparePrimitiveAscWithCustomComparison<
-                 Kind>(
-                 decoded.base()->type().get(),
-                 decoded.valueAt<T>(index),
-                 valueAt<T>(row, offset)) == 0;
+      vector_size_t index,
+      CompareFlags flags) const {
+    if (decoded.base()->typeUsesCustomComparison()) {
+      return compare<true, Kind, mayHaveNulls>(
+          row, column, decoded, index, flags);
     } else {
-      return SimpleVector<T>::comparePrimitiveAsc(
-                 decoded.valueAt<T>(index), valueAt<T>(row, offset)) == 0;
+      return compare<false, Kind, mayHaveNulls>(
+          row, column, decoded, index, flags);
     }
   }
 
   template <
       bool typeProvidesCustomComparison,
       TypeKind Kind,
-      std::enable_if_t<Kind != TypeKind::OPAQUE, int32_t> = 0>
+      bool mayHaveNulls,
+      std::enable_if_t<
+          Kind != TypeKind::OPAQUE && Kind != TypeKind::UNKNOWN,
+          int32_t> = 0>
   inline int compare(
       const char* row,
       RowColumn column,
@@ -1222,14 +1188,18 @@ class RowContainer {
       vector_size_t index,
       CompareFlags flags) const {
     using T = typename KindToFlatVector<Kind>::HashRowType;
-    bool rowIsNull = isNullAt(row, column.nullByte(), column.nullMask());
-    bool indexIsNull = decoded.isNullAt(index);
-    if (rowIsNull) {
-      return indexIsNull ? 0 : flags.nullsFirst ? -1 : 1;
+
+    if constexpr (mayHaveNulls) {
+      bool rowIsNull = isNullAt(row, column.nullByte(), column.nullMask());
+      bool indexIsNull = decoded.isNullAt(index);
+      if (rowIsNull) {
+        return indexIsNull ? 0 : flags.nullsFirst ? -1 : 1;
+      }
+      if (indexIsNull) {
+        return flags.nullsFirst ? 1 : -1;
+      }
     }
-    if (indexIsNull) {
-      return flags.nullsFirst ? 1 : -1;
-    }
+
     if constexpr (
         Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
@@ -1259,6 +1229,22 @@ class RowContainer {
   template <
       bool typeProvidesCustomComparison,
       TypeKind Kind,
+      bool mayHaveNulls,
+      std::enable_if_t<Kind == TypeKind::UNKNOWN, int32_t> = 0>
+  inline int compare(
+      const char* row,
+      RowColumn column,
+      const DecodedVector& /*decoded*/,
+      vector_size_t /*index*/,
+      CompareFlags flags) const {
+    const bool rowIsNull = isNullAt(row, column.nullByte(), column.nullMask());
+    return rowIsNull ? 0 : flags.nullsFirst ? 1 : -1;
+  }
+
+  template <
+      bool typeProvidesCustomComparison,
+      TypeKind Kind,
+      bool mayHaveNulls,
       std::enable_if_t<Kind == TypeKind::OPAQUE, int32_t> = 0>
   inline int compare(
       const char* /*row*/,
@@ -1728,60 +1714,21 @@ inline void RowContainer::extractNulls(
 }
 
 template <bool mayHaveNulls>
-inline bool RowContainer::equals(
-    const char* row,
-    RowColumn column,
-    const DecodedVector& decoded,
-    vector_size_t index) const {
-  auto typeKind = decoded.base()->typeKind();
-  if (typeKind == TypeKind::UNKNOWN) {
-    return isNullAt(row, column.nullByte(), column.nullMask());
-  }
-
-  if constexpr (!mayHaveNulls) {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
-        equalsNoNulls, false, typeKind, row, column.offset(), decoded, index);
-  } else {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
-        equalsWithNulls,
-        false,
-        typeKind,
-        row,
-        column.offset(),
-        column.nullByte(),
-        column.nullMask(),
-        decoded,
-        index);
-  }
-}
-
 inline int RowContainer::compare(
     const char* row,
     RowColumn column,
     const DecodedVector& decoded,
     vector_size_t index,
     CompareFlags flags) const {
-  if (decoded.base()->typeUsesCustomComparison()) {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
-        compare,
-        true,
-        decoded.base()->typeKind(),
-        row,
-        column,
-        decoded,
-        index,
-        flags);
-  } else {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
-        compare,
-        false,
-        decoded.base()->typeKind(),
-        row,
-        column,
-        decoded,
-        index,
-        flags);
-  }
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+      compare,
+      mayHaveNulls,
+      decoded.base()->typeKind(),
+      row,
+      column,
+      decoded,
+      index,
+      flags);
 }
 
 inline int RowContainer::compare(
