@@ -55,7 +55,7 @@ namespace facebook::velox::connector::hive {
 /// converted to their appropriate types.
 ///
 /// @param type The target Velox type for the constant vector. Supports all
-/// scalar types including primitives, dates, timestamps, and decimals.
+/// scalar types including primitives, dates, timestamps.
 /// @param value The string representation of the value to convert, formatted
 /// the same way as CAST(x as VARCHAR). Date values must be formatted using ISO
 /// 8601 as YYYY-MM-DD. If nullopt, creates a null constant vector.

@@ -32,6 +32,10 @@ $ ctest -R cudf -V
 
 Velox-cuDF builds are included in Velox CI as part of the [adapters build](https://github.com/facebookincubator/velox/blob/de31a3eb07b5ec3cbd1e6320a989fcb2ee1a95a7/.github/workflows/linux-build-base.yml#L85). The build step for cuDF does not require the worker to have a GPU, so adding a Velox-cuDF build step to Velox CI is compatible with the existing runners.
 
+### Configuring Velox-cuDF
+
+Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://facebookincubator.github.io/velox/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
+
 ### Testing Velox with cuDF
 
 Tests with Velox-cuDF can only be run on GPU-enabled hardware. The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:
