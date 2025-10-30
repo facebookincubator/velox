@@ -168,7 +168,7 @@ void CudfFilterProject::initialize() {
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
     for (const auto& expr : expr->exprs()) {
-      std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
+      LOG(INFO) << "expr[" << i++ << "] " << expr->toString() << std::endl;
       debugPrintTree(expr);
       ++i;
     }
@@ -216,7 +216,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
   if (CudfConfig::getInstance().debugEnabled) {
-    std::cout << "cudfProject Output: " << size << " rows, " << numColumns
+    LOG(INFO) << "cudfProject Output: " << size << " rows, " << numColumns
               << " columns " << std::endl;
   }
 

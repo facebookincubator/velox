@@ -571,8 +571,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (auto row : rows) {
       ASSERT_EQ(
           expected[index],
-          rowContainer->equals<canHandleNulls>(
-              row, rowContainer->columnAt(0), rhsDecoded, index))
+          rowContainer->compare<canHandleNulls>(
+              row, rowContainer->columnAt(0), rhsDecoded, index) == 0)
           << fmt::format(
                  "Mismatch at index {} with canHandleNulls {}",
                  index,
@@ -1178,11 +1178,13 @@ TEST_F(RowContainerTest, types) {
       EXPECT_EQ(source->hashValueAt(i), hashes[i]);
       // Test non-null and nullable variants of equals.
       if (column < keys.size()) {
-        EXPECT_TRUE(
-            data->equals<false>(rows[i], data->columnAt(column), decoded, i));
+        EXPECT_EQ(
+            data->compare<false>(rows[i], data->columnAt(column), decoded, i),
+            0);
       } else if (!columnType->isMap()) {
-        EXPECT_TRUE(
-            data->equals<true>(rows[i], data->columnAt(column), decoded, i));
+        EXPECT_EQ(
+            data->compare<true>(rows[i], data->columnAt(column), decoded, i),
+            0);
       }
       // Non-key map columns are not comparable, as the map keys are not sorted.
       if (columnType->isMap() && column >= keys.size()) {
@@ -1869,8 +1871,10 @@ TEST_F(RowContainerTest, unknown) {
   }
 
   for (size_t row = 0; row < size; ++row) {
-    ASSERT_TRUE(rowContainer->equals<false>(
-        rows[row], rowContainer->columnAt(0), decoded, row));
+    ASSERT_EQ(
+        rowContainer->compare</*mayHaveNulls=*/true>(
+            rows[row], rowContainer->columnAt(0), decoded, row),
+        0);
   }
 
   {
@@ -1951,8 +1955,10 @@ TEST_F(RowContainerTest, nans) {
 
   // Verify that they are considered equal.
   for (size_t row = 0; row < size; ++row) {
-    ASSERT_TRUE(rowContainer->equals<false>(
-        rows[row], rowContainer->columnAt(0), decoded, row));
+    ASSERT_EQ(
+        rowContainer->compare<false>(
+            rows[row], rowContainer->columnAt(0), decoded, row),
+        0);
   }
   ASSERT_EQ(rowContainer->compare(rows[0], rows[1], 0, {}), 0);
 }
