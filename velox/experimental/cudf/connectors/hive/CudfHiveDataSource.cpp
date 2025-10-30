@@ -390,13 +390,14 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
 std::unique_ptr<cudf::io::chunked_parquet_reader>
 CudfHiveDataSource::createSplitReader() {
-  cudf::io::source_info sourceInfo{};
+  // Source info for the split reader
+  auto sourceInfo = cudf::io::source_info{};
 
-  const FileHandleKey fileHandleKey{
+  const auto fileHandleKey = FileHandleKey{
       .filename = split_->filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   auto fileProperties = FileProperties{};
-  const FileHandleCachedPtr fileHandleCachePtr = fileHandleFactory_->generate(
+  const auto fileHandleCachePtr = fileHandleFactory_->generate(
       fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
 
