@@ -251,7 +251,7 @@ TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
 
   const std::string duckDbSql = "SELECT * FROM tmp";
 
-  // Reset the CudfHiveConnector config to not use async data cache
+  // Reset the CudfHiveConnector config to not buffered input data source
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseBufferedInput,
