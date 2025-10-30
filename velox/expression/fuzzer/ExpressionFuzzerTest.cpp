@@ -261,6 +261,9 @@ std::unordered_set<std::string> skipFunctions = {
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
+    "t_cdf", // New function, not yet widely deployed in Presto instances
+    "inverse_t_cdf", // New function, not yet widely deployed in Presto
+                     // instances
     "array_subset", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
