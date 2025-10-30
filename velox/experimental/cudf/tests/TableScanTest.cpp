@@ -241,6 +241,44 @@ TEST_F(TableScanTest, allColumns) {
   }
 }
 
+TEST_F(TableScanTest, allColumnsWithoutFileHandleCache) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, "c");
+
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+
+  const std::string duckDbSql = "SELECT * FROM tmp";
+
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::connector::hive::HiveConfig::kEnableFileHandleCache,
+       "false"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
+
+  auto splits = makeCudfHiveConnectorSplits({filePath});
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .splits(splits)
+                  .assertResults(duckDbSql);
+
+  // A quick sanity check for memory usage reporting. Check that peak
+  // total memory usage for the project node is > 0.
+  auto planStats = toPlanStats(task->taskStats());
+  auto scanNodeId = plan->id();
+  auto it = planStats.find(scanNodeId);
+  ASSERT_TRUE(it != planStats.end());
+  // TODO (dm): enable this test once we start to track gpu memory
+  // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+  //  Verifies there is no dynamic filter stats.
+  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+  // TODO: We are not writing any customStats yet so disable this check
+  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+}
+
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
