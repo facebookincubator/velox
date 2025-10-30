@@ -403,8 +403,6 @@ bool CompileState::compile(bool allowCpuFallback) {
 std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 struct CudfDriverAdapter {
-  bool allowCpuFallback_;
-
   CudfDriverAdapter(bool allowCpuFallback)
       : allowCpuFallback_{allowCpuFallback} {}
 
@@ -419,6 +417,9 @@ struct CudfDriverAdapter {
     auto res = state.compile(allowCpuFallback_);
     return res;
   }
+
+ private:
+  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
