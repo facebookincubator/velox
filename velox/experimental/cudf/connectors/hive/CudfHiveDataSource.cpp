@@ -390,35 +390,44 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
 std::unique_ptr<cudf::io::chunked_parquet_reader>
 CudfHiveDataSource::createSplitReader() {
-  // Source info for the split reader
-  auto sourceInfo = cudf::io::source_info{};
+  // Build source info for the chunked parquet reader
+  auto sourceInfo = [&]() {
+    if (not parquetConfig_->isUseAsyncDataCacheBufferedInput()) {
+      return cudf::io::source_info{split_->filePath};
+    }
 
-  const auto fileHandleKey = FileHandleKey{
-      .filename = split_->filePath,
-      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-  auto fileProperties = FileProperties{};
-  const auto fileHandleCachePtr = fileHandleFactory_->generate(
-      fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
-  VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+    try {
+      const auto fileHandleKey = FileHandleKey{
+          .filename = split_->filePath,
+          .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+      auto fileProperties = FileProperties{};
+      const auto fileHandleCachePtr = fileHandleFactory_->generate(
+          fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+      VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+    } catch (const VeloxRuntimeError& e) {
+      LOG(WARNING) << fmt::format(
+          "Failed to generate file handle cache for file {}, using fallback instead",
+          split_->filePath);
+      return cudf::io::source_info{split_->filePath};
+    }
 
-  auto bufferedInput = ::facebook::velox::connector::hive::createBufferedInput(
-      *fileHandleCachePtr,
-      baseReaderOpts_,
-      connectorQueryCtx_,
-      ioStats_,
-      fsStats_,
-      executor_);
-
-  if (bufferedInput) {
+    auto bufferedInput = velox::connector::hive::createBufferedInput(
+        *fileHandleCachePtr,
+        baseReaderOpts_,
+        connectorQueryCtx_,
+        ioStats_,
+        fsStats_,
+        executor_);
+    if (not bufferedInput) {
+      LOG(WARNING) << fmt::format(
+          "Failed to create buffered input source for file {}, using fallback instead",
+          split_->filePath);
+      return cudf::io::source_info{split_->filePath};
+    }
     datasource_ =
         std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
-    sourceInfo = cudf::io::source_info{datasource_.get()};
-  } else {
-    LOG(WARNING) << fmt::format(
-        "Failed to create BufferedInputDataSource for file {}, using fallback instead",
-        split_->filePath);
-    sourceInfo = cudf::io::source_info{split_->filePath};
-  }
+    return cudf::io::source_info{datasource_.get()};
+  }();
 
   // Reader options
   auto readerOptions =
