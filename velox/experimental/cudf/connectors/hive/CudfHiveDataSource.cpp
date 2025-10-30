@@ -396,8 +396,7 @@ CudfHiveDataSource::createSplitReader() {
     // Use file data source if we don't want to use the buffered input or if the
     // file handle cache has a max size of 0
     if (not cudfHiveConfig_->isUseBufferedInputSession(
-            connectorQueryCtx_->sessionProperties()) or
-        fileHandleFactory_->maxSize() == 0) {
+            connectorQueryCtx_->sessionProperties())) {
       LOG(INFO) << "Using file data source for CudfHiveDataSource";
       return cudf::io::source_info{split_->filePath};
     }
