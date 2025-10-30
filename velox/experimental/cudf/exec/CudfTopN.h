@@ -53,6 +53,16 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   std::vector<cudf::order> columnOrder_;
   std::vector<cudf::null_order> nullOrder_;
 
+  CudfVectorPtr mergeTopK(
+      std::vector<CudfVectorPtr> topNBatches,
+      int32_t k,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+  CudfVectorPtr mergeTopK2(
+      std::vector<CudfVectorPtr> topNBatches,
+      int32_t k,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
   CudfVectorPtr getTopKBatch(CudfVectorPtr cudfInput, int32_t k);
   std::unique_ptr<cudf::table> getTopK(
       cudf::table_view const& values,

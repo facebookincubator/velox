@@ -19,6 +19,7 @@
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
+#include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -64,6 +65,44 @@ CudfTopN::CudfTopN(
   }
 }
 
+CudfVectorPtr CudfTopN::mergeTopK2(
+    std::vector<CudfVectorPtr> topNBatches,
+    int32_t k,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto concatenatedTable =
+      getConcatenatedTable(topNBatches, outputType_, stream);
+  auto topk = getTopK(concatenatedTable->view(), k, stream, mr);
+  auto const size = topk->num_rows();
+  return std::make_shared<CudfVector>(
+      topNBatches[0]->pool(), outputType_, size, std::move(topk), stream);
+}
+
+CudfVectorPtr CudfTopN::mergeTopK(
+    std::vector<CudfVectorPtr> topNBatches,
+    int32_t k,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  std::vector<cudf::table_view> tableViews;
+  for (const auto& batch : topNBatches) {
+    tableViews.push_back(batch->getTableView());
+  }
+  auto mergedTable =
+      cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
+  // slice it
+  auto topk =
+      cudf::split(
+          mergedTable->view(), {std::min(k, mergedTable->num_rows())}, stream)
+          .front();
+  auto const size = topk.num_rows();
+  return std::make_shared<CudfVector>(
+      topNBatches[0]->pool(),
+      outputType_,
+      size,
+      std::make_unique<cudf::table>(topk),
+      stream);
+}
+
 std::unique_ptr<cudf::table> CudfTopN::getTopK(
     cudf::table_view const& values,
     int32_t k,
@@ -73,11 +112,12 @@ std::unique_ptr<cudf::table> CudfTopN::getTopK(
   auto const indices =
       cudf::stable_sorted_order(keys, columnOrder_, nullOrder_, stream, mr);
   k = std::min(k, values.num_rows());
-  auto const k_indices =
-      cudf::detail::split(indices->view(), {k}, stream).front();
+  auto const kIndices =
+      cudf::split(indices->view(), {std::min(k, indices->size())}, stream)
+          .front();
   return cudf::detail::gather(
       values,
-      k_indices,
+      kIndices,
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::detail::negative_index_policy::NOT_ALLOWED,
       stream,
@@ -126,14 +166,10 @@ void CudfTopN::addInput(RowVectorPtr input) {
   if (topNBatches_.size() >= kBatchSize and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
     auto mr = cudf::get_current_device_resource_ref();
-    auto result = getTopK(
-        getConcatenatedTable(topNBatches_, outputType_, stream)->view(),
-        count_,
-        stream,
-        mr);
+
+    auto result = mergeTopK(topNBatches_, count_, stream, mr);
     topNBatches_.clear();
-    topNBatches_.push_back(std::make_shared<CudfVector>(
-        pool(), outputType_, result->num_rows(), std::move(result), stream));
+    topNBatches_.push_back(std::move(result));
   }
 }
 
@@ -148,18 +184,10 @@ RowVectorPtr CudfTopN::getOutput() {
 
   auto stream = topNBatches_[0]->stream();
   auto mr = cudf::get_current_device_resource_ref();
-  auto result = getTopK(
-      getConcatenatedTable(topNBatches_, outputType_, stream)->view(),
-      count_,
-      stream,
-      mr);
+  auto result = mergeTopK(topNBatches_, count_, stream, mr);
   topNBatches_.clear();
-  auto const size = result->num_rows();
-  auto resultTable = std::make_shared<CudfVector>(
-      pool(), outputType_, size, std::move(result), stream);
-
   finished_ = noMoreInput_ && topNBatches_.empty();
-  return resultTable;
+  return result;
 }
 
 void CudfTopN::noMoreInput() {
