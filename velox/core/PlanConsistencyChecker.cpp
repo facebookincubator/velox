@@ -95,6 +95,13 @@ class Checker : public PlanNodeVisitor {
 
   void visit(const HashJoinNode& node, PlanNodeVisitorContext& ctx)
       const override {
+    if (node.filter() != nullptr) {
+      const auto& leftRowType = node.sources().at(0)->outputType();
+      const auto& rightRowType = node.sources().at(1)->outputType();
+      auto rowType = leftRowType->unionWith(rightRowType);
+      checkInputs(node.filter(), rowType);
+    }
+
     visitSources(&node, ctx);
   }
 

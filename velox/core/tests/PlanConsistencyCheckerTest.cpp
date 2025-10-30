@@ -17,6 +17,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanConsistencyChecker.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 
 namespace facebook::velox::core {
 
@@ -208,6 +209,46 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
         PlanConsistencyChecker::check(aggregationNode),
         "Duplicate output column: sum");
   }
+}
+
+TEST_F(PlanConsistencyCheckerTest, hashJoin) {
+  PlanNodeIdGenerator idGenerator;
+  auto nextId = [&]() { return idGenerator.next(); };
+
+  auto leftValuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto leftProjectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{Lit(1), Lit(2)},
+      leftValuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(leftValuesNode));
+
+  auto rightValuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto rightProjectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"c", "d"},
+      std::vector<TypedExprPtr>{Lit(1), Lit(2)},
+      leftValuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(rightProjectNode));
+
+  auto joinNode = std::make_shared<HashJoinNode>(
+      nextId(),
+      JoinType::kLeft,
+      /*nullAware=*/false,
+      std::vector<FieldAccessTypedExprPtr>{Col(INTEGER(), "a")},
+      std::vector<FieldAccessTypedExprPtr>{Col(INTEGER(), "c")},
+      std::make_shared<CallTypedExpr>(
+          BOOLEAN(), "lt", Col(INTEGER(), "b"), Col(INTEGER(), "blah")),
+      leftProjectNode,
+      rightProjectNode,
+      ROW({}));
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(joinNode),
+      "Field not found: blah. Available fields are: a, b, c, d.");
 }
 
 } // namespace
