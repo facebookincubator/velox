@@ -151,12 +151,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.
 /// \param expr Expression to check
-/// \param deep If true, recursively check all children in the expression tree;
-///             if false, only check if the top-level operation is supported
-///             (useful when delegating to subexpressions)
-bool canBeEvaluatedByCudf(
-    std::shared_ptr<velox::exec::Expr> expr,
-    bool deep = true);
+bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr);
 
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// before compiling to exec::Expr

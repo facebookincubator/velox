@@ -777,32 +777,17 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
   return getCudfFunctionRegistry().contains(call->name());
 }
 
-bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
+bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
-  bool supported = false;
   for (const auto& [name, entry] : registry) {
     if (entry.canEvaluateCompiled && entry.canEvaluateCompiled(expr)) {
-      supported = true;
-      break;
-    }
-  }
-  if (!supported) {
-    LOG_FALLBACK(expr->toString());
-    return false;
-  }
-
-  if (deep) {
-    for (const auto& input : expr->inputs()) {
-      if (input->name() != "literal" && !canBeEvaluatedByCudf(input, true)) {
-        LOG_FALLBACK(input->toString());
-        return false;
-      }
+      return true;
     }
   }
 
-  return true;
+  return false;
 }
 
 bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {

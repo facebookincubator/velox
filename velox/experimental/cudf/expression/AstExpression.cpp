@@ -442,7 +442,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       }
     }
     VELOX_FAIL("Field not found, " + name);
-  } else if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+  } else if (canBeEvaluatedByCudf(expr)) {
     // Shallow check: only verify this operation is supported
     // Children will be recursively handled by createCudfExpression
     auto node =

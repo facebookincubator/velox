@@ -69,36 +69,53 @@ class CudfExpressionSelectionTest : public ::testing::Test {
 };
 
 TEST_F(CudfExpressionSelectionTest, astRoot) {
-  auto expr = compileExecExpr("a + b", rowType_, execCtx_.get());
+  // driver adapter stage
+  auto typedexpr = parseAndInferTypedExpr("a + c", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(typedexpr));
+
+  // exec stage
+  auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
+  // implicitly calls canBeEvaluatedByCudf(exec::Expr)
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   ASSERT_NE(ast, nullptr);
-  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
+  // driver adapter stage
+  auto typedexpr =
+      parseAndInferTypedExpr("lower(name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(typedexpr));
+
+  // exec stage
   auto expr = compileExecExpr("lower(name)", rowType_, execCtx_.get());
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
-  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
+  // driver adapter stage
   // AST handles AND and comparisons; functions (year/length) are precomputed.
+  auto typedexpr = parseAndInferTypedExpr(
+      "(year(date) > 2020) AND (length(name) < 10)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(typedexpr));
+
+  // exec stage
   auto expr = compileExecExpr(
       "(year(date) > 2020) AND (length(name) < 10)", rowType_, execCtx_.get());
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   ASSERT_NE(ast, nullptr);
-
-  // Shallow: AST root supported
-  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
-  // Deep: children (functions) supported via nested evaluators
-  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
+  // driver adapter stage
+  auto typedexpr = parseAndInferTypedExpr(
+      "lower(substr(name, 1, 5))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(typedexpr));
+
+  // exec stage
   auto expr =
       compileExecExpr("lower(substr(name, 1, 5))", rowType_, execCtx_.get());
   auto cudfExpr = createCudfExpression(expr, rowType_);
@@ -106,12 +123,20 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
-  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedAst) {
   facebook::velox::functions::sparksql::registerFunctions();
 
+  // driver adapter stage
+  auto typedexpr = parseAndInferTypedExpr(
+      "hash_with_seed(42, add(a, b))",
+      rowType_,
+      execCtx_.get(),
+      {.parseIntegerAsBigint = false, .functionPrefix = ""});
+  ASSERT_TRUE(canBeEvaluatedByCudf(typedexpr));
+
+  // exec stage
   auto expr = compileExecExpr(
       "hash_with_seed(42, add(a, b))",
       rowType_,
@@ -120,7 +145,6 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedAst) {
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
-  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
 }
 
 } // namespace
