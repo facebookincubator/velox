@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -120,7 +121,9 @@ void CudfTopN::addInput(RowVectorPtr input) {
       [](int32_t sum, const auto& batch) {
         return sum + (batch ? batch->size() : 0);
       });
-  if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
+  auto const kBatchSize = operatorCtx_->driverCtx()->queryConfig().get<int32_t>(
+      CudfConfig::kCudfTopKBatchSize, 5);
+  if (topNBatches_.size() >= kBatchSize and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
     auto mr = cudf::get_current_device_resource_ref();
     auto result = getTopK(

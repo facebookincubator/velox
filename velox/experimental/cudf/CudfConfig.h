@@ -31,6 +31,7 @@ struct CudfConfig {
       "cudf.function_name_prefix"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+  static constexpr const char* kCudfTopKBatchSize{"cudf.topk_batch_size"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().

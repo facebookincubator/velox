@@ -65,8 +65,8 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   // We only update the topNBatches_ if number of batches >= 5 and number of
   // rows in topNBatches_ >= count_. Once all inputs are available, we concat
   // the topNBatches_ and get the topN rows.
+  // config value kCudfTopKBatchSize is maximum number of batches to hold.
   std::vector<CudfVectorPtr> topNBatches_;
-  static constexpr size_t kBatchSize_{5};
   bool finished_ = false;
 };
 } // namespace facebook::velox::cudf_velox
