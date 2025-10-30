@@ -110,14 +110,15 @@ TEST_F(ThrottlerTest, throttle) {
     SCOPED_TRACE(fmt::format("signal: {}", Throttler::signalTypeName(signal)));
 
     Throttler::testingReset();
-    Throttler::init(Throttler::Config(
-        true,
-        minThrottleBackoffMs,
-        maxThrottleBackoffMs,
-        2.0,
-        signal == Throttler::SignalType::kLocal ? 2 : 1'000,
-        signal == Throttler::SignalType::kGlobal ? 2 : 1'000,
-        signal == Throttler::SignalType::kNetwork ? 2 : 1'000));
+    Throttler::init(
+        Throttler::Config(
+            true,
+            minThrottleBackoffMs,
+            maxThrottleBackoffMs,
+            2.0,
+            signal == Throttler::SignalType::kLocal ? 2 : 1'000,
+            signal == Throttler::SignalType::kGlobal ? 2 : 1'000,
+            signal == Throttler::SignalType::kNetwork ? 2 : 1'000));
     auto* instance = Throttler::instance();
     const auto& stats = instance->stats();
     ASSERT_EQ(stats.localThrottled, 0);
@@ -186,16 +187,17 @@ TEST_F(ThrottlerTest, expire) {
   for (const auto signal : kSignalTypes) {
     SCOPED_TRACE(fmt::format("signal: {}", Throttler::signalTypeName(signal)));
     Throttler::testingReset();
-    Throttler::init(Throttler::Config(
-        true,
-        minThrottleBackoffMs,
-        maxThrottleBackoffMs,
-        2.0,
-        signal == Throttler::SignalType::kLocal ? 2 : 1'000,
-        signal == Throttler::SignalType::kGlobal ? 2 : 1'000,
-        signal == Throttler::SignalType::kNetwork ? 2 : 1'000,
-        1'000,
-        1'000));
+    Throttler::init(
+        Throttler::Config(
+            true,
+            minThrottleBackoffMs,
+            maxThrottleBackoffMs,
+            2.0,
+            signal == Throttler::SignalType::kLocal ? 2 : 1'000,
+            signal == Throttler::SignalType::kGlobal ? 2 : 1'000,
+            signal == Throttler::SignalType::kNetwork ? 2 : 1'000,
+            1'000,
+            1'000));
     auto* instance = Throttler::instance();
     const auto& stats = instance->stats();
     ASSERT_EQ(stats.localThrottled, 0);
@@ -228,8 +230,9 @@ TEST_F(ThrottlerTest, expire) {
 TEST_F(ThrottlerTest, differentLocals) {
   const uint64_t minThrottleBackoffMs = 1'000;
   const uint64_t maxThrottleBackoffMs = 2'000;
-  Throttler::init(Throttler::Config(
-      true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 2, 1'0000));
+  Throttler::init(
+      Throttler::Config(
+          true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 2, 1'0000));
   auto* instance = Throttler::instance();
   const auto& stats = instance->stats();
   ASSERT_EQ(stats.localThrottled, 0);
@@ -320,8 +323,9 @@ TEST_F(ThrottlerTest, differentLocals) {
 TEST_F(ThrottlerTest, differentGlobals) {
   const uint64_t minThrottleBackoffMs = 1'000;
   const uint64_t maxThrottleBackoffMs = 2'000;
-  Throttler::init(Throttler::Config(
-      true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 1'0000, 2));
+  Throttler::init(
+      Throttler::Config(
+          true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 1'0000, 2));
   auto* instance = Throttler::instance();
   const auto& stats = instance->stats();
   ASSERT_EQ(stats.localThrottled, 0);
@@ -409,14 +413,15 @@ TEST_F(ThrottlerTest, differentGlobals) {
 TEST_F(ThrottlerTest, differentNetworks) {
   const uint64_t minThrottleBackoffMs = 1'000;
   const uint64_t maxThrottleBackoffMs = 2'000;
-  Throttler::init(Throttler::Config(
-      true,
-      minThrottleBackoffMs,
-      maxThrottleBackoffMs,
-      2.0,
-      1'0000,
-      1'0000,
-      2));
+  Throttler::init(
+      Throttler::Config(
+          true,
+          minThrottleBackoffMs,
+          maxThrottleBackoffMs,
+          2.0,
+          1'0000,
+          1'0000,
+          2));
   auto* instance = Throttler::instance();
   const auto& stats = instance->stats();
   ASSERT_EQ(stats.localThrottled, 0);
@@ -511,8 +516,9 @@ TEST_F(ThrottlerTest, maxOfGlobalAndLocal) {
   for (const bool localFirst : {false, true}) {
     SCOPED_TRACE(fmt::format("localFirst: {}", localFirst));
     Throttler::testingReset();
-    Throttler::init(Throttler::Config(
-        true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 2, 2));
+    Throttler::init(
+        Throttler::Config(
+            true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 2, 2));
     auto* instance = Throttler::instance();
     const auto& stats = instance->stats();
     ASSERT_EQ(stats.localThrottled, 0);
@@ -627,16 +633,17 @@ TEST_F(ThrottlerTest, fuzz) {
   const uint32_t maxCacheEntries = 64;
   const uint32_t cacheTTLMs = 10;
   Throttler::testingReset();
-  Throttler::init(Throttler::Config(
-      true,
-      minThrottleBackoffMs,
-      maxThrottleBackoffMs,
-      backoffScaleFactor,
-      minLocalThrottledSignals,
-      minGlobalThrottledSignals,
-      minNetworkThrottledSignals,
-      maxCacheEntries,
-      cacheTTLMs));
+  Throttler::init(
+      Throttler::Config(
+          true,
+          minThrottleBackoffMs,
+          maxThrottleBackoffMs,
+          backoffScaleFactor,
+          minLocalThrottledSignals,
+          minGlobalThrottledSignals,
+          minNetworkThrottledSignals,
+          maxCacheEntries,
+          cacheTTLMs));
   auto* instance = Throttler::instance();
 
   const auto seed = getCurrentTimeMs();

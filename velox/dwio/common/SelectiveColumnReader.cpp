@@ -449,8 +449,11 @@ void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {
 
 void SelectiveColumnReader::resetFilterCaches() {
   if (scanState_.filterCache.empty() && scanSpec_->hasFilter()) {
-    scanState_.filterCache.resize(std::max<int32_t>(
-        1, scanState_.dictionary.numValues + scanState_.dictionary2.numValues));
+    scanState_.filterCache.resize(
+        std::max<int32_t>(
+            1,
+            scanState_.dictionary.numValues +
+                scanState_.dictionary2.numValues));
     scanState_.updateRawState();
   }
   if (!scanState_.filterCache.empty()) {

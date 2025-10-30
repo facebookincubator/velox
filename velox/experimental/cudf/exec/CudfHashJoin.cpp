@@ -251,8 +251,9 @@ void CudfHashJoinBuild::noMoreInput() {
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
 
   cudfHashJoinBridge->setBuildStream(stream);
-  cudfHashJoinBridge->setHashTable(std::make_optional(
-      std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
+  cudfHashJoinBridge->setHashTable(
+      std::make_optional(
+          std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {

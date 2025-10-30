@@ -89,11 +89,11 @@ class EncodingManager : public EncodingContainer {
       const encryption::EncryptionHandler& encryptionHandler);
   virtual ~EncodingManager() override = default;
 
-  proto::ColumnEncoding& addEncodingToFooter(uint32_t nodeId);
-  proto::Stream* addStreamToFooter(uint32_t nodeId, uint32_t& currentIndex);
+  ColumnEncodingWriteWrapper addEncodingToFooter(uint32_t nodeId);
+  StreamWriteWrapper addStreamToFooter(uint32_t nodeId, uint32_t& currentIndex);
   std::string* addEncryptionGroupToFooter();
   proto::StripeEncryptionGroup getEncryptionGroup(uint32_t i);
-  const proto::StripeFooter& getFooter() const;
+  const StripeFooterWriteWrapper& getFooter() const;
 
   EncodingIter begin() const override;
   EncodingIter end() const override;
@@ -102,7 +102,8 @@ class EncodingManager : public EncodingContainer {
   void initEncryptionGroups();
 
   const encryption::EncryptionHandler& encryptionHandler_;
-  proto::StripeFooter footer_;
+  std::unique_ptr<StripeFooterWriteWrapper> footer_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
   std::vector<proto::StripeEncryptionGroup> encryptionGroups_;
 };
 

@@ -90,8 +90,9 @@ bool ReaderMock::loadUnit() {
 std::vector<std::unique_ptr<LoadUnit>> ReaderMock::getUnits() {
   std::vector<std::unique_ptr<LoadUnit>> units;
   for (size_t i = 0; i < rowsPerUnit_.size(); ++i) {
-    units.emplace_back(std::make_unique<LoadUnitMock>(
-        rowsPerUnit_[i], ioSizes_[i], unitsLoaded_, i));
+    units.emplace_back(
+        std::make_unique<LoadUnitMock>(
+            rowsPerUnit_[i], ioSizes_[i], unitsLoaded_, i));
   }
   return units;
 }

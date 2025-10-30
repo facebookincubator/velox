@@ -266,6 +266,25 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
+    memory::MemoryPool* pool) {
+  auto [cursor, results] = readCursor();
+
+  if (results.empty()) {
+    return results;
+  }
+
+  std::vector<RowVectorPtr> copies;
+  copies.reserve(results.size());
+  for (const auto& result : results) {
+    copies.push_back(
+        BaseVector::create<RowVector>(result->type(), result->size(), pool));
+    copies.back()->copy(result.get(), 0, 0, result->size());
+  }
+
+  return copies;
+}
+
 uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
   auto [cursor, results] = readCursor();
   uint64_t count = 0;

@@ -123,8 +123,9 @@ bool WaveHiveDataSource::isFinished() {
       if (it == splitReaderStats_.end()) {
         splitReaderStats_.insert(std::make_pair(name, counter));
       } else {
-        splitReaderStats_.insert(std::make_pair(
-            name, RuntimeCounter(it->second.value, counter.unit)));
+        splitReaderStats_.insert(
+            std::make_pair(
+                name, RuntimeCounter(it->second.value, counter.unit)));
       }
     }
     return true;

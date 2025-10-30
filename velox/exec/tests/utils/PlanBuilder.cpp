@@ -190,8 +190,9 @@ PlanBuilder& PlanBuilder::tpcdsTableScan(
   auto rowType = ROW(std::move(columnNames), std::move(outputTypes));
   return TableScanBuilder(*this)
       .outputType(rowType)
-      .tableHandle(std::make_shared<connector::tpcds::TpcdsTableHandle>(
-          std::string(connectorId), table, scaleFactor))
+      .tableHandle(
+          std::make_shared<connector::tpcds::TpcdsTableHandle>(
+              std::string(connectorId), table, scaleFactor))
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -421,8 +422,9 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     std::vector<core::FieldAccessTypedExprPtr> groupingKeys;
     groupingKeys.reserve(partitionBy_.size());
     for (const auto& partitionBy : partitionBy_) {
-      groupingKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          outputType->findChild(partitionBy), partitionBy));
+      groupingKeys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              outputType->findChild(partitionBy), partitionBy));
     }
     columnStatsSpec = core::ColumnStatsSpec(
         std::move(groupingKeys),
@@ -1216,8 +1218,9 @@ PlanBuilder& PlanBuilder::expand(
               dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
           VELOX_CHECK_NOT_NULL(constantExpr);
           VELOX_CHECK(constantExpr->value().isNull());
-          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              expectedType, variant::null(expectedType->kind())));
+          projectExpr.push_back(
+              std::make_shared<core::ConstantTypedExpr>(
+                  expectedType, variant::null(expectedType->kind())));
         }
       }
     }
@@ -2577,8 +2580,9 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
   std::vector<core::IndexLookupConditionPtr> joinConditionPtrs{};
   joinConditionPtrs.reserve(joinConditions_.size());
   for (const auto& joinCondition : joinConditions_) {
-    joinConditionPtrs.push_back(PlanBuilder::parseIndexJoinCondition(
-        joinCondition, inputType, planBuilder_.pool_));
+    joinConditionPtrs.push_back(
+        PlanBuilder::parseIndexJoinCondition(
+            joinCondition, inputType, planBuilder_.pool_));
   }
 
   // Parse filter expression if provided

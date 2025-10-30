@@ -275,7 +275,7 @@ class SubscriptImpl : public exec::Subscript {
       default:
         VELOX_UNSUPPORTED(
             "Unsupported type for element_at index {}",
-            mapTypeKindToName(indexArg->typeKind()));
+            TypeKindName::toName(indexArg->typeKind()));
     }
   }
 
@@ -284,22 +284,24 @@ class SubscriptImpl : public exec::Subscript {
 
     // array(T), integer|bigint -> T
     for (const auto& indexType : {"integer", "bigint"}) {
-      signatures.push_back(exec::FunctionSignatureBuilder()
-                               .typeVariable("T")
-                               .returnType("T")
-                               .argumentType("array(T)")
-                               .argumentType(indexType)
-                               .build());
+      signatures.push_back(
+          exec::FunctionSignatureBuilder()
+              .typeVariable("T")
+              .returnType("T")
+              .argumentType("array(T)")
+              .argumentType(indexType)
+              .build());
     }
 
     // map(K,V), K -> V
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .typeVariable("K")
-                             .typeVariable("V")
-                             .returnType("V")
-                             .argumentType("map(K,V)")
-                             .argumentType("K")
-                             .build());
+    signatures.push_back(
+        exec::FunctionSignatureBuilder()
+            .typeVariable("K")
+            .typeVariable("V")
+            .returnType("V")
+            .argumentType("map(K,V)")
+            .argumentType("K")
+            .build());
 
     return signatures;
   }

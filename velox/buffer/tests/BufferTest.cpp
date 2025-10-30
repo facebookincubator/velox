@@ -498,7 +498,9 @@ TEST_F(BufferTest, testNonPOD) {
 TEST_F(BufferTest, testNonPODMemoryUsage) {
   using T = std::shared_ptr<void>;
   const int64_t currentBytes = pool_->usedBytes();
-  { auto buffer = AlignedBuffer::allocate<T>(0, pool_.get()); }
+  {
+    auto buffer = AlignedBuffer::allocate<T>(0, pool_.get());
+  }
   EXPECT_EQ(pool_->usedBytes(), currentBytes);
 }
 

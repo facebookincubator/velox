@@ -31,13 +31,14 @@ DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 using namespace ::testing;
 
 namespace facebook::velox::memory {
-
 namespace {
-constexpr folly::StringPiece kSysRootName{"__sys_root__"};
+
+constexpr std::string_view kSysRootName{"__sys_root__"};
 
 MemoryManager& toMemoryManager(MemoryManager& manager) {
   return *static_cast<MemoryManager*>(&manager);
 }
+
 } // namespace
 
 class MemoryManagerTest : public testing::Test {
@@ -221,14 +222,18 @@ TEST_F(MemoryManagerTest, addPool) {
   auto rootPool = manager.addRootPool("duplicateRootPool", kMaxMemory);
   ASSERT_EQ(rootPool->capacity(), kMaxMemory);
   ASSERT_EQ(rootPool->maxCapacity(), kMaxMemory);
-  { ASSERT_ANY_THROW(manager.addRootPool("duplicateRootPool", kMaxMemory)); }
+  {
+    ASSERT_ANY_THROW(manager.addRootPool("duplicateRootPool", kMaxMemory));
+  }
   auto threadSafeLeafPool = manager.addLeafPool("leafPool", true);
   ASSERT_EQ(threadSafeLeafPool->capacity(), kMaxMemory);
   ASSERT_EQ(threadSafeLeafPool->maxCapacity(), kMaxMemory);
   auto nonThreadSafeLeafPool = manager.addLeafPool("duplicateLeafPool", true);
   ASSERT_EQ(nonThreadSafeLeafPool->capacity(), kMaxMemory);
   ASSERT_EQ(nonThreadSafeLeafPool->maxCapacity(), kMaxMemory);
-  { ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool")); }
+  {
+    ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool"));
+  }
   const int64_t poolCapacity = 1 << 20;
   auto rootPoolWithMaxCapacity =
       manager.addRootPool("rootPoolWithCapacity", poolCapacity);
@@ -273,7 +278,9 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
   auto nonThreadSafeLeafPool = manager.addLeafPool("duplicateLeafPool", true);
   ASSERT_EQ(nonThreadSafeLeafPool->capacity(), kMaxMemory);
   ASSERT_EQ(nonThreadSafeLeafPool->maxCapacity(), kMaxMemory);
-  { ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool")); }
+  {
+    ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool"));
+  }
   const int64_t poolCapacity = 1 << 30;
   auto rootPoolWithMaxCapacity = manager.addRootPool(
       "rootPoolWithCapacity", poolCapacity, MemoryReclaimer::create());
@@ -346,8 +353,9 @@ TEST_F(MemoryManagerTest, defaultMemoryManager) {
   for (int i = 0; i < 32; ++i) {
     ASSERT_THAT(
         managerA.toString(true),
-        testing::HasSubstr(fmt::format(
-            "__sys_shared_leaf__{} usage 0B reserved 0B peak 0B\n", i)));
+        testing::HasSubstr(
+            fmt::format(
+                "__sys_shared_leaf__{} usage 0B reserved 0B peak 0B\n", i)));
   }
 }
 
@@ -487,7 +495,7 @@ TEST_F(MemoryManagerTest, globalMemoryManager) {
     auto childII = manager->addLeafPool("another_child");
     ASSERT_EQ(childII->kind(), MemoryPool::Kind::kLeaf);
     ASSERT_EQ(rootI.getChildCount(), kSharedPoolCount + 2);
-    ASSERT_EQ(childII->parent()->name(), kSysRootName.str());
+    ASSERT_EQ(childII->parent()->name(), kSysRootName);
     childII.reset();
     ASSERT_EQ(rootI.getChildCount(), kSharedPoolCount + 1);
     ASSERT_EQ(rootII.getChildCount(), kSharedPoolCount + 1);

@@ -573,8 +573,7 @@ class RowContainer {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  int32_t
-  listRows(
+  int32_t listRows(
       RowContainerIterator* iter,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -668,8 +667,7 @@ class RowContainer {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  void
-  setProbedFlag(char** rows, int32_t numRows);
+  void setProbedFlag(char** rows, int32_t numRows);
 
   /// Returns true if 'row' at 'column' equals the value at 'index' in
   /// 'decoded'. 'mayHaveNulls' specifies if nulls need to be checked. This is a

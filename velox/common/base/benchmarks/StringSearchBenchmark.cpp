@@ -105,11 +105,12 @@ class TestStringSearch {
   void runSearching(size_t iters) const {
     if constexpr (alg == SIMD) {
       FOR_EACH_RANGE (i, 0, iters)
-        doNotOptimizeAway(simd::simdStrstr(
-            heyStack_.data(),
-            heyStack_.size(),
-            needle_.data(),
-            needle_.size()));
+        doNotOptimizeAway(
+            simd::simdStrstr(
+                heyStack_.data(),
+                heyStack_.size(),
+                needle_.data(),
+                needle_.size()));
     } else if constexpr (alg == STD) {
       FOR_EACH_RANGE (i, 0, iters)
         doNotOptimizeAway(

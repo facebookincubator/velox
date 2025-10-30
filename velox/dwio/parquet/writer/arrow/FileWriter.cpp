@@ -492,8 +492,9 @@ class FileSerializer : public ParquetFileWriter::Contents {
     return AppendRowGroup(true);
   }
 
-  void AddKeyValueMetadata(const std::shared_ptr<const KeyValueMetadata>&
-                               key_value_metadata) override {
+  void AddKeyValueMetadata(
+      const std::shared_ptr<const KeyValueMetadata>& key_value_metadata)
+      override {
     if (key_value_metadata_ == nullptr) {
       key_value_metadata_ = key_value_metadata;
     } else if (key_value_metadata != nullptr) {

@@ -16,10 +16,9 @@
 #pragma once
 
 #define XXH_INLINE_ALL
-#include <boost/regex.hpp>
+#include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
-#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -101,8 +100,9 @@ struct FromUnixtimeFunction {
       const arg_type<double>& unixtime,
       const arg_type<int64_t>& hours,
       const arg_type<int64_t>& minutes) {
-    int16_t timezoneId = tzID_.value_or(tz::getTimeZoneID(
-        checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes)));
+    int16_t timezoneId = tzID_.value_or(
+        tz::getTimeZoneID(
+            checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes)));
     result = pack(fromUnixtime(unixtime).toMillis(), timezoneId);
   }
 
@@ -608,18 +608,19 @@ class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>>
   signaturesPlus() {
-    return {// Signature 1: (time, interval year to month) -> time
-            exec::FunctionSignatureBuilder()
-                .returnType("time")
-                .argumentType("time")
-                .argumentType("interval year to month")
-                .build(),
-            // Signature 2: (interval year to month, time) -> time
-            exec::FunctionSignatureBuilder()
-                .returnType("time")
-                .argumentType("interval year to month")
-                .argumentType("time")
-                .build()};
+    return {
+        // Signature 1: (time, interval year to month) -> time
+        exec::FunctionSignatureBuilder()
+            .returnType("time")
+            .argumentType("time")
+            .argumentType("interval year to month")
+            .build(),
+        // Signature 2: (interval year to month, time) -> time
+        exec::FunctionSignatureBuilder()
+            .returnType("time")
+            .argumentType("interval year to month")
+            .argumentType("time")
+            .build()};
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>>
@@ -1922,43 +1923,53 @@ template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<boost::regex> durationRegex_;
+  std::unique_ptr<RE2> durationRegex_;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ = std::make_unique<boost::regex>(
-        "^\\s*(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z]+)\\s*$");
+    durationRegex_ =
+        std::make_unique<RE2>(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    std::string strAmountUnit = (std::string)amountUnit;
-    boost::smatch match;
-    bool isMatch = boost::regex_search(strAmountUnit, match, *durationRegex_);
-    if (!isMatch) {
+    re2::StringPiece valueStr;
+    re2::StringPiece unit;
+    if (!RE2::FullMatch(
+            re2::StringPiece(amountUnit.data(), amountUnit.size()),
+            *durationRegex_,
+            &valueStr,
+            &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
-    VELOX_USER_CHECK_EQ(
-        match.size(),
-        3,
-        "Input duration does not have value and unit components only: {}",
-        amountUnit);
+
+    double value{};
     try {
-      double value = std::stod(match[1].str());
-      std::string unit = match[2].str();
-      result = valueOfTimeUnitToMillis(value, unit);
-    } catch (std::out_of_range&) {
+      size_t pos = 0;
+      // Create temporary string from re2::StringPiece for stod
+      std::string valueString(valueStr.data(), valueStr.size());
+      value = std::stod(valueString, &pos);
+      if (pos != valueString.size()) {
+        VELOX_USER_FAIL(
+            "Input duration value is not a valid number: {}",
+            std::string_view(valueStr.data(), valueStr.size()));
+      }
+    } catch (const std::out_of_range&) {
       VELOX_USER_FAIL(
           "Input duration value is out of range for double: {}",
-          match[1].str());
-    } catch (std::invalid_argument&) {
+          std::string_view(valueStr.data(), valueStr.size()));
+    } catch (const std::exception&) {
       VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}", match[1].str());
+          "Input duration value is not a valid number: {}",
+          std::string_view(valueStr.data(), valueStr.size()));
     }
+
+    result = valueOfTimeUnitToMillis(
+        value, std::string_view(unit.data(), unit.size()));
   }
 };
 

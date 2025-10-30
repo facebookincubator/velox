@@ -74,14 +74,16 @@ TEST_F(SpatialIndexTest, testEmptyIndex) {
 }
 
 TEST_F(SpatialIndexTest, testPointProbe) {
-  makeIndex(std::vector<Envelope>{
-      Envelope{.minX = 1, .minY = 0, .maxX = 1, .maxY = 0, .rowIndex = 6},
-      Envelope{.minX = 0, .minY = 0, .maxX = 0, .maxY = 0, .rowIndex = 5},
-      Envelope{.minX = 0, .minY = 0, .maxX = 1, .maxY = 1, .rowIndex = 4},
-      Envelope{.minX = -1, .minY = -1, .maxX = 0, .maxY = 0, .rowIndex = 3},
-      Envelope{.minX = -1, .minY = -1, .maxX = 1, .maxY = 1, .rowIndex = 2},
-      Envelope{.minX = 0.5, .minY = 0.5, .maxX = 1, .maxY = 1, .rowIndex = 1},
-  });
+  makeIndex(
+      std::vector<Envelope>{
+          Envelope{.minX = 1, .minY = 0, .maxX = 1, .maxY = 0, .rowIndex = 6},
+          Envelope{.minX = 0, .minY = 0, .maxX = 0, .maxY = 0, .rowIndex = 5},
+          Envelope{.minX = 0, .minY = 0, .maxX = 1, .maxY = 1, .rowIndex = 4},
+          Envelope{.minX = -1, .minY = -1, .maxX = 0, .maxY = 0, .rowIndex = 3},
+          Envelope{.minX = -1, .minY = -1, .maxX = 1, .maxY = 1, .rowIndex = 2},
+          Envelope{
+              .minX = 0.5, .minY = 0.5, .maxX = 1, .maxY = 1, .rowIndex = 1},
+      });
   Envelope bounds = indexBounds();
   ASSERT_EQ(bounds.minX, -1);
   ASSERT_EQ(bounds.minY, -1);
@@ -115,11 +117,12 @@ TEST_F(SpatialIndexTest, testFloatImprecision) {
   double baseMinDown =
       std::nextafter<double>(baseMin, -std::numeric_limits<double>::infinity());
 
-  makeIndex(std::vector<Envelope>{
-      Envelope::from(baseMin, baseMin, baseMax, baseMax, 1),
-      Envelope::from(baseMinUp, baseMinUp, baseMaxUp, baseMaxUp, 2),
-      Envelope::from(baseMinDown, baseMinDown, baseMaxDown, baseMaxDown, 3),
-  });
+  makeIndex(
+      std::vector<Envelope>{
+          Envelope::from(baseMin, baseMin, baseMax, baseMax, 1),
+          Envelope::from(baseMinUp, baseMinUp, baseMaxUp, baseMaxUp, 2),
+          Envelope::from(baseMinDown, baseMinDown, baseMaxDown, baseMaxDown, 3),
+      });
 
   Envelope bounds = indexBounds();
   ASSERT_EQ(bounds.minX, float1Down);
@@ -148,27 +151,28 @@ TEST_F(SpatialIndexTest, testFloatImprecisionSubnormal) {
   double subnormalDoubleUp =
       std::nextafter<double>(0.0, std::numeric_limits<double>::infinity());
 
-  makeIndex(std::vector<Envelope>{
-      Envelope::from(0.0, 0.0, 0.0, 0.0, 1),
-      Envelope::from(
-          subnormalDoubleDown,
-          subnormalDoubleDown,
-          subnormalDoubleDown,
-          subnormalDoubleDown,
-          2),
-      Envelope::from(
-          subnormalDoubleUp,
-          subnormalDoubleUp,
-          subnormalDoubleUp,
-          subnormalDoubleUp,
-          3),
-      Envelope::from(
-          subnormalDoubleDown,
-          subnormalDoubleDown,
-          subnormalDoubleUp,
-          subnormalDoubleUp,
-          4),
-  });
+  makeIndex(
+      std::vector<Envelope>{
+          Envelope::from(0.0, 0.0, 0.0, 0.0, 1),
+          Envelope::from(
+              subnormalDoubleDown,
+              subnormalDoubleDown,
+              subnormalDoubleDown,
+              subnormalDoubleDown,
+              2),
+          Envelope::from(
+              subnormalDoubleUp,
+              subnormalDoubleUp,
+              subnormalDoubleUp,
+              subnormalDoubleUp,
+              3),
+          Envelope::from(
+              subnormalDoubleDown,
+              subnormalDoubleDown,
+              subnormalDoubleUp,
+              subnormalDoubleUp,
+              4),
+      });
 
   Envelope bounds = indexBounds();
   ASSERT_EQ(bounds.minX, subnormalFloatDown);

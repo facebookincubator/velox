@@ -23,12 +23,13 @@ class OrderByBenchmarkUtil {
  public:
   /// Add the benchmarks with the parameter.
   /// @param benchmarkFunc benchmark generator.
-  static void addBenchmarks(const std::function<void(
-                                const std::string& benchmarkName,
-                                vector_size_t numRows,
-                                const RowTypePtr& rowType,
-                                int iterations,
-                                int numKeys)>& benchmarkFunc);
+  static void addBenchmarks(
+      const std::function<void(
+          const std::string& benchmarkName,
+          vector_size_t numRows,
+          const RowTypePtr& rowType,
+          int iterations,
+          int numKeys)>& benchmarkFunc);
 
   /// Generate RowVector by VectorFuzzer according to rowType. Use
   /// FLAGS_data_null_ratio to specify the columns null ratio

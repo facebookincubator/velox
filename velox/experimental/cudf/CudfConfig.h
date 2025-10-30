@@ -30,6 +30,7 @@ struct CudfConfig {
   static constexpr const char* kCudfFunctionNamePrefix{
       "cudf.function_name_prefix"};
   static constexpr const char* kCudfForceReplace{"cudf.force_replace"};
+  static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -58,6 +59,9 @@ struct CudfConfig {
 
   /// Force replacement of operators. Throws an error if a replacement fails.
   bool forceReplace{false};
+
+  /// Whether to log a reason for falling back to Velox CPU execution.
+  bool logFallback{true};
 };
 
 } // namespace facebook::velox::cudf_velox

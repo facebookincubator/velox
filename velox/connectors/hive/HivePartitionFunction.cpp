@@ -73,8 +73,7 @@ inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
 __attribute__((no_sanitize("integer")))
 #endif
 #endif
-uint32_t
-hashBytes(StringView bytes, int32_t initialValue) {
+uint32_t hashBytes(StringView bytes, int32_t initialValue) {
   uint32_t hash = initialValue;
   auto* data = bytes.data();
   for (auto i = 0; i < bytes.size(); ++i) {

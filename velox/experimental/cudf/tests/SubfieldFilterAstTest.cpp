@@ -649,8 +649,7 @@ TEST_P(IntInListParamTest, InListParam) {
     }
   }
   EXPECT_EQ(scalars.size(), expectedScalars)
-      << "Scalar count mismatch for IN list with kind "
-      << mapTypeKindToName(p.kind);
+      << "Scalar count mismatch for IN list with kind " << p.kind;
 
   auto vec = makeTestVector(rowType, 100);
   testFilterExecution(rowType, columnName, *filter, vec, expr);

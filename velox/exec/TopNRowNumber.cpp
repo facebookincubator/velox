@@ -127,13 +127,14 @@ TopNRowNumber::TopNRowNumber(
           driverCtx->queryConfig().abandonPartialTopNRowNumberMinRows()),
       abandonPartialMinPct_(
           driverCtx->queryConfig().abandonPartialTopNRowNumberMinPct()),
-      data_(std::make_unique<RowContainer>(
-          slice(inputType_->children(), 0, spillCompareFlags_.size()),
-          slice(
-              inputType_->children(),
-              spillCompareFlags_.size(),
-              inputType_->size()),
-          pool())),
+      data_(
+          std::make_unique<RowContainer>(
+              slice(inputType_->children(), 0, spillCompareFlags_.size()),
+              slice(
+                  inputType_->children(),
+                  spillCompareFlags_.size(),
+                  inputType_->size()),
+              pool())),
       comparator_(
           inputType_,
           node->sortingKeys(),
