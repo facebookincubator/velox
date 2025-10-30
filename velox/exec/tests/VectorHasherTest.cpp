@@ -1198,3 +1198,84 @@ TEST_F(VectorHasherTest, customComparisonRow) {
               {std::nullopt, 0, 1, 0, 1, 0, 1},
               velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())}));
 }
+
+TEST_F(VectorHasherTest, customComparisonValueIds) {
+  // Test that VectorHasher created with custom comparison type
+  // has value IDs disabled (distinctOverflow_ and rangeOverflow_ set).
+  auto vectorHasher = exec::VectorHasher::create(
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 1);
+
+  // Test that types with custom comparison do not support value IDs.
+  EXPECT_FALSE(vectorHasher->typeSupportsValueIds());
+
+  // Verify that mayUseValueIds() returns false for custom comparison types.
+  EXPECT_FALSE(vectorHasher->mayUseValueIds());
+}
+
+DEBUG_ONLY_TEST_F(VectorHasherTest, customComparisonNoValueIds) {
+  // Test that custom comparison types cannot use value IDs for optimization.
+  auto data = makeRowVector({makeNullableFlatVector<int64_t>(
+      {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+
+  auto hasher = exec::VectorHasher::create(
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
+
+  SelectivityVector allRows(data->size());
+  raw_vector<uint64_t> result(data->size());
+  std::fill(result.begin(), result.end(), 0);
+
+  hasher->decode(*data->childAt(0), allRows);
+
+  VELOX_ASSERT_THROW(
+      hasher->computeValueIds(allRows, result), "Value IDs cannot be used");
+  VectorHasher::ScratchMemory scratchMemory;
+  VELOX_ASSERT_THROW(
+      hasher->lookupValueIds(*data->childAt(0), allRows, scratchMemory, result),
+      "Value IDs cannot be used");
+  EXPECT_EQ(nullptr, hasher->getFilter(true));
+  VELOX_ASSERT_THROW(
+      hasher->enableValueRange(1, 50), "Value IDs cannot be used");
+  VELOX_ASSERT_THROW(
+      hasher->enableValueRange(1, 50), "Value IDs cannot be used");
+}
+
+DEBUG_ONLY_TEST_F(VectorHasherTest, computeValueIdsForRowsCustomComparison) {
+  // Test that computeValueIdsForRows throws an exception for types with custom
+  // comparison.
+  auto hasher = exec::VectorHasher::create(
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
+
+  constexpr int32_t kNumGroups = 5;
+  constexpr int32_t kRowSize = 16;
+  constexpr int32_t kValueOffset = 0;
+  constexpr int32_t kNullByte = 8;
+  constexpr uint8_t kNullMask = 1;
+
+  // Allocate memory for row-wise data.
+  std::vector<std::vector<char>> rowData(kNumGroups);
+  std::vector<char*> groups(kNumGroups);
+
+  for (int i = 0; i < kNumGroups; ++i) {
+    rowData[i].resize(kRowSize, 0);
+    groups[i] = rowData[i].data();
+
+    // Set values for all rows (no nulls for simplicity).
+    *reinterpret_cast<int64_t*>(groups[i] + kValueOffset) = i * 256;
+  }
+
+  raw_vector<uint64_t> result(kNumGroups);
+  std::fill(result.begin(), result.end(), 0);
+
+  // computeValueIdsForRows should throw an exception for types with custom
+  // comparison.
+  VELOX_ASSERT_THROW(
+      hasher->computeValueIdsForRows(
+          groups.data(),
+          kNumGroups,
+          kValueOffset,
+          kNullByte,
+          kNullMask,
+          result),
+      "Value IDs cannot be used");
+}
