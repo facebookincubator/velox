@@ -48,6 +48,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
+        {"c", INTEGER()},
         {"name", VARCHAR()},
         {"date", TIMESTAMP()},
     });

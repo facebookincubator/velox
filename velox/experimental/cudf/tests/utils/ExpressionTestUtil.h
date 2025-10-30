@@ -26,13 +26,22 @@
 
 namespace facebook::velox::cudf_velox::test_utils {
 
-inline std::shared_ptr<exec::Expr> compileExecExpr(
+// Parse SQL and infer types only, without compiling to exec::Expr
+inline core::TypedExprPtr parseAndInferTypedExpr(
     const std::string& sql,
     const RowTypePtr& rowType,
     core::ExecCtx* execCtx,
     const parse::ParseOptions& options = {}) {
   auto untyped = parse::parseExpr(sql, options);
-  auto typed = core::Expressions::inferTypes(untyped, rowType, execCtx->pool());
+  return core::Expressions::inferTypes(untyped, rowType, execCtx->pool());
+}
+
+inline std::shared_ptr<exec::Expr> compileExecExpr(
+    const std::string& sql,
+    const RowTypePtr& rowType,
+    core::ExecCtx* execCtx,
+    const parse::ParseOptions& options = {}) {
+  auto typed = parseAndInferTypedExpr(sql, rowType, execCtx, options);
   exec::ExprSet exprSet({typed}, execCtx, /*enableConstantFolding*/ false);
   return exprSet.expr(0);
 }

@@ -731,13 +731,12 @@ ColumnOrView FunctionExpression::eval(
     }
 
     auto result = function_->eval(inputColumns, stream, mr);
-    if (finalize &&
-        std::holds_alternative<std::unique_ptr<cudf::column>>(result)) {
+    if (finalize) {
       const auto requestedType =
           cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_->type()));
-      auto& owned = std::get<std::unique_ptr<cudf::column>>(result);
-      if (owned->type() != requestedType) {
-        owned = cudf::cast(*owned, requestedType, stream, mr);
+      auto resultView = asView(result);
+      if (resultView.type() != requestedType) {
+        return cudf::cast(resultView, requestedType, stream, mr);
       }
     }
     return result;

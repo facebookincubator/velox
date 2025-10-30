@@ -99,6 +99,8 @@ class ASTExpression : public CudfExpression {
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
+  std::shared_ptr<velox::exec::Expr> expr_;
+
   cudf::ast::tree cudfTree_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
   // instruction on dependent column to get new column index on non-ast
