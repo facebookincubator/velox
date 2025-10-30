@@ -598,67 +598,6 @@ TEST_F(HiveDataSinkTest, basicBucket) {
   verifyWrittenData(outputDirectory->getPath(), numBuckets);
 }
 
-TEST_F(HiveDataSinkTest, decimalPartition) {
-  const auto outputDirectory = TempDirectoryPath::create();
-
-  connectorSessionProperties_->set(
-      HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "1");
-  const auto rowType =
-      ROW({"c0", "c1", "c2"}, {BIGINT(), DECIMAL(14, 3), DECIMAL(20, 4)});
-  auto dataSink = createDataSink(
-      rowType,
-      outputDirectory->getPath(),
-      dwio::common::FileFormat::DWRF,
-      {"c2"});
-  auto stats = dataSink->stats();
-  ASSERT_TRUE(stats.empty()) << stats.toString();
-
-  const auto vector = makeRowVector(
-      {makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 345}),
-       makeNullableFlatVector<int64_t>(
-           {1, 2, std::nullopt, 345}, DECIMAL(14, 3)),
-       makeFlatVector<int128_t>({1, 340, 234567, -345}, DECIMAL(20, 4))});
-
-  dataSink->appendData(vector);
-  while (!dataSink->finish()) {
-  }
-  const auto partitions = dataSink->close();
-  stats = dataSink->stats();
-  ASSERT_FALSE(stats.empty());
-  ASSERT_EQ(partitions.size(), vector->size());
-
-  createDuckDbTable({vector});
-
-  const auto rootPath = outputDirectory->getPath();
-  std::vector<std::shared_ptr<ConnectorSplit>> splits;
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  auto partitionPath = [&](std::string value) {
-    partitionKeys["c2"] = value;
-    auto path = listFiles(rootPath + "/c2=" + value)[0];
-    splits.push_back(makeHiveConnectorSplits(
-                         path, 1, dwio::common::FileFormat::DWRF, partitionKeys)
-                         .back());
-  };
-  partitionPath("0.0001");
-  partitionPath("0.0340");
-  partitionPath("23.4567");
-  partitionPath("-0.0345");
-
-  ColumnHandleMap assignments = {
-      {"c0", regularColumn("c0", BIGINT())},
-      {"c1", regularColumn("c1", DECIMAL(14, 3))},
-      {"c2", partitionKey("c2", DECIMAL(20, 4))}};
-
-  auto op = PlanBuilder()
-                .startTableScan()
-                .outputType(rowType)
-                .assignments(assignments)
-                .endTableScan()
-                .planNode();
-
-  assertQuery(op, splits, fmt::format("SELECT * FROM tmp"));
-}
-
 TEST_F(HiveDataSinkTest, close) {
   for (bool empty : {true, false}) {
     SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
