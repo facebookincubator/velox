@@ -332,7 +332,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (CudfConfig::getInstance().debugEnabled) {
       LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
-                << oper->toString().c_str() << ", keepOperator = " keepOperator
+                << oper->toString().c_str()
+                << ", keepOperator = " << keepOperator
                 << ", replaceOp.size() = " << replaceOp.size() << "\n";
     }
     auto GpuReplacedOperator = [](const exec::Operator* op) {
