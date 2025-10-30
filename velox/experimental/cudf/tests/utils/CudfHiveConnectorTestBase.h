@@ -37,7 +37,7 @@ using ColumnHandleMap = std::unordered_map<
     std::shared_ptr<facebook::velox::connector::ColumnHandle>>;
 
 class CudfHiveConnectorTestBase
-    : virtual public facebook::velox::exec::test::OperatorTestBase {
+    : public facebook::velox::exec::test::OperatorTestBase {
  public:
   CudfHiveConnectorTestBase();
 
