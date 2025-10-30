@@ -41,9 +41,6 @@ namespace facebook::velox::exec {
       case TypeKind::BIGINT: {                                              \
         return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);                \
       }                                                                     \
-      case TypeKind::HUGEINT: {                                             \
-        return TEMPLATE_FUNC<TypeKind::HUGEINT>(__VA_ARGS__);               \
-      }                                                                     \
       case TypeKind::VARCHAR:                                               \
       case TypeKind::VARBINARY: {                                           \
         return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);               \
@@ -739,7 +736,6 @@ void extendRange(
       extendRange<int32_t>(reserve, min, max);
       break;
     case TypeKind::BIGINT:
-    case TypeKind::HUGEINT:
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
     case TypeKind::TIMESTAMP:

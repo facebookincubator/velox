@@ -3322,9 +3322,9 @@ TEST_F(CastExprTest, varcharToTimeCast) {
   }
 
   {
-    // Test time formats without milliseconds
-    auto varcharVector =
-        makeFlatVector<StringView>({"00:00:00", "12:30:45", "23:59:59"});
+    // Test time formats without seconds and milliseconds
+    auto varcharVector = makeFlatVector<StringView>(
+        {"00:00:00", "12:30:45", "23:59:59", "12:30"});
 
     auto inputField =
         std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
@@ -3335,7 +3335,8 @@ TEST_F(CastExprTest, varcharToTimeCast) {
         {
             0, // 00:00:00
             45045000, // 12:30:45 = 12*3600*1000 + 30*60*1000 + 45*1000
-            86399000 // 23:59:59 = 23*3600*1000 + 59*60*1000 + 59*1000
+            86399000, // 23:59:59 = 23*3600*1000 + 59*60*1000 + 59*1000
+            45000000, // 12:30 = 12*3600*1000 + 30*60*1000
         },
         TIME());
 
@@ -3349,8 +3350,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
         "25:00:00.000", // invalid hour
         "12:60:00.000", // invalid minute
         "12:30:60.000", // invalid second
-        "invalid", // completely invalid
-        "12:30" // missing seconds
+        "invalid" // completely invalid
     });
 
     auto inputField =
@@ -3364,8 +3364,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
             std::nullopt, // invalid hour
             std::nullopt, // invalid minute
             std::nullopt, // invalid second
-            std::nullopt, // completely invalid
-            std::nullopt // missing seconds
+            std::nullopt // completely invalid
         },
         TIME());
 
@@ -3415,7 +3414,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
     // Should throw error for Unicode digits
     VELOX_ASSERT_THROW(
         evaluate(castExpr, makeRowVector({varcharVector})),
-        "Failed to parse minute in time string");
+        "Invalid time format: expected ':' after hour");
 
     // Test with try_cast - should return null for Unicode digits
     auto tryCastExpr = makeCastExpr(inputField, TIME(), true);

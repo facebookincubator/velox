@@ -29,6 +29,7 @@ velox_add_library(
   StringView.cpp
   StringView.h
   Subfield.cpp
+  Time.cpp
   Timestamp.cpp
   TimestampConversion.cpp
   Tokenizer.cpp
