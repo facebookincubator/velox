@@ -272,13 +272,11 @@ bool CompileState::compile(bool allow_cpu_fallback) {
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (auto topNOp = dynamic_cast<exec::TopN*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::TopNNode>(
           getPlanNode(topNOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfTopN>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
           getPlanNode(hashAggOp->planNodeId()));
@@ -309,7 +307,6 @@ bool CompileState::compile(bool allow_cpu_fallback) {
       if (CudfLocalPartition::shouldReplace(planNode)) {
         replaceOp.push_back(
             std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else {
         // Round Robin batch-wise Partitioning is supported by CPU operator with
         // GPU Vector.
@@ -330,7 +327,6 @@ bool CompileState::compile(bool allow_cpu_fallback) {
               planNode,
               planNode->taskUniqueId(),
               planNode->uniqueIdCounter()));
-      replaceOp.back()->initialize();
     } else {
       keepOperator = 1;
     }
