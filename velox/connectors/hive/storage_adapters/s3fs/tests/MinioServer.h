@@ -28,18 +28,14 @@ namespace {
 constexpr char const* kMinioExecutableName{"minio-2022-05-26"};
 constexpr char const* kMinioAccessKey{"minio"};
 constexpr char const* kMinioSecretKey{"miniopass"};
+constexpr char const* kHostAddressTemplate{"127.0.0.1:{}"};
 } // namespace
 
 // A minio server, managed as a child process.
 // Adapted from the Apache Arrow library.
 class MinioServer {
  public:
-  MinioServer() : tempPath_(::exec::test::TempDirectoryPath::create()) {
-    constexpr auto kHostAddressTemplate = "127.0.0.1:{}";
-    auto ports = facebook::velox::exec::test::getFreePorts(2);
-    connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
-    consoleAddress_ = fmt::format(kHostAddressTemplate, ports[1]);
-  }
+  MinioServer() : tempPath_(::exec::test::TempDirectoryPath::create()) {}
 
   void start();
 
@@ -93,21 +89,47 @@ void MinioServer::start() {
   }
 
   const auto path = tempPath_->getPath();
-  try {
-    serverProcess_ = std::make_shared<boost::process::child>(
-        env,
-        exePath,
-        "server",
-        "--quiet",
-        "--compat",
-        "--address",
-        connectionString_,
-        "--console-address",
-        consoleAddress_,
-        path.c_str());
-  } catch (const std::exception& e) {
-    VELOX_FAIL("Failed to launch Minio server: {}", e.what());
+  std::vector<int> ports = {9000, 65203};
+  int kMaxRetryCount = 5;
+  int retries = 0;
+  while (retries++ < kMaxRetryCount) {
+    try {
+      // Create a stream to capture process output.
+      boost::process::ipstream out_stream;
+      ports = facebook::velox::exec::test::getFreePorts(2);
+      connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
+      consoleAddress_ = fmt::format(kHostAddressTemplate, ports[1]);
+      serverProcess_ = std::make_shared<boost::process::child>(
+          env,
+          exePath,
+          "server",
+          "--quiet",
+          "--compat",
+          "--address",
+          connectionString_,
+          "--console-address",
+          consoleAddress_,
+          path.c_str(),
+          boost::process::std_out > out_stream);
+      std::string output;
+      // Let the process start.
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (!serverProcess_->running()) {
+        std::getline(out_stream, output);
+        std::string_view kPortUsedError =
+            "ERROR Unable to start the server: Specified port is already in use";
+        if (output == kPortUsedError) {
+          continue;
+        }
+      }
+      return;
+    } catch (const std::exception& e) {
+      VELOX_FAIL("Failed to launch Minio server: {}", e.what());
+    }
   }
+  VELOX_FAIL(
+      "Failed to launch Minio server after {} retries due to port conflict",
+      kMaxRetryCount);
 }
 
 void MinioServer::stop() {
