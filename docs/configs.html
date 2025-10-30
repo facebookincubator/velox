@@ -1481,6 +1481,63 @@ execution. This is used for crash debugging.</p></td>
 </tbody>
 </table>
 </section>
+<section id="cudf-specific-configuration-experimental">
+<h2>Cudf-specific Configuration (Experimental)<a class="headerlink" href="#cudf-specific-configuration-experimental" title="Link to this heading">¶</a></h2>
+<p>These configurations are available when [compiled with cuDF](<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf">https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf</a>).
+Note: These configurations are experimental and subject to change.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 25.0%" />
+<col style="width: 8.3%" />
+<col style="width: 8.3%" />
+<col style="width: 58.3%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>cudf.enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, enable cuDF. By default, it is enabled if compiled with cuDF.</p></td>
+</tr>
+<tr class="row-odd"><td><p>cudf.memory_resource</p></td>
+<td><p>string</p></td>
+<td><p>async</p></td>
+<td><p>The memory resource to use for cuDF. Possible values are (cuda, pool, async, arena, managed, managed_pool).</p></td>
+</tr>
+<tr class="row-even"><td><p>cudf.memory_percent</p></td>
+<td><p>integer</p></td>
+<td><p>50</p></td>
+<td><p>The initial percent of GPU memory to allocate for pool or arena memory resources.</p></td>
+</tr>
+<tr class="row-odd"><td><p>cudf.function_name_prefix</p></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>The prefix to use for the function names in cuDF.</p></td>
+</tr>
+<tr class="row-even"><td><p>cudf.allow_cpu_fallback</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.</p></td>
+</tr>
+<tr class="row-odd"><td><p>cudf.debug_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, enable debug printing.</p></td>
+</tr>
+<tr class="row-even"><td><p>cudf.log_fallback</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 
 
@@ -1516,6 +1573,7 @@ execution. This is used for crash debugging.</p></td>
 <li><a class="reference internal" href="#presto-specific-configuration">Presto-specific Configuration</a></li>
 <li><a class="reference internal" href="#spark-specific-configuration">Spark-specific Configuration</a></li>
 <li><a class="reference internal" href="#tracing">Tracing</a></li>
+<li><a class="reference internal" href="#cudf-specific-configuration-experimental">Cudf-specific Configuration (Experimental)</a></li>
 </ul>
 </li>
 </ul>

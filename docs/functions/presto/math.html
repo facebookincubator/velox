@@ -548,6 +548,13 @@ The lambda parameter must be a positive real number (of type DOUBLE) and value m
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="t_cdf">
+<span class="sig-name descname"><span class="pre">t_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#t_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the Student’s t cdf with given degrees of freedom:  P(N &lt; value; df).
+The degrees of freedom must be a positive real number and value must be a real value.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="weibull_cdf">
 <span class="sig-name descname"><span class="pre">weibull_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#weibull_cdf" title="Link to this definition">¶</a></dt>
 <dd><p>Compute the Weibull cdf with given parameters a, b: P(N &lt;= value). The <code class="docutils literal notranslate"><span class="pre">a</span></code>
@@ -636,6 +643,14 @@ The probability p must lie on the interval [0, 1).</p>
 <span class="sig-name descname"><span class="pre">inverse_chi_squared_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_chi_squared_cdf" title="Link to this definition">¶</a></dt>
 <dd><p>Compute the inverse of the Chi-square cdf with given df (degrees of freedom) parameter for the cumulative
 probability (p): P(N &lt; n). The df parameter must be positive real values.
+The probability p must lie on the interval [0, 1].</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="inverse_t_cdf">
+<span class="sig-name descname"><span class="pre">inverse_t_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_t_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Student’s t cdf with given degrees of freedom for the cumulative
+probability (p): P(N &lt; n). The degrees of freedom must be a positive real value.
 The probability p must lie on the interval [0, 1].</p>
 </dd></dl>
 
@@ -743,6 +758,7 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#laplace_cdf"><code class="docutils literal notranslate"><span class="pre">laplace_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#normal_cdf"><code class="docutils literal notranslate"><span class="pre">normal_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#poisson_cdf"><code class="docutils literal notranslate"><span class="pre">poisson_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#t_cdf"><code class="docutils literal notranslate"><span class="pre">t_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#weibull_cdf"><code class="docutils literal notranslate"><span class="pre">weibull_cdf()</span></code></a></li>
 </ul>
 </li>
@@ -757,6 +773,7 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#inverse_binomial_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_binomial_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_poisson_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_poisson_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_chi_squared_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_chi_squared_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#inverse_t_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_t_cdf()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#statistical-functions">Statistical Functions</a><ul>
