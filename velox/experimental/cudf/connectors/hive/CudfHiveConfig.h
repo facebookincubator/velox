@@ -34,34 +34,34 @@ class CudfHiveConfig {
 
   // Number of rows to skip from the start; CudfHive stores the number of rows
   // as int64_t
-  static constexpr const char* kSkipRows = "parquet.reader.skip-rows";
+  static constexpr const char* kSkipRows = "cudf.hive.reader.skip-rows";
 
   // Number of rows to read; `nullopt` is all
-  static constexpr const char* kNumRows = "parquet.reader.num-rows";
+  static constexpr const char* kNumRows = "cudf.hive.reader.num-rows";
 
   // This isn't a typo; parquet connector and session config names are different
   // ('-' vs '_').
   static constexpr const char* kMaxChunkReadLimit =
-      "parquet.reader.chunk-read-limit";
+      "cudf.hive.reader.chunk-read-limit";
   static constexpr const char* kMaxChunkReadLimitSession =
-      "parquet.reader.chunk_read_limit";
+      "cudf.hive.reader.chunk_read_limit";
 
   static constexpr const char* kMaxPassReadLimit =
-      "parquet.reader.pass-read-limit";
+      "cudf.hive.reader.pass-read-limit";
   static constexpr const char* kMaxPassReadLimitSession =
-      "parquet.reader.pass_read_limit";
+      "cudf.hive.reader.pass_read_limit";
 
   // Whether to store string data as categorical type
   static constexpr const char* kConvertStringsToCategories =
-      "parquet.reader.convert-strings-to-categories";
+      "cudf.hive.reader.parquet.convert-strings-to-categories";
   static constexpr const char* kConvertStringsToCategoriesSession =
-      "parquet.reader.convert_strings_to_categories";
+      "cudf.hive.reader.parquet.convert_strings_to_categories";
 
   // Whether to use PANDAS metadata to load columns
   static constexpr const char* kUsePandasMetadata =
-      "parquet.reader.use-pandas-metadata";
+      "cudf.hive.reader.parquet.use-pandas-metadata";
   static constexpr const char* kUsePandasMetadataSession =
-      "parquet.reader.use_pandas_metadata";
+      "cudf.hive.reader.parquet.use_pandas_metadata";
 
   // Whether to read and use ARROW schema
   static constexpr const char* kUseArrowSchema =
@@ -72,14 +72,15 @@ class CudfHiveConfig {
   // Whether to allow reading matching select columns from mismatched CudfHive
   // files.
   static constexpr const char* kAllowMismatchedCudfHiveSchemas =
-      "parquet.reader.allow-mismatched-parquet-schemas";
+      "cudf.hive.reader.parquet.allow-mismatched-parquet-schemas";
   static constexpr const char* kAllowMismatchedCudfHiveSchemasSession =
-      "parquet.reader.allow_mismatched_parquet_schemas";
+      "cudf.hive.reader.parquet.allow_mismatched_parquet_schemas";
 
   // Cast timestamp columns to a specific type
-  static constexpr const char* kTimestampType = "parquet.reader.timestamp-type";
+  static constexpr const char* kTimestampType =
+      "cudf.hive.reader.parquet.timestamp-type";
   static constexpr const char* kTimestampTypeSession =
-      "parquet.reader.timestamp_type";
+      "cudf.hive.reader.parquet.timestamp_type";
 
   // Whether to use the buffered input source for CudfHiveDataSource. The
   // buffered source may benefit from the file handle `AsyncDataCache` in the
@@ -94,7 +95,8 @@ class CudfHiveConfig {
 
   /// Whether new data can be inserted into a CudfHive file
   /// Cudf-Velox currently does not support appending data to existing files.
-  static constexpr const char* kImmutableFiles = "parquet.immutable-files";
+  static constexpr const char* kImmutableFiles =
+      "cudf.hive.writer.immutable-files";
 
   /// Sort Writer will exit finish() method after this many milliseconds even if
   /// it has not completed its work yet. Zero means no time limit.
@@ -104,19 +106,19 @@ class CudfHiveConfig {
       "sort_writer_finish_time_slice_limit_ms";
 
   static constexpr const char* kWriteTimestampsAsUTC =
-      "parquet.writer.write-timestamps-as-utc";
+      "cudf.hive.writer.parquet.write-timestamps-as-utc";
   static constexpr const char* kWriteTimestampsAsUTCSession =
-      "parquet.writer.write_timestamps_as_utc";
+      "cudf.hive.writer.parquet.write_timestamps_as_utc";
 
   static constexpr const char* kWriteArrowSchema =
-      "parquet.writer.write-arrow-schema";
+      "cudf.hive.writer.parquet.write-arrow-schema";
   static constexpr const char* kWriteArrowSchemaSession =
-      "parquet.writer.write_arrow_schema";
+      "cudf.hive.writer.parquet.write_arrow_schema";
 
   static constexpr const char* kWritev2PageHeaders =
-      "parquet.writer.write-v2-page-headers";
+      "cudf.hive.writer.parquet.write-v2-page-headers";
   static constexpr const char* kWritev2PageHeadersSession =
-      "parquet.writer.write_v2_page_headers";
+      "cudf.hive.writer.parquet.write_v2_page_headers";
 
   CudfHiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
