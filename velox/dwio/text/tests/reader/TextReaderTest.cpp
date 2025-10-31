@@ -1910,6 +1910,36 @@ INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(params),
     [](const auto& paramInfo) { return paramInfo.param.compression; });
 
+TEST_F(TextReaderTest, CRNotFollowedByLF) {
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatVector<std::string>({"a", "b"}),
+  });
+
+  const std::string data =
+      "1,a\r"
+      "2,b";
+
+  auto type = ROW({{"col_bigint", BIGINT()}, {"col_string", VARCHAR()}});
+  auto serDeOptions = dwio::common::SerDeOptions(',');
+  auto readerOptions = dwio::common::ReaderOptions(pool());
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(serDeOptions);
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  for (int i = 0; i < 2; ++i) {
+    EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
+  }
+}
+
 } // namespace
 
 } // namespace facebook::velox::text

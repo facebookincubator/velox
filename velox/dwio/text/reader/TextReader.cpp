@@ -709,6 +709,7 @@ char TextRowReader::getByteUncheckedOptimized(DelimType& delim) {
     if (skipLF) {
       if (v != '\n') {
         pos_--;
+        unreadIdx_--;
         return '\n';
       }
     } else {
