@@ -33,7 +33,6 @@ target_link_libraries(
   velox_dwio_text_reader_register
   velox_dwio_text_writer_register
   velox_link_libs
-  Boost::regex
   Folly::folly
   ${TEST_LINK_LIBS}
   GTest::gtest

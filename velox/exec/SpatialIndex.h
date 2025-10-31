@@ -79,15 +79,20 @@ struct Envelope {
   float maxY;
   int32_t rowIndex = -1;
 
+  /// Returns true if the intersection of two envelopes is not empty.
   static inline bool intersects(const Envelope& left, const Envelope& right) {
     return (left.maxX >= right.minX) && (left.minX <= right.maxX) &&
         (left.maxY >= right.minY) && (left.minY <= right.maxY);
   }
 
+  /// Returns true if the envelope contains at least one point.
+  /// An envelope of a point is not empty.
   inline bool isEmpty() const {
-    return (maxX < minX) || (maxY < minY);
+    // This negation handles NaNs correctly.
+    return !((minX <= maxX) && (minY <= maxY));
   }
 
+  /// Construct an empty envelope.
   static constexpr inline Envelope empty() {
     return Envelope{
         .minX = std::numeric_limits<float>::infinity(),

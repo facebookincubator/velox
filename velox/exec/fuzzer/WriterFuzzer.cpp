@@ -248,7 +248,7 @@ class WriterFuzzer {
   };
 
   // Supported partition key column types
-  // According to VectorHasher::typeKindSupportsValueIds and
+  // According to VectorHasher::typeSupportsValueIds and
   // https://github.com/prestodb/presto/blob/10143be627beb2c61aba5b3d36af473d2a8ef65e/presto-hive/src/main/java/com/facebook/presto/hive/HiveUtil.java#L593
   const std::vector<TypePtr> kPartitionKeyTypes_{
       BOOLEAN(),

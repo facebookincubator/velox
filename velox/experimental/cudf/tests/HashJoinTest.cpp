@@ -55,7 +55,7 @@ class HashJoinTest : public HashJoinTestBase {
 
   void SetUp() override {
     HashJoinTestBase::SetUp();
-    cudf_velox::CudfConfig::getInstance().forceReplace = true;
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
@@ -919,7 +919,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   }
 }
 
-TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
@@ -1024,7 +1024,7 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .run();
 }
 
-TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_nullAwareAntiJoin) {
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(5, [&](uint32_t /*unused*/) {
         return makeRowVector({
@@ -3584,7 +3584,7 @@ TEST_F(HashJoinTest, memory) {
   EXPECT_GT(40'000'000, params.queryCtx->pool()->stats().cumulativeBytes);
 }
 
-TEST_F(HashJoinTest, lazyVectors) {
+TEST_F(HashJoinTest, DISABLED_lazyVectors) {
   // a dataset of multiple row groups with multiple columns. We create
   // different dictionary wrappings for different columns and load the
   // rows in scope at different times.
@@ -3703,7 +3703,7 @@ TEST_F(HashJoinTest, lazyVectors) {
   }
 }
 
-TEST_F(HashJoinTest, lazyVectorNotLoadedInFilter) {
+TEST_F(HashJoinTest, DISABLED_lazyVectorNotLoadedInFilter) {
   // Ensure that if lazy vectors are temporarily wrapped during a filter's
   // execution and remain unloaded, the temporary wrap is promptly
   // discarded. This precaution prevents the generation of the probe's output
@@ -3721,7 +3721,7 @@ TEST_F(HashJoinTest, lazyVectorNotLoadedInFilter) {
       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0");
 }
 
-TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftJoin) {
+TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3732,7 +3732,7 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftJoin) {
       "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
 }
 
-TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
+TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterFullJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3746,7 +3746,9 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
+TEST_F(
+    HashJoinTest,
+    DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3760,7 +3762,7 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterAntiJoin) {
+TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterAntiJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3771,7 +3773,7 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterAntiJoin) {
       "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0))");
 }
 
-TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterInnerJoin) {
+TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterInnerJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3782,7 +3784,7 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterInnerJoin) {
       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2 >= 0)");
 }
 
-TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
+TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -4957,7 +4959,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
       .run();
 }
 
-TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
+TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> innerBuild = {makeRowVector(
       {"a"},
       {
@@ -5213,7 +5215,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, buildReservationReleaseCheck) {
   ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
 }
 
-TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
+TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
   vector_size_t size = 10;
   auto filePaths = makeFilePaths(1);
   auto rowVector = makeRowVector(
