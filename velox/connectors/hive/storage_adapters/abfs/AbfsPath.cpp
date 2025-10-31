@@ -35,9 +35,12 @@ AbfsPath::AbfsPath(std::string_view path) {
   }
 
   auto firstAt = file.find_first_of("@");
-  fileSystem_ = file.substr(0, firstAt);
+  fileSystem_ = Azure::Storage::_internal::UrlEncodePath(
+      Azure::Core::Url::Decode(file.substr(0, firstAt)));
   auto firstSep = file.find_first_of("/");
-  filePath_ = file.substr(firstSep + 1);
+  filePath_ = Azure::Storage::_internal::UrlEncodePath(
+      Azure::Core::Url::Decode(file.substr(firstSep + 1)));
+
   accountNameWithSuffix_ = file.substr(firstAt + 1, firstSep - firstAt - 1);
   auto firstDot = accountNameWithSuffix_.find_first_of(".");
   accountName_ = accountNameWithSuffix_.substr(0, firstDot);
@@ -53,12 +56,12 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
     }
   }
 
-  const std::string protocol = isHttps_ ? "https" : "http";
-  auto url = Azure::Core::Url(
-      fmt::format("{}://{}", protocol, accountNameWithSuffixForUrl));
-  url.AppendPath(Azure::Storage::_internal::UrlEncodePath(fileSystem_));
-  url.AppendPath(Azure::Storage::_internal::UrlEncodePath(filePath_));
-  return url.GetAbsoluteUrl();
+  return fmt::format(
+      "{}{}/{}/{}",
+      isHttps_ ? "https://" : "http://",
+      accountNameWithSuffixForUrl,
+      fileSystem_,
+      filePath_);
 }
 
 } // namespace facebook::velox::filesystems
