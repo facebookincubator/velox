@@ -33,6 +33,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -8352,6 +8353,52 @@ DEBUG_ONLY_TEST_F(
   }
   ASSERT_LT(
       testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
+}
+
+/// Test hash join where build-side keys have a type that supports custom
+/// comparison and come from a small range which would allow for array-based
+/// lookup instead of a hash table for other types.
+TEST_F(HashJoinTest, arrayBasedLookupCustomComparisonType) {
+  std::vector<RowVectorPtr> probeVectors = {
+      makeRowVector({makeFlatVector<int64_t>(
+          1'024,
+          [](auto row) { return row; },
+          nullptr,
+          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+
+  std::vector<RowVectorPtr> buildVectors = {
+      makeRowVector({makeFlatVector<int64_t>(
+          256,
+          [](auto row) { return row; },
+          nullptr,
+          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan = PlanBuilder(planNodeIdGenerator)
+                       .values({buildVectors})
+                       .project({"c0 as right"})
+                       .planNode();
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .project({"c0 as left"})
+                  .hashJoin(
+                      {"left"},
+                      {"right"},
+                      rightPlan,
+                      "",
+                      {"left"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  // The probe side consists of the values 0-1023, the build side consists of
+  // the values 0-255. If custom comparison is not respected, the join will
+  // produce 256 values (0-255). When custom comparison is respected equality is
+  // treated mod 256 so we get 1024 values (0-1023).
+  EXPECT_EQ(result->size(), 1'024);
 }
 
 } // namespace

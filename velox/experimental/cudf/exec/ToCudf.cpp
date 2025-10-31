@@ -71,10 +71,10 @@ bool CompileState::compile(bool allow_cpu_fallback) {
   auto operators = driver_.operators();
 
   if (CudfConfig::getInstance().debugEnabled) {
-    std::cout << "Operators before adapting for cuDF: count ["
+    LOG(INFO) << "Operators before adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
     std::cout << "allow_cpu_fallback = " << allow_cpu_fallback << std::endl;
@@ -397,10 +397,10 @@ bool CompileState::compile(bool allow_cpu_fallback) {
 
   if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
-    std::cout << "Operators after adapting for cuDF: count ["
+    LOG(INFO) << "Operators after adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
   }
