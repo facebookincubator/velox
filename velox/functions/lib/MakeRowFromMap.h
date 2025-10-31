@@ -308,6 +308,6 @@ class MakeRowFromMap {
   const bool throwOnDuplicateKeys_{true};
   const std::vector<std::string> outputFieldNames_;
   const TypePtr inputKeyType_;
-  std::unordered_map<KeyType, size_t> keyToIndex_;
+  folly::F14FastMap<KeyType, size_t> keyToIndex_;
 };
 } // namespace facebook::velox::functions
