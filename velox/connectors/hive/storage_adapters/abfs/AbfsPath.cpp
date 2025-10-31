@@ -15,6 +15,7 @@
  */
 
 #include <azure/core/url.hpp>
+#include <azure/storage/common/crypt.hpp>
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
@@ -55,8 +56,8 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
   const std::string protocol = isHttps_ ? "https" : "http";
   auto url = Azure::Core::Url(
       fmt::format("{}://{}", protocol, accountNameWithSuffixForUrl));
-  url.AppendPath(Azure::Core::Url::Encode(fileSystem_, "/"));
-  url.AppendPath(Azure::Core::Url::Encode(filePath_, "/"));
+  url.AppendPath(Azure::Storage::_internal::UrlEncodePath(fileSystem_));
+  url.AppendPath(Azure::Storage::_internal::UrlEncodePath(filePath_));
   return url.GetAbsoluteUrl();
 }
 

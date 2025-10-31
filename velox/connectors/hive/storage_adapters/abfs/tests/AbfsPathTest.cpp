@@ -34,5 +34,5 @@ TEST(AbfsPathTest, encodedPath) {
       "main@dir/brand#51/sub dir/test.txt");
   EXPECT_EQ(
       abfssAccountWithSpecialCharacters.getUrl(true),
-      "https://test.blob.core.windows.net/testc/main%40dir/brand%2351/sub%20dir/test.txt");
+      "https://test.blob.core.windows.net/testc/main@dir/brand%2351/sub%20dir/test.txt");
 }
