@@ -117,10 +117,6 @@ CudfVectorPtr CudfTopN::getTopKBatch(CudfVectorPtr cudfInput, int32_t k) {
   if (k == 0 || cudfInput->size() == 0) {
     return nullptr;
   }
-  if (k >= cudfInput->size()) {
-    // no need to sort until getOutput.
-    return cudfInput;
-  }
   auto stream = cudfInput->stream();
   auto mr = cudf::get_current_device_resource_ref();
   auto values = cudfInput->getTableView();
