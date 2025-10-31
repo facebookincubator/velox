@@ -212,17 +212,17 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_BUILD_TEST_UTILS ON)
 endif()
 
-if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  find_package(CURL REQUIRED)
-  set(VELOX_ENABLE_DUCKDB ON)
-  set(VELOX_ENABLE_PARSE ON)
-endif()
-
 if(VELOX_ENABLE_CUDF)
   message(STATUS "Building curl from source to satisfy cuDF curl version requirement")
   set(curl_SOURCE BUNDLED)
   velox_resolve_dependency(curl)
-  FetchContent_MakeAvailable(curl)
+endif()
+
+if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
+  # find the bundled or system curl
+  find_package(CURL REQUIRED)
+  set(VELOX_ENABLE_DUCKDB ON)
+  set(VELOX_ENABLE_PARSE ON)
 endif()
 
 if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
