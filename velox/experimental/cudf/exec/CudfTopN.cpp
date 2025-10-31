@@ -65,19 +65,6 @@ CudfTopN::CudfTopN(
   }
 }
 
-CudfVectorPtr CudfTopN::mergeTopK2(
-    std::vector<CudfVectorPtr> topNBatches,
-    int32_t k,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto concatenatedTable =
-      getConcatenatedTable(topNBatches, outputType_, stream);
-  auto topk = getTopK(concatenatedTable->view(), k, stream, mr);
-  auto const size = topk->num_rows();
-  return std::make_shared<CudfVector>(
-      topNBatches[0]->pool(), outputType_, size, std::move(topk), stream);
-}
-
 CudfVectorPtr CudfTopN::mergeTopK(
     std::vector<CudfVectorPtr> topNBatches,
     int32_t k,
