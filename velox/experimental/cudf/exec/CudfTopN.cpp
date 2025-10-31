@@ -72,24 +72,12 @@ CudfVectorPtr CudfTopN::mergeTopK(
     int32_t k,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  std::vector<cudf::table_view> tableViews;
-  for (const auto& batch : topNBatches) {
-    tableViews.push_back(batch->getTableView());
-  }
-  auto mergedTable =
-      cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
-  // slice it
-  auto topk =
-      cudf::split(
-          mergedTable->view(), {std::min(k, mergedTable->num_rows())}, stream)
-          .front();
-  auto const size = topk.num_rows();
+  auto concatenatedTable =
+      getConcatenatedTable(topNBatches, outputType_, stream);
+  auto topk = getTopK(concatenatedTable->view(), k, stream, mr);
+  auto const size = topk->num_rows();
   return std::make_shared<CudfVector>(
-      topNBatches[0]->pool(),
-      outputType_,
-      size,
-      std::make_unique<cudf::table>(topk),
-      stream);
+      topNBatches[0]->pool(), outputType_, size, std::move(topk), stream);
 }
 
 std::unique_ptr<cudf::table> CudfTopN::getTopK(
