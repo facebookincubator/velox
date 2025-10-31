@@ -602,7 +602,7 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
     cudf::column_view rightIndicesCol,
     std::function<std::vector<std::unique_ptr<cudf::column>>(
         std::vector<std::unique_ptr<cudf::column>>&&,
-        cudf::mutable_column_view)> func,
+        cudf::column_view)> func,
     rmm::cuda_stream_view stream) {
   auto leftResult =
       cudf::gather(leftTableView, leftIndicesCol, oobPolicy, stream);
@@ -623,11 +623,11 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   std::vector<velox::RowTypePtr> rowTypes{probeType, buildType};
   exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
-  auto filterEvaluator = ExpressionEvaluator(
-      {exprs.exprs()[0]}, facebook::velox::type::concatRowTypes(rowTypes));
-  auto filterColumns = filterEvaluator.compute(
+  auto filterEvaluator = createCudfExpression(
+      exprs.exprs()[0], facebook::velox::type::concatRowTypes(rowTypes));
+  auto filterColumns = filterEvaluator->eval(
       joinedCols, stream, cudf::get_current_device_resource_ref());
-  auto filterColumn = filterColumns[0]->mutable_view();
+  auto filterColumn = asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
 
@@ -689,7 +689,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
       auto filterFunc =
           [stream](
               std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
-              cudf::mutable_column_view filterColumn) {
+              cudf::column_view filterColumn) {
             auto filterTable =
                 std::make_unique<cudf::table>(std::move(joinedCols));
             auto filteredTable =
@@ -757,7 +757,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
                          stream](
                             std::vector<std::unique_ptr<cudf::column>>&&
                                 joinedCols,
-                            cudf::mutable_column_view filterColumn) {
+                            cudf::column_view filterColumn) {
         auto leftColsSize = leftTableView.num_columns();
         auto rightColsSize = rightTableView.num_columns();
 
@@ -922,7 +922,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
       auto filterFunc =
           [&rightMatchedFlags, rightIndicesSpan, stream](
               std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
-              cudf::mutable_column_view filterColumn) {
+              cudf::column_view filterColumn) {
             // apply the filter
             auto filterTable =
                 std::make_unique<cudf::table>(std::move(joinedCols));
