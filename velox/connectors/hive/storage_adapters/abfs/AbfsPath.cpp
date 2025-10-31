@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <azure/core/url.hpp>
+#include <azure/storage/common/internal/storage_url_utilities.hpp>
+
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
@@ -49,12 +52,12 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
       accountNameWithSuffixForUrl.replace(startPos, 3, "blob");
     }
   }
-  return fmt::format(
-      "{}{}/{}/{}",
-      isHttps_ ? "https://" : "http://",
-      accountNameWithSuffixForUrl,
-      fileSystem_,
-      filePath_);
+  const std::string protocol = isHttps_ ? "https" : "http";
+  auto url = Azure::Core::Url(
+      fmt::format("{}://{}", protocol, accountNameWithSuffixForUrl));
+  url.AppendPath(Azure::Storage::_internal::UrlEncodePath(fileSystem_));
+  url.AppendPath(Azure::Storage::_internal::UrlEncodePath(filePath_));
+  return url.GetAbsoluteUrl();
 }
 
 } // namespace facebook::velox::filesystems
