@@ -559,18 +559,6 @@ void TextRowReader::setValueFromString(
   }
 }
 
-uint8_t TextRowReader::getByte(DelimType& delim) {
-  setNone(delim);
-  auto v = getByteUnchecked(delim);
-  if (isNone(delim)) {
-    if (v == '\r') {
-      v = getByteUnchecked<true>(delim); // always returns '\n' in this case
-    }
-    delim = getDelimType(v);
-  }
-  return v;
-}
-
 uint8_t TextRowReader::getByteOptimized(DelimType& delim) {
   setNone(delim);
   auto v = getByteUncheckedOptimized(delim);
@@ -610,48 +598,6 @@ DelimType TextRowReader::getDelimType(uint8_t v) {
     }
   }
   return delim;
-}
-
-template <bool skipLF>
-char TextRowReader::getByteUnchecked(DelimType& delim) {
-  if (atEOL_) {
-    if (!skipLF) {
-      delim = DelimTypeEOR; // top level EOR
-    }
-    return '\n';
-  }
-
-  try {
-    char v;
-    if (!unreadData_.empty()) {
-      v = unreadData_[0];
-      unreadData_.erase(0, 1);
-    } else {
-      contents_->inputStream->readFully(&v, 1);
-    }
-    pos_++;
-
-    // only when previous char == '\r'
-    if (skipLF) {
-      if (v != '\n') {
-        pos_--;
-        return '\n';
-      }
-    } else {
-      atSOL_ = false;
-    }
-    return v;
-  } catch (EOFError&) {
-  } catch (std::runtime_error& e) {
-    if (std::string(e.what()).find("Short read of") != 0 && !skipLF) {
-      throw;
-    }
-  }
-  if (!skipLF) {
-    setEOF();
-    delim = DelimTypeEOR;
-  }
-  return '\n';
 }
 
 template <bool skipLF>
