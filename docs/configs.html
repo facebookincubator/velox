@@ -1483,7 +1483,7 @@ execution. This is used for crash debugging.</p></td>
 </section>
 <section id="cudf-specific-configuration-experimental">
 <h2>Cudf-specific Configuration (Experimental)<a class="headerlink" href="#cudf-specific-configuration-experimental" title="Link to this heading">¶</a></h2>
-<p>These configurations are available when [compiled with cuDF](<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf">https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf</a>).
+<p>These configurations are available when <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf">compiled with cuDF</a>.
 Note: These configurations are experimental and subject to change.</p>
 <table class="docutils align-default">
 <colgroup>
@@ -1508,7 +1508,9 @@ Note: These configurations are experimental and subject to change.</p>
 <tr class="row-odd"><td><p>cudf.memory_resource</p></td>
 <td><p>string</p></td>
 <td><p>async</p></td>
-<td><p>The memory resource to use for cuDF. Possible values are (cuda, pool, async, arena, managed, managed_pool).</p></td>
+<td><p>The memory resource to use for cuDF. Possible values are (cuda, pool, async, arena, managed, managed_pool, prefetch_managed, prefetch_managed_pool).
+The prefetch options enable automatic prefetching for better GPU memory performance: prefetch_managed uses CUDA unified memory with prefetching,
+prefetch_managed_pool uses a pooled version of CUDA unified memory with prefetching.</p></td>
 </tr>
 <tr class="row-even"><td><p>cudf.memory_percent</p></td>
 <td><p>integer</p></td>
