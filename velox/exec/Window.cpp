@@ -16,12 +16,22 @@
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionStreamingWindowBuild.h"
-#include "velox/exec/RegionSortWindowBuild.h"
+#include "velox/exec/MultiGroupSortWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+common::PrefixSortConfig makePrefixSortConfig(const core::QueryConfig& queryConfig) {
+  return common::PrefixSortConfig{
+    queryConfig.prefixSortNormalizedKeyMaxBytes(),
+    queryConfig.prefixSortMinRows(),
+    queryConfig.prefixSortMaxStringPrefixLength()};
+}
+
+} // namespace
 
 Window::Window(
     int32_t operatorId,
@@ -56,17 +66,14 @@ Window::Window(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
   } else {
-    if (auto regionNum =
-            operatorCtx_->driverCtx()->queryConfig().windowRegionNum();
-        regionNum > 1) {
-      windowBuild_ = std::make_unique<RegionSortWindowBuild>(
+    if (auto numGroups =
+            operatorCtx_->driverCtx()->queryConfig().windowNumGroups();
+        numGroups > 1) {
+      windowBuild_ = std::make_unique<MultiGroupSortWindowBuild>(
           windowNode,
-          regionNum,
+          numGroups,
           pool(),
-          common::PrefixSortConfig{
-              driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
-              driverCtx->queryConfig().prefixSortMinRows(),
-              driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
+          makePrefixSortConfig(driverCtx->queryConfig()),
           spillConfig,
           &nonReclaimableSection_,
           &stats_,
@@ -75,10 +82,7 @@ Window::Window(
       windowBuild_ = std::make_unique<SortWindowBuild>(
           windowNode,
           pool(),
-          common::PrefixSortConfig{
-              driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
-              driverCtx->queryConfig().prefixSortMinRows(),
-              driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
+          makePrefixSortConfig(driverCtx->queryConfig()),
           spillConfig,
           &nonReclaimableSection_,
           &stats_,

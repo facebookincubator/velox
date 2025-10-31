@@ -431,16 +431,16 @@ DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
   ASSERT_TRUE(isStreamCreated.load());
 }
 
-TEST_F(WindowTest, regionBuild) {
+TEST_F(WindowTest, multiGroupSortBuild) {
   const vector_size_t size = 1'000;
-  const int partitionNum = 37;
-  const int regionNum = 4;
+  const int numPartitions = 37;
+  const int numGroups = 4;
   auto data = makeRowVector(
       {"p", "s"},
       {
           // Partition key.
           makeFlatVector<int16_t>(
-              size, [](auto row) { return row % partitionNum; }),
+              size, [](auto row) { return row % numPartitions; }),
           // Sorting key.
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
       });
@@ -453,20 +453,19 @@ TEST_F(WindowTest, regionBuild) {
           .values(split(data, 10))
           .window({"row_number() over (partition by p order by s desc)"})
           .capturePlanNodeId(windowId)
-          .orderBy({"s"}, false)
           .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kWindowRegionNum, std::to_string(regionNum))
+      .config(core::QueryConfig::kWindowNumGroups, std::to_string(numGroups))
       .assertResults(
           "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 }
 
 TEST_F(WindowTest, regionBuildWithSpill) {
   const vector_size_t size = 1'000;
-  const int partitionNum = 37;
-  const int regionNum = 4;
+  const int numPartitions = 37;
+  const int numGroups = 4;
   auto data = makeRowVector(
       {"d", "p", "s"},
       {
@@ -474,7 +473,7 @@ TEST_F(WindowTest, regionBuildWithSpill) {
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           // Partition key.
           makeFlatVector<int16_t>(
-              size, [](auto row) { return row % partitionNum; }),
+              size, [](auto row) { return row % numPartitions; }),
           // Sorting key.
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
       });
@@ -487,7 +486,6 @@ TEST_F(WindowTest, regionBuildWithSpill) {
           .values(split(data, 10))
           .window({"row_number() over (partition by p order by s desc)"})
           .capturePlanNodeId(windowId)
-          .orderBy({"s"}, false)
           .planNode();
 
   auto spillDirectory = TempDirectoryPath::create();
@@ -496,7 +494,7 @@ TEST_F(WindowTest, regionBuildWithSpill) {
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
           .config(
-              core::QueryConfig::kWindowRegionNum, std::to_string(regionNum))
+              core::QueryConfig::kWindowNumGroups, std::to_string(numGroups))
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .config(core::QueryConfig::kOrderBySpillEnabled, "false")

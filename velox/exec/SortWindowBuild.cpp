@@ -43,7 +43,7 @@ std::vector<CompareFlags> makeCompareFlags(
 SortWindowBuild::SortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
     velox::memory::MemoryPool* pool,
-    const common::PrefixSortConfig& prefixSortConfig,
+    common::PrefixSortConfig&& prefixSortConfig,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
     folly::Synchronized<OperatorStats>* opStats,
@@ -85,13 +85,12 @@ void SortWindowBuild::addInput(RowVectorPtr input) {
   numRows_ += input->size();
 }
 
-void SortWindowBuild::addInputRow(
+void SortWindowBuild::addDecodedInputRow(
     std::vector<DecodedVector>& decodedInputVectors,
-    size_t row,
-    size_t colNum) {
+    size_t row) {
   char* newRow = data_->newRow();
 
-  for (auto col = 0; col < colNum; ++col) {
+  for (auto col = 0; col < inputChannels_.size(); ++col) {
     data_->store(decodedInputVectors[col], row, newRow, col);
   }
 

@@ -23,14 +23,14 @@
 #include "velox/exec/WindowBuild.h"
 
 namespace facebook::velox::exec {
-// Divides the input data into several regions by partition keys, then sorts
+// Divides the input data into several groups by partition keys, then sorts
 // input data of the Window by {partition keys, sort keys} to identify window
 // partitions with SortWindowBuild.
-class RegionSortWindowBuild : public WindowBuild {
+class MultiGroupSortWindowBuild : public WindowBuild {
  public:
-  RegionSortWindowBuild(
+  MultiGroupSortWindowBuild(
       const std::shared_ptr<const core::WindowNode>& node,
-      int32_t numRegions,
+      int32_t numGroups,
       velox::memory::MemoryPool* pool,
       common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
@@ -38,13 +38,13 @@ class RegionSortWindowBuild : public WindowBuild {
       folly::Synchronized<OperatorStats>* opStats,
       folly::Synchronized<common::SpillStats>* spillStats);
 
-  ~RegionSortWindowBuild() override {
+  ~MultiGroupSortWindowBuild() override {
     pool_->release();
   }
 
   bool needsInput() override {
-    // No regions are available yet, so can consume input rows.
-    return currentRegion_ < 0;
+    // No groups are available yet, so can consume input rows.
+    return currentGroup_ < 0;
   }
 
   void addInput(RowVectorPtr input) override;
@@ -62,29 +62,32 @@ class RegionSortWindowBuild : public WindowBuild {
   std::optional<int64_t> estimateRowSize() override;
 
  private:
-  bool switchToNextRegion();
+  // The current group's WindowBuild has finished producing all the partitions.
+  // Release all the memory of current group's WindowBuild, and then switch to
+  // next group's WindowBuild as the new current one.
+  bool switchToNextGroup();
 
   void ensureInputFits(const RowVectorPtr& input);
 
-  const int32_t numRegions_;
+  const int32_t numGroups_;
 
   const size_t numPartitionKeys_;
 
-  std::unique_ptr<HashPartitionFunction> regionPartitionFunction_;
+  memory::MemoryPool* const pool_;
 
-  std::vector<std::unique_ptr<SortWindowBuild>> windowBuilds_;
+  folly::Synchronized<common::SpillStats>* const spillStats_;
+
+  // Partition each row to the corresponding group.
+  std::unique_ptr<HashPartitionFunction> groupPartitionFunction_;
+
+  // WindowBuilds for each group.
+  std::vector<std::unique_ptr<SortWindowBuild>> groupWindowBuilds_;
 
   bool spilled_{false};
 
-  std::vector<uint32_t> regionIdsBuffer_;
+  // Buffers the groupIds for each row. Reused across addInput callings.
+  std::vector<uint32_t> groupIdsBuffer_;
 
-  int32_t currentRegion_ = -1;
-
-  memory::MemoryPool* const pool_;
-
-  // Config for Prefix-sort.
-  const common::PrefixSortConfig prefixSortConfig_;
-
-  folly::Synchronized<common::SpillStats>* const spillStats_;
+  int32_t currentGroup_ = -1;
 };
 } // namespace facebook::velox::exec

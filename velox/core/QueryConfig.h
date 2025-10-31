@@ -490,11 +490,11 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
-  /// Number of regions when building window partitions. If region number is
-  /// greater than 1, window would divide data into multiple regions and compute
-  /// each region separately to accelerate computation and reduce memory usage.
-  static constexpr const char* kWindowRegionNum =
-      "window_region_num";
+  /// Number of groups when building window partitions. If group number is
+  /// greater than 1, window would divide data into multiple groups and compute
+  /// each group separately to accelerate computation and reduce memory usage.
+  static constexpr const char* kWindowNumGroups =
+      "window_num_groups";
 
   /// Maximum number of bytes to use for the normalized key in prefix-sort. Use
   /// 0 to disable prefix-sort.
@@ -1232,8 +1232,8 @@ class QueryConfig {
     return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
   }
 
-  uint32_t windowRegionNum() const {
-    return get<uint32_t>(kWindowRegionNum, 1);
+  uint32_t windowNumGroups() const {
+    return get<uint32_t>(kWindowNumGroups, 1);
   }
 
   uint32_t prefixSortNormalizedKeyMaxBytes() const {

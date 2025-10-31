@@ -29,7 +29,7 @@ class SortWindowBuild : public WindowBuild {
   SortWindowBuild(
       const std::shared_ptr<const core::WindowNode>& node,
       velox::memory::MemoryPool* pool,
-      const common::PrefixSortConfig& prefixSortConfig,
+      common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
       folly::Synchronized<OperatorStats>* opStats,
@@ -46,10 +46,9 @@ class SortWindowBuild : public WindowBuild {
 
   void addInput(RowVectorPtr input) override;
 
-  void addInputRow(
+  void addDecodedInputRow(
       std::vector<DecodedVector>& decodedInputVectors,
-      size_t row,
-      size_t colNum);
+      size_t row);
 
   void spill() override;
 

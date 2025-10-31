@@ -136,7 +136,7 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_window_regionsort_benchmark WindowRegionSortBenchmark.cpp)
+add_executable(velox_window_regionsort_benchmark WindowMultiGroupSortBenchmark.cpp)
 
 target_link_libraries(
   velox_window_regionsort_benchmark

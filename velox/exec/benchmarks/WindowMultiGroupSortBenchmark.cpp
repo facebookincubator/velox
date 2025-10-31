@@ -39,9 +39,9 @@ static constexpr int32_t kRowsPerVector = 1'0000;
 
 namespace {
 
-class WindowRegionSortBenchmark : public HiveConnectorTestBase {
+class WindowMultiGroupSortBenchmark : public HiveConnectorTestBase {
  public:
-  explicit WindowRegionSortBenchmark() {
+  explicit WindowMultiGroupSortBenchmark() {
     memory::SharedArbitrator::registerFactory();
     HiveConnectorTestBase::SetUp();
     aggregate::prestosql::registerAllAggregateFunctions();
@@ -119,7 +119,7 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
     writeToFile(sourceFilePath_->getPath(), inputVectors);
   }
 
-  ~WindowRegionSortBenchmark() override {
+  ~WindowMultiGroupSortBenchmark() override {
     HiveConnectorTestBase::TearDown();
   }
 
@@ -132,17 +132,17 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
   void run(
       const std::string& key,
       const std::string& aggregate,
-      bool regionSort = true) {
+      bool groupSort = true) {
     folly::BenchmarkSuspender suspender1;
 
-    if ((regionSort && !lastRunRegionSort_) ||
-        (!regionSort && lastRunRegionSort_)) {
+    if ((groupSort && !lastRunGroupSort_) ||
+        (!groupSort && lastRunGroupSort_)) {
       report();
       windowNanos_.clear();
       windowMems_.clear();
     }
 
-    lastRunRegionSort_ = regionSort;
+    lastRunGroupSort_ = groupSort;
     std::string functionSql = fmt::format(
         "{} over (partition by {} order by k_sort)", aggregate, key);
 
@@ -154,7 +154,7 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
                                   .planFragment();
 
     vector_size_t numResultRows = 0;
-    auto task = makeTask(plan, regionSort);
+    auto task = makeTask(plan, groupSort);
     task->addSplit(
         tableScanPlanId,
         exec::Split(makeHiveConnectorSplit(sourceFilePath_->getPath())));
@@ -187,10 +187,10 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
 
   std::shared_ptr<exec::Task> makeTask(
       core::PlanFragment plan,
-      bool regionSort) {
-    if (regionSort) {
+      bool groupSort) {
+    if (groupSort) {
       const std::unordered_map<std::string, std::string> queryConfigMap(
-          {{core::QueryConfig::kWindowRegionNum, std::to_string(numRegions_)}});
+          {{core::QueryConfig::kWindowNumGroups, std::to_string(numGroups_)}});
       return exec::Task::create(
           "t",
           std::move(plan),
@@ -222,18 +222,18 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
 
   CpuWallTiming windowNanos_;
   MemoryStats windowMems_;
-  bool lastRunRegionSort_;
+  bool lastRunGroupSort_;
 
-  static constexpr int numRegions_ = 32;
+  static constexpr int numGroups_ = 32;
 };
 
-std::unique_ptr<WindowRegionSortBenchmark> benchmark;
+std::unique_ptr<WindowMultiGroupSortBenchmark> benchmark;
 
 void doSortRun(uint32_t, const std::string& key, const std::string& aggregate) {
   benchmark->run(key, aggregate, false);
 }
 
-void doRegionSortRun(
+void doGroupSortRun(
     uint32_t,
     const std::string& key,
     const std::string& aggregate) {
@@ -247,7 +247,7 @@ void doRegionSortRun(
       #_key_,                                      \
       fmt::format("{}(i32)", (#_name_)));          \
   BENCHMARK_RELATIVE_NAMED_PARAM(                  \
-      doRegionSortRun,                             \
+      doGroupSortRun,                              \
       _name_##_INTEGER_##_key_,                    \
       #_key_,                                      \
       fmt::format("{}(i32)", (#_name_)));          \
@@ -257,7 +257,7 @@ void doRegionSortRun(
       #_key_,                                      \
       fmt::format("{}(f32)", (#_name_)));          \
   BENCHMARK_RELATIVE_NAMED_PARAM(                  \
-      doRegionSortRun,                             \
+      doGroupSortRun,                              \
       _name_##_REAL_##_key_,                       \
       #_key_,                                      \
       fmt::format("{}(f32)", (#_name_)));          \
@@ -267,7 +267,7 @@ void doRegionSortRun(
       #_key_,                                      \
       fmt::format("{}(i32_halfnull)", (#_name_))); \
   BENCHMARK_RELATIVE_NAMED_PARAM(                  \
-      doRegionSortRun,                             \
+      doGroupSortRun,                              \
       _name_##_INTEGER_NULLS_##_key_,              \
       #_key_,                                      \
       fmt::format("{}(i32_halfnull)", (#_name_))); \
@@ -277,7 +277,7 @@ void doRegionSortRun(
       #_key_,                                      \
       fmt::format("{}(f32_halfnull)", (#_name_))); \
   BENCHMARK_RELATIVE_NAMED_PARAM(                  \
-      doRegionSortRun,                             \
+      doGroupSortRun,                              \
       _name_##_REAL_NULLS_##_key_,                 \
       #_key_,                                      \
       fmt::format("{}(f32_halfnull)", (#_name_))); \
@@ -291,7 +291,7 @@ void doRegionSortRun(
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(i64)", (#_name_)));                \
   BENCHMARK_RELATIVE_NAMED_PARAM(                        \
-      doRegionSortRun,                                   \
+      doGroupSortRun,                                    \
       _name_##_BIGINT_##_key1_##_key2_,                  \
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(i64)", (#_name_)));                \
@@ -301,7 +301,7 @@ void doRegionSortRun(
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(i64_halfnull)", (#_name_)));       \
   BENCHMARK_RELATIVE_NAMED_PARAM(                        \
-      doRegionSortRun,                                   \
+      doGroupSortRun,                                    \
       _name_##_BIGINT_NULLS_##_key1_##_key2_,            \
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(i64_halfnull)", (#_name_)));       \
@@ -311,7 +311,7 @@ void doRegionSortRun(
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(f64)", (#_name_)));                \
   BENCHMARK_RELATIVE_NAMED_PARAM(                        \
-      doRegionSortRun,                                   \
+      doGroupSortRun,                                    \
       _name_##_DOUBLE_##_key1_##_key2_,                  \
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(f64)", (#_name_)));                \
@@ -321,7 +321,7 @@ void doRegionSortRun(
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(f64_halfnull)", (#_name_)));       \
   BENCHMARK_RELATIVE_NAMED_PARAM(                        \
-      doRegionSortRun,                                   \
+      doGroupSortRun,                                    \
       _name_##_DOUBLE_NULLS_##_key1_##_key2_,            \
       fmt::format("{},{}", (#_key1_), (#_key2_)),        \
       fmt::format("{}(f64_halfnull)", (#_name_)));       \
@@ -331,19 +331,19 @@ void doRegionSortRun(
 // Count(1) aggregate.
 BENCHMARK_NAMED_PARAM(doSortRun, count_k_array, "k_array", "count(1)");
 BENCHMARK_RELATIVE_NAMED_PARAM(
-    doRegionSortRun,
+    doGroupSortRun,
     count_k_array,
     "k_array",
     "count(1)");
 BENCHMARK_NAMED_PARAM(doSortRun, count_k_norm, "k_norm", "count(1)");
 BENCHMARK_RELATIVE_NAMED_PARAM(
-    doRegionSortRun,
+    doGroupSortRun,
     count_k_norm,
     "k_norm",
     "count(1)");
 BENCHMARK_NAMED_PARAM(doSortRun, count_k_hash, "k_hash", "count(1)");
 BENCHMARK_RELATIVE_NAMED_PARAM(
-    doRegionSortRun,
+    doGroupSortRun,
     count_k_hash,
     "k_hash",
     "count(1)");
@@ -353,7 +353,7 @@ BENCHMARK_NAMED_PARAM(
     "k_array,i32",
     "count(1)");
 BENCHMARK_RELATIVE_NAMED_PARAM(
-    doRegionSortRun,
+    doGroupSortRun,
     count_k_array_k_hash,
     "k_array,i64",
     "count(1)");
@@ -406,7 +406,7 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
-  benchmark = std::make_unique<WindowRegionSortBenchmark>();
+  benchmark = std::make_unique<WindowMultiGroupSortBenchmark>();
   folly::runBenchmarks();
   benchmark->report();
   benchmark.reset();
