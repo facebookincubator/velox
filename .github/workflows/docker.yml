@@ -206,7 +206,63 @@ jobs:
           rm /tmp/centos9.tar
 
       - name: Build and Push
+        id: bake
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6.9.0
         with:
           targets: ${{ matrix.target }}
-          push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
+          push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'XXXpull_request'}}
+
+      - name: Export digests
+        env:
+          METADATA: ${{ steps.bake.outputs.metadata }}
+          DIGEST_DIR: ${{ runner.temp }}/dependent_digests
+        run: |
+          mkdir -p "$DIGEST_DIR"
+          cd "$DIGEST_DIR" || exit 1
+          # Add the target for any images that shouldn't be build as multi-platform
+          # into the skip list
+          echo "$METADATA" | to_entries[] | .key | split("-")[0] |
+            if . as $name | skip | index($name) != null then empty else . end' | \
+            while read -r image_name; do
+              touch "$image_name"
+            done
+          ls -la
+
+      - name: Upload digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ matrix.target }}
+          path: ${{ runner.temp }}/dependent_digests/*
+          retention-days: 1
+
+  merge-dependent-images:
+    if: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'XXXpull_request'}}
+    needs: dependent-images
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/dependent_digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/dependent_digests
+        run: |
+          ls -laR
+
+          for file in *; do
+            image_name="$BASE_NAME/velox-dev:$file"
+
+            docker buildx imagetools create -t "$image_name"
+          done
