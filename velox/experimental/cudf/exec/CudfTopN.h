@@ -73,6 +73,7 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   // the topNBatches_ and get the topN rows.
   // config value kCudfTopKBatchSize is maximum number of batches to hold.
   std::vector<CudfVectorPtr> topNBatches_;
+  int32_t kBatchSize_{5};
   bool finished_ = false;
 };
 } // namespace facebook::velox::cudf_velox

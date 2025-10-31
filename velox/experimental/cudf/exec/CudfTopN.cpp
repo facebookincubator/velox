@@ -13,9 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfQueryConfig.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
@@ -39,6 +38,8 @@ CudfTopN::CudfTopN(
           fmt::format("[{}]", topNNode->id())),
       count_(topNNode->count()),
       topNNode_(topNNode) {
+  kBatchSize_ = driverCtx->queryConfig().get<int32_t>(
+      CudfQueryConfig::kCudfTopNBatchSize, kBatchSize_);
   const auto numColumns{outputType_->children().size()};
   const auto numSortingKeys{topNNode->sortingKeys().size()};
   std::vector<bool> isSortingKey(numColumns);
@@ -98,7 +99,6 @@ std::unique_ptr<cudf::table> CudfTopN::getTopK(
   auto keys = values.select(sortKeys_);
   auto const indices =
       cudf::stable_sorted_order(keys, columnOrder_, nullOrder_, stream, mr);
-  k = std::min(k, values.num_rows());
   auto const kIndices =
       cudf::split(indices->view(), {std::min(k, indices->size())}, stream)
           .front();
@@ -137,7 +137,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Take topk of each input, add to batch.
-  // If got kBatchSize batches, concat batches and topk once.
+  // If got kBatchSize_ batches, concat batches and topk once.
   // During getOutput, concat batches and topk once.
   topNBatches_.push_back(getTopKBatch(cudfInput, count_));
   // sum of sizes of topNBatches_ >= count_, then concat and topk once.
@@ -148,9 +148,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
       [](int32_t sum, const auto& batch) {
         return sum + (batch ? batch->size() : 0);
       });
-  auto const kBatchSize = operatorCtx_->driverCtx()->queryConfig().get<int32_t>(
-      CudfConfig::kCudfTopKBatchSize, 5);
-  if (topNBatches_.size() >= kBatchSize and totalSize >= count_) {
+  if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
