@@ -51,12 +51,12 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
       accountNameWithSuffixForUrl.replace(startPos, 3, "blob");
     }
   }
-  
+
   const std::string protocol = isHttps_ ? "https" : "http";
   auto url = Azure::Core::Url(
       fmt::format("{}://{}", protocol, accountNameWithSuffixForUrl));
-  url.AppendPath(Azure::Core::Url::Encode(fileSystem_));
-  url.AppendPath(Azure::Core::Url::Encode(filePath_));
+  url.AppendPath(Azure::Core::Url::Encode(fileSystem_, "/"));
+  url.AppendPath(Azure::Core::Url::Encode(filePath_, "/"));
   return url.GetAbsoluteUrl();
 }
 
