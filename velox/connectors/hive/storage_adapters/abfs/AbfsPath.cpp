@@ -36,10 +36,10 @@ AbfsPath::AbfsPath(std::string_view path) {
 
   auto firstAt = file.find_first_of("@");
   fileSystem_ = Azure::Storage::_internal::UrlEncodePath(
-      Azure::Core::Url::Decode(file.substr(0, firstAt)));
+      Azure::Core::Url::Decode(std::string(file.substr(0, firstAt))));
   auto firstSep = file.find_first_of("/");
   filePath_ = Azure::Storage::_internal::UrlEncodePath(
-      Azure::Core::Url::Decode(file.substr(firstSep + 1)));
+      Azure::Core::Url::Decode(std::string(file.substr(firstSep + 1))));
 
   accountNameWithSuffix_ = file.substr(firstAt + 1, firstSep - firstAt - 1);
   auto firstDot = accountNameWithSuffix_.find_first_of(".");
