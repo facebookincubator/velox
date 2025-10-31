@@ -26,13 +26,12 @@
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "folly/Conv.h"
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
@@ -124,12 +123,11 @@ bool CompileState::compile(bool allow_cpu_fallback) {
       auto filterNode = filterProjectOp->filterNode();
       bool canBeEvaluated = true;
       if (projectPlanNode &&
-          !ExpressionEvaluator::canBeEvaluated(
-              projectPlanNode->projections())) {
+          !canBeEvaluatedByCudf(projectPlanNode->projections())) {
         canBeEvaluated = false;
       }
       if (canBeEvaluated && filterNode &&
-          !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
+          !canBeEvaluatedByCudf({filterNode->filter()})) {
         canBeEvaluated = false;
       }
       return canBeEvaluated;
@@ -456,6 +454,11 @@ void registerCudf() {
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+
+  if (CudfConfig::getInstance().astExpressionEnabled) {
+    registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -494,6 +497,13 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
+  }
+  if (config.find(kCudfAstExpressionEnabled) != config.end()) {
+    astExpressionEnabled = folly::to<bool>(config[kCudfAstExpressionEnabled]);
+  }
+  if (config.find(kCudfAstExpressionPriority) != config.end()) {
+    astExpressionPriority =
+        folly::to<int32_t>(config[kCudfAstExpressionPriority]);
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);

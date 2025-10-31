@@ -75,6 +75,7 @@ velox_link_libraries(
   velox_presto_types
   velox_functions_util
   Folly::folly
+  FastFloat::fast_float
   stemmer::stemmer
 )
 
