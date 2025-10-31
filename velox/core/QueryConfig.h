@@ -493,8 +493,7 @@ class QueryConfig {
   /// Number of groups when building window partitions. If group number is
   /// greater than 1, window would divide data into multiple groups and compute
   /// each group separately to accelerate computation and reduce memory usage.
-  static constexpr const char* kWindowNumGroups =
-      "window_num_groups";
+  static constexpr const char* kWindowNumGroups = "window_num_groups";
 
   /// Maximum number of bytes to use for the normalized key in prefix-sort. Use
   /// 0 to disable prefix-sort.

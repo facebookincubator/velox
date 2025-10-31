@@ -20,7 +20,6 @@
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/Spiller.h"
-#include "velox/exec/WindowBuild.h"
 
 namespace facebook::velox::exec {
 // Divides the input data into several groups by partition keys, then sorts

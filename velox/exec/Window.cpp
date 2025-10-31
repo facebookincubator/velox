@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include "velox/exec/MultiGroupSortWindowBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionStreamingWindowBuild.h"
-#include "velox/exec/MultiGroupSortWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -24,11 +24,12 @@
 namespace facebook::velox::exec {
 
 namespace {
-common::PrefixSortConfig makePrefixSortConfig(const core::QueryConfig& queryConfig) {
+common::PrefixSortConfig makePrefixSortConfig(
+    const core::QueryConfig& queryConfig) {
   return common::PrefixSortConfig{
-    queryConfig.prefixSortNormalizedKeyMaxBytes(),
-    queryConfig.prefixSortMinRows(),
-    queryConfig.prefixSortMaxStringPrefixLength()};
+      queryConfig.prefixSortNormalizedKeyMaxBytes(),
+      queryConfig.prefixSortMinRows(),
+      queryConfig.prefixSortMaxStringPrefixLength()};
 }
 
 } // namespace
