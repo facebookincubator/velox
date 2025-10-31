@@ -206,7 +206,7 @@ jobs:
           rm /tmp/centos9.tar
 
       - name: Build and Push
-        uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6.9.0
+        uses: docker/build-push-action@v6
         with:
           targets: ${{ matrix.target }}
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
