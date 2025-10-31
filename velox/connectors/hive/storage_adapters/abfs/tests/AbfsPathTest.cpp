@@ -22,7 +22,7 @@
 using namespace facebook::velox::filesystems;
 
 TEST(AbfsPathTest, encodedPath) {
-    auto abfssAccountWithSpecialCharacters = AbfsPath(
+  auto abfssAccountWithSpecialCharacters = AbfsPath(
       "abfss://testc@test.dfs.core.windows.net/main@dir/brand#51/sub dir/test.txt");
   EXPECT_EQ(
       abfssAccountWithSpecialCharacters.accountNameWithSuffix(),
