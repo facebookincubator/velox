@@ -1,0 +1,38 @@
+diff --git a/.pre-commit-config.yaml b/.pre-commit-config.yaml
+index 519d2dfe0..52c501f74 100644
+--- a/.pre-commit-config.yaml
++++ b/.pre-commit-config.yaml
+@@ -84,14 +84,14 @@ repos:
+     rev: v0.14.3
+     hooks:
+       - id: ruff-check
+-        args: [--fix]
++        args: [--output-format, github]
+       - id: ruff-format
+ 
+   - repo: https://github.com/shellcheck-py/shellcheck-py
+     rev: v0.11.0.1
+     hooks:
+       - id: shellcheck
+-        args: [-x, --severity=info]
++        args: [-x, --severity=info, -f, gcc]
+ 
+   - repo: https://github.com/scop/pre-commit-shfmt
+     rev: v3.12.0-2
+@@ -105,7 +105,7 @@ repos:
+     rev: v1.37.1
+     hooks:
+       - id: yamllint
+-        args: [--format, auto, --strict]
++        args: [--format, github, --strict]
+         exclude: .*\.clang-(tidy|format)
+ 
+   - repo: https://github.com/google/yamlfmt
+@@ -118,6 +118,7 @@ repos:
+     rev: v1.16.1
+     hooks:
+       - id: zizmor
++        args: [--format, github, --no-progress]
+ 
+   - repo: https://github.com/mpalmer/action-validator
+     rev: v0.8.0
