@@ -158,8 +158,7 @@ class CountDistinctAggregate
 };
 
 template <
-    template <typename T, typename AccumulatorType>
-    class Aggregate,
+    template <typename T, typename AccumulatorType> class Aggregate,
     TypeKind Kind>
 std::unique_ptr<exec::Aggregate> create(const TypePtr& resultType) {
   return std::make_unique<Aggregate<
@@ -167,8 +166,9 @@ std::unique_ptr<exec::Aggregate> create(const TypePtr& resultType) {
       aggregate::prestosql::CustomComparisonSetAccumulator<Kind>>>(resultType);
 }
 
-template <template <typename T, typename AcumulatorType = SetAccumulator<T>>
-          class Aggregate>
+template <template <
+    typename T,
+    typename AcumulatorType = SetAccumulator<T>> class Aggregate>
 std::unique_ptr<exec::Aggregate> create(
     const TypePtr& inputType,
     const TypePtr& resultType) {

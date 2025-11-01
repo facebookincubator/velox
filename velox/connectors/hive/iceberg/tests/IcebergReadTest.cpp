@@ -270,18 +270,19 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     splits.reserve(splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
-          kHiveConnectorId,
-          dataFilePath,
-          fileFomat_,
-          i * splitSize,
-          splitSize,
-          partitionKeys,
-          std::nullopt,
-          customSplitInfo,
-          nullptr,
-          /*cacheable=*/true,
-          deleteFiles));
+      splits.emplace_back(
+          std::make_shared<HiveIcebergSplit>(
+              kHiveConnectorId,
+              dataFilePath,
+              fileFomat_,
+              i * splitSize,
+              splitSize,
+              partitionKeys,
+              std::nullopt,
+              customSplitInfo,
+              nullptr,
+              /*cacheable=*/true,
+              deleteFiles));
     }
 
     return splits;
@@ -914,51 +915,6 @@ TEST_F(HiveIcebergTest, partitionColumnsFromHive) {
       }));
 
   // Read with table schema including partition columns.
-  auto plan = PlanBuilder()
-                  .tableScan(tableRowType, {}, "", tableRowType, assignments)
-                  .planNode();
-  AssertQueryBuilder(plan).splits(icebergSplits).assertResults(expectedVectors);
-}
-
-TEST_F(HiveIcebergTest, mixedScenario) {
-  auto fileRowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
-  auto tableRowType =
-      ROW({"c0", "c1", "c2", "region"},
-          {BIGINT(), VARCHAR(), INTEGER(), DECIMAL(38, 5)});
-
-  // Write data file with c0 and c1.
-  std::vector<RowVectorPtr> dataVectors;
-  dataVectors.push_back(makeRowVector({
-      makeFlatVector<int64_t>({100, 200}),
-      makeFlatVector<std::string>({"a", "b"}),
-  }));
-  auto dataFilePath = TempFilePath::create();
-  writeToFile(dataFilePath->getPath(), dataVectors);
-
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  partitionKeys["region"] = "12345.67890";
-
-  auto icebergSplits =
-      makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
-  auto assignments = makeColumnHandles(tableRowType, {3});
-
-  // Expected result:
-  // - c0, c1: from file.
-  // - c2: NULL (schema evolution).
-  // - region: from partition keys (DECIMAL(38,5) = 12345.67890).
-  std::vector<RowVectorPtr> expectedVectors;
-  expectedVectors.push_back(makeRowVector(
-      tableRowType->names(),
-      {
-          dataVectors[0]->childAt(0),
-          dataVectors[0]->childAt(1),
-          makeNullConstant(TypeKind::INTEGER, 2),
-          makeFlatVector<int128_t>(
-              {1'234'567'890, 1'234'567'890}, DECIMAL(38, 5)),
-      }));
-
-  // Read with table schema: c0, c1 (from file), c2 (new column), region
-  // (partition).
   auto plan = PlanBuilder()
                   .tableScan(tableRowType, {}, "", tableRowType, assignments)
                   .planNode();

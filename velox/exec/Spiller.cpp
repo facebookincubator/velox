@@ -154,8 +154,9 @@ void SpillerBase::runSpill(bool lastRun) {
     if (spillRun.rows.empty()) {
       continue;
     }
-    writes.push_back(memory::createAsyncMemoryReclaimTask<SpillStatus>(
-        [partitionId = id, this]() { return writeSpill(partitionId); }));
+    writes.push_back(
+        memory::createAsyncMemoryReclaimTask<SpillStatus>(
+            [partitionId = id, this]() { return writeSpill(partitionId); }));
     if ((writes.size() > 1) && executor_ != nullptr) {
       executor_->add([source = writes.back()]() { source->prepare(); });
     }

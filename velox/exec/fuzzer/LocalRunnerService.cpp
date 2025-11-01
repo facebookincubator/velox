@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/exec/fuzzer/if/gen-cpp2/LocalRunnerService.h"
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
 #include <folly/json.h>
@@ -21,12 +22,11 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
-
-#include "velox/core/QueryCtx.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/ByteStream.h"
 #include "velox/exec/fuzzer/LocalRunnerService.h"
-#include "velox/exec/fuzzer/if/gen-cpp2/LocalRunnerService.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/expression/EvalCtx.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::runner;
@@ -84,217 +84,32 @@ std::pair<RowVectorPtr, std::string> execute(
 
 } // namespace
 
-ScalarValue getScalarValue(const VectorPtr& vector, vector_size_t rowIdx) {
-  ScalarValue scalar;
+std::string serializeBatch(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool* pool) {
+  std::ostringstream out;
 
-  switch (vector->typeKind()) {
-    case TypeKind::BOOLEAN:
-      scalar.boolValue_ref() =
-          vector->as<SimpleVector<bool>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::TINYINT:
-      scalar.tinyintValue_ref() =
-          vector->as<SimpleVector<int8_t>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::SMALLINT:
-      scalar.smallintValue_ref() =
-          vector->as<SimpleVector<int16_t>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::INTEGER:
-      scalar.integerValue_ref() =
-          vector->as<SimpleVector<int32_t>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::BIGINT:
-      scalar.bigintValue_ref() =
-          vector->as<SimpleVector<int64_t>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::REAL:
-      scalar.realValue_ref() =
-          vector->as<SimpleVector<float>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::DOUBLE:
-      scalar.doubleValue_ref() =
-          vector->as<SimpleVector<double>>()->valueAt(rowIdx);
-      break;
-    case TypeKind::VARCHAR:
-      scalar.varcharValue_ref() =
-          vector->as<SimpleVector<StringView>>()->valueAt(rowIdx).str();
-      break;
-    case TypeKind::VARBINARY: {
-      const auto& binValue =
-          vector->as<SimpleVector<StringView>>()->valueAt(rowIdx);
-      scalar.varbinaryValue_ref() =
-          std::string(binValue.data(), binValue.size());
-      break;
-    }
-    case TypeKind::TIMESTAMP: {
-      const auto& ts =
-          vector->as<SimpleVector<facebook::velox::Timestamp>>()->valueAt(
-              rowIdx);
-      facebook::velox::runner::Timestamp timestampValue;
-      timestampValue.seconds_ref() = ts.getSeconds();
-      timestampValue.nanos_ref() = ts.getNanos();
-      scalar.timestampValue_ref() = std::move(timestampValue);
-      break;
-    }
-    case TypeKind::HUGEINT: {
-      const auto& hugeint =
-          vector->as<SimpleVector<int128_t>>()->valueAt(rowIdx);
-      facebook::velox::runner::i128 hugeintValue;
-      hugeintValue.msb_ref() = static_cast<int64_t>(hugeint >> 64);
-      hugeintValue.lsb_ref() =
-          static_cast<int64_t>(hugeint & 0xFFFFFFFFFFFFFFFFULL);
-      scalar.hugeintValue_ref() = std::move(hugeintValue);
-      break;
-    }
-    default:
-      VELOX_FAIL(fmt::format("Unsupported scalar type: {}", vector->type()));
-  }
+  OStreamOutputStream outputStream(&out);
 
-  return scalar;
-}
+  auto serde = std::make_unique<serializer::presto::PrestoVectorSerde>();
+  serializer::presto::PrestoVectorSerde::PrestoOptions options;
 
-ComplexValue getComplexValue(
-    const VectorPtr& vector,
-    vector_size_t rowIdx,
-    const exec::EvalCtx& evalCtx) {
-  ComplexValue complex;
+  auto serializer = serde->createBatchSerializer(pool, &options);
+  serializer->serialize(rowVector, &outputStream);
 
-  exec::LocalDecodedVector decoder(
-      evalCtx, *vector, SelectivityVector(vector->size()));
-  auto& decoded = *decoder.get();
-  rowIdx = decoded.index(rowIdx);
-
-  switch (vector->typeKind()) {
-    case TypeKind::ARRAY: {
-      auto arrayVector = decoded.base()->as<ArrayVector>();
-      auto elements = arrayVector->elements();
-      auto offset = arrayVector->offsetAt(rowIdx);
-      auto size = arrayVector->sizeAt(rowIdx);
-
-      facebook::velox::runner::Array arrayValue;
-
-      for (auto i = 0; i < size; ++i) {
-        auto elementIdx = offset + i;
-
-        Value elementValue;
-        if (elements->isNullAt(elementIdx)) {
-          elementValue.isNull() = true;
-        } else {
-          elementValue = convertValue(elements, elementIdx, evalCtx);
-        }
-        arrayValue.values()->push_back(std::move(elementValue));
-      }
-
-      complex.arrayValue_ref() = std::move(arrayValue);
-      break;
-    }
-    case TypeKind::MAP: {
-      auto mapVector = decoded.base()->as<MapVector>();
-      auto keys = mapVector->mapKeys();
-      auto values = mapVector->mapValues();
-      auto offset = mapVector->offsetAt(rowIdx);
-      auto size = mapVector->sizeAt(rowIdx);
-
-      facebook::velox::runner::Map mapValue;
-
-      for (auto i = 0; i < size; ++i) {
-        Value keyValue, valueValue;
-
-        VELOX_CHECK(!(keys->isNullAt(offset + i)), "Map key cannot be null");
-        keyValue = convertValue(keys, offset + i, evalCtx);
-        if (values->isNullAt(offset + i)) {
-          valueValue.isNull() = true;
-        } else {
-          valueValue = convertValue(values, offset + i, evalCtx);
-        }
-        (*mapValue.values())[std::move(keyValue)] = std::move(valueValue);
-      }
-
-      complex.mapValue_ref() = std::move(mapValue);
-      break;
-    }
-    case TypeKind::ROW: {
-      auto rowVector = decoded.base()->as<RowVector>();
-      facebook::velox::runner::Row rowValue;
-
-      for (auto i = 0; i < rowVector->childrenSize(); ++i) {
-        auto childVector = rowVector->childAt(i);
-
-        Value fieldValue;
-        if (childVector->isNullAt(rowIdx)) {
-          fieldValue.isNull() = true;
-        } else {
-          fieldValue = convertValue(childVector, rowIdx, evalCtx);
-        }
-        rowValue.fieldValues()->push_back(std::move(fieldValue));
-      }
-
-      complex.rowValue_ref() = std::move(rowValue);
-      break;
-    }
-    default:
-      VELOX_FAIL(fmt::format("Unsupported complex type: {}", vector->type()));
-  }
-
-  return complex;
-}
-
-Value convertValue(
-    const VectorPtr& vector,
-    vector_size_t rowIdx,
-    const exec::EvalCtx& evalCtx) {
-  Value value;
-  if (vector->isNullAt(rowIdx)) {
-    value.isNull() = true;
-  } else {
-    value.isNull() = false;
-    switch (vector->typeKind()) {
-      case TypeKind::BOOLEAN:
-      case TypeKind::TINYINT:
-      case TypeKind::SMALLINT:
-      case TypeKind::INTEGER:
-      case TypeKind::BIGINT:
-      case TypeKind::REAL:
-      case TypeKind::DOUBLE:
-      case TypeKind::VARCHAR:
-      case TypeKind::VARBINARY:
-      case TypeKind::TIMESTAMP:
-      case TypeKind::HUGEINT:
-        value.scalarValue_ref() = getScalarValue(vector, rowIdx);
-        break;
-      case TypeKind::ARRAY:
-      case TypeKind::MAP:
-      case TypeKind::ROW:
-        value.complexValue_ref() = getComplexValue(vector, rowIdx, evalCtx);
-        break;
-      default:
-        VELOX_FAIL(fmt::format("Unsupported type: {}", vector->type()));
-    }
-  }
-  return value;
-}
-
-std::vector<Value> convertVector(
-    const VectorPtr& vector,
-    vector_size_t size,
-    const exec::EvalCtx& evalCtx) {
-  std::vector<Value> rows;
-  for (vector_size_t rowIdx = 0; rowIdx < size; ++rowIdx) {
-    Value value = convertValue(vector, rowIdx, evalCtx);
-    rows.push_back(value);
-  }
-  return rows;
+  return out.str();
 }
 
 std::vector<Batch> convertToBatches(
     const std::vector<RowVectorPtr>& rowVectors,
-    const exec::EvalCtx& evalCtx) {
+    memory::MemoryPool* pool) {
   std::vector<Batch> results;
 
   if (rowVectors.empty()) {
     return results;
   }
+
+  auto leafPool = pool->addLeafChild("batchSerialization");
 
   for (const auto& rowVector : rowVectors) {
     Batch result;
@@ -305,15 +120,8 @@ std::vector<Batch> convertToBatches(
       result.columnTypes()->push_back(rowType.childAt(i)->toString());
     }
 
-    result.numRows() = rowVector->size();
-
-    const auto numColumns = rowVector->childrenSize();
-    result.columns()->resize(numColumns);
-
-    for (auto colIdx = 0; colIdx < numColumns; ++colIdx) {
-      (*result.columns())[colIdx].rows() =
-          convertVector(rowVector->childAt(colIdx), rowVector->size(), evalCtx);
-    }
+    std::string serializedData = serializeBatch(rowVector, leafPool.get());
+    result.serializedData() = std::move(serializedData);
 
     results.push_back(std::move(result));
   }
@@ -326,8 +134,8 @@ void LocalRunnerServiceHandler::execute(
     std::unique_ptr<ExecutePlanRequest> request) {
   VLOG(1) << "Received executePlan request";
 
-  std::shared_ptr<memory::MemoryPool> pool =
-      memory::memoryManager()->addLeafPool();
+  auto rootPool = memory::memoryManager()->addRootPool();
+  auto pool = rootPool->addLeafChild("localRunnerHandler");
 
   RowVectorPtr results;
   std::string output;
@@ -348,12 +156,8 @@ void LocalRunnerServiceHandler::execute(
     return;
   }
 
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx(pool.get(), queryCtx.get());
-  exec::EvalCtx evalCtx(&execCtx);
-
   VLOG(1) << "Converting results to Thrift response";
-  auto resultBatches = convertToBatches({results}, evalCtx);
+  auto resultBatches = convertToBatches({results}, rootPool.get());
   response.results() = std::move(resultBatches);
   response.output() = output;
   response.success() = true;

@@ -259,12 +259,14 @@ void NimbleReaderVerifier::verify(
 
       if (childSpec && childSpec->projectOut()) {
         // This column should be projected out - wrap with dictionary
-        filteredChildren.push_back(BaseVector::wrapInDictionary(
-            nullptr, indices, selectedCount, input->childAt(i)));
+        filteredChildren.push_back(
+            BaseVector::wrapInDictionary(
+                nullptr, indices, selectedCount, input->childAt(i)));
       } else {
         // This column is not projected out - create null constant
-        filteredChildren.push_back(BaseVector::createNullConstant(
-            input->childAt(i)->type(), selectedCount, input->pool()));
+        filteredChildren.push_back(
+            BaseVector::createNullConstant(
+                input->childAt(i)->type(), selectedCount, input->pool()));
       }
     }
 

@@ -491,8 +491,9 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
-      type, std::vector<std::string>({"col_string", "col_map"})));
+  rowOptions.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          type, std::vector<std::string>({"col_string", "col_map"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
   VectorPtr result;
@@ -591,8 +592,10 @@ TEST_F(TextReaderTest, projectPrimitiveTypes) {
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
-      type, std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
+  rowOptions.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          type,
+          std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
   VectorPtr result;
@@ -654,8 +657,9 @@ TEST_F(TextReaderTest, projectColumns) {
   spec->addField("col_float", 1);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
-      type, std::vector<std::string>({"col_float"})));
+  rowOptions.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          type, std::vector<std::string>({"col_float"})));
   auto rowReader = reader->createRowReader(rowOptions);
   VectorPtr result;
   ASSERT_EQ(rowReader->next(10, result), 10);
@@ -773,8 +777,9 @@ TEST_F(TextReaderTest, compressedFilter) {
       BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
   spec->addField("col_int", 1);
   spec->getOrCreateChild(common::Subfield("col_string"))
-      ->setFilter(std::make_unique<common::BytesValues>(
-          std::vector<std::string>({"BAR"}), false));
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>({"BAR"}), false));
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
   rowOptions.select(
@@ -818,8 +823,9 @@ TEST_F(TextReaderTest, filter) {
       BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
   spec->addField("col_big_int", 1);
   spec->getOrCreateChild(common::Subfield("col_string"))
-      ->setFilter(std::make_unique<common::BytesValues>(
-          std::vector<std::string>({"BAR", "BAZ"}), false));
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>({"BAR", "BAZ"}), false));
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
@@ -1903,6 +1909,31 @@ INSTANTIATE_TEST_SUITE_P(
     TextReaderDecompressionTest,
     testing::ValuesIn(params),
     [](const auto& paramInfo) { return paramInfo.param.compression; });
+
+TEST_F(TextReaderTest, unsupportedCompressedKind) {
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  const std::string kBaseDir = "velox/dwio/text/tests/reader/";
+  std::vector paths = {
+      getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lz4"),
+      getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lzo"),
+      getDataFilePath(
+          kBaseDir, "examples/simple_types_compressed_file.snappy")};
+  for (const auto& path : paths) {
+    auto readFile = std::make_shared<LocalReadFile>(path);
+    auto readerOptions = dwio::common::ReaderOptions(pool());
+    readerOptions.setFileSchema(type);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    EXPECT_THROW(
+        factory->createReader(std::move(input), readerOptions),
+        VeloxRuntimeError);
+  }
+}
 
 } // namespace
 

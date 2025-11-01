@@ -122,11 +122,12 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
       // results if we use local time.
       const tz::TimeZone* timeZone =
           tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
-      auto originalTimestamp =
-          Timestamp::fromMillis(timeZone
-                                    ->to_local(std::chrono::milliseconds(
-                                        unpackMillisUtc(timestampWithTimezone)))
-                                    .count());
+      auto originalTimestamp = Timestamp::fromMillis(
+          timeZone
+              ->to_local(
+                  std::chrono::milliseconds(
+                      unpackMillisUtc(timestampWithTimezone)))
+              .count());
       auto updatedTimeStamp =
           addToTimestamp(originalTimestamp, unit, (int32_t)value);
       updatedTimeStamp = Timestamp(
@@ -171,15 +172,17 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     // doesn't affect time units less than a day, and will produce incorrect
     // results if we use local time.
     const tz::TimeZone* timeZone = tz::locateZone(fromTimeZoneId);
-    fromTimestamp = Timestamp::fromMillis(
-        timeZone
-            ->to_local(std::chrono::milliseconds(
-                unpackMillisUtc(fromTimestampWithTimeZone)))
-            .count());
+    fromTimestamp =
+        Timestamp::fromMillis(timeZone
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          fromTimestampWithTimeZone)))
+                                  .count());
     toTimestamp =
         Timestamp::fromMillis(timeZone
-                                  ->to_local(std::chrono::milliseconds(
-                                      unpackMillisUtc(toTimestampWithTimeZone)))
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          toTimestampWithTimeZone)))
                                   .count());
   }
 

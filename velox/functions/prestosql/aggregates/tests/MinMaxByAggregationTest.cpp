@@ -722,11 +722,12 @@ class MinMaxByGroupByAggregationTest
           aggregate,
           groupByColumnName);
     }
-    SCOPED_TRACE(fmt::format(
-        "{} GROUP BY {}\nverifyDuckDbSql: {}",
-        aggregate,
-        groupByColumnName,
-        verifyDuckDbSql));
+    SCOPED_TRACE(
+        fmt::format(
+            "{} GROUP BY {}\nverifyDuckDbSql: {}",
+            aggregate,
+            groupByColumnName,
+            verifyDuckDbSql));
     testAggregations(
         vectors, {groupByColumnName}, {aggregate}, {}, verifyDuckDbSql);
   }
@@ -2507,32 +2508,33 @@ TEST_F(MinMaxByTest, nans) {
 }
 
 TEST_F(MinMaxByTest, TimestampWithTimezone) {
-  auto data = makeRowVector({// output column for min_by/max_by
-                             makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
-                             // group by column
-                             makeFlatVector<int32_t>({1, 2, 2, 1, 1, 1, 2, 2}),
-                             // regular ordering
-                             makeFlatVector<int64_t>(
-                                 {pack(-1, 2),
-                                  pack(-3, 1),
-                                  pack(0, 4),
-                                  pack(2, 4),
-                                  pack(3, 1),
-                                  pack(-4, 5),
-                                  pack(1, 3),
-                                  pack(4, 0)},
-                                 TIMESTAMP_WITH_TIME_ZONE()),
-                             // with nulls
-                             makeNullableFlatVector<int64_t>(
-                                 {pack(-1, 2),
-                                  std::nullopt,
-                                  pack(0, 4),
-                                  pack(2, 4),
-                                  pack(3, 1),
-                                  std::nullopt,
-                                  pack(1, 3),
-                                  pack(4, 0)},
-                                 TIMESTAMP_WITH_TIME_ZONE())});
+  auto data = makeRowVector(
+      {// output column for min_by/max_by
+       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
+       // group by column
+       makeFlatVector<int32_t>({1, 2, 2, 1, 1, 1, 2, 2}),
+       // regular ordering
+       makeFlatVector<int64_t>(
+           {pack(-1, 2),
+            pack(-3, 1),
+            pack(0, 4),
+            pack(2, 4),
+            pack(3, 1),
+            pack(-4, 5),
+            pack(1, 3),
+            pack(4, 0)},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       // with nulls
+       makeNullableFlatVector<int64_t>(
+           {pack(-1, 2),
+            std::nullopt,
+            pack(0, 4),
+            pack(2, 4),
+            pack(3, 1),
+            std::nullopt,
+            pack(1, 3),
+            pack(4, 0)},
+           TIMESTAMP_WITH_TIME_ZONE())});
 
   // Global aggregation.
   {

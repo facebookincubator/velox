@@ -240,10 +240,11 @@ core::ExprPtr getProjectionForRow(
           rowType.nameOf(i),
           transformDirection));
     } else {
-      children.push_back(std::make_shared<core::FieldAccessExpr>(
-          rowType.nameOf(i),
-          rowType.nameOf(i),
-          std::vector<core::ExprPtr>{inputExpr}));
+      children.push_back(
+          std::make_shared<core::FieldAccessExpr>(
+              rowType.nameOf(i),
+              rowType.nameOf(i),
+              std::vector<core::ExprPtr>{inputExpr}));
     }
   }
 

@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox {
@@ -126,6 +127,19 @@ TEST_F(VariantToVectorTest, array) {
       type,
       Variant::array({1, 2, Variant::null(TypeKind::INTEGER), 4}),
       makeArrayVectorFromJson<int32_t>({"[1, 2, null, 4]"}));
+}
+
+TEST_F(VariantToVectorTest, saveVarcharArrayVector) {
+  auto type = ARRAY(VARCHAR());
+  auto variant =
+      Variant::array({"a", "b", Variant::null(TypeKind::VARCHAR), "d"});
+  auto vectorWithNulls = BaseVector::createConstant(type, variant, 1, pool());
+  std::ostringstream out;
+  saveVector(*vectorWithNulls, out);
+  std::istringstream in(out.str());
+  auto vectorCopy = restoreVector(in, pool());
+  auto variantCopy = vectorCopy->variantAt(0);
+  EXPECT_EQ(variantCopy, variant);
 }
 
 TEST_F(VariantToVectorTest, nestedContainers) {

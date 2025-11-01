@@ -56,11 +56,11 @@ struct OpenCLPlatform {
   }
   template <typename SliceT, typename T = typename SliceT::data_type>
   inline T atomic_load(SliceT address) {
-    return *reinterpret_cast<const volatile T *>(address.data());
+    return *reinterpret_cast<const volatile T*>(address.data());
   }
   template <typename SliceT, typename T>
   inline void atomic_store(SliceT address, T value) {
-    *reinterpret_cast<volatile T *>(address.data()) = value;
+    *reinterpret_cast<volatile T*>(address.data()) = value;
   }
   template <typename SliceT, typename T>
   inline T atomic_cas(SliceT address, T compare, T value) {

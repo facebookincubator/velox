@@ -567,20 +567,21 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             // In this legacy case, there is no middle layer between "array"
             // node and the children nodes. Below creates this dummy middle
             // layer to mimic the non-legacy case and fill the gap.
-            rowChildren.emplace_back(std::make_unique<ParquetTypeWithId>(
-                childrenRowType,
-                std::move(children),
-                curSchemaIdx,
-                maxSchemaElementIdx,
-                ParquetTypeWithId::kNonLeaf,
-                "dummy",
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                maxRepeat,
-                maxDefine,
-                isOptional,
-                isRepeated));
+            rowChildren.emplace_back(
+                std::make_unique<ParquetTypeWithId>(
+                    childrenRowType,
+                    std::move(children),
+                    curSchemaIdx,
+                    maxSchemaElementIdx,
+                    ParquetTypeWithId::kNonLeaf,
+                    "dummy",
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    maxRepeat,
+                    maxDefine,
+                    isOptional,
+                    isRepeated));
             auto res = std::make_unique<ParquetTypeWithId>(
                 TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
                 std::move(rowChildren),
@@ -631,20 +632,21 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // In this legacy case, there is no middle layer between "array"
           // node and the children nodes. Below creates this dummy middle
           // layer to mimic the non-legacy case and fill the gap.
-          rowChildren.emplace_back(std::make_unique<ParquetTypeWithId>(
-              childrenRowType,
-              std::move(children),
-              curSchemaIdx,
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf,
-              "dummy",
-              std::nullopt,
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine,
-              isOptional,
-              isRepeated));
+          rowChildren.emplace_back(
+              std::make_unique<ParquetTypeWithId>(
+                  childrenRowType,
+                  std::move(children),
+                  curSchemaIdx,
+                  maxSchemaElementIdx,
+                  ParquetTypeWithId::kNonLeaf,
+                  "dummy",
+                  std::nullopt,
+                  std::nullopt,
+                  std::nullopt,
+                  maxRepeat,
+                  maxDefine,
+                  isOptional,
+                  isRepeated));
           return std::make_unique<ParquetTypeWithId>(
               TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
               std::move(rowChildren),

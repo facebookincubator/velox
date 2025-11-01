@@ -35,8 +35,10 @@ template <typename T>
 std::enable_if_t<std::is_floating_point_v<T>, void>
 append(T value, std::string& result, bool isMapKey) {
   if (!isMapKey && FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-    result.append(fmt::format(
-        "\"{}\"", util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+    result.append(
+        fmt::format(
+            "\"{}\"",
+            util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
   } else {
     result.append(util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
   }

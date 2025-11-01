@@ -42,8 +42,9 @@ class TestEncryption {
     ++count_;
     std::string key{input.begin(), key_.size()};
     DWIO_ENSURE_EQ(key_, key);
-    auto decoded = velox::encoding::Base64::decodeUrl(std::string_view{
-        input.begin() + key_.size(), input.size() - key_.size()});
+    auto decoded = velox::encoding::Base64::decodeUrl(
+        std::string_view{
+            input.begin() + key_.size(), input.size() - key_.size()});
     return folly::IOBuf::copyBuffer(decoded);
   }
 

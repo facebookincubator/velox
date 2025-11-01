@@ -84,3 +84,26 @@ TEST_F(P4HyperLogLogCastTest, nonEmptyValues) {
   testCast<StringView, StringView>(
       P4HYPERLOGLOG(), HYPERLOGLOG(), expectedP4Data, expectedP4Data);
 }
+
+TEST_F(P4HyperLogLogCastTest, oldFormatSparseV1) {
+  // Test casting HLL with deprecated SPARSE_V1 format (tag = 0) to P4HLL
+
+  std::string sparseV1Binary = std::string(1, '\x00') + std::string(11, '\x00');
+
+  auto inputData =
+      std::vector<std::optional<StringView>>{StringView(sparseV1Binary)};
+
+  testThrow<StringView>(
+      HYPERLOGLOG(), P4HYPERLOGLOG(), inputData, "Invalid HyperLogLog format");
+}
+
+TEST_F(P4HyperLogLogCastTest, oldFormatDenseV1) {
+  // Test casting HLL with deprecated DENSE_V1 format (tag = 1) to P4HLL
+  std::string denseV1Binary = std::string(1, '\x01') + std::string(11, '\x00');
+
+  testThrow<StringView>(
+      HYPERLOGLOG(),
+      P4HYPERLOGLOG(),
+      {StringView(denseV1Binary)},
+      "Invalid HyperLogLog format");
+}

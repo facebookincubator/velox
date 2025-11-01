@@ -106,8 +106,9 @@ IcebergInsertTableHandlePtr IcebergTestBase::createIcebergInsertTableHandle(
   for (auto i = 0; i < rowType->size(); ++i) {
     auto columnName = rowType->nameOf(i);
     auto columnType = HiveColumnHandle::ColumnType::kRegular;
-    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
-        columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
+    columnHandles.push_back(
+        std::make_shared<HiveColumnHandle>(
+            columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
   }
 
   auto locationHandle = std::make_shared<LocationHandle>(
@@ -162,18 +163,19 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   for (const auto& filePath : files) {
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
-    splits.push_back(std::make_shared<HiveIcebergSplit>(
-        exec::test::kHiveConnectorId,
-        filePath,
-        fileFormat_,
-        0,
-        file->size(),
-        std::unordered_map<std::string, std::optional<std::string>>{},
-        std::nullopt,
-        customSplitInfo,
-        nullptr,
-        /*cacheable=*/true,
-        std::vector<IcebergDeleteFile>()));
+    splits.push_back(
+        std::make_shared<HiveIcebergSplit>(
+            exec::test::kHiveConnectorId,
+            filePath,
+            fileFormat_,
+            0,
+            file->size(),
+            std::unordered_map<std::string, std::optional<std::string>>{},
+            std::nullopt,
+            customSplitInfo,
+            nullptr,
+            /*cacheable=*/true,
+            std::vector<IcebergDeleteFile>()));
   }
 
   return splits;

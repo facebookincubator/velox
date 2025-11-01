@@ -47,36 +47,42 @@ void registerNoisyApproxSfmAggregate(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>
       countSignatures;
   for (const auto& inputType : supportedInputTypes) {
-    setSignatures.push_back(setBuilder()
-                                .argumentType(inputType)
-                                .constantArgumentType("double")
-                                .build());
-    setSignatures.push_back(setBuilder()
-                                .argumentType(inputType)
-                                .constantArgumentType("double")
-                                .constantArgumentType("bigint")
-                                .build());
-    setSignatures.push_back(setBuilder()
-                                .argumentType(inputType)
-                                .constantArgumentType("double")
-                                .constantArgumentType("bigint")
-                                .constantArgumentType("bigint")
-                                .build());
-    countSignatures.push_back(countBuilder()
-                                  .argumentType(inputType)
-                                  .constantArgumentType("double")
-                                  .build());
-    countSignatures.push_back(countBuilder()
-                                  .argumentType(inputType)
-                                  .constantArgumentType("double")
-                                  .constantArgumentType("bigint")
-                                  .build());
-    countSignatures.push_back(countBuilder()
-                                  .argumentType(inputType)
-                                  .constantArgumentType("double")
-                                  .constantArgumentType("bigint")
-                                  .constantArgumentType("bigint")
-                                  .build());
+    setSignatures.push_back(
+        setBuilder()
+            .argumentType(inputType)
+            .constantArgumentType("double")
+            .build());
+    setSignatures.push_back(
+        setBuilder()
+            .argumentType(inputType)
+            .constantArgumentType("double")
+            .constantArgumentType("bigint")
+            .build());
+    setSignatures.push_back(
+        setBuilder()
+            .argumentType(inputType)
+            .constantArgumentType("double")
+            .constantArgumentType("bigint")
+            .constantArgumentType("bigint")
+            .build());
+    countSignatures.push_back(
+        countBuilder()
+            .argumentType(inputType)
+            .constantArgumentType("double")
+            .build());
+    countSignatures.push_back(
+        countBuilder()
+            .argumentType(inputType)
+            .constantArgumentType("double")
+            .constantArgumentType("bigint")
+            .build());
+    countSignatures.push_back(
+        countBuilder()
+            .argumentType(inputType)
+            .constantArgumentType("double")
+            .constantArgumentType("bigint")
+            .constantArgumentType("bigint")
+            .build());
   }
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>

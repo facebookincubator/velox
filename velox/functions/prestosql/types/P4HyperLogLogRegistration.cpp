@@ -128,13 +128,8 @@ class P4HyperLogLogCastOperator : public exec::CastOperator {
         writer.resize(serializedSize);
         denseHll.serialize(writer.data());
       } else if (DenseHlls::canDeserialize(hllData.data())) {
-        // Input is already dense but may be in older format (e.g DenseV1).
-        // Deserialize and re-serialize to ensure canonical P4HyperLogLog
-        // format.
-        DenseHll denseHll(hllData.data(), memoryPool);
-        int32_t serializedSize = denseHll.serializedSize();
-        writer.resize(serializedSize);
-        denseHll.serialize(writer.data());
+        // Input is already dense - direct copy.
+        writer.copy_from(hllData);
       } else {
         VELOX_USER_FAIL("Invalid HyperLogLog format");
       }

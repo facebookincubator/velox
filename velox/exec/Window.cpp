@@ -160,10 +160,11 @@ Window::WindowFrame Window::createWindowFrame(
       return std::make_optional(
           FrameChannelArg{kConstantChannel, nullptr, value});
     } else {
-      return std::make_optional(FrameChannelArg{
-          frameChannel,
-          BaseVector::create(frame->type(), 0, pool()),
-          std::nullopt});
+      return std::make_optional(
+          FrameChannelArg{
+              frameChannel,
+              BaseVector::create(frame->type(), 0, pool()),
+              std::nullopt});
     }
   };
 
@@ -197,14 +198,15 @@ void Window::createWindowFunctions() {
       }
     }
 
-    windowFunctions_.push_back(WindowFunction::create(
-        windowNodeFunction.functionCall->name(),
-        functionArgs,
-        windowNodeFunction.functionCall->type(),
-        windowNodeFunction.ignoreNulls,
-        operatorCtx_->pool(),
-        &stringAllocator_,
-        operatorCtx_->driverCtx()->queryConfig()));
+    windowFunctions_.push_back(
+        WindowFunction::create(
+            windowNodeFunction.functionCall->name(),
+            functionArgs,
+            windowNodeFunction.functionCall->type(),
+            windowNodeFunction.ignoreNulls,
+            operatorCtx_->pool(),
+            &stringAllocator_,
+            operatorCtx_->driverCtx()->queryConfig()));
 
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));

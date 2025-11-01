@@ -1040,8 +1040,8 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
       const std::unordered_set<int32_t> expectedSplitGroupIds({1, 5, 8});
       int numSplitGroupJoinNodes{0};
       task->pool()->visitChildren([&](memory::MemoryPool* childPool) -> bool {
-        if (folly::StringPiece(childPool->name())
-                .startsWith(fmt::format("node.{}[", joinNodeId))) {
+        if (childPool->name().starts_with(
+                fmt::format("node.{}[", joinNodeId))) {
           ++numSplitGroupJoinNodes;
           std::vector<std::string> parts;
           folly::split(".", childPool->name(), parts);

@@ -258,8 +258,9 @@ RowVectorPtr TableWriter::getOutput() {
   if (statsCollector_ != nullptr) {
     for (int i = TableWriteTraits::kStatsChannel; i < outputType_->size();
          ++i) {
-      columns.push_back(BaseVector::createNullConstant(
-          outputType_->childAt(i), writtenRowsVector->size(), pool()));
+      columns.push_back(
+          BaseVector::createNullConstant(
+              outputType_->childAt(i), writtenRowsVector->size(), pool()));
     }
   }
 
@@ -336,8 +337,9 @@ void TableWriter::close() {
 void TableWriter::setConnectorMemoryReclaimer() {
   VELOX_CHECK_NOT_NULL(connectorPool_);
   if (connectorPool_->parent()->reclaimer() != nullptr) {
-    connectorPool_->setReclaimer(TableWriter::ConnectorReclaimer::create(
-        spillConfig_, operatorCtx_->driverCtx(), this));
+    connectorPool_->setReclaimer(
+        TableWriter::ConnectorReclaimer::create(
+            spillConfig_, operatorCtx_->driverCtx(), this));
   }
 }
 
@@ -422,18 +424,20 @@ RowVectorPtr TableWriteTraits::createAggregationStatsOutput(
     if (channel < TableWriteTraits::kContextChannel) {
       // 1. Set null rows column.
       // 2. Set null fragments column.
-      columns.push_back(BaseVector::createNullConstant(
-          outputType->childAt(channel), numOutputRows, pool));
+      columns.push_back(
+          BaseVector::createNullConstant(
+              outputType->childAt(channel), numOutputRows, pool));
       continue;
     }
     if (channel == TableWriteTraits::kContextChannel) {
       // 3. Set commitcontext column.
-      columns.push_back(std::make_shared<ConstantVector<StringView>>(
-          pool,
-          numOutputRows,
-          false /*isNull*/,
-          VARBINARY(),
-          std::move(tableCommitContext)));
+      columns.push_back(
+          std::make_shared<ConstantVector<StringView>>(
+              pool,
+              numOutputRows,
+              false /*isNull*/,
+              VARBINARY(),
+              std::move(tableCommitContext)));
       continue;
     }
     // 4. Set statistics columns.

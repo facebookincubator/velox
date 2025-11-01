@@ -170,7 +170,7 @@ class BadDeviceAlloc : public std::exception {
                  ",free=" + std::to_string(free) +
                  ",total=" + std::to_string(total) + ")") {}
 
-  virtual const char *what() const noexcept { return message_.c_str(); }
+  virtual const char* what() const noexcept { return message_.c_str(); }
 
  private:
   std::string message_;
@@ -219,13 +219,13 @@ class Slice<THREAD, A, T> {
   static constant DataArrangement ARRANGEMENT = A;
   using data_type = T;
 
-  ATTR explicit Slice(thread T *data) : data_(data) {}
-  ATTR T const thread &operator[](int index) const { return data_[index]; }
-  ATTR T thread &operator[](int index) { return data_[index]; }
-  ATTR T const thread &operator*() const { return *data_; }
-  ATTR T thread &operator*() { return *data_; }
-  ATTR T const thread *operator->() const { return data_; }
-  ATTR T thread *operator->() { return data_; }
+  ATTR explicit Slice(thread T* data) : data_(data) {}
+  ATTR T const thread& operator[](int index) const { return data_[index]; }
+  ATTR T thread& operator[](int index) { return data_[index]; }
+  ATTR T const thread& operator*() const { return *data_; }
+  ATTR T thread& operator*() { return *data_; }
+  ATTR T const thread* operator->() const { return data_; }
+  ATTR T thread* operator->() { return data_; }
   ATTR Slice<THREAD, A, T> subslice(int offset) {
     return Slice<THREAD, A, T>(data_ + offset);
   }
@@ -233,15 +233,15 @@ class Slice<THREAD, A, T> {
     return Slice<THREAD, A, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T thread *data() { return data_; }
-  ATTR T const thread *data() const { return data_; }
+  ATTR T thread* data() { return data_; }
+  ATTR T const thread* data() const { return data_; }
 
  private:
-  thread T *data_;
+  thread T* data_;
 };
 
 template <AddressSpace A = THREAD, DataArrangement B = STRIPED, typename T>
-ATTR Slice<THREAD, B, T> constexpr make_slice(thread T *data) {
+ATTR Slice<THREAD, B, T> constexpr make_slice(thread T* data) {
   return Slice<THREAD, B, T>(data);
 }
 
@@ -253,13 +253,13 @@ class Slice<SHARED, A, T> {
   static constant DataArrangement ARRANGEMENT = A;
   using data_type = T;
 
-  ATTR explicit Slice(threadgroup T *data) : data_(data) {}
-  ATTR T const threadgroup &operator[](int index) const { return data_[index]; }
-  ATTR T threadgroup &operator[](int index) { return data_[index]; }
-  ATTR T const threadgroup &operator*() const { return *data_; }
-  ATTR T threadgroup &operator*() { return *data_; }
-  ATTR T const threadgroup *operator->() const { return data_; }
-  ATTR T threadgroup *operator->() { return data_; }
+  ATTR explicit Slice(threadgroup T* data) : data_(data) {}
+  ATTR T const threadgroup& operator[](int index) const { return data_[index]; }
+  ATTR T threadgroup& operator[](int index) { return data_[index]; }
+  ATTR T const threadgroup& operator*() const { return *data_; }
+  ATTR T threadgroup& operator*() { return *data_; }
+  ATTR T const threadgroup* operator->() const { return data_; }
+  ATTR T threadgroup* operator->() { return data_; }
   ATTR Slice<SHARED, A, T> subslice(int offset) {
     return Slice<SHARED, A, T>(data_ + offset);
   }
@@ -267,8 +267,8 @@ class Slice<SHARED, A, T> {
     return Slice<SHARED, A, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T threadgroup *data() { return data_; }
-  ATTR T const threadgroup *data() const { return data_; }
+  ATTR T threadgroup* data() { return data_; }
+  ATTR T const threadgroup* data() const { return data_; }
 
   template <AddressSpace OTHER>
   ATTR Slice<OTHER, A, T> reinterpret();
@@ -279,11 +279,11 @@ class Slice<SHARED, A, T> {
   }
 
  private:
-  threadgroup T *data_;
+  threadgroup T* data_;
 };
 
 template <AddressSpace A = SHARED, DataArrangement B = BLOCKED, typename T>
-ATTR Slice<SHARED, B, T> constexpr make_slice(threadgroup T *data) {
+ATTR Slice<SHARED, B, T> constexpr make_slice(threadgroup T* data) {
   return Slice<SHARED, B, T>(data);
 }
 
@@ -295,11 +295,11 @@ class Slice<GLOBAL, A, T> {
   static constant DataArrangement ARRANGEMENT = A;
   using data_type = T;
 
-  ATTR explicit Slice(device T *data) : data_(data) {}
-  ATTR T const device &operator[](int index) const { return data_[index]; }
-  ATTR T device &operator[](int index) { return data_[index]; }
-  ATTR T const device &operator*() const { return *data_; }
-  ATTR T device &operator*() { return *data_; }
+  ATTR explicit Slice(device T* data) : data_(data) {}
+  ATTR T const device& operator[](int index) const { return data_[index]; }
+  ATTR T device& operator[](int index) { return data_[index]; }
+  ATTR T const device& operator*() const { return *data_; }
+  ATTR T device& operator*() { return *data_; }
   ATTR Slice<GLOBAL, A, T> subslice(int offset) {
     return Slice<GLOBAL, A, T>(data_ + offset);
   }
@@ -307,15 +307,15 @@ class Slice<GLOBAL, A, T> {
     return Slice<GLOBAL, A, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T device *data() { return data_; }
-  ATTR T const device *data() const { return data_; }
+  ATTR T device* data() { return data_; }
+  ATTR T const device* data() const { return data_; }
 
  private:
-  device T *data_;
+  device T* data_;
 };
 
 template <AddressSpace A = GLOBAL, DataArrangement B = BLOCKED, typename T>
-ATTR Slice<GLOBAL, B, T> constexpr make_slice(device T *data) {
+ATTR Slice<GLOBAL, B, T> constexpr make_slice(device T* data) {
   return Slice<GLOBAL, B, T>(data);
 }
 
@@ -332,13 +332,13 @@ class Slice<THREAD, A, T> {
   static constexpr DataArrangement ARRANGEMENT = A;
   using data_type = T;
 
-  ATTR explicit Slice(__private T *data) : data_(data) {}
-  ATTR T const __private &operator[](int index) const { return data_[index]; }
-  ATTR T __private &operator[](int index) { return data_[index]; }
-  ATTR T const __private &operator*() const { return *data_; }
-  ATTR T __private &operator*() { return *data_; }
-  ATTR T const __private *operator->() const { return data_; }
-  ATTR T __private *operator->() { return data_; }
+  ATTR explicit Slice(__private T* data) : data_(data) {}
+  ATTR T const __private& operator[](int index) const { return data_[index]; }
+  ATTR T __private& operator[](int index) { return data_[index]; }
+  ATTR T const __private& operator*() const { return *data_; }
+  ATTR T __private& operator*() { return *data_; }
+  ATTR T const __private* operator->() const { return data_; }
+  ATTR T __private* operator->() { return data_; }
   ATTR Slice<THREAD, A, T> subslice(int offset) {
     return Slice<THREAD, A, T>(data_ + offset);
   }
@@ -346,8 +346,8 @@ class Slice<THREAD, A, T> {
     return Slice<THREAD, A, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T __private *data() { return data_; }
-  ATTR T const __private *data() const { return data_; }
+  ATTR T __private* data() { return data_; }
+  ATTR T const __private* data() const { return data_; }
 
   template <AddressSpace OTHER>
   ATTR Slice<OTHER, A, T> reinterpret();
@@ -358,11 +358,11 @@ class Slice<THREAD, A, T> {
   }
 
  private:
-  __private T *data_;
+  __private T* data_;
 };
 
 template <AddressSpace A = THREAD, DataArrangement B = STRIPED, typename T>
-ATTR Slice<THREAD, B, T> constexpr make_slice(private T *data) {
+ATTR Slice<THREAD, B, T> constexpr make_slice(private T* data) {
   return Slice<THREAD, B, T>(data);
 }
 
@@ -374,13 +374,13 @@ class Slice<SHARED, A, T> {
   static constexpr DataArrangement ARRANGEMENT = A;
   using data_type = T;
 
-  ATTR explicit Slice(local T *data) : data_(data) {}
-  ATTR T const local &operator[](int index) const { return data_[index]; }
-  ATTR T local &operator[](int index) { return data_[index]; }
-  ATTR T const local &operator*() const { return *data_; }
-  ATTR T local &operator*() { return *data_; }
-  ATTR T const local *operator->() const { return data_; }
-  ATTR T local *operator->() { return data_; }
+  ATTR explicit Slice(local T* data) : data_(data) {}
+  ATTR T const local& operator[](int index) const { return data_[index]; }
+  ATTR T local& operator[](int index) { return data_[index]; }
+  ATTR T const local& operator*() const { return *data_; }
+  ATTR T local& operator*() { return *data_; }
+  ATTR T const local* operator->() const { return data_; }
+  ATTR T local* operator->() { return data_; }
   ATTR Slice<SHARED, A, T> subslice(int offset) {
     return Slice<SHARED, A, T>(data_ + offset);
   }
@@ -388,8 +388,8 @@ class Slice<SHARED, A, T> {
     return Slice<SHARED, A, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T local *data() { return data_; }
-  ATTR T const local *data() const { return data_; }
+  ATTR T local* data() { return data_; }
+  ATTR T const local* data() const { return data_; }
 
   template <AddressSpace OTHER>
   ATTR Slice<OTHER, A, T> reinterpret();
@@ -400,11 +400,11 @@ class Slice<SHARED, A, T> {
   }
 
  private:
-  local T *data_;
+  local T* data_;
 };
 
 template <AddressSpace A = SHARED, DataArrangement B = BLOCKED, typename T>
-ATTR Slice<SHARED, B, T> constexpr make_slice(local T *data) {
+ATTR Slice<SHARED, B, T> constexpr make_slice(local T* data) {
   return Slice<SHARED, B, T>(data);
 }
 
@@ -416,11 +416,11 @@ class Slice<GLOBAL, A, T> {
   static constexpr DataArrangement ARRANGEMENT = A;
   using data_type = T;
 
-  ATTR explicit Slice(global T *data) : data_(data) {}
-  ATTR T const global &operator[](int index) const { return data_[index]; }
-  ATTR T global &operator[](int index) { return data_[index]; }
-  ATTR T const global &operator*() const { return *data_; }
-  ATTR T global &operator*() { return *data_; }
+  ATTR explicit Slice(global T* data) : data_(data) {}
+  ATTR T const global& operator[](int index) const { return data_[index]; }
+  ATTR T global& operator[](int index) { return data_[index]; }
+  ATTR T const global& operator*() const { return *data_; }
+  ATTR T global& operator*() { return *data_; }
   ATTR Slice<GLOBAL, A, T> subslice(int offset) {
     return Slice<GLOBAL, A, T>(data_ + offset);
   }
@@ -428,15 +428,15 @@ class Slice<GLOBAL, A, T> {
     return Slice<GLOBAL, A, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T global *data() { return data_; }
-  ATTR T const global *data() const { return data_; }
+  ATTR T global* data() { return data_; }
+  ATTR T const global* data() const { return data_; }
 
  private:
-  global T *data_;
+  global T* data_;
 };
 
 template <AddressSpace A = GLOBAL, DataArrangement B = BLOCKED, typename T>
-ATTR Slice<GLOBAL, B, T> constexpr make_slice(global T *data) {
+ATTR Slice<GLOBAL, B, T> constexpr make_slice(global T* data) {
   return Slice<GLOBAL, B, T>(data);
 }
 
@@ -448,15 +448,15 @@ class Slice {
   static constexpr AddressSpace ADDRESS_SPACE = A;
   static constexpr DataArrangement ARRANGEMENT = B;
   using data_type = T;
-  using pointer_type = T *;
+  using pointer_type = T*;
 
   ATTR explicit Slice(pointer_type data) : data_(data) {}
-  ATTR T const &operator[](int index) const { return data_[index]; }
-  ATTR T &operator[](int index) { return data_[index]; }
-  ATTR T const &operator*() const { return *data_; }
-  ATTR T &operator*() { return *data_; }
-  ATTR T const *operator->() const { return data_; }
-  ATTR T *operator->() { return data_; }
+  ATTR T const& operator[](int index) const { return data_[index]; }
+  ATTR T& operator[](int index) { return data_[index]; }
+  ATTR T const& operator*() const { return *data_; }
+  ATTR T& operator*() { return *data_; }
+  ATTR T const* operator->() const { return data_; }
+  ATTR T* operator->() { return data_; }
   ATTR Slice<A, B, T> subslice(int offset) {
     return Slice<A, B, T>(data_ + offset);
   }
@@ -464,8 +464,8 @@ class Slice {
     return Slice<A, B, T>(data_ + offset);
   }
   ATTR operator bool() const { return data_ != nullptr; }
-  ATTR T *data() { return data_; }
-  ATTR T const *data() const { return data_; }
+  ATTR T* data() { return data_; }
+  ATTR T const* data() const { return data_; }
 
   template <AddressSpace OTHER, DataArrangement OTHER_ARRANGEMENT =
                                     OTHER == THREAD ? STRIPED : BLOCKED>
@@ -482,7 +482,7 @@ class Slice {
 // arrangement by default for other address spaces
 template <AddressSpace A = THREAD,
           DataArrangement B = A == THREAD ? STRIPED : BLOCKED, typename T>
-ATTR Slice<A, B, T> constexpr make_slice(T *data) {
+ATTR Slice<A, B, T> constexpr make_slice(T* data) {
   return Slice<A, B, T>(data);
 }
 

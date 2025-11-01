@@ -650,8 +650,16 @@ VectorPtr createStringFlatVector(
   bool shouldAcquireStringBuffer = false;
 
   for (size_t i = 0; i < length; ++i) {
-    rawStringViews[i] =
-        StringView(values + offsets[i], offsets[i + 1] - offsets[i]);
+    const auto rowBytes = offsets[i + 1] - offsets[i];
+    if constexpr (!std::is_same_v<TOffset, int32_t>) {
+      VELOX_CHECK(
+          rowBytes >= 0 && rowBytes <= std::numeric_limits<int32_t>::max(),
+          "Offset difference (rowBytes = {}) is negative or out of int32_t range at index {}",
+          rowBytes,
+          i);
+    }
+
+    rawStringViews[i] = StringView(values + offsets[i], rowBytes);
     shouldAcquireStringBuffer |= !rawStringViews[i].isInline();
   }
 
@@ -838,13 +846,15 @@ void exportViews(
       if (i == 0 ||
           (currAddr - bufferAddrCache) >
               rawVariadicBufferSizes[bufferIdxCache]) {
-        auto it = std::prev(std::upper_bound(
-            stringBufferVec.begin(),
-            stringBufferVec.end(),
-            currAddr,
-            [&out](const auto& lhs, const auto& rhs) {
-              return lhs < (reinterpret_cast<uint64_t*>(&out.buffers[2]))[rhs];
-            }));
+        auto it = std::prev(
+            std::upper_bound(
+                stringBufferVec.begin(),
+                stringBufferVec.end(),
+                currAddr,
+                [&out](const auto& lhs, const auto& rhs) {
+                  return lhs <
+                      (reinterpret_cast<uint64_t*>(&out.buffers[2]))[rhs];
+                }));
         bufferAddrCache = (reinterpret_cast<uint64_t*>(&out.buffers[2]))[*it];
         bufferIdxCache = *it;
       }
@@ -906,8 +916,10 @@ void exportFlat(
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-    case TypeKind::UNKNOWN:
       exportValues(vec, rows, options, out, pool, holder);
+      break;
+    case TypeKind::UNKNOWN:
+      // Keep out.n_children = 0 for UNKNOWN type.
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
@@ -1147,19 +1159,23 @@ void exportConstantValue(
     // If this is a scalar type, then ConstantVector does not have a vector
     // inside. Wrap the single value in a flat vector with a single element to
     // export it to an ArrowArray.
-    size_t bufferSize = (vec.type()->isVarchar() || vec.type()->isVarbinary())
-        ? sizeof(StringView)
-        : vec.type()->cppSizeInBytes();
+    if (vec.typeKind() == TypeKind::UNKNOWN) {
+      valuesVector = BaseVector::create(vec.type(), 1, pool);
+    } else {
+      size_t bufferSize = (vec.type()->isVarchar() || vec.type()->isVarbinary())
+          ? sizeof(StringView)
+          : vec.type()->cppSizeInBytes();
 
-    valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        createFlatVector,
-        vec.typeKind(),
-        pool,
-        vec.type(),
-        vec.nulls(),
-        1,
-        wrapInBufferViewAsViewer(vec.valuesAsVoid(), bufferSize),
-        vec.mayHaveNulls() ? 1 : 0);
+      valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createFlatVector,
+          vec.typeKind(),
+          pool,
+          vec.type(),
+          vec.nulls(),
+          1,
+          wrapInBufferViewAsViewer(vec.valuesAsVoid(), bufferSize),
+          vec.mayHaveNulls() ? 1 : 0);
+    }
   }
   exportToArrowImpl(*valuesVector, selection, options, out, pool);
 }

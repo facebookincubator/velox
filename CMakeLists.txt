@@ -111,7 +111,7 @@ endif()
 if(VELOX_BUILD_SHARED)
   message(
     WARNING
-    "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags."
+    "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
 endif()
@@ -616,7 +616,10 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_E
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 3.13.0)
+velox_resolve_dependency(simdjson 4.1.0)
+
+velox_set_source(FastFloat)
+velox_resolve_dependency(FastFloat)
 
 velox_set_source(folly)
 velox_resolve_dependency(folly)

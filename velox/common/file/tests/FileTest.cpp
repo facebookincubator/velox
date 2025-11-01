@@ -168,8 +168,9 @@ TEST(InMemoryFile, preadv) {
   std::vector<std::string> values;
   values.reserve(iobufs.size());
   for (auto& iobuf : iobufs) {
-    values.push_back(std::string{
-        reinterpret_cast<const char*>(iobuf.data()), iobuf.length()});
+    values.push_back(
+        std::string{
+            reinterpret_cast<const char*>(iobuf.data()), iobuf.length()});
   }
 
   EXPECT_EQ(expected, values);

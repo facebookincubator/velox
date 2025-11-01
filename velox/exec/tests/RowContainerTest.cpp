@@ -484,11 +484,12 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const VectorPtr& expected,
       std::optional<CompareFlags> flags) {
     // If no flags provided then it must be the default of {true, true}.
-    SCOPED_TRACE(fmt::format(
-        "{}, ascending = {}, nullsFirst = {}",
-        type->toString(),
-        flags.has_value() ? flags.value().ascending : true,
-        flags.has_value() ? flags.value().nullsFirst : true));
+    SCOPED_TRACE(
+        fmt::format(
+            "{}, ascending = {}, nullsFirst = {}",
+            type->toString(),
+            flags.has_value() ? flags.value().ascending : true,
+            flags.has_value() ? flags.value().nullsFirst : true));
 
     // Set 'isJoinBuild' to true to enable nullable sort key in test.
     auto rowContainer = makeRowContainer({type}, {type}, false);
@@ -570,8 +571,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (auto row : rows) {
       ASSERT_EQ(
           expected[index],
-          rowContainer->equals<canHandleNulls>(
-              row, rowContainer->columnAt(0), rhsDecoded, index))
+          rowContainer->compare<canHandleNulls>(
+              row, rowContainer->columnAt(0), rhsDecoded, index) == 0)
           << fmt::format(
                  "Mismatch at index {} with canHandleNulls {}",
                  index,
@@ -1177,11 +1178,13 @@ TEST_F(RowContainerTest, types) {
       EXPECT_EQ(source->hashValueAt(i), hashes[i]);
       // Test non-null and nullable variants of equals.
       if (column < keys.size()) {
-        EXPECT_TRUE(
-            data->equals<false>(rows[i], data->columnAt(column), decoded, i));
+        EXPECT_EQ(
+            data->compare<false>(rows[i], data->columnAt(column), decoded, i),
+            0);
       } else if (!columnType->isMap()) {
-        EXPECT_TRUE(
-            data->equals<true>(rows[i], data->columnAt(column), decoded, i));
+        EXPECT_EQ(
+            data->compare<true>(rows[i], data->columnAt(column), decoded, i),
+            0);
       }
       // Non-key map columns are not comparable, as the map keys are not sorted.
       if (columnType->isMap() && column >= keys.size()) {
@@ -1868,8 +1871,10 @@ TEST_F(RowContainerTest, unknown) {
   }
 
   for (size_t row = 0; row < size; ++row) {
-    ASSERT_TRUE(rowContainer->equals<false>(
-        rows[row], rowContainer->columnAt(0), decoded, row));
+    ASSERT_EQ(
+        rowContainer->compare</*mayHaveNulls=*/true>(
+            rows[row], rowContainer->columnAt(0), decoded, row),
+        0);
   }
 
   {
@@ -1892,24 +1897,29 @@ TEST_F(RowContainerTest, unknown) {
   // Verify compare method with row and decoded vector as input
   // Sorting a NULL constant Vector doesn't change the Vector, so we just
   // validate that it runs without throwing an exception.
-  EXPECT_NO_THROW(std::sort(
-      indexedRows.begin(),
-      indexedRows.end(),
-      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-        return rowContainer->compare(
-                   l.second, rowContainer->columnAt(0), decoded, r.first, {}) <
-            0;
-      }));
+  EXPECT_NO_THROW(
+      std::sort(
+          indexedRows.begin(),
+          indexedRows.end(),
+          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+            return rowContainer->compare(
+                       l.second,
+                       rowContainer->columnAt(0),
+                       decoded,
+                       r.first,
+                       {}) < 0;
+          }));
 
   // Verify compareRows method with row as input.
   // Sorting a NULL constant Vector doesn't change the Vector, so we just
   // validate that it runs without throwing an exception.
-  EXPECT_NO_THROW(std::sort(
-      indexedRows.begin(),
-      indexedRows.end(),
-      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-        return rowContainer->compareRows(l.second, r.second) < 0;
-      }));
+  EXPECT_NO_THROW(
+      std::sort(
+          indexedRows.begin(),
+          indexedRows.end(),
+          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+            return rowContainer->compareRows(l.second, r.second) < 0;
+          }));
 }
 
 TEST_F(RowContainerTest, nans) {
@@ -1945,8 +1955,10 @@ TEST_F(RowContainerTest, nans) {
 
   // Verify that they are considered equal.
   for (size_t row = 0; row < size; ++row) {
-    ASSERT_TRUE(rowContainer->equals<false>(
-        rows[row], rowContainer->columnAt(0), decoded, row));
+    ASSERT_EQ(
+        rowContainer->compare<false>(
+            rows[row], rowContainer->columnAt(0), decoded, row),
+        0);
   }
   ASSERT_EQ(rowContainer->compare(rows[0], rows[1], 0, {}), 0);
 }

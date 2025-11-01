@@ -231,8 +231,9 @@ class SsdFileTest : public testing::Test {
     std::vector<SsdPin> ssdPins;
     ssdPins.reserve(pins.size());
     for (auto& pin : pins) {
-      ssdPins.push_back(ssdFile_->find(RawFileCacheKey{
-          pin.entry()->key().fileNum.id(), pin.entry()->key().offset}));
+      ssdPins.push_back(ssdFile_->find(
+          RawFileCacheKey{
+              pin.entry()->key().fileNum.id(), pin.entry()->key().offset}));
       EXPECT_FALSE(ssdPins.back().empty());
     }
     ssdFile_->load(ssdPins, pins);
@@ -868,8 +869,9 @@ TEST_F(SsdFileTest, dataFileErrorInjection) {
   std::vector<SsdPin> ssdPins;
   ssdPins.reserve(pins.size());
   for (auto& pin : pins) {
-    ssdPins.push_back(ssdFile_->find(RawFileCacheKey{
-        pin.entry()->key().fileNum.id(), pin.entry()->key().offset}));
+    ssdPins.push_back(ssdFile_->find(
+        RawFileCacheKey{
+            pin.entry()->key().fileNum.id(), pin.entry()->key().offset}));
   }
 
   SsdCacheStats statsWithReadErrorInjected;

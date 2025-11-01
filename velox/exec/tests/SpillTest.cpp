@@ -404,14 +404,15 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       const std::vector<CompareFlags>& compareFlags,
       uint64_t expectedNumSpilledFiles) {
     const int numRowsPerBatch = 1'000;
-    SCOPED_TRACE(fmt::format(
-        "targetFileSize: {}, numPartitions: {}, numBatches: {}, numDuplicates: {}, nullsFirst: {}, ascending: {}",
-        targetFileSize,
-        numPartitions,
-        numBatches,
-        numDuplicates,
-        compareFlags.empty() ? true : compareFlags[0].nullsFirst,
-        compareFlags.empty() ? true : compareFlags[0].ascending));
+    SCOPED_TRACE(
+        fmt::format(
+            "targetFileSize: {}, numPartitions: {}, numBatches: {}, numDuplicates: {}, nullsFirst: {}, ascending: {}",
+            targetFileSize,
+            numPartitions,
+            numBatches,
+            numDuplicates,
+            compareFlags.empty() ? true : compareFlags[0].nullsFirst,
+            compareFlags.empty() ? true : compareFlags[0].ascending));
 
     const auto prevGStats = common::globalSpillStats();
 
@@ -958,12 +959,15 @@ TEST_P(SpillTest, spillPartitionFunctionBasic) {
     std::vector<VectorPtr> columns;
     columns.push_back(
         makeFlatVector<int64_t>(numRows, [](auto row) { return row; }));
-    columns.push_back(makeFlatVector<std::string>(
-        numRows, [](auto row) { return fmt::format("key_{}", row); }));
-    columns.push_back(makeFlatVector<std::string>(
-        numRows, [](auto row) { return fmt::format("key_{}_{}", row, row); }));
-    columns.push_back(makeFlatVector<std::string>(
-        numRows, [](auto row) { return fmt::format("val_{}", row); }));
+    columns.push_back(makeFlatVector<std::string>(numRows, [](auto row) {
+      return fmt::format("key_{}", row);
+    }));
+    columns.push_back(makeFlatVector<std::string>(numRows, [](auto row) {
+      return fmt::format("key_{}_{}", row, row);
+    }));
+    columns.push_back(makeFlatVector<std::string>(numRows, [](auto row) {
+      return fmt::format("val_{}", row);
+    }));
     inputVectors.push_back(makeRowVector(columns));
   }
 

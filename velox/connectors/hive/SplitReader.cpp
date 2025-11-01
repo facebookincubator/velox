@@ -52,18 +52,6 @@ VectorPtr newConstantFromStringImpl(
         pool, 1, false, type, std::move(days));
   }
 
-  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-    if (type->isDecimal()) {
-      auto [precision, scale] = getDecimalPrecisionScale(*type);
-      T result;
-      const auto status = DecimalUtil::castFromString<T>(
-          StringView(value.value()), precision, scale, result);
-      VELOX_USER_CHECK(status.ok(), status.message());
-      return std::make_shared<ConstantVector<T>>(
-          pool, 1, false, type, std::move(result));
-    }
-  }
-
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
         pool, 1, false, type, StringView(value.value()));
@@ -452,10 +440,11 @@ std::vector<TypePtr> SplitReader::adaptColumns(
       if (!fileTypeIdx.has_value()) {
         // Column is missing. Most likely due to schema evolution.
         VELOX_CHECK(tableSchema, "Unable to resolve column '{}'", fieldName);
-        childSpec->setConstantValue(BaseVector::createNullConstant(
-            tableSchema->findChild(fieldName),
-            1,
-            connectorQueryCtx_->memoryPool()));
+        childSpec->setConstantValue(
+            BaseVector::createNullConstant(
+                tableSchema->findChild(fieldName),
+                1,
+                connectorQueryCtx_->memoryPool()));
       } else {
         // Column no longer missing, reset constant value set on the spec.
         childSpec->setConstantValue(nullptr);
