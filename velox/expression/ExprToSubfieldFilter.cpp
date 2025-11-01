@@ -536,7 +536,13 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
   if (auto call = asCall(expr.get())) {
     if (call->name() == "or") {
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
+      if (!left.second) {
+        return {};
+      }
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
+      if (!right.second) {
+        return {};
+      }
       VELOX_CHECK(left.first == right.first);
       return {
           std::move(left.first),
@@ -559,8 +565,7 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
       return std::make_pair(std::move(subfield), std::move(filter));
     }
   }
-  VELOX_UNSUPPORTED(
-      "Unsupported expression for range filter: {}", expr->toString());
+  return {};
 }
 
 } // namespace facebook::velox::exec
