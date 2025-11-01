@@ -91,7 +91,7 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        args: [-x, --severity=warning]
+        args: [-x, --severity=info]
 
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: v3.12.0-2
