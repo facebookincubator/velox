@@ -13,7 +13,7 @@ In this post, I’ll share how we unblocked shared library builds in Velox, the 
 
 Velox’s codebase was started in Meta’s internal monorepo, which still serves as a source of truth. Changes from pull requests in the Github repository are not merged directly via the web UI. Instead, the changes are imported into the internal review and CI tool [Phabricator](https://developers.facebook.com/blog/post/2022/11/15/meta-developers-workflow-exploring-tools-used-to-code/), as a ‘diff’. There, it has to pass an additional set of CI checks before being merged into the monorepo and in turn, exported to Github as a commit on the ‘main’ branch.
 
-Internally, Meta uses the Buck2 build system which, like its predecessor Buck, promotes   small, [granular build targets](https://buck.build/concept/what_makes_buck_so_fast.html) to improve caching and distributed compilation. Externally, however, the open-source community relies on CMake as a build system. When the CMake build system was first added, its structure was heavily inspired by the granular nature of the internal build targets.
+Internally, Meta uses the Buck2 build system which, like its predecessor Buck, promotes   small, [granular build targets](https://buck.build/concept/what_makes_buck_so_fast.html) to improve caching and distributed compilation. Externally, however, the open-source community relies on CMake as a build system. When the CMake build system was first added, its structure mirrored the granular nature of the internal build targets.
 
 The result was hundreds of targets: over one hundred library targets, built as static libraries, and more than two hundred executables for tests and examples. While Buck(2) is optimized  for managing such  granular targets, the same can not be said for CMake. Each subdirectory maintained its own `CMakeLists.txt`, and header includes were managed through global `include_directories()`, with no direct link between targets and their associated header files. This approach encouraged tight coupling across module boundaries. Over the years, dependencies accumulated organically, resulting in a highly interconnected, and in parts cyclic, dependency graph.
 
@@ -87,7 +87,9 @@ The new executables built against the shared [`libvelox.so`](http://libvelox.so)
 
 Table 1: Total size of test, fuzzer and benchmark executables
 
-Less impressive but still notable is the reduction of the debug build time by almost two hours. The improvement is entirely explained by the much faster link time for the shared build of \~30 minutes compared to the 2 hours and 20 minutes it takes to link the static library.
+Less impressive but still notable is the reduction of the debug build time by almost two hours[^1]. The improvement is entirely explained by the much faster link time for the shared build of \~30 minutes compared to the 2 hours and 20 minutes it takes to link the static library.
+
+[^1]: This is of course much less in terms of wall time the user experiences (~ CPU Time/Number of Cores used for the build)
 
 | Total CPU Time | Static | Shared |
 | :---- | :---- | :---- |
