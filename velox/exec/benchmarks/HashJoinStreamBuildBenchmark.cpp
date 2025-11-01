@@ -274,16 +274,20 @@ class HashJoinStreamBuildBenchmark : public VectorTestBase {
   makeProbeVector(int64_t size, int64_t hashTableSize, int64_t& sequence) {
     std::vector<VectorPtr> children;
     for (int32_t i = 0; i < params_.numFields; ++i) {
-      children.push_back(makeFlatVector<int64_t>(
-          size,
-          [&](vector_size_t row) { return (sequence + row) % hashTableSize; },
-          nullptr));
+      children.push_back(
+          makeFlatVector<int64_t>(
+              size,
+              [&](vector_size_t row) {
+                return (sequence + row) % hashTableSize;
+              },
+              nullptr));
     }
     sequence += size;
 
     for (int32_t i = 0; i < 2; ++i) {
-      children.push_back(makeFlatVector<int64_t>(
-          size, [&](vector_size_t row) { return row + size; }, nullptr));
+      children.push_back(
+          makeFlatVector<int64_t>(
+              size, [&](vector_size_t row) { return row + size; }, nullptr));
     }
     return makeRowVector(children);
   }
@@ -330,7 +334,7 @@ class HashJoinStreamBuildBenchmark : public VectorTestBase {
 
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
-  memory::MemoryManagerOptions options;
+  memory::MemoryManager::Options options;
   options.useMmapAllocator = true;
   options.allocatorCapacity = 10UL << 30;
   options.useMmapArena = true;
