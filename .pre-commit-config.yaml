@@ -105,7 +105,7 @@ repos:
     rev: v1.37.1
     hooks:
       - id: yamllint
-        args: [--format, parsable, --strict]
+        args: [--format, auto, --strict]
         exclude: .*\.clang-(tidy|format)
 
   - repo: https://github.com/google/yamlfmt
