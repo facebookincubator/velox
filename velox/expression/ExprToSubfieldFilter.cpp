@@ -543,7 +543,9 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
       if (!right.second) {
         return {};
       }
-      VELOX_CHECK(left.first == right.first);
+      if (left.first != right.first) {
+        return {};
+      }
       return {
           std::move(left.first),
           makeOrFilter(std::move(left.second), std::move(right.second))};
