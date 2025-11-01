@@ -623,7 +623,7 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   std::vector<velox::RowTypePtr> rowTypes{probeType, buildType};
   exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
-  auto filterEvaluator = ExpressionEvaluator(
+  auto filterEvaluator = facebook::velox::core::ExpressionEvaluator(
       {exprs.exprs()[0]}, facebook::velox::type::concatRowTypes(rowTypes));
   auto filterColumns = filterEvaluator.compute(
       joinedCols, stream, cudf::get_current_device_resource_ref());
