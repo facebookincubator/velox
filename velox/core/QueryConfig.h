@@ -204,11 +204,11 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
-  static constexpr const char* kAbandonHashBuildDedupMinRows =
-      "abandon_build_no_dup_hash_min_rows";
+  static constexpr const char* kAbandonDedupHashMapMinRows =
+      "abandon_dedup_hashmap_min_rows";
 
-  static constexpr const char* kAbandonHashBuildDedupMinPct =
-      "abandon_build_no_dup_hash_min_pct";
+  static constexpr const char* kAbandonDedupHashMapMinPct =
+      "abandon_dedup_hashmap_min_pct";
 
   static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
       "max_elements_size_in_repeat_and_sequence";
@@ -826,11 +826,11 @@ class QueryConfig {
   }
 
   int32_t abandonHashBuildDedupMinRows() const {
-    return get<int32_t>(kAbandonHashBuildDedupMinRows, 100'000);
+    return get<int32_t>(kAbandonDedupHashMapMinRows, 100'000);
   }
 
   int32_t abandonHashBuildDedupMinPct() const {
-    return get<int32_t>(kAbandonHashBuildDedupMinPct, 0);
+    return get<int32_t>(kAbandonDedupHashMapMinPct, 0);
   }
 
   int32_t maxElementsSizeInRepeatAndSequence() const {
