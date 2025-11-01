@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/ParallelUnitLoader.h"
+#include <glog/logging.h>
 #include <numeric>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/time/Timer.h"
@@ -54,10 +55,12 @@ class ParallelUnitLoader : public UnitLoader {
   ParallelUnitLoader(
       std::vector<std::unique_ptr<LoadUnit>> units,
       folly::Executor* ioExecutor,
-      uint16_t maxConcurrentLoads)
+      uint16_t maxConcurrentLoads,
+      std::chrono::milliseconds loadTimeoutMs = std::chrono::minutes(5))
       : loadUnits_(std::move(units)),
         ioExecutor_(ioExecutor),
-        maxConcurrentLoads_(maxConcurrentLoads) {
+        maxConcurrentLoads_(maxConcurrentLoads),
+        loadTimeoutMs_(loadTimeoutMs) {
     VELOX_CHECK_NOT_NULL(ioExecutor, "ParallelUnitLoader ioExecutor is null");
     VELOX_CHECK_GT(
         maxConcurrentLoads_,
@@ -71,9 +74,19 @@ class ParallelUnitLoader : public UnitLoader {
   /// Destructor ensures all pending load operations are properly cancelled
   /// and waited for to prevent resource leaks and dangling references.
   ~ParallelUnitLoader() override {
-    for (auto& future : futures_) {
-      future.cancel();
-      future.wait();
+    for (size_t i = 0; i < futures_.size(); ++i) {
+      if (futures_[i].valid()) {
+        futures_[i].cancel();
+        try {
+          futures_[i].wait(std::chrono::seconds(1));
+        } catch (const std::exception& e) {
+          LOG(ERROR) << "Exception while waiting for unit " << i
+                     << " to complete during destruction: " << e.what();
+        } catch (...) {
+          LOG(ERROR) << "Unknown exception while waiting for unit " << i
+                     << " to complete during destruction";
+        }
+      }
     }
   }
 
@@ -96,6 +109,8 @@ class ParallelUnitLoader : public UnitLoader {
       NanosecondTimer timer{&unitLoadNanos};
       futures_[unit].wait();
     } catch (const std::exception& e) {
+      LOG(ERROR) << "Exception caught while waiting for unit " << unit
+                 << " to load: " << e.what();
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
     }
     waitForUnitReadyNanos_ += unitLoadNanos;
@@ -138,8 +153,32 @@ class ParallelUnitLoader : public UnitLoader {
     VELOX_CHECK_LT(unitIndex, loadUnits_.size(), "Unit index out of bounds");
     VELOX_CHECK_NOT_NULL(ioExecutor_, "ParallelUnitLoader ioExecutor is null");
 
-    futures_[unitIndex] = folly::via(
-        ioExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
+    futures_[unitIndex] =
+        folly::via(ioExecutor_, [this, unitIndex]() {
+          try {
+            loadUnits_[unitIndex]->load();
+          } catch (const std::exception& e) {
+            LOG(ERROR) << "I/O thread crashed while loading unit " << unitIndex
+                       << ": " << e.what();
+            throw;
+          } catch (...) {
+            LOG(ERROR) << "I/O thread crashed while loading unit " << unitIndex
+                       << " with unknown exception";
+            throw;
+          }
+        })
+            .within(loadTimeoutMs_)
+            .thenError(
+                folly::tag_t<folly::FutureTimeout>{},
+                [unitIndex, this](const folly::FutureTimeout& e) {
+                  LOG(ERROR) << "Timeout loading unit " << unitIndex
+                             << ": operation exceeded timeout of "
+                             << std::chrono::duration_cast<std::chrono::seconds>(
+                                    loadTimeoutMs_)
+                                    .count()
+                             << "s";
+                  throw;
+                });
     unitsLoaded_[unitIndex] = true;
   }
 
@@ -159,6 +198,7 @@ class ParallelUnitLoader : public UnitLoader {
   std::vector<folly::Future<folly::Unit>> unloadFutures_;
   folly::Executor* ioExecutor_;
   size_t maxConcurrentLoads_;
+  std::chrono::milliseconds loadTimeoutMs_;
 
   // Stats
   std::unordered_set<uint32_t> processedUnits_;
