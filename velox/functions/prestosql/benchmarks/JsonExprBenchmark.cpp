@@ -243,7 +243,7 @@ struct SimdjsonParseFunction {
     } else {
       SIMDJSON_ASSIGN_OR_RAISE(auto doc, simdjsonParse(paddedJson));
       // Parse paddedJson again.
-      simdjsonParse(paddedJson).get(jsonDoc);
+      std::ignore = simdjsonParse(paddedJson).get(jsonDoc);
     }
     result = true;
     return simdjson::SUCCESS;
