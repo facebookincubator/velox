@@ -209,10 +209,17 @@ inline std::unique_ptr<common::BigintMultiRange> bigintOr(
 }
 
 inline std::unique_ptr<common::BytesValues> equal(
-    const std::string& value,
+    std::string value,
     bool nullAllowed = false) {
   return std::make_unique<common::BytesValues>(
-      std::vector<std::string>{value}, nullAllowed);
+      std::vector{std::move(value)}, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesValues> notEqual(
+    std::string value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesValues>(
+      std::vector{std::move(value)}, nullAllowed);
 }
 
 inline std::unique_ptr<common::BigintRange> equal(
@@ -427,27 +434,27 @@ class ExprToSubfieldFilterParser {
   /// Analyzes 'expr' to determine if it can be expressed as a subfield filter.
   /// Returns a pair of subfield and filter if so. Otherwise, throws.
   ///
-  /// Supports all expressions supported by leafCallToSubfieldFilter + negations
-  /// and disjunctions over same subfield.
+  /// Supports all expressions supported by leafCallToSubfieldFilter and
+  /// negations, disjunctions and conjunctions over same subfield.
   ///  Examples:
   ///    a = 1
   ///    a = 1 OR a > 10
   ///    not (a = 1)
-  ///
-  /// TODO Improve the API by returning std::optional instead of throwing.
+  /// This API return nullptr filter if expr isn't representable as subfield
+  /// filter. This API throw only if expr is malformed.
   virtual std::pair<common::Subfield, std::unique_ptr<common::Filter>>
   toSubfieldFilter(
       const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator*) = 0;
+      core::ExpressionEvaluator* evaluator,
+      bool negated = false) = 0;
 
   /// Analyzes 'call' expression to determine if it can be expressed as a
   /// subfield filter. Returns the filter and sets 'subfield' output argument if
   /// so. Otherwise, returns nullptr. If 'negated' is true, considers the
   /// negation of 'call' expressions (not(call)). It is possible that 'call'
   /// expression can be represented as subfield filter, but its negation cannot.
-  ///
-  /// TODO Make this and toSubfieldFilter APIs consistent. Both should not throw
-  /// and return std::optional pair of filter and subfield.
+  /// This API return nullptr if call isn't representable as subfield filter.
+  /// This API throw only if call is malformed.
   virtual std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
       common::Subfield& subfield,
@@ -519,7 +526,8 @@ class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
  public:
   std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
       const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator) override;
+      core::ExpressionEvaluator* evaluator,
+      bool negated = false) override;
 
   std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,

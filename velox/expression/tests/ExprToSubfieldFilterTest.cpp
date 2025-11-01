@@ -308,7 +308,8 @@ class CustomExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
  public:
   std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
       const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator) override {
+      core::ExpressionEvaluator* evaluator,
+      bool negated = false) override {
     if (expr->isCallKind();
         auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
       if (call->name() == "or") {
@@ -324,10 +325,11 @@ class CustomExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
       if (call->name() == "not") {
         if (auto* inner =
                 call->inputs()[0]->asUnchecked<core::CallTypedExpr>()) {
-          filter = leafCallToSubfieldFilter(*inner, subfield, evaluator, true);
+          filter =
+              leafCallToSubfieldFilter(*inner, subfield, evaluator, !negated);
         }
       } else {
-        filter = leafCallToSubfieldFilter(*call, subfield, evaluator, false);
+        filter = leafCallToSubfieldFilter(*call, subfield, evaluator, negated);
       }
       if (filter) {
         return std::make_pair(std::move(subfield), std::move(filter));
