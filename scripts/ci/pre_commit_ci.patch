@@ -24,7 +24,7 @@ index 519d2dfe0..52c501f74 100644
      hooks:
        - id: yamllint
 -        args: [--format, auto, --strict]
-+        args: [--format, github, --strict]
++        args: [--format, parsable, --strict]
          exclude: .*\.clang-(tidy|format)
  
    - repo: https://github.com/google/yamlfmt
