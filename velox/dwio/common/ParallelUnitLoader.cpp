@@ -94,8 +94,24 @@ class ParallelUnitLoader : public UnitLoader {
     uint64_t unitLoadNanos{0};
     try {
       NanosecondTimer timer{&unitLoadNanos};
-      futures_[unit].wait();
+      // Wait with timeout to detect hung I/O threads
+      constexpr auto kLoadTimeout = std::chrono::seconds(60);
+      futures_[unit].wait(kLoadTimeout);
+      // Check if the future completed within the timeout
+      if (!futures_[unit].isReady()) {
+        LOG(ERROR) << "I/O thread timed out after " << kLoadTimeout.count()
+                   << "s while loading unit " << unit
+                   << ". This may indicate a deadlock or hung I/O operation.";
+        VELOX_FAIL(
+            "Timeout waiting for unit {} to load after {}s",
+            unit,
+            kLoadTimeout.count());
+      }
     } catch (const std::exception& e) {
+      LOG(ERROR)
+          << "Driver thread caught exception from I/O thread for unit " << unit
+          << ": " << e.what()
+          << ". This likely indicates a race condition with dynamic filters.";
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
     }
     waitForUnitReadyNanos_ += unitLoadNanos;
@@ -138,8 +154,19 @@ class ParallelUnitLoader : public UnitLoader {
     VELOX_CHECK_LT(unitIndex, loadUnits_.size(), "Unit index out of bounds");
     VELOX_CHECK_NOT_NULL(ioExecutor_, "ParallelUnitLoader ioExecutor is null");
 
-    futures_[unitIndex] = folly::via(
-        ioExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
+    futures_[unitIndex] = folly::via(ioExecutor_, [this, unitIndex]() {
+      try {
+        loadUnits_[unitIndex]->load();
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "I/O thread crashed while loading unit " << unitIndex
+                   << ": " << e.what();
+        throw; // Re-throw to fail the future
+      } catch (...) {
+        LOG(ERROR) << "I/O thread crashed while loading unit " << unitIndex
+                   << " with unknown exception";
+        throw;
+      }
+    });
     unitsLoaded_[unitIndex] = true;
   }
 
