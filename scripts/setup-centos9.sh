@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# shellcheck source-path=SCRIPT_DIR
+# shellcheck source-path=SCRIPTDIR
 
 # This script documents setting up a Centos9 host for Velox
 # development.  Running it should make you ready to compile.
@@ -30,6 +30,7 @@ set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+# shellcheck source=setup-common.sh
 source "$SCRIPT_DIR"/setup-common.sh
 CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CXXFLAGS
@@ -126,6 +127,7 @@ function install_velox_deps {
       export CXX=/usr/bin/clang++-15
     else
       # Activate gcc12; enable errors on unset variables afterwards.
+      # shellcheck source=/dev/null
       source /opt/rh/gcc-toolset-12/enable || exit 1
       set -u
     fi
@@ -146,6 +148,7 @@ function install_velox_deps {
       export CXX=/usr/bin/clang++-15
     else
       # Activate gcc12; enable errors on unset variables afterwards.
+      # shellcheck source=/dev/null
       source /opt/rh/gcc-toolset-12/enable || exit 1
       set -u
     fi

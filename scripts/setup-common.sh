@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # trigger reinstall
-# shellcheck source-path=SCRIPT_DIR
+# shellcheck source-path=SCRIPTDIR
 
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-helper-functions.sh
@@ -149,6 +149,7 @@ function install_abseil {
     ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
     (
       cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
+      # shellcheck disable=SC2086
       git apply $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch
     )
   fi
@@ -210,6 +211,7 @@ function install_arrow {
     git apply "$VELOX_ARROW_CMAKE_PATCH"
   ) || exit 1
 
+  # shellcheck disable=SC2086
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
     -DARROW_WITH_THRIFT=ON \

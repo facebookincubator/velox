@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# shellcheck source-path=SCRIPT_DIR
+# shellcheck source-path=SCRIPTDIR
 # shellcheck disable=SC2076
 
 # This script documents setting up a Ubuntu host for Velox
@@ -36,7 +36,7 @@ SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
-VERSION=$(cat /etc/os-release | grep VERSION_ID)
+VERSION=$(grep VERSION_ID /etc/os-release)
 PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 
 # On Ubuntu 20.04 dependencies need to be built using gcc11.
@@ -58,6 +58,7 @@ function install_clang15 {
   if [[ ${VERSION} =~ "22.04" ]]; then
     CLANG_PACKAGE_LIST="${CLANG_PACKAGE_LIST} gcc-12 g++-12 libc++-12-dev"
   fi
+  # shellcheck disable=2086
   ${SUDO} apt install ${CLANG_PACKAGE_LIST} -y
 }
 

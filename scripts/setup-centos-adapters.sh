@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# shellcheck source-path=SCRIPT_DIR
+# shellcheck source-path=SCRIPTDIR
 
 # This script installs addition dependencies for the adapters build
 # of Velox. The scrip expects base dependencies to already be installed.
@@ -25,6 +25,7 @@
 #     Use "n" to never wipe directories.
 # * VELOX_CUDA_VERSION="12.8": Which version of CUDA to install, will pick up
 #   CUDA_VERSION from the env
+# shellcheck source-path=SCRIPTDIR
 
 set -efx -o pipefail
 
@@ -89,6 +90,7 @@ function install_adapters {
 (
   if [[ $# -ne 0 ]]; then
     # Activate gcc12; enable errors on unset variables afterwards.
+    # shellcheck source=/dev/null
     source /opt/rh/gcc-toolset-12/enable || exit 1
     set -u
 
@@ -98,6 +100,7 @@ function install_adapters {
     echo "All specified dependencies installed!"
   else
     # Activate gcc12; enable errors on unset variables afterwards.
+    # shellcheck source=/dev/null
     source /opt/rh/gcc-toolset-12/enable || exit 1
     set -u
     install_cuda "$VELOX_CUDA_VERSION"

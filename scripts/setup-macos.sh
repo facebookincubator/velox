@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# shellcheck source-path=SCRIPT_DIR
+# shellcheck source-path=SCRIPTDIR
 
 # This script documents setting up a macOS host for Velox
 # development.  Running it should make you ready to compile.
@@ -86,6 +86,7 @@ function install_build_prerequisites {
     echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
     python3 -m venv "${PYTHON_VENV}"
   fi
+  # shellcheck source=/dev/null
   source "${PYTHON_VENV}"/bin/activate
   pip3 install regex pyyaml
 
