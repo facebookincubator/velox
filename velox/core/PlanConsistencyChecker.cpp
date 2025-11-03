@@ -209,7 +209,26 @@ class Checker : public PlanNodeVisitor {
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& ctx)
       const override {
-    visitSources(&node, ctx);
+    // Verify that output column names are not empty and unique.
+    std::unordered_set<std::string> names;
+    for (const auto& name : node.outputType()->names()) {
+      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
+      VELOX_USER_CHECK(
+          names.insert(name).second, "Duplicate output column: {}", name);
+    }
+
+    // Verify assignments match outputType 1:1.
+    VELOX_USER_CHECK_EQ(
+        names.size(),
+        node.assignments().size(),
+        "Column assignments must match output type 1:1.");
+
+    for (const auto& name : names) {
+      VELOX_USER_CHECK(
+          node.assignments().contains(name),
+          "Column assignment is missing for {}",
+          name);
+    }
   }
 
   void visit(const TableWriteNode& node, PlanNodeVisitorContext& ctx)

@@ -280,5 +280,108 @@ TEST_F(PlanConsistencyCheckerTest, hashJoin) {
   }
 }
 
+namespace {
+class TestTableHandle : public connector::ConnectorTableHandle {
+ public:
+  explicit TestTableHandle(std::string connectorId, std::string name)
+      : connector::ConnectorTableHandle(std::move(connectorId)),
+        name_{std::move(name)} {}
+
+  const std::string& name() const override {
+    return name_;
+  }
+
+ private:
+  const std::string name_;
+};
+
+class TestColumnHandle : public connector::ColumnHandle {
+ public:
+  explicit TestColumnHandle(std::string name) : name_{std::move(name)} {}
+
+  const std::string& name() const override {
+    return name_;
+  }
+
+ private:
+  const std::string name_;
+};
+} // namespace
+
+TEST_F(PlanConsistencyCheckerTest, tableScan) {
+  // Empty output column name.
+  {
+    auto scanNode = std::make_shared<TableScanNode>(
+        nextId(),
+        ROW({"", "b"}, INTEGER()),
+        std::make_shared<TestTableHandle>("test", "t"),
+        connector::ColumnHandleMap{});
+
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(scanNode),
+        "Output column name cannot be empty");
+  }
+
+  // Duplicate output column name.
+  {
+    auto scanNode = std::make_shared<TableScanNode>(
+        nextId(),
+        ROW({"a", "b", "a"}, INTEGER()),
+        std::make_shared<TestTableHandle>("test", "t"),
+        connector::ColumnHandleMap{});
+
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(scanNode), "Duplicate output column: a");
+  }
+
+  // Missing assignments.
+  {
+    auto scanNode = std::make_shared<TableScanNode>(
+        nextId(),
+        ROW({"a", "b", "c"}, INTEGER()),
+        std::make_shared<TestTableHandle>("test", "t"),
+        connector::ColumnHandleMap{});
+
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(scanNode),
+        "Column assignments must match output type");
+  }
+
+  {
+    connector::ColumnHandleMap assignments{
+        {"a", std::make_shared<TestColumnHandle>("x")},
+        {"b", std::make_shared<TestColumnHandle>("y")},
+        {"blah", std::make_shared<TestColumnHandle>("z")},
+    };
+
+    auto scanNode = std::make_shared<TableScanNode>(
+        nextId(),
+        ROW({"a", "b", "c"}, INTEGER()),
+        std::make_shared<TestTableHandle>("test", "t"),
+        assignments);
+
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(scanNode),
+        "Column assignment is missing for c");
+  }
+
+  // No issues.
+  {
+    connector::ColumnHandleMap assignments{
+        {"a", std::make_shared<TestColumnHandle>("x")},
+        {"b", std::make_shared<TestColumnHandle>("y")},
+        {"c", std::make_shared<TestColumnHandle>("z")},
+    };
+
+    auto scanNode = std::make_shared<TableScanNode>(
+        nextId(),
+        ROW({"a", "b", "c"}, INTEGER()),
+        std::make_shared<TestTableHandle>("test", "t"),
+        assignments);
+
+    ASSERT_NO_THROW(PlanConsistencyChecker::check(scanNode));
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::core
