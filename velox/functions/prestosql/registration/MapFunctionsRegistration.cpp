@@ -31,40 +31,6 @@
 namespace facebook::velox::functions {
 
 namespace {
-
-template <typename T>
-void registerMapSubsetPrimitive(const std::string& prefix) {
-  registerFunction<
-      ParameterBinder<MapSubsetPrimitiveFunction, T>,
-      Map<T, Generic<T1>>,
-      Map<T, Generic<T1>>,
-      Array<T>>({prefix + "map_subset"});
-}
-
-void registerMapSubset(const std::string& prefix) {
-  registerMapSubsetPrimitive<bool>(prefix);
-  registerMapSubsetPrimitive<int8_t>(prefix);
-  registerMapSubsetPrimitive<int16_t>(prefix);
-  registerMapSubsetPrimitive<int32_t>(prefix);
-  registerMapSubsetPrimitive<int64_t>(prefix);
-  registerMapSubsetPrimitive<float>(prefix);
-  registerMapSubsetPrimitive<double>(prefix);
-  registerMapSubsetPrimitive<Timestamp>(prefix);
-  registerMapSubsetPrimitive<Date>(prefix);
-
-  registerFunction<
-      MapSubsetVarcharFunction,
-      Map<Varchar, Generic<T1>>,
-      Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({prefix + "map_subset"});
-
-  registerFunction<
-      MapSubsetFunction,
-      Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_subset"});
-}
-
 template <typename T>
 void registerRemapKeysPrimitive(const std::string& prefix) {
   registerFunction<
@@ -171,7 +137,7 @@ void registerMapFunctions(const std::string& prefix) {
       Map<Orderable<T1>, Orderable<T2>>,
       int64_t>({prefix + "map_top_n_values"});
 
-  registerMapSubset(prefix);
+  registerMapSubset(prefix + "map_subset");
 
   registerRemapKeys(prefix);
 
