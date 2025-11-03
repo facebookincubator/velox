@@ -35,9 +35,9 @@
 #include "velox/parse/TypeResolver.h"
 
 #ifdef VELOX_ENABLE_CUDF2
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 #endif
 
 using namespace facebook::velox;
@@ -328,11 +328,11 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 #ifdef VELOX_ENABLE_CUDF2
       if (facebook::velox::cudf_velox::cudfIsRegistered() &&
           facebook::velox::connector::getAllConnectors().count(
-              cudf_velox::exec::test::kParquetConnectorId) > 0 &&
+              cudf_velox::exec::test::kCudfHiveConnectorId) > 0 &&
           facebook::velox::cudf_velox::cudfTableScanEnabled()) {
         return std::make_shared<
-            cudf_velox::connector::parquet::ParquetTableHandle>(
-            cudf_velox::exec::test::kParquetConnectorId,
+            cudf_velox::connector::hive::CudfHiveTableHandle>(
+            cudf_velox::exec::test::kCudfHiveConnectorId,
             tableName_,
             filterNodeExpr != nullptr,
             filtersAsNode_ ? nullptr : std::move(filterNodeExpr),

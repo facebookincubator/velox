@@ -58,9 +58,7 @@ class CudfTpchBenchmark : public TpchBenchmark {
     TpchBenchmark::initialize();
 
     if (FLAGS_velox_cudf_table_scan) {
-      connector::unregisterConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName);
-      connector::unregisterConnector(
+      facebook::velox::connector::unregisterConnector(
           facebook::velox::exec::test::kHiveConnectorId);
 
       // Add new values into the cudfHive configuration...
@@ -79,18 +77,12 @@ class CudfTpchBenchmark : public TpchBenchmark {
           std::move(cudfHiveConfigurationValues));
 
       // Create cudfHive connector with config...
-      connector::registerConnectorFactory(
-          std::make_shared<
-              cudf_velox::connector::hive::CudfHiveConnectorFactory>());
-      auto cudfHiveConnector =
-          connector::getConnectorFactory(
-              facebook::velox::connector::hive::HiveConnectorFactory::
-                  kHiveConnectorName)
-              ->newConnector(
-                  facebook::velox::exec::test::kHiveConnectorId,
-                  cudfHiveProperties,
-                  ioExecutor_.get());
-      connector::registerConnector(cudfHiveConnector);
+      cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
+      auto cudfHiveConnector = factory.newConnector(
+          facebook::velox::exec::test::kHiveConnectorId,
+          cudfHiveProperties,
+          ioExecutor_.get());
+      facebook::velox::connector::registerConnector(cudfHiveConnector);
     }
 
     // Enable cuDF operators
