@@ -1004,11 +1004,11 @@ TEST_F(CudfFilterProjectTest, substrWithLength) {
   auto input =
       makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
   auto data = makeRowVector({input});
-  auto substrPlan = PlanBuilder()
+  auto SubstrPlan = PlanBuilder()
                         .values({data})
                         .project({"substr(c0, 1, 3) AS c0"})
                         .planNode();
-  auto substrResults = AssertQueryBuilder(substrPlan).copyResults(pool());
+  auto SubstrResults = AssertQueryBuilder(SubstrPlan).copyResults(pool());
 
   auto calculatedSubstrResults = makeRowVector({
       makeFlatVector<std::string>({
@@ -1017,7 +1017,7 @@ TEST_F(CudfFilterProjectTest, substrWithLength) {
       }),
   });
   facebook::velox::test::assertEqualVectors(
-      substrResults, calculatedSubstrResults);
+      SubstrResults, calculatedSubstrResults);
 }
 
 TEST_F(CudfFilterProjectTest, coalesceColumnWithLiteral) {

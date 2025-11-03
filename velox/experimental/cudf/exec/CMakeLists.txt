@@ -19,7 +19,6 @@ add_library(
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
-  Helpers.cu
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
@@ -32,7 +31,7 @@ add_library(
 
 target_link_libraries(
   velox_cudf_exec
-  PUBLIC cudf::cudf cuco::cuco
+  PUBLIC cudf::cudf
   PRIVATE
     arrow
     velox_arrow_bridge

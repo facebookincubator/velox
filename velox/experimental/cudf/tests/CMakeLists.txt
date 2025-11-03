@@ -81,7 +81,11 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-add_test(NAME velox_cudf_limit_test COMMAND velox_cudf_limit_test)
+add_test(
+  NAME velox_cudf_limit_test
+  COMMAND velox_cudf_limit_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 add_test(
   NAME velox_cudf_expression_selection_test
