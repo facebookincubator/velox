@@ -75,9 +75,7 @@ folly::Expected<uint8_t, Status> Base32::base32ReverseLookup(
   auto index = reverseIndex[static_cast<uint8_t>(encodedChar)];
   if (index >= 32) {
     return folly::makeUnexpected(
-        Status::UserError(
-            "decode() - invalid input string: invalid character '{}'",
-            encodedChar));
+        Status::UserError("Unrecognized character: {}", encodedChar));
   }
   return index;
 }
@@ -112,7 +110,25 @@ folly::Expected<size_t, Status> Base32::calculateDecodedSize(
     return 0;
   }
 
-  // Count valid (non-padding, non-whitespace) characters and validate them
+  // First pass: Count all non-padding, non-whitespace characters
+  // (without validation to match Guava's error priority)
+  size_t charCount = 0;
+  for (size_t i = 0; i < inputSize; ++i) {
+    char c = input[i];
+    if (c == Base32::kPadding || std::isspace(static_cast<unsigned char>(c))) {
+      continue;
+    }
+    charCount++;
+  }
+
+  // Check for invalid input length - Base32 cannot have exactly 1 character
+  // This check happens before character validation to match Guava behavior
+  if (charCount == 1) {
+    return folly::makeUnexpected(
+        Status::UserError("Invalid input length {}", charCount));
+  }
+
+  // Second pass: Validate each character
   size_t validCharCount = 0;
   for (size_t i = 0; i < inputSize; ++i) {
     char c = input[i];
@@ -120,21 +136,12 @@ folly::Expected<size_t, Status> Base32::calculateDecodedSize(
       continue;
     }
 
-    // Validate character first
     auto index = kBase32ReverseIndexTable[static_cast<uint8_t>(c)];
     if (index >= 32) {
       return folly::makeUnexpected(
-          Status::UserError(
-              "decode() - invalid input string: invalid character '{}'", c));
+          Status::UserError("Unrecognized character: {}", c));
     }
     validCharCount++;
-  }
-
-  // Check for invalid input length - Base32 cannot have exactly 1 valid
-  // character
-  if (validCharCount == 1) {
-    return folly::makeUnexpected(
-        Status::UserError("Invalid input length {}", validCharCount));
   }
 
   // Calculate decoded size

@@ -899,16 +899,14 @@ TEST_F(BinaryFunctionsTest, fromBase32) {
   EXPECT_EQ("a", fromBase32("ME"));
   EXPECT_EQ("abc", fromBase32("MFRGG"));
 
-  // Test invalid characters - matching Velox error message format
+  // Test invalid characters - matching Guava/Presto error message format
+  VELOX_ASSERT_USER_THROW(fromBase32("1="), "Invalid input length 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M1======"), "Unrecognized character: 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M!======"), "Unrecognized character: !");
+
+  // Test string with multiple invalid characters (hits first invalid char)
   VELOX_ASSERT_USER_THROW(
-      fromBase32("1="),
-      "decode() - invalid input string: invalid character '1'");
-  VELOX_ASSERT_USER_THROW(
-      fromBase32("M1======"),
-      "decode() - invalid input string: invalid character '1'");
-  VELOX_ASSERT_USER_THROW(
-      fromBase32("M!======"),
-      "decode() - invalid input string: invalid character '!'");
+      fromBase32("o3Xr<~I0:WDg1FV4FkF"), "Unrecognized character: <");
 }
 
 } // namespace
