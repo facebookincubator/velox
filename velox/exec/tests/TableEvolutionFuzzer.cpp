@@ -48,6 +48,13 @@ DEFINE_bool(
     "up after failures. Therefore, results are not compared when this is "
     "enabled. Note that this option only works in debug builds.");
 
+DEFINE_int32(
+    aggregation_pushdown_frequency,
+    5,
+    "Controls the frequency of aggregation pushdown. The aggregation pushdown "
+    "is enabled with probability 1/N where N is this value. For example, "
+    "N=5 means 20% chance, N=2 means 50% chance.");
+
 namespace facebook::velox::exec::test {
 
 std::ostream& operator<<(
@@ -401,6 +408,94 @@ fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
   return expressionFuzzer.fuzzExpressions(1);
 }
 
+// Generate random aggregation configuration for pushdown testing.
+// Only generates aggregations that are eligible for pushdown:
+// - Supported aggregate functions: min, max, sum
+// - Each column can only be used by at most one aggregate
+// - Grouping keys are optional (can be empty for global aggregation)
+// - Columns with filters (subfield or remaining) are excluded to enable
+// pushdown
+std::optional<AggregationConfig> generateAggregationConfig(
+    const RowTypePtr& schema,
+    FuzzerGenerator& rng,
+    const std::unordered_set<std::string>& filteredColumns) {
+  // List of aggregate functions that support pushdown
+  // Note: Excluding 'sum' to avoid integer overflow in fuzzer with random data
+  static const std::vector<std::string> supportedAggs = {"min", "max"};
+
+  // Randomly decide number of grouping keys (0 to 2)
+  int numGroupingKeys = folly::Random::rand32(3, rng);
+  std::vector<std::string> groupingKeys;
+  std::unordered_set<int> usedColumnIndices;
+
+  // Select random columns for grouping keys
+  for (int i = 0; i < numGroupingKeys && i < schema->size(); ++i) {
+    int colIdx = folly::Random::rand32(schema->size(), rng);
+    if (usedColumnIndices.count(colIdx) == 0) {
+      groupingKeys.push_back(schema->nameOf(colIdx));
+      usedColumnIndices.insert(colIdx);
+    }
+  }
+
+  // Generate aggregates on remaining columns
+  // For aggregation pushdown to work, each column should only be used once
+  // and columns with filters should be excluded
+  std::vector<std::string> aggregates;
+  std::vector<int> availableColumns;
+  for (int i = 0; i < schema->size(); ++i) {
+    if (usedColumnIndices.count(i) == 0) {
+      auto columnName = schema->nameOf(i);
+      // Skip columns that have filters (subfield or remaining)
+      if (filteredColumns.count(columnName) > 0) {
+        continue;
+      }
+
+      auto type = schema->childAt(i);
+      // Only numeric types support min/max/sum
+      // Check if it's a primitive numeric type (not decimal)
+      if ((type->isInteger() || type->isBigint() || type->isSmallint() ||
+           type->isTinyint() || type->isReal() || type->isDouble()) &&
+          !type->isDecimal()) {
+        availableColumns.push_back(i);
+      }
+    }
+  }
+
+  if (availableColumns.empty()) {
+    return std::nullopt;
+  }
+
+  // Randomly select 1-5 aggregates
+  int numAggregates = std::min(
+      static_cast<int>(5),
+      static_cast<int>(
+          folly::Random::rand32(1, availableColumns.size() + 1, rng)));
+
+  // Randomly pick columns for aggregates without replacement
+  std::unordered_set<int> selectedIndices;
+  for (int i = 0; i < numAggregates; ++i) {
+    int randomIdx;
+    do {
+      randomIdx = folly::Random::rand32(availableColumns.size(), rng);
+    } while (selectedIndices.count(randomIdx) > 0);
+    selectedIndices.insert(randomIdx);
+
+    int colIdx = availableColumns[randomIdx];
+    std::string aggFunc =
+        supportedAggs[folly::Random::rand32(supportedAggs.size(), rng)];
+    aggregates.push_back(
+        fmt::format("{}({})", aggFunc, schema->nameOf(colIdx)));
+  }
+
+  if (aggregates.empty()) {
+    return std::nullopt;
+  }
+
+  return AggregationConfig{
+      .groupingKeys = std::move(groupingKeys),
+      .aggregates = std::move(aggregates)};
+}
+
 } // namespace
 
 VectorPtr TableEvolutionFuzzer::liftToType(
@@ -599,17 +694,17 @@ void TableEvolutionFuzzer::run() {
       selectedBucket,
       finalExpectedData);
 
-  // Step 5: Setup scan tasks with filters
+  // Step 5: Setup scan tasks with filters and optional aggregation pushdown
   auto rowType = testSetups.back().schema;
-  PushdownConfig pushownConfig;
+  PushdownConfig pushdownConfig;
 
   // Generate subfield filters first
-  pushownConfig.subfieldFiltersMap =
+  pushdownConfig.subfieldFiltersMap =
       generateSubfieldFilters(rowType, finalExpectedData);
 
   // Extract field names used by subfield filters to avoid conflicts
   std::unordered_set<std::string> subfieldFilteredFields;
-  for (const auto& [subfield, filter] : pushownConfig.subfieldFiltersMap) {
+  for (const auto& [subfield, filter] : pushdownConfig.subfieldFiltersMap) {
     auto fieldName = subfield.toString();
     VLOG(1) << "Raw subfield: " << fieldName << ' ' << filter->toString();
     // Extract the root field name (before any nested access)
@@ -628,23 +723,61 @@ void TableEvolutionFuzzer::run() {
     applyRemainingFilters(
         generatedRemainingFilters,
         columnNameMapping,
-        pushownConfig,
+        pushdownConfig,
         subfieldFilteredFields);
   }
 
+  // Collect all filtered columns (both subfield and remaining filters)
+  std::unordered_set<std::string> allFilteredColumns = subfieldFilteredFields;
+
+  // Extract columns from remaining filter if present
+  if (!pushdownConfig.remainingFilter.empty()) {
+    for (const auto& name : rowType->names()) {
+      // Check if the column name appears in the remaining filter
+      if (pushdownConfig.remainingFilter.find(name) != std::string::npos) {
+        allFilteredColumns.insert(name);
+      }
+    }
+  }
+
+  // Enable aggregation testing
+  std::optional<AggregationConfig> aggConfig;
+  bool shouldTestAggregation =
+      folly::Random::oneIn(FLAGS_aggregation_pushdown_frequency, rng_);
+  if (shouldTestAggregation) {
+    aggConfig = generateAggregationConfig(rowType, rng_, allFilteredColumns);
+    if (aggConfig.has_value()) {
+      VLOG(1) << "Testing aggregation pushdown with grouping keys: ["
+              << folly::join(", ", aggConfig->groupingKeys)
+              << "] and aggregates: ["
+              << folly::join(", ", aggConfig->aggregates) << "]";
+    } else {
+      VLOG(1) << "Could not generate valid aggregation configuration";
+      aggConfig = std::nullopt;
+    }
+  }
+
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
+  // actual: TableScan -> Aggregation (allows pushdown)
+  pushdownConfig.aggregationConfig = aggConfig;
   scanTasks[0] = makeScanTask(
       rowType,
       std::move(actualSplits),
-      pushownConfig,
+      pushdownConfig,
       false,
+      false, // insertProjectToBlockPushdown
       globalMapColumnKeys,
       globallyConsistentColumnIndexVector);
+
+  // expected: TableScan -> Project -> Aggregation (blocks pushdown)
+  // Insert a Project node to prevent aggregation pushdown
+  pushdownConfig.aggregationConfig = aggConfig;
   scanTasks[1] = makeScanTask(
       rowType,
       std::move(expectedSplits),
-      pushownConfig,
+      pushdownConfig,
       true,
+      true, // insertProjectToBlockPushdown
       globalMapColumnKeys,
       globallyConsistentColumnIndexVector);
 
@@ -1056,6 +1189,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     std::vector<Split> splits,
     const PushdownConfig& pushdownConfig,
     bool useFiltersAsNode,
+    bool insertProjectToBlockPushdown,
     const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
         globalMapColumnKeys,
     const std::vector<int>& globallyCompatibleFlatmapColumns) {
@@ -1065,17 +1199,38 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
 
   CursorParameters params;
   params.serialExecution = true;
-  // TODO: Mix in filter and aggregate pushdowns.
-  params.planNode =
-      PlanBuilder()
-          .filtersAsNode(useFiltersAsNode)
-          .tableScanWithPushDown(
-              newSchemaUsingStructReadingFlatMap, // Use struct schema for
-                                                  // flatmap reading
-              /*pushdownConfig=*/pushdownConfig,
-              tableSchema, // Original schema as dataColumns
-              {})
-          .planNode();
+
+  auto builder = PlanBuilder()
+                     .filtersAsNode(useFiltersAsNode)
+                     .tableScanWithPushDown(
+                         newSchemaUsingStructReadingFlatMap, // Use struct
+                                                             // schema for
+                                                             // flatmap reading
+                         /*pushdownConfig=*/pushdownConfig,
+                         tableSchema, // Original schema as dataColumns
+                         {});
+
+  // If insertProjectToBlockPushdown is set, insert an identity Project node
+  // to prevent Driver::mayPushdownAggregation() from allowing pushdown
+  if (insertProjectToBlockPushdown &&
+      pushdownConfig.aggregationConfig.has_value()) {
+    // Create identity projection: simply pass through all columns
+    std::vector<std::string> projectExprs;
+    for (const auto& name : newSchemaUsingStructReadingFlatMap->names()) {
+      projectExprs.push_back(name);
+    }
+    builder.project(projectExprs);
+  }
+
+  // Add aggregation if enabled in pushdown config
+  if (pushdownConfig.aggregationConfig.has_value()) {
+    builder.singleAggregation(
+        pushdownConfig.aggregationConfig->groupingKeys,
+        pushdownConfig.aggregationConfig->aggregates);
+  }
+
+  params.planNode = builder.planNode();
+
   auto cursor = TaskCursor::create(params);
   for (auto& split : splits) {
     cursor->task()->addSplit("0", std::move(split));
