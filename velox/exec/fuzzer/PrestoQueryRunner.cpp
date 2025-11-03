@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-#include <curl/curl.h>
+#include <cpr/cpr.h> // @manual
 #include <folly/json.h>
 #include <iostream>
-#include <string>
 #include <utility>
 
 #include "velox/common/base/Fs.h"
@@ -51,13 +50,6 @@ using namespace facebook::velox;
 
 namespace facebook::velox::exec::test {
 namespace {
-
-static size_t
-writeFunction(char* data, size_t size, size_t nmemb, void* userdata) {
-  std::string* response = static_cast<std::string*>(userdata);
-  response->append(data, size * nmemb);
-  return size * nmemb;
-}
 
 void writeToFile(
     const std::string& path,
@@ -501,75 +493,38 @@ std::vector<RowVectorPtr> PrestoQueryRunner::execute(
 std::string PrestoQueryRunner::startQuery(
     const std::string& sql,
     const std::string& sessionProperty) {
-  CURL* curl = curl_easy_init();
-  VELOX_CHECK_NOT_NULL(curl, "Failed to initialize libcurl");
-
-  // Prepare curl headers
-  struct curl_slist* headers = nullptr;
-  headers = curl_slist_append(
-      headers, fmt::format("X-Presto-User: {}", user_).c_str());
-  headers = curl_slist_append(headers, "X-Presto-Catalog: hive");
-  headers = curl_slist_append(headers, "X-Presto-Schema: tpch");
-  headers = curl_slist_append(headers, "Content-Type: text/plain");
-  headers = curl_slist_append(
-      headers, fmt::format("X-Presto-Session: {}", sessionProperty).c_str());
-
-  std::string url =
-      fmt::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_POST, 1L);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, sql.c_str());
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, sql.size());
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunction);
-
-  std::string response;
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-  // Perform the request
-  CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK(
-      (res == CURLE_OK),
+  auto uri = fmt::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
+  cpr::Url url{uri};
+  cpr::Body body{sql};
+  cpr::Header header(
+      {{"X-Presto-User", user_},
+       {"X-Presto-Catalog", "hive"},
+       {"X-Presto-Schema", "tpch"},
+       {"Content-Type", "text/plain"},
+       {"X-Presto-Session", sessionProperty}});
+  cpr::Timeout timeout{timeout_};
+  cpr::Response response = cpr::Post(url, body, header, timeout);
+  VELOX_CHECK_EQ(
+      response.status_code,
+      200,
       "POST to {} failed: {}",
-      coordinatorUri_,
-      curl_easy_strerror(res));
-
-  // Cleanup
-  curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
-
-  return response;
+      uri,
+      response.error.message);
+  return response.text;
 }
 
 std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
-  CURL* curl = curl_easy_init();
-  VELOX_CHECK_NOT_NULL(curl, "Failed to initialize libcurl");
-
-  // Set up the request URL
-  curl_easy_setopt(curl, CURLOPT_URL, nextUri.c_str());
-
-  // Set up headers
-  struct curl_slist* headers = nullptr;
-  headers = curl_slist_append(headers, "X-Presto-Client-Binary-Results: true");
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_);
-
-  // Capture the response body
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunction);
-  std::string response;
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-  // Perform GET request
-  CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK(
-      (res == CURLE_OK), "Get request failed: {}", curl_easy_strerror(res));
-
-  // Cleanup
-  curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
-
-  return response;
+  cpr::Url url(nextUri);
+  cpr::Header header({{"X-Presto-Client-Binary-Results", "true"}});
+  cpr::Timeout timeout{timeout_};
+  cpr::Response response = cpr::Get(url, header, timeout);
+  VELOX_CHECK_EQ(
+      response.status_code,
+      200,
+      "GET from {} failed: {}",
+      nextUri,
+      response.error.message);
+  return response.text;
 }
 
 bool PrestoQueryRunner::supportsVeloxVectorResults() const {
