@@ -31,4 +31,5 @@ FetchContent_Declare(
   URL ${VELOX_XSIMD_SOURCE_URL}
   URL_HASH ${VELOX_XSIMD_BUILD_SHA256_CHECKSUM}
 )
+
 FetchContent_MakeAvailable(xsimd)
