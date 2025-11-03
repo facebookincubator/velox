@@ -45,13 +45,7 @@ class Checker : public PlanNodeVisitor {
       }
     }
 
-    // Verify that output column names are not empty and unique.
-    std::unordered_set<std::string> names;
-    for (const auto& name : node.outputType()->names()) {
-      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
-      VELOX_USER_CHECK(
-          names.insert(name).second, "Duplicate output column: {}", name);
-    }
+    verifyOutputNames(node);
 
     visitSources(&node, ctx);
   }
@@ -180,13 +174,7 @@ class Checker : public PlanNodeVisitor {
       checkInputs(expr, rowType);
     }
 
-    // Verify that output column names are not empty and unique.
-    std::unordered_set<std::string> names;
-    for (const auto& name : node.outputType()->names()) {
-      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
-      VELOX_USER_CHECK(
-          names.insert(name).second, "Duplicate output column: {}", name);
-    }
+    verifyOutputNames(node);
 
     visitSources(&node, ctx);
   }
@@ -209,15 +197,10 @@ class Checker : public PlanNodeVisitor {
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& ctx)
       const override {
-    // Verify that output column names are not empty and unique.
-    std::unordered_set<std::string> names;
-    for (const auto& name : node.outputType()->names()) {
-      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
-      VELOX_USER_CHECK(
-          names.insert(name).second, "Duplicate output column: {}", name);
-    }
+    verifyOutputNames(node);
 
     // Verify assignments match outputType 1:1.
+    const auto& names = node.outputType()->names();
     VELOX_USER_CHECK_EQ(
         names.size(),
         node.assignments().size(),
@@ -278,6 +261,16 @@ class Checker : public PlanNodeVisitor {
   void visitSources(const PlanNode* node, PlanNodeVisitorContext& ctx) const {
     for (auto& source : node->sources()) {
       source->accept(*this, ctx);
+    }
+  }
+
+  // Verify that output column names are not empty and unique.
+  static void verifyOutputNames(const PlanNode& node) {
+    folly::F14FastSet<std::string_view> names;
+    for (const auto& name : node.outputType()->names()) {
+      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
+      VELOX_USER_CHECK(
+          names.emplace(name).second, "Duplicate output column: {}", name);
     }
   }
 
