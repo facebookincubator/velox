@@ -34,7 +34,9 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
+#define VELOX_ENABLE_CUDF2
 #ifdef VELOX_ENABLE_CUDF2
+DECLARE_bool(velox_cudf_table_scan);
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
@@ -329,7 +331,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
       if (facebook::velox::cudf_velox::cudfIsRegistered() &&
           facebook::velox::connector::getAllConnectors().count(
               cudf_velox::exec::test::kCudfHiveConnectorId) > 0 &&
-          facebook::velox::cudf_velox::cudfTableScanEnabled()) {
+              FLAGS_velox_cudf_table_scan) {
         return std::make_shared<
             cudf_velox::connector::hive::CudfHiveTableHandle>(
             cudf_velox::exec::test::kCudfHiveConnectorId,

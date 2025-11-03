@@ -71,11 +71,8 @@ for query_number in ${queries}; do
       --data_format=parquet \
       --run_query_verbose=${query_number} \
       --num_repeats=1 \
-      --velox_cudf_enabled=${VELOX_CUDF_ENABLED} \
-      --velox_cudf_memory_resource=${VELOX_CUDF_MEMORY_RESOURCE} \
+      --velox_cudf_table_scan=true \
       --num_drivers=${num_drivers} \
-      --preferred_output_batch_rows=${output_batch_rows} \
-      --max_output_batch_rows=${output_batch_rows} \
       ${CUDF_FLAGS} 2>&1 |
       tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
     { set -e +x; } &>/dev/null
