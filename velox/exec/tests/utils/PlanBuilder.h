@@ -316,6 +316,12 @@ class PlanBuilder {
       return *this;
     }
 
+    TableScanBuilder& columnHandles(
+        std::vector<connector::hive::HiveColumnHandlePtr> columnHandles) {
+      columnHandles_ = std::move(columnHandles);
+      return *this;
+    }
+
     /// @param assignments Optional ColumnHandles.
     /// outputType names should match the keys in the 'assignments' map. The
     /// 'assignments' map may contain more columns than 'outputType' if some
@@ -341,6 +347,7 @@ class PlanBuilder {
     RowTypePtr outputType_;
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
+    std::vector<connector::hive::HiveColumnHandlePtr> columnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
     connector::ColumnHandleMap assignments_;
