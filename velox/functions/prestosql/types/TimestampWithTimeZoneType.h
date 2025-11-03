@@ -88,11 +88,6 @@ class TimestampWithTimeZoneType final : public BigintType {
     return "TIMESTAMP WITH TIME ZONE";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
-  }
-
   std::string toString() const override {
     return name();
   }

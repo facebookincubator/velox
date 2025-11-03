@@ -66,7 +66,6 @@ class RowVector : public BaseVector {
             rowType->nameOf(i),
             i,
             type->childAt(i)->toString());
-        BaseVector::inMemoryBytes_ += child->inMemoryBytes();
       }
     }
     updateContainsLazyNotLoaded();
@@ -183,6 +182,8 @@ class RowVector : public BaseVector {
         std::move(copiedChildren),
         nullCount_);
   }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   uint64_t retainedSize() const override {
     auto size = BaseVector::retainedSize();
@@ -372,6 +373,8 @@ struct ArrayVectorBase : BaseVector {
     sizes_->asMutable<vector_size_t>()[i] = size;
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+
   /// Check if there is any overlapping [offset, size] ranges.
   bool hasOverlappingRanges() const {
     std::vector<vector_size_t> indices;
@@ -464,10 +467,11 @@ class ArrayVector : public ArrayVectorBase {
             nullCount,
             std::move(offsets),
             std::move(lengths)),
-        elements_(BaseVector::getOrCreateEmpty(
-            std::move(elements),
-            type->childAt(0),
-            pool)) {
+        elements_(
+            BaseVector::getOrCreateEmpty(
+                std::move(elements),
+                type->childAt(0),
+                pool)) {
     VELOX_CHECK_EQ(type->kind(), TypeKind::ARRAY);
     VELOX_CHECK(
         elements_->type()->kindEquals(type->childAt(0)),
@@ -520,6 +524,8 @@ class ArrayVector : public ArrayVectorBase {
         elements_->testingCopyPreserveEncodings(pool),
         nullCount_);
   }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -580,14 +586,16 @@ class MapVector : public ArrayVectorBase {
             nullCount,
             std::move(offsets),
             std::move(sizes)),
-        keys_(BaseVector::getOrCreateEmpty(
-            std::move(keys),
-            type->childAt(0),
-            pool)),
-        values_(BaseVector::getOrCreateEmpty(
-            std::move(values),
-            type->childAt(1),
-            pool)),
+        keys_(
+            BaseVector::getOrCreateEmpty(
+                std::move(keys),
+                type->childAt(0),
+                pool)),
+        values_(
+            BaseVector::getOrCreateEmpty(
+                std::move(values),
+                type->childAt(1),
+                pool)),
         sortedKeys_{sortedKeys} {
     VELOX_CHECK_EQ(type->kind(), TypeKind::MAP);
 
@@ -665,6 +673,8 @@ class MapVector : public ArrayVectorBase {
         nullCount_,
         sortedKeys_);
   }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +

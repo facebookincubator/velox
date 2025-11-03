@@ -39,12 +39,13 @@ class ArrayGetFunction : public SubscriptImpl<
 
     // array(T), tinyint|smallint|integer|bigint -> T
     for (const auto& indexType : {"tinyint", "smallint", "integer", "bigint"}) {
-      signatures.push_back(exec::FunctionSignatureBuilder()
-                               .typeVariable("T")
-                               .returnType("T")
-                               .argumentType("array(T)")
-                               .argumentType(indexType)
-                               .build());
+      signatures.push_back(
+          exec::FunctionSignatureBuilder()
+              .typeVariable("T")
+              .returnType("T")
+              .argumentType("array(T)")
+              .argumentType(indexType)
+              .build());
     }
 
     return signatures;

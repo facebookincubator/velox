@@ -191,12 +191,13 @@ void registerSumDataSizeForStatsAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .typeVariable("T")
-                           .returnType("bigint")
-                           .intermediateType("bigint")
-                           .argumentType("T")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("T")
+          .build());
 
   auto name = prefix + kSumDataSizeForStats;
   exec::registerAggregateFunction(
@@ -213,6 +214,7 @@ void registerSumDataSizeForStatsAggregate(
 
         return std::make_unique<SumDataSizeForStatsAggregate>(resultType);
       },
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

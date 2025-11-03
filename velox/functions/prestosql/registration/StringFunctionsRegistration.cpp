@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/prestosql/RegexpReplace.h"
@@ -44,6 +45,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
+  registerFunction<BitLengthFunction, int64_t, Varchar>(
+      {prefix + "bit_length"});
   registerFunction<XxHash64StringFunction, int64_t, Varchar>(
       {prefix + "xxhash64_internal"});
 
@@ -189,9 +192,10 @@ void registerSplitToMap(const std::string& prefix) {
       Varchar,
       Varchar,
       bool>({"$internal$split_to_map"});
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
-    return rewriteSplitToMapCall(prefix, expr);
-  });
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [prefix](const auto& expr) {
+        return rewriteSplitToMapCall(prefix, expr);
+      });
 }
 } // namespace
 

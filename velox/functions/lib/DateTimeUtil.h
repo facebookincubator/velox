@@ -18,6 +18,7 @@
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
@@ -45,8 +46,9 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // converting all timestamps to microseconds for each unit.
   if (unit == DateTimeUnit::kMicrosecond) {
     const std::chrono::time_point<std::chrono::system_clock>
-        fromMicrosecondpoint(std::chrono::microseconds(
-            std::min(fromTimestamp, toTimestamp).toMicros()));
+        fromMicrosecondpoint(
+            std::chrono::microseconds(
+                std::min(fromTimestamp, toTimestamp).toMicros()));
     const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
         std::chrono::microseconds(
             std::max(fromTimestamp, toTimestamp).toMicros()));
@@ -59,12 +61,14 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // fromTimepoint is less than or equal to toTimepoint.
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          fromTimepoint(std::chrono::milliseconds(
-              std::min(fromTimestamp, toTimestamp).toMillis()));
+          fromTimepoint(
+              std::chrono::milliseconds(
+                  std::min(fromTimestamp, toTimestamp).toMillis()));
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          toTimepoint(std::chrono::milliseconds(
-              std::max(fromTimestamp, toTimestamp).toMillis()));
+          toTimepoint(
+              std::chrono::milliseconds(
+                  std::max(fromTimestamp, toTimestamp).toMillis()));
 
   // Millisecond, second, minute, hour and day have fixed conversion ratio.
   switch (unit) {
@@ -373,4 +377,26 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
   return result;
 }
 
+/// Adds the specified unit and value to a TIME value, handling 24-hour
+/// wraparound. TIME represents milliseconds since midnight (0 to 86399999ms).
+/// For units < DAY, the time of day changes.
+/// For units >= DAY, the time of day doesn't change.
+FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
+  VELOX_USER_CHECK(
+      time >= 0 && time < kMillisInDay,
+      "TIME value {} is out of range [0, 86400000)",
+      time);
+
+  if (FOLLY_UNLIKELY(valueInMillis == 0)) {
+    return time;
+  }
+
+  // IntervalDayTime is already in milliseconds, add it directly to the time
+  // and handle 24-hour wraparound using modulo
+  int64_t newTime = (time + valueInMillis) % kMillisInDay;
+  if (FOLLY_UNLIKELY(newTime < 0)) {
+    newTime += kMillisInDay;
+  }
+  return newTime;
+}
 } // namespace facebook::velox::functions

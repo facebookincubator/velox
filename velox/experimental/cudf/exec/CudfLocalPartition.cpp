@@ -17,12 +17,22 @@
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/partitioning.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+bool CudfLocalPartition::shouldReplace(
+    const std::shared_ptr<const core::LocalPartitionNode>& planNode) {
+  auto* hashFunctionSpec = dynamic_cast<const exec::HashPartitionFunctionSpec*>(
+      &planNode->partitionFunctionSpec());
+  // Only replace LocalPartition with CudfLocalPartition for hash partitioning.
+  // TODO: Round Robin Row-Wise Partitioning can be supported in future.
+  return hashFunctionSpec;
+}
 
 CudfLocalPartition::CudfLocalPartition(
     int32_t operatorId,
@@ -55,9 +65,11 @@ CudfLocalPartition::CudfLocalPartition(
 
   // Get partition function specification string
   std::string spec = planNode->partitionFunctionSpec().toString();
+  auto* hashFunctionSpec = dynamic_cast<const exec::HashPartitionFunctionSpec*>(
+      &planNode->partitionFunctionSpec());
 
   // Only parse keys if it's a hash function
-  if (spec.find("HASH(") != std::string::npos) {
+  if (hashFunctionSpec) {
     // Extract keys between HASH( and )
     size_t start = spec.find("HASH(") + 5;
     size_t end = spec.find(")", start);

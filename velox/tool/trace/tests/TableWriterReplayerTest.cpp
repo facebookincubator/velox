@@ -194,8 +194,9 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
 
     for (auto& path : fs::recursive_directory_iterator(directoryPath)) {
       if (path.is_regular_file()) {
-        splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
-            path.path().string(), 1, fileFormat_)[0]);
+        splits.push_back(
+            HiveConnectorTestBase::makeHiveConnectorSplits(
+                path.path().string(), 1, fileFormat_)[0]);
       }
     }
 
@@ -382,8 +383,9 @@ TEST_F(TableWriterReplayerTest, basic) {
 
   const auto copy =
       AssertQueryBuilder(plan)
-          .split(makeHiveConnectorSplit(fmt::format(
-              "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
+          .split(makeHiveConnectorSplit(
+              fmt::format(
+                  "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
           .copyResults(pool());
   assertEqualResults({data}, {copy});
 }

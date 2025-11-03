@@ -33,10 +33,11 @@ SerializedPage::SerializedPage(
   VELOX_CHECK_NOT_NULL(iobuf_);
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();
-    ranges_.push_back(ByteRange{
-        const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
-        bufSize,
-        0});
+    ranges_.push_back(
+        ByteRange{
+            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
+            bufSize,
+            0});
   }
 }
 
@@ -128,7 +129,7 @@ void ExchangeQueue::addPromiseLocked(
     *stalePromise = std::move(it->second);
     it->second = std::move(promise);
   } else {
-    promises_[consumerId] = std::move(promise);
+    promises_.emplace(consumerId, std::move(promise));
   }
   VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
 }

@@ -190,19 +190,21 @@ class ComparisonSimdFunction : public exec::VectorFunction {
              "interval day to second",
              "interval year to month",
          }) {
-      signatures.push_back(exec::FunctionSignatureBuilder()
-                               .returnType("boolean")
-                               .argumentType(inputType)
-                               .argumentType(inputType)
-                               .build());
+      signatures.push_back(
+          exec::FunctionSignatureBuilder()
+              .returnType("boolean")
+              .argumentType(inputType)
+              .argumentType(inputType)
+              .build());
     }
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .integerVariable("a_precision")
-                             .integerVariable("a_scale")
-                             .returnType("boolean")
-                             .argumentType("DECIMAL(a_precision, a_scale)")
-                             .argumentType("DECIMAL(a_precision, a_scale)")
-                             .build());
+    signatures.push_back(
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .returnType("boolean")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build());
     return signatures;
   }
 

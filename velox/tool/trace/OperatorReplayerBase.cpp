@@ -72,6 +72,10 @@ OperatorReplayerBase::OperatorReplayerBase(
   const auto taskMetaReader = exec::trace::TaskTraceMetadataReader(
       taskTraceDir_, memory::MemoryManager::getInstance()->tracePool());
   queryConfigs_ = taskMetaReader.queryConfigs();
+  LOG(INFO) << "Query configs:\n";
+  for (const auto& [key, value] : queryConfigs_) {
+    LOG(INFO) << fmt::format("\t{}: {}", key, value);
+  }
   connectorConfigs_ = taskMetaReader.connectorProperties();
   planFragment_ = taskMetaReader.queryPlan();
   queryConfigs_[core::QueryConfig::kQueryTraceEnabled] = "false";
@@ -94,9 +98,8 @@ RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
 }
 
 core::PlanNodePtr OperatorReplayerBase::createPlan() {
-  const auto* replayNode = core::PlanNode::findFirstNode(
-      planFragment_.get(),
-      [this](const core::PlanNode* node) { return node->id() == nodeId_; });
+  const auto* replayNode =
+      core::PlanNode::findNodeById(planFragment_.get(), nodeId_);
 
   if (replayNode->sources().empty()) {
     return exec::test::PlanBuilder()
@@ -147,12 +150,12 @@ OperatorReplayerBase::replayNodeFactory(const core::PlanNode* node) const {
 
 void OperatorReplayerBase::printStats(
     const std::shared_ptr<exec::Task>& task) const {
-  const auto planStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = planStats.at(replayPlanNodeId_);
-  for (const auto& [name, operatorStats] : stats.operatorStats) {
-    LOG(INFO) << "Stats of replaying operator " << name << " : "
-              << operatorStats->toString();
-  }
+  const auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& nodeStats = taskStats.at(replayPlanNodeId_);
+  LOG(INFO) << "Stats of replaying execution:";
+  LOG(INFO) << nodeStats.toString(
+      /*includeInputStats=*/true,
+      /*includeRuntimeStats=*/true);
   LOG(INFO) << "Memory usage: " << task->pool()->treeMemoryUsage(false);
 }
 } // namespace facebook::velox::tool::trace

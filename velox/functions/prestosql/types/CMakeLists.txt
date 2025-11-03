@@ -30,12 +30,17 @@ velox_add_library(
   SfmSketchRegistration.cpp
   TDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
+  TimeWithTimezoneRegistration.cpp
+  SetDigestRegistration.cpp
   UuidRegistration.cpp
   VarcharEnumRegistration.cpp
   VarcharEnumType.cpp
 )
 if(VELOX_ENABLE_GEO)
-  velox_sources(velox_presto_types PRIVATE GeometryRegistration.cpp)
+  velox_sources(
+    velox_presto_types
+    PRIVATE GeometryRegistration.cpp SphericalGeographyRegistration.cpp
+  )
 endif()
 
 velox_link_libraries(

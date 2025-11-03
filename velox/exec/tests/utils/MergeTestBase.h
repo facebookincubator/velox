@@ -15,8 +15,8 @@
  */
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/common/time/Timer.h"
-#include "velox/exec/TreeOfLosers.h"
 
 #include <folly/Random.h>
 

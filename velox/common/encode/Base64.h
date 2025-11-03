@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include <folly/io/IOBuf.h>
 
 #include <array>
@@ -45,7 +44,7 @@ class Base64 {
   static std::string encode(const char* input, size_t inputSize);
 
   /// Encodes the specified text.
-  static std::string encode(folly::StringPiece text);
+  static std::string encode(std::string_view text);
 
   /// Encodes the specified IOBuf data.
   static std::string encode(const folly::IOBuf* inputBuffer);
@@ -60,7 +59,7 @@ class Base64 {
   static std::string encodeUrl(const char* input, size_t inputSize);
 
   /// Encodes the specified text using URL encoding.
-  static std::string encodeUrl(folly::StringPiece text);
+  static std::string encodeUrl(std::string_view text);
 
   /// Encodes the specified IOBuf data using URL encoding.
   static std::string encodeUrl(const folly::IOBuf* inputBuffer);
@@ -72,7 +71,7 @@ class Base64 {
   encodeUrl(const char* input, size_t inputSize, char* outputBuffer);
 
   /// Decodes the input Base64 encoded string.
-  static std::string decode(folly::StringPiece encodedText);
+  static std::string decode(std::string_view encodedText);
 
   /// Decodes the specified encoded payload and writes the result to the
   /// 'output'.
@@ -94,7 +93,7 @@ class Base64 {
       size_t outputSize);
 
   /// Decodes the input Base64 URL encoded string.
-  static std::string decodeUrl(folly::StringPiece encodedText);
+  static std::string decodeUrl(std::string_view encodedText);
 
   /// Decodes the specified URL encoded payload and writes the result to the
   /// 'output'.

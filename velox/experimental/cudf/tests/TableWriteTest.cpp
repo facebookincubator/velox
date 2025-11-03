@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
+#include <gflags/gflags.h>
 #include <re2/re2.h>
 
 #include <string>
@@ -54,6 +55,8 @@ using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
 
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
+
+DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
 
 namespace {
 
@@ -154,7 +157,7 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
         commitStrategy_(testParam_.commitStrategy()),
         compressionKind_(testParam_.compressionKind()) {
     LOG(INFO) << testParam_.toString();
-    if (cudfDebugEnabled()) {
+    if (FLAGS_velox_cudf_debug) {
       std::cout << testParam_.toString() << std::endl;
     }
 
@@ -175,8 +178,9 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
       bool spillEnabled = false) {
     std::vector<Split> splits;
     for (const auto& filePath : filePaths) {
-      splits.push_back(facebook::velox::exec::Split(
-          makeCudfHiveConnectorSplit(filePath->getPath())));
+      splits.push_back(
+          facebook::velox::exec::Split(
+              makeCudfHiveConnectorSplit(filePath->getPath())));
     }
     if (!spillEnabled) {
       return AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -267,8 +271,9 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
 
     for (auto& path : fs::recursive_directory_iterator(directoryPath)) {
       if (path.is_regular_file()) {
-        splits.push_back(CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
-            path.path().string(), 1)[0]);
+        splits.push_back(
+            CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
+                path.path().string(), 1)[0]);
       }
     }
 
@@ -294,8 +299,9 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
     std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
         splits;
     for (const auto& filePath : filePaths) {
-      splits.push_back(CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
-          filePath.string(), 1)[0]);
+      splits.push_back(
+          CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
+              filePath.string(), 1)[0]);
     }
     return splits;
   }
@@ -525,20 +531,22 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
       const std::string& targetDir) {
     ASSERT_EQ(filePath.parent_path().string(), targetDir);
     if (commitStrategy_ == CommitStrategy::kNoCommit) {
-      ASSERT_TRUE(RE2::FullMatch(
-          filePath.filename().string(),
-          fmt::format(
-              "test_cursor.+_[0-{}]_{}_.+",
-              numTableWriterCount_ - 1,
-              tableWriteNodeId_)))
+      ASSERT_TRUE(
+          RE2::FullMatch(
+              filePath.filename().string(),
+              fmt::format(
+                  "test_cursor.+_[0-{}]_{}_.+",
+                  numTableWriterCount_ - 1,
+                  tableWriteNodeId_)))
           << filePath.filename().string();
     } else {
-      ASSERT_TRUE(RE2::FullMatch(
-          filePath.filename().string(),
-          fmt::format(
-              ".tmp.velox.test_cursor.+_[0-{}]_{}_.+",
-              numTableWriterCount_ - 1,
-              tableWriteNodeId_)))
+      ASSERT_TRUE(
+          RE2::FullMatch(
+              filePath.filename().string(),
+              fmt::format(
+                  ".tmp.velox.test_cursor.+_[0-{}]_{}_.+",
+                  numTableWriterCount_ - 1,
+                  tableWriteNodeId_)))
           << filePath.filename().string();
     }
   }
@@ -645,10 +653,12 @@ TEST_F(BasicTableWriteTest, roundTrip) {
              .endTableScan()
              .planNode();
 
-  auto copy = AssertQueryBuilder(plan)
-                  .split(makeCudfHiveConnectorSplit(fmt::format(
-                      "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
-                  .copyResults(pool());
+  auto copy =
+      AssertQueryBuilder(plan)
+          .split(makeCudfHiveConnectorSplit(
+              fmt::format(
+                  "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
+          .copyResults(pool());
   assertEqualResults({data}, {copy});
 }
 
@@ -695,20 +705,22 @@ class UnpartitionedTableWriterTest
     std::vector<uint64_t> testParams;
     const auto multiDriverOptions = std::vector<bool>{false, true};
     for (bool multiDrivers : multiDriverOptions) {
-      testParams.push_back(TestParam{
-          FileFormat::PARQUET,
-          TestMode::kUnpartitioned,
-          CommitStrategy::kNoCommit,
-          multiDrivers,
-          CompressionKind_NONE}
-                               .value);
-      testParams.push_back(TestParam{
-          FileFormat::PARQUET,
-          TestMode::kUnpartitioned,
-          CommitStrategy::kTaskCommit,
-          multiDrivers,
-          CompressionKind_NONE}
-                               .value);
+      testParams.push_back(
+          TestParam{
+              FileFormat::PARQUET,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kNoCommit,
+              multiDrivers,
+              CompressionKind_NONE}
+              .value);
+      testParams.push_back(
+          TestParam{
+              FileFormat::PARQUET,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kTaskCommit,
+              multiDrivers,
+              CompressionKind_NONE}
+              .value);
     }
     return testParams;
   }

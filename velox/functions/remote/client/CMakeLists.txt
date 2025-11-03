@@ -18,7 +18,7 @@ velox_link_libraries(
   PUBLIC remote_function_thrift FBThrift::thriftcpp2
 )
 
-velox_add_library(velox_functions_remote Remote.cpp)
+velox_add_library(velox_functions_remote Remote.cpp RemoteVectorFunction.cpp)
 velox_link_libraries(
   velox_functions_remote
   PUBLIC

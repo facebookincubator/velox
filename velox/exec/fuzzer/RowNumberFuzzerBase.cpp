@@ -19,6 +19,7 @@
 #include <utility>
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -78,6 +79,7 @@ RowNumberFuzzerBase::RowNumberFuzzerBase(
 void RowNumberFuzzerBase::setupReadWrite() {
   filesystems::registerLocalFileSystem();
   dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
 
   if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();

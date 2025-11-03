@@ -94,10 +94,11 @@ class FilterProjectBenchmark : public VectorTestBase {
     auto& type = data[0]->type()->as<TypeKind::ROW>();
     builder.values(data);
     for (auto level = 0; level < numStages; ++level) {
-      builder.filter(fmt::format(
-          "c0 >= {}",
-          static_cast<int32_t>(
-              1000000 - pow(passPct / 100.0, 1 + level) * 1000000)));
+      builder.filter(
+          fmt::format(
+              "c0 >= {}",
+              static_cast<int32_t>(
+                  1000000 - pow(passPct / 100.0, 1 + level) * 1000000)));
       std::vector<std::string> projections = {"c0"};
       int32_t nthBigint = 0;
       int32_t nthVarchar = 0;

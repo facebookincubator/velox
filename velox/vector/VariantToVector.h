@@ -26,7 +26,8 @@ namespace facebook::velox {
 //
 // @returns ConstantVector of size 1.
 //
-// TODO Fold into BaseVector::createConstant API.
+// Deprecated: use BaseVector::createConstant instead.
+[[deprecated("Use BaseVector::createConstant")]]
 VectorPtr variantToVector(
     const TypePtr& type,
     const Variant& value,

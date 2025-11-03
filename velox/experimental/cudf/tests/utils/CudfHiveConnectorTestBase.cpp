@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
@@ -26,7 +25,6 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -74,21 +72,17 @@ CudfHiveConnectorTestBase::CudfHiveConnectorTestBase() {
 void CudfHiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
 
-  // Register cudf to enable the CudfHiveDataSource delegate
+  // Register cudf to enable the CudfDatasource creation from CudfHiveConnector
   facebook::velox::cudf_velox::registerCudf();
 
-  // Register Hive connector factory and connector
-  facebook::velox::connector::registerConnectorFactory(
-      std::make_shared<facebook::velox::cudf_velox::connector::hive::
-                           CudfHiveConnectorFactory>());
-  auto hiveConnector =
-      facebook::velox::connector::getConnectorFactory(
-          HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              kCudfHiveConnectorId,
-              std::make_shared<facebook::velox::config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor_.get());
+  // Register Hive connector
+  facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
+      factory;
+  auto hiveConnector = factory.newConnector(
+      kCudfHiveConnectorId,
+      std::make_shared<facebook::velox::config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
 }
@@ -98,8 +92,6 @@ void CudfHiveConnectorTestBase::TearDown() {
   // connector.
   ioExecutor_.reset();
   facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
-  facebook::velox::connector::unregisterConnectorFactory(
-      HiveConnectorFactory::kHiveConnectorName);
   facebook::velox::cudf_velox::unregisterCudf();
   OperatorTestBase::TearDown();
 }
@@ -107,10 +99,11 @@ void CudfHiveConnectorTestBase::TearDown() {
 void CudfHiveConnectorTestBase::resetCudfHiveConnector(
     const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
   facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
+
+  facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
+      factory;
   auto hiveConnector =
-      facebook::velox::connector::getConnectorFactory(
-          HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kCudfHiveConnectorId, config, ioExecutor_.get());
+      factory.newConnector(kCudfHiveConnectorId, config, ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
 }
 

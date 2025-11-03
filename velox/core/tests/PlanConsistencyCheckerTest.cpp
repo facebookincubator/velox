@@ -17,6 +17,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanConsistencyChecker.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 
 namespace facebook::velox::core {
 
@@ -26,6 +27,16 @@ class PlanConsistencyCheckerTest : public testing::Test {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
+
+  void SetUp() override {
+    idGenerator_.reset();
+  }
+
+  std::string nextId() {
+    return idGenerator_.next();
+  }
+
+  PlanNodeIdGenerator idGenerator_;
 };
 
 TypedExprPtr Lit(Variant value) {
@@ -33,28 +44,28 @@ TypedExprPtr Lit(Variant value) {
   return std::make_shared<ConstantTypedExpr>(std::move(type), std::move(value));
 }
 
-TypedExprPtr Col(TypePtr type, std::string name) {
+FieldAccessTypedExprPtr Col(TypePtr type, std::string name) {
   return std::make_shared<FieldAccessTypedExpr>(
       std::move(type), std::move(name));
 }
 
 TEST_F(PlanConsistencyCheckerTest, filter) {
   auto valuesNode =
-      std::make_shared<ValuesNode>("0", std::vector<RowVectorPtr>{});
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
 
   auto projectNode = std::make_shared<ProjectNode>(
-      "2",
+      nextId(),
       std::vector<std::string>{"a", "b", "c"},
       std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
       valuesNode);
 
   auto filterNode =
-      std::make_shared<FilterNode>("1", Col(BOOLEAN(), "a"), projectNode);
+      std::make_shared<FilterNode>(nextId(), Col(BOOLEAN(), "a"), projectNode);
   ASSERT_NO_THROW(PlanConsistencyChecker::check(filterNode));
 
   // Wrong type.
   filterNode =
-      std::make_shared<FilterNode>("1", Col(BOOLEAN(), "b"), projectNode);
+      std::make_shared<FilterNode>(nextId(), Col(BOOLEAN(), "b"), projectNode);
 
   VELOX_ASSERT_THROW(
       PlanConsistencyChecker::check(filterNode),
@@ -62,7 +73,7 @@ TEST_F(PlanConsistencyCheckerTest, filter) {
 
   // Wrong name.
   filterNode =
-      std::make_shared<FilterNode>("1", Col(BOOLEAN(), "x"), projectNode);
+      std::make_shared<FilterNode>(nextId(), Col(BOOLEAN(), "x"), projectNode);
 
   VELOX_ASSERT_THROW(
       PlanConsistencyChecker::check(filterNode), "Field not found: x");
@@ -70,10 +81,10 @@ TEST_F(PlanConsistencyCheckerTest, filter) {
 
 TEST_F(PlanConsistencyCheckerTest, project) {
   auto valuesNode =
-      std::make_shared<ValuesNode>("0", std::vector<RowVectorPtr>{});
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
 
   auto projectNode = std::make_shared<ProjectNode>(
-      "2",
+      nextId(),
       std::vector<std::string>{"a", "b", "c"},
       std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
       valuesNode);
@@ -81,7 +92,7 @@ TEST_F(PlanConsistencyCheckerTest, project) {
 
   // Duplicate output name.
   projectNode = std::make_shared<ProjectNode>(
-      "2",
+      nextId(),
       std::vector<std::string>{"a", "a", "c"},
       std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
       valuesNode);
@@ -91,13 +102,182 @@ TEST_F(PlanConsistencyCheckerTest, project) {
 
   // Wrong column name.
   projectNode = std::make_shared<ProjectNode>(
-      "2",
+      nextId(),
       std::vector<std::string>{"a", "a", "c"},
       std::vector<TypedExprPtr>{Lit(true), Col(REAL(), "x"), Lit(0.1)},
       valuesNode);
 
   VELOX_ASSERT_THROW(
       PlanConsistencyChecker::check(projectNode), "Field not found: x");
+}
+
+TEST_F(PlanConsistencyCheckerTest, aggregation) {
+  auto valuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto projectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"a", "b", "c"},
+      std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
+      valuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(projectNode));
+
+  {
+    auto aggregationNode = std::make_shared<AggregationNode>(
+        nextId(),
+        AggregationNode::Step::kPartial,
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<std::string>{"sum", "cnt"},
+        std::vector<AggregationNode::Aggregate>{
+            {
+                .call = std::make_shared<CallTypedExpr>(
+                    BIGINT(), "sum", Col(INTEGER(), "x")),
+                .rawInputTypes = {BIGINT()},
+            },
+            {
+                .call = std::make_shared<CallTypedExpr>(BIGINT(), "count"),
+                .rawInputTypes = {},
+            },
+        },
+        /*ignoreNullKeys*/ false,
+        projectNode);
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(aggregationNode), "Field not found: x");
+  }
+
+  {
+    auto aggregationNode = std::make_shared<AggregationNode>(
+        nextId(),
+        AggregationNode::Step::kPartial,
+        std::vector<FieldAccessTypedExprPtr>{Col(INTEGER(), "y")},
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<std::string>{"sum", "cnt"},
+        std::vector<AggregationNode::Aggregate>{
+            {
+                .call = std::make_shared<CallTypedExpr>(
+                    BIGINT(), "sum", Col(INTEGER(), "b")),
+                .rawInputTypes = {BIGINT()},
+            },
+            {
+                .call = std::make_shared<CallTypedExpr>(BIGINT(), "count"),
+                .rawInputTypes = {},
+            },
+        },
+        /*ignoreNullKeys*/ false,
+        projectNode);
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(aggregationNode), "Field not found: y");
+  }
+
+  {
+    auto aggregationNode = std::make_shared<AggregationNode>(
+        nextId(),
+        AggregationNode::Step::kPartial,
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<std::string>{"sum", "cnt"},
+        std::vector<AggregationNode::Aggregate>{
+            {
+                .call = std::make_shared<CallTypedExpr>(
+                    BIGINT(), "sum", Col(INTEGER(), "b")),
+                .rawInputTypes = {BIGINT()},
+                .mask = Col(BOOLEAN(), "z"),
+            },
+            {
+                .call = std::make_shared<CallTypedExpr>(BIGINT(), "count"),
+                .rawInputTypes = {},
+            },
+        },
+        /*ignoreNullKeys*/ false,
+        projectNode);
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(aggregationNode), "Field not found: z");
+  }
+
+  {
+    auto aggregationNode = std::make_shared<AggregationNode>(
+        nextId(),
+        AggregationNode::Step::kPartial,
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<FieldAccessTypedExprPtr>{},
+        std::vector<std::string>{"sum", "sum"},
+        std::vector<AggregationNode::Aggregate>{
+            {
+                .call = std::make_shared<CallTypedExpr>(
+                    BIGINT(), "sum", Col(INTEGER(), "b")),
+                .rawInputTypes = {BIGINT()},
+            },
+            {
+                .call = std::make_shared<CallTypedExpr>(BIGINT(), "count"),
+                .rawInputTypes = {},
+            },
+        },
+        /*ignoreNullKeys*/ false,
+        projectNode);
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(aggregationNode),
+        "Duplicate output column: sum");
+  }
+}
+
+TEST_F(PlanConsistencyCheckerTest, hashJoin) {
+  auto leftValuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto leftProjectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{Lit(1), Lit(2)},
+      leftValuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(leftValuesNode));
+
+  auto rightValuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto rightProjectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"c", "d"},
+      std::vector<TypedExprPtr>{Lit(1), Lit(2)},
+      leftValuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(rightProjectNode));
+
+  // Invalid reference in the filter.
+  {
+    auto joinNode = std::make_shared<HashJoinNode>(
+        nextId(),
+        JoinType::kLeft,
+        /*nullAware=*/false,
+        std::vector<FieldAccessTypedExprPtr>{Col(INTEGER(), "a")},
+        std::vector<FieldAccessTypedExprPtr>{Col(INTEGER(), "c")},
+        std::make_shared<CallTypedExpr>(
+            BOOLEAN(), "lt", Col(INTEGER(), "b"), Col(INTEGER(), "blah")),
+        leftProjectNode,
+        rightProjectNode,
+        ROW({}));
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(joinNode),
+        "Field not found: blah. Available fields are: a, b, c, d.");
+  }
+
+  // Duplicate join condition.
+  {
+    auto joinNode = std::make_shared<HashJoinNode>(
+        nextId(),
+        JoinType::kLeft,
+        /*nullAware=*/false,
+        std::vector<FieldAccessTypedExprPtr>{
+            Col(INTEGER(), "a"), Col(INTEGER(), "a")},
+        std::vector<FieldAccessTypedExprPtr>{
+            Col(INTEGER(), "c"), Col(INTEGER(), "c")},
+        /*filter=*/nullptr,
+        leftProjectNode,
+        rightProjectNode,
+        ROW({}));
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(joinNode),
+        "Duplicate join condition: \"a\" = \"c\"");
+  }
 }
 
 } // namespace

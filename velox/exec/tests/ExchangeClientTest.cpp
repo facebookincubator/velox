@@ -91,7 +91,8 @@ class ExchangeClientTest
         core::PlanFragment{plan},
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
   }
 
   int32_t enqueue(
@@ -588,7 +589,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::test::LocalExchangeSource::pause",
       std::function<void(void*)>(([&numberOfAcknowledgeRequests](void*) {
-        numberOfAcknowledgeRequests++;
+        ++numberOfAcknowledgeRequests;
       })));
 
   {
@@ -609,10 +610,11 @@ TEST_P(ExchangeClientTest, acknowledge) {
     client->addRemoteTaskId(sourceTaskId);
     client->noMoreRemoteTasks();
 
-    ASSERT_TRUE(std::move(future)
-                    .via(executor())
-                    .wait(std::chrono::seconds{10})
-                    .isReady());
+    ASSERT_TRUE(
+        std::move(future)
+            .via(executor())
+            .wait(std::chrono::seconds{10})
+            .isReady());
 
 #ifndef NDEBUG
     // The client knew there is more data available but could not fetch any more
@@ -663,7 +665,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
     int attempts = 100;
     bool outputBuffersEmpty;
     while (attempts > 0) {
-      attempts--;
+      --attempts;
       outputBuffersEmpty = bufferManager_->getUtilization(sourceTaskId) == 0;
       if (outputBuffersEmpty) {
         break;
@@ -675,7 +677,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
     // The output buffer is empty now
     // Explicit acknowledge is not necessary as a blocking getDataSize is sent
     // right away
-    EXPECT_EQ(numberOfAcknowledgeRequests, 2);
+    EXPECT_EQ(numberOfAcknowledgeRequests, 3);
 #endif
   }
 
@@ -689,10 +691,11 @@ TEST_P(ExchangeClientTest, acknowledge) {
   pages = client->next(1, 1, &atEnd, &dequeueEndOfDataFuture);
   ASSERT_EQ(0, pages.size());
 
-  ASSERT_TRUE(std::move(dequeueEndOfDataFuture)
-                  .via(executor())
-                  .wait(std::chrono::seconds{10})
-                  .isReady());
+  ASSERT_TRUE(
+      std::move(dequeueEndOfDataFuture)
+          .via(executor())
+          .wait(std::chrono::seconds{10})
+          .isReady());
   pages = client->next(1, 1, &atEnd, &dequeueEndOfDataFuture);
   ASSERT_EQ(0, pages.size());
   ASSERT_TRUE(atEnd);
@@ -982,7 +985,10 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VectorSerde::Kind::kPresto,
         VectorSerde::Kind::kCompactRow,
-        VectorSerde::Kind::kUnsafeRow));
+        VectorSerde::Kind::kUnsafeRow),
+    [](const testing::TestParamInfo<VectorSerde::Kind>& info) {
+      return fmt::format("{}", info.param);
+    });
 
 } // namespace
 } // namespace facebook::velox::exec

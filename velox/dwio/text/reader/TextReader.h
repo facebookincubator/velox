@@ -85,8 +85,6 @@ class TextReader : public dwio::common::Reader {
 
   uint64_t getFileLength() const;
 
-  uint64_t getMemoryUse();
-
  private:
   ReaderOptions options_;
   mutable std::shared_ptr<const TypeWithId> typeWithId_;
@@ -205,6 +203,13 @@ class TextRowReader : public dwio::common::RowReader {
       BaseVector* FOLLY_NULLABLE data,
       vector_size_t insertionRow,
       DelimType& delim);
+
+  template <class T>
+  void setValueFromString(
+      const std::string& str,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      std::function<std::optional<T>(const std::string&)> convert);
 
   const std::shared_ptr<FileContents> contents_;
   const std::shared_ptr<const TypeWithId> schemaWithId_;

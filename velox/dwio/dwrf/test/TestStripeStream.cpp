@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -42,8 +43,8 @@ class RecordingInputStream : public facebook::velox::InMemoryReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      facebook::velox::filesystems::File::IoStats* stats =
-          nullptr) const override {
+      const facebook::velox::FileStorageContext& fileStorageContext = {})
+      const override {
     reads_.push_back({offset, length});
     return {static_cast<char*>(buf), length};
   }
@@ -158,10 +159,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(StripeStreamFormatTypeTest, planReads) {
   google::protobuf::Arena arena;
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
-  footer->set_rowindexstride(100);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
+  auto footerWrapper = FooterWriteWrapper(footer);
+  footerWrapper.setRowIndexStride(100);
   auto type = HiveTypeParser().parse("struct<a:int,b:float>");
-  ProtoUtils::writeType(*type, *footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
   auto readerBase = std::make_shared<ReaderBase>(
@@ -247,10 +249,11 @@ TEST_P(StripeStreamFormatTypeTest, planReads) {
 
 TEST_F(StripeStreamTest, filterSequences) {
   google::protobuf::Arena arena;
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
-  footer->set_rowindexstride(100);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
+  auto footerWrapper = FooterWriteWrapper(footer);
+  footerWrapper.setRowIndexStride(100);
   auto type = HiveTypeParser().parse("struct<a:map<int,float>>");
-  ProtoUtils::writeType(*type, *footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
   auto readerBase = std::make_shared<ReaderBase>(
@@ -311,10 +314,11 @@ TEST_F(StripeStreamTest, filterSequences) {
 
 TEST_P(StripeStreamFormatTypeTest, zeroLength) {
   google::protobuf::Arena arena;
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
-  footer->set_rowindexstride(100);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
+  auto footerWrapper = FooterWriteWrapper(footer);
+  footerWrapper.setRowIndexStride(100);
   auto type = HiveTypeParser().parse("struct<a:int>");
-  ProtoUtils::writeType(*type, *footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   proto::PostScript ps;
   ps.set_compressionblocksize(1024);
   ps.set_compression(proto::CompressionKind::ZSTD);
@@ -437,12 +441,13 @@ TEST_P(StripeStreamFormatTypeTest, planReadsIndex) {
   index.SerializeToOstream(&buffer);
 
   // build footer
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
-  footer->set_rowindexstride(100);
-  footer->add_stripecacheoffsets(0);
-  footer->add_stripecacheoffsets(buffer.tellp());
+  auto footer = ArenaCreate<proto::Footer>(&arena);
+  auto footerWrapper = FooterWriteWrapper(footer);
+  footerWrapper.setRowIndexStride(100);
+  footerWrapper.addStripeCacheOffsets(0);
+  footerWrapper.addStripeCacheOffsets(buffer.tellp());
   auto type = HiveTypeParser().parse("struct<a:int>");
-  ProtoUtils::writeType(*type, *footer);
+  ProtoUtils::writeType(*type, footerWrapper);
 
   // build cache
   std::string str(buffer.str());
@@ -596,23 +601,24 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
   proto::PostScript ps;
   ps.set_compression(proto::CompressionKind::ZSTD);
   ps.set_compressionblocksize(256 * 1024);
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
+  auto footerWrapper = FooterWriteWrapper(footer);
   // a: not encrypted, projected
   // encryption group 1: b, c. projected b.
   // group 2: d. projected d.
   // group 3: e. not projected
   auto type = HiveTypeParser().parse("struct<a:int,b:int,c:int,d:int,e:int>");
-  ProtoUtils::writeType(*type, *footer);
+  ProtoUtils::writeType(*type, footerWrapper);
 
-  auto enc = footer->mutable_encryption();
+  auto enc = footerWrapper.mutableEncryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   addEncryptionGroup(*enc, {2, 3});
   addEncryptionGroup(*enc, {4});
   addEncryptionGroup(*enc, {5});
 
-  auto stripe = footer->add_stripes();
+  auto stripe = footerWrapper.addStripes();
   for (auto i = 0; i < 3; ++i) {
-    *stripe->add_keymetadata() = folly::to<std::string>("key", i);
+    *stripe.addKeyMetadata() = folly::to<std::string>("key", i);
   }
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
@@ -689,19 +695,20 @@ TEST_F(StripeStreamTest, schemaMismatch) {
   proto::PostScript ps;
   ps.set_compression(proto::CompressionKind::ZSTD);
   ps.set_compressionblocksize(256 * 1024);
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
+  auto footerWrapper = FooterWriteWrapper(footer);
   // a: not encrypted, has schema change
   // b: encrypted
   // c: not encrypted
   auto type = HiveTypeParser().parse("struct<a:struct<a:int>,b:int,c:int>");
-  ProtoUtils::writeType(*type, *footer);
+  ProtoUtils::writeType(*type, footerWrapper);
 
-  auto enc = footer->mutable_encryption();
+  auto enc = footerWrapper.mutableEncryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   addEncryptionGroup(*enc, {3});
 
-  auto stripe = footer->add_stripes();
-  *stripe->add_keymetadata() = "key";
+  auto stripe = footerWrapper.addStripes();
+  *stripe.addKeyMetadata() = "key";
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
   TestEncrypter encrypter;

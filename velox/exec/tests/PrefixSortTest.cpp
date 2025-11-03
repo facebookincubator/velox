@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 
 #include "velox/exec/PrefixSort.h"

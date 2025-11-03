@@ -48,7 +48,8 @@ class OperatorUtilsTest : public OperatorTestBase {
         std::move(planFragment),
         0,
         core::QueryCtx::create(executor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     driver_ = Driver::testingCreate();
     driverCtx_ = std::make_unique<DriverCtx>(task_, 0, 0, 0, 0);
     driverCtx_->driver = driver_.get();
@@ -65,8 +66,9 @@ class OperatorUtilsTest : public OperatorTestBase {
     // Build source vectors with nulls.
     std::vector<RowVectorPtr> sources;
     for (int i = 0; i < numSources; ++i) {
-      sources.push_back(std::static_pointer_cast<RowVector>(
-          BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
+      sources.push_back(
+          std::static_pointer_cast<RowVector>(
+              BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
       for (int j = 0; j < kNumColumns; ++j) {
         auto vector = sources.back()->childAt(j);
         int nullRow = (folly::Random::rand32() % kNumRows) / 4;

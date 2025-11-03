@@ -123,8 +123,9 @@ bool WaveHiveDataSource::isFinished() {
       if (it == splitReaderStats_.end()) {
         splitReaderStats_.insert(std::make_pair(name, counter));
       } else {
-        splitReaderStats_.insert(std::make_pair(
-            name, RuntimeCounter(it->second.value, counter.unit)));
+        splitReaderStats_.insert(
+            std::make_pair(
+                name, RuntimeCounter(it->second.value, counter.unit)));
       }
     }
     return true;
@@ -140,11 +141,12 @@ uint64_t WaveHiveDataSource::getCompletedRows() {
   return completedRows_;
 }
 
-std::unordered_map<std::string, RuntimeCounter>
-WaveHiveDataSource::runtimeStats() {
-  auto map = runtimeStats_.toMap();
+std::unordered_map<std::string, RuntimeMetric>
+WaveHiveDataSource::getRuntimeStats() {
+  auto map = runtimeStats_.toRuntimeMetricMap();
   for (const auto& [name, counter] : splitReaderStats_) {
-    map.insert(std::make_pair(name, counter));
+    map.insert(
+        std::make_pair(name, RuntimeMetric(counter.value, counter.unit)));
   }
   return map;
 }

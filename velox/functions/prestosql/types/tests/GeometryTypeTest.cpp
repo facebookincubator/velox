@@ -29,7 +29,7 @@ class GeometryTypeTest : public testing::Test, public TypeTestBase {
 
 TEST_F(GeometryTypeTest, basic) {
   ASSERT_EQ(GEOMETRY()->name(), "GEOMETRY");
-  ASSERT_EQ(GEOMETRY()->kindName(), "VARBINARY");
+  ASSERT_STREQ(GEOMETRY()->kindName(), "VARBINARY");
   ASSERT_TRUE(GEOMETRY()->parameters().empty());
   ASSERT_EQ(GEOMETRY()->toString(), "GEOMETRY");
 

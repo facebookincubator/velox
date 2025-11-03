@@ -15,6 +15,7 @@
  */
 #include <folly/container/F14Set.h>
 
+#include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/core/PlanNode.h"
 #include "velox/vector/VectorSaver.h"
@@ -59,7 +60,11 @@ IndexLookupConditionPtr createIndexJoinCondition(
 }
 } // namespace
 
-std::vector<IndexLookupConditionPtr> deserializeJoinConditions(
+/// Deserializes lookup conditions from dynamic object for index lookup joins.
+/// These conditions are more complex than simple equality join conditions and
+/// can include IN, BETWEEN, and EQUAL conditions that involve both left and
+/// right side columns.
+std::vector<IndexLookupConditionPtr> deserializejoinConditions(
     const folly::dynamic& obj,
     void* context) {
   if (obj.count("joinConditions") == 0) {
@@ -384,6 +389,10 @@ std::vector<FieldAccessTypedExprPtr> deserializeFields(
     void* context) {
   return ISerializable::deserialize<std::vector<FieldAccessTypedExpr>>(
       array, context);
+}
+
+FieldAccessTypedExprPtr deserializeField(const folly::dynamic& obj) {
+  return ISerializable::deserialize<FieldAccessTypedExpr>(obj);
 }
 
 std::vector<std::string> deserializeStrings(const folly::dynamic& array) {
@@ -1146,8 +1155,9 @@ std::vector<TypedExprPtr> flattenExprs(
 
   const auto& sourceType = input->outputType();
   for (auto& name : moreNames) {
-    result.push_back(std::make_shared<FieldAccessTypedExpr>(
-        sourceType->findChild(name), name));
+    result.push_back(
+        std::make_shared<FieldAccessTypedExpr>(
+            sourceType->findChild(name), name));
   }
   return result;
 }
@@ -1730,7 +1740,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     const std::vector<FieldAccessTypedExprPtr>& leftKeys,
     const std::vector<FieldAccessTypedExprPtr>& rightKeys,
     const std::vector<IndexLookupConditionPtr>& joinConditions,
-    bool includeMatchColumn,
+    TypedExprPtr filter,
+    bool hasMarker,
     PlanNodePtr left,
     TableScanNodePtr right,
     RowTypePtr outputType)
@@ -1739,13 +1750,13 @@ IndexLookupJoinNode::IndexLookupJoinNode(
           joinType,
           leftKeys,
           rightKeys,
-          /*filter=*/nullptr,
+          std::move(filter),
           std::move(left),
           right,
           outputType),
       lookupSourceNode_(std::move(right)),
       joinConditions_(joinConditions),
-      includeMatchColumn_(includeMatchColumn) {
+      hasMarker_(hasMarker) {
   VELOX_USER_CHECK(
       !leftKeys.empty(),
       "The index lookup join node requires at least one join key");
@@ -1789,7 +1800,7 @@ IndexLookupJoinNode::IndexLookupJoinNode(
   }
 
   auto numOutputColumns = outputType_->size();
-  if (includeMatchColumn_) {
+  if (hasMarker_) {
     VELOX_USER_CHECK(
         isLeftJoin(),
         "Index join match column can only present for {} but not {}",
@@ -1818,17 +1829,19 @@ PlanNodePtr IndexLookupJoinNode::create(
   auto sources = deserializeSources(obj, context);
   VELOX_CHECK_EQ(2, sources.size());
   TableScanNodePtr lookupSource =
-      std::dynamic_pointer_cast<const TableScanNode>(sources[1]);
-  VELOX_CHECK_NOT_NULL(lookupSource);
+      checked_pointer_cast<const TableScanNode>(sources[1]);
 
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
 
-  VELOX_CHECK_EQ(obj.count("filter"), 0);
+  TypedExprPtr filter;
+  if (obj.count("filter")) {
+    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"], context);
+  }
 
-  auto joinConditions = deserializeJoinConditions(obj, context);
+  auto joinConditions = deserializejoinConditions(obj, context);
 
-  const bool includeMatchColumn = obj["includeMatchColumn"].asBool();
+  const bool hasMarker = obj["hasMarker"].asBool();
 
   auto outputType = deserializeRowType(obj["outputType"]);
 
@@ -1838,7 +1851,8 @@ PlanNodePtr IndexLookupJoinNode::create(
       std::move(leftKeys),
       std::move(rightKeys),
       std::move(joinConditions),
-      includeMatchColumn,
+      filter,
+      hasMarker,
       sources[0],
       std::move(lookupSource),
       std::move(outputType));
@@ -1853,7 +1867,10 @@ folly::dynamic IndexLookupJoinNode::serialize() const {
     }
     obj["joinConditions"] = std::move(serializedJoins);
   }
-  obj["includeMatchColumn"] = includeMatchColumn_;
+  if (filter_) {
+    obj["filter"] = filter_->serialize();
+  }
+  obj["hasMarker"] = hasMarker_;
   return obj;
 }
 
@@ -1863,14 +1880,15 @@ void IndexLookupJoinNode::addDetails(std::stringstream& stream) const {
     return;
   }
 
-  std::vector<std::string> joinConditionStrs;
-  joinConditionStrs.reserve(joinConditions_.size());
+  std::vector<std::string> joinConditionstrs;
+  joinConditionstrs.reserve(joinConditions_.size());
   for (const auto& joinCondition : joinConditions_) {
-    joinConditionStrs.push_back(joinCondition->toString());
+    joinConditionstrs.push_back(joinCondition->toString());
   }
-  stream << ", joinConditions: [" << folly::join(", ", joinConditionStrs)
-         << " ], includeMatchColumn: ["
-         << (includeMatchColumn_ ? "true" : "false") << "]";
+  stream << ", joinConditions: [" << folly::join(", ", joinConditionstrs)
+         << " ], filter: ["
+         << (filter_ == nullptr ? "null" : filter_->toString())
+         << "], hasMarker: [" << (hasMarker_ ? "true" : "false") << "]";
 }
 
 void IndexLookupJoinNode::accept(
@@ -1892,9 +1910,7 @@ bool IndexLookupJoinNode::isSupported(JoinType joinType) {
 }
 
 bool isIndexLookupJoin(const PlanNode* planNode) {
-  const auto* indexLookupJoin =
-      dynamic_cast<const IndexLookupJoinNode*>(planNode);
-  return indexLookupJoin != nullptr;
+  return is_instance_of<IndexLookupJoinNode>(planNode);
 }
 
 // static
@@ -2709,11 +2725,6 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   auto columns = deserializeRowType(obj["columns"]);
   auto columnNames =
       ISerializable::deserialize<std::vector<std::string>>(obj["columnNames"]);
-  AggregationNodePtr aggregationNode;
-  if (obj.count("aggregationNode") != 0) {
-    aggregationNode = ISerializable::deserialize<AggregationNode>(
-        obj["aggregationNode"], context);
-  }
   auto connectorId = obj["connectorId"].asString();
   auto connectorInsertTableHandle =
       ISerializable::deserialize<connector::ConnectorInsertTableHandle>(
@@ -3069,21 +3080,30 @@ SpatialJoinNode::SpatialJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
     TypedExprPtr joinCondition,
+    FieldAccessTypedExprPtr probeGeometry,
+    FieldAccessTypedExprPtr buildGeometry,
+    std::optional<FieldAccessTypedExprPtr> radius,
     PlanNodePtr left,
     PlanNodePtr right,
     RowTypePtr outputType)
     : PlanNode(id),
       joinType_(joinType),
       joinCondition_(std::move(joinCondition)),
+      probeGeometry_(std::move(probeGeometry)),
+      buildGeometry_(std::move(buildGeometry)),
+      radius_(std::move(radius)),
       sources_({std::move(left), std::move(right)}),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK(
       isSupported(joinType_),
       "The join type is not supported by spatial join: {}",
       JoinTypeName::toName(joinType_));
-  VELOX_USER_CHECK(
-      joinCondition_ != nullptr,
-      "The join condition must not be null for spatial join");
+  VELOX_USER_CHECK_NOT_NULL(
+      joinCondition_, "The join condition must not be null for spatial join");
+  VELOX_USER_CHECK_NOT_NULL(
+      probeGeometry_, "Probe geometery must not be null for spatial joins");
+  VELOX_USER_CHECK_NOT_NULL(
+      buildGeometry_, "Build geometery must not be null for spatial joins");
   VELOX_USER_CHECK_EQ(
       sources_.size(), 2, "Must have 2 sources for spatial joins");
   VELOX_USER_CHECK(
@@ -3115,6 +3135,11 @@ void SpatialJoinNode::addDetails(std::stringstream& stream) const {
   if (joinCondition_) {
     stream << ", joinCondition: " << joinCondition_->toString();
   }
+  stream << ", probeGeometry: " << probeGeometry_->name();
+  stream << ", buildGeometry: " << buildGeometry_->name();
+  if (radius_) {
+    stream << ", radius: " << radius_.value()->name();
+  }
 }
 
 folly::dynamic SpatialJoinNode::serialize() const {
@@ -3124,6 +3149,11 @@ folly::dynamic SpatialJoinNode::serialize() const {
     obj["joinCondition"] = joinCondition_->serialize();
   }
   obj["outputType"] = outputType_->serialize();
+  obj["probeGeometry"] = probeGeometry_->serialize();
+  obj["buildGeometry"] = buildGeometry_->serialize();
+  if (radius_) {
+    obj["radius"] = radius_.value()->serialize();
+  }
   return obj;
 }
 
@@ -3144,11 +3174,20 @@ PlanNodePtr SpatialJoinNode::create(const folly::dynamic& obj, void* context) {
   }
 
   auto outputType = deserializeRowType(obj["outputType"]);
+  auto probeGeometry = deserializeField(obj["probeGeometry"]);
+  auto buildGeometry = deserializeField(obj["buildGeometry"]);
+  std::optional<FieldAccessTypedExprPtr> radius;
+  if (obj.count("radius")) {
+    radius = deserializeField(obj["radius"]);
+  }
 
   return std::make_shared<SpatialJoinNode>(
       deserializePlanNodeId(obj),
       JoinTypeName::toJoinType(obj["joinType"].asString()),
       joinCondition,
+      probeGeometry,
+      buildGeometry,
+      radius,
       sources[0],
       sources[1],
       outputType);
@@ -3425,6 +3464,25 @@ void PlanNode::toSkeletonString(
   }
 }
 
+// static
+const PlanNode* PlanNode::findFirstNode(
+    const PlanNode* root,
+    const std::function<bool(const PlanNode* node)>& predicate) {
+  VELOX_CHECK_NOT_NULL(root);
+  if (predicate(root)) {
+    return root;
+  }
+
+  // Recursively go further through the sources.
+  for (const auto& source : root->sources()) {
+    const auto* ret = PlanNode::findFirstNode(source.get(), predicate);
+    if (ret != nullptr) {
+      return ret;
+    }
+  }
+  return nullptr;
+}
+
 namespace {
 void collectLeafPlanNodeIds(
     const PlanNode& planNode,
@@ -3587,7 +3645,7 @@ folly::dynamic IndexLookupCondition::serialize() const {
 }
 
 bool InIndexLookupCondition::isFilter() const {
-  return std::dynamic_pointer_cast<const ConstantTypedExpr>(list) != nullptr;
+  return list->isConstantKind();
 }
 
 folly::dynamic InIndexLookupCondition::serialize() const {
@@ -3605,16 +3663,13 @@ void InIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(key);
   VELOX_CHECK_NOT_NULL(list);
   VELOX_CHECK(
-      std::dynamic_pointer_cast<const FieldAccessTypedExpr>(list) ||
-          std::dynamic_pointer_cast<const ConstantTypedExpr>(list),
+      list->isFieldAccessKind() || list->isConstantKind(),
       "Invalid condition list {}",
       list->toString());
-  const auto listType =
-      std::dynamic_pointer_cast<const ArrayType>(list->type());
-  VELOX_CHECK_NOT_NULL(listType);
+  const auto& listType = list->type()->asArray();
   VELOX_CHECK_EQ(
       key->type()->kind(),
-      listType->elementType()->kind(),
+      listType.elementType()->kind(),
       "In condition key and list condition element must have the same type");
 }
 
@@ -3632,9 +3687,7 @@ IndexLookupConditionPtr InIndexLookupCondition::create(
 }
 
 bool BetweenIndexLookupCondition::isFilter() const {
-  return (std::dynamic_pointer_cast<const ConstantTypedExpr>(lower) !=
-          nullptr) &&
-      (std::dynamic_pointer_cast<const ConstantTypedExpr>(upper) != nullptr);
+  return lower->isConstantKind() && upper->isConstantKind();
 }
 
 folly::dynamic BetweenIndexLookupCondition::serialize() const {
@@ -3669,14 +3722,12 @@ void BetweenIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(lower);
   VELOX_CHECK_NOT_NULL(upper);
   VELOX_CHECK(
-      std::dynamic_pointer_cast<const FieldAccessTypedExpr>(lower) ||
-          std::dynamic_pointer_cast<const ConstantTypedExpr>(lower),
+      lower->isFieldAccessKind() || lower->isConstantKind(),
       "Invalid lower between condition {}",
       lower->toString());
 
   VELOX_CHECK(
-      std::dynamic_pointer_cast<const FieldAccessTypedExpr>(upper) ||
-          std::dynamic_pointer_cast<const ConstantTypedExpr>(upper),
+      upper->isFieldAccessKind() || upper->isConstantKind(),
       "Invalid upper between condition {}",
       upper->toString());
 
@@ -3692,7 +3743,7 @@ void BetweenIndexLookupCondition::validate() const {
 }
 
 bool EqualIndexLookupCondition::isFilter() const {
-  return std::dynamic_pointer_cast<const ConstantTypedExpr>(value) != nullptr;
+  return value->isConstantKind();
 }
 
 folly::dynamic EqualIndexLookupCondition::serialize() const {
@@ -3719,7 +3770,7 @@ void EqualIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(key);
   VELOX_CHECK_NOT_NULL(value);
   VELOX_CHECK_NOT_NULL(
-      std::dynamic_pointer_cast<const ConstantTypedExpr>(value),
+      checked_pointer_cast<const ConstantTypedExpr>(value),
       "Equal condition value must be a constant expression: {}",
       value->toString());
 

@@ -117,8 +117,9 @@ class TpchSpeedTest {
     for (size_t i = 0; i < numSplits; ++i) {
       task.addSplit(
           scanId,
-          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-              kTpchConnectorId_, /*cacheable=*/true, numSplits, i)));
+          exec::Split(
+              std::make_shared<connector::tpch::TpchConnectorSplit>(
+                  kTpchConnectorId_, /*cacheable=*/true, numSplits, i)));
     }
 
     task.noMoreSplits(scanId);

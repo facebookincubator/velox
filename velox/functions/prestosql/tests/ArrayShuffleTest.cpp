@@ -95,8 +95,9 @@ class ArrayShuffleTest : public FunctionBaseTest {
       auto expectedArray = readerExpected[i].materialize();
 
       // Assert the two vectors contain the same elements (ignoring order).
-      ASSERT_TRUE(std::is_permutation(
-          actualArray.begin(), actualArray.end(), expectedArray.begin()))
+      ASSERT_TRUE(
+          std::is_permutation(
+              actualArray.begin(), actualArray.end(), expectedArray.begin()))
           << "Actual array " << printArray(actualArray) << " at " << i
           << " must produce a permutation of expected array "
           << printArray(expectedArray);
@@ -181,8 +182,9 @@ class ArrayShuffleTest : public FunctionBaseTest {
       auto actualArray = readerActual.readNullFree(i).materialize();
       auto expectedArray = readerExpected.readNullFree(i).materialize();
 
-      ASSERT_TRUE(std::is_permutation(
-          actualArray.begin(), actualArray.end(), expectedArray.begin()))
+      ASSERT_TRUE(
+          std::is_permutation(
+              actualArray.begin(), actualArray.end(), expectedArray.begin()))
           << "Actual " << inputVector->encoding() << " array "
           << printArray(actualArray) << " at " << i
           << " must produce a permutation of expected array "

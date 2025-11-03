@@ -312,7 +312,7 @@ void registerNthValue(const std::string& name, TypeKind offsetTypeKind) {
           .typeVariable("T")
           .returnType("T")
           .argumentType("T")
-          .argumentType(mapTypeKindToName(offsetTypeKind))
+          .argumentType(std::string(TypeKindName::toName(offsetTypeKind)))
           .build(),
   };
 

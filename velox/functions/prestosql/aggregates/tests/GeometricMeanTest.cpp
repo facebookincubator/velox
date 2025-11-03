@@ -79,9 +79,10 @@ TEST_F(GeometricMeanTest, globalIntegers) {
   });
 
   auto expected = makeRowVector({
-      makeFlatVector(std::vector<double>{
-          geometricMean<double>(1, 100, 1, [](int32_t i) { return i / 7; }),
-      }),
+      makeFlatVector(
+          std::vector<double>{
+              geometricMean<double>(1, 100, 1, [](int32_t i) { return i / 7; }),
+          }),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
@@ -143,8 +144,9 @@ TEST_F(GeometricMeanTest, globalDoubles) {
   });
 
   auto expected = makeRowVector({
-      makeFlatVector(std::vector<double>{geometricMean<double>(
-          0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
+      makeFlatVector(
+          std::vector<double>{geometricMean<double>(
+              0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
@@ -175,8 +177,9 @@ TEST_F(GeometricMeanTest, globalReals) {
   });
 
   auto expected = makeRowVector({
-      makeFlatVector(std::vector<float>{geometricMean<float>(
-          0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
+      makeFlatVector(
+          std::vector<float>{geometricMean<float>(
+              0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});

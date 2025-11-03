@@ -16,6 +16,7 @@
 
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 namespace facebook::velox::functions {
@@ -146,6 +147,31 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerTimestampPlusInterval<TimestampWithTimezone>({prefix + "plus"});
   registerTimestampMinusInterval<TimestampWithTimezone>({prefix + "minus"});
 
+  // Register Time + Interval and Interval + Time functions
+  registerFunction<TimePlusInterval, Time, Time, IntervalDayTime>(
+      {prefix + "plus"});
+
+  registerFunction<IntervalPlusTime, Time, IntervalDayTime, Time>(
+      {prefix + "plus"});
+
+  // Register Time - Interval function
+  registerFunction<TimeMinusInterval, Time, Time, IntervalDayTime>(
+      {prefix + "minus"});
+
+  // Use optimized vector function for Time + IntervalYearMonth (identity
+  // function)
+  exec::registerVectorFunction(
+      prefix + "plus",
+      TimeIntervalYearMonthVectorFunction::signaturesPlus(),
+      std::make_unique<TimeIntervalYearMonthVectorFunction>());
+
+  // Use optimized vector function for Time - IntervalYearMonth (identity
+  // function). Only supports (time, interval), not (interval, time).
+  exec::registerVectorFunction(
+      prefix + "minus",
+      TimeIntervalYearMonthVectorFunction::signaturesMinus(),
+      std::make_unique<TimeIntervalYearMonthVectorFunction>());
+
   registerFunction<
       TimestampMinusFunction,
       IntervalDayTime,
@@ -183,6 +209,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<HourFunction, int64_t, Date>({prefix + "hour"});
   registerFunction<HourFunction, int64_t, TimestampWithTimezone>(
       {prefix + "hour"});
+  registerFunction<HourFunction, int64_t, Time>({prefix + "hour"});
   registerFunction<HourFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "hour"});
 
@@ -197,6 +224,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<MinuteFunction, int64_t, Date>({prefix + "minute"});
   registerFunction<MinuteFunction, int64_t, TimestampWithTimezone>(
       {prefix + "minute"});
+  registerFunction<MinuteFunction, int64_t, Time>({prefix + "minute"});
   registerFunction<MinuteFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "minute"});
 
@@ -204,6 +232,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<SecondFunction, int64_t, Date>({prefix + "second"});
   registerFunction<SecondFunction, int64_t, TimestampWithTimezone>(
       {prefix + "second"});
+  registerFunction<SecondFunction, int64_t, Time>({prefix + "second"});
   registerFunction<SecondFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "second"});
 
@@ -212,6 +241,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<MillisecondFunction, int64_t, Date>(
       {prefix + "millisecond"});
   registerFunction<MillisecondFunction, int64_t, TimestampWithTimezone>(
+      {prefix + "millisecond"});
+  registerFunction<MillisecondFunction, int64_t, Time>(
       {prefix + "millisecond"});
   registerFunction<MillisecondFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "millisecond"});
@@ -235,6 +266,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar,
       int64_t,
       TimestampWithTimezone>({prefix + "date_add"});
+  registerFunction<DateAddFunction, Time, Varchar, int64_t, Time>(
+      {prefix + "date_add"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Date, Date>(
       {prefix + "date_diff"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Timestamp, Timestamp>(
@@ -245,6 +278,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar,
       TimestampWithTimezone,
       TimestampWithTimezone>({prefix + "date_diff"});
+  registerFunction<DateDiffFunction, int64_t, Varchar, Time, Time>(
+      {prefix + "date_diff"});
   registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
   registerFunction<DateFormatFunction, Varchar, TimestampWithTimezone, Varchar>(
@@ -291,12 +326,14 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<ParseDurationFunction, IntervalDayTime, Varchar>(
       {prefix + "parse_duration"});
+
+  registerFunction<LocalTimeFunction, Time>({prefix + "localtime"});
 }
 } // namespace
 
 void registerDateTimeFunctions(const std::string& prefix) {
   registerTimestampWithTimeZoneType();
-
+  registerTimeWithTimezoneType();
   registerSimpleFunctions(prefix);
 }
 } // namespace facebook::velox::functions

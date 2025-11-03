@@ -131,8 +131,15 @@ class VectorHasher {
   static constexpr int32_t kNoLimit = -1;
 
   VectorHasher(TypePtr type, column_index_t channel)
-      : channel_(channel), type_(std::move(type)), typeKind_(type_->kind()) {
-    if (typeKind_ == TypeKind::BOOLEAN) {
+      : channel_(channel),
+        type_(std::move(type)),
+        typeKind_(type_->kind()),
+        typeProvidesCustomComparison_(type_->providesCustomComparison()) {
+    if (!typeSupportsValueIds()) {
+      // Ensure any range or unique value based hashing is disabled.
+      setRangeOverflow();
+      setDistinctOverflow();
+    } else if (typeKind_ == TypeKind::BOOLEAN) {
       // We do not need samples to know the cardinality or limits of a bool
       // vector.
       hasRange_ = true;
@@ -235,9 +242,10 @@ class VectorHasher {
       ScratchMemory& scratchMemory,
       raw_vector<uint64_t>& result) const;
 
-  // Returns true if either range or distinct values have not overflowed.
+  // Returns true if either range or distinct values have not overflowed and the
+  // type doesn't support custom comparison.
   bool mayUseValueIds() const {
-    return hasRange_ || !distinctOverflow_;
+    return typeSupportsValueIds() && (hasRange_ || !distinctOverflow_);
   }
 
   // Returns an instance of the filter corresponding to a set of unique values.
@@ -284,8 +292,12 @@ class VectorHasher {
     return isRange_;
   }
 
-  static bool typeKindSupportsValueIds(TypeKind kind) {
-    switch (kind) {
+  bool typeSupportsValueIds() const {
+    if (typeProvidesCustomComparison_) {
+      return false;
+    }
+
+    switch (typeKind_) {
       case TypeKind::BOOLEAN:
       case TypeKind::TINYINT:
       case TypeKind::SMALLINT:
@@ -535,6 +547,13 @@ class VectorHasher {
 
   void setRangeOverflow();
 
+  inline void checkTypeSupportsValueIds() const {
+    VELOX_DCHECK(
+        typeSupportsValueIds(),
+        "Value IDs cannot be used, the type {} is not supported.",
+        type_->toString());
+  }
+
   static inline bool
   isNullAt(const char* group, int32_t nullByte, uint8_t nullMask) {
     return (group[nullByte] & nullMask) != 0;
@@ -551,6 +570,7 @@ class VectorHasher {
   const column_index_t channel_;
   const TypePtr type_;
   const TypeKind typeKind_;
+  const bool typeProvidesCustomComparison_;
 
   DecodedVector decoded_;
   raw_vector<uint64_t> cachedHashes_;

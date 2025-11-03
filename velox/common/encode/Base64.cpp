@@ -187,14 +187,13 @@ size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
 
 // static
 void Base64::encode(const char* input, size_t inputSize, char* output) {
-  encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64Charset, true, output);
+  encodeImpl(std::string_view(input, inputSize), kBase64Charset, true, output);
 }
 
 // static
 void Base64::encodeUrl(const char* input, size_t inputSize, char* output) {
   encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64UrlCharset, true, output);
+      std::string_view(input, inputSize), kBase64UrlCharset, true, output);
 }
 
 // static
@@ -249,13 +248,13 @@ void Base64::encodeImpl(
 }
 
 // static
-std::string Base64::encode(folly::StringPiece text) {
+std::string Base64::encode(std::string_view text) {
   return encodeImpl(text, kBase64Charset, true);
 }
 
 // static
 std::string Base64::encode(const char* input, size_t inputSize) {
-  return encode(folly::StringPiece(input, inputSize));
+  return encode(std::string_view(input, inputSize));
 }
 
 namespace {
@@ -308,7 +307,7 @@ std::string Base64::encode(const folly::IOBuf* inputBuffer) {
 }
 
 // static
-std::string Base64::decode(folly::StringPiece encodedText) {
+std::string Base64::decode(std::string_view encodedText) {
   std::string decodedResult;
   decode(std::make_pair(encodedText.data(), encodedText.size()), decodedResult);
   return decodedResult;
@@ -346,9 +345,10 @@ Expected<uint8_t> Base64::base64ReverseLookup(
     const ReverseIndex& reverseIndex) {
   auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
   if (reverseLookupValue >= 0x40) {
-    return folly::makeUnexpected(Status::UserError(
-        "decode() - invalid input string: invalid character '{}'",
-        encodedChar));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "decode() - invalid input string: invalid character '{}'",
+            encodedChar));
   }
   return reverseLookupValue;
 }
@@ -381,8 +381,9 @@ Expected<size_t> Base64::calculateDecodedSize(
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
       return folly::makeUnexpected(
-          Status::UserError("Base64::decode() - invalid input string: "
-                            "string length is not a multiple of 4."));
+          Status::UserError(
+              "Base64::decode() - invalid input string: "
+              "string length is not a multiple of 4."));
     }
 
     auto decodedSize =
@@ -403,9 +404,10 @@ Expected<size_t> Base64::calculateDecodedSize(
   // Adjust the needed size for extra bytes, if present
   if (extraBytes) {
     if (extraBytes == 1) {
-      return folly::makeUnexpected(Status::UserError(
-          "Base64::decode() - invalid input string: "
-          "string length cannot be 1 more than a multiple of 4."));
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Base64::decode() - invalid input string: "
+              "string length cannot be 1 more than a multiple of 4."));
     }
     decodedSize += (extraBytes * kBinaryBlockByteSize) / kEncodedBlockByteSize;
   }
@@ -431,8 +433,9 @@ Expected<size_t> Base64::decodeImpl(
 
   if (outputSize < decodedSize.value()) {
     return folly::makeUnexpected(
-        Status::UserError("Base64::decode() - invalid output string: "
-                          "output string is too small."));
+        Status::UserError(
+            "Base64::decode() - invalid output string: "
+            "output string is too small."));
   }
   outputSize = decodedSize.value();
 
@@ -492,13 +495,13 @@ Expected<size_t> Base64::decodeImpl(
 }
 
 // static
-std::string Base64::encodeUrl(folly::StringPiece text) {
+std::string Base64::encodeUrl(std::string_view text) {
   return encodeImpl(text, kBase64UrlCharset, false);
 }
 
 // static
 std::string Base64::encodeUrl(const char* input, size_t inputSize) {
-  return encodeUrl(folly::StringPiece(input, inputSize));
+  return encodeUrl(std::string_view(input, inputSize));
 }
 
 // static
@@ -521,7 +524,7 @@ Status Base64::decodeUrl(
 }
 
 // static
-std::string Base64::decodeUrl(folly::StringPiece encodedText) {
+std::string Base64::decodeUrl(std::string_view encodedText) {
   std::string decodedOutput;
   decodeUrl(
       std::make_pair(encodedText.data(), encodedText.size()), decodedOutput);
@@ -628,8 +631,9 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
     if (kBase64ReverseIndexTable[static_cast<uint8_t>(input[0])] >= 0x40) {
       return 0;
     }
-    return folly::makeUnexpected(Status::UserError(
-        "Input should at least have 2 bytes for base64 bytes."));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Input should at least have 2 bytes for base64 bytes."));
   }
   auto decodedSize = inputSize;
   // Compute how many true Base64 chars.

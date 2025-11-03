@@ -78,8 +78,9 @@ void ByteStreamSplitDecodeSse2(
 
   for (int64_t i = 0; i < num_blocks; ++i) {
     for (size_t j = 0; j < kNumStreams; ++j) {
-      stage[0][j] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-          &data[i * sizeof(__m128i) + j * stride]));
+      stage[0][j] = _mm_loadu_si128(
+          reinterpret_cast<const __m128i*>(
+              &data[i * sizeof(__m128i) + j * stride]));
     }
     for (size_t step = 0; step < kNumStreamsLog2; ++step) {
       for (size_t j = 0; j < kNumStreamsHalf; ++j) {
@@ -227,8 +228,9 @@ void ByteStreamSplitDecodeAvx2(
 
   for (int64_t i = 0; i < num_blocks; ++i) {
     for (size_t j = 0; j < kNumStreams; ++j) {
-      stage[0][j] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
-          &data[i * sizeof(__m256i) + j * stride]));
+      stage[0][j] = _mm256_loadu_si256(
+          reinterpret_cast<const __m256i*>(
+              &data[i * sizeof(__m256i) + j * stride]));
     }
 
     for (size_t step = 0; step < kNumStreamsLog2; ++step) {
@@ -405,8 +407,9 @@ void ByteStreamSplitDecodeAvx512(
 
   for (int64_t i = 0; i < num_blocks; ++i) {
     for (size_t j = 0; j < kNumStreams; ++j) {
-      stage[0][j] = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(
-          &data[i * sizeof(__m512i) + j * stride]));
+      stage[0][j] = _mm512_loadu_si512(
+          reinterpret_cast<const __m512i*>(
+              &data[i * sizeof(__m512i) + j * stride]));
     }
 
     for (size_t step = 0; step < kNumStreamsLog2; ++step) {

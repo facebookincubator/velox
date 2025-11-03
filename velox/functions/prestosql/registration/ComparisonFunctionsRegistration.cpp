@@ -33,6 +33,7 @@ void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
   registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
   registerFunction<T, TReturn, TimestampWithTimezone, TimestampWithTimezone>(
       aliases);
+  registerFunction<T, TReturn, Time, Time>(aliases);
   registerFunction<T, TReturn, IPAddress, IPAddress>(aliases);
 }
 } // namespace
@@ -93,6 +94,8 @@ void registerComparisonFunctions(const std::string& prefix) {
   registerFunction<BetweenFunction, bool, Date, Date, Date>(
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, Timestamp, Timestamp, Timestamp>(
+      {prefix + "between"});
+  registerFunction<BetweenFunction, bool, Time, Time, Time>(
       {prefix + "between"});
   registerFunction<
       BetweenFunction,

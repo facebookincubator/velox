@@ -292,8 +292,9 @@ TEST_F(AggregationTest, allKeyTypes) {
 
   std::vector<RowVectorPtr> batches;
   for (auto i = 0; i < 10; ++i) {
-    batches.push_back(std::static_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rowType, 100, *pool_)));
+    batches.push_back(
+        std::static_pointer_cast<RowVector>(
+            BatchMaker::createBatch(rowType, 100, *pool_)));
   }
   createDuckDbTable(batches);
   auto op =
@@ -525,12 +526,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   core::PlanNodeId aggNodeId;
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .config(QueryConfig::kMaxPartialAggregationMemory, 100)
-                  .plan(PlanBuilder()
-                            .values(vectors)
-                            .partialAggregation({"c0"}, {})
-                            .capturePlanNodeId(aggNodeId)
-                            .finalAggregation()
-                            .planNode())
+                  .plan(
+                      PlanBuilder()
+                          .values(vectors)
+                          .partialAggregation({"c0"}, {})
+                          .capturePlanNodeId(aggNodeId)
+                          .finalAggregation()
+                          .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
 
   auto rowFlushStats = toPlanStats(task->taskStats())
@@ -542,12 +544,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   // Count aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
              .config(QueryConfig::kMaxPartialAggregationMemory, 1)
-             .plan(PlanBuilder()
-                       .values(vectors)
-                       .partialAggregation({"c0"}, {"count(1)"})
-                       .capturePlanNodeId(aggNodeId)
-                       .finalAggregation()
-                       .planNode())
+             .plan(
+                 PlanBuilder()
+                     .values(vectors)
+                     .partialAggregation({"c0"}, {"count(1)"})
+                     .capturePlanNodeId(aggNodeId)
+                     .finalAggregation()
+                     .planNode())
              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 
   rowFlushStats = toPlanStats(task->taskStats())
@@ -559,12 +562,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   // Global aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
              .config(QueryConfig::kMaxPartialAggregationMemory, 1)
-             .plan(PlanBuilder()
-                       .values(vectors)
-                       .partialAggregation({}, {"sum(c0)"})
-                       .capturePlanNodeId(aggNodeId)
-                       .finalAggregation()
-                       .planNode())
+             .plan(
+                 PlanBuilder()
+                     .values(vectors)
+                     .partialAggregation({}, {"sum(c0)"})
+                     .capturePlanNodeId(aggNodeId)
+                     .finalAggregation()
+                     .planNode())
              .assertResults("SELECT sum(c0) FROM tmp");
   EXPECT_EQ(
       0,

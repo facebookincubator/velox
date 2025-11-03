@@ -23,8 +23,8 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
-
 namespace ipaddress {
+
 constexpr uint8_t kIPV4Bits = 32;
 constexpr uint8_t kIPV6Bits = 128;
 constexpr int kIPPrefixLengthIndex = 16;
@@ -50,7 +50,7 @@ inline folly::Expected<int8_t, Status> tryIpPrefixLengthFromIPAddressType(
 }
 
 inline folly::Expected<std::pair<int128_t, int8_t>, Status>
-tryParseIpPrefixString(folly::StringPiece ipprefixString) {
+tryParseIpPrefixString(std::string_view ipprefixString) {
   // Ensure '/' is present
   if (ipprefixString.find('/') == std::string::npos) {
     return folly::makeUnexpected(
@@ -92,6 +92,7 @@ tryParseIpPrefixString(folly::StringPiece ipprefixString) {
   memcpy(&intAddr, &addrBytes, ipaddress::kIPAddressBytes);
   return std::make_pair(intAddr, prefix);
 }
+
 }; // namespace ipaddress
 
 class IPPrefixType final : public RowType {
@@ -126,9 +127,8 @@ class IPPrefixType final : public RowType {
     return obj;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
+  std::span<const TypeParameter> parameters() const override {
+    return {};
   }
 };
 

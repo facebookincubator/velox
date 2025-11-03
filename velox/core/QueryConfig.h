@@ -21,16 +21,21 @@
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around velox::ConfigBase. Defines constants for query
+/// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  explicit QueryConfig(
-      const std::unordered_map<std::string, std::string>& values);
+  explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
-  explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
+  // This is needed only to resolve correct ctor for cases like
+  // QueryConfig{{}} or QueryConfig({}).
+  struct ConfigTag {};
+
+  explicit QueryConfig(
+      ConfigTag /*tag*/,
+      std::shared_ptr<const config::IConfig> config);
 
   /// Maximum memory that a query can use on a single host.
   static constexpr const char* kQueryMaxMemoryPerNode =
@@ -39,6 +44,11 @@ class QueryConfig {
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
   static constexpr const char* kSessionTimezone = "session_timezone";
+
+  /// Session start time in milliseconds since Unix epoch. This represents when
+  /// the query session began execution. Used for functions that need to know
+  /// the session start time (e.g., current_date, localtime).
+  static constexpr const char* kSessionStartTime = "start_time";
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
@@ -63,6 +73,19 @@ class QueryConfig {
   /// small batches, e.g. < 10K rows.
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
+
+  /// Controls whether non-deterministic expressions are deduplicated during
+  /// compilation. This is intended for testing and debugging purposes. By
+  /// default, this is set to true to preserve standard behavior. If set to
+  /// false, non-deterministic functions (such as rand()) will not be
+  /// deduplicated. Since non-deterministic functions may yield different
+  /// outputs on each call, disabling deduplication guarantees that the function
+  /// is executed only when the original expression is evaluated, rather than
+  /// being triggered for every deduplicated instance. This ensures each
+  /// invocation corresponds directly to the actual expression, maintaining
+  /// independent behavior for each call.
+  static constexpr const char* kExprDedupNonDeterministic =
+      "expression.dedup_non_deterministic";
 
   /// Whether to track CPU usage for stages of individual operators. True by
   /// default. Can be expensive when processing small batches, e.g. < 10K rows.
@@ -254,6 +277,13 @@ class QueryConfig {
 
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
+
+  /// When processing spilled window data, read batches of whole partitions
+  /// having at least that many rows. Set to 1 to read one whole partition at a
+  /// time. Each driver processing the Window operator will process that much
+  /// data at once.
+  static constexpr const char* kWindowSpillMinReadBatchRows =
+      "window_spill_min_read_batch_rows";
 
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk. only applies if "spill_enabled" flag
@@ -693,8 +723,23 @@ class QueryConfig {
   /// username.
   static constexpr const char* kClientTags = "client_tags";
 
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
+  static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+
+  enum class RowSizeTrackingMode {
+    DISABLED = 0,
+    EXCLUDE_DELTA_SPLITS = 1,
+    ENABLED_FOR_ALL = 2,
+  };
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
+  }
+
+  RowSizeTrackingMode rowSizeTrackingMode() const {
+    return get<RowSizeTrackingMode>(
+        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
   }
 
   bool debugDisableExpressionsWithPeeling() const {
@@ -733,7 +778,7 @@ class QueryConfig {
   }
 
   uint8_t debugBingTileChildrenMaxZoomShift() const {
-    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 5);
+    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 6);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -907,6 +952,12 @@ class QueryConfig {
     return get<std::string>(kSessionTimezone, "");
   }
 
+  /// Returns the session start time in milliseconds since Unix epoch.
+  /// If not set, returns 0 (or epoch).
+  int64_t sessionStartTimeMs() const {
+    return get<int64_t>(kSessionStartTime, 0);
+  }
+
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
   }
@@ -933,6 +984,10 @@ class QueryConfig {
 
   bool windowSpillEnabled() const {
     return get<bool>(kWindowSpillEnabled, true);
+  }
+
+  uint32_t windowSpillMinReadBatchRows() const {
+    return get<uint32_t>(kWindowSpillMinReadBatchRows, 1'000);
   }
 
   bool writerSpillEnabled() const {
@@ -1101,6 +1156,10 @@ class QueryConfig {
     return get<bool>(kExprTrackCpuUsage, false);
   }
 
+  bool exprDedupNonDeterministic() const {
+    return get<bool>(kExprDedupNonDeterministic, true);
+  }
+
   bool operatorTrackCpuUsage() const {
     return get<bool>(kOperatorTrackCpuUsage, true);
   }
@@ -1258,9 +1317,14 @@ class QueryConfig {
   T get(const std::string& key, const T& defaultValue) const {
     return config_->get<T>(key, defaultValue);
   }
+
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return config_->get<T>(key);
+  }
+
+  const std::shared_ptr<const config::IConfig>& config() const {
+    return config_;
   }
 
   /// Test-only method to override the current query config properties.
@@ -1273,6 +1337,6 @@ class QueryConfig {
  private:
   void validateConfig();
 
-  std::unique_ptr<velox::config::ConfigBase> config_;
+  std::shared_ptr<const config::IConfig> config_;
 };
 } // namespace facebook::velox::core

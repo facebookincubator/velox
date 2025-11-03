@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/ranges.h>
 #include <geos/geom/Geometry.h>
 #include <geos/io/WKTReader.h>
 
@@ -112,11 +113,12 @@ FOLLY_ALWAYS_INLINE Status validateType(
     std::string callerFunctionName) {
   geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
   if (!std::count(validTypes.begin(), validTypes.end(), type)) {
-    return Status::UserError(fmt::format(
-        "{} only applies to {}. Input type is: {}",
-        callerFunctionName,
-        fmt::join(getGeosTypeNames(validTypes), " or "),
-        getGeosTypeToStringIdentifier().at(type)));
+    return Status::UserError(
+        fmt::format(
+            "{} only applies to {}. Input type is: {}",
+            callerFunctionName,
+            fmt::join(getGeosTypeNames(validTypes), " or "),
+            getGeosTypeToStringIdentifier().at(type)));
   }
   return Status::OK();
 }
@@ -217,6 +219,10 @@ std::vector<int64_t> getMinimalTilesCoveringGeometry(
     const geos::geom::Geometry& geometry,
     int32_t zoom,
     uint8_t maxZoomShift);
+
+std::vector<int64_t> getDissolvedTilesCoveringGeometry(
+    const geos::geom::Geometry& geometry,
+    int32_t zoom);
 
 bool isPointOrRectangle(const geos::geom::Geometry& geometry);
 

@@ -22,7 +22,10 @@
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
+#include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/VarcharEnumType.h"
 
@@ -58,6 +61,7 @@ TEST_F(TypeOfTest, basic) {
 
   EXPECT_EQ("timestamp", typeOf(TIMESTAMP()));
   EXPECT_EQ("date", typeOf(DATE()));
+  EXPECT_EQ("time", typeOf(TIME()));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 
@@ -75,13 +79,16 @@ TEST_F(TypeOfTest, basic) {
 
 TEST_F(TypeOfTest, customTypes) {
   EXPECT_EQ("timestamp with time zone", typeOf(TIMESTAMP_WITH_TIME_ZONE()));
+  EXPECT_EQ("time with time zone", typeOf(TIME_WITH_TIME_ZONE()));
   EXPECT_EQ("bingtile", typeOf(BINGTILE()));
   EXPECT_EQ("geometry", typeOf(GEOMETRY()));
+  EXPECT_EQ("sphericalgeography", typeOf(SPHERICAL_GEOGRAPHY()));
 
   EXPECT_EQ("json", typeOf(JSON()));
 
   EXPECT_EQ("HyperLogLog", typeOf(HYPERLOGLOG()));
   EXPECT_EQ("P4HyperLogLog", typeOf(P4HYPERLOGLOG()));
+  EXPECT_EQ("SetDigest", typeOf(SETDIGEST()));
 
   EXPECT_EQ("tdigest(double)", typeOf(TDIGEST(DOUBLE())));
 

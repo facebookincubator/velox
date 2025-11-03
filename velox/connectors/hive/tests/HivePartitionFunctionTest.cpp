@@ -832,10 +832,11 @@ TEST_F(HivePartitionFunctionTest, skew) {
   }
   std::vector<VectorPtr> partitionedInputs;
   for (int partition = 0; partition < numRemotePartitions; ++partition) {
-    partitionedInputs.push_back(exec::wrap(
-        partitionSizeVectors[partition],
-        partitionIndicesVector[partition],
-        input));
+    partitionedInputs.push_back(
+        exec::wrap(
+            partitionSizeVectors[partition],
+            partitionIndicesVector[partition],
+            input));
   }
 
   // Checks that the bad hive partition function (using round-robin map from

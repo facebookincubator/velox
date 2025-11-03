@@ -190,8 +190,9 @@ PlanBuilder& PlanBuilder::tpcdsTableScan(
   auto rowType = ROW(std::move(columnNames), std::move(outputTypes));
   return TableScanBuilder(*this)
       .outputType(rowType)
-      .tableHandle(std::make_shared<connector::tpcds::TpcdsTableHandle>(
-          std::string(connectorId), table, scaleFactor))
+      .tableHandle(
+          std::make_shared<connector::tpcds::TpcdsTableHandle>(
+              std::string(connectorId), table, scaleFactor))
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -421,8 +422,9 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     std::vector<core::FieldAccessTypedExprPtr> groupingKeys;
     groupingKeys.reserve(partitionBy_.size());
     for (const auto& partitionBy : partitionBy_) {
-      groupingKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          outputType->findChild(partitionBy), partitionBy));
+      groupingKeys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              outputType->findChild(partitionBy), partitionBy));
     }
     columnStatsSpec = core::ColumnStatsSpec(
         std::move(groupingKeys),
@@ -746,7 +748,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
     const bool ensureFiles,
-    const connector::CommitStrategy commitStrategy) {
+    const connector::CommitStrategy commitStrategy,
+    std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -763,6 +766,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .compressionKind(compressionKind)
       .ensureFiles(ensureFiles)
       .commitStrategy(commitStrategy)
+      .insertHandle(insertTableHandle)
       .endTableWriter();
 }
 
@@ -1214,8 +1218,9 @@ PlanBuilder& PlanBuilder::expand(
               dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
           VELOX_CHECK_NOT_NULL(constantExpr);
           VELOX_CHECK(constantExpr->value().isNull());
-          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              expectedType, variant::null(expectedType->kind())));
+          projectExpr.push_back(
+              std::make_shared<core::ConstantTypedExpr>(
+                  expectedType, variant::null(expectedType->kind())));
         }
       }
     }
@@ -1769,20 +1774,35 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
 PlanBuilder& PlanBuilder::spatialJoin(
     const core::PlanNodePtr& right,
     const std::string& joinCondition,
+    const std::string& probeGeometry,
+    const std::string& buildGeometry,
+    const std::optional<std::string>& radius,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "SpatialJoin cannot be the source node");
-  auto resultType = concat(planNode_->outputType(), right->outputType());
+  auto probeType = planNode_->outputType();
+  auto buildType = right->outputType();
+  auto resultType = concat(probeType, buildType);
   auto outputType = extract(resultType, outputLayout);
 
   VELOX_CHECK(!joinCondition.empty(), "SpatialJoin condition cannot be empty");
   core::TypedExprPtr joinConditionExpr =
       parseExpr(joinCondition, resultType, options_, pool_);
 
+  auto probeGeometryField = field(probeType, probeGeometry);
+  auto buildGeometryField = field(buildType, buildGeometry);
+  std::optional<core::FieldAccessTypedExprPtr> radiusField;
+  if (radius.has_value()) {
+    radiusField = field(buildType, radius.value());
+  }
+
   planNode_ = std::make_shared<core::SpatialJoinNode>(
       nextPlanNodeId(),
       joinType,
       std::move(joinConditionExpr),
+      std::move(probeGeometryField),
+      std::move(buildGeometryField),
+      std::move(radiusField),
       std::move(planNode_),
       right,
       outputType);
@@ -1993,12 +2013,13 @@ PlanBuilder& PlanBuilder::indexLookupJoin(
     const std::vector<std::string>& rightKeys,
     const core::TableScanNodePtr& right,
     const std::vector<std::string>& joinConditions,
-    bool includeMatchColumn,
+    const std::string& filter,
+    bool hasMarker,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "indexLookupJoin cannot be the source node");
   auto inputType = concat(planNode_->outputType(), right->outputType());
-  if (includeMatchColumn) {
+  if (hasMarker) {
     auto names = inputType->names();
     names.push_back(outputLayout.back());
     auto types = inputType->children();
@@ -2016,13 +2037,20 @@ PlanBuilder& PlanBuilder::indexLookupJoin(
         parseIndexJoinCondition(joinCondition, inputType, pool_));
   }
 
+  // Parse filter expression if provided
+  core::TypedExprPtr filterExpr;
+  if (!filter.empty()) {
+    filterExpr = parseExpr(filter, inputType, options_, pool_);
+  }
+
   planNode_ = std::make_shared<core::IndexLookupJoinNode>(
       nextPlanNodeId(),
       joinType,
       std::move(leftKeyFields),
       std::move(rightKeyFields),
       std::move(joinConditionPtrs),
-      includeMatchColumn,
+      filterExpr,
+      hasMarker,
       std::move(planNode_),
       right,
       std::move(outputType));
@@ -2536,7 +2564,7 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       planBuilder_.planNode_, "IndexLookupJoin cannot be the source node");
   auto inputType =
       concat(planBuilder_.planNode_->outputType(), indexSource_->outputType());
-  if (includeMatchColumn_) {
+  if (hasMarker_) {
     auto names = inputType->names();
     names.push_back(outputLayout_.back());
     auto types = inputType->children();
@@ -2552,8 +2580,16 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
   std::vector<core::IndexLookupConditionPtr> joinConditionPtrs{};
   joinConditionPtrs.reserve(joinConditions_.size());
   for (const auto& joinCondition : joinConditions_) {
-    joinConditionPtrs.push_back(PlanBuilder::parseIndexJoinCondition(
-        joinCondition, inputType, planBuilder_.pool_));
+    joinConditionPtrs.push_back(
+        PlanBuilder::parseIndexJoinCondition(
+            joinCondition, inputType, planBuilder_.pool_));
+  }
+
+  // Parse filter expression if provided
+  core::TypedExprPtr filterExpr;
+  if (!filter_.empty()) {
+    filterExpr = parseExpr(
+        filter_, inputType, planBuilder_.options_, planBuilder_.pool_);
   }
 
   return std::make_shared<core::IndexLookupJoinNode>(
@@ -2562,7 +2598,8 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       std::move(leftKeyFields),
       std::move(rightKeyFields),
       std::move(joinConditionPtrs),
-      includeMatchColumn_,
+      filterExpr,
+      hasMarker_,
       std::move(planBuilder_.planNode_),
       indexSource_,
       std::move(outputType));

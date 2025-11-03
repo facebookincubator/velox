@@ -855,34 +855,38 @@ void addSignatures(
   auto intermediateType = fmt::format(
       "row(array(double), boolean, double, integer, bigint, {0}, {0}, array({0}), array(integer))",
       inputType);
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType(percentileType)
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType("bigint")
-                           .argumentType(percentileType)
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType(percentileType)
-                           .argumentType("double")
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType("bigint")
-                           .argumentType(percentileType)
-                           .argumentType("double")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType(percentileType)
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("bigint")
+          .argumentType(percentileType)
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType(percentileType)
+          .argumentType("double")
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("bigint")
+          .argumentType(percentileType)
+          .argumentType("double")
+          .build());
 }
 
 } // namespace

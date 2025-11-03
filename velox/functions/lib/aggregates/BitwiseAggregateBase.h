@@ -72,6 +72,7 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
 template <template <typename U> class T>
 exec::AggregateRegistrationResult registerBitwise(
     const std::string& name,
+    bool ignoreDuplicates,
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
@@ -81,11 +82,12 @@ exec::AggregateRegistrationResult registerBitwise(
     typeList = {"bigint"};
   }
   for (const auto& inputType : typeList) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType(inputType)
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(inputType)
+            .intermediateType(inputType)
+            .argumentType(inputType)
+            .build());
   }
 
   return exec::registerAggregateFunction(
@@ -114,7 +116,7 @@ exec::AggregateRegistrationResult registerBitwise(
                 inputType->kindName());
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.ignoreDuplicates = ignoreDuplicates, .orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

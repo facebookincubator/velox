@@ -174,22 +174,25 @@ class TaskCursorBase : public TaskCursor {
 
     if (!params.spillDirectory.empty()) {
       taskSpillDirectory_ = params.spillDirectory + "/" + taskId_;
-      auto fileSystem =
-          velox::filesystems::getFileSystem(taskSpillDirectory_, nullptr);
-      VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
-      try {
-        fileSystem->mkdir(taskSpillDirectory_);
-      } catch (...) {
-        LOG(ERROR) << "Faield to create task spill directory "
-                   << taskSpillDirectory_ << " base director "
-                   << params.spillDirectory << " exists["
-                   << std::filesystem::exists(taskSpillDirectory_) << "]";
+      taskSpillDirectoryCb_ = params.spillDirectoryCallback;
+      if (taskSpillDirectoryCb_ == nullptr) {
+        auto fileSystem =
+            velox::filesystems::getFileSystem(taskSpillDirectory_, nullptr);
+        VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
+        try {
+          fileSystem->mkdir(taskSpillDirectory_);
+        } catch (...) {
+          LOG(ERROR) << "Faield to create task spill directory "
+                     << taskSpillDirectory_ << " base director "
+                     << params.spillDirectory << " exists["
+                     << std::filesystem::exists(taskSpillDirectory_) << "]";
 
-        std::rethrow_exception(std::current_exception());
+          std::rethrow_exception(std::current_exception());
+        }
+
+        LOG(INFO) << "Task spill directory[" << taskSpillDirectory_
+                  << "] created";
       }
-
-      LOG(INFO) << "Task spill directory[" << taskSpillDirectory_
-                << "] created";
     }
   }
 
@@ -198,6 +201,7 @@ class TaskCursorBase : public TaskCursor {
   std::shared_ptr<core::QueryCtx> queryCtx_;
   core::PlanFragment planFragment_;
   std::string taskSpillDirectory_;
+  std::function<std::string()> taskSpillDirectoryCb_;
 
  private:
   std::shared_ptr<folly::Executor> executor_;
@@ -222,7 +226,14 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::make_shared<TaskQueue>(params.bufferedBytes, params.outputPool);
 
     // Captured as a shared_ptr by the consumer callback of task_.
-    auto queue = queue_;
+    auto queueHolder = std::weak_ptr(queue_);
+    std::optional<common::SpillDiskOptions> spillDiskOpts;
+    if (!taskSpillDirectory_.empty()) {
+      spillDiskOpts = common::SpillDiskOptions{
+          .spillDirPath = taskSpillDirectory_,
+          .spillDirCreated = taskSpillDirectoryCb_ == nullptr,
+          .spillDirCreateCb = taskSpillDirectoryCb_};
+    }
     task_ = Task::create(
         taskId_,
         std::move(planFragment_),
@@ -230,10 +241,15 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(queryCtx_),
         Task::ExecutionMode::kParallel,
         // consumer
-        [queue, copyResult = params.copyResult](
+        [queueHolder, copyResult = params.copyResult, taskId = taskId_](
             const RowVectorPtr& vector,
             bool drained,
             velox::ContinueFuture* future) {
+          auto queue = queueHolder.lock();
+          if (queue == nullptr) {
+            LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
+            return exec::BlockingReason::kNotBlocked;
+          }
           VELOX_CHECK(
               !drained, "Unexpected drain in multithreaded task cursor");
           if (!vector || !copyResult) {
@@ -249,16 +265,18 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           return queue->enqueue(std::move(copy), future);
         },
         0,
-        [queue](std::exception_ptr) {
+        std::move(spillDiskOpts),
+        [queueHolder, taskId = taskId_](std::exception_ptr) {
           // onError close the queue to unblock producers and consumers.
           // moveNext will handle rethrowing the error once it's
           // unblocked.
+          auto queue = queueHolder.lock();
+          if (queue == nullptr) {
+            LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
+            return;
+          }
           queue->close();
         });
-
-    if (!taskSpillDirectory_.empty()) {
-      task_->setSpillDirectory(taskSpillDirectory_);
-    }
   }
 
   ~MultiThreadedTaskCursor() override {
@@ -371,17 +389,22 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
         "Executor should not be set in serial task cursor");
-
+    std::optional<common::SpillDiskOptions> spillDiskOpts;
+    if (!taskSpillDirectory_.empty()) {
+      spillDiskOpts = common::SpillDiskOptions{
+          .spillDirPath = taskSpillDirectory_,
+          .spillDirCreated = true,
+          .spillDirCreateCb = taskSpillDirectoryCb_};
+    }
     task_ = Task::create(
         taskId_,
         std::move(planFragment_),
         params.destination,
         std::move(queryCtx_),
-        Task::ExecutionMode::kSerial);
-
-    if (!taskSpillDirectory_.empty()) {
-      task_->setSpillDirectory(taskSpillDirectory_);
-    }
+        Task::ExecutionMode::kSerial,
+        std::function<BlockingReason(RowVectorPtr, bool, ContinueFuture*)>{},
+        0,
+        std::move(spillDiskOpts));
 
     VELOX_CHECK(
         task_->supportSerialExecutionMode(),

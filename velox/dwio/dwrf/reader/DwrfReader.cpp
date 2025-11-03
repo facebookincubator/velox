@@ -19,6 +19,7 @@
 #include <chrono>
 
 #include "velox/dwio/common/OnDemandUnitLoader.h"
+#include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
@@ -328,22 +329,30 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
   std::vector<std::unique_ptr<LoadUnit>> loadUnits;
   loadUnits.reserve(stripeCeiling_ - firstStripe_);
   for (auto stripe = firstStripe_; stripe < stripeCeiling_; ++stripe) {
-    loadUnits.emplace_back(std::make_unique<DwrfUnit>(
-        /*stripeReaderBase=*/*this,
-        /*strideIndexProvider=*/*this,
-        columnReaderStatistics_,
-        stripe,
-        columnSelector_,
-        projectedNodes_,
-        options_,
-        columnReaderOptions_));
+    loadUnits.emplace_back(
+        std::make_unique<DwrfUnit>(
+            /*stripeReaderBase=*/*this,
+            /*strideIndexProvider=*/*this,
+            columnReaderStatistics_,
+            stripe,
+            columnSelector_,
+            projectedNodes_,
+            options_,
+            columnReaderOptions_));
   }
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
       options_.unitLoaderFactory();
   if (!unitLoaderFactory) {
-    unitLoaderFactory =
-        std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
-            options_.blockedOnIoCallback());
+    if (loadUnits.size() > 1 && options_.parallelUnitLoadCount() > 1 &&
+        options_.ioExecutor() != nullptr) {
+      unitLoaderFactory =
+          std::make_shared<dwio::common::ParallelUnitLoaderFactory>(
+              options_.ioExecutor(), options_.parallelUnitLoadCount());
+    } else {
+      unitLoaderFactory =
+          std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
+              options_.blockedOnIoCallback());
+    }
   }
   return unitLoaderFactory->create(std::move(loadUnits), 0);
 }
@@ -632,6 +641,8 @@ uint64_t DwrfRowReader::next(
     } else {
       previousRow_ = 0;
     }
+    // Collect unit loader stats at the end.
+    unitLoadStats_ = unitLoader_->stats();
     return 0;
   }
 
@@ -776,15 +787,23 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
 }
 
 std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
+  if (hasRowEstimate_) {
+    return estimatedRowSize_;
+  }
+
   const auto& reader = getReader();
   const auto& fileFooter = reader.footer();
 
+  hasRowEstimate_ = true;
+
   if (!fileFooter.hasNumberOfRows()) {
-    return std::nullopt;
+    estimatedRowSize_ = std::nullopt;
+    return estimatedRowSize_;
   }
 
   if (fileFooter.numberOfRows() < 1) {
-    return 0;
+    estimatedRowSize_ = 0;
+    return estimatedRowSize_;
   }
 
   // Estimate with projections.
@@ -793,9 +812,12 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   const auto projectedSize =
       estimatedRowSizeHelper(fileFooter, *stats, ROOT_NODE_ID);
   if (projectedSize.has_value()) {
-    return projectedSize.value() / fileFooter.numberOfRows();
+    estimatedRowSize_ = projectedSize.value() / fileFooter.numberOfRows();
+    return estimatedRowSize_;
   }
-  return std::nullopt;
+
+  estimatedRowSize_ = std::nullopt;
+  return estimatedRowSize_;
 }
 
 DwrfReader::DwrfReader(
@@ -817,8 +839,9 @@ DwrfReader::DwrfReader(
 void DwrfReader::updateColumnNamesFromTableSchema() {
   const auto& tableSchema = readerBase_->readerOptions().fileSchema();
   const auto& fileSchema = readerBase_->schema();
-  readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(
-      updateColumnNames(fileSchema, tableSchema)));
+  readerBase_->setSchema(
+      std::dynamic_pointer_cast<const RowType>(
+          updateColumnNames(fileSchema, tableSchema)));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(

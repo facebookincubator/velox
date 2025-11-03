@@ -417,3 +417,25 @@ TEST_F(TableScanTest, filterPushdown) {
       "SELECT count(*) FROM tmp");
 #endif
 }
+
+TEST_F(TableScanTest, splitOffset) {
+  auto vectors = makeVectors(1, 10);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto plan = tableScanNode();
+
+  auto split = facebook::velox::connector::hive::HiveConnectorSplitBuilder(
+                   filePath->getPath())
+                   .connectorId(kCudfHiveConnectorId)
+                   .start(1)
+                   .fileFormat(dwio::common::FileFormat::PARQUET)
+                   .build();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .splits({split})
+          .assertEmptyResults(),
+      "CudfHiveDataSource cannot process splits with non-zero offset");
+}

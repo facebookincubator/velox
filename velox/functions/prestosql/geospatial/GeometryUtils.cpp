@@ -13,12 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 #include <geos/operation/valid/IsSimpleOp.h>
 #include <geos/operation/valid/IsValidOp.h>
+#include <queue>
 #include "velox/common/base/Exceptions.h"
+
+#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
 using geos::operation::valid::IsSimpleOp;
@@ -154,14 +155,15 @@ Status validateLatitudeLongitude(double latitude, double longitude) {
           longitude < BingTileType::kMinLongitude ||
           longitude > BingTileType::kMaxLongitude || std::isnan(latitude) ||
           std::isnan(longitude))) {
-    return Status::UserError(fmt::format(
-        "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
-        kRealMinLatitude,
-        kRealMaxLatitude,
-        BingTileType::kMinLongitude,
-        BingTileType::kMaxLongitude,
-        latitude,
-        longitude));
+    return Status::UserError(
+        fmt::format(
+            "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
+            kRealMinLatitude,
+            kRealMaxLatitude,
+            BingTileType::kMinLongitude,
+            BingTileType::kMaxLongitude,
+            latitude,
+            longitude));
   }
   return Status::OK();
 }
@@ -174,18 +176,20 @@ FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
   if (FOLLY_UNLIKELY(
           latitude > BingTileType::kMaxLatitude ||
           latitude < BingTileType::kMinLatitude)) {
-    VELOX_USER_FAIL(fmt::format(
-        "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-        BingTileType::kMinLatitude,
-        BingTileType::kMaxLatitude));
+    VELOX_USER_FAIL(
+        fmt::format(
+            "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
+            BingTileType::kMinLatitude,
+            BingTileType::kMaxLatitude));
   }
   if (FOLLY_UNLIKELY(
           longitude > BingTileType::kMaxLongitude ||
           longitude < BingTileType::kMinLongitude)) {
-    VELOX_USER_FAIL(fmt::format(
-        "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-        BingTileType::kMinLongitude,
-        BingTileType::kMaxLongitude));
+    VELOX_USER_FAIL(
+        fmt::format(
+            "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
+            BingTileType::kMinLongitude,
+            BingTileType::kMaxLongitude));
   }
 }
 
@@ -390,6 +394,73 @@ std::vector<int64_t> getMinimalTilesCoveringGeometry(
           static_cast<int64_t>(BingTileType::bingTileCoordsToInt(x, y, zoom)));
     }
   }
+  return results;
+}
+std::vector<int64_t> getDissolvedTilesCoveringGeometry(
+    const geos::geom::Geometry& geometry,
+    int32_t zoom) {
+  std::vector<int64_t> rawTiles = getRawTilesCoveringGeometry(geometry, zoom);
+
+  const geos::geom::Envelope* envelope = geometry.getEnvelopeInternal();
+  checkLatitudeLongitudeBounds(envelope->getMinY(), envelope->getMinX());
+  checkLatitudeLongitudeBounds(envelope->getMaxY(), envelope->getMaxX());
+
+  std::vector<int64_t> results;
+  if (rawTiles.empty()) {
+    return results;
+  }
+
+  results.reserve(rawTiles.size());
+  std::set<int64_t> candidates;
+
+  auto tileComparator = [](int64_t a, int64_t b) {
+    uint8_t za = BingTileType::bingTileZoom(a),
+            zb = BingTileType::bingTileZoom(b);
+    if (za != zb) {
+      return za < zb;
+    }
+    return BingTileType::bingTileToQuadKey(a) <
+        BingTileType::bingTileToQuadKey(b);
+  };
+
+  std::priority_queue<int64_t, std::vector<int64_t>, decltype(tileComparator)>
+      queue(tileComparator);
+
+  for (auto t : rawTiles) {
+    queue.push(t);
+  }
+
+  while (!queue.empty()) {
+    int64_t candidate = queue.top();
+    queue.pop();
+
+    if (BingTileType::bingTileZoom(candidate) == 0) {
+      results.push_back(candidate);
+      continue;
+    }
+
+    auto parentZoom = BingTileType::bingTileZoom(candidate) - 1;
+    auto parentResult = BingTileType::bingTileParent(candidate, parentZoom);
+    VELOX_CHECK(parentResult.hasValue(), parentResult.error());
+    uint64_t parent = parentResult.value();
+    candidates.insert(candidate);
+
+    while (!queue.empty() &&
+           (BingTileType::bingTileParent(queue.top(), parentZoom).value() ==
+            parent)) {
+      candidates.insert(queue.top());
+      queue.pop();
+    }
+
+    if (candidates.size() == 4) {
+      // All siblings present, coalesce to parent
+      queue.push(static_cast<int64_t>(parent));
+    } else {
+      results.insert(results.end(), candidates.begin(), candidates.end());
+    }
+    candidates.clear();
+  }
+
   return results;
 }
 

@@ -50,9 +50,10 @@ void generateJsonTyped(
         std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (!legacyCast) {
         if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-          result.append(fmt::format(
-              "\"{}\"",
-              util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+          result.append(
+              fmt::format(
+                  "\"{}\"",
+                  util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
         } else {
           result.append(
               util::Converter<TypeKind::VARCHAR>::tryCast(value).value());

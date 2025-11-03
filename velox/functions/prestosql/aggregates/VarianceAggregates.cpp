@@ -115,11 +115,12 @@ exec::AggregateRegistrationResult registerVariance(
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(bigint,double,double)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(bigint,double,double)")
+            .argumentType(inputType)
+            .build());
   }
 
   return exec::registerAggregateFunction(

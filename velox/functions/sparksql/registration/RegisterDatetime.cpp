@@ -65,8 +65,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
   registerFunction<DayFunction, int32_t, Date>(
       {prefix + "day", prefix + "dayofmonth"});
-  registerFunction<DayOfYearFunction, int32_t, Date>(
-      {prefix + "doy", prefix + "dayofyear"});
+  registerFunction<DayOfYearFunction, int32_t, Date>({prefix + "dayofyear"});
   registerFunction<DayOfWeekFunction, int32_t, Date>({prefix + "dayofweek"});
   registerFunction<WeekdayFunction, int32_t, Date>({prefix + "weekday"});
   registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
@@ -111,6 +110,8 @@ void registerDatetimeFunctions(const std::string& prefix) {
       Varchar,
       int32_t,
       Timestamp>({prefix + "timestampadd"});
+  registerFunction<MonthsBetweenFunction, double, Timestamp, Timestamp, bool>(
+      {prefix + "months_between"});
 }
 
 } // namespace facebook::velox::functions::sparksql

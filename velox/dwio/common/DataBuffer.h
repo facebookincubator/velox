@@ -23,10 +23,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 template <typename T, typename = std::enable_if_t<std::is_trivial_v<T>>>
 class DataBuffer {
@@ -34,8 +31,9 @@ class DataBuffer {
   explicit DataBuffer(velox::memory::MemoryPool& pool, uint64_t size = 0)
       : pool_(&pool),
         // Initial allocation uses calloc, to avoid memset.
-        buf_(reinterpret_cast<T*>(
-            pool_->allocateZeroFilled(1, sizeInBytes(size)))),
+        buf_(
+            reinterpret_cast<T*>(
+                pool_->allocateZeroFilled(1, sizeInBytes(size)))),
         size_(size),
         capacity_(size) {
     VELOX_CHECK(buf_ != nullptr || size_ == 0);
@@ -233,7 +231,5 @@ class DataBuffer {
   // Maximum capacity of items of type T.
   uint64_t capacity_;
 };
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox::dwio::common

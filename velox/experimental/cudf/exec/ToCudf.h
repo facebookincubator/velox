@@ -19,15 +19,9 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
-#include <gflags/gflags.h>
-
-DECLARE_bool(velox_cudf_enabled);
-DECLARE_string(velox_cudf_memory_resource);
-DECLARE_bool(velox_cudf_debug);
+#include <rmm/mr/device/device_memory_resource.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-static const std::string kCudfAdapterName = "cuDF";
 
 class CompileState {
  public:
@@ -40,54 +34,19 @@ class CompileState {
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
-  bool compile();
+  bool compile(bool allow_cpu_fallback);
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
 };
 
-class CudfOptions {
- public:
-  static CudfOptions& getInstance() {
-    static CudfOptions instance;
-    return instance;
-  }
-
-  void setPrefix(const std::string& prefix) {
-    prefix_ = prefix;
-  }
-
-  const std::string& prefix() const {
-    return prefix_;
-  }
-
-  const bool cudfEnabled;
-  const std::string cudfMemoryResource;
-  // The initial percent of GPU memory to allocate for memory resource for one
-  // thread.
-  int memoryPercent;
-
- private:
-  CudfOptions()
-      : cudfEnabled(FLAGS_velox_cudf_enabled),
-        cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
-        memoryPercent(50),
-        prefix_("") {}
-  CudfOptions(const CudfOptions&) = delete;
-  CudfOptions& operator=(const CudfOptions&) = delete;
-  std::string prefix_;
-};
+extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 /// Registers adapter to add cuDF operators to Drivers.
-void registerCudf(const CudfOptions& options = CudfOptions::getInstance());
+void registerCudf();
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
 bool cudfIsRegistered();
-
-/**
- * @brief Returns true if the velox_cudf_debug flag is set to true.
- */
-bool cudfDebugEnabled();
 
 } // namespace facebook::velox::cudf_velox

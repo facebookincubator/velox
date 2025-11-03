@@ -38,17 +38,17 @@ class GcsReadFile : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   uint64_t size() const override;
 

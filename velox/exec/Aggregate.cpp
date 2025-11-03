@@ -20,7 +20,6 @@
 #include "velox/exec/AggregateCompanionAdapter.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/AggregateWindow.h"
-#include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::exec {
 
@@ -295,24 +294,6 @@ std::unique_ptr<Aggregate> Aggregate::create(
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     const core::QueryConfig& config) {
-  // TODO(timaou, kletkavrubashku): Reneable the validation once "regr_slope"
-  // signature is fixed
-  //
-  // Validate the result type. if (isPartialOutput(step)) {
-  //   auto intermediateType = Aggregate::intermediateType(name, argTypes);
-  //   VELOX_CHECK(
-  //       resultType->equivalent(*intermediateType),
-  //       "Intermediate type mismatch. Expected: {}, actual: {}",
-  //       intermediateType->toString(),
-  //       resultType->toString());
-  // } else {
-  //   auto finalType = Aggregate::finalType(name, argTypes);
-  //   VELOX_CHECK(
-  //       resultType->equivalent(*finalType),
-  //       "Final type mismatch. Expected: {}, actual: {}",
-  //       finalType->toString(),
-  //       resultType->toString());
-  // }
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
     return func->factory(step, argTypes, resultType, config);

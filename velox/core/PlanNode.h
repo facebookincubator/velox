@@ -259,23 +259,28 @@ class PlanNode : public ISerializable {
   /// The name of the plan node, used in toString.
   virtual std::string_view name() const = 0;
 
+  template <typename T>
+  bool is() const {
+    return dynamic_cast<const T*>(this) != nullptr;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
   /// Recursively checks the node tree for a first node that satisfy a given
   /// condition. Returns pointer to the node if found, nullptr if not.
   static const PlanNode* findFirstNode(
-      const PlanNode* node,
-      const std::function<bool(const PlanNode* node)>& predicate) {
-    if (predicate(node)) {
-      return node;
-    }
+      const PlanNode* root,
+      const std::function<bool(const PlanNode* node)>& predicate);
 
-    // Recursively go further through the sources.
-    for (const auto& source : node->sources()) {
-      const auto* ret = PlanNode::findFirstNode(source.get(), predicate);
-      if (ret != nullptr) {
-        return ret;
-      }
-    }
-    return nullptr;
+  /// @return PlanNode with matching ID or nullptr if not found.
+  static const PlanNode* findNodeById(
+      const PlanNode* root,
+      const PlanNodeId& id) {
+    return findFirstNode(
+        root, [&](const auto* node) { return node->id() == id; });
   }
 
  private:
@@ -1103,14 +1108,14 @@ class AggregationNode : public PlanNode {
 
     /// Optional name of input column to use as a mask. Column type must be
     /// BOOLEAN.
-    FieldAccessTypedExprPtr mask;
+    FieldAccessTypedExprPtr mask{};
 
     /// Optional list of input columns to sort by before applying aggregate
     /// function.
-    std::vector<FieldAccessTypedExprPtr> sortingKeys;
+    std::vector<FieldAccessTypedExprPtr> sortingKeys{};
 
     /// A list of sorting orders that goes together with 'sortingKeys'.
-    std::vector<SortOrder> sortingOrders;
+    std::vector<SortOrder> sortingOrders{};
 
     /// Boolean indicating whether inputs must be de-duplicated before
     /// aggregating.
@@ -3431,7 +3436,15 @@ class IndexLookupJoinNode : public AbstractJoinNode {
  public:
   /// @param joinType Specifies the lookup join type. Only INNER and LEFT joins
   /// are supported.
-  /// @param includeMatchColumn if true, the output type includes a boolean
+  /// @param leftKeys Left side join keys used for index lookup.
+  /// @param rightKeys Right side join keys that form the index prefix.
+  /// @param joinConditions Additional conditions for index lookup that can't
+  /// be converted into simple equality join conditions. These conditions use
+  /// columns from both left and right  and exactly one index column from
+  /// the right side.sides
+  /// @param filter Additional filter to apply on join results. This supports
+  /// filters that can't be converted into join conditions.
+  /// @param hasMarker if true, the output type includes a boolean
   /// column at the end to indicate if a join output row has a match or not.
   /// This only applies for left join.
   IndexLookupJoinNode(
@@ -3440,7 +3453,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       const std::vector<FieldAccessTypedExprPtr>& leftKeys,
       const std::vector<FieldAccessTypedExprPtr>& rightKeys,
       const std::vector<IndexLookupConditionPtr>& joinConditions,
-      bool includeMatchColumn,
+      TypedExprPtr filter,
+      bool hasMarker,
       PlanNodePtr left,
       TableScanNodePtr right,
       RowTypePtr outputType);
@@ -3453,16 +3467,27 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     explicit Builder(const IndexLookupJoinNode& other)
         : AbstractJoinNode::Builder<IndexLookupJoinNode, Builder>(other) {
       joinConditions_ = other.joinConditions();
+      filter_ = other.filter();
+      hasMarker_ = other.hasMarker();
     }
 
+    /// Set lookup conditions for index lookup that can't be converted into
+    /// simple equality join conditions.
     Builder& joinConditions(
         std::vector<IndexLookupConditionPtr> joinConditions) {
       joinConditions_ = std::move(joinConditions);
       return *this;
     }
 
-    Builder& includeMatchColumn(bool includeMatchColumn) {
-      includeMatchColumn_ = includeMatchColumn;
+    /// Set additional filter to apply on join results.
+    Builder& filter(TypedExprPtr filter) {
+      filter_ = std::move(filter);
+      return *this;
+    }
+
+    /// Set whether to include a marker column for left joins.
+    Builder& hasMarker(bool hasMarker) {
+      hasMarker_ = hasMarker;
       return *this;
     }
 
@@ -3480,25 +3505,23 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           right_.has_value(), "IndexLookupJoinNode right source is not set");
       VELOX_USER_CHECK(
           outputType_.has_value(), "IndexLookupJoinNode outputType is not set");
-      VELOX_USER_CHECK(
-          joinConditions_.has_value(),
-          "IndexLookupJoinNode join conditions are not set");
 
       return std::make_shared<IndexLookupJoinNode>(
           id_.value(),
           joinType_.value(),
           leftKeys_.value(),
           rightKeys_.value(),
-          joinConditions_.value(),
-          includeMatchColumn_,
+          joinConditions_,
+          filter_.value_or(nullptr),
+          hasMarker_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
           outputType_.value());
     }
 
    private:
-    std::optional<std::vector<IndexLookupConditionPtr>> joinConditions_;
-    bool includeMatchColumn_;
+    std::vector<IndexLookupConditionPtr> joinConditions_;
+    bool hasMarker_;
   };
 
   bool supportsBarrier() const override {
@@ -3509,6 +3532,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return lookupSourceNode_;
   }
 
+  /// Returns the join conditions for index lookup that can't be converted into
+  /// simple equality join conditions.
   const std::vector<IndexLookupConditionPtr>& joinConditions() const {
     return joinConditions_;
   }
@@ -3517,8 +3542,9 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return "IndexLookupJoin";
   }
 
-  bool includeMatchColumn() const {
-    return includeMatchColumn_;
+  /// Returns whether this node includes a marker column for left joins.
+  bool hasMarker() const {
+    return hasMarker_;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -3534,11 +3560,16 @@ class IndexLookupJoinNode : public AbstractJoinNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
+  /// The table scan node that provides the lookup source for index operations.
   const TableScanNodePtr lookupSourceNode_;
 
+  /// Join conditions that can't be converted into simple equality join
+  /// conditions. These conditions involve columns from both left and right
+  /// sides and exactly one index column from the right side.
   const std::vector<IndexLookupConditionPtr> joinConditions_;
 
-  const bool includeMatchColumn_;
+  /// Whether to include a marker column for left joins to indicate matches.
+  const bool hasMarker_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
@@ -3852,9 +3883,28 @@ class SpatialJoinNode : public PlanNode {
       const PlanNodeId& id,
       JoinType joinType,
       TypedExprPtr joinCondition,
+      FieldAccessTypedExprPtr probeGeometry,
+      FieldAccessTypedExprPtr buildGeometry,
+      std::optional<FieldAccessTypedExprPtr> radius,
       PlanNodePtr left,
       PlanNodePtr right,
       RowTypePtr outputType);
+
+  SpatialJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      TypedExprPtr joinCondition,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      RowTypePtr outputType);
+
+  PlanNodePtr leftNode() const {
+    return sources()[0];
+  }
+
+  PlanNodePtr rightNode() const {
+    return sources()[1];
+  }
 
   class Builder {
    public:
@@ -3864,6 +3914,9 @@ class SpatialJoinNode : public PlanNode {
       id_ = other.id();
       joinType_ = other.joinType();
       joinCondition_ = other.joinCondition();
+      probeGeometry_ = other.probeGeometry();
+      buildGeometry_ = other.buildGeometry();
+      radius_ = other.radius();
       VELOX_CHECK_EQ(other.sources().size(), 2);
       left_ = other.sources()[0];
       right_ = other.sources()[1];
@@ -3882,6 +3935,21 @@ class SpatialJoinNode : public PlanNode {
 
     Builder& joinCondition(TypedExprPtr joinCondition) {
       joinCondition_ = std::move(joinCondition);
+      return *this;
+    }
+
+    Builder& probeGeometry(FieldAccessTypedExprPtr probeGeometry) {
+      probeGeometry_ = std::move(probeGeometry);
+      return *this;
+    }
+
+    Builder& buildGeometry(FieldAccessTypedExprPtr buildGeometry) {
+      buildGeometry_ = std::move(buildGeometry);
+      return *this;
+    }
+
+    Builder& radius(FieldAccessTypedExprPtr radius) {
+      radius_ = std::move(radius);
       return *this;
     }
 
@@ -3908,11 +3976,38 @@ class SpatialJoinNode : public PlanNode {
           right_.has_value(), "SpatialJoinNode right source is not set");
       VELOX_USER_CHECK(
           outputType_.has_value(), "SpatialJoinNode outputType is not set");
+      VELOX_USER_CHECK(
+          probeGeometry_.has_value(),
+          "SpatialJoinNode probe geometry is not set");
+      VELOX_USER_CHECK(
+          buildGeometry_.has_value(),
+          "SpatialJoinNode build geometry is not set");
+
+      VELOX_USER_CHECK(
+          (probeGeometry_.has_value() && buildGeometry_.has_value()) ||
+              (!probeGeometry_.has_value() && !buildGeometry_.has_value()),
+          "Either probe and build geometry must both be set, or neither");
+
+      if (probeGeometry_.has_value() && buildGeometry_.has_value()) {
+        return std::make_shared<SpatialJoinNode>(
+            id_.value(),
+            joinType_,
+            joinCondition_,
+            probeGeometry_.value(),
+            buildGeometry_.value(),
+            radius_,
+            left_.value(),
+            right_.value(),
+            outputType_.value());
+      }
 
       return std::make_shared<SpatialJoinNode>(
           id_.value(),
           joinType_,
           joinCondition_,
+          probeGeometry_.value(),
+          buildGeometry_.value(),
+          radius_,
           left_.value(),
           right_.value(),
           outputType_.value());
@@ -3922,6 +4017,9 @@ class SpatialJoinNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     JoinType joinType_ = kDefaultJoinType;
     TypedExprPtr joinCondition_;
+    std::optional<FieldAccessTypedExprPtr> probeGeometry_;
+    std::optional<FieldAccessTypedExprPtr> buildGeometry_;
+    std::optional<FieldAccessTypedExprPtr> radius_;
     std::optional<PlanNodePtr> left_;
     std::optional<PlanNodePtr> right_;
     std::optional<RowTypePtr> outputType_;
@@ -3946,6 +4044,18 @@ class SpatialJoinNode : public PlanNode {
     return joinCondition_;
   }
 
+  const FieldAccessTypedExprPtr& probeGeometry() const {
+    return probeGeometry_;
+  }
+
+  const FieldAccessTypedExprPtr& buildGeometry() const {
+    return buildGeometry_;
+  }
+
+  const std::optional<FieldAccessTypedExprPtr>& radius() const {
+    return radius_;
+  }
+
   JoinType joinType() const {
     return joinType_;
   }
@@ -3964,6 +4074,9 @@ class SpatialJoinNode : public PlanNode {
 
   const JoinType joinType_;
   const TypedExprPtr joinCondition_;
+  const FieldAccessTypedExprPtr probeGeometry_;
+  const FieldAccessTypedExprPtr buildGeometry_;
+  const std::optional<FieldAccessTypedExprPtr> radius_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
 };
