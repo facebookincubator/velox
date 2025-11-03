@@ -84,7 +84,11 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
   using serializer::SerializedPageFileWriter::write;
 
   using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;
-  uint64_t write(const SpillRows& rows, RowContainer* container);
+  uint64_t write(
+      const SpillRows& rows,
+      RowContainer* container,
+      const RowVectorPtr& vector,
+      bool hasProbedFlag);
 
   std::vector<std::string> testingSpilledFilePaths() const;
 

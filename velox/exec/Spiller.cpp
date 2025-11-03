@@ -53,6 +53,7 @@ SpillerBase::SpillerBase(
         }
         return compareFlags;
       }()),
+      serializeRowContainer_(spillConfig->serializeRowContainer),
       state_(
           rowType_,
           spillConfig->getSpillDirPathCb,
@@ -68,8 +69,17 @@ SpillerBase::SpillerBase(
           spillConfig->fileCreateConfig) {
   TestValue::adjust("facebook::velox::exec::SpillerBase", this);
 
-  serializeRowContainer_ = spillConfig->serializeRowContainer &&
-      container_ != nullptr && container_->supportSerializeRows();
+  if (container_ != nullptr && container_->accumulators().size() > 0) {
+    auto size = container_->accumulators().size();
+    std::vector<std::string> names(size);
+    std::vector<TypePtr> types(size);
+    for (int i = 0; i < size; ++i) {
+      types[i] = container_->accumulators()[i].spillType();
+      names[i] = "a" + std::to_string(i);
+    }
+    accumulatorType_ =
+        std::make_shared<RowType>(std::move(names), std::move(types));
+  }
 }
 
 void SpillerBase::spill(const RowContainerIterator* startRowIter) {
@@ -207,6 +217,7 @@ std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
   constexpr int32_t kTargetBatchRows = 64;
 
   RowVectorPtr spillVector;
+  RowVectorPtr accumulatorVector;
   auto& run = spillRuns_.at(id);
   try {
     ensureSorted(run);
@@ -215,8 +226,14 @@ std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
       if (serializeRowContainer_) {
         SpillRows spillRows(*memory::spillMemoryPool());
         extractSpillRows(
-            run.rows, kTargetBatchRows, kTargetBatchBytes, spillRows, written);
-        state_.appendToPartition(id, spillRows, container_);
+            run.rows,
+            kTargetBatchRows,
+            kTargetBatchBytes,
+            spillRows,
+            accumulatorVector,
+            written);
+        state_.appendToPartition(
+            id, spillRows, container_, accumulatorVector, hasProbedFlag());
       } else {
         extractSpillVector(
             run.rows,
@@ -303,6 +320,7 @@ int64_t SpillerBase::extractSpillRows(
     int32_t maxRows,
     int64_t maxBytes,
     SpillRows& spillRows,
+    RowVectorPtr& accumulatorVector,
     size_t& nextBatchIndex) {
   uint64_t extractNs{0};
   auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
@@ -324,6 +342,10 @@ int64_t SpillerBase::extractSpillRows(
         spillRows.end(),
         rows.begin() + nextBatchIndex,
         rows.begin() + nextBatchIndex + numRows);
+
+    extractNonSerializable(
+        folly::Range(&rows[nextBatchIndex], numRows), accumulatorVector);
+
     nextBatchIndex += numRows;
   }
   updateSpillExtractVectorTime(extractNs);
@@ -351,6 +373,25 @@ void SpillerBase::extractSpill(
   for (auto i = 0; i < accumulators.size(); ++i) {
     accumulators[i].extractForSpill(
         rows, result->childAt(i + accumulatorColumnOffset));
+  }
+}
+
+void SpillerBase::extractNonSerializable(
+    folly::Range<char**> rows,
+    RowVectorPtr& resultPtr) {
+  if (!container_->accumulators().empty()) {
+    if (resultPtr == nullptr) {
+      resultPtr = BaseVector::create<RowVector>(
+          accumulatorType_, rows.size(), memory::spillMemoryPool());
+    } else {
+      resultPtr->prepareForReuse();
+      resultPtr->resize(rows.size());
+    }
+
+    const auto& accumulators = container_->accumulators();
+    for (auto i = 0; i < accumulators.size(); ++i) {
+      accumulators[i].extractForSpill(rows, resultPtr->childAt(i));
+    }
   }
 }
 

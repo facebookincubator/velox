@@ -71,7 +71,8 @@ class IterativeVectorSerializer {
   virtual void append(
       const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges,
-      Scratch& scratch) = 0;
+      Scratch& scratch,
+      const column_index_t columnStartOffset = 0) = 0;
 
   virtual void append(
       const RowVectorPtr& vector,
@@ -446,13 +447,15 @@ class VectorStreamGroup : public StreamArena {
   void append(
       const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges,
-      Scratch& scratch);
+      Scratch& scratch,
+      const column_index_t columnOffset = 0);
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges) {
+      const folly::Range<const IndexRange*>& ranges,
+      const column_index_t columnOffset = 0) {
     Scratch scratch;
-    append(vector, ranges, scratch);
+    append(vector, ranges, scratch, columnOffset);
   }
 
   void append(

@@ -185,7 +185,9 @@ uint64_t SpillState::appendToPartition(
 uint64_t SpillState::appendToPartition(
     const SpillPartitionId& id,
     const SpillRows& rows,
-    RowContainer* rowContainer) {
+    RowContainer* rowContainer,
+    const RowVectorPtr& vector,
+    bool hasProbedFlag) {
   VELOX_CHECK(
       isPartitionSpilled(id), "Partition {} is not spilled", id.toString());
 
@@ -201,7 +203,7 @@ uint64_t SpillState::appendToPartition(
   validateSpillBytesSize(bytes);
   updateSpilledInputBytes(bytes);
 
-  return partitionWriter(id)->write(rows, rowContainer);
+  return partitionWriter(id)->write(rows, rowContainer, vector, hasProbedFlag);
 }
 
 SpillWriter* SpillState::partitionWriter(const SpillPartitionId& id) const {

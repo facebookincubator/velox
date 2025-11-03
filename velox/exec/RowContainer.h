@@ -325,11 +325,6 @@ class RowContainer {
              : 0);
   }
 
-  bool supportSerializeRows() {
-    // Accumulators must be extracted to spill.
-    return accumulators().empty() && probedFlagOffset_ == 0;
-  }
-
   /// Sets all fields, aggregates, keys and dependents to null. Used when making
   /// a row with uninitialized keys for aggregates with no-op partial
   /// aggregation.
@@ -573,6 +568,17 @@ class RowContainer {
       bool setNullForNullKeysRow,
       bool setNullForNonProbedRow,
       const VectorPtr& result) const;
+
+  void extractProbedFlags(
+      const char* const* rows,
+      int32_t numRows,
+      serializer::presto::VectorStream* stream) const {
+    for (auto i = 0; i < numRows; ++i) {
+      const bool probed = bits::isBitSet(rows[i], probedFlagOffset_);
+      stream->appendNonNull();
+      stream->appendOne<uint8_t>(probed ? 1 : 0);
+    }
+  }
 
   static inline int32_t nullByte(int32_t nullOffset) {
     return nullOffset / 8;

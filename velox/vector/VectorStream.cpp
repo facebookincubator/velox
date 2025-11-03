@@ -187,8 +187,9 @@ void VectorStreamGroup::createStreamTree(
 void VectorStreamGroup::append(
     const RowVectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
-    Scratch& scratch) {
-  serializer_->append(vector, ranges, scratch);
+    Scratch& scratch,
+    const column_index_t columnStartOffset) {
+  serializer_->append(vector, ranges, scratch, columnStartOffset);
 }
 
 void VectorStreamGroup::append(

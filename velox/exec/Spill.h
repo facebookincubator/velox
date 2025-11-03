@@ -612,7 +612,9 @@ class SpillState {
   uint64_t appendToPartition(
       const SpillPartitionId& id,
       const SpillRows& rows,
-      RowContainer* container);
+      RowContainer* container,
+      const RowVectorPtr& vector,
+      bool hasProbedFlag);
 
   /// Finishes a sorted run for partition with 'id'. If write is called for
   /// 'partition' again, the data does not have to be sorted relative to the

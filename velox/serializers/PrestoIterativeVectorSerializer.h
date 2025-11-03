@@ -32,7 +32,8 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
   void append(
       const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges,
-      Scratch& scratch) override;
+      Scratch& scratch,
+      const column_index_t columnStartOffset = 0) override;
 
   void append(
       const RowVectorPtr& vector,
