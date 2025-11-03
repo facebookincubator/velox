@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -158,7 +159,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(StripeStreamFormatTypeTest, planReads) {
   google::protobuf::Arena arena;
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   auto footerWrapper = FooterWriteWrapper(footer);
   footerWrapper.setRowIndexStride(100);
   auto type = HiveTypeParser().parse("struct<a:int,b:float>");
@@ -248,7 +249,7 @@ TEST_P(StripeStreamFormatTypeTest, planReads) {
 
 TEST_F(StripeStreamTest, filterSequences) {
   google::protobuf::Arena arena;
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   auto footerWrapper = FooterWriteWrapper(footer);
   footerWrapper.setRowIndexStride(100);
   auto type = HiveTypeParser().parse("struct<a:map<int,float>>");
@@ -313,7 +314,7 @@ TEST_F(StripeStreamTest, filterSequences) {
 
 TEST_P(StripeStreamFormatTypeTest, zeroLength) {
   google::protobuf::Arena arena;
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   auto footerWrapper = FooterWriteWrapper(footer);
   footerWrapper.setRowIndexStride(100);
   auto type = HiveTypeParser().parse("struct<a:int>");
@@ -440,7 +441,7 @@ TEST_P(StripeStreamFormatTypeTest, planReadsIndex) {
   index.SerializeToOstream(&buffer);
 
   // build footer
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   auto footerWrapper = FooterWriteWrapper(footer);
   footerWrapper.setRowIndexStride(100);
   footerWrapper.addStripeCacheOffsets(0);
@@ -600,7 +601,7 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
   proto::PostScript ps;
   ps.set_compression(proto::CompressionKind::ZSTD);
   ps.set_compressionblocksize(256 * 1024);
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   auto footerWrapper = FooterWriteWrapper(footer);
   // a: not encrypted, projected
   // encryption group 1: b, c. projected b.
@@ -694,7 +695,7 @@ TEST_F(StripeStreamTest, schemaMismatch) {
   proto::PostScript ps;
   ps.set_compression(proto::CompressionKind::ZSTD);
   ps.set_compressionblocksize(256 * 1024);
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   auto footerWrapper = FooterWriteWrapper(footer);
   // a: not encrypted, has schema change
   // b: encrypted

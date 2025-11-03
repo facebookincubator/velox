@@ -213,8 +213,8 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  set(curl_SOURCE BUNDLED)
-  velox_resolve_dependency(curl)
+  set(cpr_SOURCE BUNDLED)
+  velox_resolve_dependency(cpr)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
 endif()
@@ -617,7 +617,10 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_E
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 3.13.0)
+velox_resolve_dependency(simdjson 4.1.0)
+
+velox_set_source(FastFloat)
+velox_resolve_dependency(FastFloat)
 
 velox_set_source(folly)
 velox_resolve_dependency(folly)

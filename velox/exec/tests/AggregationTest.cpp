@@ -38,6 +38,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 
 namespace facebook::velox::exec::test {
 
@@ -4112,6 +4113,42 @@ TEST_F(AggregationTest, nanKeys) {
   auto testDistinctAgg = [&](std::vector<std::string> aggKeys,
                              std::vector<VectorPtr> inputCols,
                              std::vector<VectorPtr> expectedCols) {
+    auto plan = PlanBuilder()
+                    .values({makeRowVector(inputCols)})
+                    .singleAggregation(aggKeys, {}, {})
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(makeRowVector(expectedCols));
+  };
+
+  // Test with a primitive type key.
+  testDistinctAgg({"c0"}, {c0}, {e0});
+  // Multiple key columns.
+  testDistinctAgg({"c0", "c1"}, {c0, c1}, {e0, e1});
+
+  // Test with a complex type key.
+  testDistinctAgg({"c0"}, {makeRowVector({c0, c1})}, {makeRowVector({e0, e1})});
+  // Multiple key columns.
+  testDistinctAgg(
+      {"c0", "c1"},
+      {makeRowVector({c0, c1}), c1},
+      {makeRowVector({e0, e1}), e1});
+}
+
+TEST_F(AggregationTest, keysProvideCustomComparison) {
+  // Columns reused across test cases.
+  auto c0 = makeFlatVector<int64_t>(
+      {0, 1, 256, 257, 512, 513},
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON());
+  auto c1 = makeFlatVector<int32_t>({1, 2, 1, 2, 1, 2});
+  // Expected result columns reused across test cases. A deduplicated version of
+  // c0 and c1.
+  auto e0 = makeFlatVector<int64_t>(
+      {0, 1}, velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON());
+  auto e1 = makeFlatVector<int32_t>({1, 2});
+
+  auto testDistinctAgg = [&](const std::vector<std::string>& aggKeys,
+                             const std::vector<VectorPtr>& inputCols,
+                             const std::vector<VectorPtr>& expectedCols) {
     auto plan = PlanBuilder()
                     .values({makeRowVector(inputCols)})
                     .singleAggregation(aggKeys, {}, {})

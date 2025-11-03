@@ -132,7 +132,26 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
     std::vector<int64_t> remainingBytes;
   };
 
+  // Selects exchange sources to request data from based on available queue
+  // capacity. Handles multiple sources by first requesting data sizes from all
+  // empty sources, then requesting actual data from producing sources based on
+  // their remaining bytes and available capacity. May initiate out-of-band
+  // transfers for large pages that exceed capacity to avoid deadlock
+  // situations. For single source case, delegates to
+  // pickupSingleSourceToRequestLocked which sets max request bytes based on
+  // available queue space instead of reported remaining bytes from exchange
+  // sources.
   std::vector<RequestSpec> pickSourcesToRequestLocked();
+
+  // Specialized single-source request picker for single-source exchange
+  // clients. Sets the max request bytes based on available space in the queue
+  // rather than the reported remaining bytes from exchange sources. The reason
+  // is that single source has no other alternative so just fetch as much as
+  // possible from that source. Returns a request spec for the single source
+  // when there is available capacity in the queue and no pending requests. If
+  // capacity is unavailable or requests are already pending, returns empty
+  // vector.
+  std::vector<RequestSpec> pickupSingleSourceToRequestLocked();
 
   void request(std::vector<RequestSpec>&& requestSpecs);
 

@@ -31,7 +31,7 @@ by Velox. See details on bundling below.
 | xsimd             | 10.0.0          | Yes      ||
 | re2               | 2024-07-02      | Yes      ||
 | fmt               | 11.2.0          | Yes      | Used API must be fmt 9 compatible |
-| simdjson          | 3.13.0          | Yes      ||
+| simdjson          | 4.1.0           | Yes      ||
 | faiss             | 1.11.0          | Yes      ||
 | folly             | v2025.04.28.00  | Yes      ||
 | fizz              | v2025.04.28.00  | No       ||
