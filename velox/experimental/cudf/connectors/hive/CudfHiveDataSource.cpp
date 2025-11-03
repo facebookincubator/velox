@@ -360,7 +360,7 @@ CudfHiveDataSource::createSplitReader() {
   }
 
   stream_ = cudfGlobalStreamPool().get_stream();
-  //  Create a parquet reader
+  // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
       parquetConfig_->maxChunkReadLimit(),
       parquetConfig_->maxPassReadLimit(),
