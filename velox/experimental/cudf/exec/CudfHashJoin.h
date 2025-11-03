@@ -300,7 +300,7 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
       cudf::column_view rightIndicesCol,
       std::function<std::vector<std::unique_ptr<cudf::column>>(
           std::vector<std::unique_ptr<cudf::column>>&&,
-          cudf::mutable_column_view)> func,
+          cudf::column_view)> func,
       rmm::cuda_stream_view stream);
 };
 
