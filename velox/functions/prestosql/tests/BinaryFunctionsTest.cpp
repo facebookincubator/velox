@@ -867,4 +867,46 @@ TEST_F(BinaryFunctionsTest, murmur3_x64_128) {
   EXPECT_EQ(murmur3_x64_128(std::nullopt), std::nullopt);
 }
 
+TEST_F(BinaryFunctionsTest, fromBase32) {
+  const auto fromBase32 = [&](const std::optional<std::string>& value) {
+    // from_base32 allows VARCHAR and VARBINARY inputs.
+    auto result =
+        evaluateOnce<std::string>("from_base32(c0)", VARCHAR(), value);
+    auto otherResult =
+        evaluateOnce<std::string>("from_base32(c0)", VARBINARY(), value);
+
+    VELOX_CHECK_EQ(result.has_value(), otherResult.has_value());
+
+    if (!result.has_value()) {
+      return result;
+    }
+
+    EXPECT_EQ(result.value(), otherResult.value());
+    return result;
+  };
+
+  EXPECT_EQ(std::nullopt, fromBase32(std::nullopt));
+  EXPECT_EQ("", fromBase32(""));
+  EXPECT_EQ("a", fromBase32("ME======"));
+  EXPECT_EQ("abc", fromBase32("MFRGG==="));
+  EXPECT_EQ("hello world", fromBase32("NBSWY3DPEB3W64TMMQ======"));
+
+  // Test case-insensitive
+  EXPECT_EQ("a", fromBase32("me======"));
+  EXPECT_EQ("abc", fromBase32("mfrgg==="));
+
+  // Test padding handling
+  EXPECT_EQ("a", fromBase32("ME"));
+  EXPECT_EQ("abc", fromBase32("MFRGG"));
+
+  // Test invalid characters - matching Guava/Presto error message format
+  VELOX_ASSERT_USER_THROW(fromBase32("1="), "Invalid input length 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M1======"), "Unrecognized character: 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M!======"), "Unrecognized character: !");
+
+  // Test string with multiple invalid characters (hits first invalid char)
+  VELOX_ASSERT_USER_THROW(
+      fromBase32("o3Xr<~I0:WDg1FV4FkF"), "Unrecognized character: <");
+}
+
 } // namespace

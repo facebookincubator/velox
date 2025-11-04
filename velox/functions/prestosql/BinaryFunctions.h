@@ -21,6 +21,7 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/external/md5/md5.h"
@@ -307,6 +308,26 @@ struct FromBase64Function {
     }
     result.resize(decodedSize.value());
     return encoding::Base64::decode(
+        input.data(), inputSize, result.data(), result.size());
+  }
+};
+
+template <typename TExec>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    auto inputSize = input.size();
+    auto decodedSize =
+        encoding::Base32::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base32::decode(
         input.data(), inputSize, result.data(), result.size());
   }
 };
