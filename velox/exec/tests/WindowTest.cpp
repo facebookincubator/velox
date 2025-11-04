@@ -463,6 +463,37 @@ TEST_F(WindowTest, multiGroupSortBuild) {
           "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 }
 
+TEST_F(WindowTest, multiGroupSortBuildSkewed) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 4;
+  const int numGroups = 16;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kWindowNumGroups, std::to_string(numGroups))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
 TEST_F(WindowTest, regionBuildWithSpill) {
   const vector_size_t size = 1'000;
   const int numPartitions = 37;
