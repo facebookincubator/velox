@@ -43,6 +43,7 @@ class FilterProjectReplayer : public OperatorReplayerBase {
             taskId,
             nodeId,
             operatorType,
+            "",
             driverIds,
             queryCapacity,
             executor) {}

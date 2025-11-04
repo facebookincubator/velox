@@ -148,6 +148,7 @@ TEST_F(OrderByReplayerTest, basic) {
                                    orderById_,
                                    "OrderBy",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -186,6 +187,7 @@ TEST_F(OrderByReplayerTest, partial) {
                                    task->taskId(),
                                    orderById_,
                                    "OrderBy",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())
