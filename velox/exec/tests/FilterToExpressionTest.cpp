@@ -535,7 +535,8 @@ void FilterToExpressionTest::testRoundTrip(
     if (arrayExpr && arrayExpr->name() == "array_constructor") {
       // Use toSubfieldFilter for array_constructor expressions
       auto [roundTripSubfield, roundTripFilter] =
-          exec::toSubfieldFilter(expr, evaluator());
+          exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
+              expr, evaluator());
 
       // Step 3: Verify the round-tripped filter and subfield
       ASSERT_TRUE(roundTripFilter != nullptr);

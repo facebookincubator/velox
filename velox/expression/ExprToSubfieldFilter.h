@@ -361,10 +361,6 @@ betweenHugeint(int128_t min, int128_t max, bool nullAllowed = false) {
   return std::make_unique<common::HugeintRange>(min, max, nullAllowed);
 }
 
-std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator*);
-
 inline std::unique_ptr<common::TimestampRange> equal(
     const Timestamp& value,
     bool nullAllowed = false) {
@@ -427,11 +423,16 @@ class ExprToSubfieldFilterParser {
     parser_ = std::move(parser);
   }
 
-  /// Converts a leaf call expression (no conjunction like AND/OR) to subfield
-  /// and filter. Return nullptr if not supported for pushdown. This is needed
-  /// because this conversion is frequently applied when extracting filters from
-  /// remaining filter in readers. Frequent throw clutters logs and slows down
-  /// execution.
+  virtual std::pair<common::Subfield, std::unique_ptr<common::Filter>>
+  toSubfieldFilter(
+      const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator*) = 0;
+
+  /// Converts a leaf call expression (no conjunction like AND/OR) to
+  /// subfield and filter. Return nullptr if not supported for pushdown.
+  /// This is needed because this conversion is frequently applied when
+  /// extracting filters from remaining filter in readers. Frequent throw
+  /// clutters logs and slows down execution.
   virtual std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
       common::Subfield& subfield,
@@ -441,51 +442,57 @@ class ExprToSubfieldFilterParser {
  protected:
   // Converts an expression into a subfield. Returns false if the expression is
   // not a valid field expression.
-  bool toSubfield(const core::ITypedExpr* field, common::Subfield& subfield);
+  static bool toSubfield(
+      const core::ITypedExpr* field,
+      common::Subfield& subfield);
 
   // Creates a non-equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeNotEqualFilter(
+  static std::unique_ptr<common::Filter> makeNotEqualFilter(
       const core::TypedExprPtr& valueExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates an equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeEqualFilter(
+  static std::unique_ptr<common::Filter> makeEqualFilter(
       const core::TypedExprPtr& valueExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a greater-than subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeGreaterThanFilter(
+  static std::unique_ptr<common::Filter> makeGreaterThanFilter(
       const core::TypedExprPtr& lowerExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a less-than subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeLessThanFilter(
+  static std::unique_ptr<common::Filter> makeLessThanFilter(
       const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a less-than-or-equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
+  static std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
       const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a greater-than-or-equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
+  static std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
       const core::TypedExprPtr& lowerExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates an in subfield filter against the given vector.
-  std::unique_ptr<common::Filter> makeInFilter(
+  static std::unique_ptr<common::Filter> makeInFilter(
       const core::TypedExprPtr& expr,
       core::ExpressionEvaluator* evaluator,
       bool negated);
 
   // Creates a between subfield filter against the given lower and upper
   // bounds.
-  std::unique_ptr<common::Filter> makeBetweenFilter(
+  static std::unique_ptr<common::Filter> makeBetweenFilter(
       const core::TypedExprPtr& lowerExpr,
       const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator,
       bool negated);
+
+  static std::unique_ptr<common::Filter> makeOrFilter(
+      std::unique_ptr<common::Filter> a,
+      std::unique_ptr<common::Filter> b);
 
  private:
   // Singleton parser instance.
@@ -495,11 +502,25 @@ class ExprToSubfieldFilterParser {
 // Parser for Presto expressions.
 class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
  public:
+  std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
+      const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator* evaluator) override;
+
   std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
       common::Subfield& subfield,
       core::ExpressionEvaluator* evaluator,
       bool negated = false) override;
 };
+
+// TODO Remove after updating Prestissimo and Axiom.
+[[deprecated("Use ExprToSubfieldFilterParser::toSubfieldFilter instead")]]
+inline std::pair<common::Subfield, std::unique_ptr<common::Filter>>
+toSubfieldFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator) {
+  return ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
+      expr, evaluator);
+}
 
 } // namespace facebook::velox::exec
