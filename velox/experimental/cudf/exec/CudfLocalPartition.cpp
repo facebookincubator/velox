@@ -98,8 +98,14 @@ CudfLocalPartition::CudfLocalPartition(
         partitionKeyIndices_.push_back(fieldIndex);
       }
     }
+    partitionFunctionType_ = PartitionFunctionType::kHash;
+  } else if (
+      numPartitions_ > 1 && spec.find("ROUND ROBIN ROW") != std::string::npos) {
+    partitionFunctionType_ = PartitionFunctionType::kRoundRobinRow;
   }
-  VELOX_CHECK(numPartitions_ == 1 || partitionKeyIndices_.size() > 0);
+  VELOX_CHECK(
+      numPartitions_ == 1 || partitionKeyIndices_.size() > 0 ||
+      partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow);
 
   // Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
@@ -117,20 +123,29 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
   auto stream = cudfVector->stream();
 
   if (numPartitions_ > 1) {
-    // Use cudf hash partitioning
-    auto tableView = cudfVector->getTableView();
-    std::vector<cudf::size_type> partitionKeyIndices;
-    for (const auto& idx : partitionKeyIndices_) {
-      partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
-    }
+    auto [partitionedTable, partitionOffsets] = [&]() {
+      auto tableView = cudfVector->getTableView();
+      // Use cudf hash partitioning
+      if (partitionFunctionType_ == PartitionFunctionType::kHash) {
+        std::vector<cudf::size_type> partitionKeyIndices;
+        for (const auto& idx : partitionKeyIndices_) {
+          partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
+        }
 
-    auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
-        tableView,
-        partitionKeyIndices,
-        numPartitions_,
-        cudf::hash_id::HASH_MURMUR3,
-        cudf::DEFAULT_HASH_SEED,
-        stream);
+        return cudf::hash_partition(
+            tableView,
+            partitionKeyIndices,
+            numPartitions_,
+            cudf::hash_id::HASH_MURMUR3,
+            cudf::DEFAULT_HASH_SEED,
+            stream);
+      } else if (partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow) {
+        return cudf::round_robin_partition(
+            tableView, numPartitions_, counter_, stream);
+        counter_ = (counter_ + cudfVector->size()) % numPartitions_;
+      }
+      VELOX_FAIL("Unsupported partition function");
+    }();
 
     VELOX_CHECK(partitionOffsets.size() == numPartitions_);
     VELOX_CHECK(partitionOffsets[0] == 0);
