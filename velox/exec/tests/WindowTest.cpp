@@ -432,10 +432,10 @@ DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
   ASSERT_TRUE(isStreamCreated.load());
 }
 
-TEST_F(WindowTest, multiGroupSortBuild) {
+TEST_F(WindowTest, prePartitionedSortBuild) {
   const vector_size_t size = 1'000;
   const int numPartitions = 37;
-  const int numGroups = 4;
+  const int numSubPartitions = 4;
   auto data = makeRowVector(
       {"p", "s"},
       {
@@ -458,15 +458,17 @@ TEST_F(WindowTest, multiGroupSortBuild) {
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kWindowNumGroups, std::to_string(numGroups))
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
       .assertResults(
           "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 }
 
-TEST_F(WindowTest, multiGroupSortBuildSkewed) {
+TEST_F(WindowTest, prePartitionedSortBuildSkewed) {
   const vector_size_t size = 1'000;
   const int numPartitions = 4;
-  const int numGroups = 16;
+  const int numSubPartitions = 16;
   auto data = makeRowVector(
       {"p", "s"},
       {
@@ -489,15 +491,17 @@ TEST_F(WindowTest, multiGroupSortBuildSkewed) {
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kWindowNumGroups, std::to_string(numGroups))
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
       .assertResults(
           "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 }
 
-TEST_F(WindowTest, regionBuildWithSpill) {
+TEST_F(WindowTest, prePartitionedBuildWithSpill) {
   const vector_size_t size = 1'000;
   const int numPartitions = 37;
-  const int numGroups = 4;
+  const int numSubPartitions = 4;
   auto data = makeRowVector(
       {"d", "p", "s"},
       {
@@ -526,7 +530,8 @@ TEST_F(WindowTest, regionBuildWithSpill) {
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
           .config(
-              core::QueryConfig::kWindowNumGroups, std::to_string(numGroups))
+              core::QueryConfig::kWindowNumSubPartitions,
+              std::to_string(numSubPartitions))
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .config(core::QueryConfig::kOrderBySpillEnabled, "false")

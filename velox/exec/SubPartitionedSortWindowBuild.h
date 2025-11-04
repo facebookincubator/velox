@@ -22,14 +22,17 @@
 #include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
-// Divides the input data into several groups by partition keys, then sorts
-// input data of the Window by {partition keys, sort keys} to identify window
-// partitions with SortWindowBuild.
-class MultiGroupSortWindowBuild : public WindowBuild {
+// Divides the input data into several sub partitions by partition keys, then
+// sequentially sorts input data of each sub partition by {partition keys, sort
+// keys} to identify window partitions with SortWindowBuild. As each sub
+// partition has a smaller working set, the memory used by sorting is reduced.
+// Besides, once a sub partition is completely consumed, its memory could be
+// released immediately.
+class SubPartitionedSortWindowBuild : public WindowBuild {
  public:
-  MultiGroupSortWindowBuild(
+  SubPartitionedSortWindowBuild(
       const std::shared_ptr<const core::WindowNode>& node,
-      int32_t numGroups,
+      int32_t numSubPartitions,
       velox::memory::MemoryPool* pool,
       common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
@@ -37,13 +40,13 @@ class MultiGroupSortWindowBuild : public WindowBuild {
       folly::Synchronized<OperatorStats>* opStats,
       folly::Synchronized<common::SpillStats>* spillStats);
 
-  ~MultiGroupSortWindowBuild() override {
+  ~SubPartitionedSortWindowBuild() override {
     pool_->release();
   }
 
   bool needsInput() override {
-    // No groups are available yet, so can consume input rows.
-    return currentGroup_ < 0;
+    // No sub partitions are available yet, so can consume input rows.
+    return currentSubPartition_ < 0;
   }
 
   void addInput(RowVectorPtr input) override;
@@ -61,14 +64,14 @@ class MultiGroupSortWindowBuild : public WindowBuild {
   std::optional<int64_t> estimateRowSize() override;
 
  private:
-  // The current group's WindowBuild has finished producing all the partitions.
-  // Release all the memory of current group's WindowBuild, and then switch to
-  // next group's WindowBuild as the new current one.
-  bool switchToNextGroup();
+  // The current sub partition's WindowBuild has finished producing all the
+  // data. Release all the memory of current sub partition's WindowBuild, and
+  // then switch to next sub partition's WindowBuild as the new current one.
+  bool switchToNextSubPartition();
 
   void ensureInputFits(const RowVectorPtr& input);
 
-  const int32_t numGroups_;
+  const int32_t numSubPartitions_;
 
   const size_t numPartitionKeys_;
 
@@ -76,17 +79,17 @@ class MultiGroupSortWindowBuild : public WindowBuild {
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
-  // Partition each row to the corresponding group.
-  std::unique_ptr<HashPartitionFunction> groupPartitionFunction_;
+  // Distribute each row to the corresponding sub partition.
+  std::unique_ptr<HashPartitionFunction> subPartitioningFunction_;
 
-  // WindowBuilds for each group.
-  std::vector<std::unique_ptr<SortWindowBuild>> groupWindowBuilds_;
+  // WindowBuilds for each sub partition.
+  std::vector<std::unique_ptr<SortWindowBuild>> subWindowBuilds_;
 
   bool spilled_{false};
 
-  // Buffers the groupIds for each row. Reused across addInput callings.
-  std::vector<uint32_t> groupIdsBuffer_;
+  // Buffers the subPartitionIds for each row. Reused across addInput callings.
+  std::vector<uint32_t> subPartitionIdsBuffer_;
 
-  int32_t currentGroup_ = -1;
+  int32_t currentSubPartition_ = -1;
 };
 } // namespace facebook::velox::exec

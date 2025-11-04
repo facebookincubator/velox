@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/exec/MultiGroupSortWindowBuild.h"
+#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::exec {
 
-MultiGroupSortWindowBuild::MultiGroupSortWindowBuild(
+SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
-    int32_t numRegions,
+    int32_t numSubPartitions,
     velox::memory::MemoryPool* pool,
     common::PrefixSortConfig&& prefixSortConfig,
     const common::SpillConfig* spillConfig,
@@ -29,7 +29,7 @@ MultiGroupSortWindowBuild::MultiGroupSortWindowBuild(
     folly::Synchronized<OperatorStats>* opStats,
     folly::Synchronized<common::SpillStats>* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
-      numGroups_(numRegions),
+      numSubPartitions_(numSubPartitions),
       numPartitionKeys_{node->partitionKeys().size()},
       pool_(pool),
       spillStats_(spillStats) {
@@ -40,11 +40,11 @@ MultiGroupSortWindowBuild::MultiGroupSortWindowBuild(
   for (int i = 0; i < numPartitionKeys_; i++) {
     keyChannels[i] = inputChannels_[i];
   }
-  groupPartitionFunction_ = std::make_unique<HashPartitionFunction>(
-      false, numGroups_, node->inputType(), keyChannels);
-  groupWindowBuilds_.resize(numGroups_);
-  for (int i = 0; i < numGroups_; i++) {
-    groupWindowBuilds_[i] = std::make_unique<SortWindowBuild>(
+  subPartitioningFunction_ = std::make_unique<HashPartitionFunction>(
+      false, numSubPartitions_, node->inputType(), keyChannels);
+  subWindowBuilds_.resize(numSubPartitions_);
+  for (int i = 0; i < numSubPartitions_; i++) {
+    subWindowBuilds_[i] = std::make_unique<SortWindowBuild>(
         node,
         pool,
         std::move(prefixSortConfig),
@@ -55,11 +55,11 @@ MultiGroupSortWindowBuild::MultiGroupSortWindowBuild(
   }
 }
 
-void MultiGroupSortWindowBuild::addInput(RowVectorPtr input) {
-  VELOX_CHECK_LT(currentGroup_, 0);
+void SubPartitionedSortWindowBuild::addInput(RowVectorPtr input) {
+  VELOX_CHECK_LT(currentSubPartition_, 0);
 
-  groupIdsBuffer_.resize(input->size());
-  groupPartitionFunction_->partition(*input, groupIdsBuffer_);
+  subPartitionIdsBuffer_.resize(input->size());
+  subPartitioningFunction_->partition(*input, subPartitionIdsBuffer_);
 
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
@@ -68,36 +68,36 @@ void MultiGroupSortWindowBuild::addInput(RowVectorPtr input) {
   ensureInputFits(input);
 
   for (auto row = 0; row < input->size(); ++row) {
-    auto& windowBuild = groupWindowBuilds_[groupIdsBuffer_[row]];
+    auto& windowBuild = subWindowBuilds_[subPartitionIdsBuffer_[row]];
     windowBuild->addDecodedInputRow(decodedInputVectors_, row);
   }
 
   numRows_ += input->size();
 }
 
-bool MultiGroupSortWindowBuild::switchToNextGroup() {
-  if (currentGroup_ >= numGroups_) {
+bool SubPartitionedSortWindowBuild::switchToNextSubPartition() {
+  if (currentSubPartition_ >= numSubPartitions_) {
     return false;
   }
 
-  if (currentGroup_ >= 0) {
-    groupWindowBuilds_[currentGroup_].reset();
+  if (currentSubPartition_ >= 0) {
+    subWindowBuilds_[currentSubPartition_].reset();
   }
-  currentGroup_++;
-  if (currentGroup_ >= numGroups_) {
+  currentSubPartition_++;
+  if (currentSubPartition_ >= numSubPartitions_) {
     return false;
   }
 
-  VELOX_CHECK_NOT_NULL(groupWindowBuilds_[currentGroup_]);
+  VELOX_CHECK_NOT_NULL(subWindowBuilds_[currentSubPartition_]);
   // WindowBuild starts processing the partitions when 'noMoreInput' is called,
   // which allocates additional memory. We want to defer the memory allocation
   // as late as possible to reduce memory usage, so we don't call 'noMoreInput'
-  // until the group's data is to be consumed.
-  groupWindowBuilds_[currentGroup_]->noMoreInput();
+  // until the sub partition's data is to be consumed.
+  subWindowBuilds_[currentSubPartition_]->noMoreInput();
   return true;
 }
 
-void MultiGroupSortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
+void SubPartitionedSortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
   if (spillConfig_ == nullptr) {
     // Spilling is disabled.
     return;
@@ -114,21 +114,21 @@ void MultiGroupSortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  VELOX_CHECK_LT(currentGroup_, 0);
-  for (auto& windowBuild : groupWindowBuilds_) {
+  VELOX_CHECK_LT(currentSubPartition_, 0);
+  for (auto& windowBuild : subWindowBuilds_) {
     windowBuild->ensureInputFits(input);
   }
 }
 
-void MultiGroupSortWindowBuild::spill() {
-  VELOX_CHECK_LT(currentGroup_, 0);
-  for (auto& windowBuild : groupWindowBuilds_) {
+void SubPartitionedSortWindowBuild::spill() {
+  VELOX_CHECK_LT(currentSubPartition_, 0);
+  for (auto& windowBuild : subWindowBuilds_) {
     windowBuild->spill();
   }
   spilled_ = true;
 }
 
-std::optional<common::SpillStats> MultiGroupSortWindowBuild::spilledStats()
+std::optional<common::SpillStats> SubPartitionedSortWindowBuild::spilledStats()
     const {
   if (!spilled_) {
     return std::nullopt;
@@ -136,7 +136,7 @@ std::optional<common::SpillStats> MultiGroupSortWindowBuild::spilledStats()
   return {spillStats_->copy()};
 }
 
-void MultiGroupSortWindowBuild::noMoreInput() {
+void SubPartitionedSortWindowBuild::noMoreInput() {
   if (numRows_ == 0) {
     return;
   }
@@ -147,43 +147,44 @@ void MultiGroupSortWindowBuild::noMoreInput() {
     spill();
   }
 
-  switchToNextGroup();
+  switchToNextSubPartition();
 
-  VELOX_CHECK_EQ(currentGroup_, 0);
+  VELOX_CHECK_EQ(currentSubPartition_, 0);
 }
 
-std::shared_ptr<WindowPartition> MultiGroupSortWindowBuild::nextPartition() {
-  VELOX_CHECK_GE(currentGroup_, 0);
-  VELOX_CHECK_LT(currentGroup_, numGroups_);
-  VELOX_CHECK_NOT_NULL(groupWindowBuilds_[currentGroup_]);
-  return groupWindowBuilds_[currentGroup_]->nextPartition();
+std::shared_ptr<WindowPartition>
+SubPartitionedSortWindowBuild::nextPartition() {
+  VELOX_CHECK_GE(currentSubPartition_, 0);
+  VELOX_CHECK_LT(currentSubPartition_, numSubPartitions_);
+  VELOX_CHECK_NOT_NULL(subWindowBuilds_[currentSubPartition_]);
+  return subWindowBuilds_[currentSubPartition_]->nextPartition();
 }
 
-std::optional<int64_t> MultiGroupSortWindowBuild::estimateRowSize() {
-  auto region = std::max(currentGroup_, 0);
-  if (region >= numGroups_) {
+std::optional<int64_t> SubPartitionedSortWindowBuild::estimateRowSize() {
+  auto subPartition = std::max(currentSubPartition_, 0);
+  if (subPartition >= numSubPartitions_) {
     return std::nullopt;
   }
 
-  if (groupWindowBuilds_[region]) {
-    return groupWindowBuilds_[region]->estimateRowSize();
+  if (subWindowBuilds_[subPartition]) {
+    return subWindowBuilds_[subPartition]->estimateRowSize();
   }
 
   return std::nullopt;
 }
 
-bool MultiGroupSortWindowBuild::hasNextPartition() {
+bool SubPartitionedSortWindowBuild::hasNextPartition() {
   // Check if the build hasn't begun or has finished.
-  if (currentGroup_ < 0 || currentGroup_ >= numGroups_) {
+  if (currentSubPartition_ < 0 || currentSubPartition_ >= numSubPartitions_) {
     return false;
   }
 
-  VELOX_CHECK_NOT_NULL(groupWindowBuilds_[currentGroup_]);
-  if (groupWindowBuilds_[currentGroup_]->hasNextPartition()) {
+  VELOX_CHECK_NOT_NULL(subWindowBuilds_[currentSubPartition_]);
+  if (subWindowBuilds_[currentSubPartition_]->hasNextPartition()) {
     return true;
   }
 
-  if (switchToNextGroup()) {
+  if (switchToNextSubPartition()) {
     return hasNextPartition();
   }
   return false;

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
-#include "velox/exec/MultiGroupSortWindowBuild.h"
+#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionStreamingWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
@@ -67,12 +67,12 @@ Window::Window(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
   } else {
-    if (auto numGroups =
-            operatorCtx_->driverCtx()->queryConfig().windowNumGroups();
-        numGroups > 1) {
-      windowBuild_ = std::make_unique<MultiGroupSortWindowBuild>(
+    if (auto numSubPartitions =
+            operatorCtx_->driverCtx()->queryConfig().windowNumSubPartitions();
+        numSubPartitions > 1) {
+      windowBuild_ = std::make_unique<SubPartitionedSortWindowBuild>(
           windowNode,
-          numGroups,
+          numSubPartitions,
           pool(),
           makePrefixSortConfig(driverCtx->queryConfig()),
           spillConfig,
