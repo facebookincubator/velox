@@ -58,6 +58,7 @@ velox_add_library(
   SpecialFormRegistry.cpp
   ConjunctRewrite.cpp
   SwitchExpr.cpp
+  SwitchRewrite.cpp
   TryExpr.cpp
   VectorFunction.cpp
 )

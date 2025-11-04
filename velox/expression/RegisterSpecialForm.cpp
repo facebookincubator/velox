@@ -24,6 +24,7 @@
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
+#include "velox/expression/SwitchRewrite.h"
 #include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
@@ -52,5 +53,6 @@ void registerFunctionCallToSpecialForms() {
       std::make_unique<RowConstructorCallToSpecialForm>());
 
   expression::ConjunctRewrite::registerRewrite();
+  expression::SwitchRewrite::registerRewrite();
 }
 } // namespace facebook::velox::exec
