@@ -90,6 +90,12 @@ add_test(
 )
 
 add_test(
+  NAME velox_cudf_expression_selection_test
+  COMMAND velox_cudf_expression_selection_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_assign_unique_id_test
   COMMAND velox_cudf_assign_unique_id_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
