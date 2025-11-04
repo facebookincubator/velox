@@ -286,7 +286,20 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
   }
 
-  const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
+  RowTypePtr parseType;
+  if (!columnHandles_.empty()) {
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    for (auto& handle : columnHandles_) {
+      names.push_back(handle->name());
+      types.push_back(handle->hiveType());
+    }
+    parseType = ROW(std::move(names), std::move(types));
+  } else if (dataColumns_) {
+    parseType = dataColumns_;
+  } else {
+    parseType = outputType_;
+  }
 
   core::TypedExprPtr filterNodeExpr;
 
@@ -319,7 +332,9 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         true,
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
-        dataColumns_);
+        dataColumns_,
+        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+        columnHandles_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

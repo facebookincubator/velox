@@ -318,13 +318,13 @@ class CustomExprToSubfieldFilterTest : public ExprToSubfieldFilterTest {
     functions::registerIsNullFunction("is_null");
     parse::registerTypeResolver();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    ExprToSubfieldFilterParser::registerParserFactory(
-        []() { return std::make_unique<CustomExprToSubfieldFilterParser>(); });
+    ExprToSubfieldFilterParser::registerParser(
+        std::make_unique<CustomExprToSubfieldFilterParser>());
   }
 
   static void TearDownTestSuite() {
-    ExprToSubfieldFilterParser::registerParserFactory(
-        []() { return std::make_unique<PrestoExprToSubfieldFilterParser>(); });
+    ExprToSubfieldFilterParser::registerParser(
+        std::make_unique<PrestoExprToSubfieldFilterParser>());
   }
 };
 

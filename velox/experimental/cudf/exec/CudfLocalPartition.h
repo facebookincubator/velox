@@ -22,6 +22,11 @@
 
 namespace facebook::velox::cudf_velox {
 
+enum class PartitionFunctionType {
+  kHash,
+  kRoundRobin,
+};
+
 class CudfLocalPartition : public exec::Operator, public NvtxHelper {
  public:
   CudfLocalPartition(
@@ -32,6 +37,8 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
   std::string toString() const override {
     return fmt::format("CudfLocalPartition({})", numPartitions_);
   }
+
+  void recordOutputStats(RowVectorPtr& input);
 
   void addInput(RowVectorPtr input) override;
 
@@ -54,9 +61,14 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
   static bool shouldReplace(
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
+ private:
+  void flushVectorPool();
+
  protected:
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
+  PartitionFunctionType partitionFunctionType_;
+  size_t counter_{0};
 
   std::vector<exec::BlockingReason> blockingReasons_;
   std::vector<ContinueFuture> futures_;

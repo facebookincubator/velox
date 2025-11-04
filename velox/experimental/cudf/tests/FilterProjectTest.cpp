@@ -13,11 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -1006,11 +1004,11 @@ TEST_F(CudfFilterProjectTest, substrWithLength) {
   auto input =
       makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
   auto data = makeRowVector({input});
-  auto SubstrPlan = PlanBuilder()
+  auto substrPlan = PlanBuilder()
                         .values({data})
                         .project({"substr(c0, 1, 3) AS c0"})
                         .planNode();
-  auto SubstrResults = AssertQueryBuilder(SubstrPlan).copyResults(pool());
+  auto substrResults = AssertQueryBuilder(substrPlan).copyResults(pool());
 
   auto calculatedSubstrResults = makeRowVector({
       makeFlatVector<std::string>({
@@ -1019,7 +1017,65 @@ TEST_F(CudfFilterProjectTest, substrWithLength) {
       }),
   });
   facebook::velox::test::assertEqualVectors(
-      SubstrResults, calculatedSubstrResults);
+      substrResults, calculatedSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, coalesceColumnWithLiteral) {
+  vector_size_t batchSize = 100;
+  auto vectors = makeVectors(rowType_, 1, batchSize);
+  // Introduce nulls into c0 to exercise replacement
+  auto& vec = vectors[0];
+  auto c0Vector = vec->childAt(0)->asFlatVector<int32_t>();
+  for (vector_size_t i = 0; i < batchSize; i += 3) {
+    c0Vector->setNull(i, true);
+  }
+
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(c0, 5::INTEGER) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(c0, 5) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, coalesceLiteralFirst) {
+  vector_size_t batchSize = 100;
+  auto vectors = makeVectors(rowType_, 1, batchSize);
+  createDuckDbTable(vectors);
+
+  // Literal appears before any column; result should be a constant column.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(5::INTEGER, c0) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(5, c0) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
+  // Use two integer columns to validate that columns after the literal are
+  // ignored.
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", INTEGER()}});
+  auto vectors = makeVectors(rowType, 1, 50);
+  // Make some c0 nulls so fallback engages.
+  auto& vec = vectors[0];
+  auto c0 = vec->childAt(0)->asFlatVector<int32_t>();
+  for (vector_size_t i = 1; i < vec->size(); i += 4) {
+    c0->setNull(i, true);
+  }
+
+  createDuckDbTable(vectors);
+
+  // With expression coalesce(c0, 100, c1), rows with null c0 should become 100,
+  // regardless of c1. This also verifies we stop at the first literal.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(c0, 100::INTEGER, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(c0, 100, c1) AS result FROM tmp");
 }
 
 TEST_F(CudfFilterProjectTest, switchExpr) {

@@ -26,6 +26,7 @@ add_executable(velox_cudf_subfield_filter_ast_test Main.cpp SubfieldFilterAstTes
 add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
 # Disabling writer tests until we re-add writing ability to CudfHiveConnector
 # add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
+add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
 
 add_test(
   NAME velox_cudf_aggregation_test
@@ -105,6 +106,14 @@ add_test(
 #   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 # )
 
+add_test(
+  NAME velox_cudf_topn_test
+  COMMAND velox_cudf_topn_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_config_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
@@ -121,6 +130,7 @@ set_tests_properties(velox_cudf_s3_read_test PROPERTIES LABELS cuda_driver TIMEO
 set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 # set_tests_properties(velox_cudf_table_write_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_topn_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_aggregation_test
@@ -258,6 +268,17 @@ target_link_libraries(
 #   gtest_main
 #   fmt::fmt
 # )
+
+target_link_libraries(
+  velox_cudf_topn_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  fmt::fmt
+)
 
 add_subdirectory(utils)
 
