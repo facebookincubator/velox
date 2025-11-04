@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
-#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionStreamingWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
+#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
