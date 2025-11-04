@@ -37,7 +37,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
-      CUDA_VERSION: '12.8'
+      CUDA_VERSION: '13.0'
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
@@ -86,7 +86,7 @@ jobs:
       - name: Make Release Build
         env:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
-          CUDA_ARCHITECTURES: 70
+          CUDA_ARCHITECTURES: 75
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 14
           CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
