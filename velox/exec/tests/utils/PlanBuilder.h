@@ -35,9 +35,16 @@ enum class Table : uint8_t;
 
 namespace facebook::velox::exec::test {
 
+struct AggregationConfig {
+  std::vector<std::string> groupingKeys;
+  std::vector<std::string> aggregates;
+};
+
 struct PushdownConfig {
   common::SubfieldFilters subfieldFiltersMap;
   std::string remainingFilter;
+  // Aggregation pushdown configuration
+  std::optional<AggregationConfig> aggregationConfig;
 };
 
 /// A builder class with fluent API for building query plans. Plans are built
