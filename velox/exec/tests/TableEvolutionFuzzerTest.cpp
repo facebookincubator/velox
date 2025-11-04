@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 #include <folly/init/Init.h>
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
   auto ioExecutor = folly::getGlobalIOExecutor();
   facebook::velox::exec::test::registerFactories(ioExecutor.get());
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::parse::registerTypeResolver();
   return RUN_ALL_TESTS();
 }
