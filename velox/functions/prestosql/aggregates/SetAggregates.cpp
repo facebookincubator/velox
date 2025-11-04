@@ -158,8 +158,7 @@ class CountDistinctAggregate
 };
 
 template <
-    template <typename T, typename AccumulatorType>
-    class Aggregate,
+    template <typename T, typename AccumulatorType> class Aggregate,
     TypeKind Kind>
 std::unique_ptr<exec::Aggregate> create(const TypePtr& resultType) {
   return std::make_unique<Aggregate<
@@ -167,8 +166,9 @@ std::unique_ptr<exec::Aggregate> create(const TypePtr& resultType) {
       aggregate::prestosql::CustomComparisonSetAccumulator<Kind>>>(resultType);
 }
 
-template <template <typename T, typename AcumulatorType = SetAccumulator<T>>
-          class Aggregate>
+template <template <
+    typename T,
+    typename AcumulatorType = SetAccumulator<T>> class Aggregate>
 std::unique_ptr<exec::Aggregate> create(
     const TypePtr& inputType,
     const TypePtr& resultType) {
@@ -213,7 +213,7 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<UnknownValue>>(resultType);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected type {}", mapTypeKindToName(inputType->kind()));
+          "Unexpected type {}", TypeKindName::toName(inputType->kind()));
   }
 }
 
@@ -309,7 +309,7 @@ void registerSetAggAggregate(
             return std::make_unique<SetAggAggregate<UnknownValue>>(resultType);
           default:
             VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
+                "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
       {.ignoreDuplicates = true},
@@ -429,7 +429,7 @@ void registerCountDistinctAggregate(
                 resultType, argTypes[0]);
           default:
             VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
+                "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
       withCompanionFunctions,

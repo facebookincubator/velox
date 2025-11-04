@@ -39,8 +39,8 @@ using namespace breeze::utils;
 
 #define GEN_REDUCE_T(O, T, BT, IPT)                                     \
   kernel void NAME(reduce_##O##_##T, T, BT, IPT)(                       \
-      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],    \
-      const device int *num_items [[buffer(2)]],                        \
+      const device T* in [[buffer(0)]], device T* out [[buffer(1)]],    \
+      const device int* num_items [[buffer(2)]],                        \
       uint thread_idx [[thread_index_in_threadgroup]],                  \
       uint block_idx [[threadgroup_position_in_grid]]) {                \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, block_idx};           \
@@ -60,10 +60,10 @@ GEN_REDUCE(max)
 
 #define GEN_SCAN_T(O, T, BT, IPT, LD)                                          \
   kernel void NAME(scan_##O##_##T, uint_##T, BT, IPT##x##LD)(                  \
-      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],           \
-      device int *next_block_idx [[buffer(2)]],                                \
-      device uint *blocks [[buffer(3)]],                                       \
-      const device int *num_items [[buffer(4)]],                               \
+      const device T* in [[buffer(0)]], device T* out [[buffer(1)]],           \
+      device int* next_block_idx [[buffer(2)]],                                \
+      device uint* blocks [[buffer(3)]],                                       \
+      const device int* num_items [[buffer(4)]],                               \
       uint thread_idx [[thread_index_in_threadgroup]],                         \
       uint block_idx [[threadgroup_position_in_grid]]) {                       \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, block_idx};                  \
@@ -82,8 +82,8 @@ GEN_SCAN(add)
 
 #define GEN_RADIX_SORT_HISTOGRAM_T(T, BT, IPT, TS, RB)                   \
   kernel void NAME(radix_sort_histogram, T, BT, IPT##x##TS##x##RB)(      \
-      const device T *in [[buffer(0)]], device uint *out [[buffer(1)]],  \
-      const device int *num_items [[buffer(2)]],                         \
+      const device T* in [[buffer(0)]], device uint* out [[buffer(1)]],  \
+      const device int* num_items [[buffer(2)]],                         \
       uint thread_idx [[thread_index_in_threadgroup]],                   \
       uint block_idx [[threadgroup_position_in_grid]]) {                 \
     threadgroup DeviceRadixSortHistogram<RB, T>::Scratch scratch;        \
@@ -104,16 +104,16 @@ GEN_RADIX_SORT_HISTOGRAM(uint)
 
 #define GEN_RADIX_SORT(KT, VT, BT, IPT, RB)                                \
   kernel void NAME2(radix_sort, KT, VT, BT, IPT##x##RB)(                   \
-      const device KT *in_keys [[buffer(0)]],                              \
-      const device VT##_value_type *in_values [[buffer(1)]],               \
-      const device uint *in_offsets [[buffer(2)]],                         \
-      const device int *start_bit [[buffer(3)]],                           \
-      const device int *num_pass_bits [[buffer(4)]],                       \
-      device KT *out_keys [[buffer(5)]],                                   \
-      device VT##_value_type *out_values [[buffer(6)]],                    \
-      device int *next_block_idx [[buffer(7)]],                            \
-      device uint *blocks [[buffer(8)]],                                   \
-      const device int *num_items [[buffer(9)]],                           \
+      const device KT* in_keys [[buffer(0)]],                              \
+      const device VT##_value_type* in_values [[buffer(1)]],               \
+      const device uint* in_offsets [[buffer(2)]],                         \
+      const device int* start_bit [[buffer(3)]],                           \
+      const device int* num_pass_bits [[buffer(4)]],                       \
+      device KT* out_keys [[buffer(5)]],                                   \
+      device VT##_value_type* out_values [[buffer(6)]],                    \
+      device int* next_block_idx [[buffer(7)]],                            \
+      device uint* blocks [[buffer(8)]],                                   \
+      const device int* num_items [[buffer(9)]],                           \
       uint thread_idx [[thread_index_in_threadgroup]],                     \
       uint block_idx [[threadgroup_position_in_grid]]) {                   \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, block_idx};              \

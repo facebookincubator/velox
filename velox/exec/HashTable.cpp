@@ -61,7 +61,7 @@ HashTable<ignoreNullKeys>::HashTable(
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
-    if (!VectorHasher::typeKindSupportsValueIds(hasher->typeKind())) {
+    if (!hasher->typeSupportsValueIds()) {
       hashMode_ = HashMode::kHash;
     }
   }
@@ -358,8 +358,13 @@ bool HashTable<ignoreNullKeys>::compareKeys(
   int32_t i = 0;
   do {
     auto& hasher = lookup.hashers[i];
-    if (!rows_->equals<!ignoreNullKeys>(
-            group, rows_->columnAt(i), hasher->decodedVector(), row)) {
+    if (rows_->compare<!ignoreNullKeys>(
+            group,
+            rows_->columnAt(i),
+            hasher->decodedVector(),
+            row,
+            CompareFlags::equality(
+                CompareFlags::NullHandlingMode::kNullAsValue)) != 0) {
       return false;
     }
   } while (++i < numKeys);
@@ -946,11 +951,12 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   // The parallel table partitioning step.
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = getTable(i);
-    partitionSteps.push_back(std::make_shared<AsyncSource<bool>>(
-        [this, table, rawRowPartitions = rowPartitions[i].get()]() {
-          partitionRows(*table, *rawRowPartitions);
-          return std::make_unique<bool>(true);
-        }));
+    partitionSteps.push_back(
+        std::make_shared<AsyncSource<bool>>(
+            [this, table, rawRowPartitions = rowPartitions[i].get()]() {
+              partitionRows(*table, *rawRowPartitions);
+              return std::make_unique<bool>(true);
+            }));
     VELOX_CHECK(!partitionSteps.empty());
     buildExecutor_->add([driverCtx, step = partitionSteps.back()]() {
       ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
@@ -968,11 +974,12 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   // The parallel table building step.
   std::vector<std::vector<char*>> overflowPerPartition(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    buildSteps.push_back(std::make_shared<AsyncSource<bool>>(
-        [this, i, &overflowPerPartition, &rowPartitions]() {
-          buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
-          return std::make_unique<bool>(true);
-        }));
+    buildSteps.push_back(
+        std::make_shared<AsyncSource<bool>>(
+            [this, i, &overflowPerPartition, &rowPartitions]() {
+              buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
+              return std::make_unique<bool>(true);
+            }));
     VELOX_CHECK(!buildSteps.empty());
     buildExecutor_->add([driverCtx, step = buildSteps.back()]() {
       ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
@@ -1713,8 +1720,9 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   buildExecutor_ = executor;
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
-    otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
-        dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
+    otherTables_.emplace_back(
+        std::unique_ptr<HashTable<ignoreNullKeys>>(
+            dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
 
   // If there are multiple tables, we need to merge the 'columnHasNulls' flags

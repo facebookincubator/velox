@@ -109,7 +109,7 @@ static inline uint32_t unpackNaive(
     uint64_t inputBufferLen,
     uint64_t numValues,
     uint8_t bitWidth,
-    T* FOLLY_NONNULL& result);
+    T * FOLLY_NONNULL & result);
 
 /// Unpack numValues number of input values from inputBuffer. The results
 /// will be written to result. numValues must be a multiple of 8. The
@@ -122,7 +122,7 @@ inline void unpack(
     uint64_t inputBufferLen,
     uint64_t numValues,
     uint8_t bitWidth,
-    T* FOLLY_NONNULL& result) {
+    T * FOLLY_NONNULL & result) {
   unpackNaive<T>(inputBits, inputBufferLen, numValues, bitWidth, result);
 }
 
@@ -159,7 +159,7 @@ static inline uint32_t unpackNaive(
     uint64_t inputBufferLen,
     uint64_t numValues,
     uint8_t bitWidth,
-    T* FOLLY_NONNULL& result) {
+    T * FOLLY_NONNULL & result) {
   VELOX_CHECK(bitWidth >= 1 && bitWidth <= sizeof(T) * 8);
   VELOX_CHECK(inputBufferLen * 8 >= bitWidth * numValues);
 

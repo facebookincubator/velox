@@ -1567,8 +1567,9 @@ TEST_F(ElementAtTest, testCachingOptimizationComplexKey) {
     for (int i = 0; i < keysVector->size(); i += 3) {
       EXPECT_NE(
           cachedMap.end(),
-          cachedMap.find(facebook::velox::functions::detail::MapKey{
-              keysVector.get(), 0, 0}));
+          cachedMap.find(
+              facebook::velox::functions::detail::MapKey{
+                  keysVector.get(), 0, 0}));
     }
   };
 

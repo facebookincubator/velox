@@ -219,8 +219,9 @@ class MakeRowFromMap {
     auto vectorPool = evalCtx ? evalCtx->vectorPool() : nullptr;
     for (size_t i = 0; i < keyToIndex_.size(); ++i) {
       if (replaceNulls_) {
-        children.push_back(MakeRowFromMapDefaults::createFlat(
-            valueType, outputSize, *mapBase->pool(), vectorPool));
+        children.push_back(
+            MakeRowFromMapDefaults::createFlat(
+                valueType, outputSize, *mapBase->pool(), vectorPool));
       } else {
         children.push_back(
             vectorPool
@@ -307,6 +308,6 @@ class MakeRowFromMap {
   const bool throwOnDuplicateKeys_{true};
   const std::vector<std::string> outputFieldNames_;
   const TypePtr inputKeyType_;
-  std::unordered_map<KeyType, size_t> keyToIndex_;
+  folly::F14FastMap<KeyType, size_t> keyToIndex_;
 };
 } // namespace facebook::velox::functions

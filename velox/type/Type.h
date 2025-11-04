@@ -18,7 +18,6 @@
 #include <folly/CPortability.h>
 #include <folly/Hash.h>
 #include <folly/Random.h>
-#include <folly/Range.h>
 #include <folly/container/F14Set.h>
 #include <folly/dynamic.h>
 
@@ -29,6 +28,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <typeindex>
@@ -94,21 +94,6 @@ enum class TypeKind : int8_t {
 };
 
 VELOX_DECLARE_ENUM_NAME(TypeKind);
-
-/// Deprecated.
-inline TypeKind mapNameToTypeKind(const std::string& name) {
-  return TypeKindName::toTypeKind(name);
-}
-
-[[deprecated("Use TypeKindName::tryToTypeKind")]]
-inline std::optional<TypeKind> tryMapNameToTypeKind(const std::string& name) {
-  return TypeKindName::tryToTypeKind(name);
-}
-
-/// Deprecated.
-inline std::string mapTypeKindToName(const TypeKind& typeKind) {
-  return std::string(TypeKindName::toName(typeKind));
-}
 
 template <TypeKind KIND>
 class ScalarType;
@@ -570,7 +555,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   virtual const char* name() const = 0;
 
   /// Returns a possibly empty list of type parameters.
-  virtual const std::vector<TypeParameter>& parameters() const = 0;
+  virtual std::span<const TypeParameter> parameters() const = 0;
 
   /// Returns physical type name. Multiple logical types may share the same
   /// physical type backing and therefore return the same physical type name.
@@ -739,9 +724,8 @@ class TypeBase : public Type {
     return TypeTraits<KIND>::name;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
+  std::span<const TypeParameter> parameters() const override {
+    return {};
   }
 };
 
@@ -867,7 +851,7 @@ class DecimalType : public ScalarType<KIND> {
     return obj;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 
@@ -891,7 +875,7 @@ class DecimalType : public ScalarType<KIND> {
   }
 
  private:
-  const std::vector<TypeParameter> parameters_;
+  const std::array<TypeParameter, 2> parameters_;
 };
 
 class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
@@ -1026,15 +1010,15 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
   folly::dynamic serialize() const override;
 
-  const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+  std::span<const TypeParameter> parameters() const override {
+    return {&parameter_, 1};
   }
 
  protected:
   bool equals(const Type& other) const override;
 
   const TypePtr child_;
-  const std::vector<TypeParameter> parameters_;
+  const TypeParameter parameter_;
 };
 
 using ArrayTypePtr = std::shared_ptr<const ArrayType>;
@@ -1082,7 +1066,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
   folly::dynamic serialize() const override;
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 
@@ -1092,7 +1076,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
  private:
   TypePtr keyType_;
   TypePtr valueType_;
-  const std::vector<TypeParameter> parameters_;
+  const std::array<TypeParameter, 2> parameters_;
 };
 
 using MapTypePtr = std::shared_ptr<const MapType>;
@@ -1194,7 +1178,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return names_;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     const auto* parameters = parameters_.load(std::memory_order_acquire);
     if (parameters) [[likely]] {
       return *parameters;
@@ -1266,7 +1250,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
 
   folly::dynamic serialize() const override;
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 
@@ -1795,7 +1779,8 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                       \
       default:                                                                \
         VELOX_FAIL(                                                           \
-            "not a scalar type! kind: {}", mapTypeKindToName(typeKind));      \
+            "not a scalar type! kind: {}",                                    \
+            ::facebook::velox::TypeKindName::toName(typeKind));               \
     }                                                                         \
   }()
 
@@ -1849,7 +1834,8 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                  \
       default:                                                           \
         VELOX_FAIL(                                                      \
-            "not a scalar type! kind: {}", mapTypeKindToName(typeKind)); \
+            "not a scalar type! kind: {}",                               \
+            ::facebook::velox::TypeKindName::toName(typeKind));          \
     }                                                                    \
   }()
 
@@ -1913,7 +1899,9 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
             __VA_ARGS__);                                                     \
       }                                                                       \
       default:                                                                \
-        VELOX_FAIL("not a known type kind: {}", mapTypeKindToName(typeKind)); \
+        VELOX_FAIL(                                                           \
+            "not a known type kind: {}",                                      \
+            ::facebook::velox::TypeKindName::toName(typeKind));               \
     }                                                                         \
   }()
 
@@ -2000,7 +1988,9 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return PREFIX<::facebook::velox::TypeKind::ROW> SUFFIX(__VA_ARGS__);   \
       }                                                                        \
       default:                                                                 \
-        VELOX_FAIL("not a known type kind: {}", mapTypeKindToName(typeKind));  \
+        VELOX_FAIL(                                                            \
+            "not a known type kind: {}",                                       \
+            ::facebook::velox::TypeKindName::toName(typeKind));                \
     }                                                                          \
   }()
 
@@ -2042,51 +2032,53 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
 #define VELOX_SCALAR_ACCESSOR(KIND) \
   std::shared_ptr<const ScalarType<TypeKind::KIND>> KIND()
 
-#define VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(CLASS, FIELD, typeKind)           \
-  [&]() {                                                                     \
-    switch (typeKind) {                                                       \
-      case ::facebook::velox::TypeKind::BOOLEAN: {                            \
-        return CLASS<::facebook::velox::TypeKind::BOOLEAN>::FIELD;            \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::INTEGER: {                            \
-        return CLASS<::facebook::velox::TypeKind::INTEGER>::FIELD;            \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::TINYINT: {                            \
-        return CLASS<::facebook::velox::TypeKind::TINYINT>::FIELD;            \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::SMALLINT: {                           \
-        return CLASS<::facebook::velox::TypeKind::SMALLINT>::FIELD;           \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::BIGINT: {                             \
-        return CLASS<::facebook::velox::TypeKind::BIGINT>::FIELD;             \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::REAL: {                               \
-        return CLASS<::facebook::velox::TypeKind::REAL>::FIELD;               \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::DOUBLE: {                             \
-        return CLASS<::facebook::velox::TypeKind::DOUBLE>::FIELD;             \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::VARCHAR: {                            \
-        return CLASS<::facebook::velox::TypeKind::VARCHAR>::FIELD;            \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::VARBINARY: {                          \
-        return CLASS<::facebook::velox::TypeKind::VARBINARY>::FIELD;          \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::TIMESTAMP: {                          \
-        return CLASS<::facebook::velox::TypeKind::TIMESTAMP>::FIELD;          \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::ARRAY: {                              \
-        return CLASS<::facebook::velox::TypeKind::ARRAY>::FIELD;              \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::MAP: {                                \
-        return CLASS<::facebook::velox::TypeKind::MAP>::FIELD;                \
-      }                                                                       \
-      case ::facebook::velox::TypeKind::ROW: {                                \
-        return CLASS<::facebook::velox::TypeKind::ROW>::FIELD;                \
-      }                                                                       \
-      default:                                                                \
-        VELOX_FAIL("not a known type kind: {}", mapTypeKindToName(typeKind)); \
-    }                                                                         \
+#define VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(CLASS, FIELD, typeKind)  \
+  [&]() {                                                            \
+    switch (typeKind) {                                              \
+      case ::facebook::velox::TypeKind::BOOLEAN: {                   \
+        return CLASS<::facebook::velox::TypeKind::BOOLEAN>::FIELD;   \
+      }                                                              \
+      case ::facebook::velox::TypeKind::INTEGER: {                   \
+        return CLASS<::facebook::velox::TypeKind::INTEGER>::FIELD;   \
+      }                                                              \
+      case ::facebook::velox::TypeKind::TINYINT: {                   \
+        return CLASS<::facebook::velox::TypeKind::TINYINT>::FIELD;   \
+      }                                                              \
+      case ::facebook::velox::TypeKind::SMALLINT: {                  \
+        return CLASS<::facebook::velox::TypeKind::SMALLINT>::FIELD;  \
+      }                                                              \
+      case ::facebook::velox::TypeKind::BIGINT: {                    \
+        return CLASS<::facebook::velox::TypeKind::BIGINT>::FIELD;    \
+      }                                                              \
+      case ::facebook::velox::TypeKind::REAL: {                      \
+        return CLASS<::facebook::velox::TypeKind::REAL>::FIELD;      \
+      }                                                              \
+      case ::facebook::velox::TypeKind::DOUBLE: {                    \
+        return CLASS<::facebook::velox::TypeKind::DOUBLE>::FIELD;    \
+      }                                                              \
+      case ::facebook::velox::TypeKind::VARCHAR: {                   \
+        return CLASS<::facebook::velox::TypeKind::VARCHAR>::FIELD;   \
+      }                                                              \
+      case ::facebook::velox::TypeKind::VARBINARY: {                 \
+        return CLASS<::facebook::velox::TypeKind::VARBINARY>::FIELD; \
+      }                                                              \
+      case ::facebook::velox::TypeKind::TIMESTAMP: {                 \
+        return CLASS<::facebook::velox::TypeKind::TIMESTAMP>::FIELD; \
+      }                                                              \
+      case ::facebook::velox::TypeKind::ARRAY: {                     \
+        return CLASS<::facebook::velox::TypeKind::ARRAY>::FIELD;     \
+      }                                                              \
+      case ::facebook::velox::TypeKind::MAP: {                       \
+        return CLASS<::facebook::velox::TypeKind::MAP>::FIELD;       \
+      }                                                              \
+      case ::facebook::velox::TypeKind::ROW: {                       \
+        return CLASS<::facebook::velox::TypeKind::ROW>::FIELD;       \
+      }                                                              \
+      default:                                                       \
+        VELOX_FAIL(                                                  \
+            "not a known type kind: {}",                             \
+            ::facebook::velox::TypeKindName::toName(typeKind));      \
+    }                                                                \
   }()
 
 #define VELOX_STATIC_FIELD_DYNAMIC_DISPATCH_ALL(CLASS, FIELD, typeKind)   \
@@ -2551,7 +2543,7 @@ class FormatValue<facebook::velox::TypeKind> {
   template <typename FormatCallback>
   void format(FormatArg& arg, FormatCallback& cb) const {
     return format_value::formatString(
-        facebook::velox::mapTypeKindToName(type_), arg, cb);
+        facebook::velox::TypeKindName::toName(type_), arg, cb);
   }
 
  private:
@@ -2583,7 +2575,7 @@ struct fmt::formatter<facebook::velox::TypeKind> : fmt::formatter<string_view> {
   template <typename FormatContext>
   auto format(facebook::velox::TypeKind k, FormatContext& ctx) const {
     return formatter<string_view>::format(
-        facebook::velox::mapTypeKindToName(k), ctx);
+        facebook::velox::TypeKindName::toName(k), ctx);
   }
 };
 

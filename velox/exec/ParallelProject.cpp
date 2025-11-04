@@ -139,8 +139,9 @@ RowVectorPtr ParallelProject::getOutput() {
   std::vector<VectorPtr> results(outputType_->size());
 
   for (auto i = 0; i < work_.size(); ++i) {
-    pending.push_back(std::make_shared<AsyncSource<WorkResult>>(
-        [i, &results, this]() { return doWork(i, results); }));
+    pending.push_back(
+        std::make_shared<AsyncSource<WorkResult>>(
+            [i, &results, this]() { return doWork(i, results); }));
     auto item = pending.back();
     operatorCtx_->task()->queryCtx()->executor()->add(
         [item]() { item->prepare(); });

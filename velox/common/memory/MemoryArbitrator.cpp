@@ -267,9 +267,10 @@ uint64_t MemoryReclaimer::reclaim(
           nonReclaimableCandidates.push_back(Candidate{std::move(child), 0});
           continue;
         }
-        candidates.push_back(Candidate{
-            std::move(child),
-            static_cast<int64_t>(reclaimableBytesOpt.value())});
+        candidates.push_back(
+            Candidate{
+                std::move(child),
+                static_cast<int64_t>(reclaimableBytesOpt.value())});
       }
     }
   }

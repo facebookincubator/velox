@@ -45,6 +45,9 @@ void registerVeloxMetrics() {
   DEFINE_HISTOGRAM_METRIC(
       kMetricTaskBarrierProcessTimeMs, 1'000, 0, 30'000, 50, 90, 99, 100);
 
+  // Tracks the total number of splits received by all tasks.
+  DEFINE_METRIC(kMetricTaskSplitsCount, facebook::velox::StatType::COUNT);
+
   /// ================== Cache Counters =================
 
   // Tracks hive handle generation latency in range of [0, 100s] and reports
@@ -370,9 +373,6 @@ void registerVeloxMetrics() {
       kMetricTaskMemoryReclaimWaitTimeoutCount,
       facebook::velox::StatType::COUNT);
 
-  // Tracks the total number of splits received by all tasks.
-  DEFINE_METRIC(kMetricTaskSplitsCount, facebook::velox::StatType::COUNT);
-
   // The number of times that the memory reclaim fails because the operator is
   // executing a non-reclaimable section where it is expected to have reserved
   // enough memory to execute without asking for more. Therefore, it is an
@@ -648,6 +648,10 @@ void registerVeloxMetrics() {
   // of [0, 16s] with 512 buckets and reports P50, P90, P99, and P100.
   DEFINE_HISTOGRAM_METRIC(
       kMetricIndexLookupBlockedWaitTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  // The number of index lookup results with error.
+  DEFINE_METRIC(
+      kMetricIndexLookupErrorResultCount, facebook::velox::StatType::COUNT);
 
   /// ================== Table Scan Counters =================
   // Tracks the averaged table scan batch processing time in milliseconds.

@@ -30,22 +30,22 @@ namespace detail {
 
 // Each new string inserted into dictionary is assigned an incrementing id.
 // A set is maintained with all of the DictStringId created. Using
-// Heterogeneous lookup techniques, incoming StringPiece is first looked for
+// Heterogeneous lookup techniques, incoming string_view is first looked for
 // a match in the set. If no match exists a new id is generated and inserted
 // into the set. What is Heterogeneous lookup ?
 // http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0919r1.html
 // Heterogeneous lookup is not available in standard CPP and proposed for CPP20.
 // Follys:F14* variant supports it, so leveraging folly for now.
 struct StringLookupKey {
-  StringLookupKey(folly::StringPiece sp, uint32_t index)
-      : sp{sp},
+  StringLookupKey(std::string_view sv, uint32_t index)
+      : sv{sv},
         index{index},
         hash{folly::crc32c(
-            reinterpret_cast<const uint8_t*>(sp.data()),
-            sp.size(),
+            reinterpret_cast<const uint8_t*>(sv.data()),
+            sv.size(),
             0 /* seed */)} {}
 
-  const folly::StringPiece sp;
+  const std::string_view sv;
   const uint32_t index;
   const uint32_t hash;
 };
@@ -117,9 +117,9 @@ class StringDictionaryEncoder {
   }
 
   uint32_t
-  addKey(folly::StringPiece sp, uint32_t strideIndex, uint32_t count = 1) {
+  addKey(std::string_view sv, uint32_t strideIndex, uint32_t count = 1) {
     auto newIndex = size();
-    detail::StringLookupKey key{sp, newIndex};
+    detail::StringLookupKey key{sv, newIndex};
     auto result = keyIndex_.insert(key);
     if (!result.second) {
       auto index = result.first->getIndex();
@@ -130,12 +130,12 @@ class StringDictionaryEncoder {
     auto bytesCount = keyBytes_.size();
     if (UNLIKELY(
             newIndex == std::numeric_limits<uint32_t>::max() ||
-            (std::numeric_limits<uint32_t>::max() - bytesCount <= sp.size()))) {
+            (std::numeric_limits<uint32_t>::max() - bytesCount <= sv.size()))) {
       DWIO_RAISE("exceeds dictionary size limit");
     }
 
     // append keys
-    keyBytes_.extendAppend(bytesCount, sp.data(), sp.size());
+    keyBytes_.extendAppend(bytesCount, sv.data(), sv.size());
     keyOffsets_.append(keyBytes_.size());
     hash_.append(key.hash);
     counts_.append(count);
@@ -153,11 +153,11 @@ class StringDictionaryEncoder {
     return firstSeenStrideIndex_[index];
   }
 
-  folly::StringPiece getKey(uint32_t index) const {
+  std::string_view getKey(uint32_t index) const {
     DCHECK(index < keyOffsets_.size() - 1);
     auto startOffset = keyOffsets_[index];
     auto endOffset = keyOffsets_[index + 1];
-    return folly::StringPiece{
+    return std::string_view{
         keyBytes_.data() + startOffset, endOffset - startOffset};
   }
 
@@ -178,8 +178,8 @@ class StringDictionaryEncoder {
   VELOX_FRIEND_TEST(TestStringDictionaryEncoder, Clear);
 
   // Intended for testing only.
-  uint32_t getIndex(folly::StringPiece sp) {
-    detail::StringLookupKey key{sp, 0};
+  uint32_t getIndex(std::string_view sv) {
+    detail::StringLookupKey key{sv, 0};
     auto result = keyIndex_.find(key);
     if (result != keyIndex_.end()) {
       return result->getIndex();
@@ -221,7 +221,7 @@ FOLLY_ALWAYS_INLINE bool DictStringIdEquality::operator()(
 FOLLY_ALWAYS_INLINE bool DictStringIdEquality::operator()(
     detail::StringLookupKey key,
     detail::DictStringId lhs) const {
-  return encoder_.getKey(lhs.getIndex()) == key.sp;
+  return encoder_.getKey(lhs.getIndex()) == key.sv;
 }
 
 FOLLY_ALWAYS_INLINE uint32_t

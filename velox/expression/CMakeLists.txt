@@ -43,6 +43,7 @@ velox_add_library(
   Expr.cpp
   ExprCompiler.cpp
   ExprRewriteRegistry.cpp
+  ExprOptimizer.cpp
   ExprToSubfieldFilter.cpp
   ExprUtils.cpp
   FieldReference.cpp
@@ -55,6 +56,7 @@ velox_add_library(
   RowConstructor.cpp
   SimpleFunctionRegistry.cpp
   SpecialFormRegistry.cpp
+  ConjunctRewrite.cpp
   SwitchExpr.cpp
   TryExpr.cpp
   VectorFunction.cpp

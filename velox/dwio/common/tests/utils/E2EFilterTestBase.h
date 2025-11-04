@@ -64,7 +64,7 @@ class TestingHook : public ValueHook {
     }
   }
 
-  void addValue(vector_size_t row, folly::StringPiece value) override {
+  void addValue(vector_size_t row, std::string_view value) override {
     if constexpr (std::is_same_v<T, StringView>) {
       result_->set(row, StringView(value));
     } else {

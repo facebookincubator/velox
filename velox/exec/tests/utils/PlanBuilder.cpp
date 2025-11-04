@@ -184,8 +184,9 @@ PlanBuilder& PlanBuilder::tpcdsTableScan(
   auto rowType = ROW(std::move(columnNames), std::move(outputTypes));
   return TableScanBuilder(*this)
       .outputType(rowType)
-      .tableHandle(std::make_shared<connector::tpcds::TpcdsTableHandle>(
-          std::string(connectorId), table, scaleFactor))
+      .tableHandle(
+          std::make_shared<connector::tpcds::TpcdsTableHandle>(
+              std::string(connectorId), table, scaleFactor))
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -285,7 +286,20 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
   }
 
-  const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
+  RowTypePtr parseType;
+  if (!columnHandles_.empty()) {
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    for (auto& handle : columnHandles_) {
+      names.push_back(handle->name());
+      types.push_back(handle->hiveType());
+    }
+    parseType = ROW(std::move(names), std::move(types));
+  } else if (dataColumns_) {
+    parseType = dataColumns_;
+  } else {
+    parseType = outputType_;
+  }
 
   core::TypedExprPtr filterNodeExpr;
 
@@ -318,7 +332,9 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         true,
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
-        dataColumns_);
+        dataColumns_,
+        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+        columnHandles_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -393,8 +409,9 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     std::vector<core::FieldAccessTypedExprPtr> groupingKeys;
     groupingKeys.reserve(partitionBy_.size());
     for (const auto& partitionBy : partitionBy_) {
-      groupingKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          outputType->findChild(partitionBy), partitionBy));
+      groupingKeys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              outputType->findChild(partitionBy), partitionBy));
     }
     columnStatsSpec = core::ColumnStatsSpec(
         std::move(groupingKeys),
@@ -1188,8 +1205,9 @@ PlanBuilder& PlanBuilder::expand(
               dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
           VELOX_CHECK_NOT_NULL(constantExpr);
           VELOX_CHECK(constantExpr->value().isNull());
-          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              expectedType, variant::null(expectedType->kind())));
+          projectExpr.push_back(
+              std::make_shared<core::ConstantTypedExpr>(
+                  expectedType, variant::null(expectedType->kind())));
         }
       }
     }
@@ -2549,8 +2567,9 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
   std::vector<core::IndexLookupConditionPtr> joinConditionPtrs{};
   joinConditionPtrs.reserve(joinConditions_.size());
   for (const auto& joinCondition : joinConditions_) {
-    joinConditionPtrs.push_back(PlanBuilder::parseIndexJoinCondition(
-        joinCondition, inputType, planBuilder_.pool_));
+    joinConditionPtrs.push_back(
+        PlanBuilder::parseIndexJoinCondition(
+            joinCondition, inputType, planBuilder_.pool_));
   }
 
   // Parse filter expression if provided

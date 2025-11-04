@@ -60,10 +60,11 @@ class Writer : public dwio::common::Writer {
       : Writer{
             std::move(sink),
             options,
-            parentPool.addAggregateChild(fmt::format(
-                "{}.dwrf_{}",
-                parentPool.name(),
-                folly::to<std::string>(folly::Random::rand64())))} {}
+            parentPool.addAggregateChild(
+                fmt::format(
+                    "{}.dwrf_{}",
+                    parentPool.name(),
+                    folly::to<std::string>(folly::Random::rand64())))} {}
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
@@ -134,7 +135,7 @@ class Writer : public dwio::common::Writer {
     return writerBase_->getContext();
   }
 
-  const proto::Footer& getFooter() const {
+  const std::unique_ptr<FooterWriteWrapper>& getFooter() const {
     return writerBase_->getFooter();
   }
 

@@ -111,7 +111,7 @@ endif()
 if(VELOX_BUILD_SHARED)
   message(
     WARNING
-    "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags."
+    "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
 endif()
@@ -217,6 +217,13 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   velox_resolve_dependency(cpr)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
+endif()
+
+if(VELOX_ENABLE_CUDF)
+  message(STATUS "Building curl from source to satisfy cuDF curl version requirement")
+  set(curl_SOURCE BUNDLED)
+  velox_resolve_dependency(curl)
+  FetchContent_MakeAvailable(curl)
 endif()
 
 if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
@@ -486,6 +493,16 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     set(VELOX_ENABLE_ARROW ON)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)
+    if(TARGET aws-cpp-sdk-core)
+      # Fix for AWS SDK CPP using hardcoded system curl instead of soft link to curl
+      get_target_property(override_curl_lib aws-cpp-sdk-core INTERFACE_LINK_LIBRARIES)
+      list(REMOVE_ITEM override_curl_lib "/usr/lib64/libcurl.so")
+      list(APPEND override_curl_lib "\$<LINK_ONLY:CURL::libcurl>")
+      set_target_properties(
+        aws-cpp-sdk-core
+        PROPERTIES INTERFACE_LINK_LIBRARIES "${override_curl_lib}"
+      )
+    endif()
   endif()
 endif()
 
@@ -599,7 +616,10 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_E
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 3.13.0)
+velox_resolve_dependency(simdjson 4.1.0)
+
+velox_set_source(FastFloat)
+velox_resolve_dependency(FastFloat)
 
 velox_set_source(folly)
 velox_resolve_dependency(folly)

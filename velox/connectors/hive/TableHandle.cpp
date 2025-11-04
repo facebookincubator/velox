@@ -26,6 +26,7 @@ columnTypeNames() {
       {HiveColumnHandle::ColumnType::kRegular, "Regular"},
       {HiveColumnHandle::ColumnType::kSynthesized, "Synthesized"},
       {HiveColumnHandle::ColumnType::kRowIndex, "RowIndex"},
+      {HiveColumnHandle::ColumnType::kRowId, "RowId"},
   };
 }
 
@@ -110,14 +111,16 @@ HiveTableHandle::HiveTableHandle(
     common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<std::string, std::string>& tableParameters)
+    const std::unordered_map<std::string, std::string>& tableParameters,
+    std::vector<HiveColumnHandlePtr> columnHandles)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
       filterPushdownEnabled_(filterPushdownEnabled),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
       dataColumns_(dataColumns),
-      tableParameters_(tableParameters) {}
+      tableParameters_(tableParameters),
+      columnHandles_(std::move(columnHandles)) {}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;

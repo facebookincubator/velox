@@ -14,6 +14,7 @@
 
 add_executable(velox_cudf_hash_join_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
+add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
 add_executable(velox_cudf_aggregation_test Main.cpp AggregationTest.cpp)
 add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
 # Disabling writer tests until we re-add writing ability to CudfHiveConnector
@@ -22,7 +23,9 @@ add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 add_executable(velox_cudf_subfield_filter_ast_test Main.cpp SubfieldFilterAstTest.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
+add_executable(velox_cudf_expression_selection_test Main.cpp ExpressionEvaluatorSelectionTest.cpp)
 add_executable(velox_cudf_config_test Main.cpp ConfigTest.cpp)
+add_executable(velox_cudf_assign_unique_id_test Main.cpp AssignUniqueIdTest.cpp)
 
 add_test(
   NAME velox_cudf_hash_join_test
@@ -33,6 +36,12 @@ add_test(
 add_test(
   NAME velox_cudf_order_by_test
   COMMAND velox_cudf_order_by_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME velox_cudf_topn_test
+  COMMAND velox_cudf_topn_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -79,6 +88,18 @@ add_test(
 )
 
 add_test(
+  NAME velox_cudf_expression_selection_test
+  COMMAND velox_cudf_expression_selection_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME velox_cudf_assign_unique_id_test
+  COMMAND velox_cudf_assign_unique_id_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_config_test
   COMMAND velox_cudf_config_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -86,6 +107,7 @@ add_test(
 
 set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_topn_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_local_partition_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
@@ -93,7 +115,12 @@ set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TI
 set_tests_properties(velox_cudf_filter_project_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_expression_selection_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
 set_tests_properties(velox_cudf_config_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_hash_join_test
@@ -110,6 +137,17 @@ target_link_libraries(
 
 target_link_libraries(
   velox_cudf_order_by_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  fmt::fmt
+)
+
+target_link_libraries(
+  velox_cudf_topn_test
   velox_cudf_exec
   velox_exec
   velox_exec_test_lib
@@ -171,6 +209,7 @@ target_link_libraries(
   velox_cudf_exec
   velox_exec
   velox_exec_test_lib
+  velox_functions_test_lib
   velox_test_util
   gtest
   gtest_main
@@ -197,6 +236,26 @@ target_link_libraries(
 )
 
 target_link_libraries(velox_cudf_config_test velox_cudf_exec gtest gtest_main)
+target_link_libraries(
+  velox_cudf_assign_unique_id_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+)
+
+target_link_libraries(
+  velox_cudf_expression_selection_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  velox_functions_spark
+  gtest
+  gtest_main
+)
 
 add_subdirectory(utils)
 

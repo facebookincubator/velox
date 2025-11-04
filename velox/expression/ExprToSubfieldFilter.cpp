@@ -229,7 +229,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeEqualFilter(
     case TypeKind::HUGEINT:
       return equalHugeint(singleValue<int128_t>(value));
     case TypeKind::VARCHAR:
-      return equal(singleValue<StringView>(value));
+      return equal(std::string(singleValue<StringView>(value)));
     case TypeKind::TIMESTAMP:
       return equal(singleValue<Timestamp>(value));
     default:
@@ -261,7 +261,7 @@ ExprToSubfieldFilterParser::makeGreaterThanFilter(
     case TypeKind::REAL:
       return greaterThanFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
-      return greaterThan(singleValue<StringView>(lower));
+      return greaterThan(std::string(singleValue<StringView>(lower)));
     case TypeKind::TIMESTAMP:
       return greaterThan(singleValue<Timestamp>(lower));
     default:
@@ -292,7 +292,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeLessThanFilter(
     case TypeKind::REAL:
       return lessThanFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
-      return lessThan(singleValue<StringView>(upper));
+      return lessThan(std::string(singleValue<StringView>(upper)));
     case TypeKind::TIMESTAMP:
       return lessThan(singleValue<Timestamp>(upper));
     default:
@@ -324,7 +324,7 @@ ExprToSubfieldFilterParser::makeLessThanOrEqualFilter(
     case TypeKind::REAL:
       return lessThanOrEqualFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
-      return lessThanOrEqual(singleValue<StringView>(upper));
+      return lessThanOrEqual(std::string(singleValue<StringView>(upper)));
     case TypeKind::TIMESTAMP:
       return lessThanOrEqual(singleValue<Timestamp>(upper));
     default:
@@ -356,7 +356,7 @@ ExprToSubfieldFilterParser::makeGreaterThanOrEqualFilter(
     case TypeKind::REAL:
       return greaterThanOrEqualFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
-      return greaterThanOrEqual(singleValue<StringView>(lower));
+      return greaterThanOrEqual(std::string(singleValue<StringView>(lower)));
     case TypeKind::TIMESTAMP:
       return greaterThanOrEqual(singleValue<Timestamp>(lower));
     default:
@@ -401,7 +401,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
       auto stringElements = elements->as<SimpleVector<StringView>>();
       std::vector<std::string> values;
       for (auto i = 0; i < size; i++) {
-        values.push_back(stringElements->valueAt(offset + i).str());
+        values.push_back(std::string(stringElements->valueAt(offset + i)));
       }
       if (negated) {
         return notIn(values);
@@ -451,10 +451,12 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeBetweenFilter(
     case TypeKind::VARCHAR:
       if (negated) {
         return notBetween(
-            singleValue<StringView>(lower), singleValue<StringView>(upper));
+            std::string(singleValue<StringView>(lower)),
+            std::string(singleValue<StringView>(upper)));
       }
       return between(
-          singleValue<StringView>(lower), singleValue<StringView>(upper));
+          std::string(singleValue<StringView>(lower)),
+          std::string(singleValue<StringView>(upper)));
     case TypeKind::TIMESTAMP:
       return negated
           ? nullptr

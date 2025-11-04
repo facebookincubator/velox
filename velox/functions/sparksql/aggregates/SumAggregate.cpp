@@ -129,11 +129,12 @@ exec::AggregateRegistrationResult registerSum(
   };
 
   for (const auto& inputType : {"tinyint", "smallint", "integer", "bigint"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("bigint")
-                             .intermediateType("bigint")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("bigint")
+            .intermediateType("bigint")
+            .argumentType(inputType)
+            .build());
   }
 
   return exec::registerAggregateFunction(

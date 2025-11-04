@@ -17,6 +17,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/ConstantVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -85,6 +86,19 @@ TypedExprPtr InputTypedExpr::create(const folly::dynamic& obj, void* context) {
   auto type = core::deserializeType(obj, context);
 
   return std::make_shared<InputTypedExpr>(std::move(type));
+}
+
+std::optional<bool> ConstantTypedExpr::toBool() const {
+  VELOX_CHECK(
+      this->type()->isBoolean(),
+      "Expected boolean expression, but got {}",
+      this->type()->toString());
+
+  if (!isNull()) {
+    return valueVector_ ? valueVector_->as<ConstantVector<bool>>()->valueAt(0)
+                        : value_.value<TypeKind::BOOLEAN>();
+  }
+  return std::nullopt;
 }
 
 void ConstantTypedExpr::accept(

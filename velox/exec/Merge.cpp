@@ -18,24 +18,12 @@
 #include <folly/Traits.h>
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-namespace {
-std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
-    const core::QueryConfig& queryConfig,
-    VectorSerde::Kind kind) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
-      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
-      : std::make_unique<VectorSerde::Options>();
-  options->compressionKind =
-      common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
-  return options;
-}
-} // namespace
 
 Merge::Merge(
     int32_t operatorId,
@@ -171,8 +159,12 @@ void Merge::setupSpillMerger() {
     std::vector<std::unique_ptr<SpillReadFile>> spillReadFiles;
     spillReadFiles.reserve(spillFiles.size());
     for (const auto& spillFile : spillFiles) {
-      spillReadFiles.emplace_back(SpillReadFile::create(
-          spillFile, spillConfig_->readBufferSize, pool(), spillStats_.get()));
+      spillReadFiles.emplace_back(
+          SpillReadFile::create(
+              spillFile,
+              spillConfig_->readBufferSize,
+              pool(),
+              spillStats_.get()));
     }
     spillReadFilesGroups.push_back(std::move(spillReadFiles));
   }
@@ -207,8 +199,9 @@ void Merge::maybeStartNextMergeSourceGroup() {
   std::vector<std::unique_ptr<SourceStream>> cursors;
   cursors.reserve(sources.size());
   for (auto* source : sources) {
-    cursors.push_back(std::make_unique<SourceStream>(
-        source, sortingKeys_, maxOutputBatchRows_));
+    cursors.push_back(
+        std::make_unique<SourceStream>(
+            source, sortingKeys_, maxOutputBatchRows_));
   }
 
   // TODO: consider to provide a config other than the regular operator batch
@@ -343,8 +336,9 @@ SourceMerger::SourceMerger(
         }
         return streams;
       }()),
-      merger_(std::make_unique<TreeOfLosers<SourceStream>>(
-          std::move(sourceStreams))),
+      merger_(
+          std::make_unique<TreeOfLosers<SourceStream>>(
+              std::move(sourceStreams))),
       pool_(pool) {}
 
 void SourceMerger::isBlocked(
@@ -617,8 +611,9 @@ std::unique_ptr<SourceMerger> SpillMerger::createSourceMerger(
   std::vector<std::unique_ptr<SourceStream>> streams;
   streams.reserve(sources.size());
   for (const auto& source : sources) {
-    streams.push_back(std::make_unique<SourceStream>(
-        source.get(), sortingKeys, maxOutputBatchRows));
+    streams.push_back(
+        std::make_unique<SourceStream>(
+            source.get(), sortingKeys, maxOutputBatchRows));
   }
   return std::make_unique<SourceMerger>(
       type, std::move(streams), maxOutputBatchRows, maxOutputBatchBytes, pool);
@@ -769,7 +764,8 @@ MergeExchange::MergeExchange(
           "MergeExchange"),
       serde_(getNamedVectorSerde(mergeExchangeNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
-          driverCtx->queryConfig(),
+          common::stringToCompressionKind(
+              driverCtx->queryConfig().shuffleCompressionKind()),
           mergeExchangeNode->serdeKind())) {}
 
 BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
@@ -814,13 +810,14 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
             operatorCtx_->planNodeId(),
             operatorCtx_->driverCtx()->pipelineId,
             remoteSourceIndex);
-        sources_.emplace_back(MergeSource::createMergeExchangeSource(
-            this,
-            remoteSourceTaskIds_[remoteSourceIndex],
-            operatorCtx_->task()->destination(),
-            maxQueuedBytesPerSource,
-            pool,
-            operatorCtx_->task()->queryCtx()->executor()));
+        sources_.emplace_back(
+            MergeSource::createMergeExchangeSource(
+                this,
+                remoteSourceTaskIds_[remoteSourceIndex],
+                operatorCtx_->task()->destination(),
+                maxQueuedBytesPerSource,
+                pool,
+                operatorCtx_->task()->queryCtx()->executor()));
       }
     }
     // TODO Delay this call until all input data has been processed.

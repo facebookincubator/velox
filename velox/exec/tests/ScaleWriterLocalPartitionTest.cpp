@@ -494,10 +494,11 @@ class ScaleWriterLocalPartitionTest : public HiveConnectorTestBase {
     for (const auto& name : rowType_->names()) {
       orderByKeys.push_back(fmt::format("{} ASC NULLS FIRST", name));
     }
-    AssertQueryBuilder queryBuilder(PlanBuilder()
-                                        .values(inputVectors)
-                                        .orderBy(orderByKeys, false)
-                                        .planNode());
+    AssertQueryBuilder queryBuilder(
+        PlanBuilder()
+            .values(inputVectors)
+            .orderBy(orderByKeys, false)
+            .planNode());
     return queryBuilder.copyResults(pool_.get());
   }
 

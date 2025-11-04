@@ -54,8 +54,9 @@ void compareVectors(const VectorPtr& actual, const VectorPtr& expected) {
   }
   switch (actual->encoding()) {
     case VectorEncoding::Simple::DICTIONARY:
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actual->wrapInfo(), *expected->wrapInfo(), actual->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actual->wrapInfo(), *expected->wrapInfo(), actual->size()));
       compareVectors(actual->valueVector(), expected->valueVector());
       break;
     case VectorEncoding::Simple::ROW: {
@@ -69,10 +70,14 @@ void compareVectors(const VectorPtr& actual, const VectorPtr& expected) {
     case VectorEncoding::Simple::MAP: {
       auto* actualMap = actual->asChecked<MapVector>();
       auto* expectedMap = expected->asChecked<MapVector>();
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualMap->offsets(), *expectedMap->offsets(), actualMap->size()));
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualMap->sizes(), *expectedMap->sizes(), actualMap->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualMap->offsets(),
+              *expectedMap->offsets(),
+              actualMap->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualMap->sizes(), *expectedMap->sizes(), actualMap->size()));
       compareVectors(actualMap->mapKeys(), expectedMap->mapKeys());
       compareVectors(actualMap->mapValues(), expectedMap->mapValues());
       break;
@@ -80,12 +85,16 @@ void compareVectors(const VectorPtr& actual, const VectorPtr& expected) {
     case VectorEncoding::Simple::ARRAY: {
       auto* actualArray = actual->asChecked<ArrayVector>();
       auto* expectedArray = expected->asChecked<ArrayVector>();
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualArray->offsets(),
-          *expectedArray->offsets(),
-          actualArray->size()));
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualArray->sizes(), *expectedArray->sizes(), actualArray->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualArray->offsets(),
+              *expectedArray->offsets(),
+              actualArray->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualArray->sizes(),
+              *expectedArray->sizes(),
+              actualArray->size()));
       compareVectors(actualArray->elements(), expectedArray->elements());
       break;
     }

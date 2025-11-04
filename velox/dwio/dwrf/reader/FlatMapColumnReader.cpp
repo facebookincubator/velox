@@ -163,12 +163,13 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
                 .inMapDecoder = inMapDecoder.get(),
                 .keySelectionCallback = nullptr});
 
-        keyNodes.push_back(std::make_unique<KeyNode<T>>(
-            std::move(valueReader),
-            std::move(inMapDecoder),
-            key,
-            sequence,
-            memoryPool));
+        keyNodes.push_back(
+            std::make_unique<KeyNode<T>>(
+                std::move(valueReader),
+                std::move(inMapDecoder),
+                key,
+                sequence,
+                memoryPool));
       });
 
   keySelectionStats.selectedKeys = keyNodes.size();

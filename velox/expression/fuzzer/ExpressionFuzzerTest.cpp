@@ -261,6 +261,9 @@ std::unordered_set<std::string> skipFunctions = {
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
+    "t_cdf", // New function, not yet widely deployed in Presto instances
+    "inverse_t_cdf", // New function, not yet widely deployed in Presto
+                     // instances
     "array_subset", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
@@ -273,6 +276,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "cast(array(real)) -> array(varchar)",
     "cast(map(varchar,double)) -> map(varchar,varchar)",
     "cast(map(varchar,real)) -> map(varchar,varchar)",
+    // Velox and Presto may not match with regards to sparse vs. dense HLL
+    "cast(hyperloglog) -> p4hyperloglog",
+    "cast(p4hyperloglog) -> hyperloglog",
     "round", // https://github.com/facebookincubator/velox/issues/10634
     "bitwise_right_shift_arithmetic", // https://github.com/facebookincubator/velox/issues/10841
     "map_size_with", // https://github.com/facebookincubator/velox/issues/10964

@@ -35,9 +35,16 @@ enum class Table : uint8_t;
 
 namespace facebook::velox::exec::test {
 
+struct AggregationConfig {
+  std::vector<std::string> groupingKeys;
+  std::vector<std::string> aggregates;
+};
+
 struct PushdownConfig {
   common::SubfieldFilters subfieldFiltersMap;
   std::string remainingFilter;
+  // Aggregation pushdown configuration
+  std::optional<AggregationConfig> aggregationConfig;
 };
 
 /// A builder class with fluent API for building query plans. Plans are built
@@ -316,6 +323,12 @@ class PlanBuilder {
       return *this;
     }
 
+    TableScanBuilder& columnHandles(
+        std::vector<connector::hive::HiveColumnHandlePtr> columnHandles) {
+      columnHandles_ = std::move(columnHandles);
+      return *this;
+    }
+
     /// @param assignments Optional ColumnHandles.
     /// outputType names should match the keys in the 'assignments' map. The
     /// 'assignments' map may contain more columns than 'outputType' if some
@@ -341,6 +354,7 @@ class PlanBuilder {
     RowTypePtr outputType_;
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
+    std::vector<connector::hive::HiveColumnHandlePtr> columnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
     connector::ColumnHandleMap assignments_;

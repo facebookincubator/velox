@@ -3295,13 +3295,14 @@ class RleBooleanEncoder final : public EncoderImpl,
         buffered_append_values_.push_back(boolean_array.Value(i));
       }
     } else {
-      PARQUET_THROW_NOT_OK(::arrow::VisitArraySpanInline<::arrow::BooleanType>(
-          *boolean_array.data(),
-          [&](bool value) {
-            buffered_append_values_.push_back(value);
-            return Status::OK();
-          },
-          []() { return Status::OK(); }));
+      PARQUET_THROW_NOT_OK(
+          ::arrow::VisitArraySpanInline<::arrow::BooleanType>(
+              *boolean_array.data(),
+              [&](bool value) {
+                buffered_append_values_.push_back(value);
+                return Status::OK();
+              },
+              []() { return Status::OK(); }));
     }
   }
 

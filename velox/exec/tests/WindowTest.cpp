@@ -286,10 +286,11 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   CursorParameters params;
   auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(),
-      8'388'608 /* 8MB */,
-      exec::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(
+          queryCtx->queryId(),
+          8'388'608 /* 8MB */,
+          exec::MemoryReclaimer::create()));
 
   params.queryCtx = queryCtx;
 
@@ -738,10 +739,11 @@ TEST_F(WindowTest, nagativeFrameArg) {
             .planNode();
     VELOX_ASSERT_USER_THROW(
         AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .assertResults(fmt::format(
-                "SELECT *, regr_count(c0, c1) over (partition by p0, p1 order by row_number  ROWS between {} PRECEDING and {} FOLLOWING) from tmp",
-                startOffset,
-                endOffset)),
+            .assertResults(
+                fmt::format(
+                    "SELECT *, regr_count(c0, c1) over (partition by p0, p1 order by row_number  ROWS between {} PRECEDING and {} FOLLOWING) from tmp",
+                    startOffset,
+                    endOffset)),
         testData.debugString());
   }
 }
@@ -831,11 +833,12 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
 
   for (const auto [usePrefixSort, spillEnabled, enableSpillPrefixSort] :
        testSettings) {
-    SCOPED_TRACE(fmt::format(
-        "usePrefixSort: {}, spillEnabled: {}, enableSpillPrefixSort: {}",
-        usePrefixSort,
-        spillEnabled,
-        enableSpillPrefixSort));
+    SCOPED_TRACE(
+        fmt::format(
+            "usePrefixSort: {}, spillEnabled: {}, enableSpillPrefixSort: {}",
+            usePrefixSort,
+            spillEnabled,
+            enableSpillPrefixSort));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig =
         getSpillConfig(spillDirectory->getPath(), enableSpillPrefixSort);
@@ -901,18 +904,20 @@ TEST_F(WindowTest, NaNFrameBound) {
           if (startBound == "following" && endBound == "preceding") {
             continue;
           }
-          frames.push_back(fmt::format(
-              "{} over (order by s0 {} range between off0 {} and off1 {})",
-              call,
-              order,
-              startBound,
-              endBound));
-          frames.push_back(fmt::format(
-              "{} over (order by s0 {} range between off1 {} and off0 {})",
-              call,
-              order,
-              startBound,
-              endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off0 {} and off1 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off1 {} and off0 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
         }
       }
     }

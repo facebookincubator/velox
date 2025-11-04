@@ -82,11 +82,12 @@ void registerBitwiseXorAggregate(
     typeList = {"bigint"};
   }
   for (const auto& inputType : typeList) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType(inputType)
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(inputType)
+            .intermediateType(inputType)
+            .argumentType(inputType)
+            .build());
   }
 
   exec::registerAggregateFunction(

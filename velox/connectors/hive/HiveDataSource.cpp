@@ -52,10 +52,29 @@ bool shouldEagerlyMaterialize(
 
 } // namespace
 
+void HiveDataSource::processColumnHandle(const HiveColumnHandlePtr& handle) {
+  switch (handle->columnType()) {
+    case HiveColumnHandle::ColumnType::kRegular:
+      break;
+    case HiveColumnHandle::ColumnType::kPartitionKey:
+      partitionKeys_.emplace(handle->name(), handle);
+      break;
+    case HiveColumnHandle::ColumnType::kSynthesized:
+      infoColumns_.emplace(handle->name(), handle);
+      break;
+    case HiveColumnHandle::ColumnType::kRowIndex:
+      specialColumns_.rowIndex = handle->name();
+      break;
+    case HiveColumnHandle::ColumnType::kRowId:
+      specialColumns_.rowId = handle->name();
+      break;
+  }
+}
+
 HiveDataSource::HiveDataSource(
     const RowTypePtr& outputType,
     const connector::ConnectorTableHandlePtr& tableHandle,
-    const connector::ColumnHandleMap& columnHandles,
+    const connector::ColumnHandleMap& assignments,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -67,38 +86,42 @@ HiveDataSource::HiveDataSource(
       pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
-  // Column handled keyed on the column alias, the name used in the query.
-  for (const auto& [canonicalizedName, columnHandle] : columnHandles) {
-    auto handle =
-        std::dynamic_pointer_cast<const HiveColumnHandle>(columnHandle);
-    VELOX_CHECK_NOT_NULL(
-        handle,
-        "ColumnHandle must be an instance of HiveColumnHandle for {}",
-        canonicalizedName);
-    switch (handle->columnType()) {
-      case HiveColumnHandle::ColumnType::kRegular:
-        break;
-      case HiveColumnHandle::ColumnType::kPartitionKey:
-        partitionKeys_.emplace(handle->name(), handle);
-        break;
-      case HiveColumnHandle::ColumnType::kSynthesized:
-        infoColumns_.emplace(handle->name(), handle);
-        break;
-      case HiveColumnHandle::ColumnType::kRowIndex:
-        specialColumns_.rowIndex = handle->name();
-        break;
-      case HiveColumnHandle::ColumnType::kRowId:
-        specialColumns_.rowId = handle->name();
-        break;
+  hiveTableHandle_ =
+      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
+  VELOX_CHECK_NOT_NULL(
+      hiveTableHandle_, "TableHandle must be an instance of HiveTableHandle");
+
+  if (hiveTableHandle_->columnHandles().empty()) {
+    // Column handled keyed on the column alias, the name used in the query.
+    for (const auto& [canonicalizedName, columnHandle] : assignments) {
+      auto handle =
+          std::dynamic_pointer_cast<const HiveColumnHandle>(columnHandle);
+      VELOX_CHECK_NOT_NULL(
+          handle,
+          "ColumnHandle must be an instance of HiveColumnHandle for {}",
+          canonicalizedName);
+      processColumnHandle(handle);
     }
+  } else {
+    folly::F14FastSet<const connector::ColumnHandle*> assignmentHandles;
+    for (const auto& [_, columnHandle] : assignments) {
+      assignmentHandles.insert(columnHandle.get());
+    }
+    for (auto& handle : hiveTableHandle_->columnHandles()) {
+      assignmentHandles.erase(handle.get());
+      processColumnHandle(handle);
+    }
+    VELOX_CHECK(
+        assignmentHandles.empty(),
+        "Assignments must be a subset of column handles");
   }
 
   std::vector<std::string> readColumnNames;
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
-    auto it = columnHandles.find(outputName);
+    auto it = assignments.find(outputName);
     VELOX_CHECK(
-        it != columnHandles.end(),
+        it != assignments.end(),
         "ColumnHandle is missing for output column: {}",
         outputName);
 
@@ -113,10 +136,6 @@ HiveDataSource::HiveDataSource(
     }
   }
 
-  hiveTableHandle_ =
-      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
-  VELOX_CHECK_NOT_NULL(
-      hiveTableHandle_, "TableHandle must be an instance of HiveTableHandle");
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->sessionProperties())) {
     checkColumnNameLowerCase(outputType_);

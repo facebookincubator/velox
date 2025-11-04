@@ -46,8 +46,9 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // converting all timestamps to microseconds for each unit.
   if (unit == DateTimeUnit::kMicrosecond) {
     const std::chrono::time_point<std::chrono::system_clock>
-        fromMicrosecondpoint(std::chrono::microseconds(
-            std::min(fromTimestamp, toTimestamp).toMicros()));
+        fromMicrosecondpoint(
+            std::chrono::microseconds(
+                std::min(fromTimestamp, toTimestamp).toMicros()));
     const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
         std::chrono::microseconds(
             std::max(fromTimestamp, toTimestamp).toMicros()));
@@ -60,12 +61,14 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // fromTimepoint is less than or equal to toTimepoint.
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          fromTimepoint(std::chrono::milliseconds(
-              std::min(fromTimestamp, toTimestamp).toMillis()));
+          fromTimepoint(
+              std::chrono::milliseconds(
+                  std::min(fromTimestamp, toTimestamp).toMillis()));
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          toTimepoint(std::chrono::milliseconds(
-              std::max(fromTimestamp, toTimestamp).toMillis()));
+          toTimepoint(
+              std::chrono::milliseconds(
+                  std::max(fromTimestamp, toTimestamp).toMillis()));
 
   // Millisecond, second, minute, hour and day have fixed conversion ratio.
   switch (unit) {
@@ -379,8 +382,10 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
 /// For units < DAY, the time of day changes.
 /// For units >= DAY, the time of day doesn't change.
 FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
-  VELOX_USER_CHECK_GE(time, 0, "TIME value must be positive");
-  VELOX_USER_CHECK_LT(time, kMillisInDay, "TIME value must be less than 24h");
+  VELOX_USER_CHECK(
+      time >= 0 && time < kMillisInDay,
+      "TIME value {} is out of range [0, 86400000)",
+      time);
 
   if (FOLLY_UNLIKELY(valueInMillis == 0)) {
     return time;

@@ -1870,15 +1870,6 @@ TEST_F(TableScanTest, partitionedTableDoubleKey) {
   testPartitionedTable(filePath->getPath(), DOUBLE(), "3.5");
 }
 
-TEST_F(TableScanTest, partitionedTableDecimalKey) {
-  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
-  auto vectors = makeVectors(10, 1'000, rowType);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
-  createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), DECIMAL(20, 4), "3.5123");
-}
-
 TEST_F(TableScanTest, partitionedTableDateKey) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
   auto vectors = makeVectors(10, 1'000, rowType);
@@ -1972,8 +1963,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT {}, * FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
 
     expect(true);
@@ -1999,9 +1992,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT c0, {}, c1 FROM tmp",
-              asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT c0, {}, c1 FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2026,9 +2020,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT c0, c1, {} FROM tmp",
-              asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT c0, c1, {} FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2053,8 +2048,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT {} FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2101,8 +2098,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
-              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(
+              fmt::format(
+                  "SELECT {}, * FROM tmp",
+                  asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -6142,6 +6141,32 @@ TEST_F(TableScanTest, parallelUnitLoader) {
   auto stats = getTableScanRuntimeStats(task);
   // Verify that parallel unit loader is enabled.
   ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
+}
+
+TEST_F(TableScanTest, allColumnHandles) {
+  auto data = makeVectors(1, 10, ROW({"a", "b"}, BIGINT()));
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  std::vector<HiveColumnHandlePtr> columnHandles = {
+      partitionKey("ds", VARCHAR()),
+      regularColumn("a", BIGINT()),
+      regularColumn("b", BIGINT()),
+  };
+  connector::ColumnHandleMap assignments = {{"x", columnHandles[1]}};
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+                   .partitionKey("ds", "2025-10-23")
+                   .build();
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({"x"}, {BIGINT()}))
+                  .assignments(assignments)
+                  .dataColumns(asRowType(data[0]->type()))
+                  .columnHandles(columnHandles)
+                  .remainingFilter("length(ds) + a % 2 > 0")
+                  .endTableScan()
+                  .planNode();
+  AssertQueryBuilder(plan).split(split).assertResults(
+      makeRowVector({data[0]->childAt(0)}));
 }
 
 } // namespace

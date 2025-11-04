@@ -976,7 +976,7 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<TBridgeType> getJoinBridgeInternalLocked(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
-      MemberType SplitGroupState::*bridges_member);
+      MemberType SplitGroupState::* bridges_member);
 
   std::shared_ptr<JoinBridge> getCustomJoinBridgeInternal(
       uint32_t splitGroupId,

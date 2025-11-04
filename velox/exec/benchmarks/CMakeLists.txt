@@ -176,3 +176,21 @@ target_link_libraries(
 add_executable(velox_atomics_benchmark AtomicsBench.cpp)
 
 target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
+
+if(VELOX_ENABLE_GEO)
+  add_executable(velox_spatial_join_benchmark SpatialJoinBenchmark.cpp)
+
+  target_compile_definitions(velox_spatial_join_benchmark PRIVATE VELOX_ENABLE_GEO)
+
+  target_link_libraries(
+    velox_spatial_join_benchmark
+    velox_memory
+    velox_exec
+    velox_exec_test_lib
+    velox_parse_parser
+    velox_presto_types
+    velox_vector_test_lib
+    velox_functions_prestosql
+    Folly::follybenchmark
+  )
+endif()

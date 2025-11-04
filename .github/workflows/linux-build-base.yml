@@ -41,7 +41,7 @@ jobs:
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
-      - uses: actions/checkout@v5.0.0
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -71,6 +71,8 @@ jobs:
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
           fi
+          # Install GCC14 until it is also available in the dependency image.
+          dnf install -y gcc-toolset-14
 
       - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -86,8 +88,8 @@ jobs:
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
-          # Set compiler to GCC 12
-          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-12/root/usr/bin
+          # Set compiler to GCC 14
+          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
@@ -113,6 +115,7 @@ jobs:
             # Investigate issues with remote function service: Issue #13897
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
+          source /opt/rh/gcc-toolset-14/enable
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 
       - name: Ccache after
@@ -164,7 +167,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5.0.0
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
@@ -209,7 +212,7 @@ jobs:
           cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
 
   fedora-debug:
-    runs-on: 8-core-ubuntu-22.04
+    runs-on: 16-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:fedora
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
@@ -232,7 +235,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
@@ -248,7 +251,7 @@ jobs:
           fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=4 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
           EXTRA_CMAKE_FLAGS: >-
             -DVELOX_ENABLE_PARQUET=ON
             -DARROW_THRIFT_USE_SHARED=ON

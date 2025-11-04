@@ -58,8 +58,9 @@ class TDigestAggregateInputGenerator : public InputGenerator {
         boost::random::uniform_real_distribution<double> dist(10.0, 1000.0);
         compression_ = dist(rng);
       }
-      inputs.push_back(BaseVector::createConstant(
-          DOUBLE(), compression_.value(), size, pool));
+      inputs.push_back(
+          BaseVector::createConstant(
+              DOUBLE(), compression_.value(), size, pool));
     }
 
     return inputs;

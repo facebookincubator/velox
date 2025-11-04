@@ -70,19 +70,20 @@ TEST_F(ExpressionRunnerUnitTest, run) {
 
   for (bool useSeperatePoolForInput : {true, false}) {
     LOG(INFO) << "Using useSeperatePoolForInput: " << useSeperatePoolForInput;
-    EXPECT_NO_THROW(ExpressionRunner::run(
-        inputPathStr.data(),
-        selectivityVectorPathStr.data(),
-        "length(c0)",
-        "",
-        resultPathStr.data(),
-        "verify",
-        0,
-        "",
-        "",
-        nullptr,
-        false,
-        useSeperatePoolForInput));
+    EXPECT_NO_THROW(
+        ExpressionRunner::run(
+            inputPathStr.data(),
+            selectivityVectorPathStr.data(),
+            "length(c0)",
+            "",
+            resultPathStr.data(),
+            "verify",
+            0,
+            "",
+            "",
+            nullptr,
+            false,
+            useSeperatePoolForInput));
   }
 }
 

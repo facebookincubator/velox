@@ -25,6 +25,8 @@ namespace facebook::velox::connector::hive {
 
 class HiveColumnHandle : public ColumnHandle {
  public:
+  /// NOTE: Make sure to update the mapping in columnTypeNames() when modifying
+  /// this.
   enum class ColumnType {
     kPartitionKey,
     kRegular,
@@ -145,7 +147,8 @@ class HiveTableHandle : public ConnectorTableHandle {
       common::SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
-      const std::unordered_map<std::string, std::string>& tableParameters = {});
+      const std::unordered_map<std::string, std::string>& tableParameters = {},
+      std::vector<HiveColumnHandlePtr> columnHandles = {});
 
   const std::string& tableName() const {
     return tableName_;
@@ -155,25 +158,45 @@ class HiveTableHandle : public ConnectorTableHandle {
     return tableName();
   }
 
-  bool isFilterPushdownEnabled() const {
+  [[deprecated]] bool isFilterPushdownEnabled() const {
     return filterPushdownEnabled_;
   }
 
+  /// Single field filters that can be applied efficiently during file reading.
   const common::SubfieldFilters& subfieldFilters() const {
     return subfieldFilters_;
   }
 
+  /// Everything else that cannot be converted into subfield filters, but still
+  /// require the data source to filter out.  This is usually less efficient
+  /// than subfield filters but supports arbitrary boolean expression.
   const core::TypedExprPtr& remainingFilter() const {
     return remainingFilter_;
   }
 
-  // Schema of the table.  Need this for reading TEXTFILE.
+  /// Subset of schema of the table that we store in file (i.e.,
+  /// non-partitioning columns).  This must be in the exact order as columns in
+  /// file (except trailing columns), but with the table schema during read
+  /// time.
+  ///
+  /// This is needed for multiple purposes, including reading TEXTFILE and
+  /// handling schema evolution.
   const RowTypePtr& dataColumns() const {
     return dataColumns_;
   }
 
+  /// Extra parameters to pass down to file format reader layer.  Keys should be
+  /// in dwio::common::TableParameter.
   const std::unordered_map<std::string, std::string>& tableParameters() const {
     return tableParameters_;
+  }
+
+  /// Full schema including partitioning columns and data columns.  If this is
+  /// non-empty, it should be a superset of the column handles in data source
+  /// assignments parameter (the shared_ptrs should pointing to the exact same
+  /// objects).
+  const std::vector<HiveColumnHandlePtr> columnHandles() const {
+    return columnHandles_;
   }
 
   std::string toString() const override;
@@ -193,6 +216,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
+  const std::vector<HiveColumnHandlePtr> columnHandles_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;

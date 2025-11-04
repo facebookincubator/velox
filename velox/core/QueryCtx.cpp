@@ -86,18 +86,20 @@ void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
   const auto numSpilledBytes = numSpilledBytes_.fetch_add(bytes) + bytes;
   if (queryConfig_.maxSpillBytes() > 0 &&
       numSpilledBytes > queryConfig_.maxSpillBytes()) {
-    VELOX_SPILL_LIMIT_EXCEEDED(fmt::format(
-        "Query exceeded per-query local spill limit of {}",
-        succinctBytes(queryConfig_.maxSpillBytes())));
+    VELOX_SPILL_LIMIT_EXCEEDED(
+        fmt::format(
+            "Query exceeded per-query local spill limit of {}",
+            succinctBytes(queryConfig_.maxSpillBytes())));
   }
 }
 
 void QueryCtx::updateTracedBytesAndCheckLimit(uint64_t bytes) {
   if (numTracedBytes_.fetch_add(bytes) + bytes >=
       queryConfig_.queryTraceMaxBytes()) {
-    VELOX_TRACE_LIMIT_EXCEEDED(fmt::format(
-        "Query exceeded per-query local trace limit of {}",
-        succinctBytes(queryConfig_.queryTraceMaxBytes())));
+    VELOX_TRACE_LIMIT_EXCEEDED(
+        fmt::format(
+            "Query exceeded per-query local trace limit of {}",
+            succinctBytes(queryConfig_.queryTraceMaxBytes())));
   }
 }
 

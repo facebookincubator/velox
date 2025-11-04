@@ -28,10 +28,7 @@
 #include "velox/dwio/common/RandGen.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class retriable_error : public std::runtime_error {
  public:
@@ -229,7 +226,4 @@ class RetryModule {
   }
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common
