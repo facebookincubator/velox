@@ -383,9 +383,20 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
-  const auto& filePaths = split_->getCudfSourceInfo().filepaths();
-  for (const auto& filePath : filePaths) {
-    completedBytes_ += std::filesystem::file_size(filePath);
+  try {
+    const auto fileHandleKey = FileHandleKey{
+        .filename = split_->filePath,
+        .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+    auto fileProperties = FileProperties{};
+    auto const fileHandleCachePtr = fileHandleFactory_->generate(
+        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+    if (fileHandleCachePtr.get() and fileHandleCachePtr.get()->file) {
+      completedBytes_ += fileHandleCachePtr->file->size();
+    }
+  } catch (const std::exception& e) {
+    // Unable to get the file size, log a warning and continue
+    LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
+                 << e.what();
   }
 }
 
