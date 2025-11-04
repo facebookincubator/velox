@@ -385,10 +385,14 @@ bool CompileState::compile(bool allowCpuFallback) {
       LOG(INFO) << "GPU operator condition = " << condition << std::endl;
     }
     if (!allowCpuFallback) {
-      VELOX_CHECK(condition, "Replacement with cuDF operator failed");
+      VELOX_CHECK(
+          condition,
+          "Replacement of {} with cuDF operator failed",
+          oper->toString());
     } else if (!condition) {
       LOG(WARNING)
-          << "Replacement with cuDF operator failed. Falling back to CPU execution";
+          << "Replacement of " << oper->toString()
+          << " with cuDF operator failed. Falling back to CPU execution";
     }
 
     if (not replaceOp.empty()) {
