@@ -49,6 +49,10 @@ class VectorWriterBase {
   }
   virtual void commit(bool isSet) = 0;
   virtual void ensureSize(vector_size_t size) = 0;
+  // Resizes the vector to exactly the specified size. Unlike ensureSize(),
+  // this can shrink the vector. Implementations should update internal
+  // pointers after resize to ensure they remain valid.
+  virtual void resizeTo(vector_size_t size) = 0;
   virtual void finish() {}
   // Implementations that write variable length data or complex types should
   // override this to reset their state and that of their children.
@@ -789,6 +793,7 @@ class MapWriter {
     auto index = indexOfLast();
     if constexpr (!requires_commit<K>) {
       VELOX_DCHECK(provide_std_interface<K>);
+      keysVector_->setNull(index, false);
       return keysWriter_->data_[index];
     } else {
       keyNeedsCommit_ = true;
