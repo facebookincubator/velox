@@ -386,12 +386,12 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (!allowCpuFallback) {
       VELOX_CHECK(
           condition,
-          "Replacement of {} with cuDF operator failed",
+          "Replacement with cuDF operator failed. Falling back to CPU execution for operator: {}",
           oper->toString());
     } else if (!condition) {
       LOG(WARNING)
-          << "Replacement of " << oper->toString()
-          << " with cuDF operator failed. Falling back to CPU execution";
+          << "Replacement with cuDF operator failed. Falling back to CPU execution for operator:"
+          << oper->toString();
     }
 
     if (not replaceOp.empty()) {
