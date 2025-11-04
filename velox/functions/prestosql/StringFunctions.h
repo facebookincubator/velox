@@ -715,10 +715,6 @@ struct LongestCommonPrefixFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& left,
       const arg_type<Varchar>& right) {
-    // Validate both strings are valid UTF-8.
-    stringImpl::stringToCodePoints(left);
-    stringImpl::stringToCodePoints(right);
-
     if constexpr (isAscii) {
       // Fast path for ASCII: simple byte comparison.
       const char* leftData = left.data();
@@ -737,13 +733,20 @@ struct LongestCommonPrefixFunction {
         result.setNoCopy(StringView(leftData, commonLength));
       }
     } else {
-      // Unicode path: lazy codepoint iteration.
+      // Unicode path: Compare code points lazily while validating UTF-8.
+      // Matches Presto Java's approach: single pass comparing code points
+      // and tracking byte position.
+
+      // First validate UTF-8 for both strings (throws on invalid UTF-8).
+      stringImpl::stringToCodePoints(left);
+      stringImpl::stringToCodePoints(right);
+
       const char* leftData = left.data();
       const char* rightData = right.data();
-      int64_t leftPos = 0;
-      int64_t rightPos = 0;
-      int64_t leftLength = left.size();
-      int64_t rightLength = right.size();
+      size_t leftPos = 0;
+      size_t rightPos = 0;
+      size_t leftLength = left.size();
+      size_t rightLength = right.size();
 
       while (leftPos < leftLength && rightPos < rightLength) {
         int leftSize = 0;
