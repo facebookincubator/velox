@@ -19,7 +19,6 @@ add_library(
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
-  Helpers.cu
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
@@ -32,7 +31,7 @@ add_library(
 
 target_link_libraries(
   velox_cudf_exec
-  PUBLIC cudf::cudf cuco::cuco
+  PUBLIC cudf::cudf
   PRIVATE
     arrow
     velox_arrow_bridge
@@ -44,19 +43,4 @@ target_link_libraries(
     velox_cudf_expression
 )
 
-target_compile_options(
-  velox_cudf_exec
-  PRIVATE
-    -Wno-missing-field-initializers
-    $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda
-    --expt-relaxed-constexpr>
-)
-
-set_target_properties(
-  velox_cudf_exec
-  PROPERTIES
-    CUDA_STANDARD 20
-    POSITION_INDEPENDENT_CODE ON
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-)
+target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
