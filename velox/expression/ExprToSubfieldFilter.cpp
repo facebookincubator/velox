@@ -112,13 +112,11 @@ toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
   return values;
 }
 
-static std::shared_ptr<ExprToSubfieldFilterParser> defaultParser =
-    std::make_shared<PrestoExprToSubfieldFilterParser>();
-
 } // namespace
 
-std::function<std::shared_ptr<ExprToSubfieldFilterParser>()>
-    ExprToSubfieldFilterParser::parserFactory_ = [] { return defaultParser; };
+std::shared_ptr<ExprToSubfieldFilterParser>
+    ExprToSubfieldFilterParser::parser_ =
+        std::make_shared<PrestoExprToSubfieldFilterParser>();
 
 bool ExprToSubfieldFilterParser::toSubfield(
     const core::ITypedExpr* field,
