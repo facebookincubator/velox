@@ -79,7 +79,7 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
-  // Distribute each row to the corresponding sub partition.
+  // Divide input rows to the corresponding sub partitions.
   std::unique_ptr<HashPartitionFunction> subPartitioningFunction_;
 
   // WindowBuilds for each sub partition.
@@ -87,7 +87,7 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
 
   bool spilled_{false};
 
-  // Buffers the subPartitionIds for each row. Reused across addInput callings.
+  // Buffers the subPartitionIds for each row. Reused across addInput calls.
   std::vector<uint32_t> subPartitionIdsBuffer_;
 
   int32_t currentSubPartition_ = -1;

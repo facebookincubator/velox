@@ -87,7 +87,7 @@ void SortWindowBuild::addInput(RowVectorPtr input) {
 
 void SortWindowBuild::addDecodedInputRow(
     std::vector<DecodedVector>& decodedInputVectors,
-    size_t row) {
+    vector_size_t row) {
   char* newRow = data_->newRow();
 
   for (auto col = 0; col < inputChannels_.size(); ++col) {

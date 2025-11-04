@@ -48,7 +48,7 @@ class SortWindowBuild : public WindowBuild {
 
   void addDecodedInputRow(
       std::vector<DecodedVector>& decodedInputVectors,
-      size_t row);
+      vector_size_t row);
 
   void spill() override;
 
