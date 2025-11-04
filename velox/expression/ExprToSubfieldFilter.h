@@ -412,16 +412,19 @@ class ExprToSubfieldFilterParser {
  public:
   virtual ~ExprToSubfieldFilterParser() = default;
 
-  static std::shared_ptr<ExprToSubfieldFilterParser> getInstance() {
-    return parserFactory_();
+  /// Returns a parser provided to an earlier 'registerParser' call. Not thread
+  /// safe.
+  static const std::shared_ptr<ExprToSubfieldFilterParser>& getInstance() {
+    VELOX_CHECK_NOT_NULL(parser_, "Parser is not registered");
+    return parser_;
   }
 
-  /// Registers a custom parser factory. The factory is called to create a
-  /// parser instance.
-  static void registerParserFactory(
-      std::function<std::shared_ptr<ExprToSubfieldFilterParser>()>
-          parserFactory) {
-    parserFactory_ = std::move(parserFactory);
+  /// Registers a parser. Silently overwrites previously registered parser if
+  /// any. Not thread safe.
+  static void registerParser(
+      std::shared_ptr<ExprToSubfieldFilterParser> parser) {
+    VELOX_CHECK_NOT_NULL(parser);
+    parser_ = std::move(parser);
   }
 
   /// Converts a leaf call expression (no conjunction like AND/OR) to subfield
@@ -485,9 +488,8 @@ class ExprToSubfieldFilterParser {
       bool negated);
 
  private:
-  // Factory method to create a parser instance.
-  static std::function<std::shared_ptr<ExprToSubfieldFilterParser>()>
-      parserFactory_;
+  // Singleton parser instance.
+  static std::shared_ptr<ExprToSubfieldFilterParser> parser_;
 };
 
 // Parser for Presto expressions.

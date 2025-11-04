@@ -30,6 +30,7 @@
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
+#include <cudf/replace.hpp>
 #include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
@@ -444,6 +445,67 @@ class SubstrFunction : public CudfFunction {
   std::unique_ptr<cudf::numeric_scalar<cudf::size_type>> stepScalar_;
 };
 
+class CoalesceFunction : public CudfFunction {
+ public:
+  CoalesceFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+
+    // Storing the first literal that appears in inputs because we don't need to
+    // process after that. This is the last fallback.
+    numColumnsBeforeLiteral_ = expr->inputs().size();
+    for (size_t i = 0; i < expr->inputs().size(); ++i) {
+      const auto& input = expr->inputs()[i];
+      if (auto c =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+        if (!c->value()->isNullAt(0)) {
+          literalScalar_ = makeScalarFromConstantExpr(c);
+          numColumnsBeforeLiteral_ = i;
+          break;
+        }
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // Coalesce is practically a cudf::replace_nulls over multiple columns.
+    // Starting from first column, we keep calling replace nulls with
+    // subsequent cols until we get an all valid col or run out of columns
+
+    // If a literal comes before any column input, fill the result with it.
+    if (literalScalar_ && numColumnsBeforeLiteral_ == 0) {
+      if (inputColumns.empty()) {
+        // We need at least one column to tell us the required output size
+        VELOX_NYI("coalesce with only literal inputs is not supported");
+      }
+      auto size = asView(inputColumns[0]).size();
+      return cudf::make_column_from_scalar(*literalScalar_, size, stream, mr);
+    }
+
+    VELOX_CHECK(
+        !inputColumns.empty(),
+        "coalesce requires at least one non-literal input");
+    ColumnOrView result = asView(inputColumns[0]);
+    size_t stop = std::min(numColumnsBeforeLiteral_, inputColumns.size());
+    for (size_t i = 1; i < stop && asView(result).has_nulls(); ++i) {
+      result = cudf::replace_nulls(
+          asView(result), asView(inputColumns[i]), stream, mr);
+    }
+
+    if (literalScalar_ && asView(result).has_nulls()) {
+      result = cudf::replace_nulls(asView(result), *literalScalar_, stream, mr);
+    }
+
+    return result;
+  }
+
+ private:
+  size_t numColumnsBeforeLiteral_;
+  std::unique_ptr<cudf::scalar> literalScalar_;
+};
+
 class HashFunction : public CudfFunction {
  public:
   HashFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -614,6 +676,12 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {prefix + "substr", prefix + "substring"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SubstrFunction>(expr);
+      });
+
+  registerCudfFunction(
+      "coalesce",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<CoalesceFunction>(expr);
       });
 
   registerCudfFunction(
