@@ -362,7 +362,6 @@ bool CompileState::compile(bool allowCpuFallback) {
           exec::StreamingAggregation,
           exec::Limit,
           exec::LocalPartition,
-          exec::LocalExchange,
           exec::FilterProject,
           exec::AssignUniqueId>(op);
     };
