@@ -46,17 +46,6 @@ class AggregateFunctionRegistryTest : public testing::Test {
     EXPECT_EQ(*intermediateType, *expectedIntermediateType);
   }
 
-  void testResolveCombined(
-      const std::string& name,
-      const std::vector<TypePtr>& argTypes,
-      const TypePtr& expectedFinalType,
-      const TypePtr& expectedIntermediateType) {
-    auto [finalType, intermediateType] =
-        resolveAggregateFunction(name, argTypes);
-    EXPECT_EQ(*finalType, *expectedFinalType);
-    EXPECT_EQ(*intermediateType, *expectedIntermediateType);
-  }
-
   void clearRegistry() {
     aggregateFunctions().withWLock(
         [](auto& aggregationFunctionMap) { aggregationFunctionMap.clear(); });
@@ -74,19 +63,6 @@ TEST_F(AggregateFunctionRegistryTest, basic) {
       ARRAY(BOOLEAN()),
       ARRAY(ARRAY(BOOLEAN())));
   testResolve("aggregate_func", {}, DATE(), DATE());
-}
-
-TEST_F(AggregateFunctionRegistryTest, combinedAPI) {
-  testResolveCombined(
-      "aggregate_func", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
-  testResolveCombined(
-      "aggregate_func", {DOUBLE(), DOUBLE()}, DOUBLE(), ARRAY(DOUBLE()));
-  testResolveCombined(
-      "aggregate_func",
-      {ARRAY(BOOLEAN()), ARRAY(BOOLEAN())},
-      ARRAY(BOOLEAN()),
-      ARRAY(ARRAY(BOOLEAN())));
-  testResolveCombined("aggregate_func", {}, DATE(), DATE());
 }
 
 TEST_F(AggregateFunctionRegistryTest, wrongFunctionName) {
@@ -107,28 +83,6 @@ TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
       "Aggregate function signature is not supported");
   VELOX_ASSERT_THROW(
       resolveResultType("aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
-      "Aggregate function signature is not supported");
-}
-
-TEST_F(AggregateFunctionRegistryTest, wrongFunctionNameCombinedAPI) {
-  VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func_nonexist", {BIGINT(), BIGINT()}),
-      "Aggregate function not registered: aggregate_func_nonexist");
-  VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func_nonexist", {}),
-      "Aggregate function not registered: aggregate_func_nonexist");
-}
-
-TEST_F(AggregateFunctionRegistryTest, wrongArgTypeCombinedAPI) {
-  VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func", {DOUBLE(), BIGINT()}),
-      "Aggregate function signature is not supported");
-  VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func", {BIGINT()}),
-      "Aggregate function signature is not supported");
-  VELOX_ASSERT_THROW(
-      resolveAggregateFunction(
-          "aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
       "Aggregate function signature is not supported");
 }
 

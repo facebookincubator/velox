@@ -25,7 +25,6 @@ add_library(
   CudfOrderBy.cpp
   CudfTopN.cpp
   DebugUtil.cpp
-  ExpressionEvaluator.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp
@@ -42,6 +41,7 @@ target_link_libraries(
     velox_cudf_vector
     velox_exec
     velox_cudf_hive_connector
+    velox_cudf_expression
 )
 
 target_compile_options(

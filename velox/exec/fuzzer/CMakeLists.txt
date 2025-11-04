@@ -35,7 +35,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_functions
   velox_presto_types
-  CURL::libcurl
+  cpr::cpr
   Boost::regex
   velox_presto_type_parser
   Folly::folly

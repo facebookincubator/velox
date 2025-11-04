@@ -310,7 +310,8 @@ TEST_F(JsonFunctionsTest, jsonParse) {
       R"([{"response":"[\"fusil a peinture\",\"�uD83E\\uDE2Dau bois\"]"}])");
 
   VELOX_ASSERT_THROW(
-      jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
+      jsonParse(R"({"k1":})"),
+      "The JSON element does not have the requested type");
   VELOX_ASSERT_THROW(
       jsonParse(R"({:"k1"})"), "The JSON document has an improper structure");
   // The exact exception message can change based on the simdjson version used.

@@ -26,7 +26,6 @@ target_link_libraries(
   Boost::date_time
   Boost::filesystem
   Boost::program_options
-  Boost::regex
   Boost::thread
   Boost::system
   GTest::gtest
