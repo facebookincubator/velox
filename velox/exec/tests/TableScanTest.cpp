@@ -6143,5 +6143,31 @@ TEST_F(TableScanTest, parallelUnitLoader) {
   ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
 }
 
+TEST_F(TableScanTest, allColumnHandles) {
+  auto data = makeVectors(1, 10, ROW({"a", "b"}, BIGINT()));
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  std::vector<HiveColumnHandlePtr> columnHandles = {
+      partitionKey("ds", VARCHAR()),
+      regularColumn("a", BIGINT()),
+      regularColumn("b", BIGINT()),
+  };
+  connector::ColumnHandleMap assignments = {{"x", columnHandles[1]}};
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+                   .partitionKey("ds", "2025-10-23")
+                   .build();
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({"x"}, {BIGINT()}))
+                  .assignments(assignments)
+                  .dataColumns(asRowType(data[0]->type()))
+                  .columnHandles(columnHandles)
+                  .remainingFilter("length(ds) + a % 2 > 0")
+                  .endTableScan()
+                  .planNode();
+  AssertQueryBuilder(plan).split(split).assertResults(
+      makeRowVector({data[0]->childAt(0)}));
+}
+
 } // namespace
 } // namespace facebook::velox::exec
