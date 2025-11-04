@@ -37,6 +37,9 @@ add_test(velox_hdfs_insert_test velox_hdfs_insert_test)
 
 target_link_libraries(
   velox_hdfs_insert_test
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_hdfs
   velox_exec_test_lib
   velox_exec
   GTest::gtest

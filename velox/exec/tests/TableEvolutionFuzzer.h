@@ -122,6 +122,7 @@ class TableEvolutionFuzzer {
       std::vector<Split> splits,
       const PushdownConfig& pushdownConfig,
       bool useFiltersAsNode,
+      bool insertProjectToBlockPushdown,
       const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys = {},
       const std::vector<int>& globallyCompatibleFlatmapColumns = {});

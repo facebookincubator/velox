@@ -102,7 +102,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
 
       EXPECT_EQ(
           FileUtils::makePartName(
-              extractPartitionKeyValues(
+              HivePartitionUtil::extractPartitionKeyValues(
                   makePartitionsVector(input, partitionChannels), 0),
               true),
           folly::join(
@@ -124,7 +124,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
 
     VELOX_ASSERT_THROW(
         FileUtils::makePartName(
-            extractPartitionKeyValues(
+            HivePartitionUtil::extractPartitionKeyValues(
                 makePartitionsVector(input, partitionChannels), 0),
             true),
         "Unsupported partition type: MAP");
@@ -155,7 +155,7 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
 
   for (auto i = 0; i < partitionColumnNames.size(); i++) {
     std::vector<column_index_t> partitionChannels = {(column_index_t)i};
-    auto partitionEntries = extractPartitionKeyValues(
+    auto partitionEntries = HivePartitionUtil::extractPartitionKeyValues(
         makePartitionsVector(input, partitionChannels), 0);
     EXPECT_EQ(1, partitionEntries.size());
     EXPECT_EQ(partitionColumnNames[i], partitionEntries[0].first);
@@ -195,7 +195,7 @@ TEST_F(HivePartitionUtilTest, timestampPartitionValueFormatting) {
   auto partitionsVector = makePartitionsVector(input, partitionChannels);
 
   for (size_t i = 0; i < timestamps.size(); i++) {
-    auto partitionEntries = extractPartitionKeyValues(
+    auto partitionEntries = HivePartitionUtil::extractPartitionKeyValues(
         partitionsVector, static_cast<vector_size_t>(i));
 
     EXPECT_EQ(1, partitionEntries.size());

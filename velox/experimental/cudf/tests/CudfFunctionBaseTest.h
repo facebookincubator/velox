@@ -16,6 +16,7 @@
 
 #pragma once
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -37,11 +38,11 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     auto cudfTable =
         velox::cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream);
     auto filterEvaluator =
-        ExpressionEvaluator({exprSet.exprs()[0]}, input->rowType());
+        createCudfExpression({exprSet.exprs()[0]}, input->rowType());
     auto inputColumns = cudfTable->release();
-    auto filterColumns = filterEvaluator.compute(
+    auto filterColumn = filterEvaluator->eval(
         inputColumns, stream, cudf::get_current_device_resource_ref());
-    auto filterColumnView = filterColumns[0]->view();
+    auto filterColumnView = asView(filterColumn);
     cudf::table_view resultTable({filterColumnView});
     auto result = velox::cudf_velox::with_arrow::toVeloxColumn(
         resultTable, pool_.get(), "", stream);
