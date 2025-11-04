@@ -405,9 +405,8 @@ std::unique_ptr<cudf::io::chunked_parquet_reader>
 CudfHiveDataSource::createSplitReader() {
   // Build source info for the chunked parquet reader
   auto sourceInfo = [&]() {
-    // Use file data source if we don't want to use the buffered input or if the
-    // file handle cache has a max size of 0
-    if (not cudfHiveConfig_->isUseBufferedInputSession(
+    // Use file data source if we don't want to use the BufferedInput source
+    if (not cudfHiveConfig_->useBufferedInputSession(
             connectorQueryCtx_->sessionProperties())) {
       LOG(INFO) << "Using file data source for CudfHiveDataSource";
       return cudf::io::source_info{split_->filePath};
@@ -430,8 +429,7 @@ CudfHiveDataSource::createSplitReader() {
     }
 
     // Here we keep adding new entries to CacheTTLController when new
-    // fileHandles
-    // are generated, if CacheTTLController was created. Creator of
+    // fileHandles are generated, if CacheTTLController was created. Creator of
     // CacheTTLController needs to make sure a size control strategy was
     // available such as removing aged out entries.
     if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
