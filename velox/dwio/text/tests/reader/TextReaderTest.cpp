@@ -1910,6 +1910,31 @@ INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(params),
     [](const auto& paramInfo) { return paramInfo.param.compression; });
 
+TEST_F(TextReaderTest, unsupportedCompressedKind) {
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  const std::string kBaseDir = "velox/dwio/text/tests/reader/";
+  std::vector paths = {
+      getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lz4"),
+      getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lzo"),
+      getDataFilePath(
+          kBaseDir, "examples/simple_types_compressed_file.snappy")};
+  for (const auto& path : paths) {
+    auto readFile = std::make_shared<LocalReadFile>(path);
+    auto readerOptions = dwio::common::ReaderOptions(pool());
+    readerOptions.setFileSchema(type);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    EXPECT_THROW(
+        factory->createReader(std::move(input), readerOptions),
+        VeloxRuntimeError);
+  }
+}
+
 } // namespace
 
 } // namespace facebook::velox::text

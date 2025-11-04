@@ -3657,10 +3657,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
   // not.  Conjuncts have the nice property that they set throwOnError to
   // false and don't check if the result VectorPtr is nullptr.
   assertError(
-      "always_throws_vector_function(c0) AND true",
+      "always_throws_vector_function(c0) AND (c0 = 1)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
-      "Top-level Expression: and(always_throws_vector_function(c0), true:BOOLEAN)",
+      "Top-level Expression: and(always_throws_vector_function(c0), eq(cast((c0) as BIGINT), 1:BIGINT))",
       TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3669,10 +3669,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
       std::make_unique<NoOpVectorFunction>());
 
   assertError(
-      "no_op(c0) AND true",
+      "no_op(c0) AND (c0 = 2)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "no_op(c0)",
-      "Top-level Expression: and(no_op(c0), true:BOOLEAN)",
+      "Top-level Expression: and(no_op(c0), eq(cast((c0) as BIGINT), 2:BIGINT))",
       "Function neither returned results nor threw exception.");
 }
 

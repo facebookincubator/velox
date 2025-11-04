@@ -35,6 +35,9 @@ using folly::StringPiece;
 constexpr const char* kTextfileCompressionExtensionGzip = ".gz";
 constexpr const char* kTextfileCompressionExtensionDeflate = ".deflate";
 constexpr const char* kTextfileCompressionExtensionZst = ".zst";
+constexpr const char* kTextfileCompressionExtensionLz4 = ".lz4";
+constexpr const char* kTextfileCompressionExtensionLzo = ".lzo";
+constexpr const char* kTextfileCompressionExtensionSnappy = ".snappy";
 
 static std::string emptyString = std::string();
 
@@ -101,6 +104,11 @@ void setCompressionSettings(
     const std::string& filename,
     CompressionKind& kind,
     dwio::common::compression::CompressionOptions& compressionOptions) {
+  if (endsWith(filename, kTextfileCompressionExtensionLz4) ||
+      endsWith(filename, kTextfileCompressionExtensionLzo) ||
+      endsWith(filename, kTextfileCompressionExtensionSnappy)) {
+    VELOX_FAIL("Unsupported compression extension for file: {}", filename);
+  }
   if (endsWith(filename, kTextfileCompressionExtensionGzip)) {
     kind = CompressionKind::CompressionKind_GZIP;
     compressionOptions.format.zlib.windowBits =
@@ -559,18 +567,6 @@ void TextRowReader::setValueFromString(
   }
 }
 
-uint8_t TextRowReader::getByte(DelimType& delim) {
-  setNone(delim);
-  auto v = getByteUnchecked(delim);
-  if (isNone(delim)) {
-    if (v == '\r') {
-      v = getByteUnchecked<true>(delim); // always returns '\n' in this case
-    }
-    delim = getDelimType(v);
-  }
-  return v;
-}
-
 uint8_t TextRowReader::getByteOptimized(DelimType& delim) {
   setNone(delim);
   auto v = getByteUncheckedOptimized(delim);
@@ -610,48 +606,6 @@ DelimType TextRowReader::getDelimType(uint8_t v) {
     }
   }
   return delim;
-}
-
-template <bool skipLF>
-char TextRowReader::getByteUnchecked(DelimType& delim) {
-  if (atEOL_) {
-    if (!skipLF) {
-      delim = DelimTypeEOR; // top level EOR
-    }
-    return '\n';
-  }
-
-  try {
-    char v;
-    if (!unreadData_.empty()) {
-      v = unreadData_[0];
-      unreadData_.erase(0, 1);
-    } else {
-      contents_->inputStream->readFully(&v, 1);
-    }
-    pos_++;
-
-    // only when previous char == '\r'
-    if (skipLF) {
-      if (v != '\n') {
-        pos_--;
-        return '\n';
-      }
-    } else {
-      atSOL_ = false;
-    }
-    return v;
-  } catch (EOFError&) {
-  } catch (std::runtime_error& e) {
-    if (std::string(e.what()).find("Short read of") != 0 && !skipLF) {
-      throw;
-    }
-  }
-  if (!skipLF) {
-    setEOF();
-    delim = DelimTypeEOR;
-  }
-  return '\n';
 }
 
 template <bool skipLF>
