@@ -114,6 +114,10 @@ class ConstantTypedExpr : public ITypedExpr {
     return BaseVector::createConstant(type(), value_, 1, pool);
   }
 
+  /// Returns value of boolean expression, std::nullopt for null booleans.
+  /// Throws an error if expression is not of boolean type.
+  std::optional<bool> toBool() const;
+
   const std::vector<TypedExprPtr>& inputs() const {
     static const std::vector<TypedExprPtr> kEmpty{};
     return kEmpty;
