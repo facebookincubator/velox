@@ -30,6 +30,7 @@
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
+#include <cudf/replace.hpp>
 #include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
