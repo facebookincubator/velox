@@ -1323,6 +1323,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     return exec::BlockingReason::kWaitForJoinBuild;
   }
   hashObject_ = std::move(hashObject);
+  buildStream_ = cudfJoinBridge->getBuildStream();
 
   // Lazy initialize matched flags only when build side is done
   if (joinNode_->isRightJoin()) {
