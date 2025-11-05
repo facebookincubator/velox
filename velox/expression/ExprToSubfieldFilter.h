@@ -513,14 +513,4 @@ class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
       bool negated = false) override;
 };
 
-// TODO Remove after updating Prestissimo and Axiom.
-[[deprecated("Use ExprToSubfieldFilterParser::toSubfieldFilter instead")]]
-inline std::pair<common::Subfield, std::unique_ptr<common::Filter>>
-toSubfieldFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator* evaluator) {
-  return ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
-      expr, evaluator);
-}
-
 } // namespace facebook::velox::exec
