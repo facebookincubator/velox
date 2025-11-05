@@ -39,7 +39,7 @@ class HiveDataSource : public DataSource {
       const connector::ConnectorTableHandlePtr& tableHandle,
       const connector::ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
