@@ -108,5 +108,5 @@ TEST_F(S3ReadTest, s3ReadTest) {
            kExpectedRows, [](auto row) { return row + 100; }),
        makeFlatVector<int64_t>(
            kExpectedRows, [](auto row) { return row + 1000; })});
-  assertEqualResults({expectedResults}, {copy});
+  facebook::velox::cudf_velox::assertEqualResults({expectedResults}, {copy});
 }
