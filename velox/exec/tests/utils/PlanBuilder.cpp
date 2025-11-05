@@ -211,7 +211,8 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
     auto filterExpr = core::Expressions::inferTypes(
         untypedExpr, parseType, planBuilder_.pool_);
     auto [subfield, subfieldFilter] =
-        exec::toSubfieldFilter(filterExpr, &evaluator);
+        exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
+            filterExpr, &evaluator);
 
     auto it = columnAliases_.find(subfield.toString());
     if (it != columnAliases_.end()) {
