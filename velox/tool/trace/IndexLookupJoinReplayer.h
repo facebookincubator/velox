@@ -38,6 +38,7 @@ class IndexLookupJoinReplayer : public OperatorReplayerBase {
             taskId,
             nodeId,
             operatorType,
+            "",
             driverIds,
             queryCapacity,
             executor) {}

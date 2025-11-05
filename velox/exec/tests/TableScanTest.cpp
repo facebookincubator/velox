@@ -4318,6 +4318,53 @@ TEST_F(TableScanTest, parallelPrepare) {
       .copyResults(pool_.get());
 }
 
+TEST_F(TableScanTest, parallelPrepareWithSubfieldFilters) {
+  // Test metadataFilter is correctly transferred during split prefetch.
+  constexpr int32_t kNumParallel = 100;
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(100, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(100, [](auto row) { return row * 2; }),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+
+  auto subfieldFilters = SubfieldFiltersBuilder()
+                             .add("c0", greaterThanOrEqual(10))
+                             .add("c1", lessThan(150))
+                             .build();
+
+  auto outputType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+  auto remainingFilter = parseExpr("c0 % 2 = 0", outputType);
+  auto tableHandle =
+      makeTableHandle(std::move(subfieldFilters), remainingFilter);
+  auto assignments = allRegularColumns(outputType);
+
+  auto plan = exec::test::PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(outputType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  std::vector<exec::Split> splits;
+  for (auto i = 0; i < kNumParallel; ++i) {
+    splits.push_back(makeHiveSplit(filePath->getPath()));
+  }
+
+  auto result = AssertQueryBuilder(plan)
+                    .config(
+                        core::QueryConfig::kMaxSplitPreloadPerDriver,
+                        std::to_string(kNumParallel))
+                    .splits(splits)
+                    .copyResults(pool_.get());
+
+  // Verify results: c0 >= 10 AND c1 < 150 AND c0 % 2 = 0
+  // So rows [10,12,14,...,74] = 33 rows per split
+  ASSERT_EQ(result->size(), 33 * kNumParallel);
+}
+
 TEST_F(TableScanTest, dictionaryMemo) {
   constexpr int kSize = 100;
   const char* baseStrings[] = {
