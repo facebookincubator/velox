@@ -505,6 +505,7 @@ void HiveDataSource::setFromDataSource(
   readerOutputType_ = std::move(source->readerOutputType_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
+  metadataFilter_ = std::move(source->metadataFilter_);
   splitReader_ = std::move(source->splitReader_);
   splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
   // New io will be accounted on the stats of 'source'. Add the existing
