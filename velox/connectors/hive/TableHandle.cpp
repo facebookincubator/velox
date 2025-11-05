@@ -112,7 +112,7 @@ HiveTableHandle::HiveTableHandle(
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::string>& tableParameters,
-    std::vector<HiveColumnHandlePtr> columnHandles)
+    std::vector<HiveColumnHandlePtr> filterColumnHandles)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
       filterPushdownEnabled_(filterPushdownEnabled),
@@ -120,7 +120,7 @@ HiveTableHandle::HiveTableHandle(
       remainingFilter_(remainingFilter),
       dataColumns_(dataColumns),
       tableParameters_(tableParameters),
-      columnHandles_(std::move(columnHandles)) {}
+      filterColumnHandles_(std::move(filterColumnHandles)) {}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;

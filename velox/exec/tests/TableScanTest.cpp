@@ -6190,25 +6190,22 @@ TEST_F(TableScanTest, parallelUnitLoader) {
   ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
 }
 
-TEST_F(TableScanTest, allColumnHandles) {
+TEST_F(TableScanTest, filterColumnHandles) {
   auto data = makeVectors(1, 10, ROW({"a", "b"}, BIGINT()));
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), data);
-  std::vector<HiveColumnHandlePtr> columnHandles = {
-      partitionKey("ds", VARCHAR()),
-      regularColumn("a", BIGINT()),
-      regularColumn("b", BIGINT()),
-  };
-  connector::ColumnHandleMap assignments = {{"x", columnHandles[1]}};
   auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
                    .partitionKey("ds", "2025-10-23")
                    .build();
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(ROW({"x"}, {BIGINT()}))
-                  .assignments(assignments)
+                  .assignments({{"x", regularColumn("a", BIGINT())}})
                   .dataColumns(asRowType(data[0]->type()))
-                  .columnHandles(columnHandles)
+                  .filterColumnHandles({
+                      partitionKey("ds", VARCHAR()),
+                      regularColumn("a", BIGINT()),
+                  })
                   .remainingFilter("length(ds) + a % 2 > 0")
                   .endTableScan()
                   .planNode();
