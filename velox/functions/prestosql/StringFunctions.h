@@ -683,4 +683,94 @@ struct XxHash64StringFunction {
   }
 };
 
+/// longest_common_prefix(string1, string2) → varchar
+/// Returns the longest common prefix between two strings.
+template <typename T>
+struct LongestCommonPrefixFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    doCall<false>(result, left, right);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    doCall<true>(result, left, right);
+  }
+
+ private:
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    if constexpr (isAscii) {
+      // Fast path for ASCII: simple byte comparison.
+      const char* leftData = left.data();
+      const char* rightData = right.data();
+      const size_t minLength = std::min(left.size(), right.size());
+
+      size_t commonLength = 0;
+      while (commonLength < minLength &&
+             leftData[commonLength] == rightData[commonLength]) {
+        commonLength++;
+      }
+
+      if (commonLength == 0) {
+        result.setEmpty();
+      } else {
+        result.setNoCopy(StringView(leftData, commonLength));
+      }
+    } else {
+      // Unicode path: Compare code points lazily while validating UTF-8.
+      // Matches Presto Java's approach: single pass comparing code points
+      // and tracking byte position.
+
+      // First validate UTF-8 for both strings (throws on invalid UTF-8).
+      stringImpl::stringToCodePoints(left);
+      stringImpl::stringToCodePoints(right);
+
+      const char* leftData = left.data();
+      const char* rightData = right.data();
+      size_t leftPos = 0;
+      size_t rightPos = 0;
+      size_t leftLength = left.size();
+      size_t rightLength = right.size();
+
+      while (leftPos < leftLength && rightPos < rightLength) {
+        int leftSize = 0;
+        int rightSize = 0;
+        auto codePointLeft = utf8proc_codepoint(
+            leftData + leftPos, leftData + leftLength, leftSize);
+        auto codePointRight = utf8proc_codepoint(
+            rightData + rightPos, rightData + rightLength, rightSize);
+
+        if (codePointLeft != codePointRight) {
+          break;
+        }
+
+        leftPos += leftSize;
+        rightPos += rightSize;
+      }
+
+      if (leftPos == 0) {
+        result.setEmpty();
+      } else {
+        result.setNoCopy(StringView(leftData, leftPos));
+      }
+    }
+  }
+};
+
 } // namespace facebook::velox::functions
