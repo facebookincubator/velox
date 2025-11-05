@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -42,6 +43,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     rng_.seed(123);
 
@@ -899,7 +901,13 @@ TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   testMixedLiteralProjection(vectors);
 }
 
-TEST_F(CudfFilterProjectTest, dereference) {
+// This test checks for CudfExpression's ability to handle nested field
+// references. However, to test this, we need to disable CPU fallback, otherwise
+// the test could pass by using CPU, having not exercised the CudfExpression at
+// all. But this test relies on row_constructor to construct the nested fields,
+// which CudfExpression doesn't support. Disabling this until we have a better
+// test
+TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
   auto vectors = makeVectors(rowType, 10, 100);
