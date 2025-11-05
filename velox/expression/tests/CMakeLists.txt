@@ -34,6 +34,7 @@ add_executable(
   FunctionCallToSpecialFormTest.cpp
   GenericViewTest.cpp
   GenericWriterTest.cpp
+  InRewriteTest.cpp
   Main.cpp
   MapViewTest.cpp
   MapWriterTest.cpp

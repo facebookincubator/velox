@@ -13,19 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "velox/core/Expressions.h"
 
 namespace facebook::velox::expression {
 
-inline constexpr const char* kAnd = "and";
-inline constexpr const char* kOr = "or";
-inline constexpr const char* kSwitch = "switch";
-inline constexpr const char* kIf = "if";
-inline constexpr const char* kIn = "in";
-inline constexpr const char* kCoalesce = "coalesce";
-inline constexpr const char* kCast = "cast";
-inline constexpr const char* kTryCast = "try_cast";
-inline constexpr const char* kTry = "try";
-inline constexpr const char* kRowConstructor = "row_constructor";
+class InRewrite {
+ public:
+  /// Rewrites IN special form function when the `value` being searched for is
+  /// constant and the IN-list is not constant. Returns `true` if `value` is in
+  /// the IN-list. Removes constant expressions from IN-list that are not equal
+  /// to `value`.
+  static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+
+  static void registerRewrite();
+};
 
 } // namespace facebook::velox::expression

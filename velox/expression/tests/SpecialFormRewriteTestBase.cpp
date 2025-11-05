@@ -34,20 +34,28 @@ void SpecialFormRewriteTestBase::TearDown() {
 }
 
 void SpecialFormRewriteTestBase::testRewrite(
+    const core::TypedExprPtr& expr,
+    const core::TypedExprPtr& expected,
+    const RowTypePtr& type) {
+  const auto rewritten =
+      expression::ExprRewriteRegistry::instance().rewrite(expr);
+  if (*rewritten != *expected) {
+    SCOPED_TRACE(fmt::format("Input: {}", expr->toString()));
+    SCOPED_TRACE(fmt::format("Rewritten: {}", rewritten->toString()));
+    SCOPED_TRACE(fmt::format("Expected: {}", expected->toString()));
+  }
+
+  ASSERT_TRUE(*rewritten == *expected);
+}
+
+void SpecialFormRewriteTestBase::testRewrite(
     const std::string& expr,
     const std::string& expected,
     const RowTypePtr& type) {
   const auto typedExpr = makeTypedExpr(expr, type);
-  const auto rewritten =
-      expression::ExprRewriteRegistry::instance().rewrite(typedExpr);
   const auto expectedExpr = makeTypedExpr(expected, type);
-  if (*rewritten != *expectedExpr) {
-    SCOPED_TRACE(fmt::format("Input: {}", typedExpr->toString()));
-    SCOPED_TRACE(fmt::format("Rewritten: {}", rewritten->toString()));
-    SCOPED_TRACE(fmt::format("Expected: {}", expectedExpr->toString()));
-  }
 
-  ASSERT_TRUE(*rewritten == *expectedExpr);
+  testRewrite(typedExpr, expectedExpr, type);
 }
 
 } // namespace facebook::velox::expression::test

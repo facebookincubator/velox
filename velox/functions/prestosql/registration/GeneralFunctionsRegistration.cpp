@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/InRewrite.h"
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
@@ -73,12 +74,14 @@ extern void registerElementAtFunction(
 // Special form functions don't have any prefix.
 void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, expression::kIn);
   registerFunction<
       GenericInPredicateFunction,
       bool,
       Generic<T1>,
-      Variadic<Generic<T1>>>({"in"});
+      Variadic<Generic<T1>>>({expression::kIn});
+  expression::InRewrite::registerRewrite();
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, expression::kRowConstructor);
   registerIsNullFunction("is_null");
 }
