@@ -260,7 +260,7 @@ jobs:
 
       - name: Upload Signature Artifacts
         if: ${{ github.event_name != 'schedule' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -286,91 +286,91 @@ jobs:
           key: function-signatures-${{ github.sha }}
 
       - name: Upload presto fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto
           path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload spark expression fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: spark_expression_fuzzer
           path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload spark aggregation fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: spark_aggregation_fuzzer
           path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload aggregation fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: aggregation
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload join fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: join
           path: velox/_build/debug/velox/exec/fuzzer/velox_join_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload exchange fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: exchange
           path: velox/_build/debug//velox/exec/fuzzer/velox_exchange_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload window fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: window
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload cache fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: cache_fuzzer
           path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload table evolution fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: table_evolution_fuzzer
           path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload memory arbitration fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: memory_arbitration_fuzzer
           path: velox/_build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload row number fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload topn row number fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: topn_row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_topn_row_number_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload writer fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: writer
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_writer_fuzzer_test
@@ -445,7 +445,7 @@ jobs:
 
       - name: Archive production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-fuzzer-failure-artifacts
           path: |
@@ -515,7 +515,7 @@ jobs:
 
       - name: Archive expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-sot-fuzzer-failure-artifacts
           path: |
@@ -571,7 +571,7 @@ jobs:
 
       - name: Archive Presto Bias expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-bias-fuzzer-failure-artifacts
           path: |
@@ -612,7 +612,7 @@ jobs:
 
       - name: Archive Spark aggregate production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: spark-agg-fuzzer-failure-artifacts
           path: |
@@ -659,7 +659,7 @@ jobs:
 
       - name: Archive Spark expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: spark-fuzzer-failure-artifacts
           path: |
@@ -705,7 +705,7 @@ jobs:
 
       - name: Archive Spark expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: spark-fuzzer-failure-artifacts
           path: |
@@ -766,7 +766,7 @@ jobs:
 
       - name: Archive join production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-sot-join-fuzzer-failure-artifacts
           path: |
@@ -805,7 +805,7 @@ jobs:
 
       - name: Archive Exchange production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: exchange-fuzzer-failure-artifacts
           path: |
@@ -867,7 +867,7 @@ jobs:
 
       - name: Archive row number production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: row-fuzzer-failure-artifacts
           path: |
@@ -930,7 +930,7 @@ jobs:
 
       - name: Archive topn row number production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: topn-row-fuzzer-failure-artifacts
           path: |
@@ -966,7 +966,7 @@ jobs:
 
       - name: Archive Cache production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: cache-fuzzer-logs
           path: |
@@ -1000,7 +1000,7 @@ jobs:
 
       - name: Archive table evolution production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: table-evolution-fuzzer-test-logs
           path: |
@@ -1034,7 +1034,7 @@ jobs:
 
       - name: Archive memory arbitration production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: memory-arbitration-fuzzer-test-logs
           path: |
@@ -1096,7 +1096,7 @@ jobs:
 
       - name: Archive aggregate production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-sot-aggregate-fuzzer-failure-artifacts
           path: |
@@ -1186,7 +1186,7 @@ jobs:
           && echo -e "\n\nPresto Fuzzer run finished successfully."
       - name: Archive Presto only-bias-function expression fuzzer production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-only-bias-function-fuzzer-failure-artifacts
           path: |
@@ -1260,7 +1260,7 @@ jobs:
 
       - name: Archive bias aggregate production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-bias-sot-aggregate-fuzzer-failure-artifacts
           path: |
@@ -1348,7 +1348,7 @@ jobs:
 
       - name: Archive window production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-sot-window-fuzzer-failure-artifacts
           path: |
@@ -1414,7 +1414,7 @@ jobs:
 
       - name: Archive writer production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: presto-sot-writer-fuzzer-failure-artifacts
           path: |
