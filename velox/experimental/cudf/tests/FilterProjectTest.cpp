@@ -393,6 +393,26 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c2 = 'test_value' AS result FROM tmp");
   }
 
+  void testStringLowerOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR lower
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"LOWER(c2) = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT LOWER(c2) = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringUpperOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR upper
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"UPPER(c2) = 'TEST_VALUE' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT UPPER(c2) = 'TEST_VALUE' AS result FROM tmp");
+  }
+
   void testMixedLiteralProjection(const std::vector<RowVectorPtr>& input) {
     // Test mixing standalone literals with expressions containing literals
     auto plan = PlanBuilder()
@@ -853,6 +873,22 @@ TEST_F(CudfFilterProjectTest, stringLiteralInComparison) {
   createDuckDbTable(vectors);
 
   testStringLiteralInComparison(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringLowerOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLowerOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringUpperOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringUpperOperation(vectors);
 }
 
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
