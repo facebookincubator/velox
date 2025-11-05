@@ -357,7 +357,7 @@ uint32_t PrefixSort::maxRequiredBytes() const {
       2 * pool_->alignment();
 }
 
-void PrefixSort::sortInternal(
+bool PrefixSort::sortInternal(
     std::vector<char*, memory::StlAllocator<char*>>& rows) {
   const auto numRows = rows.size();
   const auto entrySize = sortLayout_.entrySize;
@@ -366,6 +366,9 @@ void PrefixSort::sortInternal(
   {
     const auto numPages =
         memory::AllocationTraits::numPages(numRows * entrySize);
+    if (!pool_->maybeReserve(memory::AllocationTraits::pageBytes(numPages))) {
+      return false;
+    }
     pool_->allocateContiguous(numPages, prefixBufferAlloc);
   }
   char* prefixBuffer = prefixBufferAlloc.data<char>();
@@ -406,6 +409,8 @@ void PrefixSort::sortInternal(
   for (auto i = 0; i < rows.size(); ++i) {
     rows[i] = getRowAddrFromPrefixBuffer(prefixBuffer + i * entrySize);
   }
+
+  return true;
 }
 
 } // namespace facebook::velox::exec
