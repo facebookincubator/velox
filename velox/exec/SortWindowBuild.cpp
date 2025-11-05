@@ -76,13 +76,8 @@ void SortWindowBuild::addInput(RowVectorPtr input) {
 
   // Add all the rows into the RowContainer.
   for (auto row = 0; row < input->size(); ++row) {
-    char* newRow = data_->newRow();
-
-    for (auto col = 0; col < input->childrenSize(); ++col) {
-      data_->store(decodedInputVectors_[col], row, newRow, col);
-    }
+    addDecodedInputRow(decodedInputVectors_, row);
   }
-  numRows_ += input->size();
 }
 
 void SortWindowBuild::addDecodedInputRow(
