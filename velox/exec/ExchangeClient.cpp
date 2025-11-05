@@ -185,7 +185,7 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
                 RECORD_METRIC_VALUE(kMetricExchangeDataCount);
               }
 
-              bool pauseCurrentSource{false};
+              bool pauseCurrentSource = false;
               std::vector<RequestSpec> requestSpecs;
               std::shared_ptr<ExchangeSource> currentSource = spec.source;
               {
@@ -231,9 +231,6 @@ std::vector<ExchangeClient::RequestSpec>
 ExchangeClient::pickSourcesToRequestLocked() {
   if (closed_) {
     return {};
-  }
-  if (sources_.size() == 1) {
-    return pickupSingleSourceToRequestLocked();
   }
   std::vector<RequestSpec> requestSpecs;
   while (!emptySources_.empty()) {
@@ -283,42 +280,6 @@ ExchangeClient::pickSourcesToRequestLocked() {
     producingSources_.pop();
     totalPendingBytes_ += requestBytes;
   }
-  return requestSpecs;
-}
-
-std::vector<ExchangeClient::RequestSpec>
-ExchangeClient::pickupSingleSourceToRequestLocked() {
-  VELOX_CHECK_EQ(sources_.size(), 1);
-  VELOX_CHECK(!closed_);
-  if (emptySources_.empty() && producingSources_.empty()) {
-    return {};
-  }
-
-  VELOX_CHECK_EQ(totalPendingBytes_, 0);
-  VELOX_CHECK_LE(!!emptySources_.empty() + !!producingSources_.empty(), 1);
-  const auto requestBytes = maxQueuedBytes_ - queue_->totalBytes();
-  if (requestBytes <= 0) {
-    return {};
-  }
-  std::vector<RequestSpec> requestSpecs;
-  SCOPE_EXIT {
-    totalPendingBytes_ += requestBytes;
-  };
-  if (!emptySources_.empty()) {
-    VELOX_CHECK_EQ(emptySources_.size(), 1);
-    auto& source = emptySources_.front();
-    VELOX_CHECK(source->shouldRequestLocked());
-    requestSpecs.push_back({std::move(source), requestBytes});
-    emptySources_.pop();
-    return requestSpecs;
-  }
-
-  VELOX_CHECK_EQ(producingSources_.size(), 1);
-  auto& source = producingSources_.front().source;
-  VELOX_CHECK(source->shouldRequestLocked());
-  VELOX_CHECK(!producingSources_.front().remainingBytes.empty());
-  requestSpecs.push_back({std::move(source), requestBytes});
-  producingSources_.pop();
   return requestSpecs;
 }
 
