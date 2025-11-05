@@ -1137,4 +1137,101 @@ TEST_F(VectorFuzzerTest, qdigestTypeGeneration) {
     EXPECT_EQ(vector->size(), opts.vectorSize);
   }
 }
+
+TEST_F(VectorFuzzerTest, fuzzDataBehindNullsArray) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 100;
+  opts.nullRatio = 0;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Since data is randomly generated, we only verify that at least one of these
+  // rows has the expected modification.
+  const std::vector<vector_size_t> nullRows = {5, 10, 15, 25, 50, 66};
+
+  auto createAndVerifyVectors =
+      [&](TypePtr type,
+          VectorEncoding::Simple encoding) -> std::pair<VectorPtr, VectorPtr> {
+    VectorPtr vector;
+    if (encoding == VectorEncoding::Simple::CONSTANT) {
+      vector = BaseVector::createNullConstant(type, opts.vectorSize, pool());
+    } else {
+      vector = fuzzer.fuzzFlat(type, opts.vectorSize);
+      if (encoding == VectorEncoding::Simple::DICTIONARY) {
+        vector = fuzzer.fuzzDictionary(vector, opts.vectorSize);
+      }
+      for (auto row : nullRows) {
+        vector->setNull(row, true);
+      }
+    }
+
+    auto copy = vector->testingCopyPreserveEncodings(pool());
+    fuzzer.fuzzDataBehindNulls(vector);
+    EXPECT_EQ(vector->size(), copy->size());
+    for (auto i = 0; i < vector->size(); i++) {
+      EXPECT_TRUE(copy->equalValueAt(vector.get(), i, i))
+          << "at " << i << ": expected " << copy->toString(i) << ", but got "
+          << vector->toString(i);
+    }
+    return {vector, copy};
+  };
+
+  // Test array vector.
+  for (auto& type :
+       std::vector<TypePtr>({ARRAY(BIGINT()), MAP(BIGINT(), BIGINT())})) {
+    auto [fuzzed, original] = createAndVerifyVectors(
+        type,
+        type->isMap() ? VectorEncoding::Simple::MAP
+                      : VectorEncoding::Simple::ARRAY);
+    auto fuzzedArrayBase = fuzzed->as<ArrayVectorBase>();
+    auto originalArrayBase = original->as<ArrayVectorBase>();
+    bool modified = false;
+    for (auto i : nullRows) {
+      if (fuzzedArrayBase->rawOffsets()[i] !=
+              originalArrayBase->rawOffsets()[i] ||
+          fuzzedArrayBase->rawSizes()[i] != originalArrayBase->rawSizes()[i]) {
+        modified = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(modified);
+  }
+
+  // Test Primitive vector
+  auto [fuzzed, original] =
+      createAndVerifyVectors(BIGINT(), VectorEncoding::Simple::FLAT);
+  auto fuzzedValues = fuzzed->asFlatVector<int64_t>()->values()->as<int64_t>();
+  auto originalValues =
+      original->asFlatVector<int64_t>()->values()->as<int64_t>();
+  bool modified = false;
+  for (auto i : nullRows) {
+    if (fuzzedValues[i] != originalValues[i]) {
+      modified = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(modified);
+
+  // Test Dictionary vector
+  std::tie(fuzzed, original) =
+      createAndVerifyVectors(BIGINT(), VectorEncoding::Simple::DICTIONARY);
+  auto fuzzedDict = fuzzed->as<DictionaryVector<int64_t>>();
+  auto originalDict = original->as<DictionaryVector<int64_t>>();
+  modified = false;
+  for (auto i : nullRows) {
+    if (fuzzedDict->indices()->as<vector_size_t>()[i] !=
+        originalDict->indices()->as<vector_size_t>()[i]) {
+      modified = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(modified);
+
+  // Test cases that are not modified by the fuzzer.
+  // Test Constant vector
+  createAndVerifyVectors(BIGINT(), VectorEncoding::Simple::CONSTANT);
+  // Test Row vector
+  createAndVerifyVectors(
+      ROW({BIGINT(), BIGINT()}), VectorEncoding::Simple::FLAT);
+}
+
 } // namespace
