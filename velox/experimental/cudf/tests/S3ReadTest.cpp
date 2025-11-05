@@ -46,7 +46,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     // Register cudf to enable the CudfDatasource creation from
     // CudfHiveConnector
     facebook::velox::cudf_velox::registerCudf();
-    facebook::velox::filesystems::registerS3FileSystem();
+    filesystems::registerS3FileSystem();
 
     // Register Hive connector
     facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
@@ -57,7 +57,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
   }
 
   void TearDown() override {
-    facebook::velox::filesystems::finalizeS3FileSystem();
+    filesystems::finalizeS3FileSystem();
     facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
     S3Test::TearDown();
   }
@@ -94,7 +94,7 @@ TEST_F(S3ReadTest, s3ReadTest) {
                   .endTableScan()
                   .planNode();
   auto split = facebook::velox::connector::hive::HiveConnectorSplitBuilder(
-                   s3URI(bucketName, "int.parquet"))
+                   filesystems::s3URI(bucketName, "int.parquet"))
                    .connectorId(kCudfHiveConnectorId)
                    .fileFormat(dwio::common::FileFormat::PARQUET)
                    .build();
@@ -108,5 +108,5 @@ TEST_F(S3ReadTest, s3ReadTest) {
            kExpectedRows, [](auto row) { return row + 100; }),
        makeFlatVector<int64_t>(
            kExpectedRows, [](auto row) { return row + 1000; })});
-  facebook::velox::cudf_velox::assertEqualResults({expectedResults}, {copy});
+  assertEqualResults({expectedResults}, {copy});
 }
