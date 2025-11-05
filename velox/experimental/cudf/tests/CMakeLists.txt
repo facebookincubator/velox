@@ -236,7 +236,6 @@ target_link_libraries(
   gtest_main
 )
 
-
 target_link_libraries(
   velox_cudf_subfield_filter_ast_test
   velox_cudf_exec
