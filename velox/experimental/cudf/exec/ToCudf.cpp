@@ -362,7 +362,6 @@ bool CompileState::compile(bool allowCpuFallback) {
           exec::StreamingAggregation,
           exec::Limit,
           exec::LocalPartition,
-          exec::LocalExchange,
           exec::FilterProject,
           exec::AssignUniqueId>(op);
     };
@@ -385,10 +384,14 @@ bool CompileState::compile(bool allowCpuFallback) {
       LOG(INFO) << "GPU operator condition = " << condition << std::endl;
     }
     if (!allowCpuFallback) {
-      VELOX_CHECK(condition, "Replacement with cuDF operator failed");
+      VELOX_CHECK(
+          condition,
+          "Replacement with cuDF operator failed. Falling back to CPU execution for operator: {}",
+          oper->toString());
     } else if (!condition) {
       LOG(WARNING)
-          << "Replacement with cuDF operator failed. Falling back to CPU execution";
+          << "Replacement with cuDF operator failed. Falling back to CPU execution for operator:"
+          << oper->toString();
     }
 
     if (not replaceOp.empty()) {

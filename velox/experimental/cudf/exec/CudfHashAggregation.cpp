@@ -32,6 +32,8 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <glog/logging.h>
+
 namespace {
 
 using namespace facebook::velox;
@@ -443,6 +445,7 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     return std::make_unique<MeanAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
   } else {
+    LOG(WARNING) << "cuDF hash aggregation not supported: " << kind;
     VELOX_NYI("Aggregation not yet supported");
   }
 }
