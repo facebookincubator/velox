@@ -96,6 +96,8 @@ class ParallelUnitLoader : public UnitLoader {
       NanosecondTimer timer{&unitLoadNanos};
       futures_[unit].wait();
     } catch (const std::exception& e) {
+      LOG(ERROR) << "Driver thread caught exception from I/O thread for unit "
+                 << unit << ": " << e.what();
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
     }
     waitForUnitReadyNanos_ += unitLoadNanos;
@@ -138,8 +140,19 @@ class ParallelUnitLoader : public UnitLoader {
     VELOX_CHECK_LT(unitIndex, loadUnits_.size(), "Unit index out of bounds");
     VELOX_CHECK_NOT_NULL(ioExecutor_, "ParallelUnitLoader ioExecutor is null");
 
-    futures_[unitIndex] = folly::via(
-        ioExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
+    futures_[unitIndex] = folly::via(ioExecutor_, [this, unitIndex]() {
+      try {
+        loadUnits_[unitIndex]->load();
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "I/O thread crashed while loading unit " << unitIndex
+                   << ": " << e.what();
+        throw; // Re-throw to fail the future
+      } catch (...) {
+        LOG(ERROR) << "I/O thread crashed while loading unit " << unitIndex
+                   << " with unknown exception";
+        throw;
+      }
+    });
     unitsLoaded_[unitIndex] = true;
   }
 
