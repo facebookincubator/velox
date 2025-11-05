@@ -227,8 +227,8 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "cudfProject Output: " << size << " rows, " << numColumns
-              << " columns " << std::endl;
+    VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
+            << " columns " << std::endl;
   }
 
   auto cudfOutput = std::make_shared<CudfVector>(

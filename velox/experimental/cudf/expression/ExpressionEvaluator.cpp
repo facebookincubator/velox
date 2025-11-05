@@ -666,11 +666,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "upper",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<UpperFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("varchar")
-           .argumentType("varchar")
-           .build()});
+      });
 
   registerCudfFunction(
       prefix + "like",

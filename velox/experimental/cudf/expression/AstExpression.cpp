@@ -157,7 +157,9 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
   return merged;
 }();
 
-const std::map<std::string, Op> unaryOps = {{"not", Op::NOT}};
+const std::map<std::string, Op> unaryOps = {
+    {"not", Op::NOT},
+    {"is_null", Op::IS_NULL}};
 
 const std::unordered_set<std::string> astSupportedOps =
     {"literal", "between", "in", "cast", "switch", "if"};

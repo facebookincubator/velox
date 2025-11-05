@@ -352,7 +352,7 @@ bool CompileState::compile(bool allowCpuFallback) {
                 << ", keepOperator = " << keepOperator
                 << ", replaceOp.size() = " << replaceOp.size() << "\n";
     }
-    auto GpuReplacedOperator = [](const exec::Operator* op) {
+    auto isGpuReplaceableOperator = [](const exec::Operator* op) {
       return isAnyOf<
           exec::OrderBy,
           exec::TopN,
@@ -365,21 +365,25 @@ bool CompileState::compile(bool allowCpuFallback) {
           exec::FilterProject,
           exec::AssignUniqueId>(op);
     };
-    auto GpuRetainedOperator =
+    auto isGpuAgnosticOperator =
         [isTableScanSupported](const exec::Operator* op) {
-          return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(
-                     op) ||
+          return isAnyOf<
+                     exec::Values,
+                     exec::LocalPartition,
+                     exec::LocalExchange,
+                     exec::CallbackSink>(op) ||
               (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
         };
     // If GPU operator is supported, then replaceOp should be non-empty and
     // the operator should not be retained Else the velox operator is retained
     // as-is
-    auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
+    auto condition = (isGpuReplaceableOperator(oper) && !replaceOp.empty() &&
                       keepOperator == 0) ||
-        (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
+        (isGpuAgnosticOperator(oper) && replaceOp.empty() && keepOperator == 1);
     if (CudfConfig::getInstance().debugEnabled) {
-      LOG(INFO) << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
-                << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
+      LOG(INFO) << "isGpuReplaceableOperator = "
+                << isGpuReplaceableOperator(oper)
+                << ", isGpuAgnosticOperator = " << isGpuAgnosticOperator(oper)
                 << std::endl;
       LOG(INFO) << "GPU operator condition = " << condition << std::endl;
     }
@@ -392,6 +396,20 @@ bool CompileState::compile(bool allowCpuFallback) {
       LOG(WARNING)
           << "Replacement with cuDF operator failed. Falling back to CPU execution for operator:"
           << oper->toString();
+      if (CudfConfig::getInstance().debugEnabled) {
+        // print input types, output types
+        auto planNode = getPlanNode(oper->planNodeId());
+        LOG(INFO) << "Output type: " << planNode->outputType()->toString();
+        if (!planNode->sources().empty()) {
+          std::vector<std::string> inputTypes;
+          for (auto& source : planNode->sources()) {
+            inputTypes.push_back(source->outputType()->toString());
+          }
+          LOG(INFO) << "Input types: " << folly::join(", ", inputTypes);
+        } else {
+          LOG(INFO) << "Input types: <none - source operator>";
+        }
+      }
     }
 
     if (not replaceOp.empty()) {
