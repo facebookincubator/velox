@@ -227,13 +227,14 @@ target_link_libraries(
   velox_cudf_s3_read_test
   velox_cudf_exec_test_lib
   velox_cudf_hive_connector
+  velox_s3fs
   velox_exec
   velox_exec_test_lib
   velox_test_util
   gtest
   gtest_main
-  fmt::fmt
 )
+
 
 target_link_libraries(
   velox_cudf_subfield_filter_ast_test
