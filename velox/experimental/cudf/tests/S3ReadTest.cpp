@@ -31,8 +31,6 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
-using namespace facebook::velox::cudf_velox;
-using namespace facebook::velox::filesystems;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::cudf_velox::exec::test;
 namespace {
@@ -48,7 +46,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     // Register cudf to enable the CudfDatasource creation from
     // CudfHiveConnector
     facebook::velox::cudf_velox::registerCudf();
-    filesystems::registerS3FileSystem();
+    facebook::velox::filesystems::registerS3FileSystem();
 
     // Register Hive connector
     facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
@@ -59,7 +57,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
   }
 
   void TearDown() override {
-    filesystems::finalizeS3FileSystem();
+    facebook::velox::filesystems::finalizeS3FileSystem();
     facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
     S3Test::TearDown();
   }
