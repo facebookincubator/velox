@@ -74,6 +74,7 @@ add_executable(
   P4HyperLogLogCastTest.cpp
   SetDigestCastTest.cpp
   InPredicateTest.cpp
+  InRewriteTest.cpp
   IntegerFunctionsTest.cpp
   IPAddressCastTest.cpp
   IPPrefixCastTest.cpp
