@@ -116,7 +116,7 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
 
 // Disabled because this test segfaults in CI in compileExecExpr step which does
 // not use cudf code.
-TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedAst) {
+TEST_F(CudfExpressionSelectionTest, DISABLED_functionTopLevelWithNestedAst) {
   auto expr = compileExecExpr(
       "hash_with_seed(42, add(a, b))",
       rowType_,
@@ -127,7 +127,11 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedAst) {
   ASSERT_NE(functionExpr, nullptr);
 }
 
-TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsSplit) {
+// Disabled because this test segfaults in CI in compileExecExpr step which does
+// not use cudf code.
+TEST_F(
+    CudfExpressionSelectionTest,
+    DISABLED_signatureEnforcesConstantArgsSplit) {
   // OK: delimiter and limit are constants
   auto ok = compileExecExpr(
       "split(name, ',', 3)",
