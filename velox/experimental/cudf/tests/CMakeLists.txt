@@ -228,6 +228,7 @@ target_link_libraries(
   velox_cudf_exec_test_lib
   velox_cudf_hive_connector
   velox_s3fs
+  velox_file
   velox_exec
   velox_exec_test_lib
   velox_test_util
