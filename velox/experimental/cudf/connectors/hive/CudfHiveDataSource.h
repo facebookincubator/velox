@@ -23,11 +23,14 @@
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/io/Options.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
+#include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 
@@ -41,6 +44,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& columnHandles,
+      facebook::velox::FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
@@ -94,8 +98,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
       tableHandle_;
 
-  const std::shared_ptr<CudfHiveConfig> parquetConfig_;
-
+  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
+  facebook::velox::FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
@@ -103,6 +107,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   // cuDF CudfHive reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
+  std::unique_ptr<cudf::io::datasource> datasource_;
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
   rmm::cuda_stream_view stream_;
 
@@ -118,6 +123,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::vector<std::string> readColumnNames_;
 
   std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+
+  dwio::common::ReaderOptions baseReaderOpts_;
 
   size_t completedRows_{0};
   size_t completedBytes_{0};

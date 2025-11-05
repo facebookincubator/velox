@@ -28,6 +28,9 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -239,6 +242,45 @@ TEST_F(TableScanTest, allColumns) {
     auto splits = makeHiveConnectorSplits({filePath});
     testScanAllColumns(splits);
   }
+}
+
+TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, "c");
+
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+
+  const std::string duckDbSql = "SELECT * FROM tmp";
+
+  // Reset the CudfHiveConnector config to not buffered input data source
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseBufferedInput,
+       "false"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
+  auto splits = makeCudfHiveConnectorSplits({filePath});
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .splits(splits)
+                  .assertResults(duckDbSql);
+
+  // A quick sanity check for memory usage reporting. Check that peak
+  // total memory usage for the project node is > 0.
+  auto planStats = toPlanStats(task->taskStats());
+  auto scanNodeId = plan->id();
+  auto it = planStats.find(scanNodeId);
+  ASSERT_TRUE(it != planStats.end());
+  // TODO (dm): enable this test once we start to track gpu memory
+  // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+  //  Verifies there is no dynamic filter stats.
+  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+  // TODO: We are not writing any customStats yet so disable this check
+  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
