@@ -2302,7 +2302,7 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
       [&](const std::optional<std::string>& wkt,
           const std::optional<std::string>& expected) {
         std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(ST_Envelope(ST_GeometryFromText(c0)))", wkt);
+            "ST_AsText(st_envelope(ST_GeometryFromText(c0)))", wkt);
 
         if (expected.has_value()) {
           ASSERT_TRUE(result.has_value());
@@ -2314,7 +2314,6 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
 
   testStEnvelopeFunc(
       "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POLYGON ((1 2, 1 8, 4 8, 4 2, 1 2))");
-  testStEnvelopeFunc("LINESTRING EMPTY", "POLYGON EMPTY");
   testStEnvelopeFunc(
       "LINESTRING (1 1, 2 2, 1 3)", "POLYGON ((1 1, 1 3, 2 3, 2 1, 1 1))");
   testStEnvelopeFunc(
@@ -2330,6 +2329,17 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
   testStEnvelopeFunc(
       "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
       "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))");
+  testStEnvelopeFunc(
+      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2868119, 119.094024 -27.2871725)))",
+      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2846569, 119.094024 -27.2871725, 119.094024 -27.2871725))");
+
+  testStEnvelopeFunc("POLYGON EMPTY", "POLYGON EMPTY");
+  testStEnvelopeFunc("MULTIPOLYGON EMPTY", "POLYGON EMPTY");
+  testStEnvelopeFunc("GEOMETRYCOLLECTION EMPTY", "POLYGON EMPTY");
+  testStEnvelopeFunc("POINT EMPTY", "POLYGON EMPTY");
+  testStEnvelopeFunc("MULTIPOINT EMPTY", "POLYGON EMPTY");
+  testStEnvelopeFunc("LINESTRING EMPTY", "POLYGON EMPTY");
+  testStEnvelopeFunc("MULTILINESTRING EMPTY", "POLYGON EMPTY");
 }
 
 TEST_F(GeometryFunctionsTest, testStPoints) {
