@@ -171,7 +171,6 @@ HiveDataSource::HiveDataSource(
   auto remainingFilter = extractFiltersFromRemainingFilter(
       hiveTableHandle_->remainingFilter(),
       expressionEvaluator_,
-      false,
       filters_,
       sampleRate);
   if (sampleRate != 1) {
