@@ -5758,7 +5758,7 @@ TEST_F(TableScanTest, footerIOCount) {
           .assertResults(
               BaseVector::create<RowVector>(vector->type(), 0, pool()));
   auto stats = getTableScanRuntimeStats(task);
-  ASSERT_EQ(stats.at("numStorageRead").sum, 1);
+  ASSERT_EQ(stats.at("storageReadBytes").count, 1);
   ASSERT_GT(stats.at("footerBufferOverread").sum, 0);
 }
 
@@ -5849,7 +5849,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
       auto tableScanStats = getTableScanStats(task);
       ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 1);
       ASSERT_GT(tableScanStats.customStats["storageReadBytes"].sum, 0);
-      ASSERT_EQ(tableScanStats.customStats["storageReadBytes"].count, 1);
+      ASSERT_GT(tableScanStats.customStats["storageReadBytes"].count, 0);
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
 

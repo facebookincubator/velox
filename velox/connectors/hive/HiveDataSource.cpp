@@ -464,7 +464,11 @@ HiveDataSource::getRuntimeStats() {
       {{"numPrefetch", RuntimeMetric(ioStats_->prefetch().count())},
        {"prefetchBytes",
         RuntimeMetric(
-            ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->prefetch().sum(),
+            ioStats_->prefetch().count(),
+            ioStats_->prefetch().min(),
+            ioStats_->prefetch().max(),
+            RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeMetric(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterTime,
@@ -474,33 +478,44 @@ HiveDataSource::getRuntimeStats() {
        {"ioWaitWallNanos",
         RuntimeMetric(
             ioStats_->queryThreadIoLatency().sum() * 1000,
-            RuntimeCounter::Unit::kNanos)},
-       {"maxSingleIoWaitWallNanos",
-        RuntimeMetric(
+            ioStats_->queryThreadIoLatency().count(),
+            ioStats_->queryThreadIoLatency().min() * 1000,
             ioStats_->queryThreadIoLatency().max() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
         RuntimeMetric(
             ioStats_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
   if (ioStats_->read().count() > 0) {
-    res.insert({"numStorageRead", RuntimeMetric(ioStats_->read().count())});
     res.insert(
         {"storageReadBytes",
-         RuntimeMetric(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
+         RuntimeMetric(
+             ioStats_->read().sum(),
+             ioStats_->read().count(),
+             ioStats_->read().min(),
+             ioStats_->read().max(),
+             RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ssdRead().count() > 0) {
     res.insert({"numLocalRead", RuntimeMetric(ioStats_->ssdRead().count())});
     res.insert(
         {"localReadBytes",
          RuntimeMetric(
-             ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)});
+             ioStats_->ssdRead().sum(),
+             ioStats_->ssdRead().count(),
+             ioStats_->ssdRead().min(),
+             ioStats_->ssdRead().max(),
+             RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ramHit().count() > 0) {
     res.insert({"numRamRead", RuntimeMetric(ioStats_->ramHit().count())});
     res.insert(
         {"ramReadBytes",
          RuntimeMetric(
-             ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)});
+             ioStats_->ramHit().sum(),
+             ioStats_->ramHit().count(),
+             ioStats_->ramHit().min(),
+             ioStats_->ramHit().max(),
+             RuntimeCounter::Unit::kBytes)});
   }
   if (numBucketConversion_ > 0) {
     res.insert({"numBucketConversion", RuntimeMetric(numBucketConversion_)});
