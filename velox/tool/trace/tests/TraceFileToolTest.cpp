@@ -251,6 +251,7 @@ TEST_F(TraceFileToolTest, basic) {
                                      traceNodeId_,
                                      "HashJoin",
                                      "",
+                                     "",
                                      0,
                                      executor_.get())
                                      .run();

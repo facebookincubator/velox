@@ -211,7 +211,8 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
     auto filterExpr = core::Expressions::inferTypes(
         untypedExpr, parseType, planBuilder_.pool_);
     auto [subfield, subfieldFilter] =
-        exec::toSubfieldFilter(filterExpr, &evaluator);
+        exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
+            filterExpr, &evaluator);
 
     auto it = columnAliases_.find(subfield.toString());
     if (it != columnAliases_.end()) {
@@ -286,19 +287,17 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
   }
 
-  RowTypePtr parseType;
-  if (!columnHandles_.empty()) {
-    std::vector<std::string> names;
-    std::vector<TypePtr> types;
-    for (auto& handle : columnHandles_) {
-      names.push_back(handle->name());
-      types.push_back(handle->hiveType());
+  RowTypePtr parseType = dataColumns_ ? dataColumns_ : outputType_;
+  if (!filterColumnHandles_.empty()) {
+    auto names = parseType->names();
+    auto types = parseType->children();
+    for (auto& handle : filterColumnHandles_) {
+      if (!parseType->containsChild(handle->name())) {
+        names.push_back(handle->name());
+        types.push_back(handle->hiveType());
+      }
     }
     parseType = ROW(std::move(names), std::move(types));
-  } else if (dataColumns_) {
-    parseType = dataColumns_;
-  } else {
-    parseType = outputType_;
   }
 
   core::TypedExprPtr filterNodeExpr;
@@ -334,7 +333,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         remainingFilterExpr,
         dataColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        columnHandles_);
+        filterColumnHandles_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

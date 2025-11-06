@@ -16,6 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -663,6 +664,21 @@ TEST_F(PlanNodeSerdeTest, scan) {
                       {"a < 5", "b = 7", "c = true", "d > 0.01"},
                       "a + b < 100")
                   .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .startTableScan()
+             .outputType(ROW({"x"}, {BIGINT()}))
+             .assignments(
+                 {{"x", HiveConnectorTestBase::regularColumn("a", BIGINT())}})
+             .dataColumns(ROW({"a", "b"}, {BIGINT(), BIGINT()}))
+             .filterColumnHandles({
+                 HiveConnectorTestBase::partitionKey("ds", VARCHAR()),
+                 HiveConnectorTestBase::regularColumn("a", BIGINT()),
+             })
+             .remainingFilter("length(ds) + a % 2 > 0")
+             .endTableScan()
+             .planNode();
   testSerde(plan);
 }
 

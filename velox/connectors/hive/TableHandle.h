@@ -148,7 +148,7 @@ class HiveTableHandle : public ConnectorTableHandle {
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
       const std::unordered_map<std::string, std::string>& tableParameters = {},
-      std::vector<HiveColumnHandlePtr> columnHandles = {});
+      std::vector<HiveColumnHandlePtr> filterColumnHandles = {});
 
   const std::string& tableName() const {
     return tableName_;
@@ -191,12 +191,12 @@ class HiveTableHandle : public ConnectorTableHandle {
     return tableParameters_;
   }
 
-  /// Full schema including partitioning columns and data columns.  If this is
-  /// non-empty, it should be a superset of the column handles in data source
-  /// assignments parameter (the shared_ptrs should pointing to the exact same
-  /// objects).
-  const std::vector<HiveColumnHandlePtr> columnHandles() const {
-    return columnHandles_;
+  /// Extra columns that are used in filters and remaining filters, but not in
+  /// the output.  If there is overlap with data source assignments parameter,
+  /// the name and types should be the same (the required subfields are taken
+  /// from assignments).
+  const std::vector<HiveColumnHandlePtr> filterColumnHandles() const {
+    return filterColumnHandles_;
   }
 
   std::string toString() const override;
@@ -216,7 +216,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
-  const std::vector<HiveColumnHandlePtr> columnHandles_;
+  const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;

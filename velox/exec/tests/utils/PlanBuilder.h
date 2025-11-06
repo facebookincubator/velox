@@ -323,9 +323,9 @@ class PlanBuilder {
       return *this;
     }
 
-    TableScanBuilder& columnHandles(
-        std::vector<connector::hive::HiveColumnHandlePtr> columnHandles) {
-      columnHandles_ = std::move(columnHandles);
+    TableScanBuilder& filterColumnHandles(
+        std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles) {
+      filterColumnHandles_ = std::move(filterColumnHandles);
       return *this;
     }
 
@@ -354,7 +354,7 @@ class PlanBuilder {
     RowTypePtr outputType_;
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
-    std::vector<connector::hive::HiveColumnHandlePtr> columnHandles_;
+    std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
     connector::ColumnHandleMap assignments_;

@@ -361,10 +361,6 @@ betweenHugeint(int128_t min, int128_t max, bool nullAllowed = false) {
   return std::make_unique<common::HugeintRange>(min, max, nullAllowed);
 }
 
-std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator*);
-
 inline std::unique_ptr<common::TimestampRange> equal(
     const Timestamp& value,
     bool nullAllowed = false) {
@@ -406,8 +402,9 @@ inline std::unique_ptr<common::TimestampRange> greaterThanOrEqual(
       min, std::numeric_limits<Timestamp>::max(), nullAllowed);
 }
 
-/// Provides the instance and helper functions to convert a leaf call
-/// expression to subfield filter. Allows the registration of custom parser.
+/// Language-specific translator of generic expressions into subfield filters.
+/// Default language is Presto. A different language can be supported by
+/// registering language-specific implementation using 'registerParser' API.
 class ExprToSubfieldFilterParser {
  public:
   virtual ~ExprToSubfieldFilterParser() = default;
@@ -427,11 +424,30 @@ class ExprToSubfieldFilterParser {
     parser_ = std::move(parser);
   }
 
-  /// Converts a leaf call expression (no conjunction like AND/OR) to subfield
-  /// and filter. Return nullptr if not supported for pushdown. This is needed
-  /// because this conversion is frequently applied when extracting filters from
-  /// remaining filter in readers. Frequent throw clutters logs and slows down
-  /// execution.
+  /// Analyzes 'expr' to determine if it can be expressed as a subfield filter.
+  /// Returns a pair of subfield and filter if so. Otherwise, throws.
+  ///
+  /// Supports all expressions supported by leafCallToSubfieldFilter + negations
+  /// and disjunctions over same subfield.
+  ///  Examples:
+  ///    a = 1
+  ///    a = 1 OR a > 10
+  ///    not (a = 1)
+  ///
+  /// TODO Improve the API by returning std::optional instead of throwing.
+  virtual std::pair<common::Subfield, std::unique_ptr<common::Filter>>
+  toSubfieldFilter(
+      const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator*) = 0;
+
+  /// Analyzes 'call' expression to determine if it can be expressed as a
+  /// subfield filter. Returns the filter and sets 'subfield' output argument if
+  /// so. Otherwise, returns nullptr. If 'negated' is true, considers the
+  /// negation of 'call' expressions (not(call)). It is possible that 'call'
+  /// expression can be represented as subfield filter, but its negation cannot.
+  ///
+  /// TODO Make this and toSubfieldFilter APIs consistent. Both should not throw
+  /// and return std::optional pair of filter and subfield.
   virtual std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
       common::Subfield& subfield,
@@ -441,51 +457,57 @@ class ExprToSubfieldFilterParser {
  protected:
   // Converts an expression into a subfield. Returns false if the expression is
   // not a valid field expression.
-  bool toSubfield(const core::ITypedExpr* field, common::Subfield& subfield);
+  static bool toSubfield(
+      const core::ITypedExpr* field,
+      common::Subfield& subfield);
 
   // Creates a non-equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeNotEqualFilter(
+  static std::unique_ptr<common::Filter> makeNotEqualFilter(
       const core::TypedExprPtr& valueExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates an equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeEqualFilter(
+  static std::unique_ptr<common::Filter> makeEqualFilter(
       const core::TypedExprPtr& valueExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a greater-than subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeGreaterThanFilter(
+  static std::unique_ptr<common::Filter> makeGreaterThanFilter(
       const core::TypedExprPtr& lowerExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a less-than subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeLessThanFilter(
+  static std::unique_ptr<common::Filter> makeLessThanFilter(
       const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a less-than-or-equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
+  static std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
       const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates a greater-than-or-equal subfield filter against the given constant.
-  std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
+  static std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
       const core::TypedExprPtr& lowerExpr,
       core::ExpressionEvaluator* evaluator);
 
   // Creates an in subfield filter against the given vector.
-  std::unique_ptr<common::Filter> makeInFilter(
+  static std::unique_ptr<common::Filter> makeInFilter(
       const core::TypedExprPtr& expr,
       core::ExpressionEvaluator* evaluator,
       bool negated);
 
   // Creates a between subfield filter against the given lower and upper
   // bounds.
-  std::unique_ptr<common::Filter> makeBetweenFilter(
+  static std::unique_ptr<common::Filter> makeBetweenFilter(
       const core::TypedExprPtr& lowerExpr,
       const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator,
       bool negated);
+
+  static std::unique_ptr<common::Filter> makeOrFilter(
+      std::unique_ptr<common::Filter> a,
+      std::unique_ptr<common::Filter> b);
 
  private:
   // Singleton parser instance.
@@ -495,6 +517,10 @@ class ExprToSubfieldFilterParser {
 // Parser for Presto expressions.
 class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
  public:
+  std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
+      const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator* evaluator) override;
+
   std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
       common::Subfield& subfield,

@@ -112,7 +112,7 @@ HiveTableHandle::HiveTableHandle(
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::string>& tableParameters,
-    std::vector<HiveColumnHandlePtr> columnHandles)
+    std::vector<HiveColumnHandlePtr> filterColumnHandles)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
       filterPushdownEnabled_(filterPushdownEnabled),
@@ -120,7 +120,7 @@ HiveTableHandle::HiveTableHandle(
       remainingFilter_(remainingFilter),
       dataColumns_(dataColumns),
       tableParameters_(tableParameters),
-      columnHandles_(std::move(columnHandles)) {}
+      filterColumnHandles_(std::move(filterColumnHandles)) {}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
@@ -162,6 +162,19 @@ std::string HiveTableHandle::toString() const {
     }
     out << "]";
   }
+  if (!filterColumnHandles_.empty()) {
+    out << ", filter column handles: [";
+    bool first = true;
+    for (auto& handle : filterColumnHandles_) {
+      if (first) {
+        first = false;
+      } else {
+        out << ", ";
+      }
+      out << handle->toString();
+    }
+    out << "]";
+  }
   return out.str();
 }
 
@@ -190,6 +203,13 @@ folly::dynamic HiveTableHandle::serialize() const {
     tableParameters[param.first] = param.second;
   }
   obj["tableParameters"] = tableParameters;
+  if (!filterColumnHandles_.empty()) {
+    folly::dynamic filterColumnHandles = folly::dynamic::array;
+    for (const auto& handle : filterColumnHandles_) {
+      filterColumnHandles.push_back(handle->serialize());
+    }
+    obj["filterColumnHandles"] = filterColumnHandles;
+  }
 
   return obj;
 }
@@ -229,6 +249,14 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     tableParameters.emplace(key.asString(), value.asString());
   }
 
+  std::vector<HiveColumnHandlePtr> filterColumnHandles;
+  if (auto it = obj.find("filterColumnHandles"); it != obj.items().end()) {
+    for (const auto& handle : it->second) {
+      filterColumnHandles.push_back(
+          ISerializable::deserialize<HiveColumnHandle>(handle, context));
+    }
+  }
+
   return std::make_shared<const HiveTableHandle>(
       connectorId,
       tableName,
@@ -236,7 +264,8 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       std::move(subfieldFilters),
       remainingFilter,
       dataColumns,
-      tableParameters);
+      tableParameters,
+      std::move(filterColumnHandles));
 }
 
 void HiveTableHandle::registerSerDe() {

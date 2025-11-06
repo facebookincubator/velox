@@ -50,6 +50,19 @@ bool shouldEagerlyMaterialize(
   return false;
 }
 
+void checkColumnHandleConsistent(
+    const HiveColumnHandle& x,
+    const HiveColumnHandle& y) {
+  VELOX_CHECK(
+      x.columnType() == y.columnType(),
+      "Inconsistent column handle: {}",
+      x.name());
+  VELOX_CHECK_EQ(
+      *x.dataType(), *y.dataType(), "Inconsistent column handle: {}", x.name());
+  VELOX_CHECK_EQ(
+      *x.hiveType(), *y.hiveType(), "Inconsistent column handle: {}", x.name());
+}
+
 } // namespace
 
 void HiveDataSource::processColumnHandle(const HiveColumnHandlePtr& handle) {
@@ -91,29 +104,37 @@ HiveDataSource::HiveDataSource(
   VELOX_CHECK_NOT_NULL(
       hiveTableHandle_, "TableHandle must be an instance of HiveTableHandle");
 
-  if (hiveTableHandle_->columnHandles().empty()) {
-    // Column handled keyed on the column alias, the name used in the query.
-    for (const auto& [canonicalizedName, columnHandle] : assignments) {
-      auto handle =
-          std::dynamic_pointer_cast<const HiveColumnHandle>(columnHandle);
-      VELOX_CHECK_NOT_NULL(
-          handle,
-          "ColumnHandle must be an instance of HiveColumnHandle for {}",
-          canonicalizedName);
-      processColumnHandle(handle);
+  folly::F14FastMap<std::string_view, const HiveColumnHandle*> columnHandles;
+  // Column handled keyed on the column alias, the name used in the query.
+  for (const auto& [canonicalizedName, columnHandle] : assignments) {
+    auto handle =
+        std::dynamic_pointer_cast<const HiveColumnHandle>(columnHandle);
+    VELOX_CHECK_NOT_NULL(
+        handle,
+        "ColumnHandle must be an instance of HiveColumnHandle for {}",
+        canonicalizedName);
+    const auto [it, unique] =
+        columnHandles.emplace(handle->name(), handle.get());
+    if (!unique) {
+      // This should not happen normally, but there is some bug in Presto DELETE
+      // queries that sometimes we do get duplicate assignments for partitioning
+      // columns.
+      checkColumnHandleConsistent(*handle, *it->second);
+      VELOX_CHECK(
+          handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey,
+          "Cannot map from same table column to different outputs in table scan; a project node should be used instead: {}",
+          handle->name());
+      continue;
     }
-  } else {
-    folly::F14FastSet<const connector::ColumnHandle*> assignmentHandles;
-    for (const auto& [_, columnHandle] : assignments) {
-      assignmentHandles.insert(columnHandle.get());
+    processColumnHandle(handle);
+  }
+  for (auto& handle : hiveTableHandle_->filterColumnHandles()) {
+    auto it = columnHandles.find(handle->name());
+    if (it != columnHandles.end()) {
+      checkColumnHandleConsistent(*handle, *it->second);
+      continue;
     }
-    for (auto& handle : hiveTableHandle_->columnHandles()) {
-      assignmentHandles.erase(handle.get());
-      processColumnHandle(handle);
-    }
-    VELOX_CHECK(
-        assignmentHandles.empty(),
-        "Assignments must be a subset of column handles");
+    processColumnHandle(handle);
   }
 
   std::vector<std::string> readColumnNames;
@@ -150,7 +171,6 @@ HiveDataSource::HiveDataSource(
   auto remainingFilter = extractFiltersFromRemainingFilter(
       hiveTableHandle_->remainingFilter(),
       expressionEvaluator_,
-      false,
       filters_,
       sampleRate);
   if (sampleRate != 1) {
@@ -505,6 +525,7 @@ void HiveDataSource::setFromDataSource(
   readerOutputType_ = std::move(source->readerOutputType_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
+  metadataFilter_ = std::move(source->metadataFilter_);
   splitReader_ = std::move(source->splitReader_);
   splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
   // New io will be accounted on the stats of 'source'. Add the existing

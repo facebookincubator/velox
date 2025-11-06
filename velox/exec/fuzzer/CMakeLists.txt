@@ -27,6 +27,14 @@ add_library(
   PrestoSql.cpp
 )
 
+# TODO Add VeloxQueryRunner to velox_fuzzer_util to support in
+# ExpressionFuzzerTest. More information can be found here:
+# https://github.com/facebookincubator/velox/issues/15414
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
+  target_link_libraries(velox_fuzzer_util FBThrift::thriftcpp2)
+endif()
+
 target_link_libraries(
   velox_fuzzer_util
   velox_common_fuzzer_util
