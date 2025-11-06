@@ -162,6 +162,9 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricMemoryCacheSumEvictScore, facebook::velox::StatType::SUM);
 
+  // Number of lookups since last counter retrieval.
+  DEFINE_METRIC(kMetricMemoryCacheNumLookups, facebook::velox::StatType::SUM);
+
   // Number of hits (saved IO) since last counter retrieval. The first hit to a
   // prefetched entry does not count.
   DEFINE_METRIC(kMetricMemoryCacheNumHits, facebook::velox::StatType::SUM);
