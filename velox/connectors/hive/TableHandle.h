@@ -140,6 +140,8 @@ using HiveColumnHandleMap =
 
 class HiveTableHandle : public ConnectorTableHandle {
  public:
+  /// @param sampleRate Sampling rate in (0, 1] range. 0.1 means 10% sampling.
+  /// 1.0 means no sampling. Default is no sampling.
   HiveTableHandle(
       std::string connectorId,
       const std::string& tableName,
@@ -148,7 +150,8 @@ class HiveTableHandle : public ConnectorTableHandle {
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
       const std::unordered_map<std::string, std::string>& tableParameters = {},
-      std::vector<HiveColumnHandlePtr> filterColumnHandles = {});
+      std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
+      double sampleRate = 1.0);
 
   const std::string& tableName() const {
     return tableName_;
@@ -172,6 +175,12 @@ class HiveTableHandle : public ConnectorTableHandle {
   /// than subfield filters but supports arbitrary boolean expression.
   const core::TypedExprPtr& remainingFilter() const {
     return remainingFilter_;
+  }
+
+  /// Sampling rate between 0 and 1 (excluding 0). 0.1 means 10%
+  /// sampling. 1.0 means no sampling.
+  double sampleRate() const {
+    return sampleRate_;
   }
 
   /// Subset of schema of the table that we store in file (i.e.,
@@ -214,6 +223,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   const bool filterPushdownEnabled_;
   const common::SubfieldFilters subfieldFilters_;
   const core::TypedExprPtr remainingFilter_;
+  const double sampleRate_;
   const RowTypePtr dataColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;

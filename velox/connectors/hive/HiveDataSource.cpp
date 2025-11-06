@@ -167,7 +167,7 @@ HiveDataSource::HiveDataSource(
   for (const auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
     filters_.emplace(k.clone(), v);
   }
-  double sampleRate = 1;
+  double sampleRate = hiveTableHandle_->sampleRate();
   auto remainingFilter = extractFiltersFromRemainingFilter(
       hiveTableHandle_->remainingFilter(),
       expressionEvaluator_,
