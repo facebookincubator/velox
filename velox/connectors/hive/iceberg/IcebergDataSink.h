@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -32,6 +33,10 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param locationHandle Contains the target location information including:
   /// - Base directory path where data files will be written.
   /// - File naming scheme and temporary directory paths.
+  /// @param tableStorageFormat File format to use for writing data files.
+  /// @param partitionSpec Optional partition specification defining how to
+  /// partition the data. If nullptr, the table is unpartitioned and all data
+  /// is written to a single directory.
   /// @param compressionKind Optional compression to apply to data files.
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
@@ -39,8 +44,18 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::vector<HiveColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
+      IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
+
+  /// Returns the Iceberg partition specification that defines how the table
+  /// is partitioned.
+  const IcebergPartitionSpecPtr& partitionSpec() const {
+    return partitionSpec_;
+  }
+
+ private:
+  const IcebergPartitionSpecPtr partitionSpec_;
 };
 
 using IcebergInsertTableHandlePtr =
