@@ -162,6 +162,7 @@ void PeriodicStatsReporter::reportCacheStats() {
   // Memory cache cumulative stats.
   const auto deltaCacheStats = cacheStats - lastCacheStats_;
 
+  REPORT_IF_NOT_ZERO(kMetricMemoryCacheNumLookups, deltaCacheStats.numLookup);
   REPORT_IF_NOT_ZERO(kMetricMemoryCacheNumHits, deltaCacheStats.numHit);
   REPORT_IF_NOT_ZERO(kMetricMemoryCacheHitBytes, deltaCacheStats.hitBytes);
   REPORT_IF_NOT_ZERO(kMetricMemoryCacheNumNew, deltaCacheStats.numNew);
