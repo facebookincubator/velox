@@ -148,6 +148,12 @@ Generic Configuration
      - 0
      - If it is not zero, specifies the time limit that a driver can continuously
        run on a thread before yield. If it is zero, then it no limit.
+   * - window_num_sub_partitions
+     - integer
+     - 1
+     - Window operator can be configured to sub-divide window partitions on each thread of execution into groups of
+       partitions for sequential processing. This setting specifies how many sub-partitions to create for each thread.
+       Use 1 to disable sub partitioning.
    * - prefixsort_normalized_key_max_bytes
      - integer
      - 128
