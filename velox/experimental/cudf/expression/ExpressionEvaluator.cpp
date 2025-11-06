@@ -368,8 +368,8 @@ class SwitchFunction : public CudfFunction {
       auto constValue = constExpr->value();
       left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           createCudfScalar, constValue->typeKind(), constValue);
-    } else if (
-        auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+    }
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
             expr->inputs()[2])) {
       auto constValue = constExpr->value();
       right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
