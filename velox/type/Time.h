@@ -85,6 +85,17 @@ inline int16_t biasEncode(int16_t timeZoneOffsetMinutes) {
   return timeZoneOffsetMinutes + kTimeZoneBias;
 }
 
+/// Decode timezone offset from bias-encoded value
+/// Converts from bias-encoded range [0, 1680] to signed offset [-840, 840]
+///
+/// @param encodedTimezone Bias-encoded timezone [0, 1680]
+/// @return Timezone offset in minutes [-840, 840]
+inline int16_t decodeTimezoneOffset(int16_t encodedTimezone) {
+  return (encodedTimezone >= kTimeZoneBias)
+      ? (encodedTimezone - kTimeZoneBias)
+      : -(kTimeZoneBias - encodedTimezone);
+}
+
 /// Parse a TIME WITH TIME ZONE string and return packed 64-bit value
 /// Supports formats (with optional space before timezone):
 /// - "H:m+HH:mm" or "H:m +HH:mm" -> "1:30+05:30" or "1:30 +05:30"
@@ -118,6 +129,49 @@ Expected<int16_t> parseTimezoneOffset(const char* buf, size_t len);
 
 inline Expected<int16_t> parseTimezoneOffset(const StringView& str) {
   return parseTimezoneOffset(str.data(), str.size());
+}
+
+/// Convert UTC time to local time by adding timezone offset
+/// Handles day boundary wrap-around (since max timezone offset is ±14 hours,
+/// only one day boundary crossing is possible)
+///
+/// @param millisUtc UTC time in milliseconds since midnight [0, kMillisInDay)
+/// @param offsetMinutes Timezone offset in minutes [-840, 840]
+/// @return Local time in milliseconds since midnight [0, kMillisInDay)
+inline int64_t utcToLocalTime(int64_t millisUtc, int16_t offsetMinutes) {
+  VELOX_DCHECK_GE(millisUtc, 0);
+  VELOX_DCHECK_LT(millisUtc, kMillisInDay);
+  int64_t millisLocal = millisUtc + (offsetMinutes * kMillisInMinute);
+
+  // Handle wrap-around for local time
+  if (millisLocal < 0) {
+    millisLocal += kMillisInDay;
+  } else if (millisLocal >= kMillisInDay) {
+    millisLocal -= kMillisInDay;
+  }
+
+  return millisLocal;
+}
+
+/// Convert local time to UTC by subtracting timezone offset
+/// Handles day boundary wrap-around (since max timezone offset is ±14 hours,
+/// only one day boundary crossing is possible)
+///
+/// @param millisLocal Local time in milliseconds since midnight [0,
+/// kMillisInDay)
+/// @param offsetMinutes Timezone offset in minutes [-840, 840]
+/// @return UTC time in milliseconds since midnight [0, kMillisInDay)
+inline int64_t localToUtcTime(int64_t millisLocal, int16_t offsetMinutes) {
+  int64_t millisUtc = millisLocal - (offsetMinutes * kMillisInMinute);
+
+  // Handle wrap-around for UTC time
+  if (millisUtc < 0) {
+    millisUtc += kMillisInDay;
+  } else if (millisUtc >= kMillisInDay) {
+    millisUtc -= kMillisInDay;
+  }
+
+  return millisUtc;
 }
 
 } // namespace facebook::velox::util
