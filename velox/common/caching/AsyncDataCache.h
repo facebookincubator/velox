@@ -516,6 +516,8 @@ struct CacheStats {
 
   /// ============= Cumulative stats =============
 
+  /// Number of lookups.
+  int64_t numLookup{0};
   /// Number of hits (saved IO). The first hit to a prefetched entry does not
   /// count.
   int64_t numHit{0};
@@ -668,6 +670,8 @@ class CacheShard {
   uint32_t eventCounter_{0};
   // Maximum retainable entry score(). Anything above this is evictable.
   int32_t evictionThreshold_{kNoThreshold};
+  // Cumulative count of cache lookups.
+  uint64_t numLookup_{0};
   // Cumulative count of cache hits.
   uint64_t numHit_{0};
   // Cumulative Sum of bytes in cache hits.
