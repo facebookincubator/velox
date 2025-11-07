@@ -69,13 +69,7 @@ struct StringView {
       // small string: inlined. Zero the last 8 bytes first to allow for whole
       // word comparison.
       value_.data = nullptr;
-      // copy first 4 bytes into prefix_.
-      size_t prefixSize = std::min<size_t>(size_, kPrefixSize);
-      memcpy(prefix_, data, prefixSize);
-
-      // copy remaining bytes into union.inlined.
-      size_t remaining = (size_ > kPrefixSize) ? size_ - kPrefixSize : 0;
-      memcpy(value_.inlined, data + kPrefixSize, remaining);
+      memcpy(prefix_, data, size_);
     } else {
       // large string: store pointer
       memcpy(prefix_, data, kPrefixSize);
