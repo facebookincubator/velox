@@ -257,9 +257,10 @@ template <typename T>
 struct FromHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
+      const TInput& input) {
     VELOX_USER_CHECK_EQ(
         input.size() % 2,
         0,
@@ -314,8 +315,10 @@ struct FromBase64Function {
 template <typename T>
 struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE Status
-  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
+  call(out_type<Varbinary>& result, const TInput& input) {
     auto inputSize = input.size();
     auto decodedSize =
         encoding::Base64::calculateDecodedSize(input.data(), inputSize);

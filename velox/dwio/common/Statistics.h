@@ -604,7 +604,9 @@ struct RuntimeStatistics {
     if (columnReaderStatistics.pageLoadTimeNs > 0) {
       result.emplace(
           "pageLoadTimeNs",
-          RuntimeMetric(columnReaderStatistics.pageLoadTimeNs));
+          RuntimeMetric(
+              columnReaderStatistics.pageLoadTimeNs,
+              RuntimeCounter::Unit::kNanos));
     }
     return result;
   }

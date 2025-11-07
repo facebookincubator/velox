@@ -229,6 +229,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
   auto expectedTypes = std::unordered_set<std::string>{
       "JSON",
       "HYPERLOGLOG",
+      "KHYPERLOGLOG",
       "TIMESTAMP WITH TIME ZONE",
       "UUID",
       "IPADDRESS",

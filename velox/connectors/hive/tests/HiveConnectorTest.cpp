@@ -584,8 +584,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
   SubfieldFilters filters;
   double sampleRate = 1;
-  auto remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  auto remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 2);
@@ -594,8 +594,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   expr = parseExpr("not (c0 > 0 or c1 > c0)", rowType);
   filters.clear();
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_GT(filters.count(Subfield("c0")), 0);
@@ -605,8 +605,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   expr = parseExpr(
       "not (c2 > 1::decimal(20, 0) or c2 < 0::decimal(20, 0))", rowType);
   filters.clear();
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_GT(filters.count(Subfield("c2")), 0);
   // Change these once HUGEINT filter merge is fixed.
@@ -623,8 +623,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
       parseExpr("c1 > 0", rowType),
       parseExpr("c2 > 0::decimal(20, 0)", rowType));
   filters.clear();
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 3);
   ASSERT_TRUE(filters.contains(Subfield("c0")));
@@ -639,8 +639,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
       parseExpr("c1 % 3 = 0", rowType),
       parseExpr("c2 > 0::decimal(20, 0)", rowType));
   filters.clear();
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_TRUE(filters.contains(Subfield("c2")));
@@ -658,8 +658,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   auto expr = parseExpr("rand() < 0.5", rowType);
   SubfieldFilters filters;
   double sampleRate = 1;
-  auto remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  auto remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 0.5);
   ASSERT_TRUE(filters.empty());
@@ -667,8 +667,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   expr = parseExpr("c0 > 0 and rand() < 0.5", rowType);
   filters.clear();
   sampleRate = 1;
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 0.5);
   ASSERT_EQ(filters.size(), 1);
@@ -677,8 +677,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   expr = parseExpr("rand() < 0.5 and rand() < 0.5", rowType);
   filters.clear();
   sampleRate = 1;
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(sampleRate, 0.25);
   ASSERT_TRUE(filters.empty());
@@ -686,8 +686,8 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   expr = parseExpr("c0 > 0 or rand() < 0.5", rowType);
   filters.clear();
   sampleRate = 1;
-  remaining = extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters, sampleRate);
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_TRUE(remaining);
   ASSERT_EQ(*remaining, *expr);
   ASSERT_EQ(sampleRate, 1);

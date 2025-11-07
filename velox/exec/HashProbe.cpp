@@ -1176,11 +1176,6 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     numOut = evalFilter(numOut);
 
     if (numOut == 0) {
-      // The hash probe might get stuck in the output loop if the filter is
-      // highly selective.
-      if (shouldYield()) {
-        return nullptr;
-      }
       continue;
     }
 
