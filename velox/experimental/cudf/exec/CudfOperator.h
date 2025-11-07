@@ -25,10 +25,10 @@ namespace facebook::velox::cudf_velox {
 /// CudfOperator and output CudfVector.
 class CudfOperator : public NvtxHelper {
  public:
-  CudfOperator()
+  CudfOperator(int32_t operatorId, const PlanNodeId& nodeId)
       : facebook::velox::cudf_velox::NvtxHelper(
             nvtx3::rgb{160, 82, 45}, // Sienna
             operatorId,
-            "[CudfOperator]") {}
+            fmt::format("[{}]", nodeId)) {}
 };
 } // namespace facebook::velox::cudf_velox
