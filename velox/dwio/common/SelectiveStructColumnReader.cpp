@@ -407,7 +407,6 @@ void SelectiveStructColumnReaderBase::read(
   }
 
   const uint64_t* structNulls = nulls();
-
   // A struct reader may have a null/non-null filter
   if (scanSpec_->filter()) {
     const auto kind = scanSpec_->filter()->kind();
