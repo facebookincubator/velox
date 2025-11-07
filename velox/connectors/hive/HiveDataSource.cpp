@@ -155,6 +155,7 @@ HiveDataSource::HiveDataSource(
           "Required subfield does not match column name");
       subfields_[handle->name()].push_back(&subfield);
     }
+    columnPostProcessors_.push_back(handle->postProcessor());
   }
 
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
@@ -438,8 +439,11 @@ std::optional<RowVectorPtr> HiveDataSource::next(
       // don't need to reallocate the result for every batch.
       child->disableMemo();
     }
-    outputColumns.emplace_back(
-        exec::wrapChild(rowsRemaining, remainingIndices, child));
+    auto column = exec::wrapChild(rowsRemaining, remainingIndices, child);
+    if (columnPostProcessors_[i]) {
+      columnPostProcessors_[i](column);
+    }
+    outputColumns.push_back(std::move(column));
   }
 
   return std::make_shared<RowVector>(

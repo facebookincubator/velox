@@ -19,7 +19,9 @@
 #include "velox/common/memory/RawVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
+
 using namespace facebook::velox::test;
 
 class LazyVectorTest : public testing::Test, public VectorTestBase {
@@ -696,3 +698,25 @@ TEST_F(LazyVectorTest, runtimeStats) {
   ASSERT_EQ(stats[2].first, LazyVector::kWallNanos);
   ASSERT_GE(stats[2].second.value, 0);
 }
+
+TEST_F(LazyVectorTest, chain) {
+  auto lazy = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      10,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
+      }));
+  lazy->chain([](auto& vector) {
+    auto* values =
+        vector->template asChecked<FlatVector<int32_t>>()->mutableRawValues();
+    for (vector_size_t i = 0; i < vector->size(); ++i) {
+      values[i] *= 2;
+    }
+  });
+  auto expected = makeFlatVector<int32_t>(10, [](auto i) { return i * 2; });
+  assertEqualVectors(expected, lazy);
+}
+
+} // namespace
+} // namespace facebook::velox
