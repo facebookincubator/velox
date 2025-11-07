@@ -37,8 +37,9 @@ class RoaringBitmapArrayTest : public functions::test::FunctionBaseTest {
       const VectorPtr& value,
       const VectorPtr& expected) {
     std::vector<core::TypedExprPtr> args;
-    args.push_back(std::make_shared<core::ConstantTypedExpr>(
-        VARBINARY(), variant::binary(serialized)));
+    args.push_back(
+        std::make_shared<core::ConstantTypedExpr>(
+            VARBINARY(), variant::binary(serialized)));
     args.push_back(
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0"));
     auto expr = exec::ExprSet(
