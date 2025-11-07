@@ -136,10 +136,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_window_regionsort_benchmark WindowSubPartitionedSortBenchmark.cpp)
+add_executable(velox_window_sub_partitioned_sort_benchmark WindowSubPartitionedSortBenchmark.cpp)
 
 target_link_libraries(
-  velox_window_regionsort_benchmark
+  velox_window_sub_partitioned_sort_benchmark
   velox_aggregates
   velox_exec
   velox_exec_test_lib
