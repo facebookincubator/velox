@@ -1116,7 +1116,7 @@ TEST_F(TestSeek, uncompressedLarge) {
       entry.getCompressed()[i] = static_cast<char>(i);
     }
     written += runSize + kHeaderSize;
-    data.insert(data.end(), entry.data().begin(), entry.data().end());
+    data.insert(data.end(), entry.data().cbegin(), entry.data().cend());
   }
   auto stream = createTestDecompressor(
       CompressionKind_SNAPPY,
