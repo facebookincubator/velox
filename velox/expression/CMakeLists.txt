@@ -56,6 +56,7 @@ velox_add_library(
   RowConstructor.cpp
   SimpleFunctionRegistry.cpp
   SpecialFormRegistry.cpp
+  StringToFloatParser.cpp
   ConjunctRewrite.cpp
   SwitchExpr.cpp
   TryExpr.cpp
@@ -70,8 +71,7 @@ velox_link_libraries(
   velox_expression_functions
   velox_functions_util
   velox_type_tz
-  double-conversion::double-conversion
-  Folly::folly
+  FastFloat::fast_float
 )
 
 add_subdirectory(type_calculation)
