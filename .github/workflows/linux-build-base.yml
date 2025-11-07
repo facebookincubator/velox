@@ -240,6 +240,10 @@ jobs:
           path: velox
           persist-credentials: false
 
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-fedora.sh
+
       - name: Clear CCache Statistics
         run: |
           ccache -sz
