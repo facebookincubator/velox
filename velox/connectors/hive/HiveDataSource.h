@@ -37,9 +37,9 @@ class HiveDataSource : public DataSource {
   HiveDataSource(
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,
-      const connector::ColumnHandleMap& columnHandles,
+      const connector::ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
@@ -146,6 +146,10 @@ class HiveDataSource : public DataSource {
     }
     return emptyOutput_;
   }
+
+  // Add the information from column handle to the corresponding fields in this
+  // object.
+  void processColumnHandle(const HiveColumnHandlePtr& handle);
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;

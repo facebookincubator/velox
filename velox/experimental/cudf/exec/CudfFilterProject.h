@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
@@ -63,8 +63,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   void close() override {
     Operator::close();
-    projectEvaluator_.close();
-    filterEvaluator_.close();
+    projectEvaluators_.clear();
+    filterEvaluator_.reset();
   }
 
  private:
@@ -78,8 +78,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
 
-  ExpressionEvaluator projectEvaluator_;
-  ExpressionEvaluator filterEvaluator_;
+  std::vector<CudfExpressionPtr> projectEvaluators_;
+  CudfExpressionPtr filterEvaluator_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;

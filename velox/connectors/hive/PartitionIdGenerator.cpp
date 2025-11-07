@@ -38,16 +38,15 @@ PartitionIdGenerator::PartitionIdGenerator(
   for (auto channel : partitionChannels_) {
     hashers_.emplace_back(
         exec::VectorHasher::create(inputType->childAt(channel), channel));
+    VELOX_USER_CHECK(
+        hashers_.back()->typeSupportsValueIds(),
+        "Unsupported partition type: {}.",
+        inputType->childAt(channel)->toString());
   }
 
   std::vector<TypePtr> partitionKeyTypes;
   std::vector<std::string> partitionKeyNames;
   for (auto channel : partitionChannels_) {
-    VELOX_USER_CHECK(
-        exec::VectorHasher::typeKindSupportsValueIds(
-            inputType->childAt(channel)->kind()),
-        "Unsupported partition type: {}.",
-        inputType->childAt(channel)->toString());
     partitionKeyTypes.push_back(inputType->childAt(channel));
     partitionKeyNames.push_back(inputType->nameOf(channel));
   }
@@ -99,7 +98,8 @@ void PartitionIdGenerator::run(
 
 std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
   return FileUtils::makePartName(
-      extractPartitionKeyValues(partitionValues_, partitionId),
+      HivePartitionUtil::extractPartitionKeyValues(
+          partitionValues_, partitionId),
       partitionPathAsLowerCase_);
 }
 

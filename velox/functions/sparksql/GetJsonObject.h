@@ -123,7 +123,7 @@ class JsonPathNormalizer {
       if (pairBegin == std::string::npos) {
         break;
       }
-      pairEnd = result.find("]", pairBegin);
+      pairEnd = result.find(']', pairBegin);
       // If expected pattern, like ['a'], is not found.
       if (pairEnd == std::string::npos || result[pairEnd - 1] != '\'') {
         return "-1";
@@ -230,10 +230,7 @@ struct GetJsonObjectFunction {
  private:
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
-    if (jsonPath.empty() || jsonPath.data()[0] != '$') {
-      return false;
-    }
-    return true;
+    return std::string_view{jsonPath}.starts_with('$');
   }
 
   // Extracts a string representation from a simdjson result. Handles various
@@ -290,13 +287,9 @@ struct GetJsonObjectFunction {
         }
         return false;
       }
-      case simdjson::ondemand::json_type::object: {
-        // For nested case, e.g., for "{"my": {"hello": 10}}", "$.my" will
-        // return an object type.
-        ss << rawResult;
-        result.append(ss.str());
-        return true;
-      }
+      // For nested case, e.g., for "{"my": {"hello": 10}}",
+      // "$.my" will return an object type.
+      case simdjson::ondemand::json_type::object:
       case simdjson::ondemand::json_type::array: {
         ss << rawResult;
         result.append(ss.str());

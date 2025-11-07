@@ -1870,15 +1870,6 @@ TEST_F(TableScanTest, partitionedTableDoubleKey) {
   testPartitionedTable(filePath->getPath(), DOUBLE(), "3.5");
 }
 
-TEST_F(TableScanTest, partitionedTableDecimalKey) {
-  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
-  auto vectors = makeVectors(10, 1'000, rowType);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
-  createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), DECIMAL(20, 4), "3.5123");
-}
-
 TEST_F(TableScanTest, partitionedTableDateKey) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
   auto vectors = makeVectors(10, 1'000, rowType);
@@ -4327,6 +4318,53 @@ TEST_F(TableScanTest, parallelPrepare) {
       .copyResults(pool_.get());
 }
 
+TEST_F(TableScanTest, parallelPrepareWithSubfieldFilters) {
+  // Test metadataFilter is correctly transferred during split prefetch.
+  constexpr int32_t kNumParallel = 100;
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(100, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(100, [](auto row) { return row * 2; }),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+
+  auto subfieldFilters = SubfieldFiltersBuilder()
+                             .add("c0", greaterThanOrEqual(10))
+                             .add("c1", lessThan(150))
+                             .build();
+
+  auto outputType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+  auto remainingFilter = parseExpr("c0 % 2 = 0", outputType);
+  auto tableHandle =
+      makeTableHandle(std::move(subfieldFilters), remainingFilter);
+  auto assignments = allRegularColumns(outputType);
+
+  auto plan = exec::test::PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(outputType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  std::vector<exec::Split> splits;
+  for (auto i = 0; i < kNumParallel; ++i) {
+    splits.push_back(makeHiveSplit(filePath->getPath()));
+  }
+
+  auto result = AssertQueryBuilder(plan)
+                    .config(
+                        core::QueryConfig::kMaxSplitPreloadPerDriver,
+                        std::to_string(kNumParallel))
+                    .splits(splits)
+                    .copyResults(pool_.get());
+
+  // Verify results: c0 >= 10 AND c1 < 150 AND c0 % 2 = 0
+  // So rows [10,12,14,...,74] = 33 rows per split
+  ASSERT_EQ(result->size(), 33 * kNumParallel);
+}
+
 TEST_F(TableScanTest, dictionaryMemo) {
   constexpr int kSize = 100;
   const char* baseStrings[] = {
@@ -5720,7 +5758,7 @@ TEST_F(TableScanTest, footerIOCount) {
           .assertResults(
               BaseVector::create<RowVector>(vector->type(), 0, pool()));
   auto stats = getTableScanRuntimeStats(task);
-  ASSERT_EQ(stats.at("numStorageRead").sum, 1);
+  ASSERT_EQ(stats.at("storageReadBytes").count, 1);
   ASSERT_GT(stats.at("footerBufferOverread").sum, 0);
 }
 
@@ -5811,7 +5849,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
       auto tableScanStats = getTableScanStats(task);
       ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 1);
       ASSERT_GT(tableScanStats.customStats["storageReadBytes"].sum, 0);
-      ASSERT_EQ(tableScanStats.customStats["storageReadBytes"].count, 1);
+      ASSERT_GT(tableScanStats.customStats["storageReadBytes"].count, 0);
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
 
@@ -6150,6 +6188,29 @@ TEST_F(TableScanTest, parallelUnitLoader) {
   auto stats = getTableScanRuntimeStats(task);
   // Verify that parallel unit loader is enabled.
   ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
+}
+
+TEST_F(TableScanTest, filterColumnHandles) {
+  auto data = makeVectors(1, 10, ROW({"a", "b"}, BIGINT()));
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+                   .partitionKey("ds", "2025-10-23")
+                   .build();
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({"x"}, {BIGINT()}))
+                  .assignments({{"x", regularColumn("a", BIGINT())}})
+                  .dataColumns(asRowType(data[0]->type()))
+                  .filterColumnHandles({
+                      partitionKey("ds", VARCHAR()),
+                      regularColumn("a", BIGINT()),
+                  })
+                  .remainingFilter("length(ds) + a % 2 > 0")
+                  .endTableScan()
+                  .planNode();
+  AssertQueryBuilder(plan).split(split).assertResults(
+      makeRowVector({data[0]->childAt(0)}));
 }
 
 } // namespace

@@ -81,6 +81,15 @@ class CudfHiveConfig {
   static constexpr const char* kTimestampTypeSession =
       "parquet.reader.timestamp_type";
 
+  // Whether to use the BufferedInput source for CudfHiveDataSource. The
+  // buffered source takes advantage of the `AsyncDataCache` if available. The
+  // `AsyncDataCache` is controlled (default: enabled) using the
+  // HiveConfig::kEnableFileHandleCache config option
+  static constexpr const char* kUseBufferedInput =
+      "cudf.hive.use-buffered-input";
+  static constexpr const char* kUseBufferedInputSession =
+      "cudf.hive.use_buffered_input";
+
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -147,6 +156,9 @@ class CudfHiveConfig {
 
   cudf::data_type timestampType() const;
   cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
+
+  bool useBufferedInput() const;
+  bool useBufferedInputSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 

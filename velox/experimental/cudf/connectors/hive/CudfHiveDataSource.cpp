@@ -18,17 +18,22 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/expression/FieldReference.h"
 
+#include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -42,6 +47,76 @@
 #include <memory>
 #include <string>
 
+namespace {
+
+// ---------------- Internal helper ----------------
+// A cudf::io::datasource that serves bytes via Velox BufferedInput so that
+// reads benefit from AsyncDataCache / SSD cache and are always returned as
+// contiguous buffers.
+class BufferedInputDataSource : public cudf::io::datasource {
+ public:
+  explicit BufferedInputDataSource(
+      std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input)
+      : input_(std::move(input)), fileSize_(input_->getReadFile()->size()) {}
+
+  [[nodiscard]] size_t size() const override {
+    return fileSize_;
+  }
+
+  std::unique_ptr<datasource::buffer> host_read(size_t offset, size_t size)
+      override {
+    if (offset >= fileSize_) {
+      return datasource::buffer::create(std::vector<uint8_t>{});
+    }
+    const size_t readSize = std::min(size, fileSize_ - offset);
+    std::vector<uint8_t> data(readSize);
+    readContiguous(offset, readSize, data.data());
+    return datasource::buffer::create(std::move(data));
+  }
+
+  size_t host_read(size_t offset, size_t size, uint8_t* dst) override {
+    if (offset >= fileSize_) {
+      return 0;
+    }
+    const size_t readSize = std::min(size, fileSize_ - offset);
+    readContiguous(offset, readSize, dst);
+    return readSize;
+  }
+
+  std::future<std::unique_ptr<datasource::buffer>> host_read_async(
+      size_t offset,
+      size_t size) override {
+    return std::async(std::launch::deferred, [this, offset, size]() {
+      return this->host_read(offset, size);
+    });
+  }
+
+  std::future<size_t> host_read_async(size_t offset, size_t size, uint8_t* dst)
+      override {
+    return std::async(std::launch::deferred, [this, offset, size, dst]() {
+      return this->host_read(offset, size, dst);
+    });
+  }
+
+  [[nodiscard]] bool supports_device_read() const override {
+    return false;
+  }
+
+ private:
+  void readContiguous(size_t offset, size_t size, uint8_t* dst) {
+    using namespace facebook::velox::dwio::common;
+    // BufferedInput::read gives us a stream over the exact region.
+    auto stream = input_->read(offset, size, LogType::FILE);
+    VELOX_CHECK(stream != nullptr, "read() returned null stream");
+    stream->readFully(reinterpret_cast<char*>(dst), size);
+  }
+
+  std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
+  const size_t fileSize_;
+};
+
+} // namespace
+
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
@@ -51,17 +126,20 @@ CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
+    facebook::velox::FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<CudfHiveConfig>& parquetConfig)
+    const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241}, // CudfHive blue,
           std::nullopt,
           fmt::format("[{}]", tableHandle->name())),
-      parquetConfig_(parquetConfig),
+      cudfHiveConfig_(cudfHiveConfig),
+      fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
+      baseReaderOpts_(pool_),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
@@ -81,9 +159,6 @@ CudfHiveDataSource::CudfHiveDataSource(
       std::dynamic_pointer_cast<const hive::HiveTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
       tableHandle_, "TableHandle must be an instance of HiveTableHandle");
-
-  // Create empty IOStats for later use
-  ioStats_ = std::make_shared<io::IoStatistics>();
 
   // Copy subfield filters
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
@@ -130,11 +205,17 @@ CudfHiveDataSource::CudfHiveDataSource(
       }
     }();
 
-    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
-        remainingFilterExprSet_->exprs(), remainingFilterType_);
+    cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
+        remainingFilterExprSet_->exprs()[0], remainingFilterType_);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }
+
+  VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
+
+  // Create empty IOStats and FsStats for later use
+  ioStats_ = std::make_shared<io::IoStatistics>();
+  fsStats_ = std::make_shared<filesystems::File::IoStats>();
 }
 
 std::optional<RowVectorPtr> CudfHiveDataSource::next(
@@ -180,7 +261,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     const auto originalNumColumns = cudfTableColumns.size();
     // Filter may need addtional computed columns which are added to
     // cudfTableColumns
-    auto filterResult = cudfExpressionEvaluator_.compute(
+    auto filterResult = cudfExpressionEvaluator_->eval(
         cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
     // discard computed columns
     std::vector<std::unique_ptr<cudf::column>> originalColumns;
@@ -194,7 +275,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     // Keep only rows where the filter is true
     cudfTable = cudf::apply_boolean_mask(
         *originalTable,
-        *filterResult[0],
+        asView(filterResult),
         stream_,
         cudf::get_current_device_resource_ref());
   }
@@ -303,28 +384,90 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
-  const auto& filePaths = split_->getCudfSourceInfo().filepaths();
-  for (const auto& filePath : filePaths) {
-    completedBytes_ += std::filesystem::file_size(filePath);
+  try {
+    const auto fileHandleKey = FileHandleKey{
+        .filename = split_->filePath,
+        .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+    auto fileProperties = FileProperties{};
+    auto const fileHandleCachePtr = fileHandleFactory_->generate(
+        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+    if (fileHandleCachePtr.get() and fileHandleCachePtr.get()->file) {
+      completedBytes_ += fileHandleCachePtr->file->size();
+    }
+  } catch (const std::exception& e) {
+    // Unable to get the file size, log a warning and continue
+    LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
+                 << e.what();
   }
 }
 
 std::unique_ptr<cudf::io::chunked_parquet_reader>
 CudfHiveDataSource::createSplitReader() {
+  // Build source info for the chunked parquet reader
+  auto sourceInfo = [&]() {
+    // Use file data source if we don't want to use the BufferedInput source
+    if (not cudfHiveConfig_->useBufferedInputSession(
+            connectorQueryCtx_->sessionProperties())) {
+      LOG(INFO) << "Using file data source for CudfHiveDataSource";
+      return cudf::io::source_info{split_->filePath};
+    }
+
+    auto fileHandleCachePtr = FileHandleCachedPtr{};
+    try {
+      const auto fileHandleKey = FileHandleKey{
+          .filename = split_->filePath,
+          .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+      auto fileProperties = FileProperties{};
+      fileHandleCachePtr = fileHandleFactory_->generate(
+          fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+      VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+    } catch (const VeloxRuntimeError& e) {
+      LOG(WARNING) << fmt::format(
+          "Failed to generate file handle cache for file {}, falling back to file data source for CudfHiveDataSource",
+          split_->filePath);
+      return cudf::io::source_info{split_->filePath};
+    }
+
+    // Here we keep adding new entries to CacheTTLController when new
+    // fileHandles are generated, if CacheTTLController was created. Creator of
+    // CacheTTLController needs to make sure a size control strategy was
+    // available such as removing aged out entries.
+    if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
+      cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
+    }
+
+    auto bufferedInput = velox::connector::hive::createBufferedInput(
+        *fileHandleCachePtr,
+        baseReaderOpts_,
+        connectorQueryCtx_,
+        ioStats_,
+        fsStats_,
+        executor_);
+    if (not bufferedInput) {
+      LOG(WARNING) << fmt::format(
+          "Failed to create buffered input source for file {}, falling back to file data source for CudfHiveDataSource",
+          split_->filePath);
+      return cudf::io::source_info{split_->filePath};
+    }
+    datasource_ =
+        std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
+    return cudf::io::source_info{datasource_.get()};
+  }();
+
   // Reader options
   auto readerOptions =
-      cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
-          .skip_rows(parquetConfig_->skipRows())
-          .use_pandas_metadata(parquetConfig_->isUsePandasMetadata())
-          .use_arrow_schema(parquetConfig_->isUseArrowSchema())
+      cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
+          .skip_rows(cudfHiveConfig_->skipRows())
+          .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
+          .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
-              parquetConfig_->isAllowMismatchedCudfHiveSchemas())
-          .timestamp_type(parquetConfig_->timestampType())
+              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
+          .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
   // Set num_rows only if available
-  if (parquetConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(parquetConfig_->numRows().value());
+  if (cudfHiveConfig_->numRows().has_value()) {
+    readerOptions.set_num_rows(cudfHiveConfig_->numRows().value());
   }
 
   if (subfieldFilters_.size()) {
@@ -361,8 +504,8 @@ CudfHiveDataSource::createSplitReader() {
   stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
-      parquetConfig_->maxChunkReadLimit(),
-      parquetConfig_->maxPassReadLimit(),
+      cudfHiveConfig_->maxChunkReadLimit(),
+      cudfHiveConfig_->maxPassReadLimit(),
       readerOptions,
       stream_,
       cudf::get_current_device_resource_ref());
@@ -385,6 +528,10 @@ CudfHiveDataSource::getRuntimeStats() {
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},
   });
+  const auto& fsStats = fsStats_->stats();
+  for (const auto& storageStats : fsStats) {
+    res.emplace(storageStats.first, storageStats.second);
+  }
   return res;
 }
 

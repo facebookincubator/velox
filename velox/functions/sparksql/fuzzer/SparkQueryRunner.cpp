@@ -26,6 +26,7 @@
 #include "arrow/status.h"
 #include "grpc/grpc.h" // @manual
 #include "velox/common/base/Fs.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -40,6 +41,9 @@
 using namespace spark::connect;
 
 namespace facebook::velox::functions::sparksql::fuzzer {
+
+using dwio::common::ArenaCreate;
+
 namespace {
 
 void writeToFile(
@@ -178,21 +182,20 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
 
 std::vector<RowVectorPtr> SparkQueryRunner::execute(
     const std::string& content) {
-  auto sql = google::protobuf::Arena::CreateMessage<SQL>(&arena_);
+  auto sql = ArenaCreate<SQL>(&arena_);
   sql->set_query(content);
 
-  auto relation = google::protobuf::Arena::CreateMessage<Relation>(&arena_);
+  auto relation = ArenaCreate<Relation>(&arena_);
   relation->set_allocated_sql(sql);
 
-  auto plan = google::protobuf::Arena::CreateMessage<Plan>(&arena_);
+  auto plan = ArenaCreate<Plan>(&arena_);
   plan->set_allocated_root(relation);
 
-  auto context = google::protobuf::Arena::CreateMessage<UserContext>(&arena_);
+  auto context = ArenaCreate<UserContext>(&arena_);
   context->set_user_id(userId_);
   context->set_user_name(userName_);
 
-  auto request =
-      google::protobuf::Arena::CreateMessage<ExecutePlanRequest>(&arena_);
+  auto request = ArenaCreate<ExecutePlanRequest>(&arena_);
   request->set_session_id(sessionId_);
   request->set_allocated_user_context(context);
   request->set_allocated_plan(plan);

@@ -25,14 +25,15 @@
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "folly/Conv.h"
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
+#include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -41,7 +42,10 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TopN.h"
+#include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 
@@ -62,16 +66,17 @@ bool isAnyOf(const Base* p) {
 
 } // namespace
 
-bool CompileState::compile(bool force_replace) {
+bool CompileState::compile(bool allowCpuFallback) {
   auto operators = driver_.operators();
 
   if (CudfConfig::getInstance().debugEnabled) {
-    std::cout << "Operators before adapting for cuDF: count ["
+    LOG(INFO) << "Operators before adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
+    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback << std::endl;
   }
 
   bool replacementsMade = false;
@@ -118,12 +123,11 @@ bool CompileState::compile(bool force_replace) {
       auto filterNode = filterProjectOp->filterNode();
       bool canBeEvaluated = true;
       if (projectPlanNode &&
-          !ExpressionEvaluator::canBeEvaluated(
-              projectPlanNode->projections())) {
+          !canBeEvaluatedByCudf(projectPlanNode->projections())) {
         canBeEvaluated = false;
       }
       if (canBeEvaluated && filterNode &&
-          !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
+          !canBeEvaluatedByCudf({filterNode->filter()})) {
         canBeEvaluated = false;
       }
       return canBeEvaluated;
@@ -156,7 +160,9 @@ bool CompileState::compile(bool force_replace) {
           const exec::Operator* op) {
         return isAnyOf<
                    exec::OrderBy,
+                   exec::TopN,
                    exec::HashAggregation,
+                   exec::StreamingAggregation,
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange,
@@ -175,7 +181,9 @@ bool CompileState::compile(bool force_replace) {
                           isJoinSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
+               exec::TopN,
                exec::HashAggregation,
+               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalPartition,
                exec::AssignUniqueId>(op) ||
@@ -186,7 +194,9 @@ bool CompileState::compile(bool force_replace) {
                             isTableScanSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
+               exec::TopN,
                exec::HashAggregation,
+               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalExchange,
                exec::AssignUniqueId>(op) ||
@@ -263,9 +273,16 @@ bool CompileState::compile(bool force_replace) {
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
-    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
+    } else if (auto topNOp = dynamic_cast<exec::TopN*>(oper)) {
+      auto planNode = std::dynamic_pointer_cast<const core::TopNNode>(
+          getPlanNode(topNOp->planNodeId()));
+      VELOX_CHECK(planNode != nullptr);
+      replaceOp.push_back(std::make_unique<CudfTopN>(id, ctx, planNode));
+    } else if (
+        dynamic_cast<exec::HashAggregation*>(oper) or
+        dynamic_cast<exec::StreamingAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
-          getPlanNode(hashAggOp->planNodeId()));
+          getPlanNode(oper->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, planNode));
@@ -293,7 +310,6 @@ bool CompileState::compile(bool force_replace) {
       if (CudfLocalPartition::shouldReplace(planNode)) {
         replaceOp.push_back(
             std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else {
         // Round Robin batch-wise Partitioning is supported by CPU operator with
         // GPU Vector.
@@ -314,7 +330,8 @@ bool CompileState::compile(bool force_replace) {
               planNode,
               planNode->taskUniqueId(),
               planNode->uniqueIdCounter()));
-      replaceOp.back()->initialize();
+    } else {
+      keepOperator = 1;
     }
 
     if (producesGpuOutput(oper) and
@@ -325,33 +342,49 @@ bool CompileState::compile(bool force_replace) {
               id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
     }
 
-    if (force_replace) {
-      if (CudfConfig::getInstance().debugEnabled) {
-        std::printf(
-            "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
-            oper->operatorId(),
-            oper->toString().c_str(),
-            keepOperator,
-            replaceOp.size());
-      }
-      auto shouldSupportGpuOperator =
-          [isFilterProjectSupported,
-           isTableScanSupported](const exec::Operator* op) {
-            return isAnyOf<
-                       exec::OrderBy,
-                       exec::TableScan,
-                       exec::HashAggregation,
-                       exec::Limit,
-                       exec::LocalPartition,
-                       exec::LocalExchange,
-                       exec::HashBuild,
-                       exec::HashProbe>(op) ||
-                isFilterProjectSupported(op);
-          };
-      VELOX_CHECK(
-          !(keepOperator == 0 && shouldSupportGpuOperator(oper) &&
-            replaceOp.empty()),
-          "Replacement with cuDF operator failed");
+    if (CudfConfig::getInstance().debugEnabled) {
+      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
+                << oper->toString().c_str()
+                << ", keepOperator = " << keepOperator
+                << ", replaceOp.size() = " << replaceOp.size() << "\n";
+    }
+    auto GpuReplacedOperator = [](const exec::Operator* op) {
+      return isAnyOf<
+          exec::OrderBy,
+          exec::TopN,
+          exec::HashAggregation,
+          exec::HashProbe,
+          exec::HashBuild,
+          exec::StreamingAggregation,
+          exec::Limit,
+          exec::LocalPartition,
+          exec::LocalExchange,
+          exec::FilterProject,
+          exec::AssignUniqueId>(op);
+    };
+    auto GpuRetainedOperator =
+        [isTableScanSupported](const exec::Operator* op) {
+          return isAnyOf<exec::Values, exec::LocalExchange, exec::CallbackSink>(
+                     op) ||
+              (isAnyOf<exec::TableScan>(op) && isTableScanSupported(op));
+        };
+    // If GPU operator is supported, then replaceOp should be non-empty and
+    // the operator should not be retained Else the velox operator is retained
+    // as-is
+    auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
+                      keepOperator == 0) ||
+        (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
+    if (CudfConfig::getInstance().debugEnabled) {
+      LOG(INFO) << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
+                << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
+                << std::endl;
+      LOG(INFO) << "GPU operator condition = " << condition << std::endl;
+    }
+    if (!allowCpuFallback) {
+      VELOX_CHECK(condition, "Replacement with cuDF operator failed");
+    } else if (!condition) {
+      LOG(WARNING)
+          << "Replacement with cuDF operator failed. Falling back to CPU execution";
     }
 
     if (not replaceOp.empty()) {
@@ -368,10 +401,10 @@ bool CompileState::compile(bool force_replace) {
 
   if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
-    std::cout << "Operators after adapting for cuDF: count ["
+    LOG(INFO) << "Operators after adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
     }
   }
@@ -382,20 +415,23 @@ bool CompileState::compile(bool force_replace) {
 std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 struct CudfDriverAdapter {
-  bool force_replace_;
-
-  CudfDriverAdapter(bool force_replace) : force_replace_{force_replace} {}
+  CudfDriverAdapter(bool allowCpuFallback)
+      : allowCpuFallback_{allowCpuFallback} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     if (!driver.driverCtx()->queryConfig().get<bool>(
-            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
+        allowCpuFallback_) {
       return false;
     }
     auto state = CompileState(factory, driver);
-    auto res = state.compile(force_replace_);
+    auto res = state.compile(allowCpuFallback_);
     return res;
   }
+
+ private:
+  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
@@ -422,9 +458,14 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{CudfConfig::getInstance().forceReplace};
+  CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+
+  if (CudfConfig::getInstance().astExpressionEnabled) {
+    registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -464,8 +505,15 @@ void CudfConfig::initialize(
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }
-  if (config.find(kCudfForceReplace) != config.end()) {
-    forceReplace = folly::to<bool>(config[kCudfForceReplace]);
+  if (config.find(kCudfAstExpressionEnabled) != config.end()) {
+    astExpressionEnabled = folly::to<bool>(config[kCudfAstExpressionEnabled]);
+  }
+  if (config.find(kCudfAstExpressionPriority) != config.end()) {
+    astExpressionPriority =
+        folly::to<int32_t>(config[kCudfAstExpressionPriority]);
+  }
+  if (config.find(kCudfAllowCpuFallback) != config.end()) {
+    allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);

@@ -140,6 +140,8 @@ using HiveColumnHandleMap =
 
 class HiveTableHandle : public ConnectorTableHandle {
  public:
+  /// @param sampleRate Sampling rate in (0, 1] range. 0.1 means 10% sampling.
+  /// 1.0 means no sampling. Default is no sampling.
   HiveTableHandle(
       std::string connectorId,
       const std::string& tableName,
@@ -147,7 +149,9 @@ class HiveTableHandle : public ConnectorTableHandle {
       common::SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
-      const std::unordered_map<std::string, std::string>& tableParameters = {});
+      const std::unordered_map<std::string, std::string>& tableParameters = {},
+      std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
+      double sampleRate = 1.0);
 
   const std::string& tableName() const {
     return tableName_;
@@ -157,25 +161,51 @@ class HiveTableHandle : public ConnectorTableHandle {
     return tableName();
   }
 
-  bool isFilterPushdownEnabled() const {
+  [[deprecated]] bool isFilterPushdownEnabled() const {
     return filterPushdownEnabled_;
   }
 
+  /// Single field filters that can be applied efficiently during file reading.
   const common::SubfieldFilters& subfieldFilters() const {
     return subfieldFilters_;
   }
 
+  /// Everything else that cannot be converted into subfield filters, but still
+  /// require the data source to filter out.  This is usually less efficient
+  /// than subfield filters but supports arbitrary boolean expression.
   const core::TypedExprPtr& remainingFilter() const {
     return remainingFilter_;
   }
 
-  // Schema of the table.  Need this for reading TEXTFILE.
+  /// Sampling rate between 0 and 1 (excluding 0). 0.1 means 10%
+  /// sampling. 1.0 means no sampling.
+  double sampleRate() const {
+    return sampleRate_;
+  }
+
+  /// Subset of schema of the table that we store in file (i.e.,
+  /// non-partitioning columns).  This must be in the exact order as columns in
+  /// file (except trailing columns), but with the table schema during read
+  /// time.
+  ///
+  /// This is needed for multiple purposes, including reading TEXTFILE and
+  /// handling schema evolution.
   const RowTypePtr& dataColumns() const {
     return dataColumns_;
   }
 
+  /// Extra parameters to pass down to file format reader layer.  Keys should be
+  /// in dwio::common::TableParameter.
   const std::unordered_map<std::string, std::string>& tableParameters() const {
     return tableParameters_;
+  }
+
+  /// Extra columns that are used in filters and remaining filters, but not in
+  /// the output.  If there is overlap with data source assignments parameter,
+  /// the name and types should be the same (the required subfields are taken
+  /// from assignments).
+  const std::vector<HiveColumnHandlePtr> filterColumnHandles() const {
+    return filterColumnHandles_;
   }
 
   std::string toString() const override;
@@ -193,8 +223,10 @@ class HiveTableHandle : public ConnectorTableHandle {
   const bool filterPushdownEnabled_;
   const common::SubfieldFilters subfieldFilters_;
   const core::TypedExprPtr remainingFilter_;
+  const double sampleRate_;
   const RowTypePtr dataColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
+  const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;

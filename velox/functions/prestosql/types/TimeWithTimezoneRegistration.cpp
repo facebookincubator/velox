@@ -13,11 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Time.h"
 #include "velox/type/Type.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox {
 
@@ -41,37 +44,42 @@ StringView TimeWithTimezoneType::valueToString(
   // The time component is a 52 bit value representing the number of
   // milliseconds since midnight in UTC.
 
-  int64_t timeComponent = unpackMillisUtc(value);
+  int64_t millisUtc = util::unpackMillisUtc(value);
 
   // Ensure time component is within valid range
-  VELOX_CHECK_GE(timeComponent, 0, "Time component is negative");
-  VELOX_CHECK_LE(timeComponent, kMillisInDay, "Time component is too large");
-
-  int64_t hours = timeComponent / kMillisInHour;
-  int64_t remainingMs = timeComponent % kMillisInHour;
-  int64_t minutes = remainingMs / kMillisInMinute;
-  remainingMs = remainingMs % kMillisInMinute;
-  int64_t seconds = remainingMs / kMillisInSecond;
-  int64_t millis = remainingMs % kMillisInSecond;
+  VELOX_CHECK_GE(millisUtc, 0, "Time component is negative");
+  VELOX_CHECK_LE(millisUtc, util::kMillisInDay, "Time component is too large");
 
   // TimeZone's are encoded as a 12 bit value.
   // This represents a range of -14:00 to +14:00, with 0 representing UTC.
   // The range is from -840 to 840 minutes, we thus encode by doing bias
   // encoding and taking 840 as the bias.
-  auto timezoneMinutes = unpackZoneKeyId(value);
+  auto timezoneMinutes = util::unpackZoneKeyId(value);
 
   VELOX_CHECK_GE(timezoneMinutes, 0, "Timezone offset is less than -14:00");
   VELOX_CHECK_LE(
       timezoneMinutes, 1680, "Timezone offset is greater than +14:00");
 
-  auto decodedMinutes = timezoneMinutes >= kTimeZoneBias
-      ? timezoneMinutes - kTimeZoneBias
-      : kTimeZoneBias - timezoneMinutes;
+  // Decode timezone offset from bias-encoded value
+  int16_t offsetMinutes = util::decodeTimezoneOffset(timezoneMinutes);
+  auto decodedMinutes = std::abs(offsetMinutes);
 
-  const auto isBehindUTCString = timezoneMinutes >= kTimeZoneBias ? "+" : "-";
+  const auto isBehindUTCString = (offsetMinutes >= 0) ? "+" : "-";
 
-  int16_t offsetHours = decodedMinutes / kMinutesInHour;
-  int16_t remainingOffsetMinutes = decodedMinutes % kMinutesInHour;
+  // Convert UTC time to local time using utility function
+  // Example: If UTC time is 06:30:00 and timezone is +05:30,
+  // the local time is 12:00:00
+  int64_t millisLocal = util::utcToLocalTime(millisUtc, offsetMinutes);
+
+  int64_t hours = millisLocal / util::kMillisInHour;
+  int64_t remainingMs = millisLocal % util::kMillisInHour;
+  int64_t minutes = remainingMs / util::kMillisInMinute;
+  remainingMs = remainingMs % util::kMillisInMinute;
+  int64_t seconds = remainingMs / util::kMillisInSecond;
+  int64_t millis = remainingMs % util::kMillisInSecond;
+
+  int16_t offsetHours = decodedMinutes / util::kMinutesInHour;
+  int16_t remainingOffsetMinutes = decodedMinutes % util::kMinutesInHour;
 
   fmt::format_to_n(
       startPos,
@@ -88,6 +96,34 @@ StringView TimeWithTimezoneType::valueToString(
 }
 
 namespace {
+void castToTime(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  auto* flatResult = result.asFlatVector<int64_t>();
+
+  auto convertToLocalTime = [](int64_t timeWithTimezone) {
+    int64_t millisUtc = util::unpackMillisUtc(timeWithTimezone);
+    auto timezoneMinutes = util::unpackZoneKeyId(timeWithTimezone);
+    int16_t offsetMinutes = util::decodeTimezoneOffset(timezoneMinutes);
+    return util::utcToLocalTime(millisUtc, offsetMinutes);
+  };
+
+  if (input.isConstantEncoding()) {
+    const auto timeWithTimezone =
+        input.as<ConstantVector<int64_t>>()->valueAt(0);
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      flatResult->set(row, convertToLocalTime(timeWithTimezone));
+    });
+    return;
+  }
+  const auto timeWithTimezones = input.as<FlatVector<int64_t>>();
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    const auto timeWithTimezone = timeWithTimezones->valueAt(row);
+    flatResult->set(row, convertToLocalTime(timeWithTimezone));
+  });
+}
 
 void castToString(
     const BaseVector& input,
@@ -111,6 +147,27 @@ void castToString(
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
 }
 
+void castFromString(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  auto* flatResult = result.asFlatVector<int64_t>();
+  DecodedVector decoded(input, rows);
+
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    const auto stringValue = decoded.valueAt<StringView>(row);
+
+    auto parseResult = util::fromTimeWithTimezoneString(stringValue);
+    if (parseResult.hasError()) {
+      context.setStatus(row, parseResult.error());
+      return;
+    }
+
+    flatResult->set(row, parseResult.value());
+  });
+}
+
 class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
   TimeWithTimeZoneCastOperator() = default;
 
@@ -124,6 +181,8 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     switch (other->kind()) {
       case TypeKind::VARCHAR:
         return true;
+      case TypeKind::BIGINT:
+        return other->isTime();
       default:
         return false;
     }
@@ -131,20 +190,29 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
 
   bool isSupportedFromType(const TypePtr& other) const override {
     switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        return true;
       default:
         return false;
     }
   }
 
   void castTo(
-      const BaseVector& /*input*/,
-      exec::EvalCtx& /*context*/,
-      const SelectivityVector& /*rows*/,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
       const TypePtr& resultType,
-      VectorPtr& /*result*/) const override {
-    VELOX_NYI(
-        "Cast to TIME WITH TIME ZONE from {} not yet supported",
-        resultType->toString());
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+    switch (input.typeKind()) {
+      case TypeKind::VARCHAR:
+        castFromString(input, context, rows, *result);
+        break;
+      default:
+        VELOX_UNREACHABLE(
+            "Cast to TIME WITH TIME ZONE from {} not yet supported",
+            input.type()->toString());
+    }
   }
 
   void castFrom(
@@ -157,6 +225,10 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     switch (resultType->kind()) {
       case TypeKind::VARCHAR:
         castToString(input, context, rows, *result);
+        break;
+      case TypeKind::BIGINT:
+        VELOX_CHECK(resultType->isTime());
+        castToTime(input, context, rows, *result);
         break;
       default:
         VELOX_UNREACHABLE(
