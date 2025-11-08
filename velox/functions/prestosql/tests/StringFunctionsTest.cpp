@@ -1048,6 +1048,44 @@ TEST_F(StringFunctionsTest, length) {
   }
 }
 
+TEST_F(StringFunctionsTest, bitLength) {
+  const auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int64_t>("bit_length(c0)", std::move(arg));
+  };
+
+  // Test basic cases
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength("hello"), 40);
+
+  // Test non-ASCII characters
+  EXPECT_EQ(bitLength("hell o\u00EF"), 64);
+  EXPECT_EQ(bitLength("中123"), 48);
+
+  // Single byte characters
+  EXPECT_EQ(bitLength("a"), 8);
+  EXPECT_EQ(bitLength("ab"), 16);
+  EXPECT_EQ(bitLength("abc"), 24);
+
+  // Multi-byte UTF-8 characters
+  EXPECT_EQ(bitLength("é"), 16);
+  EXPECT_EQ(bitLength("€"), 24);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+
+  // Mixed ASCII and Unicode
+  EXPECT_EQ(bitLength("hello世界"), 88);
+
+  // Test with null input
+  EXPECT_EQ(bitLength(std::nullopt), std::nullopt);
+
+  // Test constant vectors
+  auto rows = makeRowVector({makeRowVector(
+      {makeFlatVector<int32_t>(5, [](vector_size_t row) { return row; })})});
+  auto result = evaluate<SimpleVector<int64_t>>("bit_length('test')", rows);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(result->valueAt(i), 32);
+  }
+}
+
 TEST_F(StringFunctionsTest, startsWith) {
   auto startsWith = [&](const std::string& x, const std::string& y) {
     return evaluateOnce<bool>(
@@ -1737,10 +1775,11 @@ TEST_F(StringFunctionsTest, toUtf8) {
   // during execution) to a vector of size 2 and passed on to to_utf8(). Here,
   // if the intermediate flat vector is created for a size > 2 then the function
   // throws.
-  EXPECT_NO_THROW(evaluateSimplified<FlatVector<bool>>(
-      "to_utf8(c0) = to_utf8('this')",
-      makeRowVector({makeNullableFlatVector<StringView>(
-          {std::nullopt, "test"_sv, std::nullopt})})));
+  EXPECT_NO_THROW(
+      evaluateSimplified<FlatVector<bool>>(
+          "to_utf8(c0) = to_utf8('this')",
+          makeRowVector({makeNullableFlatVector<StringView>(
+              {std::nullopt, "test"_sv, std::nullopt})})));
 }
 
 namespace {

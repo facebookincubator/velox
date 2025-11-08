@@ -279,8 +279,9 @@ std::string toStringAlt(
 }
 
 bool checkUtcToEpoch(int year, int mon, int mday, int hour, int min, int sec) {
-  SCOPED_TRACE(fmt::format(
-      "{}-{:02}-{:02} {:02}:{:02}:{:02}", year, mon, mday, hour, min, sec));
+  SCOPED_TRACE(
+      fmt::format(
+          "{}-{:02}-{:02} {:02}:{:02}:{:02}", year, mon, mday, hour, min, sec));
   std::tm tm{};
   tm.tm_sec = sec;
   tm.tm_min = min;
@@ -479,12 +480,13 @@ void testTmToString(
     for (int i = 0; i < 10'000; ++i) {
       auto epoch = dist(gen);
       auto nanos = nanosDist(gen);
-      SCOPED_TRACE(fmt::format(
-          "epoch={}, nanos={}, mode={}, precision={}",
-          epoch,
-          nanos,
-          mode,
-          precision));
+      SCOPED_TRACE(
+          fmt::format(
+              "epoch={}, nanos={}, mode={}, precision={}",
+              epoch,
+              nanos,
+              mode,
+              precision));
       if (gmtime_r(&epoch, &expected)) {
         ASSERT_TRUE(Timestamp::epochToCalendarUtc(epoch, actual));
         checkTm(actual, expected);

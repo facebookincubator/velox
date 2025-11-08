@@ -455,7 +455,7 @@ int32_t CompactRow::variableWidthRowSize(vector_size_t index) const {
       return rowRowSize(index);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected type kind: {}", mapTypeKindToName(typeKind_));
+          "Unexpected type kind: {}", TypeKindName::toName(typeKind_));
   };
 }
 
@@ -718,7 +718,7 @@ int32_t CompactRow::serializeVariableWidth(vector_size_t index, char* buffer)
       return serializeRow(index, buffer);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected type kind: {}", mapTypeKindToName(typeKind_));
+          "Unexpected type kind: {}", TypeKindName::toName(typeKind_));
   };
 }
 

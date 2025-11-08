@@ -248,7 +248,7 @@ class WriterFuzzer {
   };
 
   // Supported partition key column types
-  // According to VectorHasher::typeKindSupportsValueIds and
+  // According to VectorHasher::typeSupportsValueIds and
   // https://github.com/prestodb/presto/blob/10143be627beb2c61aba5b3d36af473d2a8ef65e/presto-hive/src/main/java/com/facebook/presto/hive/HiveUtil.java#L593
   const std::vector<TypePtr> kPartitionKeyTypes_{
       BOOLEAN(),
@@ -365,11 +365,12 @@ void WriterFuzzer::go() {
           sortColumnOffset -= offset;
           sortBy.reserve(sortColumns.size());
           for (const auto& sortByColumn : sortColumns) {
-            sortBy.push_back(std::make_shared<const HiveSortingColumn>(
-                sortByColumn,
-                kSortOrderTypes_.at(
-                    boost::random::uniform_int_distribution<uint32_t>(
-                        0, 1)(rng_))));
+            sortBy.push_back(
+                std::make_shared<const HiveSortingColumn>(
+                    sortByColumn,
+                    kSortOrderTypes_.at(
+                        boost::random::uniform_int_distribution<uint32_t>(
+                            0, 1)(rng_))));
           }
         }
       }
@@ -484,8 +485,9 @@ std::vector<RowVectorPtr> WriterFuzzer::generateInputData(
             partitionValues.at(j - partitionOffset), size));
       }
     }
-    input.push_back(std::make_shared<RowVector>(
-        pool_.get(), inputType, nullptr, size, std::move(children)));
+    input.push_back(
+        std::make_shared<RowVector>(
+            pool_.get(), inputType, nullptr, size, std::move(children)));
   }
 
   return input;

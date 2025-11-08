@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         .addBenchmarkSet(
             fmt::format(
                 "array_constructor_{}_{}{}",
-                mapTypeKindToName(type->kind()),
+                TypeKindName::toName(type->kind()),
                 withNulls ? "nulls" : "nullfree",
                 suffix),
             input)

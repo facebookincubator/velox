@@ -19,9 +19,11 @@ add_library(
   HashJoinReplayer.cpp
   IndexLookupJoinReplayer.cpp
   OperatorReplayerBase.cpp
+  OrderByReplayer.cpp
   PartitionedOutputReplayer.cpp
   TableScanReplayer.cpp
   TableWriterReplayer.cpp
+  TopNRowNumberReplayer.cpp
   TraceReplayRunner.cpp
   TraceReplayTaskRunner.cpp
   UnnestReplayer.cpp

@@ -122,11 +122,12 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
       // results if we use local time.
       const tz::TimeZone* timeZone =
           tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
-      auto originalTimestamp =
-          Timestamp::fromMillis(timeZone
-                                    ->to_local(std::chrono::milliseconds(
-                                        unpackMillisUtc(timestampWithTimezone)))
-                                    .count());
+      auto originalTimestamp = Timestamp::fromMillis(
+          timeZone
+              ->to_local(
+                  std::chrono::milliseconds(
+                      unpackMillisUtc(timestampWithTimezone)))
+              .count());
       auto updatedTimeStamp =
           addToTimestamp(originalTimestamp, unit, (int32_t)value);
       updatedTimeStamp = Timestamp(
@@ -171,15 +172,17 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     // doesn't affect time units less than a day, and will produce incorrect
     // results if we use local time.
     const tz::TimeZone* timeZone = tz::locateZone(fromTimeZoneId);
-    fromTimestamp = Timestamp::fromMillis(
-        timeZone
-            ->to_local(std::chrono::milliseconds(
-                unpackMillisUtc(fromTimestampWithTimeZone)))
-            .count());
+    fromTimestamp =
+        Timestamp::fromMillis(timeZone
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          fromTimestampWithTimeZone)))
+                                  .count());
     toTimestamp =
         Timestamp::fromMillis(timeZone
-                                  ->to_local(std::chrono::milliseconds(
-                                      unpackMillisUtc(toTimestampWithTimeZone)))
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          toTimestampWithTimeZone)))
                                   .count());
   }
 
@@ -220,18 +223,20 @@ int64_t diffTime(
     return 0;
   }
 
-  // TIME values are milliseconds since midnight
-  int64_t diffMillis = toTime - fromTime;
+  // Use std::chrono for safe duration arithmetic
+  const auto fromDuration = std::chrono::milliseconds(fromTime);
+  const auto toDuration = std::chrono::milliseconds(toTime);
+  const auto diff = toDuration - fromDuration;
 
   switch (unit) {
     case DateTimeUnit::kMillisecond:
-      return diffMillis;
+      return diff.count();
     case DateTimeUnit::kSecond:
-      return diffMillis / kMillisInSecond;
+      return std::chrono::duration_cast<std::chrono::seconds>(diff).count();
     case DateTimeUnit::kMinute:
-      return diffMillis / kMillisInMinute;
+      return std::chrono::duration_cast<std::chrono::minutes>(diff).count();
     case DateTimeUnit::kHour:
-      return diffMillis / kMillisInHour;
+      return std::chrono::duration_cast<std::chrono::hours>(diff).count();
     default:
       VELOX_USER_FAIL("Unsupported time unit for TIME type");
   }

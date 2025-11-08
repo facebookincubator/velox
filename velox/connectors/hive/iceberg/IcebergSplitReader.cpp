@@ -141,4 +141,57 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   return rowsScanned;
 }
 
+std::vector<TypePtr> IcebergSplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const RowTypePtr& tableSchema) const {
+  std::vector<TypePtr> columnTypes = fileType->children();
+  auto& childrenSpecs = scanSpec_->children();
+  // Iceberg table stores all column's data in data file.
+  for (const auto& childSpec : childrenSpecs) {
+    const std::string& fieldName = childSpec->fieldName();
+    if (auto iter = hiveSplit_->infoColumns.find(fieldName);
+        iter != hiveSplit_->infoColumns.end()) {
+      auto infoColumnType = readerOutputType_->findChild(fieldName);
+      auto constant = newConstantFromString(
+          infoColumnType,
+          iter->second,
+          connectorQueryCtx_->memoryPool(),
+          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()),
+          false);
+      childSpec->setConstantValue(constant);
+    } else {
+      auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
+      auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+      if (outputTypeIdx.has_value() && fileTypeIdx.has_value()) {
+        childSpec->setConstantValue(nullptr);
+        auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
+        columnTypes[*fileTypeIdx] = outputType;
+      } else if (!fileTypeIdx.has_value()) {
+        // Handle columns missing from the data file in two scenarios:
+        // 1. Schema evolution: Column was added after the data file was
+        // written and doesn't exist in older data files.
+        // 2. Partition columns: Hive migrated table. In Hive-written data
+        // files, partition column values are stored in partition metadata
+        // rather than in the data file itself, following Hive's partitioning
+        // convention.
+        if (auto it = hiveSplit_->partitionKeys.find(fieldName);
+            it != hiveSplit_->partitionKeys.end()) {
+          setPartitionValue(childSpec.get(), fieldName, it->second);
+        } else {
+          childSpec->setConstantValue(
+              BaseVector::createNullConstant(
+                  tableSchema->findChild(fieldName),
+                  1,
+                  connectorQueryCtx_->memoryPool()));
+        }
+      }
+    }
+  }
+
+  scanSpec_->resetCachedValues(false);
+
+  return columnTypes;
+}
+
 } // namespace facebook::velox::connector::hive::iceberg

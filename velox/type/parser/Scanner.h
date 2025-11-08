@@ -40,6 +40,8 @@ class Scanner : public yyFlexLexer {
         outputType_(outputType),
         input_(input) {}
 
+  ~Scanner() = default;
+
   int lex(Parser::semantic_type* yylval);
 
   void setType(TypePtr type) {

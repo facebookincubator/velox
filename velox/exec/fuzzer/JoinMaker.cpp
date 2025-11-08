@@ -62,10 +62,11 @@ std::vector<core::PlanNodePtr> makeSourcesForPartitionedJoinPlan(
 
   std::vector<core::PlanNodePtr> sourceNodes;
   for (const auto& sourceInput : sourceInputs) {
-    sourceNodes.push_back(test::PlanBuilder(planNodeIdGenerator)
-                              .values(sourceInput)
-                              .projectExpressions(joinSource->projections())
-                              .planNode());
+    sourceNodes.push_back(
+        test::PlanBuilder(planNodeIdGenerator)
+            .values(sourceInput)
+            .projectExpressions(joinSource->projections())
+            .planNode());
   }
 
   return sourceNodes;

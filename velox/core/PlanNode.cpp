@@ -1155,8 +1155,9 @@ std::vector<TypedExprPtr> flattenExprs(
 
   const auto& sourceType = input->outputType();
   for (auto& name : moreNames) {
-    result.push_back(std::make_shared<FieldAccessTypedExpr>(
-        sourceType->findChild(name), name));
+    result.push_back(
+        std::make_shared<FieldAccessTypedExpr>(
+            sourceType->findChild(name), name));
   }
   return result;
 }

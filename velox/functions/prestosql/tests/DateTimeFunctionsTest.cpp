@@ -154,12 +154,13 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   int32_t getCurrentDate(const std::optional<std::string>& timeZone) {
-    return parseDate(date::format(
-        "%Y-%m-%d",
-        timeZone.has_value()
-            ? tzdb::zoned_time(
-                  timeZone.value(), std::chrono::system_clock::now())
-            : tzdb::zoned_time(std::chrono::system_clock::now())));
+    return parseDate(
+        date::format(
+            "%Y-%m-%d",
+            timeZone.has_value()
+                ? tzdb::zoned_time(
+                      timeZone.value(), std::chrono::system_clock::now())
+                : tzdb::zoned_time(std::chrono::system_clock::now())));
   }
 };
 
@@ -172,7 +173,7 @@ bool operator==(
 
 TEST_F(DateTimeFunctionsTest, dateTruncSignatures) {
   auto signatures = getSignatureStrings("date_trunc");
-  ASSERT_EQ(3, signatures.size());
+  ASSERT_EQ(4, signatures.size());
 
   ASSERT_EQ(
       1,
@@ -180,6 +181,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncSignatures) {
           "(varchar,timestamp with time zone) -> timestamp with time zone"));
   ASSERT_EQ(1, signatures.count("(varchar,date) -> date"));
   ASSERT_EQ(1, signatures.count("(varchar,timestamp) -> timestamp"));
+  ASSERT_EQ(1, signatures.count("(varchar,time) -> time"));
 }
 
 TEST_F(DateTimeFunctionsTest, parseDatetimeSignatures) {
@@ -276,8 +278,9 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeRountTrip) {
 TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
   const auto fromUnixtime = [&](std::optional<double> timestamp,
                                 std::optional<std::string> timezoneName) {
-    return TimestampWithTimezone::unpack(evaluateOnce<int64_t>(
-        "from_unixtime(c0, c1)", timestamp, timezoneName));
+    return TimestampWithTimezone::unpack(
+        evaluateOnce<int64_t>(
+            "from_unixtime(c0, c1)", timestamp, timezoneName));
   };
 
   // Check null behavior.
@@ -3277,7 +3280,9 @@ TEST_F(DateTimeFunctionsTest, dateAddTime) {
   EXPECT_EQ(std::nullopt, dateAdd("second", std::nullopt, std::nullopt));
 
   // test invalid units (TIME only supports time-related units, not
-  // date-related)
+  // date-related, and not microsecond which is not supported in Presto)
+  VELOX_ASSERT_THROW(
+      dateAdd("microsecond", 1, 0), "microsecond is not a valid TIME field");
   VELOX_ASSERT_THROW(dateAdd("day", 1, 0), "day is not a valid TIME field");
   VELOX_ASSERT_THROW(dateAdd("week", 1, 0), "week is not a valid TIME field");
   VELOX_ASSERT_THROW(dateAdd("month", 1, 0), "month is not a valid TIME field");
@@ -6385,8 +6390,11 @@ TEST_F(DateTimeFunctionsTest, dateDiffTime) {
   EXPECT_EQ(std::nullopt, dateDiff("second", std::nullopt, 1000));
   EXPECT_EQ(std::nullopt, dateDiff("second", std::nullopt, std::nullopt));
 
-  // Test invalid units (TIME only supports time-related units, not
-  // date-related)
+  // Test invalid units (TIME only supports millisecond, second, minute, and
+  // hour - microsecond is not supported in Presto)
+  VELOX_ASSERT_THROW(
+      dateDiff("microsecond", 0, 1000),
+      "microsecond is not a valid TIME field");
   VELOX_ASSERT_THROW(dateDiff("day", 0, 1000), "day is not a valid TIME field");
   VELOX_ASSERT_THROW(
       dateDiff("week", 0, 1000), "week is not a valid TIME field");
@@ -6492,6 +6500,58 @@ TEST_F(DateTimeFunctionsTest, dateTruncDateVariableUnit) {
       DATE());
 
   assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncTime) {
+  const auto dateTrunc = [&](const std::string& unit,
+                             std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        fmt::format("date_trunc('{}', c0)", unit), TIME(), time);
+  };
+
+  EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
+
+  // TIME value: 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time1 = 11045321;
+
+  EXPECT_EQ(11045321, dateTrunc("millisecond", time1)); // no change
+  EXPECT_EQ(11045000, dateTrunc("second", time1)); // 03:04:05.000
+  EXPECT_EQ(11040000, dateTrunc("minute", time1)); // 03:04:00.000
+  EXPECT_EQ(10800000, dateTrunc("hour", time1)); // 03:00:00.000
+
+  // TIME value: 00:00:00.000 = 0 ms (midnight)
+  EXPECT_EQ(0, dateTrunc("millisecond", 0));
+  EXPECT_EQ(0, dateTrunc("second", 0));
+  EXPECT_EQ(0, dateTrunc("minute", 0));
+  EXPECT_EQ(0, dateTrunc("hour", 0));
+
+  // TIME value: 23:59:59.999 = (23*3600 + 59*60 + 59)*1000 + 999 = 86399999 ms
+  const int64_t time2 = 86399999;
+  EXPECT_EQ(86399999, dateTrunc("millisecond", time2)); // no change
+  EXPECT_EQ(86399000, dateTrunc("second", time2)); // 23:59:59.000
+  EXPECT_EQ(86340000, dateTrunc("minute", time2)); // 23:59:00.000
+  EXPECT_EQ(82800000, dateTrunc("hour", time2)); // 23:00:00.000
+
+  // TIME value: 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time3 = 45045123;
+  EXPECT_EQ(45045123, dateTrunc("millisecond", time3)); // no change
+  EXPECT_EQ(45045000, dateTrunc("second", time3)); // 12:30:45.000
+  EXPECT_EQ(45000000, dateTrunc("minute", time3)); // 12:30:00.000
+  EXPECT_EQ(43200000, dateTrunc("hour", time3)); // 12:00:00.000
+
+  // Invalid unit tests - TIME only supports millisecond, second, minute, and
+  // hour (microsecond is not supported in Presto)
+  VELOX_ASSERT_THROW(
+      dateTrunc("microsecond", time1), "microsecond is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateTrunc("day", time1), "day is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("week", time1), "week is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("month", time1), "month is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("quarter", time1), "quarter is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("year", time1), "year is not a valid TIME field");
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTimestampVariableUnit) {

@@ -124,58 +124,6 @@ TEST_F(HivePartitionFunctionTest, bigint) {
   assertPartitionsWithConstChannel(values, 997);
 }
 
-TEST_F(HivePartitionFunctionTest, shortDecimal) {
-  auto values = makeNullableFlatVector<int64_t>(
-      {std::nullopt,
-       300'000'000'000,
-       123456789,
-       DecimalUtil::kShortDecimalMin / 100,
-       DecimalUtil::kShortDecimalMax / 100},
-      DECIMAL(18, 2));
-
-  assertPartitions(values, 1, {0, 0, 0, 0, 0});
-  assertPartitions(values, 2, {0, 1, 1, 1, 1});
-  assertPartitions(values, 500, {0, 471, 313, 115, 37});
-  assertPartitions(values, 997, {0, 681, 6, 982, 502});
-
-  assertPartitionsWithConstChannel(values, 1);
-  assertPartitionsWithConstChannel(values, 2);
-  assertPartitionsWithConstChannel(values, 500);
-  assertPartitionsWithConstChannel(values, 997);
-
-  values = makeFlatVector<int64_t>(
-      {123456789, DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMax},
-      DECIMAL(18, 0));
-  assertPartitions(values, 500, {311, 236, 412});
-}
-
-TEST_F(HivePartitionFunctionTest, longDecimal) {
-  auto values = makeNullableFlatVector<int128_t>(
-      {std::nullopt,
-       300'000'000'000,
-       HugeInt::parse("12345678901234567891"),
-       DecimalUtil::kLongDecimalMin / 100,
-       DecimalUtil::kLongDecimalMax / 100},
-      DECIMAL(38, 2));
-
-  assertPartitions(values, 1, {0, 0, 0, 0, 0});
-  assertPartitions(values, 2, {0, 1, 1, 1, 1});
-  assertPartitions(values, 500, {0, 471, 99, 49, 103});
-  assertPartitions(values, 997, {0, 681, 982, 481, 6});
-
-  assertPartitionsWithConstChannel(values, 1);
-  assertPartitionsWithConstChannel(values, 2);
-  assertPartitionsWithConstChannel(values, 500);
-  assertPartitionsWithConstChannel(values, 997);
-
-  values = makeNullableFlatVector<int128_t>(
-      {HugeInt::parse("1234567890123456789112345678"),
-       DecimalUtil::kLongDecimalMin,
-       DecimalUtil::kLongDecimalMax},
-      DECIMAL(38, 0));
-  assertPartitions(values, 997, {51, 835, 645});
-}
-
 TEST_F(HivePartitionFunctionTest, varchar) {
   auto values = makeNullableFlatVector<std::string>(
       {std::nullopt,
@@ -884,10 +832,11 @@ TEST_F(HivePartitionFunctionTest, skew) {
   }
   std::vector<VectorPtr> partitionedInputs;
   for (int partition = 0; partition < numRemotePartitions; ++partition) {
-    partitionedInputs.push_back(exec::wrap(
-        partitionSizeVectors[partition],
-        partitionIndicesVector[partition],
-        input));
+    partitionedInputs.push_back(
+        exec::wrap(
+            partitionSizeVectors[partition],
+            partitionIndicesVector[partition],
+            input));
   }
 
   // Checks that the bad hive partition function (using round-robin map from

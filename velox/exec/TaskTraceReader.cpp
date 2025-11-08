@@ -31,9 +31,10 @@ TaskTraceMetadataReader::TaskTraceMetadataReader(
       traceFilePath_(getTaskTraceMetaFilePath(traceDir_)),
       pool_(pool),
       metadataObj_(getTaskMetadata(traceFilePath_, fs_)),
-      tracePlanNode_(ISerializable::deserialize<core::PlanNode>(
-          metadataObj_[TraceTraits::kPlanNodeKey],
-          pool_)) {}
+      tracePlanNode_(
+          ISerializable::deserialize<core::PlanNode>(
+              metadataObj_[TraceTraits::kPlanNodeKey],
+              pool_)) {}
 
 std::unordered_map<std::string, std::string>
 TaskTraceMetadataReader::queryConfigs() const {

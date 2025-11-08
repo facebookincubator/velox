@@ -902,8 +902,8 @@ TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
 
   task->start(1);
 
-  ASSERT_FALSE(
-      task->hasMixedExecutionGroupJoin(dynamic_cast<const core::HashJoinNode*>(
+  ASSERT_FALSE(task->hasMixedExecutionGroupJoin(
+      dynamic_cast<const core::HashJoinNode*>(
           nonMixedGroupedModeJoinNode.get())));
   ASSERT_TRUE(task->hasMixedExecutionGroupJoin(
       dynamic_cast<const core::HashJoinNode*>(mixedGroupedModeJoinNode.get())));
@@ -2617,10 +2617,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kAggregationSpillEnabled, true)
           .maxDrivers(1)
-          .plan(PlanBuilder()
-                    .values(inputVectors)
-                    .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                    .planNode())
+          .plan(
+              PlanBuilder()
+                  .values(inputVectors)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
           .assertResults(
               "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1"),
       spillTableError);
@@ -2645,10 +2646,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskDeletionPromise) {
   std::thread queryThread([&]() {
     AssertQueryBuilder(duckDbQueryRunner_)
         .maxDrivers(1)
-        .plan(PlanBuilder()
-                  .values(inputVectors)
-                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                  .planNode())
+        .plan(
+            PlanBuilder()
+                .values(inputVectors)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
         .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
   });
 

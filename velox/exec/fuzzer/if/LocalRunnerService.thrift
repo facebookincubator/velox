@@ -15,91 +15,21 @@
  */
 
 // This file defines a Thrift service for executing Velox query plans remotely.
-// It provides a type system for representing query results and a service interface
-// for executing serialized query plans with configurable parallelism.
+// Results are returned using Presto's binary serialization format for efficient
+// data transfer.
 
 namespace cpp2 facebook.velox.runner
 
-// Represents a HUGEINT value by splitting it into most significant and least
-// significant components.
-struct i128 {
-  1: i64 msb;
-  2: i64 lsb;
-}
-
-// Represents a timestamp value with seconds and nanoseconds components.
-struct Timestamp {
-  1: i64 seconds;
-  2: i64 nanos;
-}
-
-// A tagged union representing all supported scalar (primitive) data types.
-// Only one field will be set at a time, corresponding to the actual type of the value.
-union ScalarValue {
-  1: bool boolValue;
-  2: byte tinyintValue;
-  3: i16 smallintValue;
-  4: i32 integerValue;
-  5: i64 bigintValue;
-  6: float realValue;
-  7: double doubleValue;
-  8: string varcharValue;
-  9: binary varbinaryValue;
-  10: Timestamp timestampValue;
-  11: i128 hugeintValue;
-}
-
-// Represents an ARRAY type, containing an ordered list of values.
-// All values in the array are of the same type.
-struct Array {
-  1: list<Value> values;
-}
-
-// Represents a MAP type, containing key-value pairs.
-// Keys and values can be of any supported type.
-struct Map {
-  1: map<Value, Value> values;
-}
-
-// Represents a ROW (struct) type, containing an ordered list of field values.
-// Each field can have a different type.
-struct Row {
-  1: list<Value> fieldValues;
-}
-
-// A tagged union representing complex (nested) data types.
-// Only one field will be set at a time, corresponding to the actual complex type.
-union ComplexValue {
-  1: Array arrayValue;
-  2: Map mapValue;
-  3: Row rowValue;
-}
-
-// Represents a single value of any supported data type.
-// A value can be:
-// - A scalar (primitive) value
-// - A complex (nested) value
-// - NULL (indicated by isNull = true)
-struct Value {
-  1: optional ScalarValue scalarValue;
-  2: optional ComplexValue complexValue;
-  3: bool isNull;
-}
-
-// Represents a single column of data in columnar format.
-// Contains all values for one column across multiple rows.
-struct Column {
-  1: list<Value> rows;
-}
-
-// Represents a batch of rows in columnar format.
-// This is the fundamental unit of data transfer, containing multiple columns
-// and metadata about the schema.
+// Represents a batch of rows using Presto's binary serialization format.
+// The serialized data can be deserialized using PrestoVectorSerde to reconstruct
+// the original RowVector.
 struct Batch {
-  1: list<Column> columns;
+  // Binary serialized RowVector data in Presto format
+  1: binary serializedData;
+  // Column names in the RowVector
   2: list<string> columnNames;
+  // Column type strings in the RowVector
   3: list<string> columnTypes;
-  4: i32 numRows;
 }
 
 // Request to execute a serialized Velox query plan.

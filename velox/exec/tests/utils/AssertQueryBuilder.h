@@ -182,14 +182,16 @@ class AssertQueryBuilder {
       const TypePtr& expectedType,
       vector_size_t expectedNumRows);
 
-  /// Run the query and collect all results into a single vector. Throws if
-  /// query returns empty result.
+  /// Run the query and collect all results into a single vector.
   RowVectorPtr copyResults(memory::MemoryPool* pool);
 
   /// Similar to above method and also returns the task.
   RowVectorPtr copyResults(
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
+
+  /// Run the query and copy the result Vectors as their original batches.
+  std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
 
   /// Run the query and return the number of result rows.
   uint64_t runWithoutResults(std::shared_ptr<Task>& task);

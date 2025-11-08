@@ -16,8 +16,12 @@
 
 #pragma once
 
-#include <folly/concurrency/ConcurrentHashMap.h>
+#include <folly/container/F14Map.h>
 #include <cstdint>
+#include <mutex>
+
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::cache {
 
@@ -72,12 +76,6 @@ struct TrackingData {
   double referencedBytes{};
   double lastReferencedBytes{};
   double readBytes{};
-
-  bool operator==(const TrackingData& other) const {
-    return referencedBytes == other.referencedBytes &&
-        lastReferencedBytes == other.lastReferencedBytes &&
-        readBytes == other.readBytes;
-  }
 };
 
 /// Tracks column access frequency during execution of a query. A ScanTracker is
@@ -134,7 +132,8 @@ class ScanTracker {
   /// Returns the percentage of referenced columns that are actually read. 100%
   /// if no data.
   int32_t readPct(TrackingId id) {
-    const auto data = data_[id];
+    std::lock_guard<std::mutex> l(mutex_);
+    const auto& data = data_[id];
     if (data.referencedBytes == 0) {
       return 100;
     }
@@ -142,6 +141,7 @@ class ScanTracker {
   }
 
   TrackingData trackingData(TrackingId id) {
+    std::lock_guard<std::mutex> l(mutex_);
     return data_[id];
   }
 
@@ -161,7 +161,9 @@ class ScanTracker {
   const std::function<void(ScanTracker*)> unregisterer_{nullptr};
   FileGroupStats* const fileGroupStats_;
 
-  folly::ConcurrentHashMap<TrackingId, TrackingData> data_;
+  std::mutex mutex_;
+  folly::F14FastMap<TrackingId, TrackingData> data_;
+  TrackingData sum_;
 };
 
 } // namespace facebook::velox::cache

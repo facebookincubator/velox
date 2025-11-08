@@ -33,6 +33,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -1440,9 +1441,10 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
         .joinType(core::JoinType::kAnti)
         .joinFilter(filter)
         .joinOutputLayout({"t0", "t1"})
-        .referenceQuery(fmt::format(
-            "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
+                filter))
         .run();
   }
 }
@@ -2965,8 +2967,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
-            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+                filter))
         .injectSpill(false)
         .run();
 
@@ -2976,9 +2980,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     // these values.
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
-            "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
+                filter))
         .injectSpill(false)
         .run();
   }
@@ -3322,8 +3327,9 @@ TEST_F(HashJoinTest, lazyVectors) {
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
+        buildSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(
+                tempFiles[probeSplits.size() + i]->getPath())));
       }
       SplitInput splits;
       splits.emplace(probeScanId, probeSplits);
@@ -6082,9 +6088,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6133,9 +6140,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6220,8 +6228,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
                   .planNode();
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
-        "minSpillableReservationPct: {}", minSpillableReservationPct));
+    SCOPED_TRACE(
+        fmt::format(
+            "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::HashBuild::addInput",
@@ -8252,5 +8261,237 @@ TEST_F(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
       << result->size() << " rows";
 }
 
+/// Test hash join where build-side keys have a type that supports custom
+/// comparison and come from a small range which would allow for array-based
+/// lookup instead of a hash table for other types.
+TEST_F(HashJoinTest, arrayBasedLookupCustomComparisonType) {
+  std::vector<RowVectorPtr> probeVectors = {
+      makeRowVector({makeFlatVector<int64_t>(
+          1'024,
+          [](auto row) { return row; },
+          nullptr,
+          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+
+  std::vector<RowVectorPtr> buildVectors = {
+      makeRowVector({makeFlatVector<int64_t>(
+          256,
+          [](auto row) { return row; },
+          nullptr,
+          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan = PlanBuilder(planNodeIdGenerator)
+                       .values({buildVectors})
+                       .project({"c0 as right"})
+                       .planNode();
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .project({"c0 as left"})
+                  .hashJoin(
+                      {"left"},
+                      {"right"},
+                      rightPlan,
+                      "",
+                      {"left"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  // The probe side consists of the values 0-1023, the build side consists of
+  // the values 0-255. If custom comparison is not respected, the join will
+  // produce 256 values (0-255). When custom comparison is respected equality is
+  // treated mod 256 so we get 1024 values (0-1023).
+  EXPECT_EQ(result->size(), 1'024);
+}
+
+DEBUG_ONLY_TEST_F(
+    HashJoinTest,
+    hashProbeShouldYieldWhenFilterConsistentlyRejectAll) {
+  const uint32_t kProbeSize = 100;
+  const uint32_t kBuildSize = 10'000;
+  const uint64_t kDriverCpuTimeSliceLimitMs = 1'000;
+  const std::string kLargeBatchSize =
+      folly::to<std::string>(kProbeSize * kBuildSize);
+
+  struct {
+    uint32_t numGetOutputCalls;
+    bool hasDelay;
+    std::string debugString() const {
+      return fmt::format(
+          "numGetOutputCalls: {}, hasDelay: {}", numGetOutputCalls, hasDelay);
+    }
+  } testSettings[] = {{0, false}, {0, true}};
+
+  // Create probe data with keys 0-99 and an additional filter column
+  const auto probeData = makeRowVector(
+      {"t_k1", "t_filter"},
+      {
+          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              kProbeSize,
+              [](/*row=*/auto) { return 1; }), // All rows have value 1
+      });
+
+  const auto buildData = makeRowVector(
+      {"u_k1"},
+      {
+          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {probeData});
+  createDuckDbTable("u", {buildData});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData})
+          .hashJoin(
+              {"t_k1"},
+              {"u_k1"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              // Filter that DOES find join matches but then rejects all of them
+              // This ensures numOut > 0 after listJoinResults, but == 0 after
+              // evalFilter All probe rows have t_filter=1, so the condition
+              // t_filter > 100000 rejects all
+              "t_filter > 100000",
+              {"t_k1", "u_k1"},
+              core::JoinType::kInner)
+          .planNode();
+
+  for (auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    std::atomic_int hashProbeGetOutputCalls{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::getOutput",
+        std::function<void(Operator*)>([&](Operator* op) {
+          if (op->operatorType() == "HashProbe") {
+            // Inject delay on the 2nd getOutput call when hasDelay is true
+            // This simulates the scenario where:
+            // 1. First getOutput: Probe data added via addInput
+            // 2. Second getOutput: Join finds matches, filter rejects all
+            //    During this call, we inject delay INSIDE the processing
+            //    to simulate CPU-intensive work in the loop
+            if (hashProbeGetOutputCalls.fetch_add(1) == 1 &&
+                testData.hasDelay) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(2 * kDriverCpuTimeSliceLimitMs));
+            }
+          }
+        }));
+
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({
+            {core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+             folly::to<std::string>(kDriverCpuTimeSliceLimitMs)},
+            {core::QueryConfig::kPreferredOutputBatchRows, kLargeBatchSize},
+        }));
+
+    AssertQueryBuilder(planNode, duckDbQueryRunner_)
+        .queryCtx(queryCtx)
+        .maxDrivers(1)
+        .assertResults(
+            "SELECT t_k1, u_k1 FROM t, u WHERE t_k1 = u_k1 AND t_filter > 100000");
+    testData.numGetOutputCalls = hashProbeGetOutputCalls.load();
+  }
+  ASSERT_LT(
+      testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
+}
+
+// This test validates that when spillOutput() is running (toSpillOutput=true),
+// the operator should NOT yield even when shouldYield() returns true. This is
+// critical because yielding during spillOutput would break the spilling loop.
+DEBUG_ONLY_TEST_F(
+    HashJoinTest,
+    spillOutputShouldNotYieldWhenFilterConsistentlyRejectAll) {
+  const uint32_t kProbeSize = 100;
+  const uint32_t kBuildSize = 10'000;
+  const uint64_t driverCpuTimeSliceLimitMs = 1'000;
+  const std::string largeBatchSize =
+      folly::to<std::string>(kProbeSize * kBuildSize);
+
+  // Create probe data with keys 0-99 and an additional filter column
+  const auto probeData = makeRowVector(
+      {"t_k1", "t_filter"},
+      {
+          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              kProbeSize,
+              [](/*row=*/auto) { return 1; }), // All rows have value 1
+      });
+
+  const auto buildData = makeRowVector(
+      {"u_k1"},
+      {
+          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {probeData});
+  createDuckDbTable("u", {buildData});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData})
+          .hashJoin(
+              {"t_k1"},
+              {"u_k1"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              // Filter that DOES find join matches but then rejects all of them
+              // This ensures numOut > 0 after listJoinResults, but == 0 after
+              // evalFilter. All probe rows have t_filter=1, so the condition
+              // t_filter > 100000 rejects all
+              "t_filter > 100000",
+              {"t_k1", "u_k1"},
+              core::JoinType::kInner)
+          .planNode();
+
+  std::atomic_bool spillTriggered{false};
+  ::facebook ::velox ::common ::testutil ::ScopedTestValue _scopedTestValue5200(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (spillTriggered.load() || op->operatorType() != "HashProbe" ||
+            !op->testingHasInput()) {
+          return;
+        }
+        spillTriggered = true;
+        testingRunArbitration(op->pool());
+      }));
+
+  // We inject delay in reclaim to trigger shouldYield().
+  // The test verifies that the query completes successfully despite
+  // shouldYield() returning true, which would only happen if the
+  // !toSpillOutput check prevents early return.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashProbe::reclaim",
+      std::function<void(HashProbe*)>([&](HashProbe* probe) {
+        if (!spillTriggered.load()) {
+          return;
+        }
+        // Inject delay once to trigger shouldYield()
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(2 * driverCpuTimeSliceLimitMs));
+      }));
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  AssertQueryBuilder(planNode, duckDbQueryRunner_)
+      .queryCtx(core::QueryCtx::create(driverExecutor_.get()))
+      .maxDrivers(1)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kJoinSpillEnabled, true)
+      .config(core::QueryConfig::kSpillStartPartitionBit, 29)
+      .config(
+          core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+          driverCpuTimeSliceLimitMs)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, largeBatchSize)
+      .assertResults(
+          "SELECT t_k1, u_k1 FROM t, u WHERE t_k1 = u_k1 AND t_filter > 100000");
+
+  ASSERT_TRUE(spillTriggered.load());
+}
 } // namespace
 } // namespace facebook::velox::exec

@@ -99,7 +99,7 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     default:
       VELOX_FAIL(
           "buildReader unhandled type: " +
-          mapTypeKindToName(fileType->type()->kind()));
+          std::string(TypeKindName::toName(fileType->type()->kind())));
   }
 }
 

@@ -37,6 +37,7 @@ permissions:
 
 env:
   BASE_NAME: ghcr.io/facebookincubator
+  DOCKER_UPLOAD_CACHE: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
 
 jobs:
   multi-arch-base:
@@ -84,8 +85,6 @@ jobs:
       - name: Bake Images
         id: bake
         uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6.9.0
-        env:
-          DOCKER_UPLOAD_CACHE: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
         with:
           targets: ${{ matrix.target }}-${{ matrix.os.platform }}
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}

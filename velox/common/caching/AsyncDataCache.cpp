@@ -129,10 +129,11 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
     } else {
       // No memory to cover 'this'.
       release();
-      VELOX_CACHE_ERROR(fmt::format(
-          "Failed to allocate {} pages for cache: {}",
-          sizePages,
-          cache->allocator()->getAndClearFailureMessage()));
+      VELOX_CACHE_ERROR(
+          fmt::format(
+              "Failed to allocate {} pages for cache: {}",
+              sizePages,
+              cache->allocator()->getAndClearFailureMessage()));
     }
   }
 }
@@ -1068,8 +1069,9 @@ CoalesceIoStats readPins(
       [&](int32_t size, std::vector<folly::Range<char*>>& ranges) {
         // This hack allows us to store the size of the gap in the Range,
         // without actually allocating a buffer for it.
-        ranges.push_back(folly::Range<char*>(
-            nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
+        ranges.push_back(
+            folly::Range<char*>(
+                nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
       },
       std::move(readFunc));
 }

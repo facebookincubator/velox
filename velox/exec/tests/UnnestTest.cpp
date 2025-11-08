@@ -848,15 +848,16 @@ TEST_P(UnnestTest, barrier) {
   // Unnest 1K rows into 3K rows.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId unnestPlanNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
-                        .startTableScan()
-                        .outputType(std::dynamic_pointer_cast<const RowType>(
-                            vectors[0]->type()))
-                        .endTableScan()
-                        .project({"sequence(1, 3) as s"})
-                        .unnest({}, {"s"})
-                        .capturePlanNodeId(unnestPlanNodeId)
-                        .planNode();
+  const auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(
+              std::dynamic_pointer_cast<const RowType>(vectors[0]->type()))
+          .endTableScan()
+          .project({"sequence(1, 3) as s"})
+          .unnest({}, {"s"})
+          .capturePlanNodeId(unnestPlanNodeId)
+          .planNode();
 
   const auto expectedResult = makeRowVector({
       makeFlatVector<int64_t>(

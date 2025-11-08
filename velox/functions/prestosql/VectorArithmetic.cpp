@@ -361,11 +361,12 @@ class ArithmeticRegistration {
         "tinyint", "smallint", "integer", "bigint", "real", "double"};
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
     for (const auto& type : types) {
-      signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                  .returnType(type)
-                                  .argumentType(type)
-                                  .argumentType(type)
-                                  .build());
+      signatures.emplace_back(
+          exec::FunctionSignatureBuilder()
+              .returnType(type)
+              .argumentType(type)
+              .argumentType(type)
+              .build());
     }
 
     registerVectorFunction(
