@@ -54,9 +54,7 @@ def git_changed_lines(commit):
 
             changed_lines[file] = [int(lspan[0]), int(lspan[0]) + int(lspan[1])]
 
-    return json.dumps(
-        [{"name": key, "lines": value} for key, value in changed_lines.items()]
-    )
+    return changed_lines
 
 
 def check_output(output):
@@ -69,19 +67,23 @@ def tidy(args):
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
 
-    fix = "--fix" if args.fix == "fix" else ""
-    lines = (
-        ("'--line-filter=" + git_changed_lines(args.commit)) + "'"
-        if args.commit is not None
-        else ""
-    )
+    changed_lines = git_changed_lines(args.commit)
 
-    print(lines)
+    line_filter = json.dumps(
+        [{"name": key, "lines": value} for key, value in changed_lines.items()]
+    )
+    filtered_files = [*changed_lines.keys()]
+    if len(filtered_files) == 0:
+        return 0
+
+    fix = "--fix" if args.fix == "fix" else ""
+    lines = f"'--line-filter={line_filter}'" if args.commit is not None else ""
 
     ok = True
+    build_path = f"-p {args.p}" if args.p else ""
     status, stdout, stderr = util.run(
-        f"xargs clang-tidy -p=_build/release/ --format-style=file -header-filter='.*' --quiet {fix} {lines}",
-        input=files,
+        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {build_path} {fix} {lines}",
+        input=filtered_files,
     )
 
     if in_gha:
@@ -108,6 +110,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Clang Tidy Utility")
     parser.add_argument("--commit")
     parser.add_argument("--fix")
+    parser.add_argument("-p", help="Path containing 'compile_commands.json'")
 
     parser.add_argument("files", metavar="FILES", nargs="+", help="files to process")
 
