@@ -6213,5 +6213,84 @@ TEST_F(TableScanTest, filterColumnHandles) {
       makeRowVector({data[0]->childAt(0)}));
 }
 
+TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
+  auto data = makeFlatVector<int64_t>(10, folly::identity);
+  auto vector = makeRowVector({data, data, data});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  ChainedVectorLoader::PostVectorLoadProcessor postProc;
+  postProc = [&](auto& column) {
+    if (column->isLazy()) {
+      auto* lazy = column->template asUnchecked<LazyVector>();
+      if (lazy->isLoaded()) {
+        column = lazy->loadedVectorShared();
+        postProc(column);
+      } else {
+        lazy->chain(postProc);
+      }
+      return;
+    }
+    if (column->encoding() == VectorEncoding::Simple::DICTIONARY) {
+      auto alphabet = column->valueVector();
+      postProc(alphabet);
+      column->setValueVector(std::move(alphabet));
+      return;
+    }
+    auto* values =
+        column->template asChecked<FlatVector<int64_t>>()->mutableRawValues();
+    for (vector_size_t i = 0; i < column->size(); ++i) {
+      ++values[i];
+    }
+  };
+  auto c0Handle = std::make_shared<HiveColumnHandle>(
+      "c0",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{},
+      HiveColumnHandle::ColumnParseParameters{},
+      postProc);
+  auto c1Handle = regularColumn("c1", BIGINT());
+  auto c2Handle = std::make_shared<HiveColumnHandle>(
+      "c2",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{},
+      HiveColumnHandle::ColumnParseParameters{},
+      postProc);
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 3, 5, 7, 9}),
+      makeFlatVector<int64_t>({0, 2, 4, 6, 8}),
+      makeFlatVector<int64_t>({1, 3, 5, 7, 9}),
+  });
+  {
+    SCOPED_TRACE("Subfield filters");
+    auto plan =
+        PlanBuilder(pool())
+            .startTableScan()
+            .outputType(asRowType(vector->type()))
+            .subfieldFilter("c0 in (0, 2, 4, 6, 8)")
+            .assignments({{"c0", c0Handle}, {"c1", c1Handle}, {"c2", c2Handle}})
+            .endTableScan()
+            .planNode();
+    auto split = makeHiveConnectorSplit(file->getPath());
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+  {
+    SCOPED_TRACE("Remaining filter");
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .outputType(asRowType(vector->type()))
+            .remainingFilter("c0 % 2 = 0")
+            .assignments({{"c0", c0Handle}, {"c1", c1Handle}, {"c2", c2Handle}})
+            .endTableScan()
+            .planNode();
+    auto split = makeHiveConnectorSplit(file->getPath());
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec
