@@ -80,9 +80,17 @@ def tidy(args):
     lines = f"'--line-filter={line_filter}'" if args.commit is not None else ""
 
     ok = True
-    build_path = f"-p {args.p}" if args.p else ""
+    build_path = args.p or os.getenv("BUILD_PATH")
+    build_path_str = f"-p {build_path}" if build_path else ""
+
+    if build_path_str == "" and not os.path.isfile(
+        os.getcwd().join("compile_commands.json")
+    ):
+        print("compile_commands.json not found, skipping clang-tidy")
+        return 0
+
     status, stdout, stderr = util.run(
-        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {build_path} {fix} {lines}",
+        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {build_path_str} {fix} {lines}",
         input=filtered_files,
     )
 
