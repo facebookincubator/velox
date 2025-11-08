@@ -162,7 +162,7 @@ SpecialFormSignatureGenerator::getSignaturesForSwitch() const {
 }
 
 std::vector<exec::FunctionSignaturePtr>
-SpecialFormSignatureGenerator::getSignaturesForCast() const {
+SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   std::vector<exec::FunctionSignaturePtr> signatures;
 
   // To integral types.
@@ -191,9 +191,24 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   addCastFromVarcharSignature("timestamp", signatures);
   addCastFromDateSignature("timestamp", signatures);
 
+  // To time type.
+  addCastFromVarcharSignature("time", signatures);
+
   // To date type.
   addCastFromVarcharSignature("date", signatures);
   addCastFromTimestampSignature("date", signatures);
+
+  return signatures;
+}
+
+std::vector<exec::FunctionSignaturePtr>
+SpecialFormSignatureGenerator::getSignaturesForCast() const {
+  std::vector<exec::FunctionSignaturePtr> signatures =
+      getCommonSignaturesForCast();
+
+  // P4HyperLogLog <-> HyperLogLog casts
+  signatures.push_back(makeCastSignature("hyperloglog", "p4hyperloglog"));
+  signatures.push_back(makeCastSignature("p4hyperloglog", "hyperloglog"));
 
   // For each supported translation pair T --> U, add signatures of array(T) -->
   // array(U), map(varchar, T) --> map(varchar, U), row(T) --> row(U).

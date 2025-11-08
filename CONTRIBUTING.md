@@ -137,6 +137,7 @@ where:
 * *Type* can be any of the following keywords:
   * **feat** when new features are being added.
   * **fix** for bug fixes.
+  * **perf** for performance improvements.
   * **build** for build or CI-related improvements.
   * **test** for adding tests (only).
   * **docs** for enhancements to documentation (only).

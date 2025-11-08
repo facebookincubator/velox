@@ -29,7 +29,12 @@ struct CudfConfig {
   static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
   static constexpr const char* kCudfFunctionNamePrefix{
       "cudf.function_name_prefix"};
-  static constexpr const char* kCudfForceReplace{"cudf.force_replace"};
+  static constexpr const char* kCudfAstExpressionEnabled{
+      "cudf.ast_expression_enabled"};
+  static constexpr const char* kCudfAstExpressionPriority{
+      "cudf.ast_expression_priority"};
+  static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
+  static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -45,6 +50,9 @@ struct CudfConfig {
   /// Enable debug printing.
   bool debugEnabled{false};
 
+  /// Allow fallback to CPU operators if GPU operator replacement fails.
+  bool allowCpuFallback{true};
+
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
   std::string memoryResource{"async"};
@@ -56,8 +64,20 @@ struct CudfConfig {
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
 
-  /// Force replacement of operators. Throws an error if a replacement fails.
-  bool forceReplace{false};
+  /// Enable AST in expression evaluation
+  bool astExpressionEnabled{true};
+
+  /// Priority of AST expression. Expression with higher priority is chosen for
+  /// a given root expression.
+  /// Example:
+  /// Priority of expression that uses individual cuDF functions is 50.
+  /// If AST priority is 100 then for a velox expression node that is supported
+  /// by both, AST will be chosen as replacement for cudf execution, if AST
+  /// priority is 25 then standalone cudf function is chosen.
+  int astExpressionPriority{100};
+
+  /// Whether to log a reason for falling back to Velox CPU execution.
+  bool logFallback{true};
 };
 
 } // namespace facebook::velox::cudf_velox

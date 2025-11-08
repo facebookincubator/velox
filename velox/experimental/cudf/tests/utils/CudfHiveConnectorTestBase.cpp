@@ -23,6 +23,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Driver.h"
@@ -66,6 +67,7 @@ using facebook::velox::connector::hive::HiveConnectorFactory;
 
 CudfHiveConnectorTestBase::CudfHiveConnectorTestBase() {
   filesystems::registerLocalFileSystem();
+  filesystems::registerS3FileSystem();
   tests::utils::registerFaultyFileSystem();
 }
 

@@ -491,7 +491,7 @@ class ColumnVisitor {
 
  protected:
   const TFilter& filter_;
-  SelectiveColumnReader* reader_;
+  SelectiveColumnReader* const reader_;
   const bool allowNulls_;
   const vector_size_t* rows_;
   vector_size_t numRows_;
@@ -928,8 +928,9 @@ class DictionaryColumnVisitor
           (simd::reinterpretBatch<uint32_t>(cache) &
            xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
 #else
-      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+      auto unknowns = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
+              (cache & (kUnknown << 24)) << 1)));
       auto passed = simd::toBitMask(
           xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
 #endif
@@ -1329,8 +1330,9 @@ class StringDictionaryColumnVisitor
           (simd::reinterpretBatch<uint32_t>(cache) &
            xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
 #else
-      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+      auto unknowns = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
+              (cache & (kUnknown << 24)) << 1)));
       auto passed = simd::toBitMask(
           xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
 #endif
@@ -1419,7 +1421,7 @@ class StringDictionaryColumnVisitor
     }
   }
 
-  folly::StringPiece valueInDictionary(int64_t index) {
+  StringView valueInDictionary(int64_t index) {
     auto stripeDictSize = DictSuper::state_.dictionary.numValues;
     if (index < stripeDictSize) {
       return reinterpret_cast<const StringView*>(
@@ -1576,7 +1578,7 @@ class StringColumnReadWithVisitorHelper {
       ExtractValues extractValues,
       F readWithVisitor) {
     readWithVisitor(
-        ColumnVisitor<folly::StringPiece, TFilter, ExtractValues, kIsDense>(
+        ColumnVisitor<std::string_view, TFilter, ExtractValues, kIsDense>(
             *static_cast<const TFilter*>(filter),
             &reader_,
             rows_,

@@ -26,42 +26,45 @@
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
+#include "velox/functions/prestosql/RemapKeys.h"
 
 namespace facebook::velox::functions {
 
 namespace {
-
 template <typename T>
-void registerMapSubsetPrimitive(const std::string& prefix) {
+void registerRemapKeysPrimitive(const std::string& prefix) {
   registerFunction<
-      ParameterBinder<MapSubsetPrimitiveFunction, T>,
+      ParameterBinder<RemapKeysPrimitiveFunction, T>,
       Map<T, Generic<T1>>,
       Map<T, Generic<T1>>,
-      Array<T>>({prefix + "map_subset"});
+      Array<T>,
+      Array<T>>({prefix + "remap_keys"});
 }
 
-void registerMapSubset(const std::string& prefix) {
-  registerMapSubsetPrimitive<bool>(prefix);
-  registerMapSubsetPrimitive<int8_t>(prefix);
-  registerMapSubsetPrimitive<int16_t>(prefix);
-  registerMapSubsetPrimitive<int32_t>(prefix);
-  registerMapSubsetPrimitive<int64_t>(prefix);
-  registerMapSubsetPrimitive<float>(prefix);
-  registerMapSubsetPrimitive<double>(prefix);
-  registerMapSubsetPrimitive<Timestamp>(prefix);
-  registerMapSubsetPrimitive<Date>(prefix);
+void registerRemapKeys(const std::string& prefix) {
+  registerRemapKeysPrimitive<bool>(prefix);
+  registerRemapKeysPrimitive<int8_t>(prefix);
+  registerRemapKeysPrimitive<int16_t>(prefix);
+  registerRemapKeysPrimitive<int32_t>(prefix);
+  registerRemapKeysPrimitive<int64_t>(prefix);
+  registerRemapKeysPrimitive<float>(prefix);
+  registerRemapKeysPrimitive<double>(prefix);
+  registerRemapKeysPrimitive<Timestamp>(prefix);
+  registerRemapKeysPrimitive<Date>(prefix);
 
   registerFunction<
-      MapSubsetVarcharFunction,
+      RemapKeysVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({prefix + "map_subset"});
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "remap_keys"});
 
   registerFunction<
-      MapSubsetFunction,
+      RemapKeysFunction,
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_subset"});
+      Array<Generic<T1>>,
+      Array<Generic<T1>>>({prefix + "remap_keys"});
 }
 
 void registerMapRemoveNullValues(const std::string& prefix) {
@@ -134,7 +137,9 @@ void registerMapFunctions(const std::string& prefix) {
       Map<Orderable<T1>, Orderable<T2>>,
       int64_t>({prefix + "map_top_n_values"});
 
-  registerMapSubset(prefix);
+  registerMapSubset(prefix + "map_subset");
+
+  registerRemapKeys(prefix);
 
   registerMapRemoveNullValues(prefix);
 

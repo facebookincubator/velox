@@ -121,11 +121,13 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
           taskId,
           nodeId,
           operatorType,
+          "",
           driverIds,
           queryCapacity,
           executor),
-      originalNode_(dynamic_cast<const core::PartitionedOutputNode*>(
-          core::PlanNode::findNodeById(planFragment_.get(), nodeId_))),
+      originalNode_(
+          dynamic_cast<const core::PartitionedOutputNode*>(
+              core::PlanNode::findNodeById(planFragment_.get(), nodeId_))),
       serdeKind_(serdeKind),
       consumerCb_(consumerCb) {
   VELOX_CHECK_NOT_NULL(originalNode_);

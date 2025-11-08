@@ -18,6 +18,7 @@
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 
@@ -106,7 +107,13 @@ class MergeHllFunction : public exec::VectorFunction {
     auto rawOffsets = baseArray->rawOffsets();
     auto indices = decodedArray->indices();
     auto arrayElements = baseArray->elements();
-    auto flatArrayElements = arrayElements->as<FlatVector<StringView>>();
+
+    exec::LocalSelectivityVector allElementsRows(
+        context, arrayElements->size());
+    allElementsRows->setAll();
+    exec::LocalDecodedVector elementsDecoder(
+        context, *arrayElements, *allElementsRows);
+    auto decodedElements = elementsDecoder.get();
 
     memory::MemoryPool* memoryPool = context.pool();
     using SparseHll = common::hll::SparseHll<memory::MemoryPool>;
@@ -127,11 +134,11 @@ class MergeHllFunction : public exec::VectorFunction {
 
       for (vector_size_t i = 0; i < arraySize; ++i) {
         auto elementIndex = arrayOffset + i;
-        if (arrayElements->isNullAt(elementIndex)) {
+        if (decodedElements->isNullAt(elementIndex)) {
           continue;
         }
 
-        auto hllData = flatArrayElements->valueAt(elementIndex);
+        auto hllData = decodedElements->valueAt<StringView>(elementIndex);
         if (hllData.empty()) {
           continue;
         }

@@ -197,12 +197,10 @@ TEST_F(ExprCompilerTest, concatStringFlattening) {
       {field("a"), concatCall({field("b"), field("c")}), field("d")});
   ASSERT_EQ("concat(a, b, c, d)", compile(expression)->toString());
 
-  // Constant folding happens after flattening.
+  // Inner concatCall is constant folded during expression compilation.
   expression = concatCall(
       {field("a"), concatCall({varchar("---"), varchar("...")}), field("b")});
-  ASSERT_EQ(
-      "concat(a, ---:VARCHAR, ...:VARCHAR, b)",
-      compile(expression)->toString());
+  ASSERT_EQ("concat(a, ---...:VARCHAR, b)", compile(expression)->toString());
 }
 
 TEST_F(ExprCompilerTest, concatArrayFlattening) {
@@ -294,12 +292,13 @@ TEST_F(ExprCompilerTest, rewrites) {
   auto arraySortSql =
       "array_sort(c0, (x, y) -> if(length(x) < length(y), -1, if(length(x) > length(y), 1, 0)))";
 
-  ASSERT_NO_THROW(std::make_unique<ExprSet>(
-      std::vector<core::TypedExprPtr>{
-          makeTypedExpr(arraySortSql, rowType),
-          makeTypedExpr("c1 + 5", rowType),
-      },
-      execCtx_.get()));
+  ASSERT_NO_THROW(
+      std::make_unique<ExprSet>(
+          std::vector<core::TypedExprPtr>{
+              makeTypedExpr(arraySortSql, rowType),
+              makeTypedExpr("c1 + 5", rowType),
+          },
+          execCtx_.get()));
 
   auto exprSet = compile(makeTypedExpr(
       "reduce(c0, 1, (s, x) -> s + x * 2, s -> s)",

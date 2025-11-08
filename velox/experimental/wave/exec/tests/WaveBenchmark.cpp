@@ -257,8 +257,11 @@ class WaveBenchmark : public QueryBenchmarkBase {
         float passRatio = FLAGS_filter_pass_pct / 100.0;
         std::vector<std::string> scanFilters;
         for (auto i = 0; i < FLAGS_num_column_filters; ++i) {
-          scanFilters.push_back(fmt::format(
-              "c{} < {}", i, static_cast<int64_t>(specs_[i].mod * passRatio)));
+          scanFilters.push_back(
+              fmt::format(
+                  "c{} < {}",
+                  i,
+                  static_cast<int64_t>(specs_[i].mod * passRatio)));
         }
         auto builder =
             PlanBuilder(leafPool_.get()).tableScan(type_, scanFilters);
@@ -266,10 +269,11 @@ class WaveBenchmark : public QueryBenchmarkBase {
         for (auto i = FLAGS_num_column_filters;
              i < FLAGS_num_column_filters + FLAGS_num_expr_filters;
              ++i) {
-          builder = builder.filter(fmt::format(
-              "c{} + 1 < {}",
-              i,
-              static_cast<int64_t>(specs_[i].mod * passRatio)));
+          builder = builder.filter(
+              fmt::format(
+                  "c{} + 1 < {}",
+                  i,
+                  static_cast<int64_t>(specs_[i].mod * passRatio)));
         }
 
         std::vector<std::string> aggInputs;
@@ -277,12 +281,13 @@ class WaveBenchmark : public QueryBenchmarkBase {
         std::vector<std::string> keys;
         for (auto i = 0; i < type_->size(); ++i) {
           if (i < FLAGS_num_keys) {
-            keyProjections.push_back(fmt::format(
-                "(c{} / {}) % {} as c{}",
-                i,
-                specs_[i].roundUp,
-                FLAGS_key_mod,
-                i));
+            keyProjections.push_back(
+                fmt::format(
+                    "(c{} / {}) % {} as c{}",
+                    i,
+                    specs_[i].roundUp,
+                    FLAGS_key_mod,
+                    i));
             keys.push_back(fmt::format("c{}", i));
           } else {
             keyProjections.push_back(fmt::format("c{}", i));

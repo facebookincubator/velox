@@ -494,10 +494,11 @@ class MapColumnStatistics : public virtual ColumnStatistics {
     values.reserve(entryStatistics_.size());
     for (const auto& entry : entryStatistics_) {
       auto& stats = *entry.second;
-      values.push_back(fmt::format(
-          "{{ Key: {}, Stats: {},}}",
-          entry.first.toString(),
-          stats.toString()));
+      values.push_back(
+          fmt::format(
+              "{{ Key: {}, Stats: {},}}",
+              entry.first.toString(),
+              stats.toString()));
     }
     std::string repr;
     folly::join(",", values, repr);
@@ -537,6 +538,9 @@ struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
   int64_t flattenStringDictionaryValues{0};
+
+  // Total time spent in loading pages, in nanoseconds.
+  uint64_t pageLoadTimeNs{0};
 };
 
 struct RuntimeStatistics {
@@ -596,6 +600,13 @@ struct RuntimeStatistics {
       result.emplace(
           "flattenStringDictionaryValues",
           RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
+    }
+    if (columnReaderStatistics.pageLoadTimeNs > 0) {
+      result.emplace(
+          "pageLoadTimeNs",
+          RuntimeMetric(
+              columnReaderStatistics.pageLoadTimeNs,
+              RuntimeCounter::Unit::kNanos));
     }
     return result;
   }

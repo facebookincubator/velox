@@ -126,7 +126,7 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_InteriorRingN"}});
   registerFunction<StNumGeometriesFunction, int32_t, Geometry>(
       {{prefix + "ST_NumGeometries"}});
-  registerFunction<StNumInteriorRingFunction, int32_t, Geometry>(
+  registerFunction<StNumInteriorRingFunction, int64_t, Geometry>(
       {{prefix + "ST_NumInteriorRing"}});
   registerFunction<StConvexHullFunction, Geometry, Geometry>(
       {{prefix + "ST_ConvexHull"}});
@@ -149,7 +149,7 @@ void registerAccessors(const std::string& prefix) {
       std::make_unique<StCoordDimFunction>());
   registerFunction<StPointsFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_Points"}});
-  registerFunction<StNumPointsFunction, int32_t, Geometry>(
+  registerFunction<StNumPointsFunction, int64_t, Geometry>(
       {{prefix + "ST_NumPoints"}});
   registerFunction<StInteriorRingsFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_InteriorRings"}});

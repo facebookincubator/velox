@@ -334,6 +334,12 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether Window operator can spill to disk under memory pressure.
+   * - window_spill_min_read_batch_rows
+     - integer
+     - 1000
+     - When processing spilled window data, read batches of whole partitions having at least that many rows. Set to 1 to
+       read one whole partition at a time. Each driver processing the Window operator will process that much data at
+       once.
    * - row_number_spill_enabled
      - boolean
      - true
@@ -1107,3 +1113,55 @@ Tracing
      - false
      - If true, we only collect the input trace for a given operator but without the actual
        execution. This is used for crash debugging.
+
+Cudf-specific Configuration (Experimental)
+------------------------------------------
+These configurations are available when `compiled with cuDF <https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf>`_.
+Note: These configurations are experimental and subject to change.
+
+.. list-table::
+   :widths: 30 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - cudf.enabled
+     - bool
+     - true
+     - If true, enable cuDF. By default, it is enabled if compiled with cuDF.
+   * - cudf.memory_resource
+     - string
+     - async
+     - The memory resource to use for cuDF. Possible values are (cuda, pool, async, arena, managed, managed_pool, prefetch_managed, prefetch_managed_pool).
+       The prefetch options enable automatic prefetching for better GPU memory performance: prefetch_managed uses CUDA unified memory with prefetching,
+       prefetch_managed_pool uses a pooled version of CUDA unified memory with prefetching.
+   * - cudf.memory_percent
+     - integer
+     - 50
+     - The initial percent of GPU memory to allocate for pool or arena memory resources.
+   * - cudf.function_name_prefix
+     - string
+     - ""
+     - The prefix to use for the function names in cuDF.
+   * - cudf.ast_expression_enabled
+     - bool
+     - true
+     - If true, enable using cuDF AST-based expression evaluation when supported.
+   * - cudf.ast_expression_priority
+     - integer
+     - 100
+     - Priority of cuDF AST expressions. Higher value wins when multiple cuDF execution options are available for the same Velox expression. Standalone cuDF functions have priority 50. If enabled, with a default priority of 100, AST will be chosen as replacement for cudf execution.
+   * - cudf.allow_cpu_fallback
+     - bool
+     - true
+     - If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.
+   * - cudf.debug_enabled
+     - bool
+     - false
+     - If true, enable debug printing.
+   * - cudf.log_fallback
+     - bool
+     - true
+     - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.

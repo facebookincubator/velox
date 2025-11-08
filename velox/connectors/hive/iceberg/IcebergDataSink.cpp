@@ -23,6 +23,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<HiveColumnHandlePtr> inputColumns,
     LocationHandlePtr locationHandle,
     dwio::common::FileFormat tableStorageFormat,
+    IcebergPartitionSpecPtr partitionSpec,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters)
     : HiveInsertTableHandle(
@@ -34,7 +35,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           serdeParameters,
           nullptr,
           false,
-          std::make_shared<const HiveInsertFileNameGenerator>()) {
+          std::make_shared<const HiveInsertFileNameGenerator>()),
+      partitionSpec_(std::move(partitionSpec)) {
   VELOX_USER_CHECK(
       !inputColumns_.empty(),
       "Input columns cannot be empty for Iceberg tables.");
@@ -61,6 +63,10 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
   std::vector<std::string> commitTasks;
   commitTasks.reserve(writerInfo_.size());
 
+  auto icebergInsertTableHandle =
+      std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
+          insertTableHandle_);
+
   for (auto i = 0; i < writerInfo_.size(); ++i) {
     const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
@@ -75,7 +81,7 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
       ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
       ("metrics",
         folly::dynamic::object("recordCount", info->numWrittenRows))
-      ("partitionSpecJson", 0)
+      ("partitionSpecJson", icebergInsertTableHandle->partitionSpec()->specId)
       ("fileFormat", "PARQUET")
       ("content", "DATA");
     // clang-format on

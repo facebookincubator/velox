@@ -93,13 +93,16 @@ Task Execution
        30 buckets. It is configured to report the latency at P50, P90, P99,
        and P100 percentiles.
    * - task_batch_process_time_ms
-     - Average
+     - Avg
      - Tracks the averaged task batch processing time. This only applies for
        sequential task execution mode.
    * - task_barrier_process_time_ms
      - Histogram
      - Tracks task barrier execution time in range of [0, 30s] with 30 buckets
        and each bucket with time window of 1s. We report P50, P90, P99, and P100.
+   * - task_splits_count
+     - Count
+     - The total number of splits received by all tasks.
 
 Memory Management
 -----------------
@@ -160,9 +163,6 @@ Memory Management
    * - task_memory_reclaim_wait_timeout_count
      - Count
      - The number of times that the task memory reclaim wait timeouts.
-   * - task_splits_count
-     - Count
-     - The total number of splits received by all tasks.
    * - memory_non_reclaimable_count
      - Count
      - The number of times that the memory reclaim fails because the operator is executing a
@@ -226,11 +226,11 @@ Memory Management
        arbitration operation in range of [0, 600s] with 20 buckets. It is configured
        to report the latency at P50, P90, P99 and P100 percentiles.
    * - arbitrator_free_capacity_bytes
-     - Average
+     - Avg
      - The average of total free memory capacity which is managed by the
        memory arbitrator.
    * - arbitrator_free_reserved_capacity_bytes
-     - Average
+     - Avg
      - The average of free memory capacity reserved to ensure each query has
        the minimal required capacity to run.
    * - memory_pool_initial_capacity_bytes
@@ -622,6 +622,9 @@ Index Join
      - The distribution of index lookup result bytes in range of [0, 128MB] with
        128 buckets. It is configured to report the capacity at P50, P90, P99, and
        P100 percentiles.
+   * - index_lookup_error_result_count
+     - Count
+     - The number of results with error.
 
 Table Scan
 ----------
@@ -634,10 +637,10 @@ Table Scan
      - Type
      - Description
    * - table_scan_batch_process_time_ms
-     - Average
+     - Avg
      - Tracks the averaged table scan batch processing time in milliseconds.
    * - table_scan_batch_bytes
-     - Average
+     - Avg
      - Tracks the averaged table scan output batch size in bytes.
        with 512 buckets and reports P50, P90, P99, and P100
 

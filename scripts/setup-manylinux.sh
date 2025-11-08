@@ -103,7 +103,7 @@ function install_cuda {
   dnf config-manager --add-repo "$repo_url"
   local dashed
   dashed="$(echo "$1" | tr '.' '-')"
-  dnf install -y cuda-nvcc-"$dashed" cuda-cudart-devel-"$dashed" cuda-nvrtc-devel-"$dashed" cuda-driver-devel-"$dashed"
+  dnf install -y cuda-nvcc-"$dashed" cuda-cudart-devel-"$dashed" cuda-nvrtc-devel-"$dashed" cuda-driver-devel-"$dashed" libnvjitlink-devel-"$dashed"
 }
 
 function install_velox_deps {

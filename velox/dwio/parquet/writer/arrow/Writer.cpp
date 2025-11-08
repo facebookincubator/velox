@@ -480,12 +480,13 @@ class FileWriterImpl : public FileWriter {
 
       if (arrow_properties_->use_threads()) {
         VELOX_DCHECK_EQ(parallel_column_write_contexts_.size(), writers.size());
-        RETURN_NOT_OK(::arrow::internal::ParallelFor(
-            static_cast<int>(writers.size()),
-            [&](int i) {
-              return writers[i]->Write(&parallel_column_write_contexts_[i]);
-            },
-            arrow_properties_->executor()));
+        RETURN_NOT_OK(
+            ::arrow::internal::ParallelFor(
+                static_cast<int>(writers.size()),
+                [&](int i) {
+                  return writers[i]->Write(&parallel_column_write_contexts_[i]);
+                },
+                arrow_properties_->executor()));
       }
 
       return Status::OK();
@@ -658,16 +659,18 @@ Result<std::unique_ptr<FileWriter>> FileWriter::Open(
 Status WriteFileMetaData(
     const FileMetaData& file_metadata,
     ::arrow::io::OutputStream* sink) {
-  PARQUET_CATCH_NOT_OK(::facebook::velox::parquet::arrow::WriteFileMetaData(
-      file_metadata, sink));
+  PARQUET_CATCH_NOT_OK(
+      ::facebook::velox::parquet::arrow::WriteFileMetaData(
+          file_metadata, sink));
   return Status::OK();
 }
 
 Status WriteMetaDataFile(
     const FileMetaData& file_metadata,
     ::arrow::io::OutputStream* sink) {
-  PARQUET_CATCH_NOT_OK(::facebook::velox::parquet::arrow::WriteMetaDataFile(
-      file_metadata, sink));
+  PARQUET_CATCH_NOT_OK(
+      ::facebook::velox::parquet::arrow::WriteMetaDataFile(
+          file_metadata, sink));
   return Status::OK();
 }
 

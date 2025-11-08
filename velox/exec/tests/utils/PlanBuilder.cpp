@@ -184,8 +184,9 @@ PlanBuilder& PlanBuilder::tpcdsTableScan(
   auto rowType = ROW(std::move(columnNames), std::move(outputTypes));
   return TableScanBuilder(*this)
       .outputType(rowType)
-      .tableHandle(std::make_shared<connector::tpcds::TpcdsTableHandle>(
-          std::string(connectorId), table, scaleFactor))
+      .tableHandle(
+          std::make_shared<connector::tpcds::TpcdsTableHandle>(
+              std::string(connectorId), table, scaleFactor))
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -210,7 +211,8 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
     auto filterExpr = core::Expressions::inferTypes(
         untypedExpr, parseType, planBuilder_.pool_);
     auto [subfield, subfieldFilter] =
-        exec::toSubfieldFilter(filterExpr, &evaluator);
+        exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
+            filterExpr, &evaluator);
 
     auto it = columnAliases_.find(subfield.toString());
     if (it != columnAliases_.end()) {
@@ -244,6 +246,11 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::remainingFilter(
   return *this;
 }
 
+PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::sampleRate(
+    double sampleRate) {
+  sampleRate_ = sampleRate;
+  return *this;
+}
 namespace {
 void addConjunct(
     const core::TypedExprPtr& conjunct,
@@ -285,7 +292,18 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
   }
 
-  const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
+  RowTypePtr parseType = dataColumns_ ? dataColumns_ : outputType_;
+  if (!filterColumnHandles_.empty()) {
+    auto names = parseType->names();
+    auto types = parseType->children();
+    for (auto& handle : filterColumnHandles_) {
+      if (!parseType->containsChild(handle->name())) {
+        names.push_back(handle->name());
+        types.push_back(handle->hiveType());
+      }
+    }
+    parseType = ROW(std::move(names), std::move(types));
+  }
 
   core::TypedExprPtr filterNodeExpr;
 
@@ -318,7 +336,9 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         true,
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
-        dataColumns_);
+        dataColumns_,
+        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+        filterColumnHandles_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -393,8 +413,9 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     std::vector<core::FieldAccessTypedExprPtr> groupingKeys;
     groupingKeys.reserve(partitionBy_.size());
     for (const auto& partitionBy : partitionBy_) {
-      groupingKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          outputType->findChild(partitionBy), partitionBy));
+      groupingKeys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              outputType->findChild(partitionBy), partitionBy));
     }
     columnStatsSpec = core::ColumnStatsSpec(
         std::move(groupingKeys),
@@ -1188,8 +1209,9 @@ PlanBuilder& PlanBuilder::expand(
               dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
           VELOX_CHECK_NOT_NULL(constantExpr);
           VELOX_CHECK(constantExpr->value().isNull());
-          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              expectedType, variant::null(expectedType->kind())));
+          projectExpr.push_back(
+              std::make_shared<core::ConstantTypedExpr>(
+                  expectedType, variant::null(expectedType->kind())));
         }
       }
     }
@@ -1743,20 +1765,35 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
 PlanBuilder& PlanBuilder::spatialJoin(
     const core::PlanNodePtr& right,
     const std::string& joinCondition,
+    const std::string& probeGeometry,
+    const std::string& buildGeometry,
+    const std::optional<std::string>& radius,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "SpatialJoin cannot be the source node");
-  auto resultType = concat(planNode_->outputType(), right->outputType());
+  auto probeType = planNode_->outputType();
+  auto buildType = right->outputType();
+  auto resultType = concat(probeType, buildType);
   auto outputType = extract(resultType, outputLayout);
 
   VELOX_CHECK(!joinCondition.empty(), "SpatialJoin condition cannot be empty");
   core::TypedExprPtr joinConditionExpr =
       parseExpr(joinCondition, resultType, options_, pool_);
 
+  auto probeGeometryField = field(probeType, probeGeometry);
+  auto buildGeometryField = field(buildType, buildGeometry);
+  std::optional<core::FieldAccessTypedExprPtr> radiusField;
+  if (radius.has_value()) {
+    radiusField = field(buildType, radius.value());
+  }
+
   planNode_ = std::make_shared<core::SpatialJoinNode>(
       nextPlanNodeId(),
       joinType,
       std::move(joinConditionExpr),
+      std::move(probeGeometryField),
+      std::move(buildGeometryField),
+      std::move(radiusField),
       std::move(planNode_),
       right,
       outputType);
@@ -2534,8 +2571,9 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
   std::vector<core::IndexLookupConditionPtr> joinConditionPtrs{};
   joinConditionPtrs.reserve(joinConditions_.size());
   for (const auto& joinCondition : joinConditions_) {
-    joinConditionPtrs.push_back(PlanBuilder::parseIndexJoinCondition(
-        joinCondition, inputType, planBuilder_.pool_));
+    joinConditionPtrs.push_back(
+        PlanBuilder::parseIndexJoinCondition(
+            joinCondition, inputType, planBuilder_.pool_));
   }
 
   // Parse filter expression if provided

@@ -17,10 +17,12 @@ add_executable(
   BingTileTypeTest.cpp
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
+  KHyperLogLogTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp
   TimeWithTimezoneTypeTest.cpp
   TDigestTypeTest.cpp
   QDigestTypeTest.cpp
+  SetDigestTypeTest.cpp
   TypeTestBase.cpp
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
@@ -28,7 +30,10 @@ add_executable(
 )
 
 if(VELOX_ENABLE_GEO)
-  target_sources(velox_presto_types_test PRIVATE GeometryTypeTest.cpp)
+  target_sources(
+    velox_presto_types_test
+    PRIVATE GeometryTypeTest.cpp SphericalGeographyTypeTest.cpp
+  )
 endif()
 
 add_test(velox_presto_types_test velox_presto_types_test)

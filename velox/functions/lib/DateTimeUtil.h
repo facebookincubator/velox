@@ -18,6 +18,7 @@
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
@@ -45,8 +46,9 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // converting all timestamps to microseconds for each unit.
   if (unit == DateTimeUnit::kMicrosecond) {
     const std::chrono::time_point<std::chrono::system_clock>
-        fromMicrosecondpoint(std::chrono::microseconds(
-            std::min(fromTimestamp, toTimestamp).toMicros()));
+        fromMicrosecondpoint(
+            std::chrono::microseconds(
+                std::min(fromTimestamp, toTimestamp).toMicros()));
     const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
         std::chrono::microseconds(
             std::max(fromTimestamp, toTimestamp).toMicros()));
@@ -59,12 +61,14 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // fromTimepoint is less than or equal to toTimepoint.
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          fromTimepoint(std::chrono::milliseconds(
-              std::min(fromTimestamp, toTimestamp).toMillis()));
+          fromTimepoint(
+              std::chrono::milliseconds(
+                  std::min(fromTimestamp, toTimestamp).toMillis()));
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          toTimepoint(std::chrono::milliseconds(
-              std::max(fromTimestamp, toTimestamp).toMillis()));
+          toTimepoint(
+              std::chrono::milliseconds(
+                  std::max(fromTimestamp, toTimestamp).toMillis()));
 
   // Millisecond, second, minute, hour and day have fixed conversion ratio.
   switch (unit) {
@@ -373,4 +377,74 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
   return result;
 }
 
+/// Adds the specified unit and value to a TIME value, handling 24-hour
+/// wraparound. TIME represents milliseconds since midnight (0 to 86399999ms).
+/// For units < DAY, the time of day changes.
+/// For units >= DAY, the time of day doesn't change.
+FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
+  VELOX_USER_CHECK(
+      time >= 0 && time < kMillisInDay,
+      "TIME value {} is out of range [0, 86400000)",
+      time);
+
+  if (FOLLY_UNLIKELY(valueInMillis == 0)) {
+    return time;
+  }
+
+  // Use std::chrono for safe duration arithmetic with overflow protection
+  const auto timeDuration = std::chrono::milliseconds(time);
+  const auto valueDuration = std::chrono::milliseconds(valueInMillis);
+  const auto resultDuration = timeDuration + valueDuration;
+
+  // Handle 24-hour wraparound using modulo
+  const auto dayDuration = std::chrono::milliseconds(kMillisInDay);
+  auto newTime = resultDuration % dayDuration;
+
+  // Ensure result is positive (C++ modulo can return negative values)
+  if (FOLLY_UNLIKELY(newTime.count() < 0)) {
+    newTime += dayDuration;
+  }
+
+  return newTime.count();
+}
+
+/// Truncates a TIME value to the specified unit. TIME represents milliseconds
+/// since midnight (0 to 86399999ms). Only time-related units (millisecond,
+/// second, minute, hour) are supported.
+FOLLY_ALWAYS_INLINE int64_t truncateTime(int64_t time, DateTimeUnit unit) {
+  VELOX_USER_CHECK(
+      time >= 0 && time < kMillisInDay,
+      "TIME value {} is out of range [0, 86400000)",
+      time);
+
+  // Validate that the unit is appropriate for TIME type
+  VELOX_USER_CHECK(isTimeUnit(unit), "Unsupported time unit for TIME type");
+
+  const auto duration = std::chrono::milliseconds(time);
+
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      return time;
+    case DateTimeUnit::kSecond: {
+      const auto seconds =
+          std::chrono::duration_cast<std::chrono::seconds>(duration);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(seconds)
+          .count();
+    }
+    case DateTimeUnit::kMinute: {
+      const auto minutes =
+          std::chrono::duration_cast<std::chrono::minutes>(duration);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(minutes)
+          .count();
+    }
+    case DateTimeUnit::kHour: {
+      const auto hours =
+          std::chrono::duration_cast<std::chrono::hours>(duration);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(hours)
+          .count();
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
 } // namespace facebook::velox::functions

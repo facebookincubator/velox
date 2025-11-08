@@ -58,25 +58,28 @@ namespace {
   }
 
 #define MEM_POOL_CAP_EXCEEDED(errorMessage, requestPool) \
-  VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(               \
-      "Exceeded memory pool capacity. {}\n{}\n\n{}",     \
-      errorMessage,                                      \
-      this->toString(),                                  \
-      requestPool->toString(true)));
+  VELOX_MEM_POOL_CAP_EXCEEDED(                           \
+      fmt::format(                                       \
+          "Exceeded memory pool capacity. {}\n{}\n\n{}", \
+          errorMessage,                                  \
+          this->toString(),                              \
+          requestPool->toString(true)));
 
 #define LOCAL_MEM_ARBITRATION_FAILED(errorMessage, requestPool) \
-  VELOX_MEM_ARBITRATION_FAILED(fmt::format(                     \
-      "Local arbitration failure. {}\n{}\n\n{}",                \
-      errorMessage,                                             \
-      this->toString(),                                         \
-      requestPool->toString(true)));
+  VELOX_MEM_ARBITRATION_FAILED(                                 \
+      fmt::format(                                              \
+          "Local arbitration failure. {}\n{}\n\n{}",            \
+          errorMessage,                                         \
+          this->toString(),                                     \
+          requestPool->toString(true)));
 
 #define GLOBAL_MEM_ARBITRATION_FAILED(errorMessage, requestPool) \
-  VELOX_MEM_ARBITRATION_FAILED(fmt::format(                      \
-      "Global arbitration failure. {}\n{}\n\n{}",                \
-      errorMessage,                                              \
-      this->toString(),                                          \
-      requestPool->toString(true)));
+  VELOX_MEM_ARBITRATION_FAILED(                                  \
+      fmt::format(                                               \
+          "Global arbitration failure. {}\n{}\n\n{}",            \
+          errorMessage,                                          \
+          this->toString(),                                      \
+          requestPool->toString(true)));
 
 template <typename T>
 T getConfig(
@@ -126,10 +129,11 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(
 uint64_t SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(
     const std::unordered_map<std::string, std::string>& configs) {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             config::toDuration(getConfig<std::string>(
-                 configs,
-                 kMaxMemoryArbitrationTime,
-                 std::string(kDefaultMaxMemoryArbitrationTime))))
+             config::toDuration(
+                 getConfig<std::string>(
+                     configs,
+                     kMaxMemoryArbitrationTime,
+                     std::string(kDefaultMaxMemoryArbitrationTime))))
       .count();
 }
 
@@ -539,14 +543,14 @@ void SharedArbitrator::addPool(const std::shared_ptr<MemoryPool>& pool) {
 }
 
 void SharedArbitrator::removePool(MemoryPool* pool) {
-  VELOX_CHECK_EQ(pool->reservedBytes(), 0);
+  VELOX_CHECK_EQ(pool->reservedBytes(), 0, "{}", pool->name());
   const uint64_t freedBytes = shrinkPool(pool, 0);
-  VELOX_CHECK_EQ(pool->capacity(), 0);
+  VELOX_CHECK_EQ(pool->capacity(), 0, "{}", pool->name());
   freeCapacity(freedBytes);
 
   std::unique_lock guard{participantLock_};
   const auto ret = participants_.erase(pool->name());
-  VELOX_CHECK_EQ(ret, 1);
+  VELOX_CHECK_EQ(ret, 1, "{}", pool->name());
 }
 
 std::vector<ArbitrationCandidate> SharedArbitrator::getCandidates(
@@ -1353,14 +1357,15 @@ uint64_t SharedArbitrator::reclaimUsedMemoryByAbort(bool force) {
   // after abort operation.
   const auto currentCapacity = victim.participant->pool()->capacity();
   try {
-    VELOX_MEM_POOL_ABORTED(fmt::format(
-        "Memory pool aborted to reclaim used memory, current capacity {}, "
-        "requesting capacity from global arbitration {} memory pool "
-        "stats:\n{}\n{}",
-        succinctBytes(currentCapacity),
-        succinctBytes(victim.participant->globalArbitrationGrowCapacity()),
-        victim.participant->pool()->toString(),
-        victim.participant->pool()->treeMemoryUsage()));
+    VELOX_MEM_POOL_ABORTED(
+        fmt::format(
+            "Memory pool aborted to reclaim used memory, current capacity {}, "
+            "requesting capacity from global arbitration {} memory pool "
+            "stats:\n{}\n{}",
+            succinctBytes(currentCapacity),
+            succinctBytes(victim.participant->globalArbitrationGrowCapacity()),
+            victim.participant->pool()->toString(),
+            victim.participant->pool()->treeMemoryUsage()));
   } catch (VeloxRuntimeError&) {
     abort(victim.participant, std::current_exception());
     return currentCapacity;

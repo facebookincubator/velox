@@ -109,8 +109,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
     auto queryCtx = core::QueryCtx::create(
         executor ? executor : executor_.get(),
         core::QueryConfig(std::move(configCopy)));
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
@@ -141,8 +142,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
         nullptr,
         nullptr,
         executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
@@ -2925,8 +2927,8 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
   } else {
     test(1, 1'000);
     test(1'000, 72);
-    test(10'000, 7);
-    test(100'000, 1);
+    test(10'000, 8);
+    test(100'000, 2);
   }
 }
 
@@ -3103,7 +3105,9 @@ TEST_P(MultiFragmentTest, compression) {
       test("local://t1", 0.7, false);
     }
     SCOPED_TRACE(fmt::format("minCompressionRatio 0.0000001"));
-    { test("local://t2", 0.0000001, true); }
+    {
+      test("local://t2", 0.0000001, true);
+    }
   }
 }
 

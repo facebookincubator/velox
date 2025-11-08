@@ -72,8 +72,8 @@ OperatorCtx::createConnectorQueryCtx(
       task->queryCtx()->fsTokenProvider());
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
-  connectorQueryCtx->setRowSizeTrackingEnabled(
-      driverCtx_->queryConfig().rowSizeTrackingEnabled());
+  connectorQueryCtx->setRowSizeTrackingMode(
+      driverCtx_->queryConfig().rowSizeTrackingMode());
   return connectorQueryCtx;
 }
 
@@ -84,21 +84,23 @@ Operator::Operator(
     std::string planNodeId,
     std::string operatorType,
     std::optional<common::SpillConfig> spillConfig)
-    : operatorCtx_(std::make_unique<OperatorCtx>(
-          driverCtx,
-          planNodeId,
-          operatorId,
-          operatorType)),
+    : operatorCtx_(
+          std::make_unique<OperatorCtx>(
+              driverCtx,
+              planNodeId,
+              operatorId,
+              operatorType)),
       outputType_(std::move(outputType)),
       spillConfig_(std::move(spillConfig)),
       dryRun_(
           operatorCtx_->driverCtx()->traceConfig().has_value() &&
           operatorCtx_->driverCtx()->traceConfig()->dryRun),
-      stats_(OperatorStats{
-          operatorId,
-          driverCtx->pipelineId,
-          std::move(planNodeId),
-          std::move(operatorType)}) {}
+      stats_(
+          OperatorStats{
+              operatorId,
+              driverCtx->pipelineId,
+              std::move(planNodeId),
+              std::move(operatorType)}) {}
 
 void Operator::maybeSetReclaimer() {
   VELOX_CHECK_NULL(pool()->reclaimer());

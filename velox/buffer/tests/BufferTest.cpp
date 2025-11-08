@@ -498,7 +498,9 @@ TEST_F(BufferTest, testNonPOD) {
 TEST_F(BufferTest, testNonPODMemoryUsage) {
   using T = std::shared_ptr<void>;
   const int64_t currentBytes = pool_->usedBytes();
-  { auto buffer = AlignedBuffer::allocate<T>(0, pool_.get()); }
+  {
+    auto buffer = AlignedBuffer::allocate<T>(0, pool_.get());
+  }
   EXPECT_EQ(pool_->usedBytes(), currentBytes);
 }
 
@@ -547,6 +549,35 @@ TEST_F(BufferTest, sliceBooleanBuffer) {
   }
   VELOX_ASSERT_THROW(
       Buffer::slice<bool>(bufferPtr, 5, 6, nullptr), "Pool must not be null.");
+}
+
+TEST_F(BufferTest, testType) {
+  // Test AlignedBuffer type
+  auto alignedBuffer = AlignedBuffer::allocate<char>(100, pool_.get());
+  EXPECT_EQ(alignedBuffer->type(), Buffer::Type::kPOD);
+  EXPECT_TRUE(alignedBuffer->isPOD());
+  EXPECT_FALSE(alignedBuffer->isView());
+
+  // Test NonPODAlignedBuffer type
+  auto nonPODBuffer = AlignedBuffer::allocate<NonPOD>(10, pool_.get());
+  EXPECT_EQ(nonPODBuffer->type(), Buffer::Type::kNonPOD);
+  EXPECT_FALSE(nonPODBuffer->isPOD());
+  EXPECT_FALSE(nonPODBuffer->isView());
+
+  // Test BufferView type
+  MockCachePin pin;
+  const char* data = "test data";
+  auto podBufferView = BufferView<MockCachePin&>::create(
+      reinterpret_cast<const uint8_t*>(data), 9, pin);
+  EXPECT_EQ(podBufferView->type(), Buffer::Type::kPODView);
+  EXPECT_TRUE(podBufferView->isPOD());
+  EXPECT_TRUE(podBufferView->isView());
+
+  auto nonPodBufferView = BufferView<MockCachePin&>::create(
+      reinterpret_cast<const uint8_t*>(data), 9, pin, false);
+  EXPECT_EQ(nonPodBufferView->type(), Buffer::Type::kNonPODView);
+  EXPECT_FALSE(nonPodBufferView->isPOD());
+  EXPECT_TRUE(nonPodBufferView->isView());
 }
 
 } // namespace velox

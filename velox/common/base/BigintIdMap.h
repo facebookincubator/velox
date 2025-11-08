@@ -31,8 +31,10 @@ class BigintIdMap {
   static constexpr int64_t kMaxCapacity = 1 << 30; // 1G entries, 12GB
 
   BigintIdMap(int32_t capacity, memory::MemoryPool& pool) : pool_(pool) {
-    makeTable(std::max<int32_t>(
-        2 * sizeof(xsimd::batch<int64_t, A>), bits::nextPowerOfTwo(capacity)));
+    makeTable(
+        std::max<int32_t>(
+            2 * sizeof(xsimd::batch<int64_t, A>),
+            bits::nextPowerOfTwo(capacity)));
   }
 
   BigintIdMap(const BigintIdMap& other) = delete;

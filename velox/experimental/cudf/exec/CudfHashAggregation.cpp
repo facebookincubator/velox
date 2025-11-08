@@ -465,7 +465,7 @@ core::AggregationNode::Step getCompanionStep(
     std::string const& kind,
     core::AggregationNode::Step step) {
   for (const auto& [k, v] : companionStep) {
-    if (folly::StringPiece(kind).endsWith(k)) {
+    if (kind.ends_with(k)) {
       step = v;
       break;
     }
@@ -475,7 +475,7 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(std::string const& kind) {
   for (const auto& [k, v] : companionStep) {
-    if (folly::StringPiece(kind).endsWith(k)) {
+    if (kind.ends_with(k)) {
       return kind.substr(0, kind.length() - k.length());
     }
   }
@@ -485,7 +485,7 @@ std::string getOriginalName(std::string const& kind) {
 bool hasFinalAggs(
     std::vector<core::AggregationNode::Aggregate> const& aggregates) {
   return std::any_of(aggregates.begin(), aggregates.end(), [](auto const& agg) {
-    return folly::StringPiece(agg.call->name()).endsWith("_merge_extract");
+    return agg.call->name().ends_with("_merge_extract");
   });
 }
 
@@ -537,8 +537,7 @@ auto toAggregators(
     auto const companionStep = getCompanionStep(kind, step);
     const auto originalName = getOriginalName(kind);
     const auto resultType = exec::isPartialOutput(companionStep)
-        ? exec::resolveAggregateFunction(originalName, aggregate.rawInputTypes)
-              .second
+        ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
         : outputType->childAt(numKeys + i);
 
     aggregators.push_back(createAggregator(
@@ -567,8 +566,7 @@ auto toIntermediateAggregators(
     auto const companionStep = getCompanionStep(kind, step);
     if (exec::isPartialOutput(companionStep)) {
       const auto resultType =
-          exec::resolveAggregateFunction(originalName, aggregate.rawInputTypes)
-              .second;
+          exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
       aggregators.push_back(createAggregator(
           step, kind, inputIndex, constant, isGlobal, resultType));
     } else {
@@ -836,8 +834,9 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    resultColumns.push_back(aggregators_[i]->doReduce(
-        tbl->view(), outputType_->childAt(i), stream));
+    resultColumns.push_back(
+        aggregators_[i]->doReduce(
+            tbl->view(), outputType_->childAt(i), stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(

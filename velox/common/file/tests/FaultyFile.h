@@ -39,16 +39,12 @@ class FaultyReadFile : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
-      const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
-      const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   uint64_t memoryUsage() const override {
     return delegatedFile_->memoryUsage();
@@ -76,9 +72,7 @@ class FaultyReadFile : public ReadFile {
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
-      const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
  private:
   const std::string path_;

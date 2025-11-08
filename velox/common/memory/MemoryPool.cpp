@@ -527,12 +527,13 @@ void* MemoryPoolImpl::allocate(
   void* buffer = allocator_->allocateBytes(alignedSize, alignment_);
   if (buffer == nullptr) [[unlikely]] {
     release(alignedSize);
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} from {} {}",
-        __FUNCTION__,
-        succinctBytes(size),
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} from {} {}",
+            __FUNCTION__,
+            succinctBytes(size),
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(this, buffer, size);
   return buffer;
@@ -546,13 +547,14 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
   if (buffer == nullptr) [[unlikely]] {
     release(alignedSize);
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} entries and {} each from {} {}",
-        __FUNCTION__,
-        numEntries,
-        succinctBytes(sizeEach),
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} entries and {} each from {} {}",
+            __FUNCTION__,
+            numEntries,
+            succinctBytes(sizeEach),
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(this, buffer, size);
   return buffer;
@@ -566,13 +568,14 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (newP == nullptr) [[unlikely]] {
     release(alignedNewSize);
-    handleAllocationFailure(fmt::format(
-        "{} failed with new {} and old {} from {} {}",
-        __FUNCTION__,
-        succinctBytes(newSize),
-        succinctBytes(size),
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with new {} and old {} from {} {}",
+            __FUNCTION__,
+            succinctBytes(newSize),
+            succinctBytes(size),
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(this, newP, newSize);
   if (p != nullptr) {
@@ -637,12 +640,13 @@ void MemoryPoolImpl::allocateNonContiguous(
           },
           minSizeClass)) {
     VELOX_CHECK(out.empty());
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} pages from {} {}",
-        __FUNCTION__,
-        numPages,
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} pages from {} {}",
+            __FUNCTION__,
+            numPages,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(this, out);
   VELOX_CHECK(!out.empty());
@@ -689,12 +693,13 @@ void MemoryPoolImpl::allocateContiguous(
           },
           maxPages)) {
     VELOX_CHECK(out.empty());
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} pages from {} {}",
-        __FUNCTION__,
-        numPages,
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} pages from {} {}",
+            __FUNCTION__,
+            numPages,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(this, out);
   VELOX_CHECK(!out.empty());
@@ -722,12 +727,13 @@ void MemoryPoolImpl::growContiguous(
               release(allocBytes);
             }
           })) {
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} pages from {} {}",
-        __FUNCTION__,
-        increment,
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} pages from {} {}",
+            __FUNCTION__,
+            increment,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   if (debugEnabled()) [[unlikely]] {
     recordGrowDbg(allocation.data(), allocation.size());
@@ -1295,16 +1301,17 @@ void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
   const auto allocRecord = allocResult->second;
   if (allocRecord.size != size) {
     const auto freeStackTrace = process::StackTrace().toString();
-    VELOX_FAIL(fmt::format(
-        "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
-        "======== Allocation Stack ========\n"
-        "{}\n"
-        "============ Free Stack ==========\n"
-        "{}\n",
-        size,
-        allocRecord.size,
-        allocRecord.callStack.toString(),
-        freeStackTrace));
+    VELOX_FAIL(
+        fmt::format(
+            "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
+            "======== Allocation Stack ========\n"
+            "{}\n"
+            "============ Free Stack ==========\n"
+            "{}\n",
+            size,
+            allocRecord.size,
+            allocRecord.callStack.toString(),
+            freeStackTrace));
   }
   debugAllocRecords_.erase(addrUint64);
 }
@@ -1344,10 +1351,11 @@ void MemoryPoolImpl::leakCheckDbg() {
   if (debugAllocRecords_.empty()) {
     return;
   }
-  VELOX_FAIL(fmt::format(
-      "[MemoryPool] Leak check failed for '{}' pool - {}",
-      name_,
-      dumpRecordsDbg()));
+  VELOX_FAIL(
+      fmt::format(
+          "[MemoryPool] Leak check failed for '{}' pool - {}",
+          name_,
+          dumpRecordsDbg()));
 }
 
 std::string MemoryPoolImpl::dumpRecordsDbgLocked() const {

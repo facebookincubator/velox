@@ -105,7 +105,10 @@ class TableEvolutionFuzzer {
       const std::string& outputDir,
       const std::vector<column_index_t>& bucketColumnIndices,
       FuzzerGenerator& rng,
-      bool enableFlatMap);
+      bool enableFlatMap,
+      folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+          globalMapColumnKeys,
+      std::vector<int>& globallyCompatibleFlatmapColumns);
 
   template <typename To, typename From>
   VectorPtr liftToPrimitiveType(
@@ -118,7 +121,19 @@ class TableEvolutionFuzzer {
       const RowTypePtr& tableSchema,
       std::vector<Split> splits,
       const PushdownConfig& pushdownConfig,
-      bool useFiltersAsNode);
+      bool useFiltersAsNode,
+      bool insertProjectToBlockPushdown,
+      const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+          globalMapColumnKeys = {},
+      const std::vector<int>& globallyCompatibleFlatmapColumns = {});
+
+  /// Builds schema for flatmap as struct reading by converting selected map
+  /// columns to struct types.
+  RowTypePtr buildFlatmapAsStructSchema(
+      const RowTypePtr& tableSchema,
+      const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+          globalMapColumnKeys,
+      const std::vector<int>& globallyCompatibleFlatmapColumns);
 
   /// Randomly generates bucket column indices for partitioning data.
   /// Returns a vector of column indices that will be used for bucketing,
@@ -134,7 +149,10 @@ class TableEvolutionFuzzer {
       const std::vector<column_index_t>& bucketColumnIndices,
       const std::string& tableOutputRootDirPath,
       std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
-      RowVectorPtr& finalExpectedData);
+      RowVectorPtr& finalExpectedData,
+      folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+          globalMapColumnKeys,
+      std::vector<int>& globallyConsistentColumnIndexVector);
 
   /// Creates scan splits from write results.
   /// Converts the output of write tasks into scan splits that can be used

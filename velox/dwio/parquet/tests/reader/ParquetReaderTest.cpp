@@ -595,8 +595,9 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
           {TINYINT(), SMALLINT(), INTEGER(), BIGINT()});
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.select(std::make_shared<dwio::common::ColumnSelector>(
-      rowType, rowType->names()));
+  rowReaderOpts.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          rowType, rowType->names()));
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
@@ -1756,4 +1757,36 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
   for (const auto& type : types) {
     runVarcharColTest(type);
   }
+}
+
+TEST_F(ParquetReaderTest, readerWithSchema) {
+  // Create an in-memory writer.
+  auto sink = std::make_unique<MemorySink>(
+      1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+  const auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1}),
+       makeArrayVectorFromJson<int32_t>({"[4 ,5]"})});
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  // key, element are Parquet reserved keywords.
+  // Ensure we handle them properly during the schema inference.
+  auto schema = ROW({"key", "element"}, {BIGINT(), ARRAY(INTEGER())});
+
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+
+  // Create the reader.
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setFileSchema(schema);
+  std::string dataBuf(sinkPtr->data(), sinkPtr->size());
+  auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
+  auto buffer = std::make_unique<dwio::common::BufferedInput>(
+      file, readerOptions.memoryPool());
+  ParquetReader reader(std::move(buffer), readerOptions);
+
+  EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }

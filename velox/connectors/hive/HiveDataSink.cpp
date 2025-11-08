@@ -772,11 +772,12 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   if (sortWrite()) {
     sortPool = createSortPool(writerPool);
   }
-  writerInfo_.emplace_back(std::make_shared<HiveWriterInfo>(
-      std::move(writerParameters),
-      std::move(writerPool),
-      std::move(sinkPool),
-      std::move(sortPool)));
+  writerInfo_.emplace_back(
+      std::make_shared<HiveWriterInfo>(
+          std::move(writerParameters),
+          std::move(writerPool),
+          std::move(sinkPool),
+          std::move(sortPool)));
   ioStats_.emplace_back(std::make_unique<io::IoStatistics>());
 
   setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
@@ -808,10 +809,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
     options->spillConfig = spillConfig_;
   }
 
-  if (options->nonReclaimableSection == nullptr) {
-    options->nonReclaimableSection =
-        writerInfo_.back()->nonReclaimableSectionHolder.get();
-  }
+  // Always set nonReclaimableSection to the current writer's holder.
+  // Since insertTableHandle_->writerOptions() returns a shared_ptr, we need
+  // to ensure each writer has its own nonReclaimableSection pointer.
+  options->nonReclaimableSection =
+      writerInfo_.back()->nonReclaimableSectionHolder.get();
 
   if (options->memoryReclaimerFactory == nullptr ||
       options->memoryReclaimerFactory() == nullptr) {

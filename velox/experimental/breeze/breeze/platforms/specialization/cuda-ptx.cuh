@@ -69,7 +69,7 @@ __device__ __forceinline__ unsigned CudaSpecialization::extract_bits(
   return BFE(value, start_bit, num_bits);
 }
 
-__device__ __forceinline__ void PREFETCH(void *ptr) {
+__device__ __forceinline__ void PREFETCH(void* ptr) {
   asm("prefetch.global.L1 [%0];" ::"l"(ptr));
 }
 
