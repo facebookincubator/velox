@@ -214,12 +214,17 @@ endif()
 
 if(VELOX_ENABLE_CUDF)
   message(STATUS "Building curl from source to satisfy cuDF curl version requirement")
-  set(curl_SOURCE BUNDLED)
-  velox_resolve_dependency(curl)
+  set(CURL_SOURCE BUNDLED)
+  velox_resolve_dependency(CURL)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  velox_resolve_dependency(curl)
+  # cuDF bundles curl since it needs a specific version.
+  # Use bundled or system curl otherwise.
+  if(NOT VELOX_ENABLE_CUDF)
+    velox_set_source(CURL)
+    velox_resolve_dependency(CURL)
+  endif()
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
 endif()
