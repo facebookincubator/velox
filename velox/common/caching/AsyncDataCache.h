@@ -441,7 +441,8 @@ class CoalescedLoad {
   bool loadOrFuture(folly::SemiFuture<bool>* wait, bool ssdSavable = true);
 
   State state() const {
-    tsan_lock_guard<std::mutex> l(mutex_);
+    // TODO: Can we do this without a lock?
+    std::lock_guard<std::mutex> l(mutex_);
     return state_;
   }
 
