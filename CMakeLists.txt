@@ -219,8 +219,7 @@ if(VELOX_ENABLE_CUDF)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  # find the bundled or system curl
-  find_package(CURL REQUIRED)
+  velox_resolve_dependency(curl)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
 endif()
