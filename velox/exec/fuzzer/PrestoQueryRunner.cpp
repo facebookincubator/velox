@@ -523,14 +523,16 @@ std::string PrestoQueryRunner::startQuery(
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, sql.size());
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunction);
+  curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
 
   std::string response;
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
   // Perform the request
   CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK(
-      (res == CURLE_OK),
+  VELOX_CHECK_EQ(
+      CURLE_OK,
+      res,
       "POST to {} failed: {}",
       coordinatorUri_,
       curl_easy_strerror(res));
@@ -554,6 +556,7 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
   headers = curl_slist_append(headers, "X-Presto-Client-Binary-Results: true");
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_);
+  curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
 
   // Capture the response body
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunction);
@@ -562,8 +565,8 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
 
   // Perform GET request
   CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK(
-      (res == CURLE_OK), "Get request failed: {}", curl_easy_strerror(res));
+  VELOX_CHECK_EQ(
+      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
   // Cleanup
   curl_slist_free_all(headers);
