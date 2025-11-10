@@ -233,11 +233,11 @@ void SpillerBase::ensureSorted(SpillRun& run) {
     bool prefixSortSuccess{false};
     if (state_.prefixSortConfig().has_value()) {
       prefixSortSuccess = PrefixSort::sort(
-              container_,
-              compareFlags_,
-              state_.prefixSortConfig().value(),
-              memory::spillMemoryPool(),
-              run.rows);
+          container_,
+          compareFlags_,
+          state_.prefixSortConfig().value(),
+          memory::spillMemoryPool(),
+          run.rows);
       if (!prefixSortSuccess) {
         LOG(WARNING) << "PrefixSort failed due to memory allocation error, "
                      << "falling back to TimSort";
