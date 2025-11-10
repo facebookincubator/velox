@@ -1902,6 +1902,38 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+template <typename T>
+struct AtTimezoneTimeFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::optional<int64_t> targetTimezoneID_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<TimeWithTimezone>* /*timeWithTz*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone) {
+      targetTimezoneID_ = tz::getTimeZoneID(
+          std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& timeWithTz,
+      const arg_type<Varchar>& timezone) {
+    const auto inputMs = unpackMillisUtc(*timeWithTz);
+    const auto targetTimezoneID = targetTimezoneID_.has_value()
+        ? targetTimezoneID_.value()
+        : tz::getTimeZoneID(std::string_view(timezone.data(), timezone.size()));
+
+    // Similar to timestamp version - only timezone ID changes, not the time
+    // value.
+    result = pack(inputMs, targetTimezoneID);
+  }
+};
+
 template <typename TExec>
 struct ToMillisecondFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
