@@ -21,6 +21,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/functions/iceberg/Register.h"
 
 #include <boost/lexical_cast.hpp>
 #include <memory>
@@ -42,6 +43,7 @@ HiveConnector::HiveConnector(
               : nullptr,
           std::make_unique<FileHandleGenerator>(hiveConfig_->config())),
       ioExecutor_(ioExecutor) {
+  iceberg::registerIcebergFunctions();
   if (hiveConfig_->isFileHandleCacheEnabled()) {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with maximum of "

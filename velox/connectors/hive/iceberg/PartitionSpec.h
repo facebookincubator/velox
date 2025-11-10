@@ -20,6 +20,25 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+inline constexpr char const* kIcebergFunctionPrefix{"iceberg_"};
+
+inline const std::string kBucketFunction =
+    std::string(kIcebergFunctionPrefix) + "bucket";
+inline const std::string kTruncateFunction =
+    std::string(kIcebergFunctionPrefix) + "truncate";
+inline const std::string kYearFunction =
+    std::string(kIcebergFunctionPrefix) + "years";
+inline const std::string kMonthFunction =
+    std::string(kIcebergFunctionPrefix) + "months";
+inline const std::string kDayFunction =
+    std::string(kIcebergFunctionPrefix) + "days";
+inline const std::string kHourFunction =
+    std::string(kIcebergFunctionPrefix) + "hours";
+
+/// Registers Iceberg partition transform functions with prefix
+/// kIcebergFunctionPrefix.
+void registerIcebergFunctions();
+
 /// Partition transform types.
 /// Defines how source column values are converted into partition keys.
 /// See https://iceberg.apache.org/spec/#partition-transforms.
@@ -113,6 +132,7 @@ struct IcebergPartitionSpec {
         case TransformType::kTruncate:
           return type;
       }
+      VELOX_UNREACHABLE("Unknown transform type");
     }
   };
 
