@@ -219,60 +219,67 @@ a limit contains the memory usage.</p></td>
 <td><p>If it is not zero, specifies the time limit that a driver can continuously
 run on a thread before yield. If it is zero, then it no limit.</p></td>
 </tr>
-<tr class="row-even"><td><p>prefixsort_normalized_key_max_bytes</p></td>
+<tr class="row-even"><td><p>window_num_sub_partitions</p></td>
+<td><p>integer</p></td>
+<td><p>1</p></td>
+<td><p>Window operator can be configured to sub-divide window partitions on each thread of execution into groups of
+sub partitions for sequential processing. This setting specifies how many sub-partitions to create for each
+thread. Use 1 to disable sub partitioning.</p></td>
+</tr>
+<tr class="row-odd"><td><p>prefixsort_normalized_key_max_bytes</p></td>
 <td><p>integer</p></td>
 <td><p>128</p></td>
 <td><p>Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.</p></td>
 </tr>
-<tr class="row-odd"><td><p>prefixsort_min_rows</p></td>
+<tr class="row-even"><td><p>prefixsort_min_rows</p></td>
 <td><p>integer</p></td>
 <td><p>128</p></td>
 <td><p>Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.</p></td>
 </tr>
-<tr class="row-even"><td><p>prefixsort_max_string_prefix_length</p></td>
+<tr class="row-odd"><td><p>prefixsort_max_string_prefix_length</p></td>
 <td><p>integer</p></td>
 <td><p>16</p></td>
 <td><p>Byte length of the string prefix stored in the prefix-sort buffer. This doesn’t include the null byte.</p></td>
 </tr>
-<tr class="row-odd"><td><p>shuffle_compression_codec</p></td>
+<tr class="row-even"><td><p>shuffle_compression_codec</p></td>
 <td><p>string</p></td>
 <td><p>none</p></td>
 <td><p>Specifies the compression algorithm type to compress the shuffle data to
 trade CPU for network IO efficiency. The supported compression codecs
 are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.</p></td>
 </tr>
-<tr class="row-even"><td><p>throw_exception_on_duplicate_map_keys</p></td>
+<tr class="row-odd"><td><p>throw_exception_on_duplicate_map_keys</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>By default, if a key is found in multiple given maps, that key’s value in the resulting map comes from the last one of those maps.
 If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions <cite>CreateMap</cite>, <cite>MapFromArrays</cite>, <cite>MapFromEntries</cite>, <cite>StringToMap</cite>, <cite>MapConcat</cite>, <cite>TransformKeys</cite>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>index_lookup_join_max_prefetch_batches</p></td>
+<tr class="row-even"><td><p>index_lookup_join_max_prefetch_batches</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
 then process one input batch at a time.</p></td>
 </tr>
-<tr class="row-even"><td><p>index_lookup_join_split_output</p></td>
+<tr class="row-odd"><td><p>index_lookup_join_split_output</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If this is true, then the index join operator might split output for each input batch based
 on the output batch size control. Otherwise, it tries to produce a single output for each input
 batch.</p></td>
 </tr>
-<tr class="row-odd"><td><p>unnest_split_output_batch</p></td>
+<tr class="row-even"><td><p>unnest_split_output_batch</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If this is true, then the unnest operator might split output for each input batch based on the
 output batch size control. Otherwise, it produces a single output for each input batch.</p></td>
 </tr>
-<tr class="row-even"><td><p>max_num_splits_listened_to</p></td>
+<tr class="row-odd"><td><p>max_num_splits_listened_to</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Specifies The max number of input splits to listen to by SplitListener per table scan node per
 worker. It’s up to the SplitListener implementation to respect this config.</p></td>
 </tr>
-<tr class="row-odd"><td><p>operator_track_expression_stats</p></td>
+<tr class="row-even"><td><p>operator_track_expression_stats</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If this is true, then operators that evaluate expressions will track stats for expressions that
