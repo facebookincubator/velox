@@ -422,6 +422,16 @@ class VectorFuzzer {
     opaqueTypeGenerators_[std::type_index(typeid(Class))] = generator;
   }
 
+  /// Corrupts the underlying data for row indices that are marked
+  /// as null in a vector. For FlatVectors, this means corrupting the values
+  /// buffer at null row indices; for Array/Map Vectors, it corrupts the
+  /// offsets and sizes; and for DictionaryVectors, it corrupts the indices
+  /// buffer. This is used to generate cases to verify that code correctly
+  /// ignores data at null positions rather than relying on it having valid
+  /// values.
+  /// Its a no-op for constant and RowVectors.
+  void fuzzDataBehindNulls(VectorPtr& vector);
+
   // Maximum values allowed values by Presto for interval types.
   static const int64_t kMaxAllowedIntervalDayTime = 2147483647;
   static const int32_t kMaxAllowedIntervalYearMonth = 178956970;
