@@ -145,14 +145,17 @@ int32_t main(int32_t argc, char* argv[]) {
     subfilters.reserve(kFilterSizes[i]);
     int64_t start = std::numeric_limits<int64_t>::min();
     for (auto j = 0; j < kFilterSizes[i]; ++j) {
-      subfilters.emplace_back(std::make_unique<common::BigintRange>(
-          start, rejectedValues[i][j] - 1, false));
+      subfilters.emplace_back(
+          std::make_unique<common::BigintRange>(
+              start, rejectedValues[i][j] - 1, false));
       start = rejectedValues[i][j] + 1;
     }
-    subfilters.emplace_back(std::make_unique<common::BigintRange>(
-        start, std::numeric_limits<int64_t>::max(), false));
-    multiRangeFilters.emplace_back(std::make_unique<common::BigintMultiRange>(
-        std::move(subfilters), false));
+    subfilters.emplace_back(
+        std::make_unique<common::BigintRange>(
+            start, std::numeric_limits<int64_t>::max(), false));
+    multiRangeFilters.emplace_back(
+        std::make_unique<common::BigintMultiRange>(
+            std::move(subfilters), false));
   }
 
   veryDenseValues.resize(kNumValues);

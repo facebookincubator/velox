@@ -16,16 +16,39 @@
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
-#include <gtest/gtest.h>
 #include <atomic>
 #include <thread>
 #include <vector>
+#include "velox/common/base/Portability.h"
 #include "velox/exec/OneWayStatusFlag.h"
 
-using namespace ::testing;
-using namespace facebook::velox;
-static const size_t kNumThreads = 88;
-static const size_t kNumIterations = 10000;
+namespace {
+
+using facebook::velox::exec::OneWayStatusFlag;
+constexpr size_t kNumThreads = 88;
+constexpr size_t kNumIterations = 10000;
+
+#if defined(__x86_64__) && !defined(TSAN_BUILD)
+
+class OneWayStatusFlagUnsafe {
+ public:
+  bool check() const {
+    return fastStatus_ || atomicStatus_.load();
+  }
+
+  void set() {
+    if (!fastStatus_) {
+      atomicStatus_.store(true);
+      fastStatus_ = true;
+    }
+  }
+
+ private:
+  bool fastStatus_{false};
+  std::atomic_bool atomicStatus_{false};
+};
+
+#endif
 
 void runParallelUpdates(
     std::function<void(size_t iter)> callback,
@@ -46,12 +69,28 @@ void runParallelUpdates(
   }
 }
 
-BENCHMARK(std_atomic_bool_write) {
-  std::atomic<bool> flag{false};
+BENCHMARK(std_atomic_bool_write_seq_cst) {
+  std::atomic_bool flag{false};
   runParallelUpdates(
       [&](size_t iters) {
         for (size_t i = 0; i < iters; ++i) {
           flag.store(true);
+          bool dummy{};
+          folly::doNotOptimizeAway(dummy);
+        }
+      },
+      kNumThreads, // Threads
+      kNumIterations); // Iterations per thread
+}
+
+BENCHMARK(std_atomic_bool_write_release) {
+  std::atomic_bool flag{false};
+  runParallelUpdates(
+      [&](size_t iters) {
+        for (size_t i = 0; i < iters; ++i) {
+          flag.store(true, std::memory_order_release);
+          bool dummy{};
+          folly::doNotOptimizeAway(dummy);
         }
       },
       kNumThreads, // Threads
@@ -59,25 +98,13 @@ BENCHMARK(std_atomic_bool_write) {
 }
 
 BENCHMARK(std_atomic_bool_write_relaxed) {
-  std::atomic<bool> flag{false};
+  std::atomic_bool flag{false};
   runParallelUpdates(
       [&](size_t iters) {
         for (size_t i = 0; i < iters; ++i) {
           flag.store(true, std::memory_order_relaxed);
-        }
-      },
-      kNumThreads, // Threads
-      kNumIterations); // Iterations per thread
-}
-
-BENCHMARK(std_atomic_bool_read_write_relaxed) {
-  std::atomic<bool> flag{false};
-  runParallelUpdates(
-      [&](size_t iters) {
-        for (size_t i = 0; i < iters; ++i) {
-          if (!flag.load(std::memory_order_relaxed)) {
-            flag.store(true, std::memory_order_acq_rel);
-          }
+          bool dummy{};
+          folly::doNotOptimizeAway(dummy);
         }
       },
       kNumThreads, // Threads
@@ -85,32 +112,64 @@ BENCHMARK(std_atomic_bool_read_write_relaxed) {
 }
 
 BENCHMARK(one_way_flag_write) {
-  exec::OneWayStatusFlag flag;
+  OneWayStatusFlag flag;
   runParallelUpdates(
       [&](size_t iters) {
         for (size_t i = 0; i < iters; ++i) {
           flag.set();
+          bool dummy{};
+          folly::doNotOptimizeAway(dummy);
         }
       },
       kNumThreads, // Threads
       kNumIterations); // Iterations per thread
 }
 
-// Read Benchmarks
-BENCHMARK(std_atomic_bool_read) {
-  std::atomic<bool> flag{false};
+#if defined(__x86_64__) && !defined(TSAN_BUILD)
+
+BENCHMARK(one_way_flag_unsafe_write) {
+  OneWayStatusFlagUnsafe flag;
   runParallelUpdates(
       [&](size_t iters) {
         for (size_t i = 0; i < iters; ++i) {
-          folly::doNotOptimizeAway(flag.load());
+          flag.set();
+          bool dummy{};
+          folly::doNotOptimizeAway(dummy);
         }
       },
       kNumThreads, // Threads
       kNumIterations); // Iterations per thread
 }
 
-BENCHMARK(std_atomic_bool_relaxed_read) {
-  std::atomic<bool> flag{false};
+#endif
+
+// Read Benchmarks
+BENCHMARK(std_atomic_bool_read_seq_cst) {
+  std::atomic_bool flag{false};
+  runParallelUpdates(
+      [&](size_t iters) {
+        for (size_t i = 0; i < iters; ++i) {
+          folly::doNotOptimizeAway(flag.load(std::memory_order_seq_cst));
+        }
+      },
+      kNumThreads, // Threads
+      kNumIterations); // Iterations per thread
+}
+
+BENCHMARK(std_atomic_bool_read_acquire) {
+  std::atomic_bool flag{false};
+  runParallelUpdates(
+      [&](size_t iters) {
+        for (size_t i = 0; i < iters; ++i) {
+          folly::doNotOptimizeAway(flag.load(std::memory_order_acquire));
+        }
+      },
+      kNumThreads, // Threads
+      kNumIterations); // Iterations per thread
+}
+
+BENCHMARK(std_atomic_bool_read_relaxed) {
+  std::atomic_bool flag{false};
   runParallelUpdates(
       [&](size_t iters) {
         for (size_t i = 0; i < iters; ++i) {
@@ -121,22 +180,8 @@ BENCHMARK(std_atomic_bool_relaxed_read) {
       kNumIterations); // Iterations per thread
 }
 
-BENCHMARK(std_atomic_bool_read_relaxed_acquire) {
-  std::atomic<bool> flag{false};
-  runParallelUpdates(
-      [&](size_t iters) {
-        for (size_t i = 0; i < iters; ++i) {
-          folly::doNotOptimizeAway(
-              flag.load(std::memory_order_relaxed) ||
-              flag.load(std::memory_order_acquire));
-        }
-      },
-      kNumThreads, // Threads
-      kNumIterations); // Iterations per thread
-}
-
 BENCHMARK(one_way_flag_read) {
-  exec::OneWayStatusFlag flag;
+  OneWayStatusFlag flag;
   runParallelUpdates(
       [&](size_t iters) {
         for (size_t i = 0; i < iters; ++i) {
@@ -146,6 +191,24 @@ BENCHMARK(one_way_flag_read) {
       kNumThreads, // Threads
       kNumIterations); // Iterations per thread
 }
+
+#if defined(__x86_64__) && !defined(TSAN_BUILD)
+
+BENCHMARK(one_way_flag_unsafe_read) {
+  OneWayStatusFlagUnsafe flag;
+  runParallelUpdates(
+      [&](size_t iters) {
+        for (size_t i = 0; i < iters; ++i) {
+          folly::doNotOptimizeAway(flag.check());
+        }
+      },
+      kNumThreads, // Threads
+      kNumIterations); // Iterations per thread
+}
+
+#endif
+
+} // namespace
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);

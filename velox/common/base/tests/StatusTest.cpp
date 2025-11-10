@@ -211,6 +211,22 @@ TEST(StatusTest, statusMacros) {
           "Reason: User error occurred.\nExpression: status != nullptr\n"));
 }
 
+TEST(StatusTest, statusMacrosSkipDetails) {
+  ScopedThreadSkipErrorDetails skipErrorDetails(true);
+  ASSERT_EQ(returnMacroCheck(), Status::UserError());
+  ASSERT_EQ(returnMacroEmptyMessage(), Status::UserError());
+  ASSERT_EQ(returnMacroFormat(), Status::UserError());
+  ASSERT_EQ(returnMacroGT(), Status::UserError());
+  ASSERT_EQ(returnMacroGE(), Status::UserError());
+  ASSERT_EQ(returnMacroLT(), Status::UserError());
+  ASSERT_EQ(returnMacroLE(), Status::UserError());
+  ASSERT_EQ(returnMacroEQ(), Status::UserError());
+  ASSERT_EQ(returnMacroNE(), Status::UserError());
+  ASSERT_EQ(returnMacroNULL(), Status::UserError());
+  Status status = Status::OK();
+  ASSERT_EQ(returnNotNull(&status), Status::UserError());
+}
+
 Expected<int> modulo(int a, int b) {
   if (b == 0) {
     return folly::makeUnexpected(Status::UserError("division by zero"));

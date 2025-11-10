@@ -945,8 +945,9 @@ class VectorMaker {
           if (it == keysMap.end()) {
             keysMap.insert({key, keyChannel++});
             flatKeys.push_back(key);
-            values.push_back(BaseVector::create(
-                mapVector->type()->childAt(1), mapVector->size(), pool_));
+            values.push_back(
+                BaseVector::create(
+                    mapVector->type()->childAt(1), mapVector->size(), pool_));
 
             // We allocate a new inMaps buffer, setting "not in map" by default.
             // Then set the current key to in map.

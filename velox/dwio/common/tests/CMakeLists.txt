@@ -38,6 +38,7 @@ add_executable(
   DecoderUtilTest.cpp
   ExecutorBarrierTest.cpp
   OnDemandUnitLoaderTests.cpp
+  ParallelUnitLoaderTest.cpp
   LocalFileSinkTest.cpp
   MemorySinkTest.cpp
   LoggedExceptionTest.cpp
@@ -62,7 +63,6 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_temp_path
   velox_vector_test_lib
-  Boost::regex
   velox_link_libs
   Folly::folly
   ${TEST_LINK_LIBS}

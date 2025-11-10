@@ -294,6 +294,30 @@ TEST_F(MapZipWithTest, fuzz) {
   }
 }
 
+TEST_F(MapZipWithTest, unknownType) {
+  auto makeFlatUnknownVector = [&](int size) {
+    auto vector =
+        BaseVector::create<FlatVector<UnknownValue>>(UNKNOWN(), size, pool());
+    for (int i = 0; i < size; ++i) {
+      vector->setNull(i, true);
+    }
+    return vector;
+  };
+
+  auto data = makeRowVector({
+      makeMapVector({0}, makeFlatUnknownVector(3), makeFlatUnknownVector(3)),
+      makeMapVector({0}, makeFlatUnknownVector(3), makeFlatUnknownVector(3)),
+  });
+
+  auto result =
+      evaluate("map_zip_with(c0, c1, (k, v1, v2) -> coalesce(v1, v2))", data);
+
+  auto expected =
+      makeMapVector({0}, makeFlatUnknownVector(3), makeFlatUnknownVector(3));
+
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(MapZipWithTest, try) {
   auto data = makeRowVector(
       {makeMapVector<int64_t, int64_t>(

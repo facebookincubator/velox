@@ -106,6 +106,12 @@ void validateBaseTypeAndCollectTypeParams(
     const TypeSignature& arg,
     std::unordered_set<std::string>& collectedTypeVariables,
     bool isReturnType) {
+  if (isReturnType) {
+    VELOX_USER_CHECK(
+        !arg.isHomogeneousRow(),
+        "Homogeneous row cannot appear in return type");
+  }
+
   if (!variables.count(arg.baseName())) {
     auto typeName = boost::algorithm::to_upper_copy(arg.baseName());
 

@@ -160,15 +160,18 @@ int32_t main(int32_t argc, char** argv) {
       std::string hi = string_pool[kStringPoolSize * (50 + pct / 2) / 100];
 
       // create NegatedBytesRange filter
-      negateds.emplace_back(std::make_unique<common::NegatedBytesRange>(
-          lo, false, false, hi, false, true, false));
+      negateds.emplace_back(
+          std::make_unique<common::NegatedBytesRange>(
+              lo, false, false, hi, false, true, false));
 
       // create MultiRange filter
       std::vector<std::unique_ptr<common::Filter>> rangeFilters;
-      rangeFilters.emplace_back(std::make_unique<common::BytesRange>(
-          "", true, false, lo, false, true, false));
-      rangeFilters.emplace_back(std::make_unique<common::BytesRange>(
-          hi, false, false, "", true, false, false));
+      rangeFilters.emplace_back(
+          std::make_unique<common::BytesRange>(
+              "", true, false, lo, false, true, false));
+      rangeFilters.emplace_back(
+          std::make_unique<common::BytesRange>(
+              hi, false, false, "", true, false, false));
       multiRanges.emplace_back(
           std::make_unique<common::MultiRange>(std::move(rangeFilters), false));
 

@@ -120,29 +120,35 @@ core::TypedExprPtr toJoinConditionExpr(
     if (auto inCondition =
             std::dynamic_pointer_cast<core::InIndexLookupCondition>(
                 condition)) {
-      conditionExprs.push_back(std::make_shared<const core::CallTypedExpr>(
-          BOOLEAN(),
-          "contains",
-          inCondition->list,
-          std::move(indexColumnExpr)));
+      conditionExprs.push_back(
+          std::make_shared<const core::CallTypedExpr>(
+              BOOLEAN(),
+              "contains",
+              inCondition->list,
+              std::move(indexColumnExpr)));
       continue;
     }
     if (auto betweenCondition =
             std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
                 condition)) {
-      conditionExprs.push_back(std::make_shared<const core::CallTypedExpr>(
-          BOOLEAN(),
-          "between",
-          std::move(indexColumnExpr),
-          betweenCondition->lower,
-          betweenCondition->upper));
+      conditionExprs.push_back(
+          std::make_shared<const core::CallTypedExpr>(
+              BOOLEAN(),
+              "between",
+              std::move(indexColumnExpr),
+              betweenCondition->lower,
+              betweenCondition->upper));
       continue;
     }
     if (auto equalCondition =
             std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
                 condition)) {
-      conditionExprs.push_back(std::make_shared<const core::CallTypedExpr>(
-          BOOLEAN(), "eq", std::move(indexColumnExpr), equalCondition->value));
+      conditionExprs.push_back(
+          std::make_shared<const core::CallTypedExpr>(
+              BOOLEAN(),
+              "eq",
+              std::move(indexColumnExpr),
+              equalCondition->value));
       continue;
     }
     VELOX_FAIL("Invalid index join condition: {}", condition->toString());

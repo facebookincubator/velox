@@ -37,35 +37,39 @@ void registerAverageAggregate(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(double,bigint)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(double,bigint)")
+            .argumentType(inputType)
+            .build());
   }
 
   // Interval input type in Presto has special case and returns INTERVAL, not
   // DOUBLE.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("interval day to second")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("interval day to second")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("interval day to second")
+          .intermediateType("row(double,bigint)")
+          .argumentType("interval day to second")
+          .build());
 
   // Real input type in Presto has special case and returns REAL, not DOUBLE.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("real")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("real")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("real")
+          .intermediateType("row(double,bigint)")
+          .argumentType("real")
+          .build());
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("varbinary")
-                           .returnType("DECIMAL(a_precision, a_scale)")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("varbinary")
+          .returnType("DECIMAL(a_precision, a_scale)")
+          .build());
 
   auto name = prefix + kAvg;
   exec::registerAggregateFunction(
@@ -156,7 +160,7 @@ void registerAverageAggregate(
           }
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

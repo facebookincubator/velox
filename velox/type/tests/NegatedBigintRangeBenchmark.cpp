@@ -127,10 +127,12 @@ int32_t main(int32_t argc, char* argv[]) {
 
   negatedRangeNeq = std::make_unique<NegatedBigintRange>(0, 0, false);
   std::vector<std::unique_ptr<BigintRange>> zeroRanges;
-  zeroRanges.emplace_back(std::make_unique<BigintRange>(
-      std::numeric_limits<int64_t>::min(), -1, false));
-  zeroRanges.emplace_back(std::make_unique<BigintRange>(
-      1, std::numeric_limits<int64_t>::max(), false));
+  zeroRanges.emplace_back(
+      std::make_unique<BigintRange>(
+          std::numeric_limits<int64_t>::min(), -1, false));
+  zeroRanges.emplace_back(
+      std::make_unique<BigintRange>(
+          1, std::numeric_limits<int64_t>::max(), false));
   multiRangeNeq =
       std::make_unique<BigintMultiRange>(std::move(zeroRanges), false);
 
@@ -151,13 +153,18 @@ int32_t main(int32_t argc, char* argv[]) {
 
   for (int i = 0; i < rangeBounds.size(); ++i) {
     filterSizeIndices[rangeBounds[i]] = i;
-    negatedRanges.emplace_back(std::make_unique<NegatedBigintRange>(
-        -1 * rangeBounds[i], rangeBounds[i], false));
+    negatedRanges.emplace_back(
+        std::make_unique<NegatedBigintRange>(
+            -1 * rangeBounds[i], rangeBounds[i], false));
     std::vector<std::unique_ptr<BigintRange>> ranges;
-    ranges.emplace_back(std::make_unique<BigintRange>(
-        std::numeric_limits<int64_t>::min(), -1 * (rangeBounds[i] + 1), false));
-    ranges.emplace_back(std::make_unique<BigintRange>(
-        rangeBounds[i] + 1, std::numeric_limits<int64_t>::max(), false));
+    ranges.emplace_back(
+        std::make_unique<BigintRange>(
+            std::numeric_limits<int64_t>::min(),
+            -1 * (rangeBounds[i] + 1),
+            false));
+    ranges.emplace_back(
+        std::make_unique<BigintRange>(
+            rangeBounds[i] + 1, std::numeric_limits<int64_t>::max(), false));
     multiRanges.emplace_back(
         std::make_unique<BigintMultiRange>(std::move(ranges), false));
   }

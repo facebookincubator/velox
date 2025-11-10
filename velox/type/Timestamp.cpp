@@ -352,10 +352,6 @@ std::string::size_type getMaxStringLength(
   }
 }
 
-void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out) {
-  // TODO Implement
-}
-
 } // namespace facebook::velox
 
 namespace std {

@@ -132,8 +132,9 @@ class ServerResponse {
     std::vector<TypePtr> types;
     for (const auto& column : response_["columns"]) {
       names.push_back(column["name"].asString());
-      types.push_back(facebook::velox::functions::prestosql::parseType(
-          column["type"].asString()));
+      types.push_back(
+          facebook::velox::functions::prestosql::parseType(
+              column["type"].asString()));
     }
 
     auto rowType = ROW(std::move(names), std::move(types));
@@ -243,8 +244,9 @@ PrestoQueryRunner::inputProjections(
         children[batchIndex].push_back(input[batchIndex]->childAt(childIndex));
       }
 
-      projections.push_back(std::make_shared<core::FieldAccessExpr>(
-          names[childIndex], names[childIndex]));
+      projections.push_back(
+          std::make_shared<core::FieldAccessExpr>(
+              names[childIndex], names[childIndex]));
     }
   }
 
@@ -258,12 +260,13 @@ PrestoQueryRunner::inputProjections(
   std::vector<RowVectorPtr> output;
   output.reserve(input.size());
   for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
-    output.push_back(std::make_shared<RowVector>(
-        input[batchIndex]->pool(),
-        rowType,
-        input[batchIndex]->nulls(),
-        input[batchIndex]->size(),
-        std::move(children[batchIndex])));
+    output.push_back(
+        std::make_shared<RowVector>(
+            input[batchIndex]->pool(),
+            rowType,
+            input[batchIndex]->nulls(),
+            input[batchIndex]->size(),
+            std::move(children[batchIndex])));
   }
 
   return std::make_pair(output, projections);
@@ -318,17 +321,35 @@ bool PrestoQueryRunner::isConstantExprSupported(
 }
 
 bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
-  // TODO: support queries with these types. Among the types below, hugeint is
-  // not a native type in Presto, so fuzzer should not use it as the type of
-  // cast-to or constant literals. Hyperloglog and TDigest can only be casted
-  // from varbinary and cannot be used as the type of constant literals.
-  // Interval year to month can only be casted from NULL and cannot be used as
-  // the type of constant literals. Json, Ipaddress, Ipprefix, and UUID require
-  // special handling, because Presto requires literals of these types to be
-  // valid, and doesn't allow creating HIVE columns of these types.
+  // TODO: support queries with these types.
+  // Types not supported by PrestoQueryRunner and their reasons:
+  //
+  // hugeint:
+  //   - Not a native type in Presto
+  //   - Fuzzer should not use it for cast-to or constant literals
+  //
+  // interval year to month:
+  //   - Can only be casted from NULL
+  //   - Cannot be used as constant literal types
+  //
+  // ipaddress, ipprefix, uuid:
+  //   - Require special handling in Presto
+  //   - Presto requires literals of these types to be valid
+  //   - Cannot create HIVE columns of these types
+  //
+  // geometry:
+  //   - Under development in Presto
+  //   - Cannot be used as constant literals
+  //   - Expected differences between Presto Java and Velox C++ implementations
+  //
+  // p4hyperloglog:
+  //   - Not a native type in Presto
+  //   - Cannot create HIVE columns of these types
   return !(
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
+      usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
+      usesTypeName(signature, "p4hyperloglog") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
@@ -362,11 +383,12 @@ std::string PrestoQueryRunner::createTable(
 
   execute(fmt::format("DROP TABLE IF EXISTS {}", name));
 
-  execute(fmt::format(
-      "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
-      name,
-      folly::join(", ", inputType->names()),
-      nullValues.str()));
+  execute(
+      fmt::format(
+          "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
+          name,
+          folly::join(", ", inputType->names()),
+          nullValues.str()));
 
   // Query Presto to find out table's location on disk.
   auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));

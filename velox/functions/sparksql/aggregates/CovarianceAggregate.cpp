@@ -90,8 +90,7 @@ template <
     typename TAccumulator,
     typename TIntermediateInput,
     typename TIntermediateResult,
-    template <bool>
-    class TResultAccessor>
+    template <bool> class TResultAccessor>
 exec::AggregateRegistrationResult registerCovariance(
     const std::string& name,
     bool withCompanionFunctions,

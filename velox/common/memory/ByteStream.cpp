@@ -16,19 +16,21 @@
 
 #include "velox/common/memory/ByteStream.h"
 
+#include <algorithm>
+
 namespace facebook::velox {
+
+static ByteRange convByteRange(folly::ByteRange br) {
+  return {const_cast<uint8_t*>(br.data()), folly::to_signed(br.size()), 0};
+}
 
 std::vector<ByteRange> byteRangesFromIOBuf(folly::IOBuf* iobuf) {
   if (iobuf == nullptr) {
     return {};
   }
   std::vector<ByteRange> byteRanges;
-  auto* current = iobuf;
-  do {
-    byteRanges.push_back(
-        {current->writableData(), static_cast<int32_t>(current->length()), 0});
-    current = current->next();
-  } while (current != iobuf);
+  auto dst = std::back_inserter(byteRanges);
+  std::transform(iobuf->begin(), iobuf->end(), dst, convByteRange);
   return byteRanges;
 }
 

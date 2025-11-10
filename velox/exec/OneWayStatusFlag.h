@@ -16,53 +16,28 @@
 
 #pragma once
 
-#include <folly/synchronization/SanitizeThread.h>
 #include <atomic>
 
 namespace facebook::velox::exec {
 
-/// A simple one way status flag that uses a non atomic flag to avoid
-/// unnecessary atomic operations.
 class OneWayStatusFlag {
  public:
-  bool check() const {
-#if defined(__x86_64__)
-    folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
-    return fastStatus_ || atomicStatus_.load();
-#else
-    return atomicStatus_.load(std::memory_order_relaxed) ||
-        atomicStatus_.load();
-#endif
+  bool check() const noexcept {
+    return status_.load(std::memory_order_acquire);
   }
 
-  void set() {
-#if defined(__x86_64__)
-    folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
-    if (!fastStatus_) {
-      atomicStatus_.store(true);
-      fastStatus_ = true;
+  void set() noexcept {
+    if (!status_.load(std::memory_order_relaxed)) {
+      status_.store(true, std::memory_order_release);
     }
-#else
-    if (!atomicStatus_.load(std::memory_order_relaxed)) {
-      atomicStatus_.store(true);
-    }
-#endif
   }
 
-  /// Operator overload to convert OneWayStatusFlag to bool
-  operator bool() const {
+  explicit operator bool() const noexcept {
     return check();
   }
 
  private:
-#if defined(__x86_64__)
-  // This flag can only go from false to true, and is only checked at the end of
-  // a loop. Given that once a flag is true it can never go back to false, we
-  // are ok to use this in a non synchronized manner to avoid the overhead. As
-  // such we consciously exempt ourselves here from TSAN detection.
-  bool fastStatus_{false};
-#endif
-  std::atomic_bool atomicStatus_{false};
+  std::atomic_bool status_{false};
 };
 
 } // namespace facebook::velox::exec

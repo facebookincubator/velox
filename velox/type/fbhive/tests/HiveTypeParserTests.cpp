@@ -128,7 +128,7 @@ TEST(FbHive, badParse) {
       "Unexpected token uniontype at < bigint , int, float");
   VELOX_ASSERT_THROW(parser.parse("badid"), "Unexpected token badid at ");
   VELOX_ASSERT_THROW(
-      parser.parse("struct<int, bigint>"), "Unexpected token  bigint>");
+      parser.parse("struct<int, bigint>"), "Unexpected token ' bigint>'");
   VELOX_ASSERT_THROW(parser.parse("list<>"), "Unexpected token list at <>");
   VELOX_ASSERT_THROW(
       parser.parse("map<>"), "wrong param count for map type def");
@@ -140,7 +140,7 @@ TEST(FbHive, badParse) {
   VELOX_ASSERT_THROW(
       parser.parse("map<int>"), "wrong param count for map type def");
   VELOX_ASSERT_THROW(
-      parser.parse("decimal<20, 10>"), "Unexpected token 20, 10>");
+      parser.parse("decimal<20, 10>"), "Unexpected token '20, 10>'");
   VELOX_ASSERT_THROW(parser.parse("decimal(20, 10>"), "Unexpected token ");
   VELOX_ASSERT_THROW(
       parser.parse("decimal(a, 10)"),

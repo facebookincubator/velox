@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
 #include <boost/lexical_cast.hpp>
 #include <memory>
@@ -27,14 +28,6 @@
 using namespace facebook::velox::exec;
 
 namespace facebook::velox::connector::hive {
-
-namespace {
-std::vector<std::unique_ptr<HiveConnectorMetadataFactory>>&
-hiveConnectorMetadataFactories() {
-  static std::vector<std::unique_ptr<HiveConnectorMetadataFactory>> factories;
-  return factories;
-}
-} // namespace
 
 HiveConnector::HiveConnector(
     const std::string& id,
@@ -59,12 +52,6 @@ HiveConnector::HiveConnector(
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with file handle cache disabled";
   }
-  for (auto& factory : hiveConnectorMetadataFactories()) {
-    metadata_ = factory->create(this);
-    if (metadata_ != nullptr) {
-      break;
-    }
-  }
 }
 
 std::unique_ptr<DataSource> HiveConnector::createDataSource(
@@ -87,6 +74,16 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
     ConnectorInsertTableHandlePtr connectorInsertTableHandle,
     ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy) {
+  if (auto icebergInsertHandle =
+          std::dynamic_pointer_cast<const iceberg::IcebergInsertTableHandle>(
+              connectorInsertTableHandle)) {
+    return std::make_unique<iceberg::IcebergDataSink>(
+        inputType,
+        icebergInsertHandle,
+        connectorQueryCtx,
+        commitStrategy,
+        hiveConfig_);
+  }
   auto hiveInsertHandle =
       std::dynamic_pointer_cast<const HiveInsertTableHandle>(
           connectorInsertTableHandle);
@@ -204,12 +201,6 @@ void HivePartitionFunctionSpec::registerSerDe() {
   auto& registry = DeserializationWithContextRegistryForSharedPtr();
   registry.Register(
       "HivePartitionFunctionSpec", HivePartitionFunctionSpec::deserialize);
-}
-
-bool registerHiveConnectorMetadataFactory(
-    std::unique_ptr<HiveConnectorMetadataFactory> factory) {
-  hiveConnectorMetadataFactories().push_back(std::move(factory));
-  return true;
 }
 
 } // namespace facebook::velox::connector::hive

@@ -18,7 +18,7 @@
 #include "velox/common/base/SortingNetwork.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/expression/VectorWriters.h"
-#include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/JsonStringUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonExtractor.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -33,6 +33,12 @@ template <typename T>
 static simdjson::error_code validate(T value) {
   SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
   switch (type) {
+    case simdjson::ondemand::json_type::unknown: {
+      // In simdjson 4.0.7+, unknown type is returned for invalid JSON values
+      // like NaN, Infinity, etc. Return INCORRECT_TYPE to indicate invalid
+      // JSON.
+      return simdjson::INCORRECT_TYPE;
+    }
     case simdjson::ondemand::json_type::array: {
       SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
       for (auto elementOrError : array) {
@@ -120,15 +126,6 @@ void addOrMergeChar(JsonViews& views, std::string_view view) {
   } else {
     views.push_back(view);
   }
-}
-
-std::string_view trimToken(std::string_view token) {
-  VELOX_DCHECK(!stringImpl::isAsciiWhiteSpace(token[0]));
-  auto size = token.size();
-  while (stringImpl::isAsciiWhiteSpace(token[size - 1])) {
-    --size;
-  }
-  return std::string_view(token.data(), size);
 }
 
 struct JsonField {
@@ -398,6 +395,12 @@ class JsonParseImpl {
   simdjson::error_code generateViews(T value) const {
     SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
     switch (type) {
+      case simdjson::ondemand::json_type::unknown: {
+        // In simdjson 4.0.7+, unknown type is returned for invalid JSON values
+        // like NaN, Infinity, etc. Return INCORRECT_TYPE to indicate invalid
+        // JSON.
+        return simdjson::INCORRECT_TYPE;
+      }
       case simdjson::ondemand::json_type::array: {
         SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
         return generateViewsFromArray<kNeedNormalize>(array);
@@ -770,6 +773,12 @@ struct JsonExtractImpl {
       // contents directly) and we might miss invalid JSON.
       SIMDJSON_ASSIGN_OR_RAISE(auto vtype, v.type());
       switch (vtype) {
+        case simdjson::ondemand::json_type::unknown: {
+          // In simdjson 4.0.7+, unknown type is returned for invalid JSON
+          // values like NaN, Infinity, etc. Return INCORRECT_TYPE to indicate
+          // invalid JSON.
+          return simdjson::INCORRECT_TYPE;
+        }
         case simdjson::ondemand::json_type::object: {
           SIMDJSON_ASSIGN_OR_RAISE(
               auto jsonStr, simdjson::to_json_string(v.get_object()));

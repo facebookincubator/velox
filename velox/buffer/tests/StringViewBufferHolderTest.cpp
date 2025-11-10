@@ -161,23 +161,21 @@ TEST_F(StringViewBufferHolderTest, getOwnedValueCanBeCalledWithStringType) {
   ASSERT_EQ(1, holder.buffers().size());
 }
 
-TEST_F(
-    StringViewBufferHolderTest,
-    getOwnedValueCanBeCalledWithStringPieceType) {
+TEST_F(StringViewBufferHolderTest, getOwnedValueCanBeCalledWithStringViewType) {
   const char* buf = "abcdefghijklmnopqrstuvxz";
   StringView result;
-  folly::StringPiece piece;
+  std::string_view view;
 
   auto holder = makeHolder();
   ASSERT_EQ(0, holder.buffers().size());
 
   {
     std::string str = buf;
-    piece = str;
-    result = holder.getOwnedValue(piece);
+    view = str;
+    result = holder.getOwnedValue(view);
   }
 
-  // `str` is already destructed and piece is invalid.
+  // `str` is already destructed and `view` is invalid.
   ASSERT_EQ(StringView(buf), result);
   ASSERT_EQ(1, holder.buffers().size());
 }

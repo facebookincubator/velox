@@ -884,6 +884,14 @@ VectorPtr tryEvaluateConstantExpression(
     const std::shared_ptr<core::QueryCtx>& queryCtx,
     bool suppressEvaluationFailures = false);
 
+/// Variant of `tryEvaluateConstantExpression` with a raw pointer to QueryCtx
+/// instead of a shared_ptr, used by `ExprOptimizer`.
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
+    core::QueryCtx* queryCtx,
+    bool suppressEvaluationFailures);
+
 /// Returns a string representation of the expression trees annotated with
 /// runtime statistics. Expected to be called after calling ExprSet::eval one or
 /// more times. If called before ExprSet::eval runtime statistics will be all

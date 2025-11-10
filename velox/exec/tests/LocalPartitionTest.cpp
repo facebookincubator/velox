@@ -388,8 +388,9 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
 
   auto valuesNode = [&](int start, int end) {
     return PlanBuilder(planNodeIdGenerator)
-        .values(std::vector<RowVectorPtr>(
-            vectors.begin() + start, vectors.begin() + end))
+        .values(
+            std::vector<RowVectorPtr>(
+                vectors.begin() + start, vectors.begin() + end))
         .planNode();
   };
 
@@ -961,8 +962,9 @@ TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
       }
     };
 
-    Operator::registerOperator(std::make_unique<BlockingNodeFactory>(
-        std::move(blockingCallback), std::move(finishCallback)));
+    Operator::registerOperator(
+        std::make_unique<BlockingNodeFactory>(
+            std::move(blockingCallback), std::move(finishCallback)));
 
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan = PlanBuilder(planNodeIdGenerator)
@@ -1030,8 +1032,9 @@ TEST_F(
 
   auto finishCallback = [&](bool /*unused*/) {};
 
-  Operator::registerOperator(std::make_unique<BlockingNodeFactory>(
-      std::move(blockingCallback), std::move(finishCallback)));
+  Operator::registerOperator(
+      std::make_unique<BlockingNodeFactory>(
+          std::move(blockingCallback), std::move(finishCallback)));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(planNodeIdGenerator)

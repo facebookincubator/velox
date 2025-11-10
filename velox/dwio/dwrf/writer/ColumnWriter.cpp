@@ -68,8 +68,9 @@ class ByteRleColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_->flush();
   }
@@ -248,8 +249,9 @@ class IntegerColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     tryAbandonDictionaries(false);
     initStreamWriters(useDictionaryEncoding_);
 
@@ -287,12 +289,14 @@ class IntegerColumnWriter : public BaseColumnWriter {
 
   // FIXME: call base class set encoding first to deal with sequence and
   // whatnot.
-  void setEncoding(proto::ColumnEncoding& encoding) const override {
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
     if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+      auto columnEncodingKind =
+          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY;
+      encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+
+      encoding.setDictionarySize(finalDictionarySize_);
     }
   }
 
@@ -679,8 +683,9 @@ class TimestampColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     seconds_->flush();
     nanos_->flush();
@@ -788,8 +793,9 @@ class DecimalColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     unscaledValues_->flush();
     scales_->flush();
@@ -954,8 +960,9 @@ class StringColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     tryAbandonDictionaries(false);
     initStreamWriters(useDictionaryEncoding_);
 
@@ -1000,12 +1007,13 @@ class StringColumnWriter : public BaseColumnWriter {
 
   // FIXME: call base class set encoding first to deal with sequence and
   // whatnot.
-  void setEncoding(proto::ColumnEncoding& encoding) const override {
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
     if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+      auto columnEncodingKind =
+          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY;
+      encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+      encoding.setDictionarySize(finalDictionarySize_);
     }
   }
 
@@ -1230,10 +1238,12 @@ uint64_t StringColumnWriter::writeDict(
   size_t strideIndex = strideOffsets_.size() - 1;
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    rows_.unsafeAppend(dictEncoder_.addKey(sp, strideIndex));
-    statsBuilder.addValues(sp);
-    rawSize += sp.size();
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    // TODO: Remove explicit std::string_view cast.
+    rows_.unsafeAppend(dictEncoder_.addKey(std::string_view(sv), strideIndex));
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
+    rawSize += sv.size();
   };
 
   uint64_t nullCount = 0;
@@ -1274,10 +1284,11 @@ uint64_t StringColumnWriter::writeDirect(
 
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    auto size = sp.size();
-    dataDirect_->write(sp.data(), size);
-    statsBuilder.addValues(sp);
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    auto size = sv.size();
+    dataDirect_->write(sv.data(), size);
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
     rawSize += size;
     lengths.unsafeAppend(size);
   };
@@ -1481,8 +1492,9 @@ class FloatColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_.flush();
   }
@@ -1612,8 +1624,9 @@ class BinaryColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_.flush();
     lengths_->flush();
@@ -1726,8 +1739,9 @@ class StructColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     for (auto& c : children_) {
       c->flush(encodingFactory);
@@ -1855,8 +1869,9 @@ class ListColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     lengths_->flush();
     children_.at(0)->flush(encodingFactory);
@@ -1982,8 +1997,9 @@ class MapColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     lengths_->flush();
     children_.at(0)->flush(encodingFactory);
@@ -2119,7 +2135,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           "MAP_FLAT_COLS contains column {}, but the root type of this column is {}."
           " Column root types must be of type MAP",
           type.column(),
-          mapTypeKindToName(type.type()->kind()));
+          TypeKindName::toName(type.type()->kind()));
     }
     const auto structColumnKeys =
         context.getConfig(Config::MAP_FLAT_COLS_STRUCT_KEYS);
@@ -2212,7 +2228,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     }
     default:
       VELOX_FAIL(
-          "not supported yet: {}", mapTypeKindToName(type.type()->kind()));
+          "not supported yet: {}", TypeKindName::toName(type.type()->kind()));
   }
 }
 } // namespace facebook::velox::dwrf

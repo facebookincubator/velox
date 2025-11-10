@@ -21,16 +21,14 @@
 
 namespace facebook::velox::exec {
 
-std::pair<TypePtr, TypePtr> resolveAggregateFunction(
+TypePtr resolveResultType(
     const std::string& name,
     const std::vector<TypePtr>& argTypes) {
   if (auto signatures = getAggregateFunctionSignatures(name)) {
     for (const auto& signature : signatures.value()) {
       SignatureBinder binder(*signature, argTypes);
       if (binder.tryBind()) {
-        return std::make_pair(
-            binder.tryResolveReturnType(),
-            binder.tryResolveType(signature->intermediateType()));
+        return binder.tryResolveReturnType();
       }
     }
 
@@ -39,7 +37,27 @@ std::pair<TypePtr, TypePtr> resolveAggregateFunction(
           << toString(name, argTypes)
           << ". Supported signatures: " << toString(signatures.value()) << ".";
     VELOX_USER_FAIL(error.str());
+  } else {
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
+  }
+}
 
+TypePtr resolveIntermediateType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  if (auto signatures = getAggregateFunctionSignatures(name)) {
+    for (const auto& signature : signatures.value()) {
+      SignatureBinder binder(*signature, argTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveType(signature->intermediateType());
+      }
+    }
+
+    std::stringstream error;
+    error << "Aggregate function signature is not supported: "
+          << toString(name, argTypes)
+          << ". Supported signatures: " << toString(signatures.value()) << ".";
+    VELOX_USER_FAIL(error.str());
   } else {
     VELOX_USER_FAIL("Aggregate function not registered: {}", name);
   }

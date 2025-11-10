@@ -90,15 +90,15 @@ class StringDecoder {
     return *reinterpret_cast<const int32_t*>(buffer);
   }
 
-  folly::StringPiece readString() {
+  std::string_view readString() {
     auto length = lengthAt(bufferStart_);
     bufferStart_ += length + sizeof(int32_t);
-    return folly::StringPiece(bufferStart_ - length, length);
+    return std::string_view(bufferStart_ - length, length);
   }
 
-  folly::StringPiece readFixedString() {
+  std::string_view readFixedString() {
     bufferStart_ += fixedLength_;
-    return folly::StringPiece(bufferStart_ - fixedLength_, fixedLength_);
+    return std::string_view(bufferStart_ - fixedLength_, fixedLength_);
   }
 
   const char* bufferStart_;

@@ -153,6 +153,7 @@ void OperatorTestBase::SetUp() {
 void OperatorTestBase::TearDown() {
   waitForAllTasksToBeDeleted();
   stopPeriodicStatsReporter();
+  executor_.reset();
   // There might be lingering exchange source on executor even after all tasks
   // are deleted. This can cause memory leak because exchange source holds
   // reference to memory pool. We need to make sure they are properly cleaned.

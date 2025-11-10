@@ -340,8 +340,9 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     } else {
       using type = std::tuple_element_t<I, children_types>;
       std::get<I>(writer_.childrenWriters_)
-          .init(static_cast<typename TypeToFlatVector<type>::type&>(
-              *rowVector_->childAt(I).get()));
+          .init(
+              static_cast<typename TypeToFlatVector<type>::type&>(
+                  *rowVector_->childAt(I).get()));
 
       initVectorWriters<I + 1>();
     }

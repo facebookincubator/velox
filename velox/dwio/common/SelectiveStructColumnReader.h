@@ -20,6 +20,8 @@
 
 namespace facebook::velox::dwio::common {
 
+class ColumnLoader;
+
 template <typename T, typename KeyNode, typename FormatData>
 class SelectiveFlatMapColumnReaderHelper;
 
@@ -108,7 +110,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
 
   // The subscript of childSpecs will be set to this value if the column is
   // constant (either explicitly or because it's missing).
-  static constexpr int32_t kConstantChildSpecSubscript = -1;
+  static constexpr int32_t kConstantChildSpecSubscript{-1};
 
   SelectiveStructColumnReaderBase(
       const TypePtr& requestedType,
@@ -161,6 +163,12 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       const int64_t offset,
       const int32_t rowsPerRowGroup);
 
+  virtual std::unique_ptr<velox::dwio::common::ColumnLoader> makeColumnLoader(
+      vector_size_t index);
+
+  // Sequence number of output batch. Checked against ColumnLoaders
+  // created by 'this' to verify they are still valid at load.
+  uint64_t numReads_ = 0;
   std::vector<SelectiveColumnReader*> children_;
 
  private:
@@ -189,13 +197,9 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
 
-  // Sequence number of output batch. Checked against ColumnLoaders
-  // created by 'this' to verify they are still valid at load.
-  uint64_t numReads_ = 0;
-
   int64_t lazyVectorReadOffset_;
 
-  int64_t currentRowNumber_ = -1;
+  int64_t currentRowNumber_{-1};
 
   const Mutation* mutation_ = nullptr;
 

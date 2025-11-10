@@ -106,8 +106,9 @@ class CompanionSignatures {
           normalizeType(signature->intermediateType(), signature->variables());
       auto normalizedReturnType =
           normalizeType(signature->returnType(), signature->variables());
-      if (distinctIntermediateAndResultTypes.count(std::make_pair(
-              normalizedIntermediateType, normalizedReturnType))) {
+      if (distinctIntermediateAndResultTypes.count(
+              std::make_pair(
+                  normalizedIntermediateType, normalizedReturnType))) {
         continue;
       }
 

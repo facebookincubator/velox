@@ -55,12 +55,13 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     auto childOperand = std::make_unique<AbstractOperand>(
         i + 1, childRequestedType, "c" + std::to_string(i));
 
-    addChild(NimbleFormatReader::build(
-        childRequestedType,
-        childFileType,
-        params,
-        *childSpec /*, path, defines*/,
-        childOperand.get()));
+    addChild(
+        NimbleFormatReader::build(
+            childRequestedType,
+            childFileType,
+            params,
+            *childSpec /*, path, defines*/,
+            childOperand.get()));
     childSpec->setSubscript(children_.size() - 1);
     operands_.push_back(std::move(childOperand));
   }

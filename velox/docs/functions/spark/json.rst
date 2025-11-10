@@ -59,16 +59,19 @@ JSON Functions
 .. spark:function:: get_json_object(jsonString, path) -> varchar
 
     Returns a json object, represented by VARCHAR, from ``jsonString`` by searching ``path``.
-    Valid ``path`` should start with '$' and then contain "[index]", "['field']" or ".field"
-    to define a JSON path. Here are some examples: "$.a" "$.a.b", "$[0]['a'].b". Returns
-    ``jsonString`` if ``path`` is "$". Returns NULL if ``jsonString`` or ``path`` is malformed.
-    Returns NULL if ``path`` does not exist. ::
+    Returns NULL if ``jsonString`` or ``path`` is malformed or ``path`` does not exist. ::
 
         SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
         SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'
         SELECT get_json_object('{"a":3}', '$.b'); -- NULL (unexisting field)
         SELECT get_json_object('{"a"-3}'', '$.a'); -- NULL (malformed JSON string)
         SELECT get_json_object('{"a":3}'', '.a'); -- NULL (malformed JSON path)
+
+    Valid ``path`` syntax:
+        * Must start with '$'.
+        * Using "[index]", "['field']" or ".field" to navigate to the desired JSON object.
+        * Whitespace is allowed **after the dot** and **before the field name**, e.g., "$.  field".
+        * Trailing whitespace after '$' is allowed, e.g., "$   ".
 
 .. spark:function:: json_array_length(jsonString) -> integer
 

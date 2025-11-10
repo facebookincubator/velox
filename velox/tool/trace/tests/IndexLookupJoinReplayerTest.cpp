@@ -73,7 +73,6 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
     probeInput_.clear();
     indexInput_.clear();
     HiveConnectorTestBase::TearDown();
-    connector::unregisterConnectorFactory(kTestIndexConnectorName);
     connector::unregisterConnector(kTestIndexConnectorName);
   }
 
@@ -263,7 +262,8 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
               rightKeys,
               std::dynamic_pointer_cast<const core::TableScanNode>(indexScan),
               /*joinConditions=*/{},
-              /*includeMatchColumn=*/false,
+              /*filter=*/"",
+              /*hasMarker=*/false,
               concat(probeType_, indexType_)->names(),
               core::JoinType::kInner)
           .capturePlanNodeId(traceNodeId_)

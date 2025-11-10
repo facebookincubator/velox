@@ -17,12 +17,22 @@
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/partitioning.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+bool CudfLocalPartition::shouldReplace(
+    const std::shared_ptr<const core::LocalPartitionNode>& planNode) {
+  auto* hashFunctionSpec = dynamic_cast<const exec::HashPartitionFunctionSpec*>(
+      &planNode->partitionFunctionSpec());
+  // Only replace LocalPartition with CudfLocalPartition for hash partitioning.
+  // TODO: Round Robin Row-Wise Partitioning can be supported in future.
+  return hashFunctionSpec;
+}
 
 CudfLocalPartition::CudfLocalPartition(
     int32_t operatorId,
@@ -55,9 +65,11 @@ CudfLocalPartition::CudfLocalPartition(
 
   // Get partition function specification string
   std::string spec = planNode->partitionFunctionSpec().toString();
+  auto* hashFunctionSpec = dynamic_cast<const exec::HashPartitionFunctionSpec*>(
+      &planNode->partitionFunctionSpec());
 
   // Only parse keys if it's a hash function
-  if (spec.find("HASH(") != std::string::npos) {
+  if (hashFunctionSpec) {
     // Extract keys between HASH( and )
     size_t start = spec.find("HASH(") + 5;
     size_t end = spec.find(")", start);
@@ -86,8 +98,14 @@ CudfLocalPartition::CudfLocalPartition(
         partitionKeyIndices_.push_back(fieldIndex);
       }
     }
+    partitionFunctionType_ = PartitionFunctionType::kHash;
+  } else if (
+      numPartitions_ > 1 && spec.find("ROUND ROBIN") != std::string::npos) {
+    partitionFunctionType_ = PartitionFunctionType::kRoundRobin;
   }
-  VELOX_CHECK(numPartitions_ == 1 || partitionKeyIndices_.size() > 0);
+  VELOX_CHECK(
+      numPartitions_ == 1 || partitionKeyIndices_.size() > 0 ||
+      partitionFunctionType_ == PartitionFunctionType::kRoundRobin);
 
   // Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
@@ -98,27 +116,58 @@ CudfLocalPartition::CudfLocalPartition(
   // }
 }
 
+void CudfLocalPartition::recordOutputStats(RowVectorPtr& input) {
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
+  }
+}
+
+void CudfLocalPartition::flushVectorPool() {
+  // We reuse the LocalExchangeQueue from the CPU implementation. That impl
+  // stores used vectors in a vector pool for the CPU LocalPartition to re-use.
+  // CudfLocalPartition does not need it and does not extract it. This results
+  // in unnecessary extension of the lifetimes of vectors that were exchanged,
+  // resulting in kind of a memory leak.
+  // This is a hack to forcefully flush the vector pools.
+
+  for (auto& queue : queues_) {
+    queue->getVector();
+  }
+}
+
 void CudfLocalPartition::addInput(RowVectorPtr input) {
+  flushVectorPool();
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  recordOutputStats(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
   auto stream = cudfVector->stream();
 
   if (numPartitions_ > 1) {
-    // Use cudf hash partitioning
-    auto tableView = cudfVector->getTableView();
-    std::vector<cudf::size_type> partitionKeyIndices;
-    for (const auto& idx : partitionKeyIndices_) {
-      partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
-    }
+    auto [partitionedTable, partitionOffsets] = [&]() {
+      auto tableView = cudfVector->getTableView();
+      // Use cudf hash partitioning
+      if (partitionFunctionType_ == PartitionFunctionType::kHash) {
+        std::vector<cudf::size_type> partitionKeyIndices;
+        for (const auto& idx : partitionKeyIndices_) {
+          partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
+        }
 
-    auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
-        tableView,
-        partitionKeyIndices,
-        numPartitions_,
-        cudf::hash_id::HASH_MURMUR3,
-        cudf::DEFAULT_HASH_SEED,
-        stream);
+        return cudf::hash_partition(
+            tableView,
+            partitionKeyIndices,
+            numPartitions_,
+            cudf::hash_id::HASH_MURMUR3,
+            cudf::DEFAULT_HASH_SEED,
+            stream);
+      } else if (partitionFunctionType_ == PartitionFunctionType::kRoundRobin) {
+        return cudf::round_robin_partition(
+            tableView, numPartitions_, counter_, stream);
+        counter_ = (counter_ + cudfVector->size()) % numPartitions_;
+      }
+      VELOX_FAIL("Unsupported partition function");
+    }();
 
     VELOX_CHECK(partitionOffsets.size() == numPartitions_);
     VELOX_CHECK(partitionOffsets[0] == 0);
@@ -191,6 +240,7 @@ bool CudfLocalPartition::isFinished() {
   if (!futures_.empty() || !noMoreInput_) {
     return false;
   }
+  flushVectorPool();
 
   return true;
 }

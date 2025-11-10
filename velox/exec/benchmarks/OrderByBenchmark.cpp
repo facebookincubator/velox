@@ -79,8 +79,9 @@ class OrderByBenchmark {
       core::PlanNodeId& orderByNodeId) {
     folly::BenchmarkSuspender suspender;
     std::vector<RowVectorPtr> vectors;
-    vectors.emplace_back(OrderByBenchmarkUtil::fuzzRows(
-        test.rowType, test.numRows, pool_.get()));
+    vectors.emplace_back(
+        OrderByBenchmarkUtil::fuzzRows(
+            test.rowType, test.numRows, pool_.get()));
 
     std::vector<std::string> keys;
     keys.reserve(test.numKeys);

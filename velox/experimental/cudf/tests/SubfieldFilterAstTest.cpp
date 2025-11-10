@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -649,8 +649,7 @@ TEST_P(IntInListParamTest, InListParam) {
     }
   }
   EXPECT_EQ(scalars.size(), expectedScalars)
-      << "Scalar count mismatch for IN list with kind "
-      << mapTypeKindToName(p.kind);
+      << "Scalar count mismatch for IN list with kind " << p.kind;
 
   auto vec = makeTestVector(rowType, 100);
   testFilterExecution(rowType, columnName, *filter, vec, expr);

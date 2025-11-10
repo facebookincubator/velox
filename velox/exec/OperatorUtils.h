@@ -15,8 +15,11 @@
  */
 #pragma once
 
+#include <optional>
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spiller.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
 
@@ -307,4 +310,12 @@ class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
  private:
   BlockedOperatorCb blockedCb_{nullptr};
 };
+
+/// Creates VectorSerde::Options for the given VectorSerde kind with compression
+/// settings. Optionally configures minimum compression ratio.
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    common::CompressionKind compressionKind,
+    VectorSerde::Kind kind,
+    std::optional<float> minCompressionRatio = std::nullopt);
+
 } // namespace facebook::velox::exec

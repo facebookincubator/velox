@@ -20,10 +20,7 @@
 #include <functional>
 #include <optional>
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class MeasureTime {
  public:
@@ -61,7 +58,4 @@ inline std::optional<MeasureTime> measureTimeIfCallback(
   return std::nullopt;
 }
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

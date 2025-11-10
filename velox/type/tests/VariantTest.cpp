@@ -182,7 +182,9 @@ TEST(VariantTest, opaque) {
     EXPECT_EQ(2, foo.use_count());
     Variant vv = v;
     EXPECT_EQ(3, foo.use_count());
-    { Variant tmp = std::move(vv); }
+    {
+      Variant tmp = std::move(vv);
+    }
     EXPECT_EQ(2, foo.use_count());
     v = 0;
     EXPECT_EQ(1, foo.use_count());
@@ -942,6 +944,21 @@ TEST(VariantTest, nullableMapOfArraysGetter) {
       {{"a", std::vector<std::optional<int64_t>>{1, std::nullopt}},
        {"b", std::nullopt},
        {"c", std::vector<std::optional<int64_t>>{3}}});
+}
+
+TEST(VariantTest, nullVariant) {
+  // Type of null variant is UNKNOWN and should be compatible with all types.
+  auto nullVariant = Variant{};
+  ASSERT_TRUE(nullVariant.isTypeCompatible(VARCHAR()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(INTEGER()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(BIGINT()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(DOUBLE()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(DATE()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(TIMESTAMP()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(MAP(BIGINT(), DOUBLE())));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(ARRAY(DATE())));
+  ASSERT_TRUE(
+      nullVariant.isTypeCompatible(ROW({DATE(), BIGINT(), TIMESTAMP()})));
 }
 
 } // namespace

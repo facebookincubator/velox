@@ -66,6 +66,9 @@ intermediateTypeTransforms() {
            std::make_shared<IntermediateTypeTransformUsingCast>(
                SFMSKETCH(), VARBINARY())},
           {JSON(), std::make_shared<JsonTransform>()},
+          {TIME(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               TIME(), VARCHAR())},
           {BINGTILE(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                BINGTILE(), BIGINT())},
@@ -237,10 +240,11 @@ core::ExprPtr getProjectionForRow(
           rowType.nameOf(i),
           transformDirection));
     } else {
-      children.push_back(std::make_shared<core::FieldAccessExpr>(
-          rowType.nameOf(i),
-          rowType.nameOf(i),
-          std::vector<core::ExprPtr>{inputExpr}));
+      children.push_back(
+          std::make_shared<core::FieldAccessExpr>(
+              rowType.nameOf(i),
+              rowType.nameOf(i),
+              std::vector<core::ExprPtr>{inputExpr}));
     }
   }
 

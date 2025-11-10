@@ -244,6 +244,20 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT month('2009-07-30'); -- 7
 
+.. spark:function:: months_between(timestamp1, timestamp2, roundOff) -> double
+
+    Returns number of months between times ``timestamp1`` and ``timestamp2``.
+    If ``timestamp1`` is later than ``timestamp2``, the result is positive.
+    If ``timestamp1`` and ``timestamp2`` are on the same day of month, or both are the
+    last day of month, time of day will be ignored. Otherwise, the difference is calculated
+    based on 31 days per month, and rounded to 8 digits unless ``roundOff`` is false. ::
+
+        SELECT months_between('1997-02-28 10:30:00', '1996-10-30', true); -- 3.94959677
+        SELECT months_between('1997-02-28 10:30:00', '1996-10-30', false); -- 3.9495967741935485
+        SELECT months_between('1997-02-28 10:30:00', '1996-03-31 11:00:00', true); -- 11.0
+        SELECT months_between('1997-02-28 10:30:00', '1996-03-28 11:00:00', true); -- 11.0
+        SELECT months_between('1997-02-21 10:30:00', '1996-03-21 11:00:00', true); -- 11.0
+
 .. spark:function:: next_day(startDate, dayOfWeek) -> date
 
     Returns the first date which is later than ``startDate`` and named as ``dayOfWeek``.
@@ -313,6 +327,23 @@ These functions support TIMESTAMP and DATE input types.
     Supported types are: TINYINT, SMALLINT, INTEGER and BIGINT.::
 
         SELECT timestamp_millis(1230219000123); -- '2008-12-25 15:30:00.123'
+
+.. spark:function:: timestamp_seconds(x) -> timestamp
+
+    Returns timestamp from the number of seconds (can be fractional) since UTC epoch.
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, and DOUBLE.
+    For integral types (TINYINT, SMALLINT, INTEGER, BIGINT), the function directly
+    converts the number of seconds to a timestamp. For floating-point types
+    (FLOAT, DOUBLE), the function scales the input to microseconds, truncates
+    towards zero, and saturates the result to the minimum and maximum values allowed
+    in Spark. Returns NULL when ``x`` is NaN or Infinity. ::
+
+        SELECT timestamp_seconds(1230219000); -- '2008-12-25 15:30:00'
+        SELECT timestamp_seconds(1230219000.123); -- '2008-12-25 15:30:00.123'
+        SELECT timestamp_seconds(double(1.1234567)); -- '1970-01-01 00:00:01.123456'
+        SELECT timestamp_seconds(double('inf')); -- NULL
+        SELECT timestamp_seconds(float(3.4028235E+38)); -- '+294247-01-10 04:00:54.775807'
+        SELECT timestamp_seconds(float('nan')); -- NULL
 
 .. spark:function:: to_unix_timestamp(date) -> bigint
    :noindex:

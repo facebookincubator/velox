@@ -90,7 +90,8 @@ bool SsdCache::startWrite() {
 }
 
 void SsdCache::write(std::vector<CachePin> pins) {
-  VELOX_CHECK_EQ(numShards_, writesInProgress_);
+  VELOX_CHECK_EQ(
+      numShards_, writesInProgress_, "startWrite() have not been called");
 
   TestValue::adjust("facebook::velox::cache::SsdCache::write", this);
 
@@ -98,7 +99,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
 
   uint64_t bytes = 0;
   std::vector<std::vector<CachePin>> shards(numShards_);
-  for (auto& pin : pins) {
+  for (const auto& pin : pins) {
     bytes += pin.checkedEntry()->size();
     const auto& target = file(pin.checkedEntry()->key().fileNum.id());
     shards[target.shardId()].push_back(std::move(pin));
@@ -135,9 +136,10 @@ void SsdCache::write(std::vector<CachePin> pins) {
         // Typically occurs every few GB. Allows detecting unusually slow rates
         // from failing devices.
         VELOX_SSD_CACHE_LOG(INFO) << fmt::format(
-            "Wrote {}, {} bytes/s",
+            "Wrote {} to SSD, {} bytes/s",
             succinctBytes(bytes),
-            static_cast<float>(bytes) / (getCurrentTimeMicro() - startTimeUs));
+            static_cast<double>(bytes) * 1'000'000 /
+                (getCurrentTimeMicro() - startTimeUs));
       }
     });
   }

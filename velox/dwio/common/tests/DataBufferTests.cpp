@@ -21,10 +21,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/DataBuffer.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
+
 using namespace facebook::velox::memory;
 using namespace testing;
 using MemoryPool = facebook::velox::memory::MemoryPool;
@@ -175,7 +173,5 @@ TEST_F(DataBufferTest, Move) {
   }
   ASSERT_EQ(0, pool_->usedBytes());
 }
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox::dwio::common

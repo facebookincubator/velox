@@ -24,6 +24,29 @@ class Checker : public PlanNodeVisitor {
  public:
   void visit(const AggregationNode& node, PlanNodeVisitorContext& ctx)
       const override {
+    const auto& rowType = node.sources().at(0)->outputType();
+    for (const auto& expr : node.groupingKeys()) {
+      checkInputs(expr, rowType);
+    }
+
+    for (const auto& expr : node.preGroupedKeys()) {
+      checkInputs(expr, rowType);
+    }
+
+    for (const auto& aggregate : node.aggregates()) {
+      checkInputs(aggregate.call, rowType);
+
+      for (const auto& expr : aggregate.sortingKeys) {
+        checkInputs(expr, rowType);
+      }
+
+      if (aggregate.mask) {
+        checkInputs(aggregate.mask, rowType);
+      }
+    }
+
+    verifyOutputNames(node);
+
     visitSources(&node, ctx);
   }
 
@@ -66,6 +89,26 @@ class Checker : public PlanNodeVisitor {
 
   void visit(const HashJoinNode& node, PlanNodeVisitorContext& ctx)
       const override {
+    std::unordered_set<std::pair<std::string, std::string>> keyNames;
+    for (auto i = 0; i < node.leftKeys().size(); ++i) {
+      const auto& leftKey = node.leftKeys().at(i);
+      const auto& rightKey = node.rightKeys().at(i);
+
+      bool unique = keyNames.emplace(leftKey->name(), rightKey->name()).second;
+      VELOX_CHECK(
+          unique,
+          "Duplicate join condition: {} = {}",
+          leftKey->toString(),
+          rightKey->toString());
+    }
+
+    if (node.filter() != nullptr) {
+      const auto& leftRowType = node.sources().at(0)->outputType();
+      const auto& rightRowType = node.sources().at(1)->outputType();
+      auto rowType = leftRowType->unionWith(rightRowType);
+      checkInputs(node.filter(), rowType);
+    }
+
     visitSources(&node, ctx);
   }
 
@@ -131,13 +174,7 @@ class Checker : public PlanNodeVisitor {
       checkInputs(expr, rowType);
     }
 
-    // Verify that output column names are not empty and unique.
-    std::unordered_set<std::string> names;
-    for (const auto& name : node.outputType()->names()) {
-      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
-      VELOX_USER_CHECK(
-          names.insert(name).second, "Duplicate output column: {}", name);
-    }
+    verifyOutputNames(node);
 
     visitSources(&node, ctx);
   }
@@ -160,7 +197,21 @@ class Checker : public PlanNodeVisitor {
 
   void visit(const TableScanNode& node, PlanNodeVisitorContext& ctx)
       const override {
-    visitSources(&node, ctx);
+    verifyOutputNames(node);
+
+    // Verify assignments match outputType 1:1.
+    const auto& names = node.outputType()->names();
+    VELOX_USER_CHECK_EQ(
+        names.size(),
+        node.assignments().size(),
+        "Column assignments must match output type 1:1.");
+
+    for (const auto& name : names) {
+      VELOX_USER_CHECK(
+          node.assignments().contains(name),
+          "Column assignment is missing for {}",
+          name);
+    }
   }
 
   void visit(const TableWriteNode& node, PlanNodeVisitorContext& ctx)
@@ -210,6 +261,16 @@ class Checker : public PlanNodeVisitor {
   void visitSources(const PlanNode* node, PlanNodeVisitorContext& ctx) const {
     for (auto& source : node->sources()) {
       source->accept(*this, ctx);
+    }
+  }
+
+  // Verify that output column names are not empty and unique.
+  static void verifyOutputNames(const PlanNode& node) {
+    folly::F14FastSet<std::string_view> names;
+    for (const auto& name : node.outputType()->names()) {
+      VELOX_USER_CHECK(!name.empty(), "Output column name cannot be empty");
+      VELOX_USER_CHECK(
+          names.emplace(name).second, "Duplicate output column: {}", name);
     }
   }
 

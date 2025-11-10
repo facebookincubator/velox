@@ -43,7 +43,7 @@ class EnumTypeBase : public TPhysical {
     return this == &other;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 

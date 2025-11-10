@@ -73,6 +73,28 @@ Geometry Constructors
 
     Returns a geometry type polygon object from WKT representation.
 
+.. function:: ST_LineFromText(wkt: varchar) -> linestring: Geometry
+
+    Returns a geometry type linestring object from WKT representation.
+    An error is returned if the input WKT represents a valid non-LineString
+    geometry. Null input returns null output.
+
+.. function:: ST_LineString(points: array(Geometry)) -> linestring: Geometry
+
+    Returns a LineString formed from an array of points. If there are fewer
+    than two non-empty points in the input array, an empty LineString will
+    be returned. Throws an exception if any element in the array is null or
+    empty or same as the previous one. The returned geometry may not be simple,
+    e.g. may self-intersect or may contain duplicate vertexes depending on the
+    input.
+
+.. function:: ST_MultiPoint(points: array(Geometry)) -> multipoint: Geometry
+
+    Returns a MultiPoint geometry object formed from the specified points.
+    Return null if input array is empty. Throws an exception if any element
+    in the array is null or empty. The returned geometry may not be simple
+    and may contain duplicate points if input array has duplicates.
+
 Spatial Predicates
 ------------------
 
@@ -114,7 +136,7 @@ function you are using.
     Returns ``true`` if the given geometries share space, are of the same
     dimension, but are not completely contained by each other.
 
-.. function:: ST_Relat(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
+.. function:: ST_Relate(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
 
     Returns true if first geometry is spatially related to second geometry as
     described by the relation.  The relation is a string like ``'"1*T***T**'``:
@@ -178,6 +200,13 @@ Spatial Operations
     Empty geometries will return an empty polygon. Negative or NaN distances will
     return an error. Positive infinity distances may lead to undefined results.
 
+.. function:: geometry_union(geometries: array(Geometry)) -> union: Geometry
+
+    Returns a geometry that represents the point set union of the input geometries.
+    Performance of this function, in conjunction with array_agg() to first
+    aggregate the input geometries, may be better than geometry_union_agg(),
+    at the expense of higher memory utilization. Null elements in the input
+    array are ignored. Empty array input returns null.
 
 Accessors
 ---------
@@ -224,7 +253,7 @@ Accessors
    Returns an array of points in a geometry. Empty or null inputs
    return null.
 
-.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
+.. function:: ST_NumPoints(geometry: Geometry) -> points: bigint
 
    Returns the number of points in a geometry. This is an extension
    to the SQL/MM ``ST_NumPoints`` function which only applies to
@@ -376,7 +405,7 @@ Accessors
     GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
     [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
 
-.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
+.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: bigint
 
     Returns the cardinality of the collection of interior rings of a polygon.
 
@@ -384,7 +413,7 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
-.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
+.. function:: ST_CoordDim(geometry: Geometry) -> output: tinyint
 
     Return the coordinate dimension of the geometry.
 
@@ -507,6 +536,19 @@ for more details.
 
     Returns the quadkey representing the provided bing tile.
 
+.. function:: geometry_to_bing_tiles(geometry: Geometry, zoom_level: tinyint) -> tiles: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level. Empty inputs return an empty array, and null inputs return
+    null.
+
+.. function:: geometry_to_dissolved_bing_tiles(geometry: Geometry, max_zoom_level: tinyint) -> tile: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level, recursively dissolving full sets of children into parents.
+    This results in a smaller array of tiles of different zoom levels.
+    For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
+    the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.
 
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html

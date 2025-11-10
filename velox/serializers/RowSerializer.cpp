@@ -85,7 +85,7 @@ bool RowIteratorImpl::hasNext() const {
   return source_->tellp() < endOffset_;
 }
 
-std::unique_ptr<std::string> RowIteratorImpl::next() {
+std::unique_ptr<std::string> RowIteratorImpl::nextRow() {
   const auto rowSize = readRowSize();
   auto serializedBuffer = std::make_unique<std::string>();
   serializedBuffer->reserve(rowSize);

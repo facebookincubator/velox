@@ -51,8 +51,9 @@ class ArbitraryResultVerifier : public ResultVerifier {
     std::vector<std::string> projectColumns = groupingKeys;
     // Add a column of aggregateTypeSql_ of all nulls so that we can union the
     // oracle result with the actual result.
-    projectColumns.push_back(fmt::format(
-        "cast(NULL as {}) as {}", aggregateTypeSql_, aggregateName));
+    projectColumns.push_back(
+        fmt::format(
+            "cast(NULL as {}) as {}", aggregateTypeSql_, aggregateName));
     projectColumns.push_back("expected");
 
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();

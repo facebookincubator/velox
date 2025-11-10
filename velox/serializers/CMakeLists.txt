@@ -24,6 +24,7 @@ velox_add_library(
   PrestoSerializerSerializationUtils.cpp
   PrestoVectorLexer.cpp
   RowSerializer.cpp
+  SerializedPageFile.cpp
   VectorStream.cpp
 )
 

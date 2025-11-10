@@ -291,7 +291,8 @@ void PrestoQueryRunnerToSqlPlanNodeVisitor::visit(
     sql << inputType->nameOf(i);
   }
 
-  sql << ", row_number() OVER (";
+  sql << ", " << core::TopNRowNumberNode::rankFunctionName(node.rankFunction())
+      << "() OVER (";
 
   const auto& partitionKeys = node.partitionKeys();
   if (!partitionKeys.empty()) {

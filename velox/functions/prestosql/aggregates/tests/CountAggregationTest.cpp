@@ -213,8 +213,9 @@ TEST_F(CountAggregationTest, distinct) {
                         {"c0"}, {fmt::format("count(distinct {})", input)})
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .assertResults(fmt::format(
-            "SELECT c0, count(distinct {}) FROM tmp GROUP BY 1", input));
+        .assertResults(
+            fmt::format(
+                "SELECT c0, count(distinct {}) FROM tmp GROUP BY 1", input));
   };
 
   testGroupBy("c1");

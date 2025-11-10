@@ -776,8 +776,9 @@ Expected<int64_t> daysSinceEpochFromWeekDate(
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
     }
-    return folly::makeUnexpected(Status::UserError(
-        "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
   }
 
   return daysSinceEpochFromDate(weekYear, 1, 4)
@@ -801,8 +802,13 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
     }
-    return folly::makeUnexpected(Status::UserError(
-        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Date out of range: {}-{}-{}-{}",
+            year,
+            month,
+            weekOfMonth,
+            dayOfWeek));
   }
 
   // Adjusts the year and month to ensure month is within the range 1-12,
@@ -860,27 +866,30 @@ Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {
 
     switch (mode) {
       case ParseMode::kPrestoCast:
-        return folly::makeUnexpected(Status::UserError(
-            "Unable to parse date value: \"{}\". "
-            "Valid date string pattern is (YYYY-MM-DD), "
-            "and can be prefixed with [+-]",
-            std::string(str, len)));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value: \"{}\". "
+                "Valid date string pattern is (YYYY-MM-DD), "
+                "and can be prefixed with [+-]",
+                std::string(str, len)));
       case ParseMode::kSparkCast:
-        return folly::makeUnexpected(Status::UserError(
-            "Unable to parse date value: \"{}\". "
-            "Valid date string patterns include "
-            "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
-            "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
-            "and any pattern prefixed with [+-]",
-            std::string(str, len)));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value: \"{}\". "
+                "Valid date string patterns include "
+                "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+                "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
+                "and any pattern prefixed with [+-]",
+                std::string(str, len)));
       case ParseMode::kIso8601:
-        return folly::makeUnexpected(Status::UserError(
-            "Unable to parse date value: \"{}\". "
-            "Valid date string patterns include "
-            "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
-            "[y]y*-[m]m*-[d]d* *), "
-            "and any pattern prefixed with [+-]",
-            std::string(str, len)));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value: \"{}\". "
+                "Valid date string patterns include "
+                "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+                "[y]y*-[m]m*-[d]d* *), "
+                "and any pattern prefixed with [+-]",
+                std::string(str, len)));
       default:
         VELOX_UNREACHABLE();
     }

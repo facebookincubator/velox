@@ -85,6 +85,55 @@ TEST_F(PlanNodeTest, findFirstNode) {
       }));
 }
 
+TEST_F(PlanNodeTest, findNodeById) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  auto filter = std::make_shared<FilterNode>(
+      "3",
+      std::make_shared<CallTypedExpr>(
+          BOOLEAN(),
+          "gt",
+          std::make_shared<FieldAccessTypedExpr>(DOUBLE(), "a"),
+          std::make_shared<ConstantTypedExpr>(DOUBLE(), 0.5)),
+      project);
+
+  auto limit = std::make_shared<LimitNode>("4", 0, 10, false, filter);
+
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "1"), values.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "2"), project.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "3"), filter.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "4"), limit.get());
+
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "5"), nullptr);
+  ASSERT_EQ(PlanNode::findNodeById(project.get(), "4"), nullptr);
+}
+
+TEST_F(PlanNodeTest, is) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  ASSERT_TRUE(values->is<ValuesNode>());
+  ASSERT_FALSE(values->is<ProjectNode>());
+
+  ASSERT_FALSE(project->is<ValuesNode>());
+  ASSERT_TRUE(project->is<ProjectNode>());
+}
+
 TEST_F(PlanNodeTest, sortOrder) {
   struct {
     SortOrder order1;
@@ -132,6 +181,7 @@ TEST_F(PlanNodeTest, duplicateSortKeys) {
           "orderBy", sortingKeys, sortingOrders, false, nullptr),
       "Duplicate sorting keys are not allowed: c0");
 }
+
 class TestIndexTableHandle : public connector::ConnectorTableHandle {
  public:
   TestIndexTableHandle()
@@ -163,7 +213,7 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   }
 };
 
-TEST_F(PlanNodeTest, isIndexLookupJoin) {
+TEST_F(PlanNodeTest, indexLookupJoin) {
   const auto rowType = ROW({"name"}, {BIGINT()});
   const auto valueNode = std::make_shared<ValuesNode>("orderBy", rowData_);
   ASSERT_FALSE(isIndexLookupJoin(valueNode.get()));
@@ -193,12 +243,17 @@ TEST_F(PlanNodeTest, isIndexLookupJoin) {
             leftKeys,
             rightKeys,
             std::vector<IndexLookupConditionPtr>{},
-            /*includeMatchColumn=*/false,
+            /*filter=*/nullptr,
+            /*hasMarker=*/false,
             probeNode,
             buildNode,
             outputType);
     ASSERT_TRUE(isIndexLookupJoin(indexJoinNodeWithInnerJoin.get()));
-    ASSERT_FALSE(indexJoinNodeWithInnerJoin->includeMatchColumn());
+    ASSERT_FALSE(indexJoinNodeWithInnerJoin->hasMarker());
+    ASSERT_EQ(indexJoinNodeWithInnerJoin->filter(), nullptr);
+    ASSERT_EQ(
+        indexJoinNodeWithInnerJoin->toString(/*detailed=*/true),
+        "-- IndexLookupJoin[indexJoinNode][INNER c0=c1] -> c0:BIGINT, c1:BIGINT\n");
   }
   {
     const RowTypePtr outputTypeWithMatchColumn =
@@ -210,12 +265,39 @@ TEST_F(PlanNodeTest, isIndexLookupJoin) {
             leftKeys,
             rightKeys,
             std::vector<IndexLookupConditionPtr>{},
-            /*includeMatchColumn=*/true,
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
             probeNode,
             buildNode,
             outputTypeWithMatchColumn);
     ASSERT_TRUE(isIndexLookupJoin(indexJoinNodeWithLeftJoin.get()));
-    ASSERT_TRUE(indexJoinNodeWithLeftJoin->includeMatchColumn());
+    ASSERT_TRUE(indexJoinNodeWithLeftJoin->hasMarker());
+    ASSERT_EQ(indexJoinNodeWithLeftJoin->filter(), nullptr);
+    ASSERT_EQ(
+        indexJoinNodeWithLeftJoin->toString(/*detailed=*/true),
+        "-- IndexLookupJoin[indexJoinNode][LEFT c0=c1] -> c0:BIGINT, c1:BIGINT, c2:BOOLEAN\n");
+  }
+  {
+    // Test IndexLookupJoinNode with filter
+    const auto filterExpr = std::make_shared<core::FieldAccessTypedExpr>(
+        BOOLEAN(), "filter_column");
+    const auto indexJoinNodeWithFilter = std::make_shared<IndexLookupJoinNode>(
+        "indexJoinNodeWithFilter",
+        core::JoinType::kInner,
+        leftKeys,
+        rightKeys,
+        std::vector<IndexLookupConditionPtr>{},
+        /*filter=*/filterExpr,
+        /*hasMarker=*/false,
+        probeNode,
+        buildNode,
+        outputType);
+    ASSERT_TRUE(isIndexLookupJoin(indexJoinNodeWithFilter.get()));
+    ASSERT_FALSE(indexJoinNodeWithFilter->hasMarker());
+    ASSERT_EQ(indexJoinNodeWithFilter->filter(), filterExpr);
+    ASSERT_EQ(
+        indexJoinNodeWithFilter->toString(/*detailed=*/true),
+        "-- IndexLookupJoin[indexJoinNodeWithFilter][INNER c0=c1, filter: \"filter_column\"] -> c0:BIGINT, c1:BIGINT\n");
   }
   // Error case.
   {
@@ -226,7 +308,8 @@ TEST_F(PlanNodeTest, isIndexLookupJoin) {
             leftKeys,
             rightKeys,
             std::vector<IndexLookupConditionPtr>{},
-            /*includeMatchColumn=*/true,
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
             probeNode,
             buildNode,
             outputType),
@@ -240,7 +323,8 @@ TEST_F(PlanNodeTest, isIndexLookupJoin) {
             leftKeys,
             rightKeys,
             std::vector<IndexLookupConditionPtr>{},
-            /*includeMatchColumn=*/true,
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
             probeNode,
             buildNode,
             outputType),
@@ -256,7 +340,8 @@ TEST_F(PlanNodeTest, isIndexLookupJoin) {
             leftKeys,
             rightKeys,
             std::vector<IndexLookupConditionPtr>{},
-            /*includeMatchColumn=*/true,
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
             probeNode,
             buildNode,
             outputTypeWithDuplicateMatchColumn),

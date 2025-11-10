@@ -65,9 +65,11 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     case TypeKind::VARCHAR:
       return std::make_unique<StringColumnReader>(fileType, params, scanSpec);
 
-    case TypeKind::ARRAY:
+    case TypeKind::ARRAY: {
+      VELOX_CHECK(requestedType->isArray(), "Requested type must be array");
       return std::make_unique<ListColumnReader>(
           columnReaderOptions, requestedType, fileType, params, scanSpec);
+    }
 
     case TypeKind::MAP:
       return std::make_unique<MapColumnReader>(
@@ -97,7 +99,7 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     default:
       VELOX_FAIL(
           "buildReader unhandled type: " +
-          mapTypeKindToName(fileType->type()->kind()));
+          std::string(TypeKindName::toName(fileType->type()->kind())));
   }
 }
 

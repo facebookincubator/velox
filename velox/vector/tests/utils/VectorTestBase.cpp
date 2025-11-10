@@ -121,13 +121,15 @@ std::vector<RowVectorPtr> VectorTestBase::split(
 
   vector_size_t offset = 0;
   for (auto i = 0; i < n - 1; ++i) {
-    vectors.push_back(std::dynamic_pointer_cast<RowVector>(
-        vector->slice(offset, numRowsPerVector)));
+    vectors.push_back(
+        std::dynamic_pointer_cast<RowVector>(
+            vector->slice(offset, numRowsPerVector)));
     offset += numRowsPerVector;
   }
 
-  vectors.push_back(std::dynamic_pointer_cast<RowVector>(
-      vector->slice(offset, numRows - offset)));
+  vectors.push_back(
+      std::dynamic_pointer_cast<RowVector>(
+          vector->slice(offset, numRows - offset)));
   return vectors;
 }
 

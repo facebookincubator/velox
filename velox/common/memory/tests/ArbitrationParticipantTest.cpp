@@ -233,11 +233,12 @@ class MockTask : public std::enable_shared_from_this<MockTask> {
       ReclaimInjectionCallback reclaimInjectCb,
       ArbitrationInjectionCallback arbitrationInjectCb) {
     root_->setReclaimer(RootMemoryReclaimer::create(shared_from_this()));
-    pool_->setReclaimer(std::make_unique<LeafMemoryReclaimer>(
-        shared_from_this(),
-        reclaimable,
-        std::move(reclaimInjectCb),
-        std::move(arbitrationInjectCb)));
+    pool_->setReclaimer(
+        std::make_unique<LeafMemoryReclaimer>(
+            shared_from_this(),
+            reclaimable,
+            std::move(reclaimInjectCb),
+            std::move(arbitrationInjectCb)));
   }
 
   const std::shared_ptr<MemoryPool>& pool() const {

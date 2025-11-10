@@ -15,6 +15,8 @@
  */
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 
@@ -389,7 +391,8 @@ core::TypedExprPtr rewriteReduce(
     auto minus = std::make_shared<core::CallTypedExpr>(
         fx->type(), prefix + "minus", fx, inputBody->inputs()[1]);
     return toArraySum(prefix, *reduce, inputArgs, minus);
-  } else if (inputBody->name() == "if" && inputBody->inputs().size() == 3) {
+  } else if (
+      inputBody->name() == expression::kIf && inputBody->inputs().size() == 3) {
     // if(h(x), s + f(x), s + g(x)) =>
     // array_sum(transform(array, x -> if(h(x), f(x), g(x))))
     auto fx = extractFromAddition(prefix, inputBody->inputs()[1], s);
@@ -401,7 +404,7 @@ core::TypedExprPtr rewriteReduce(
       return nullptr;
     }
     auto ifExpr = std::make_shared<core::CallTypedExpr>(
-        fx->type(), "if", inputBody->inputs()[0], fx, gx);
+        fx->type(), expression::kIf, inputBody->inputs()[0], fx, gx);
     return toArraySum(prefix, *reduce, inputArgs, ifExpr);
   }
   return nullptr;
@@ -421,7 +424,7 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     std::make_unique<ReduceFunction>());
 
 void registerReduceRewrites(const std::string& prefix) {
-  exec::registerExpressionRewrite(
+  expression::ExprRewriteRegistry::instance().registerRewrite(
       [prefix](const auto& expr) { return rewriteReduce(prefix, expr); });
 }
 

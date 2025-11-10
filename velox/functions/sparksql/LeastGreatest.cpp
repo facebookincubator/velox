@@ -149,19 +149,21 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> leastSignatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
 
   for (const auto& type : types) {
-    signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                .returnType(type)
-                                .argumentType(type)
-                                .variableArity(type)
-                                .build());
+    signatures.emplace_back(
+        exec::FunctionSignatureBuilder()
+            .returnType(type)
+            .argumentType(type)
+            .variableArity(type)
+            .build());
   }
-  signatures.emplace_back(exec::FunctionSignatureBuilder()
-                              .integerVariable("p")
-                              .integerVariable("s")
-                              .returnType("decimal(p,s)")
-                              .argumentType("decimal(p,s)")
-                              .variableArity("decimal(p,s)")
-                              .build());
+  signatures.emplace_back(
+      exec::FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .variableArity("decimal(p,s)")
+          .build());
   return signatures;
 }
 

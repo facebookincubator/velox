@@ -96,7 +96,7 @@ const std::vector<std::string>& StackTrace::toStrVector() const {
     btVector_.reserve(btPtrs_.size());
     for (auto ptr : btPtrs_) {
       auto framename = translateFrame(ptr);
-      if (folly::StringPiece(framename).startsWith(*myname)) {
+      if (framename.starts_with(*myname)) {
         continue; // ignore frames in the StackTrace class
       }
       btVector_.push_back(fmt::format("# {:<2d} {}", frame++, framename));

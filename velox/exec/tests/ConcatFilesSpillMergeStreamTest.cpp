@@ -99,8 +99,12 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       std::vector<std::unique_ptr<SpillReadFile>> spillReadFiles;
       spillReadFiles.reserve(spillFiles.size());
       for (const auto& spillFile : spillFiles) {
-        spillReadFiles.emplace_back(SpillReadFile::create(
-            spillFile, spillConfig_.readBufferSize, pool_.get(), &spillStats_));
+        spillReadFiles.emplace_back(
+            SpillReadFile::create(
+                spillFile,
+                spillConfig_.readBufferSize,
+                pool_.get(),
+                &spillStats_));
       }
       auto stream =
           ConcatFilesSpillMergeStream::create(i - 1, std::move(spillReadFiles));

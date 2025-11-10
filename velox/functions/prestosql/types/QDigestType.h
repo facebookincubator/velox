@@ -48,12 +48,12 @@ class QDigestType final : public VarbinaryType {
     return "QDIGEST";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+  std::span<const TypeParameter> parameters() const override {
+    return {&parameter_, 1};
   }
 
   std::string toString() const override {
-    return fmt::format("QDIGEST({})", parameters_[0].type->toString());
+    return fmt::format("QDIGEST({})", parameter_.type->toString());
   }
 
   folly::dynamic serialize() const override {
@@ -61,9 +61,7 @@ class QDigestType final : public VarbinaryType {
     obj["name"] = "Type";
     obj["type"] = name();
     folly::dynamic children = folly::dynamic::array;
-    for (auto& param : parameters_) {
-      children.push_back(param.type->serialize());
-    }
+    children.push_back(parameter_.type->serialize());
     obj["cTypes"] = children;
     return obj;
   }
@@ -73,10 +71,9 @@ class QDigestType final : public VarbinaryType {
   }
 
  private:
-  explicit QDigestType(const TypePtr& dataType)
-      : parameters_({TypeParameter(dataType)}) {}
+  explicit QDigestType(const TypePtr& dataType) : parameter_(dataType) {}
 
-  const std::vector<TypeParameter> parameters_;
+  const TypeParameter parameter_;
 };
 
 inline std::shared_ptr<const QDigestType> QDIGEST(const TypePtr& dataType) {

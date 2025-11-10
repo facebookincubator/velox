@@ -18,10 +18,14 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
 namespace facebook::velox::dwrf {
+
+using dwio::common::ArenaCreate;
+
 class ColumnStatisticsBase {
  public:
   ColumnStatisticsBase()
@@ -752,8 +756,7 @@ class ColumnStatisticsBase {
 
       if (format == DwrfFormat::kDwrf) {
         auto columnStatistics =
-            google::protobuf::Arena::CreateMessage<proto::ColumnStatistics>(
-                arena_.get());
+            ArenaCreate<proto::ColumnStatistics>(arena_.get());
         if (from == State::kFalse) {
           columnStatistics->set_hasnull(false);
         } else if (from == State::kTrue) {
@@ -762,8 +765,8 @@ class ColumnStatisticsBase {
         target.merge(*buildColumnStatisticsFromProto(
             ColumnStatisticsWrapper(columnStatistics), context()));
       } else {
-        auto columnStatistics = google::protobuf::Arena::CreateMessage<
-            proto::orc::ColumnStatistics>(arena_.get());
+        auto columnStatistics =
+            ArenaCreate<proto::orc::ColumnStatistics>(arena_.get());
         if (from == State::kFalse) {
           columnStatistics->set_hasnull(false);
         } else if (from == State::kTrue) {

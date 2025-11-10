@@ -29,7 +29,7 @@ class SerializedPage {
       std::function<void(folly::IOBuf&)> onDestructionCb = nullptr,
       std::optional<int64_t> numRows = std::nullopt);
 
-  ~SerializedPage();
+  virtual ~SerializedPage();
 
   /// Returns the size of the serialized data in bytes.
   uint64_t size() const {

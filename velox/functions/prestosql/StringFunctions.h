@@ -660,6 +660,17 @@ struct NormalizeFunction {
   }
 };
 
+/// bit_length(string) → bigint
+/// Returns the length in bits of the input string.
+template <typename T>
+struct BitLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const StringView& input) {
+    result = static_cast<int64_t>(input.size()) * 8;
+  }
+};
+
 /// xxhash64(varchar) → bigint
 /// Return a hash64 of input (Varchar such as string)
 template <typename T>

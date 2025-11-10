@@ -22,10 +22,7 @@
 #include <cstdio>
 #include <string>
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 void verify_range(uint64_t v, uint64_t rangeMask) {
   auto mv = (v & rangeMask);
@@ -67,7 +64,4 @@ std::string format_error_string(std::string fmt...) {
   return s;
 }
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

@@ -15,8 +15,9 @@
  */
 #pragma once
 
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/ComplexViewTypes.h"
-#include "velox/functions/Udf.h"
+#include "velox/functions/Macros.h"
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions {
@@ -233,5 +234,7 @@ struct MapSubsetFunction {
       MapSubsetFunctionEqualComparator>
       searchKeys_;
 };
+
+void registerMapSubset(const std::string& name);
 
 } // namespace facebook::velox::functions

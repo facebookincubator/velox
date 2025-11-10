@@ -371,9 +371,10 @@ class WriterEncodingIndexTest2 {
         }
       }
       proto::StripeFooter stripeFooter;
+      auto sfw = StripeFooterWriteWrapper(&stripeFooter);
       columnWriter->flush(
-          [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-            return *stripeFooter.add_encoding();
+          [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+            return sfw.addEncoding();
           });
 
       // Simulate continue writing to next stripe, so internally buffered data
@@ -821,9 +822,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
         // *all* streams
         EXPECT_CALL(*mockIndexBuilderPtr, add(0, -1)).Times(positionCount);
         proto::StripeFooter stripeFooter;
+        auto sfw = StripeFooterWriteWrapper(&stripeFooter);
         columnWriter->flush(
-            [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-              return *stripeFooter.add_encoding();
+            [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+              return sfw.addEncoding();
             });
       } else {
         for (size_t i = 0; i != pageCount; ++i) {
@@ -847,9 +849,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
         EXPECT_CALL(*mockIndexBuilderPtr, flush());
         EXPECT_CALL(*mockIndexBuilderPtr, add(0, -1)).Times(positionCount);
         proto::StripeFooter stripeFooter;
+        auto sfw = StripeFooterWriteWrapper(&stripeFooter);
         columnWriter->flush(
-            [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-              return *stripeFooter.add_encoding();
+            [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+              return sfw.addEncoding();
             });
       }
 
@@ -972,9 +975,10 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
       // Recording PRESENT stream starting positions for the new stripe.
       EXPECT_CALL(*mockIndexBuilderPtr, add(0, -1)).Times(4);
       proto::StripeFooter stripeFooter;
+      auto sfw = StripeFooterWriteWrapper(&stripeFooter);
       columnWriter->flush(
-          [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-            return *stripeFooter.add_encoding();
+          [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+            return sfw.addEncoding();
           });
 
       // Simulate continue writing to next stripe, so internally buffered data
@@ -1128,9 +1132,10 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
         // *all* streams
         EXPECT_CALL(*mockIndexBuilderPtr, add(0, -1)).Times(positionCount);
         proto::StripeFooter stripeFooter;
+        auto sfw = StripeFooterWriteWrapper(&stripeFooter);
         columnWriter->flush(
-            [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-              return *stripeFooter.add_encoding();
+            [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+              return sfw.addEncoding();
             });
       } else {
         for (size_t i = 0; i != pageCount; ++i) {
@@ -1154,9 +1159,10 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
         EXPECT_CALL(*mockIndexBuilderPtr, flush());
         EXPECT_CALL(*mockIndexBuilderPtr, add(0, -1)).Times(positionCount);
         proto::StripeFooter stripeFooter;
+        auto sfw = StripeFooterWriteWrapper(&stripeFooter);
         columnWriter->flush(
-            [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-              return *stripeFooter.add_encoding();
+            [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+              return sfw.addEncoding();
             });
       }
 
@@ -1208,7 +1214,7 @@ class ListColumnWriterEncodingIndexTest : public testing::Test,
                                           public WriterEncodingIndexTest2 {
  public:
   ListColumnWriterEncodingIndexTest()
-      : WriterEncodingIndexTest2(ARRAY(REAL())){};
+      : WriterEncodingIndexTest2(ARRAY(REAL())) {};
 
  protected:
   static void SetUpTestCase() {

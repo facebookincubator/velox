@@ -113,6 +113,7 @@ class DwrfRowReader : public StrideIndexProvider,
     stats.numStripes += stripeCeiling_ - firstStripe_;
     stats.columnReaderStatistics.flattenStringDictionaryValues +=
         columnReaderStatistics_.flattenStringDictionaryValues;
+    stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
   void resetFilterCaches() override;
@@ -210,6 +211,8 @@ class DwrfRowReader : public StrideIndexProvider,
   // Number of processed strides.
   int64_t processedStrides_{0};
 
+  dwio::common::UnitLoaderStats unitLoadStats_;
+
   // Set to true after clearing filter caches, i.e. adding a dynamic filter.
   // Causes filters to be re-evaluated against stride stats on next stride
   // instead of next stripe.
@@ -221,6 +224,9 @@ class DwrfRowReader : public StrideIndexProvider,
 
   std::unique_ptr<dwio::common::UnitLoader> unitLoader_;
   DwrfUnit* currentUnit_;
+
+  mutable std::optional<size_t> estimatedRowSize_;
+  mutable bool hasRowEstimate_{false};
 };
 
 class DwrfReader : public dwio::common::Reader {

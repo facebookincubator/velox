@@ -29,8 +29,9 @@ class MakeDecimalTest : public SparkFunctionBaseTest {
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")};
     if (nullOnOverflow.has_value()) {
-      inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
-          BOOLEAN(), variant(nullOnOverflow.value())));
+      inputs.emplace_back(
+          std::make_shared<core::ConstantTypedExpr>(
+              BOOLEAN(), variant(nullOnOverflow.value())));
     }
     auto makeDecimal = std::make_shared<const core::CallTypedExpr>(
         outputType, std::move(inputs), "make_decimal");

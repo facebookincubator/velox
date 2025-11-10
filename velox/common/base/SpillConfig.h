@@ -52,6 +52,13 @@ using GetSpillDirectoryPathCB = std::function<std::string_view()>;
 /// bytes exceed the set limit.
 using UpdateAndCheckSpillLimitCB = std::function<void(uint64_t)>;
 
+/// Specifies the options for spill to disk.
+struct SpillDiskOptions {
+  std::string spillDirPath;
+  bool spillDirCreated{true};
+  std::function<std::string()> spillDirCreateCb{nullptr};
+};
+
 /// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig() = default;
@@ -73,7 +80,8 @@ struct SpillConfig {
       const std::string& _compressionKind,
       uint32_t numMaxMergeFiles,
       std::optional<PrefixSortConfig> _prefixSortConfig = std::nullopt,
-      const std::string& _fileCreateConfig = {});
+      const std::string& _fileCreateConfig = {},
+      uint32_t _windowMinReadBatchRows = 1'000);
 
   /// Returns the spilling level with given 'startBitOffset' and
   /// 'numPartitionBits'.
@@ -166,5 +174,8 @@ struct SpillConfig {
 
   /// Custom options passed to velox::FileSystem to create spill WriteFile.
   std::string fileCreateConfig;
+
+  /// The minimum number of rows to read when processing spilled window data.
+  uint32_t windowMinReadBatchRows;
 };
 } // namespace facebook::velox::common

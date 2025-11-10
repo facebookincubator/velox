@@ -89,7 +89,7 @@ function install_build_prerequisites {
     wget
 
   install_uv
-  uv_install cmake==3.28.3
+  uv_install cmake==3.30.4
 
   install_gcc11_if_needed
 
@@ -189,6 +189,7 @@ function install_cuda {
     cuda-minimal-build-"$dashed" \
     cuda-nvrtc-dev-"$dashed" \
     libcufile-dev-"$dashed" \
+    libnvjitlink-dev-"$dashed" \
     libnuma1
 }
 
@@ -201,18 +202,18 @@ function install_s3 {
 
 function install_gcs {
   # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-  apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
+  ${SUDO} apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
   install_gcs-sdk-cpp
 }
 
 function install_abfs {
   # Dependencies of Azure Storage Blob cpp
-  apt install -y openssl libxml2-dev
+  ${SUDO} apt install -y openssl libxml2-dev
   install_azure-storage-sdk-cpp
 }
 
 function install_hdfs {
-  apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
+  ${SUDO} apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
   install_hdfs_deps
 }
 
@@ -224,7 +225,7 @@ function install_adapters {
 }
 
 function install_faiss_deps {
-  sudo apt-get install -y libopenblas-dev libomp-dev
+  ${SUDO} apt-get install -y libopenblas-dev libomp-dev
 }
 
 function install_velox_deps {

@@ -19,12 +19,14 @@
 #include <fmt/format.h>
 
 #include "velox/common/process/TraceContext.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::dwrf {
 
+using dwio::common::ArenaCreate;
 using dwio::common::ColumnStatistics;
 using dwio::common::FileFormat;
 using dwio::common::LogType;
@@ -96,7 +98,7 @@ template <typename T>
 std::unique_ptr<FooterWrapper> parseFooter(
     dwio::common::SeekableInputStream* input,
     google::protobuf::Arena* arena) {
-  auto* impl = google::protobuf::Arena::CreateMessage<T>(arena);
+  auto* impl = ArenaCreate<T>(arena);
   VELOX_CHECK(impl->ParseFromZeroCopyStream(input));
   return std::make_unique<FooterWrapper>(impl);
 }

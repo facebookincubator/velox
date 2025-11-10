@@ -139,16 +139,17 @@ TEST_F(VectorMakerTest, flatVectorStringNullableTypes) {
       maker_.flatVectorNullable<const char*>({"hello", std::nullopt, "world"}));
 
   // std::string
-  validate(maker_.flatVectorNullable(std::vector<std::optional<std::string>>(
-      {"hello", std::nullopt, "world"})));
+  validate(maker_.flatVectorNullable(
+      std::vector<std::optional<std::string>>(
+          {"hello", std::nullopt, "world"})));
 
   // StringView
   validate(
       maker_.flatVectorNullable<StringView>({"hello", std::nullopt, "world"}));
 
   // std::string_view
-  validate(
-      maker_.flatVectorNullable(std::vector<std::optional<std::string_view>>(
+  validate(maker_.flatVectorNullable(
+      std::vector<std::optional<std::string_view>>(
           {"hello", std::nullopt, "world"})));
 }
 

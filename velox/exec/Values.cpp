@@ -45,8 +45,9 @@ void Values::initialize() {
         // If this is parallelizable, copy the values to prevent Vectors from
         // being shared across threads.  Note that the contract in ValuesNode is
         // that this should only be enabled for testing.
-        values_.emplace_back(std::static_pointer_cast<RowVector>(
-            vector->testingCopyPreserveEncodings()));
+        values_.emplace_back(
+            std::static_pointer_cast<RowVector>(
+                vector->testingCopyPreserveEncodings()));
       } else {
         values_.emplace_back(vector);
       }

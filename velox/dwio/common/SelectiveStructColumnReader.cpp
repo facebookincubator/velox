@@ -407,7 +407,6 @@ void SelectiveStructColumnReaderBase::read(
   }
 
   const uint64_t* structNulls = nulls();
-
   // A struct reader may have a null/non-null filter
   if (scanSpec_->filter()) {
     const auto kind = scanSpec_->filter()->kind();
@@ -531,6 +530,12 @@ bool SelectiveStructColumnReaderBase::isChildMissing(
        childSpec.channel() >= fileType_->size());
 }
 
+std::unique_ptr<velox::dwio::common::ColumnLoader>
+SelectiveStructColumnReaderBase::makeColumnLoader(vector_size_t index) {
+  return std::make_unique<velox::dwio::common::ColumnLoader>(
+      this, children_[index], numReads_);
+}
+
 void SelectiveStructColumnReaderBase::getValues(
     const RowSet& rows,
     VectorPtr* result) {
@@ -616,7 +621,7 @@ void SelectiveStructColumnReaderBase::getValues(
     // LazyVector result.
     setOutputRowsForLazy(rows);
     setLazyField(
-        std::make_unique<ColumnLoader>(this, children_[index], numReads_),
+        makeColumnLoader(index),
         resultRow->type()->childAt(channel),
         rows.size(),
         memoryPool_,

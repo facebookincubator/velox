@@ -116,7 +116,7 @@ class BufferedOutputStream : public google::protobuf::io::ZeroCopyOutputStream {
       void** buffer,
       int32_t* size,
       uint64_t headerSize,
-      const std::vector<folly::StringPiece>& bufferToFlush) {
+      const std::vector<std::string_view>& bufferToFlush) {
     bufferHolder_.take(bufferToFlush);
     *buffer = buffer_.data() + headerSize;
     *size = static_cast<int32_t>(buffer_.size() - headerSize);

@@ -298,8 +298,7 @@ class ISerializable {
   }
 
   template <
-      template <typename, typename, typename...>
-      typename TMap,
+      template <typename, typename, typename...> typename TMap,
       typename TKey,
       typename TMapped,
       typename... TArgs,

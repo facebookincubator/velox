@@ -18,10 +18,7 @@
 
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 /**
  * Error tolerance level for readers
@@ -63,7 +60,4 @@ struct ErrorTolerance {
   }
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

@@ -321,8 +321,9 @@ FileMetaDataPtr::FileMetaDataPtr(const void* metadata) : ptr_(metadata) {}
 FileMetaDataPtr::~FileMetaDataPtr() = default;
 
 RowGroupMetaDataPtr FileMetaDataPtr::rowGroup(int i) const {
-  return RowGroupMetaDataPtr(reinterpret_cast<const void*>(
-      &thriftFileMetaDataPtr(ptr_)->row_groups[i]));
+  return RowGroupMetaDataPtr(
+      reinterpret_cast<const void*>(
+          &thriftFileMetaDataPtr(ptr_)->row_groups[i]));
 }
 
 int64_t FileMetaDataPtr::numRows() const {

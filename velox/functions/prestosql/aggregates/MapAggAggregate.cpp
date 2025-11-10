@@ -225,7 +225,7 @@ void registerMapAggAggregate(
             return std::make_unique<MapAggAggregate<int32_t>>(resultType);
           default:
             VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
+                "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
       withCompanionFunctions,

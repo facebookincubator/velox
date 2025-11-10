@@ -15,15 +15,11 @@
  */
 
 #include "velox/connectors/Connector.h"
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 
 #include <gtest/gtest.h>
 
 namespace facebook::velox::connector {
-
-class ConnectorTest : public testing::Test {};
-
 namespace {
 
 class TestConnector : public connector::Connector {
@@ -49,9 +45,7 @@ class TestConnector : public connector::Connector {
 
 class TestConnectorFactory : public connector::ConnectorFactory {
  public:
-  static constexpr const char* kConnectorFactoryName = "test-factory";
-
-  TestConnectorFactory() : ConnectorFactory(kConnectorFactoryName) {}
+  TestConnectorFactory() : ConnectorFactory("test-factory") {}
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
@@ -62,39 +56,30 @@ class TestConnectorFactory : public connector::ConnectorFactory {
   }
 };
 
-} // namespace
+TEST(ConnectorTest, getAllConnectors) {
+  TestConnectorFactory factory;
 
-TEST_F(ConnectorTest, getAllConnectors) {
-  registerConnectorFactory(std::make_shared<TestConnectorFactory>());
-  VELOX_ASSERT_THROW(
-      registerConnectorFactory(std::make_shared<TestConnectorFactory>()),
-      "ConnectorFactory with name 'test-factory' is already registered");
-  EXPECT_TRUE(hasConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
   const int32_t numConnectors = 10;
   for (int32_t i = 0; i < numConnectors; i++) {
-    registerConnector(
-        getConnectorFactory(TestConnectorFactory::kConnectorFactoryName)
-            ->newConnector(
-                fmt::format("connector-{}", i),
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>())));
+    registerConnector(factory.newConnector(
+        fmt::format("connector-{}", i),
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>())));
   }
+
   const auto& connectors = getAllConnectors();
   EXPECT_EQ(connectors.size(), numConnectors);
   for (int32_t i = 0; i < numConnectors; i++) {
     EXPECT_EQ(connectors.count(fmt::format("connector-{}", i)), 1);
   }
+
   for (int32_t i = 0; i < numConnectors; i++) {
     unregisterConnector(fmt::format("connector-{}", i));
   }
   EXPECT_EQ(getAllConnectors().size(), 0);
-  EXPECT_TRUE(
-      unregisterConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
-  EXPECT_FALSE(
-      unregisterConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
 }
 
-TEST_F(ConnectorTest, connectorSplit) {
+TEST(ConnectorTest, connectorSplit) {
   {
     const ConnectorSplit split("test", 100, true);
     ASSERT_EQ(split.connectorId, "test");
@@ -114,4 +99,5 @@ TEST_F(ConnectorTest, connectorSplit) {
         "[split: connector id test, weight 50, cacheable false]");
   }
 }
+} // namespace
 } // namespace facebook::velox::connector

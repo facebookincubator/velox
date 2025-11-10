@@ -1039,11 +1039,12 @@ void CompileState::generatePrograms() {
     auto firstOperatorIdx = operators_.size();
     if (firstStep->kind() == StepKind::kTableScan) {
       auto& scanStep = firstStep->as<TableScanStep>();
-      operators_.push_back(std::make_unique<TableScan>(
-          *this,
-          operators_.size(),
-          *scanStep.node,
-          std::move(scanStep.defines)));
+      operators_.push_back(
+          std::make_unique<TableScan>(
+              *this,
+              operators_.size(),
+              *scanStep.node,
+              std::move(scanStep.defines)));
       start = 1;
     }
     instructionStatus_ = InstructionStatus();
@@ -1085,10 +1086,11 @@ void CompileState::generatePrograms() {
       levels.back().push_back(std::move(program));
     }
     if (!levels.empty()) {
-      operators_.push_back(std::make_unique<Project>(
-          *this,
-          selectedPipelines_[pipelineIdx_].outputType,
-          std::move(levels)));
+      operators_.push_back(
+          std::make_unique<Project>(
+              *this,
+              selectedPipelines_[pipelineIdx_].outputType,
+              std::move(levels)));
       currentCandidate_->setOutputIds(
           this,
           operators_.back().get(),

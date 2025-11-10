@@ -42,6 +42,7 @@ class TableWriterReplayer final : public OperatorReplayerBase {
             taskId,
             nodeId,
             operatorType,
+            "",
             driverIds,
             queryCapacity,
             executor),

@@ -18,17 +18,23 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/SpatialIndex.h"
 
 namespace facebook::velox::exec {
 
+struct SpatialBuildResult {
+  std::vector<RowVectorPtr> buildVectors;
+  std::shared_ptr<SpatialIndex> spatialIndex;
+};
+
 class SpatialJoinBridge : public JoinBridge {
  public:
-  void setData(std::vector<RowVectorPtr> buildVectors);
+  void setData(SpatialBuildResult buildResult);
 
-  std::optional<std::vector<RowVectorPtr>> dataOrFuture(ContinueFuture* future);
+  std::optional<SpatialBuildResult> dataOrFuture(ContinueFuture* future);
 
  private:
-  std::optional<std::vector<RowVectorPtr>> buildVectors_;
+  std::optional<SpatialBuildResult> buildResult_;
 };
 
 class SpatialJoinBuild : public Operator {
@@ -61,8 +67,22 @@ class SpatialJoinBuild : public Operator {
 
   std::vector<RowVectorPtr> mergeDataVectors() const;
 
+  SpatialIndex buildSpatialIndex(
+      const std::vector<RowVectorPtr>& data,
+      column_index_t geometryIdx,
+      std::optional<column_index_t> radiusIdx);
+
+  static Envelope readEnvelope(
+      const StringView& serializedGeometry,
+      double radius);
+
  private:
   std::vector<RowVectorPtr> dataVectors_;
+
+  // Channel of geometry variable used to build spatial index
+  column_index_t buildGeometryChannel_;
+  // Channel (if set) of radius variable used to build spatial index
+  std::optional<column_index_t> radiusChannel_{};
 
   // Future for synchronizing with other Drivers of the same pipeline. All build
   // Drivers must be completed before making data available for the probe side.

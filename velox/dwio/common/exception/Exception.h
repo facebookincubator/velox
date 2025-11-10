@@ -18,11 +18,8 @@
 
 #include "velox/common/base/VeloxException.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace exception {
+namespace facebook::velox::dwio {
+namespace common::exception {
 
 class ExceptionLogger {
  public:
@@ -101,8 +98,7 @@ class LoggedException : public velox::VeloxException {
   }
 };
 
-} // namespace exception
-} // namespace common
+} // namespace common::exception
 
 #define DWIO_WARN_IF(e, ...)                                                \
   ({                                                                        \
@@ -256,6 +252,4 @@ containing information about the file, line, and function where it happened.
       "]: ",                           \
       ##__VA_ARGS__);
 
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio

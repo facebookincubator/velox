@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 #include <folly/init/Init.h>
@@ -36,16 +37,12 @@ namespace {
 
 void registerFactories(folly::Executor* ioExecutor) {
   filesystems::registerLocalFileSystem();
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              TableEvolutionFuzzer::connectorId(),
-              std::make_shared<config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor);
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      TableEvolutionFuzzer::connectorId(),
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor);
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
@@ -88,6 +85,7 @@ int main(int argc, char** argv) {
   auto ioExecutor = folly::getGlobalIOExecutor();
   facebook::velox::exec::test::registerFactories(ioExecutor.get());
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::parse::registerTypeResolver();
   return RUN_ALL_TESTS();
 }

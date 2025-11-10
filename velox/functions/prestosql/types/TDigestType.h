@@ -39,12 +39,12 @@ class TDigestType final : public VarbinaryType {
     return "TDIGEST";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+  std::span<const TypeParameter> parameters() const override {
+    return {&parameter_, 1};
   }
 
   std::string toString() const override {
-    return fmt::format("TDIGEST({})", parameters_[0].type->toString());
+    return fmt::format("TDIGEST({})", parameter_.type->toString());
   }
 
   folly::dynamic serialize() const override {
@@ -52,9 +52,7 @@ class TDigestType final : public VarbinaryType {
     obj["name"] = "Type";
     obj["type"] = name();
     folly::dynamic children = folly::dynamic::array;
-    for (auto& param : parameters_) {
-      children.push_back(param.type->serialize());
-    }
+    children.push_back(parameter_.type->serialize());
     obj["cTypes"] = children;
     return obj;
   }
@@ -64,10 +62,9 @@ class TDigestType final : public VarbinaryType {
   }
 
  private:
-  explicit TDigestType(const TypePtr& dataType)
-      : parameters_({TypeParameter(dataType)}) {}
+  explicit TDigestType(const TypePtr& dataType) : parameter_(dataType) {}
 
-  const std::vector<TypeParameter> parameters_;
+  const TypeParameter parameter_;
 };
 
 inline bool isTDigestType(const TypePtr& type) {

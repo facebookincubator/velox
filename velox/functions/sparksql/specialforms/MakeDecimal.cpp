@@ -114,10 +114,12 @@ class MakeDecimalFunction final : public exec::VectorFunction {
   std::exception_ptr overflowException(
       int64_t unscaled,
       uint8_t resultPrecision) const {
-    return std::make_exception_ptr(std::overflow_error(fmt::format(
-        "Unscaled value {} too large for precision {}.",
-        unscaled,
-        resultPrecision)));
+    return std::make_exception_ptr(
+        std::overflow_error(
+            fmt::format(
+                "Unscaled value {} too large for precision {}.",
+                unscaled,
+                resultPrecision)));
   }
 
   const uint8_t resultPrecision_;

@@ -310,10 +310,13 @@ TEST_F(JsonFunctionsTest, jsonParse) {
       R"([{"response":"[\"fusil a peinture\",\"�uD83E\\uDE2Dau bois\"]"}])");
 
   VELOX_ASSERT_THROW(
-      jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
+      jsonParse(R"({"k1":})"),
+      "The JSON element does not have the requested type");
   VELOX_ASSERT_THROW(
       jsonParse(R"({:"k1"})"), "The JSON document has an improper structure");
-  VELOX_ASSERT_THROW(jsonParse(R"(not_json)"), "Problem while parsing an atom");
+  // The exact exception message can change based on the simdjson version used.
+  // Instead, check that VeloxUserError for invalid Json is returned.
+  ASSERT_THROW(jsonParse(R"(not_json)"), VeloxUserError);
   VELOX_ASSERT_THROW(
       jsonParse("[1"),
       "JSON document ended early in the middle of an object or array");

@@ -327,10 +327,11 @@ core::ExprPtr parseConjunctionExpr(
       StringUtil::Lower(ExpressionTypeToOperator(expr.GetExpressionType()));
 
   if (conjExpr.children.size() < 2) {
-    throw std::invalid_argument(folly::sformat(
-        "Malformed conjunction expression "
-        "(expected at least 2 input columns, got {}).",
-        conjExpr.children.size()));
+    throw std::invalid_argument(
+        folly::sformat(
+            "Malformed conjunction expression "
+            "(expected at least 2 input columns, got {}).",
+            conjExpr.children.size()));
   }
 
   // DuckDB's parser returns conjunction involving multiple input in a flat
@@ -463,8 +464,9 @@ core::ExprPtr parseOperatorExpr(
     }
 
     if (options.parseInListAsArray) {
-      params.emplace_back(std::make_shared<const core::ConstantExpr>(
-          ARRAY(valueType), Variant::array(values), std::nullopt));
+      params.emplace_back(
+          std::make_shared<const core::ConstantExpr>(
+              ARRAY(valueType), Variant::array(values), std::nullopt));
     }
     auto inExpr = callExpr("in", std::move(params), getAlias(expr), options);
     // Translate COMPARE_NOT_IN into NOT(IN()).
@@ -790,8 +792,11 @@ AggregateExpr parseAggregateExpr(
     for (const auto& orderByNode : functionExpr.order_bys->orders) {
       const bool ascending = isAscending(orderByNode.type, exprString);
       const bool nullsFirst = isNullsFirst(orderByNode.null_order, exprString);
-      aggregateExpr.orderBy.emplace_back(OrderByClause{
-          parseExpr(*orderByNode.expression, options), ascending, nullsFirst});
+      aggregateExpr.orderBy.emplace_back(
+          OrderByClause{
+              parseExpr(*orderByNode.expression, options),
+              ascending,
+              nullsFirst});
     }
   }
 
@@ -862,8 +867,11 @@ IExprWindowFunction parseWindowExpr(
   for (const auto& orderByNode : windowExpr.orders) {
     const bool ascending = isAscending(orderByNode.type, windowString);
     const bool nullsFirst = isNullsFirst(orderByNode.null_order, windowString);
-    windowIExpr.orderBy.emplace_back(OrderByClause{
-        parseExpr(*orderByNode.expression, options), ascending, nullsFirst});
+    windowIExpr.orderBy.emplace_back(
+        OrderByClause{
+            parseExpr(*orderByNode.expression, options),
+            ascending,
+            nullsFirst});
   }
 
   std::vector<core::ExprPtr> params;

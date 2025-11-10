@@ -46,11 +46,12 @@ exec::AggregateRegistrationResult registerMerge(
       "qdigest(double)"};
   signatures.reserve(inputTypes.size());
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType("varbinary")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(inputType)
+            .intermediateType("varbinary")
+            .argumentType(inputType)
+            .build());
   }
   bool hllAsRawInput = true;
   bool hllAsFinalResult = true;

@@ -104,8 +104,7 @@ FOLLY_ALWAYS_INLINE void hashFloating(
 #if defined(__clang__)
 __attribute__((no_sanitize("integer")))
 #endif
-FOLLY_ALWAYS_INLINE int64_t
-safeHash(const int64_t& a, const int64_t& b) {
+FOLLY_ALWAYS_INLINE int64_t safeHash(const int64_t& a, const int64_t& b) {
   return a * 31 + b;
 }
 

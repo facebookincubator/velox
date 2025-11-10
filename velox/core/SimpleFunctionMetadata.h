@@ -243,13 +243,14 @@ struct TypeAnalysis<Generic<T, comparable, orderable>> {
     } else {
       auto typeVariableName = fmt::format("__user_T{}", T::getId());
       results.out << typeVariableName;
-      results.addVariable(exec::SignatureVariable(
-          typeVariableName,
-          std::nullopt,
-          exec::ParameterType::kTypeParameter,
-          false,
-          orderable,
-          comparable));
+      results.addVariable(
+          exec::SignatureVariable(
+              typeVariableName,
+              std::nullopt,
+              exec::ParameterType::kTypeParameter,
+              false,
+              orderable,
+              comparable));
     }
     results.stats.hasGeneric = true;
     results.physicalType = UNKNOWN();
@@ -264,10 +265,12 @@ struct TypeAnalysis<ShortDecimal<P, S>> {
     const auto p = P::name();
     const auto s = S::name();
     results.out << fmt::format("decimal({},{})", p, s);
-    results.addVariable(exec::SignatureVariable(
-        p, std::nullopt, exec::ParameterType::kIntegerParameter));
-    results.addVariable(exec::SignatureVariable(
-        s, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.addVariable(
+        exec::SignatureVariable(
+            p, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.addVariable(
+        exec::SignatureVariable(
+            s, std::nullopt, exec::ParameterType::kIntegerParameter));
     results.physicalType = BIGINT();
   }
 };
@@ -280,10 +283,12 @@ struct TypeAnalysis<LongDecimal<P, S>> {
     const auto p = P::name();
     const auto s = S::name();
     results.out << fmt::format("decimal({},{})", p, s);
-    results.addVariable(exec::SignatureVariable(
-        p, std::nullopt, exec::ParameterType::kIntegerParameter));
-    results.addVariable(exec::SignatureVariable(
-        s, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.addVariable(
+        exec::SignatureVariable(
+            p, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.addVariable(
+        exec::SignatureVariable(
+            s, std::nullopt, exec::ParameterType::kIntegerParameter));
     results.physicalType = HUGEINT();
   }
 };
@@ -295,8 +300,9 @@ struct TypeAnalysis<facebook::velox::BigintEnumT<E>> {
 
     const auto e = E::name();
     results.out << fmt::format("bigint_enum({})", e);
-    results.addVariable(exec::SignatureVariable(
-        e, std::nullopt, exec::ParameterType::kEnumParameter));
+    results.addVariable(
+        exec::SignatureVariable(
+            e, std::nullopt, exec::ParameterType::kEnumParameter));
     results.physicalType = BIGINT();
   }
 };
@@ -308,8 +314,9 @@ struct TypeAnalysis<facebook::velox::VarcharEnumT<E>> {
 
     const auto e = E::name();
     results.out << fmt::format("varchar_enum({})", e);
-    results.addVariable(exec::SignatureVariable(
-        e, std::nullopt, exec::ParameterType::kEnumParameter));
+    results.addVariable(
+        exec::SignatureVariable(
+            e, std::nullopt, exec::ParameterType::kEnumParameter));
     results.physicalType = VARCHAR();
   }
 };

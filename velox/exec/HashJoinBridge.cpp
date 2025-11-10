@@ -452,11 +452,11 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
 }
 
 bool isHashBuildMemoryPool(const memory::MemoryPool& pool) {
-  return folly::StringPiece(pool.name()).endsWith("HashBuild");
+  return pool.name().ends_with("HashBuild");
 }
 
 bool isHashProbeMemoryPool(const memory::MemoryPool& pool) {
-  return folly::StringPiece(pool.name()).endsWith("HashProbe");
+  return pool.name().ends_with("HashProbe");
 }
 
 bool needRightSideJoin(core::JoinType joinType) {

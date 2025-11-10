@@ -108,9 +108,10 @@ uint64_t ParallelMemoryReclaimer::reclaim(
         if (!reclaimableBytesOpt.has_value()) {
           continue;
         }
-        candidates.push_back(Candidate{
-            std::move(child),
-            static_cast<int64_t>(reclaimableBytesOpt.value())});
+        candidates.push_back(
+            Candidate{
+                std::move(child),
+                static_cast<int64_t>(reclaimableBytesOpt.value())});
       }
     }
   }
@@ -134,21 +135,23 @@ uint64_t ParallelMemoryReclaimer::reclaim(
     if (candidate.reclaimableBytes == 0) {
       continue;
     }
-    reclaimTasks.push_back(memory::createAsyncMemoryReclaimTask<ReclaimResult>(
-        [&, reclaimPool = candidate.pool]() {
-          try {
-            Stats reclaimStats;
-            const auto bytes =
-                reclaimPool->reclaim(targetBytes, maxWaitMs, reclaimStats);
-            return std::make_unique<ReclaimResult>(
-                bytes, std::move(reclaimStats));
-          } catch (const std::exception& e) {
-            VELOX_MEM_LOG(ERROR) << "Reclaim from memory pool " << pool->name()
-                                 << " failed: " << e.what();
-            // The exception is captured and thrown by the caller.
-            return std::make_unique<ReclaimResult>(std::current_exception());
-          }
-        }));
+    reclaimTasks.push_back(
+        memory::createAsyncMemoryReclaimTask<ReclaimResult>(
+            [&, reclaimPool = candidate.pool]() {
+              try {
+                Stats reclaimStats;
+                const auto bytes =
+                    reclaimPool->reclaim(targetBytes, maxWaitMs, reclaimStats);
+                return std::make_unique<ReclaimResult>(
+                    bytes, std::move(reclaimStats));
+              } catch (const std::exception& e) {
+                VELOX_MEM_LOG(ERROR) << "Reclaim from memory pool "
+                                     << pool->name() << " failed: " << e.what();
+                // The exception is captured and thrown by the caller.
+                return std::make_unique<ReclaimResult>(
+                    std::current_exception());
+              }
+            }));
     if (reclaimTasks.size() > 1) {
       executor_->add([source = reclaimTasks.back()]() { source->prepare(); });
     }

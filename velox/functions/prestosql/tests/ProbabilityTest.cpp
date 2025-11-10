@@ -853,5 +853,64 @@ TEST_F(ProbabilityTest, inverseChiSquaredCdf) {
       "inverseChiSquaredCdf Function: p must be in the interval [0, 1]");
 }
 
+TEST_F(ProbabilityTest, tCDF) {
+  const auto tCDF = [&](std::optional<double> df, std::optional<double> value) {
+    return evaluateOnce<double>("t_cdf(c0, c1)", df, value);
+  };
+
+  EXPECT_EQ(0.5, tCDF(1000, 0.0));
+  EXPECT_EQ(1.0, tCDF(1000, kInf));
+  EXPECT_EQ(0.0, tCDF(1000, -kInf));
+
+  EXPECT_EQ(std::nullopt, tCDF(std::nullopt, 0.5));
+  EXPECT_EQ(std::nullopt, tCDF(1000, std::nullopt));
+
+  VELOX_ASSERT_THROW(tCDF(0, 0.5), "df must be greater than 0");
+  VELOX_ASSERT_THROW(tCDF(-1, 0.5), "df must be greater than 0");
+
+  EXPECT_NEAR(0.95, tCDF(5, 2.015).value(), 0.001);
+  EXPECT_NEAR(0.05, tCDF(5, -2.015).value(), 0.001);
+
+  EXPECT_NEAR(0.975, tCDF(10, 2.228).value(), 0.001);
+  EXPECT_NEAR(0.025, tCDF(10, -2.228).value(), 0.001);
+
+  EXPECT_NEAR(0.99, tCDF(20, 2.528).value(), 0.001);
+
+  EXPECT_NEAR(0.90, tCDF(30, 1.310).value(), 0.001);
+
+  EXPECT_NEAR(0.95, tCDF(100, 1.660).value(), 0.001);
+}
+
+TEST_F(ProbabilityTest, inverseTCDF) {
+  const auto inverseTCDF = [&](std::optional<double> df,
+                               std::optional<double> p) {
+    return evaluateOnce<double>("inverse_t_cdf(c0, c1)", df, p);
+  };
+
+  EXPECT_EQ(0.0, inverseTCDF(1000, 0.5));
+  EXPECT_EQ(-kInf, inverseTCDF(1000, 0.0));
+  EXPECT_EQ(kInf, inverseTCDF(1000, 1.0));
+
+  EXPECT_EQ(std::nullopt, inverseTCDF(std::nullopt, 0.5));
+  EXPECT_EQ(std::nullopt, inverseTCDF(1000, std::nullopt));
+
+  VELOX_ASSERT_THROW(inverseTCDF(0, 0.5), "df must be greater than 0");
+  VELOX_ASSERT_THROW(inverseTCDF(-1, 0.5), "df must be greater than 0");
+  VELOX_ASSERT_THROW(inverseTCDF(3, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(inverseTCDF(3, 1.1), "p must be in the interval [0, 1]");
+
+  EXPECT_NEAR(2.015, inverseTCDF(5, 0.95).value(), 0.001);
+  EXPECT_NEAR(-2.015, inverseTCDF(5, 0.05).value(), 0.001);
+
+  EXPECT_NEAR(2.228, inverseTCDF(10, 0.975).value(), 0.001);
+  EXPECT_NEAR(-2.228, inverseTCDF(10, 0.025).value(), 0.001);
+
+  EXPECT_NEAR(2.528, inverseTCDF(20, 0.99).value(), 0.001);
+
+  EXPECT_NEAR(1.310, inverseTCDF(30, 0.90).value(), 0.001);
+
+  EXPECT_NEAR(1.660, inverseTCDF(100, 0.95).value(), 0.001);
+}
+
 } // namespace
 } // namespace facebook::velox

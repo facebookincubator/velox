@@ -15,6 +15,8 @@
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
 
+#include <utility>
+
 namespace facebook::velox::connector::hive {
 
 namespace {
@@ -31,8 +33,7 @@ int32_t hashInt64(int64_t value) {
 __attribute__((no_sanitize("integer")))
 #endif
 #endif
-uint32_t
-hashBytes(StringView bytes, int32_t initialValue) {
+uint32_t hashBytes(StringView bytes, int32_t initialValue) {
   uint32_t hash = initialValue;
   auto* data = bytes.data();
   for (auto i = 0; i < bytes.size(); ++i) {
@@ -461,7 +462,7 @@ HivePartitionFunction::HivePartitionFunction(
     std::vector<column_index_t> keyChannels,
     const std::vector<VectorPtr>& constValues)
     : numBuckets_{numBuckets},
-      bucketToPartition_{bucketToPartition},
+      bucketToPartition_{std::move(bucketToPartition)},
       keyChannels_{std::move(keyChannels)} {
   precomputedHashes_.resize(keyChannels_.size());
   size_t constChannel{0};
@@ -495,7 +496,7 @@ std::optional<uint32_t> HivePartitionFunction::partition(
     }
   }
 
-  static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
+  static constexpr int32_t kInt32Max = std::numeric_limits<int32_t>::max();
 
   if (bucketToPartition_.empty()) {
     // NOTE: if bucket to partition mapping is empty, then we do

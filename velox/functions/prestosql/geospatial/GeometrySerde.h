@@ -16,32 +16,17 @@
 
 #pragma once
 
+#include <geos/geom/CoordinateArraySequence.h>
 #include <geos/geom/Geometry.h>
 #include <geos/geom/GeometryFactory.h>
 
 #include "velox/common/base/IOUtils.h"
+#include "velox/common/geospatial/GeometryConstants.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/type/StringView.h"
 
 namespace facebook::velox::functions::geospatial {
-
-enum class GeometrySerializationType : uint8_t {
-  POINT = 0,
-  MULTI_POINT = 1,
-  LINE_STRING = 2,
-  MULTI_LINE_STRING = 3,
-  POLYGON = 4,
-  MULTI_POLYGON = 5,
-  GEOMETRY_COLLECTION = 6,
-  ENVELOPE = 7
-};
-
-enum class EsriShapeType : uint32_t {
-  POINT = 1,
-  POLYLINE = 3,
-  POLYGON = 5,
-  MULTI_POINT = 8
-};
 
 /**
  * VarbinaryWriter is a utility for serializing raw binary data to a
@@ -94,7 +79,9 @@ class GeometrySerializer {
       double yMax,
       StringWriter& stringWriter) {
     VarbinaryWriter writer(stringWriter);
-    writer.write(static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
+    writer.write(
+        static_cast<uint8_t>(
+            common::geospatial::GeometrySerializationType::ENVELOPE));
     writer.write(xMin);
     writer.write(yMin);
     writer.write(xMax);
@@ -192,7 +179,9 @@ class GeometrySerializer {
   static void writePoint(
       const geos::geom::Geometry& point,
       VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(GeometrySerializationType::POINT));
+    writer.write(
+        static_cast<uint8_t>(
+            common::geospatial::GeometrySerializationType::POINT));
     if (!point.isEmpty()) {
       writeCoordinates(point.getCoordinates(), writer);
     } else {
@@ -205,8 +194,11 @@ class GeometrySerializer {
   static void writeMultiPoint(
       const geos::geom::Geometry& geometry,
       VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
-    writer.write(static_cast<int32_t>(EsriShapeType::MULTI_POINT));
+    writer.write(
+        static_cast<uint8_t>(
+            common::geospatial::GeometrySerializationType::MULTI_POINT));
+    writer.write(
+        static_cast<int32_t>(common::geospatial::EsriShapeType::MULTI_POINT));
     writeEnvelope(geometry, writer);
     writer.write(static_cast<int32_t>(geometry.getNumPoints()));
     writeCoordinates(geometry.getCoordinates(), writer);
@@ -223,14 +215,17 @@ class GeometrySerializer {
     if (multiType) {
       numParts = geometry.getNumGeometries();
       writer.write(
-          static_cast<uint8_t>(GeometrySerializationType::MULTI_LINE_STRING));
+          static_cast<uint8_t>(common::geospatial::GeometrySerializationType::
+                                   MULTI_LINE_STRING));
     } else {
       numParts = (numPoints > 0) ? 1 : 0;
       writer.write(
-          static_cast<uint8_t>(GeometrySerializationType::LINE_STRING));
+          static_cast<uint8_t>(
+              common::geospatial::GeometrySerializationType::LINE_STRING));
     }
 
-    writer.write(static_cast<int32_t>(EsriShapeType::POLYLINE));
+    writer.write(
+        static_cast<int32_t>(common::geospatial::EsriShapeType::POLYLINE));
 
     writeEnvelope(geometry, writer);
 
@@ -272,12 +267,16 @@ class GeometrySerializer {
 
     if (multiType) {
       writer.write(
-          static_cast<uint8_t>(GeometrySerializationType::MULTI_POLYGON));
+          static_cast<uint8_t>(
+              common::geospatial::GeometrySerializationType::MULTI_POLYGON));
     } else {
-      writer.write(static_cast<uint8_t>(GeometrySerializationType::POLYGON));
+      writer.write(
+          static_cast<uint8_t>(
+              common::geospatial::GeometrySerializationType::POLYGON));
     }
 
-    writer.write(static_cast<int32_t>(EsriShapeType::POLYGON));
+    writer.write(
+        static_cast<int32_t>(common::geospatial::EsriShapeType::POLYGON));
     writeEnvelope(geometry, writer);
 
     writer.write(static_cast<int32_t>(numParts));
@@ -325,7 +324,8 @@ class GeometrySerializer {
       const geos::geom::Geometry& collection,
       VarbinaryWriter<T>& writer) {
     writer.write(
-        static_cast<uint8_t>(GeometrySerializationType::GEOMETRY_COLLECTION));
+        static_cast<uint8_t>(common::geospatial::GeometrySerializationType::
+                                 GEOMETRY_COLLECTION));
 
     for (size_t geometryIndex = 0;
          geometryIndex < collection.getNumGeometries();
@@ -358,6 +358,62 @@ class GeometryDeserializer {
 
   static const std::unique_ptr<geos::geom::Envelope> deserializeEnvelope(
       const StringView& geometry);
+
+  template <typename T>
+  static std::unique_ptr<geos::geom::CoordinateArraySequence>
+  deserializePointsToCoordinate(
+      const exec::ArrayView<true, T>& input,
+      const std::string& functionName,
+      bool forbidDuplicates) {
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        std::make_unique<geos::geom::CoordinateArraySequence>(input.size(), 2);
+
+    double lastX = std::numeric_limits<double>::signaling_NaN();
+    double lastY = std::numeric_limits<double>::signaling_NaN();
+    for (int i = 0; i < input.size(); i++) {
+      if (!input[i].has_value()) {
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Invalid input to {}: input array contains null at index {}.",
+                functionName,
+                i));
+      }
+
+      StringView view = *input[i];
+
+      velox::common::InputByteStream inputStream(view.data());
+      auto geometryType =
+          inputStream.read<common::geospatial::GeometrySerializationType>();
+      if (geometryType !=
+          common::geospatial::GeometrySerializationType::POINT) {
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Non-point geometry in {} input at index {}.",
+                functionName,
+                i));
+      }
+      auto x = inputStream.read<double>();
+      auto y = inputStream.read<double>();
+      if (std::isnan(x) || std::isnan(y)) {
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Empty point in {} input at index {}.", functionName, i));
+      }
+      if (forbidDuplicates && x == lastX && y == lastY) {
+        VELOX_USER_FAIL(
+            fmt::format(
+                "Repeated point sequence in {}: point {},{} at index {}.",
+                functionName,
+                x,
+                y,
+                i));
+      }
+      lastX = x;
+      lastY = y;
+      coords->setAt({x, y}, i);
+    }
+    return coords;
+  }
 
  private:
   static std::unique_ptr<geos::geom::Geometry> readGeometry(

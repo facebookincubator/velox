@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -26,6 +27,7 @@
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/SimpleComparisonMatcher.h"
 
 namespace facebook::velox::functions {
 
@@ -216,9 +218,17 @@ void registerArrayFunctions(const std::string& prefix) {
   registerSparkArrayFunctions(prefix);
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
-      prefix + "array_sort", arraySortSignatures(), makeArraySort);
+      prefix + "array_sort", arraySortSignatures(true), makeArraySortAsc);
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort_desc", arraySortDescSignatures(), makeArraySortDesc);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
+
+  auto checker = std::make_shared<SparkSimpleComparisonChecker>();
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [prefix, checker](const auto& expr) {
+        return rewriteArraySortCall(prefix, expr, checker);
+      });
   exec::registerStatefulVectorFunction(
       prefix + "array_repeat",
       repeatSignatures(),

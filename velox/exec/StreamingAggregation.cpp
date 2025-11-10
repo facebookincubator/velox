@@ -41,6 +41,8 @@ StreamingAggregation::StreamingAggregation(
                         ->queryConfig()
                         .streamingAggregationMinOutputBatchRows())
               : maxOutputBatchSize_},
+      maxOutputBatchBytes_{
+          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes()},
       aggregationNode_{aggregationNode},
       step_{aggregationNode->step()} {
   if (aggregationNode_->ignoreNullKeys()) {
@@ -356,9 +358,16 @@ RowVectorPtr StreamingAggregation::getOutput() {
   initializeNewGroups(numPrevGroups);
   evaluateAggregates();
 
+  const auto estimatedRowBytes = rows_->estimateRowSize();
+  const auto estimatedBatchBytes =
+      estimatedRowBytes.value_or(0) * rows_->numRows();
+
   RowVectorPtr output;
 
-  if ((numPrevGroups != 0) && (numGroups_ > minOutputBatchSize_)) {
+  const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
+  const bool outputDueToBatchBytes =
+      numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
+  if (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes)) {
     size_t numOutputGroups{0};
     // NOTE: we only want to apply the single group output optimization if
     // 'minOutputBatchSize_' is set to one for eagerly streaming output

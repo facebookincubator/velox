@@ -154,6 +154,7 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
       HiveColumnHandle::ColumnType::kRegular,
       HiveColumnHandle::ColumnType::kSynthesized,
       HiveColumnHandle::ColumnType::kRowIndex,
+      HiveColumnHandle::ColumnType::kRowId,
   };
 
   for (auto columnHandleType : columnHandleTypes) {

@@ -846,8 +846,8 @@ class VectorTestBase {
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   velox::test::VectorMaker vectorMaker_{pool_.get()};
-  std::shared_ptr<folly::Executor> executor_{
-      std::make_shared<folly::CPUThreadPoolExecutor>(
+  std::unique_ptr<folly::Executor> executor_{
+      std::make_unique<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(

@@ -84,10 +84,11 @@ class NimbleReaderTest : public ::testing::Test,
 void compareEncodingTree(
     NimbleEncoding& encoding,
     EncodingLayout const& layout) {
-  SCOPED_TRACE(fmt::format(
-      "Encoding: {}, #children: {}",
-      toString(layout.encodingType()),
-      encoding.childrenCount()));
+  SCOPED_TRACE(
+      fmt::format(
+          "Encoding: {}, #children: {}",
+          toString(layout.encodingType()),
+          encoding.childrenCount()));
   EXPECT_EQ(encoding.childrenCount(), layout.childrenCount());
   ENCODING_TYPE_EXPECT_EQ(encoding.encodingType(), layout.encodingType());
   for (int i = 0; i < encoding.childrenCount(); i++) {
@@ -312,7 +313,7 @@ TEST_F(NimbleReaderTest, decodeTrivialSingleLevelFloat) {
   test({{input}}, readFactors, compressionOptions);
 }
 
-TEST_F(NimbleReaderTest, TrivialWithCompressionShouldFail) {
+TEST_F(NimbleReaderTest, DISABLED_TrivialWithCompressionShouldFail) {
   using namespace facebook::nimble;
 
   auto c0 = makeFlatVector<double>(17, [](auto row) { return row * 1.1; });

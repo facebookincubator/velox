@@ -182,11 +182,12 @@ class TimestampColumnReader : public IntegerColumnReader {
       filters.reserve(multiRange->filters().size());
       for (const auto& filter : multiRange->filters()) {
         if (auto* range = dynamic_cast<common::TimestampRange*>(filter.get())) {
-          filters.emplace_back(std::make_unique<ParquetTimestampRange<T>>(
-              range->lower(),
-              range->upper(),
-              range->nullAllowed(),
-              filePrecision_));
+          filters.emplace_back(
+              std::make_unique<ParquetTimestampRange<T>>(
+                  range->lower(),
+                  range->upper(),
+                  range->nullAllowed(),
+                  filePrecision_));
         } else {
           filters.emplace_back(filter->clone(range->nullAllowed()));
         }

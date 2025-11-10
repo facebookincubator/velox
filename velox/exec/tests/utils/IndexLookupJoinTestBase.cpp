@@ -22,8 +22,7 @@ namespace fecebook::velox::exec::test {
 using namespace facebook::velox::test;
 
 namespace {
-std::vector<std::string> appendMatchColumn(
-    const std::vector<std::string> columns) {
+std::vector<std::string> appendMarker(const std::vector<std::string> columns) {
   std::vector<std::string> resultColumns;
   resultColumns.reserve(columns.size() + 1);
   for (const auto& column : columns) {
@@ -117,10 +116,11 @@ std::vector<RowVectorPtr> IndexLookupJoinTestBase::generateProbeInput(
     for (int i = 0; i < numBatches; ++i) {
       std::vector<FlatVectorPtr<int64_t>> probeKeyVectors;
       for (int j = 0; j < probeJoinKeys.size(); ++j) {
-        probeKeyVectors.push_back(BaseVector::create<FlatVector<int64_t>>(
-            probeType_->findChild(probeJoinKeys[j]),
-            probeInputs[i]->size(),
-            pool.get()));
+        probeKeyVectors.push_back(
+            BaseVector::create<FlatVector<int64_t>>(
+                probeType_->findChild(probeJoinKeys[j]),
+                probeInputs[i]->size(),
+                pool.get()));
       }
       for (int row = 0; row < probeInputs[i]->size();
            row += numDuplicateProbeRows) {
@@ -259,7 +259,7 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const std::vector<std::string>& joinConditions,
-    bool includeMatchColumn,
+    bool hasMarker,
     JoinType joinType,
     const std::vector<std::string>& outputColumns,
     PlanNodeId& joinNodeId) {
@@ -267,14 +267,15 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
   VELOX_CHECK_LE(leftKeys.size(), keyType_->size());
   return PlanBuilder(planNodeIdGenerator, pool_.get())
       .values(probeVectors)
-      .indexLookupJoin(
-          leftKeys,
-          rightKeys,
-          indexScanNode,
-          joinConditions,
-          includeMatchColumn,
-          includeMatchColumn ? appendMatchColumn(outputColumns) : outputColumns,
-          joinType)
+      .startIndexLookupJoin()
+      .leftKeys(leftKeys)
+      .rightKeys(rightKeys)
+      .indexSource(indexScanNode)
+      .joinConditions(joinConditions)
+      .hasMarker(hasMarker)
+      .outputLayout(hasMarker ? appendMarker(outputColumns) : outputColumns)
+      .joinType(joinType)
+      .endIndexLookupJoin()
       .capturePlanNodeId(joinNodeId)
       .planNode();
 }
@@ -285,7 +286,8 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const std::vector<std::string>& joinConditions,
-    bool includeMatchColumn,
+    const std::string& filter,
+    bool hasMarker,
     JoinType joinType,
     const std::vector<std::string>& outputColumns) {
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
@@ -295,14 +297,16 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
       .outputType(probeType_)
       .endTableScan()
       .captureScanNodeId(probeScanNodeId_)
-      .indexLookupJoin(
-          leftKeys,
-          rightKeys,
-          indexScanNode,
-          joinConditions,
-          includeMatchColumn,
-          includeMatchColumn ? appendMatchColumn(outputColumns) : outputColumns,
-          joinType)
+      .startIndexLookupJoin()
+      .leftKeys(leftKeys)
+      .rightKeys(rightKeys)
+      .indexSource(indexScanNode)
+      .joinConditions(joinConditions)
+      .filter(filter)
+      .hasMarker(hasMarker)
+      .outputLayout(hasMarker ? appendMarker(outputColumns) : outputColumns)
+      .joinType(joinType)
+      .endIndexLookupJoin()
       .capturePlanNodeId(joinNodeId_)
       .planNode();
 }

@@ -56,9 +56,36 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest
     GTest::gtest_main
   )
+
+  add_executable(
+    velox_hive_iceberg_insert_test
+    IcebergInsertTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+    PartitionSpecTest.cpp
+  )
+
+  add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_insert_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_fuzzer
+    GTest::gtest
+    GTest::gtest_main
+  )
+
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+    target_link_libraries(
+      velox_hive_iceberg_insert_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
   endif()
 endif()

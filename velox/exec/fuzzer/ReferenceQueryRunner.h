@@ -55,7 +55,8 @@ class ReferenceQueryRunner {
   enum class RunnerType {
     kPrestoQueryRunner,
     kDuckQueryRunner,
-    kSparkQueryRunner
+    kSparkQueryRunner,
+    kVeloxQueryRunner
   };
 
   // @param aggregatePool Used to allocate memory needed for vectors produced

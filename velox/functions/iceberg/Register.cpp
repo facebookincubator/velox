@@ -16,11 +16,15 @@
 
 #include "velox/functions/iceberg/Register.h"
 #include "velox/functions/iceberg/BucketFunction.h"
+#include "velox/functions/iceberg/DateTimeFunctions.h"
+#include "velox/functions/iceberg/Truncate.h"
 
 namespace facebook::velox::functions::iceberg {
 
 void registerFunctions(const std::string& prefix) {
   registerBucketFunctions(prefix);
+  registerTruncateFunctions(prefix);
+  registerDateTimeFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions::iceberg

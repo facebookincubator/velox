@@ -892,23 +892,29 @@ TEST(CorruptStatistics, Basics) {
   schema::NodePtr node;
   std::vector<schema::NodePtr> fields;
   // Test Physical Types
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col1", Repetition::OPTIONAL, Type::INT32, ConvertedType::NONE));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col2", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::NONE));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col1", Repetition::OPTIONAL, Type::INT32, ConvertedType::NONE));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col2", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::NONE));
   // Test Logical Types
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col3", Repetition::OPTIONAL, Type::INT32, ConvertedType::DATE));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col4", Repetition::OPTIONAL, Type::INT32, ConvertedType::UINT_32));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col5",
-      Repetition::OPTIONAL,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::INTERVAL,
-      12));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col6", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::UTF8));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col3", Repetition::OPTIONAL, Type::INT32, ConvertedType::DATE));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col4", Repetition::OPTIONAL, Type::INT32, ConvertedType::UINT_32));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col5",
+          Repetition::OPTIONAL,
+          Type::FIXED_LEN_BYTE_ARRAY,
+          ConvertedType::INTERVAL,
+          12));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col6", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::UTF8));
   node = schema::GroupNode::Make("schema", Repetition::REQUIRED, fields);
   schema.Init(node);
 
@@ -932,23 +938,29 @@ TEST(CorrectStatistics, Basics) {
   schema::NodePtr node;
   std::vector<schema::NodePtr> fields;
   // Test Physical Types
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col1", Repetition::OPTIONAL, Type::INT32, ConvertedType::NONE));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col2", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::NONE));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col1", Repetition::OPTIONAL, Type::INT32, ConvertedType::NONE));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col2", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::NONE));
   // Test Logical Types
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col3", Repetition::OPTIONAL, Type::INT32, ConvertedType::DATE));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col4", Repetition::OPTIONAL, Type::INT32, ConvertedType::UINT_32));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col5",
-      Repetition::OPTIONAL,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::INTERVAL,
-      12));
-  fields.push_back(schema::PrimitiveNode::Make(
-      "col6", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::UTF8));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col3", Repetition::OPTIONAL, Type::INT32, ConvertedType::DATE));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col4", Repetition::OPTIONAL, Type::INT32, ConvertedType::UINT_32));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col5",
+          Repetition::OPTIONAL,
+          Type::FIXED_LEN_BYTE_ARRAY,
+          ConvertedType::INTERVAL,
+          12));
+  fields.push_back(
+      schema::PrimitiveNode::Make(
+          "col6", Repetition::OPTIONAL, Type::BYTE_ARRAY, ConvertedType::UTF8));
   node = schema::GroupNode::Make("schema", Repetition::REQUIRED, fields);
   schema.Init(node);
 
@@ -973,8 +985,12 @@ class TestStatisticsSortOrder : public ::testing::Test {
   using c_type = typename TestType::c_type;
 
   void AddNodes(std::string name) {
-    fields_.push_back(schema::PrimitiveNode::Make(
-        name, Repetition::REQUIRED, TestType::type_num, ConvertedType::NONE));
+    fields_.push_back(
+        schema::PrimitiveNode::Make(
+            name,
+            Repetition::REQUIRED,
+            TestType::type_num,
+            ConvertedType::NONE));
   }
 
   void SetUpSchema() {
@@ -1053,11 +1069,13 @@ using CompareTestTypes = ::testing::
 template <>
 void TestStatisticsSortOrder<Int32Type>::AddNodes(std::string name) {
   // UINT_32 logical type to set Unsigned Statistics
-  fields_.push_back(schema::PrimitiveNode::Make(
-      name, Repetition::REQUIRED, Type::INT32, ConvertedType::UINT_32));
+  fields_.push_back(
+      schema::PrimitiveNode::Make(
+          name, Repetition::REQUIRED, Type::INT32, ConvertedType::UINT_32));
   // INT_32 logical type to set Signed Statistics
-  fields_.push_back(schema::PrimitiveNode::Make(
-      name, Repetition::REQUIRED, Type::INT32, ConvertedType::INT_32));
+  fields_.push_back(
+      schema::PrimitiveNode::Make(
+          name, Repetition::REQUIRED, Type::INT32, ConvertedType::INT_32));
 }
 
 template <>
@@ -1068,28 +1086,34 @@ void TestStatisticsSortOrder<Int32Type>::SetValues() {
 
   // Write UINT32 min/max values
   stats_[0]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(&values_[5]), sizeof(c_type)))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(&values_[4]), sizeof(c_type)));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(&values_[5]), sizeof(c_type)))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(&values_[4]), sizeof(c_type)));
 
   // Write INT32 min/max values
   stats_[1]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
 }
 
 // TYPE::INT64
 template <>
 void TestStatisticsSortOrder<Int64Type>::AddNodes(std::string name) {
   // UINT_64 logical type to set Unsigned Statistics
-  fields_.push_back(schema::PrimitiveNode::Make(
-      name, Repetition::REQUIRED, Type::INT64, ConvertedType::UINT_64));
+  fields_.push_back(
+      schema::PrimitiveNode::Make(
+          name, Repetition::REQUIRED, Type::INT64, ConvertedType::UINT_64));
   // INT_64 logical type to set Signed Statistics
-  fields_.push_back(schema::PrimitiveNode::Make(
-      name, Repetition::REQUIRED, Type::INT64, ConvertedType::INT_64));
+  fields_.push_back(
+      schema::PrimitiveNode::Make(
+          name, Repetition::REQUIRED, Type::INT64, ConvertedType::INT_64));
 }
 
 template <>
@@ -1100,17 +1124,21 @@ void TestStatisticsSortOrder<Int64Type>::SetValues() {
 
   // Write UINT64 min/max values
   stats_[0]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(&values_[5]), sizeof(c_type)))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(&values_[4]), sizeof(c_type)));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(&values_[5]), sizeof(c_type)))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(&values_[4]), sizeof(c_type)));
 
   // Write INT64 min/max values
   stats_[1]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
 }
 
 // TYPE::FLOAT
@@ -1123,10 +1151,12 @@ void TestStatisticsSortOrder<FloatType>::SetValues() {
 
   // Write Float min/max values
   stats_[0]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
 }
 
 // TYPE::DOUBLE
@@ -1139,18 +1169,21 @@ void TestStatisticsSortOrder<DoubleType>::SetValues() {
 
   // Write Double min/max values
   stats_[0]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(&values_[0]), sizeof(c_type)))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(&values_[9]), sizeof(c_type)));
 }
 
 // TYPE::ByteArray
 template <>
 void TestStatisticsSortOrder<ByteArrayType>::AddNodes(std::string name) {
   // UTF8 logical type to set Unsigned Statistics
-  fields_.push_back(schema::PrimitiveNode::Make(
-      name, Repetition::REQUIRED, Type::BYTE_ARRAY, ConvertedType::UTF8));
+  fields_.push_back(
+      schema::PrimitiveNode::Make(
+          name, Repetition::REQUIRED, Type::BYTE_ARRAY, ConvertedType::UTF8));
 }
 
 template <>
@@ -1180,22 +1213,26 @@ void TestStatisticsSortOrder<ByteArrayType>::SetValues() {
 
   // Write String min/max values
   stats_[0]
-      .set_min(std::string(
-          reinterpret_cast<const char*>(vals[2].c_str()), vals[2].length()))
-      .set_max(std::string(
-          reinterpret_cast<const char*>(vals[9].c_str()), vals[9].length()));
+      .set_min(
+          std::string(
+              reinterpret_cast<const char*>(vals[2].c_str()), vals[2].length()))
+      .set_max(
+          std::string(
+              reinterpret_cast<const char*>(vals[9].c_str()),
+              vals[9].length()));
 }
 
 // TYPE::FLBAArray
 template <>
 void TestStatisticsSortOrder<FLBAType>::AddNodes(std::string name) {
   // FLBA has only Unsigned Statistics
-  fields_.push_back(schema::PrimitiveNode::Make(
-      name,
-      Repetition::REQUIRED,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::NONE,
-      FLBA_LENGTH));
+  fields_.push_back(
+      schema::PrimitiveNode::Make(
+          name,
+          Repetition::REQUIRED,
+          Type::FIXED_LEN_BYTE_ARRAY,
+          ConvertedType::NONE,
+          FLBA_LENGTH));
 }
 
 template <>
@@ -1274,14 +1311,15 @@ TEST(TestByteArrayStatisticsFromArrow, LargeStringType) {
 using TestStatisticsSortOrderFLBA = TestStatisticsSortOrder<FLBAType>;
 
 TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
-  this->fields_.push_back(schema::PrimitiveNode::Make(
-      "Column 0",
-      Repetition::REQUIRED,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::DECIMAL,
-      FLBA_LENGTH,
-      12,
-      2));
+  this->fields_.push_back(
+      schema::PrimitiveNode::Make(
+          "Column 0",
+          Repetition::REQUIRED,
+          Type::FIXED_LEN_BYTE_ARRAY,
+          ConvertedType::DECIMAL,
+          FLBA_LENGTH,
+          12,
+          2));
   this->SetUpSchema();
   this->WriteParquet();
 

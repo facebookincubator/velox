@@ -13,15 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sstream>
+
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/common/time/Timer.h"
 #include "velox/type/Type.h"
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
 
 TEST(StringView, basic) {
   std::string text = "We are stardust, we are golden...";
@@ -181,6 +185,27 @@ int32_t linearSearchSimple(
   return -1;
 }
 
+TEST(StringView, makeInline) {
+  const std::string_view shortString = "hola";
+
+  // Test makeInline using std::string and std::string_view.
+  auto sv1 = StringView::makeInline(shortString);
+  EXPECT_TRUE(sv1.isInline());
+  EXPECT_EQ(sv1, StringView{shortString});
+
+  auto sv2 = StringView::makeInline(std::string(shortString));
+  EXPECT_TRUE(sv2.isInline());
+  EXPECT_EQ(sv2, StringView{shortString});
+
+// Only checks and throws in debug mode.
+#ifndef NDEBUG
+  VELOX_ASSERT_THROW(
+      StringView::makeInline(
+          std::string_view("slightly longer non-inlinable string")),
+      "StringView::makeInline() requires an input string that fits inline");
+#endif
+}
+
 TEST(StringView, linearSearch) {
   constexpr int32_t kSize = 1003;
   std::vector<raw_vector<char>> data(kSize);
@@ -285,3 +310,6 @@ TEST(StringView, linearSearch) {
             << simdIndicesUsec << " scalar: " << loopUsec << " / "
             << loopIndicesUsec;
 }
+
+} // namespace
+} // namespace facebook::velox

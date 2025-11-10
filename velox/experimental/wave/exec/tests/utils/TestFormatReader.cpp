@@ -289,15 +289,17 @@ class TestStructColumnReader : public StructColumnReader {
       auto childParams = TestFormatParams(
           params.pool(), params.runtimeStatistics(), params.stripe());
 
-      path.push_back(std::make_unique<common::Subfield::NestedField>(
-          childSpec->fieldName()));
-      addChild(TestFormatReader::build(
-          childRequestedType,
-          childFileType,
-          params,
-          *childSpec,
-          path,
-          defines));
+      path.push_back(
+          std::make_unique<common::Subfield::NestedField>(
+              childSpec->fieldName()));
+      addChild(
+          TestFormatReader::build(
+              childRequestedType,
+              childFileType,
+              params,
+              *childSpec,
+              path,
+              defines));
       path.pop_back();
       childSpec->setSubscript(children_.size() - 1);
     }

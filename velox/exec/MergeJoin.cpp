@@ -996,18 +996,22 @@ RowVectorPtr MergeJoin::doGetOutput() {
           leftEndRow < input_->size(),
           std::nullopt};
 
-      vector_size_t endRightRow = rightRowIndex_ + 1;
-      while (endRightRow < rightInput_->size() &&
-             compareRight(endRightRow) == 0) {
-        ++endRightRow;
+      vector_size_t rightEndRow = rightRowIndex_ + 1;
+      while (rightEndRow < rightInput_->size() &&
+             compareRight(rightEndRow) == 0) {
+        ++rightEndRow;
       }
 
       rightMatch_ = Match{
           {rightInput_},
           rightRowIndex_,
-          endRightRow,
-          endRightRow < rightInput_->size(),
+          rightEndRow,
+          rightEndRow < rightInput_->size(),
           std::nullopt};
+
+      // Track matched rows for this key match.
+      matchedLeftRows_ += leftEndRow - leftMatch_->startRowIndex;
+      matchedRightRows_ += rightEndRow - rightMatch_->startRowIndex;
 
       if (!leftMatch_->complete || !rightMatch_->complete) {
         if (!leftMatch_->complete) {
@@ -1024,10 +1028,10 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
       leftRowIndex_ = leftEndRow;
       if (isFullJoin(joinType_) || isRightJoin(joinType_)) {
-        rightRowIndex_ = endRightRow;
+        rightRowIndex_ = rightEndRow;
       } else {
         rightRowIndex_ =
-            firstNonNull(rightInput_, rightKeyChannels_, endRightRow);
+            firstNonNull(rightInput_, rightKeyChannels_, rightEndRow);
       }
 
       if (rightBatchFinished()) {
@@ -1464,6 +1468,14 @@ bool MergeJoin::isFinished() {
 }
 
 void MergeJoin::close() {
+  // Report match ratio statistics.
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addRuntimeStat(
+        "matchedLeftRows", RuntimeCounter(matchedLeftRows_));
+    lockedStats->addRuntimeStat(
+        "matchedRightRows", RuntimeCounter(matchedRightRows_));
+  }
   if (rightSource_) {
     rightSource_->close();
   }

@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
@@ -101,7 +103,11 @@ void gatherCopy(
     const std::vector<const RowVector*>& sources,
     const std::vector<vector_size_t>& sourceIndices,
     column_index_t sourceChannel) {
-  if (target->isScalar()) {
+  const bool flattenSources =
+      std::all_of(sources.begin(), sources.end(), [](const auto& source) {
+        return source->isFlatEncoding();
+      });
+  if (target->isScalar() && flattenSources) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         scalarGatherCopy,
         target->type()->kind(),
@@ -569,4 +575,20 @@ std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
   }
   return nullptr;
 }
+
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    common::CompressionKind compressionKind,
+    VectorSerde::Kind kind,
+    std::optional<float> minCompressionRatio) {
+  std::unique_ptr<VectorSerde::Options> options =
+      kind == VectorSerde::Kind::kPresto
+      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
+      : std::make_unique<VectorSerde::Options>();
+  options->compressionKind = compressionKind;
+  if (minCompressionRatio.has_value()) {
+    options->minCompressionRatio = minCompressionRatio.value();
+  }
+  return options;
+}
+
 } // namespace facebook::velox::exec

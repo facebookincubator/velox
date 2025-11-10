@@ -29,11 +29,12 @@ namespace facebook::velox::tool::trace {
 class OperatorReplayerBase {
  public:
   OperatorReplayerBase(
-      std::string traceDir,
-      std::string queryId,
-      std::string taskId,
-      std::string nodeId,
-      std::string nodeName,
+      const std::string& traceDir,
+      const std::string& queryId,
+      const std::string& taskId,
+      const std::string& nodeId,
+      const std::string& nodeName,
+      const std::string& spillBaseDir,
       const std::string& driverIds,
       uint64_t queryCapacity,
       folly::Executor* executor);
@@ -63,6 +64,7 @@ class OperatorReplayerBase {
   const std::string nodeName_;
   const std::string taskTraceDir_;
   const std::string nodeTraceDir_;
+  const std::string spillBaseDir_;
   const std::shared_ptr<filesystems::FileSystem> fs_;
   const std::vector<uint32_t> pipelineIds_;
   const std::vector<uint32_t> driverIds_;

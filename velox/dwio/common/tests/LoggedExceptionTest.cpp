@@ -34,11 +34,12 @@ void testTraceCollectionSwitchControl(bool enabled) {
   try {
     throw LoggedException("Test error message");
   } catch (VeloxException& e) {
-    SCOPED_TRACE(fmt::format(
-        "enabled: {}, user flag: {}, sys flag: {}",
-        enabled,
-        FLAGS_velox_exception_user_stacktrace_enabled,
-        FLAGS_velox_exception_system_stacktrace_enabled));
+    SCOPED_TRACE(
+        fmt::format(
+            "enabled: {}, user flag: {}, sys flag: {}",
+            enabled,
+            FLAGS_velox_exception_user_stacktrace_enabled,
+            FLAGS_velox_exception_system_stacktrace_enabled));
     ASSERT_TRUE(e.exceptionType() == VeloxException::Type::kSystem);
     ASSERT_EQ(enabled, e.stackTrace() != nullptr);
   }

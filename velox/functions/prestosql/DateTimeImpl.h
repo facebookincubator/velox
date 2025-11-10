@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Doubles.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeUtil.h"
@@ -61,9 +62,7 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
       seconds, milliseconds * Timestamp::kNanosecondsInMillisecond);
 }
 
-FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
-    double unixtime,
-    int16_t timeZoneId) {
+FOLLY_ALWAYS_INLINE int64_t fromUnixtime(double unixtime, int16_t timeZoneId) {
   if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
     return pack(0, timeZoneId);
   }
@@ -123,11 +122,12 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
       // results if we use local time.
       const tz::TimeZone* timeZone =
           tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
-      auto originalTimestamp =
-          Timestamp::fromMillis(timeZone
-                                    ->to_local(std::chrono::milliseconds(
-                                        unpackMillisUtc(timestampWithTimezone)))
-                                    .count());
+      auto originalTimestamp = Timestamp::fromMillis(
+          timeZone
+              ->to_local(
+                  std::chrono::milliseconds(
+                      unpackMillisUtc(timestampWithTimezone)))
+              .count());
       auto updatedTimeStamp =
           addToTimestamp(originalTimestamp, unit, (int32_t)value);
       updatedTimeStamp = Timestamp(
@@ -172,15 +172,17 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     // doesn't affect time units less than a day, and will produce incorrect
     // results if we use local time.
     const tz::TimeZone* timeZone = tz::locateZone(fromTimeZoneId);
-    fromTimestamp = Timestamp::fromMillis(
-        timeZone
-            ->to_local(std::chrono::milliseconds(
-                unpackMillisUtc(fromTimestampWithTimeZone)))
-            .count());
+    fromTimestamp =
+        Timestamp::fromMillis(timeZone
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          fromTimestampWithTimeZone)))
+                                  .count());
     toTimestamp =
         Timestamp::fromMillis(timeZone
-                                  ->to_local(std::chrono::milliseconds(
-                                      unpackMillisUtc(toTimestampWithTimeZone)))
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          toTimestampWithTimeZone)))
                                   .count());
   }
 
@@ -200,6 +202,71 @@ int64_t diffDate(
       // prevent overflow
       Timestamp((int64_t)fromDate * util::kSecsPerDay, 0),
       Timestamp((int64_t)toDate * util::kSecsPerDay, 0));
+}
+
+FOLLY_ALWAYS_INLINE
+int64_t diffTime(
+    const DateTimeUnit unit,
+    const int64_t fromTime,
+    const int64_t toTime) {
+  // Validate time inputs are in valid range [0, 86400000)
+  VELOX_USER_CHECK(
+      fromTime >= 0 && fromTime < kMillisInDay,
+      "from TIME value {} is out of range [0, 86400000)",
+      fromTime);
+  VELOX_USER_CHECK(
+      toTime >= 0 && toTime < kMillisInDay,
+      "to TIME value {} is out of range [0, 86400000)",
+      toTime);
+
+  if (fromTime == toTime) {
+    return 0;
+  }
+
+  // Use std::chrono for safe duration arithmetic
+  const auto fromDuration = std::chrono::milliseconds(fromTime);
+  const auto toDuration = std::chrono::milliseconds(toTime);
+  const auto diff = toDuration - fromDuration;
+
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      return diff.count();
+    case DateTimeUnit::kSecond:
+      return std::chrono::duration_cast<std::chrono::seconds>(diff).count();
+    case DateTimeUnit::kMinute:
+      return std::chrono::duration_cast<std::chrono::minutes>(diff).count();
+    case DateTimeUnit::kHour:
+      return std::chrono::duration_cast<std::chrono::hours>(diff).count();
+    default:
+      VELOX_USER_FAIL("Unsupported time unit for TIME type");
+  }
+}
+
+FOLLY_ALWAYS_INLINE int64_t
+addToTime(const DateTimeUnit unit, const int32_t value, const int64_t time) {
+  if (value == 0) {
+    return time;
+  }
+
+  int64_t valueInMillis;
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      valueInMillis = value;
+      break;
+    case DateTimeUnit::kSecond:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInSecond);
+      break;
+    case DateTimeUnit::kMinute:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInMinute);
+      break;
+    case DateTimeUnit::kHour:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInHour);
+      break;
+    default:
+      VELOX_USER_FAIL("Unsupported time unit for TIME type");
+  }
+
+  return addToTime(time, valueInMillis);
 }
 
 FOLLY_ALWAYS_INLINE int64_t

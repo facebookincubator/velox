@@ -200,8 +200,9 @@ class MapAggregateBase : public exec::Aggregate {
   DecodedVector decodedMaps_;
 };
 
-template <template <typename K, typename Accumulator = MapAccumulator<K>>
-          class TAggregate>
+template <template <
+    typename K,
+    typename Accumulator = MapAccumulator<K>> class TAggregate>
 std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
   auto typeKind = resultType->childAt(0)->kind();
   switch (typeKind) {
@@ -232,7 +233,7 @@ std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
     case TypeKind::UNKNOWN:
       return std::make_unique<TAggregate<int32_t>>(resultType);
     default:
-      VELOX_UNREACHABLE("Unexpected type {}", mapTypeKindToName(typeKind));
+      VELOX_UNREACHABLE("Unexpected type {}", TypeKindName::toName(typeKind));
   }
 }
 

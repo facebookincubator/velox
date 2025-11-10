@@ -125,6 +125,8 @@ function install_boost {
 }
 
 function install_protobuf {
+  install_abseil
+
   wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v"${PROTOBUF_VERSION}"/protobuf-all-"${PROTOBUF_VERSION}".tar.gz protobuf
   cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
 }
@@ -139,9 +141,29 @@ function install_ranges_v3 {
   cmake_install_dir ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
 }
 
+function install_abseil {
+  wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
+  local OS
+  OS=$(uname)
+  if [[ $OS == "Darwin" ]]; then
+    ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+    (
+      cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
+      git apply $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch
+    )
+  fi
+  cmake_install_dir abseil-cpp \
+    -DABSL_BUILD_TESTING=OFF \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DABSL_PROPAGATE_CXX_STD=ON \
+    -DABSL_ENABLE_INSTALL=ON
+}
+
 function install_re2 {
+  install_abseil
+
   wget_and_untar https://github.com/google/re2/archive/refs/tags/"${RE2_VERSION}".tar.gz re2
-  cmake_install_dir re2 -DRE2_BUILD_TESTING=OFF
+  cmake_install_dir re2 -DRE2_BUILD_TESTING=OFF -Dabsl_DIR="${INSTALL_PREFIX}/lib/cmake/absl"
 }
 
 function install_glog {
@@ -277,7 +299,7 @@ function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
 
   github_checkout $AWS_REPO_NAME "$AWS_SDK_VERSION" --depth 1 --recurse-submodules
-  cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  cmake_install_dir aws-sdk-cpp -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
 }
 
 function install_minio {
@@ -303,22 +325,17 @@ function install_gcs-sdk-cpp {
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
   # abseil-cpp
-  github_checkout abseil/abseil-cpp "${ABSEIL_VERSION}" --depth 1
-  cmake_install \
-    -DABSL_BUILD_TESTING=OFF \
-    -DCMAKE_CXX_STANDARD=17 \
-    -DABSL_PROPAGATE_CXX_STD=ON \
-    -DABSL_ENABLE_INSTALL=ON
+  install_abseil
 
   # protobuf
   github_checkout protocolbuffers/protobuf v"${PROTOBUF_VERSION}" --depth 1
-  cmake_install \
+  cmake_install_dir protobuf \
     -Dprotobuf_BUILD_TESTS=OFF \
     -Dprotobuf_ABSL_PROVIDER=package
 
   # grpc
   github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
-  cmake_install \
+  cmake_install_dir grpc \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_ABSL_PROVIDER=package \
     -DgRPC_ZLIB_PROVIDER=package \
@@ -330,19 +347,19 @@ function install_gcs-sdk-cpp {
 
   # crc32
   github_checkout google/crc32c "${CRC32_VERSION}" --depth 1
-  cmake_install \
+  cmake_install_dir crc32c \
     -DCRC32C_BUILD_TESTS=OFF \
     -DCRC32C_BUILD_BENCHMARKS=OFF \
     -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
   github_checkout nlohmann/json "${NLOHMAN_JSON_VERSION}" --depth 1
-  cmake_install \
+  cmake_install_dir json \
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
   github_checkout googleapis/google-cloud-cpp "${GOOGLE_CLOUD_CPP_VERSION}" --depth 1
-  cmake_install \
+  cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
 }
@@ -353,7 +370,8 @@ function install_azure-storage-sdk-cpp {
   export AZURE_SDK_DISABLE_AUTO_VCPKG=ON
   vcpkg_commit_id=7a6f366cefd27210f6a8309aed10c31104436509
   github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_"${AZURE_SDK_VERSION}"
-  sed -i "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake
+  pushd azure-sdk-for-cpp || exit
+  sed -i='' "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake
 
   azure_core_dir="sdk/core/azure-core"
   if ! grep -q "baseline" $azure_core_dir/vcpkg.json; then
@@ -362,8 +380,8 @@ function install_azure-storage-sdk-cpp {
     if [[ $openssl_version == 1.1.1* ]]; then
       openssl_version="1.1.1n"
     fi
-    sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
-    sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
+    sed -i='' "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
+    sed -i='' "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
   fi
   (
     cd $azure_core_dir || exit
@@ -389,11 +407,12 @@ function install_azure-storage-sdk-cpp {
     cd sdk/storage/azure-storage-files-datalake || exit
     cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
   )
+  popd || exit
 }
 
 function install_hdfs_deps {
   # Dependencies for Hadoop testing
-  wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
+  wget_and_untar https://dlcdn.apache.org/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
   wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
 }

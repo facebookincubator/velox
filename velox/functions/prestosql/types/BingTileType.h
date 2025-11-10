@@ -64,11 +64,6 @@ class BingTileType final : public BigintType {
     return "BINGTILE";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
-  }
-
   std::string toString() const override {
     return name();
   }

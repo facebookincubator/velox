@@ -19,10 +19,7 @@
 #include <folly/Conv.h>
 #include <random>
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class RandGen {
  public:
@@ -68,7 +65,4 @@ class RandGen {
   std::uniform_int_distribution<int32_t> dist_;
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

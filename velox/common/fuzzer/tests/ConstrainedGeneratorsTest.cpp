@@ -405,9 +405,10 @@ TEST_F(ConstrainedGeneratorsTest, jsonPath) {
     const auto jsonPath = jsonPathGenerator->generate();
     if (jsonPath.hasValue()) {
       if (json.hasValue()) {
-        EXPECT_NO_THROW(functions::jsonExtract(
-            json.value<TypeKind::VARCHAR>(),
-            jsonPath.value<TypeKind::VARCHAR>()));
+        EXPECT_NO_THROW(
+            functions::jsonExtract(
+                json.value<TypeKind::VARCHAR>(),
+                jsonPath.value<TypeKind::VARCHAR>()));
       }
     } else {
       hasNull = true;

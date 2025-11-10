@@ -32,7 +32,9 @@ class DictionaryVector : public SimpleVector<T> {
   DictionaryVector(const DictionaryVector&) = delete;
   DictionaryVector& operator=(const DictionaryVector&) = delete;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   static constexpr bool can_simd = std::is_same_v<T, int64_t>;
+#endif
 
   // Creates dictionary vector using base vector (dictionaryValues) and a set
   // of indices (dictionaryIndexArray).
@@ -108,6 +110,7 @@ class DictionaryVector : public SimpleVector<T> {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /**
    * Loads a SIMD vector of data at the virtual byteOffset given
    * Note this method is implemented on each vector type, but is intentionally
@@ -117,6 +120,7 @@ class DictionaryVector : public SimpleVector<T> {
    * @return the vector of values starting at the given index
    */
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+#endif
 
   inline const BufferPtr& indices() const {
     return indices_;
@@ -248,6 +252,15 @@ class DictionaryVector : public SimpleVector<T> {
         SimpleVector<T>::isSorted_,
         BaseVector::representedByteCount_,
         BaseVector::storageByteCount_);
+  }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    dictionaryValues_->transferOrCopyTo(pool);
+    if (!indices_->transferTo(pool)) {
+      indices_ = AlignedBuffer::copy<vector_size_t>(indices_, pool);
+      rawIndices_ = indices_->as<vector_size_t>();
+    }
   }
 
  private:

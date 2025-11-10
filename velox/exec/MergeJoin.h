@@ -632,5 +632,11 @@ class MergeJoin : public Operator {
 
   bool leftHasDrained_{false};
   bool rightHasDrained_{false};
+
+  // Stats for tracking matched rows from the left side
+  uint64_t matchedLeftRows_{0};
+
+  // Stats for tracking matched rows from the right side
+  uint64_t matchedRightRows_{0};
 };
 } // namespace facebook::velox::exec

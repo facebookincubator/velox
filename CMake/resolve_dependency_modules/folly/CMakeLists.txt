@@ -14,8 +14,8 @@
 project(Folly)
 cmake_minimum_required(VERSION 3.28)
 
-velox_set_source(fastfloat)
-velox_resolve_dependency(fastfloat CONFIG REQUIRED)
+velox_set_source(FastFloat)
+velox_resolve_dependency(FastFloat CONFIG REQUIRED)
 
 set(VELOX_FOLLY_BUILD_VERSION v2025.04.28.00)
 set(

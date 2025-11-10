@@ -49,42 +49,47 @@ exec::AggregateRegistrationResult registerApproxDistinct(
             "date",
             "unknown"};
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(returnType)
-                             .intermediateType("varbinary")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(returnType)
+            .intermediateType("varbinary")
+            .argumentType(inputType)
+            .build());
 
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(returnType)
-                             .intermediateType("varbinary")
-                             .argumentType(inputType)
-                             .argumentType("double")
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(returnType)
+            .intermediateType("varbinary")
+            .argumentType(inputType)
+            .argumentType("double")
+            .build());
   }
   if (!hllAsFinalResult) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("bigint")
-                             .intermediateType("tinyint")
-                             .argumentType("boolean")
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("bigint")
+            .intermediateType("tinyint")
+            .argumentType("boolean")
+            .build());
   }
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .returnType(returnType)
-                           .intermediateType("varbinary")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .returnType(returnType)
-                           .intermediateType("varbinary")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .argumentType("double")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType(returnType)
+          .intermediateType("varbinary")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType(returnType)
+          .intermediateType("varbinary")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("double")
+          .build());
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),

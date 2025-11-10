@@ -65,10 +65,8 @@ core::PlanNodePtr FilterProjectReplayer::createPlanNode(
 bool FilterProjectReplayer::isFilterProject(
     const core::PlanNode* filterNode) const {
   const auto* projectNode =
-      dynamic_cast<const core::ProjectNode*>(core::PlanNode::findFirstNode(
-          planFragment_.get(), [this](const core::PlanNode* node) {
-            return node->id() == std::to_string(std::stoull(nodeId_) + 1);
-          }));
+      dynamic_cast<const core::ProjectNode*>(core::PlanNode::findNodeById(
+          planFragment_.get(), std::to_string(std::stoull(nodeId_) + 1)));
   return projectNode != nullptr && projectNode->name() == "Project" &&
       projectNode->sources().size() == 1 &&
       projectNode->sources().front()->id() == nodeId_;

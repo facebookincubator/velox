@@ -24,6 +24,9 @@
 
 using facebook::velox::common::InputByteStream;
 
+using facebook::velox::common::geospatial::EsriShapeType;
+using facebook::velox::common::geospatial::GeometrySerializationType;
+
 namespace facebook::velox::functions::geospatial {
 std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readGeometry(
     velox::common::InputByteStream& stream,
@@ -174,8 +177,9 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolyline(
   std::vector<std::unique_ptr<geos::geom::LineString>> lineStrings;
   lineStrings.reserve(partCount);
   for (size_t i = 0; i < partCount; ++i) {
-    lineStrings.push_back(getGeometryFactory()->createLineString(
-        readCoordinates(input, partLengths[i])));
+    lineStrings.push_back(
+        getGeometryFactory()->createLineString(
+            readCoordinates(input, partLengths[i])));
   }
 
   if (multiType) {
@@ -224,15 +228,28 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
 
   for (size_t i = 0; i < partCount; i++) {
     auto coordinates = readCoordinates(input, partLengths[i]);
+    bool shouldCreateNewShell = true;
 
     if (isClockwise(coordinates, 0, coordinates->size())) {
-      // next polygon has started
       if (shell) {
-        polygons.push_back(getGeometryFactory()->createPolygon(
-            std::move(shell), std::move(holes)));
-        holes.clear();
+        // next polygon has started
+        if (FOLLY_LIKELY(multiType)) {
+          polygons.push_back(
+              getGeometryFactory()->createPolygon(
+                  std::move(shell), std::move(holes)));
+          holes.clear();
+        } else {
+          // If this is not a MultiPolygon, we only have one shell so this
+          // CoordinateSequence represents a malformed (clockwise) interior
+          // ring.
+          holes.push_back(
+              getGeometryFactory()->createLinearRing(std::move(coordinates)));
+          shouldCreateNewShell = false;
+        }
       }
-      shell = getGeometryFactory()->createLinearRing(std::move(coordinates));
+      if (FOLLY_LIKELY(shouldCreateNewShell)) {
+        shell = getGeometryFactory()->createLinearRing(std::move(coordinates));
+      }
     } else {
       holes.push_back(
           getGeometryFactory()->createLinearRing(std::move(coordinates)));

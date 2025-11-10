@@ -30,9 +30,8 @@ class DecimalSumAggregate {
  public:
   using InputType = Row<TInputType>;
 
-  using IntermediateType =
-      Row</*sum*/ TSumType,
-          /*isEmpty*/ bool>;
+  using IntermediateType = Row</*sum*/ TSumType,
+                               /*isEmpty*/ bool>;
 
   using OutputType = TSumType;
 

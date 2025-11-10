@@ -40,6 +40,7 @@ velox_add_library(
   MapEntries.cpp
   MapFromEntries.cpp
   MapKeysAndValues.cpp
+  MapSubset.cpp
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
@@ -47,7 +48,6 @@ velox_add_library(
   RowFunction.cpp
   Sequence.cpp
   SfmSketchFunctions.cpp
-  SimpleComparisonMatcher.cpp
   Split.cpp
   SplitToMap.cpp
   StringFunctions.cpp
@@ -59,7 +59,6 @@ velox_add_library(
   TypeOf.cpp
   UpperLower.cpp
   URIParser.cpp
-  URLFunctions.cpp
   VectorArithmetic.cpp
   WidthBucketArray.cpp
   Zip.cpp
@@ -77,6 +76,7 @@ velox_link_libraries(
   velox_presto_types
   velox_functions_util
   Folly::folly
+  FastFloat::fast_float
   stemmer::stemmer
 )
 

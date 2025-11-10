@@ -58,8 +58,9 @@ struct QueryContext {
   MakeTableScan makeTableScan;
   bool isInDelimJoin{false};
 
-  QueryContext(const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
-                   _inMemoryTables)
+  QueryContext(
+      const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
+          _inMemoryTables)
       : inMemoryTables{_inMemoryTables} {}
 
   std::string nextNodeId() {
@@ -182,8 +183,9 @@ PlanNodePtr toVeloxPlan(
         children.push_back(rowVector->childAt(columnIds[i]));
       }
     }
-    data.push_back(std::make_shared<RowVector>(
-        pool, rowType, nullptr, rowVector->size(), children));
+    data.push_back(
+        std::make_shared<RowVector>(
+            pool, rowType, nullptr, rowVector->size(), children));
   }
 
   return std::make_shared<ValuesNode>(queryContext.nextNodeId(), data);
@@ -436,8 +438,9 @@ PlanNodePtr toVeloxPlan(
       } else {
         identityProjection = false;
         projectNames.push_back(queryContext.nextColumnName("_p"));
-        fieldInputs.push_back(std::make_shared<FieldAccessTypedExpr>(
-            input->type(), projectNames.back()));
+        fieldInputs.push_back(
+            std::make_shared<FieldAccessTypedExpr>(
+                input->type(), projectNames.back()));
       }
     }
 
@@ -463,8 +466,9 @@ PlanNodePtr toVeloxPlan(
     } else {
       identityProjection = false;
       projectNames.push_back(queryContext.nextColumnName("_p"));
-      groupingKeys.push_back(std::make_shared<FieldAccessTypedExpr>(
-          groupingExpr->type(), projectNames.back()));
+      groupingKeys.push_back(
+          std::make_shared<FieldAccessTypedExpr>(
+              groupingExpr->type(), projectNames.back()));
     }
   }
 
@@ -836,8 +840,9 @@ PlanNodePtr processDelimGetJoin(
     names.push_back(queryContext.nextColumnName("_delim"));
     auto rightIndex = delimAlias[i];
     auto type = rightType->childAt(rightIndex);
-    exprs.push_back(std::make_shared<FieldAccessTypedExpr>(
-        type, rightType->nameOf(rightIndex)));
+    exprs.push_back(
+        std::make_shared<FieldAccessTypedExpr>(
+            type, rightType->nameOf(rightIndex)));
   }
   for (auto i = 0; i < rightType->size(); ++i) {
     names.push_back(rightType->nameOf(i));
@@ -887,8 +892,9 @@ PlanNodePtr processDelimGetJoin(
     names.push_back(queryContext.nextColumnName("_delim"));
     auto rightIndex = delimAlias[i];
     auto type = rightType->childAt(rightIndex);
-    exprs.push_back(std::make_shared<FieldAccessTypedExpr>(
-        type, rightType->nameOf(rightIndex)));
+    exprs.push_back(
+        std::make_shared<FieldAccessTypedExpr>(
+            type, rightType->nameOf(rightIndex)));
   }
   for (auto i = 0; i < rightType->size(); ++i) {
     names.push_back(rightType->nameOf(i));

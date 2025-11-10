@@ -53,8 +53,8 @@ template <>
 struct fmt::formatter<facebook::velox::connector::tpcds::TpcdsConnectorSplit>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::tpcds::TpcdsConnectorSplit s,
-      format_context& ctx) {
+      facebook::velox::connector::tpcds::TpcdsConnectorSplit const& s,
+      format_context& ctx) const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };
@@ -64,8 +64,9 @@ struct fmt::formatter<
     std::shared_ptr<facebook::velox::connector::tpcds::TpcdsConnectorSplit>>
     : formatter<std::string> {
   auto format(
-      std::shared_ptr<facebook::velox::connector::tpcds::TpcdsConnectorSplit> s,
-      format_context& ctx) {
+      std::shared_ptr<
+          facebook::velox::connector::tpcds::TpcdsConnectorSplit> const& s,
+      format_context& ctx) const {
     return formatter<std::string>::format(s->toString(), ctx);
   }
 };

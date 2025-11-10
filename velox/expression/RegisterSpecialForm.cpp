@@ -20,14 +20,15 @@
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
-#include "velox/expression/ExprConstants.h"
-#include "velox/expression/FunctionCallToSpecialForm.h"
+#include "velox/expression/ConjunctRewrite.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
+#include "velox/expression/SwitchRewrite.h"
 #include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
+
 void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kAnd,
@@ -48,7 +49,10 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kTry, std::make_unique<TryCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      RowConstructorCallToSpecialForm::kRowConstructor,
+      expression::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
+
+  expression::ConjunctRewrite::registerRewrite();
+  expression::SwitchRewrite::registerRewrite();
 }
 } // namespace facebook::velox::exec

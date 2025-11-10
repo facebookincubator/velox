@@ -25,27 +25,20 @@ namespace facebook::velox::encoding {
 class Base64Test : public ::testing::Test {};
 
 TEST_F(Base64Test, fromBase64) {
-  EXPECT_EQ(
-      "Hello, World!",
-      Base64::decode(folly::StringPiece("SGVsbG8sIFdvcmxkIQ==")));
+  EXPECT_EQ("Hello, World!", Base64::decode("SGVsbG8sIFdvcmxkIQ=="));
   EXPECT_EQ(
       "Base64 encoding is fun.",
-      Base64::decode(folly::StringPiece("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=")));
-  EXPECT_EQ(
-      "Simple text", Base64::decode(folly::StringPiece("U2ltcGxlIHRleHQ=")));
-  EXPECT_EQ(
-      "1234567890", Base64::decode(folly::StringPiece("MTIzNDU2Nzg5MA==")));
+      Base64::decode("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4="));
+  EXPECT_EQ("Simple text", Base64::decode("U2ltcGxlIHRleHQ="));
+  EXPECT_EQ("1234567890", Base64::decode("MTIzNDU2Nzg5MA=="));
 
   // Check encoded strings without padding
-  EXPECT_EQ(
-      "Hello, World!",
-      Base64::decode(folly::StringPiece("SGVsbG8sIFdvcmxkIQ")));
+  EXPECT_EQ("Hello, World!", Base64::decode("SGVsbG8sIFdvcmxkIQ"));
   EXPECT_EQ(
       "Base64 encoding is fun.",
-      Base64::decode(folly::StringPiece("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4")));
-  EXPECT_EQ(
-      "Simple text", Base64::decode(folly::StringPiece("U2ltcGxlIHRleHQ")));
-  EXPECT_EQ("1234567890", Base64::decode(folly::StringPiece("MTIzNDU2Nzg5MA")));
+      Base64::decode("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4"));
+  EXPECT_EQ("Simple text", Base64::decode("U2ltcGxlIHRleHQ"));
+  EXPECT_EQ("1234567890", Base64::decode("MTIzNDU2Nzg5MA"));
 }
 
 TEST_F(Base64Test, calculateDecodedSizeProperSize) {

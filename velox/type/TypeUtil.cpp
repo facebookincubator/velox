@@ -18,10 +18,9 @@
 
 namespace facebook::velox::type {
 
-velox::RowTypePtr concatRowTypes(
-    const std::vector<velox::RowTypePtr>& rowTypes) {
+RowTypePtr concatRowTypes(const std::vector<RowTypePtr>& rowTypes) {
   std::vector<std::string> columnNames;
-  std::vector<velox::TypePtr> columnTypes;
+  std::vector<TypePtr> columnTypes;
   for (auto& rowType : rowTypes) {
     columnNames.insert(
         columnNames.end(), rowType->names().begin(), rowType->names().end());
@@ -30,7 +29,28 @@ velox::RowTypePtr concatRowTypes(
         rowType->children().begin(),
         rowType->children().end());
   }
-  return velox::ROW(std::move(columnNames), std::move(columnTypes));
+  return ROW(std::move(columnNames), std::move(columnTypes));
+}
+
+TypePtr tryGetHomogeneousRowChild(const TypePtr& type) {
+  VELOX_DCHECK(type != nullptr);
+  if (type->kind() != TypeKind::ROW) {
+    return nullptr;
+  }
+
+  const auto childCount = type->size();
+  if (childCount == 0) {
+    return nullptr; // No child type to infer
+  }
+
+  const auto& first = type->childAt(0);
+  for (size_t i = 1; i < childCount; ++i) {
+    const auto& child = type->childAt(i);
+    if (!(*first == *child)) {
+      return nullptr;
+    }
+  }
+  return first;
 }
 
 } // namespace facebook::velox::type

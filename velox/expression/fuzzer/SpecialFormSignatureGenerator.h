@@ -57,6 +57,12 @@ class SpecialFormSignatureGenerator {
       const std::string& toType,
       std::vector<exec::FunctionSignaturePtr>& signatures) const;
 
+  /// Generates signatures for cast from time to the given type and adds
+  /// them to signatures.
+  void addCastFromTimeSignature(
+      const std::string& toType,
+      std::vector<exec::FunctionSignaturePtr>& signatures) const;
+
   /// Generates signatures for cast from date to the given type and adds them to
   /// signatures.
   void addCastFromDateSignature(
@@ -84,6 +90,9 @@ class SpecialFormSignatureGenerator {
   // Returns the signatures for the 'switch' special form.
   virtual std::vector<exec::FunctionSignaturePtr> getSignaturesForSwitch()
       const;
+
+  // Returns the common signatures for the 'cast' special form.
+  std::vector<exec::FunctionSignaturePtr> getCommonSignaturesForCast() const;
 
   // Returns the signatures for the 'cast' special form.
   virtual std::vector<exec::FunctionSignaturePtr> getSignaturesForCast() const;

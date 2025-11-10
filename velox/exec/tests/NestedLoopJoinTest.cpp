@@ -100,11 +100,12 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 
     for (const auto joinType : joinTypes_) {
       for (const auto& comparison : comparisons_) {
-        SCOPED_TRACE(fmt::format(
-            "maxDrivers:{} joinType:{} comparison:{}",
-            std::to_string(numDrivers),
-            core::JoinTypeName::toName(joinType),
-            comparison));
+        SCOPED_TRACE(
+            fmt::format(
+                "maxDrivers:{} joinType:{} comparison:{}",
+                std::to_string(numDrivers),
+                core::JoinTypeName::toName(joinType),
+                comparison));
 
         params.planNode =
             PlanBuilder(planNodeIdGenerator)

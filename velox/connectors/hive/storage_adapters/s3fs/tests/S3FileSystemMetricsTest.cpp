@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/init/Init.h>
 #include <functional>
 
@@ -24,8 +25,9 @@
 
 #include <gtest/gtest.h>
 
-namespace facebook::velox::filesystems {
+namespace facebook::velox::filesystems::test {
 namespace {
+
 class S3TestReporter : public BaseStatsReporter {
  public:
   mutable std::mutex m;
@@ -40,6 +42,7 @@ class S3TestReporter : public BaseStatsReporter {
     statTypeMap.clear();
     histogramPercentilesMap.clear();
   }
+
   void registerMetricExportType(const char* key, StatType statType)
       const override {
     statTypeMap[key] = statType;
@@ -67,18 +70,6 @@ class S3TestReporter : public BaseStatsReporter {
       const std::vector<int32_t>& pcts) const override {
     histogramPercentilesMap[key.str()] = pcts;
   }
-
-  void registerQuantileMetricExportType(
-      const char* /* key */,
-      const std::vector<StatType>& /* statTypes */,
-      const std::vector<double>& /* pcts */,
-      const std::vector<size_t>& /* slidingWindowsSeconds */) const override {}
-
-  void registerQuantileMetricExportType(
-      folly::StringPiece /* key */,
-      const std::vector<StatType>& /* statTypes */,
-      const std::vector<double>& /* pcts */,
-      const std::vector<size_t>& /* slidingWindowsSeconds */) const override {}
 
   void addMetricValue(const std::string& key, const size_t value)
       const override {
@@ -109,42 +100,6 @@ class S3TestReporter : public BaseStatsReporter {
       const override {
     counterMap[key.str()] = std::max(counterMap[key.str()], value);
   }
-
-  void addQuantileMetricValue(const std::string& /* key */, size_t /* value */)
-      const override {}
-
-  void addQuantileMetricValue(const char* /* key */, size_t /* value */)
-      const override {}
-
-  void addQuantileMetricValue(folly::StringPiece /* key */, size_t /* value */)
-      const override {}
-
-  void registerDynamicQuantileMetricExportType(
-      const char* /* keyPattern */,
-      const std::vector<StatType>& /* statTypes */,
-      const std::vector<double>& /* pcts */,
-      const std::vector<size_t>& /* slidingWindowsSeconds */) const override {}
-
-  void registerDynamicQuantileMetricExportType(
-      folly::StringPiece /* keyPattern */,
-      const std::vector<StatType>& /* statTypes */,
-      const std::vector<double>& /* pcts */,
-      const std::vector<size_t>& /* slidingWindowsSeconds */) const override {}
-
-  void addDynamicQuantileMetricValue(
-      const std::string& /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
-      size_t /* value */) const override {}
-
-  void addDynamicQuantileMetricValue(
-      const char* /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
-      size_t /* value */) const override {}
-
-  void addDynamicQuantileMetricValue(
-      folly::StringPiece /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
-      size_t /* value */) const override {}
 
   std::string fetchMetrics() override {
     std::stringstream ss;
@@ -217,7 +172,7 @@ TEST_F(S3FileSystemMetricsTest, metrics) {
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetObjectCalls}]);
 }
 
-} // namespace facebook::velox::filesystems
+} // namespace facebook::velox::filesystems::test
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

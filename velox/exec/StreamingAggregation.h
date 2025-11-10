@@ -96,6 +96,10 @@ class StreamingAggregation : public Operator {
   // Maximum number of rows in the output batch.
   const vector_size_t minOutputBatchSize_;
 
+  // If the size of the data in the RowContainer exceeds this value, we will
+  // output a batch regardless of the number of rows.
+  const uint64_t maxOutputBatchBytes_;
+
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 

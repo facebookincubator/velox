@@ -271,6 +271,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
                                        traceNodeId_,
                                        "Aggregation",
                                        "",
+                                       "",
                                        0,
                                        executor_.get())
                                        .run();
@@ -336,6 +337,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
                                        task->taskId(),
                                        traceNodeId_,
                                        "Aggregation",
+                                       "",
                                        "",
                                        0,
                                        executor_.get())

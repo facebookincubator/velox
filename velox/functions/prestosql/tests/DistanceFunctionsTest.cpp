@@ -84,10 +84,11 @@ TEST_F(DistanceFunctionsTest, cosineSimilarity) {
   auto rightMap =
       makeMapVector<StringView, double>({{{{"c"_sv, 1}, {"b"_sv, 3}}}});
 
-  EXPECT_FALSE(evaluateOnce<double>(
-                   "cosine_similarity(c0,c1)",
-                   makeRowVector({nullableLeftMap, rightMap}))
-                   .has_value());
+  EXPECT_FALSE(
+      evaluateOnce<double>(
+          "cosine_similarity(c0,c1)",
+          makeRowVector({nullableLeftMap, rightMap}))
+          .has_value());
 }
 
 TEST_F(DistanceFunctionsTest, cosineSimilarityArray) {

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <vector>
 #include "velox/expression/ComplexViewTypes.h"
@@ -34,8 +35,10 @@ template <typename T>
 std::enable_if_t<std::is_floating_point_v<T>, void>
 append(T value, std::string& result, bool isMapKey) {
   if (!isMapKey && FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-    result.append(fmt::format(
-        "\"{}\"", util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+    result.append(
+        fmt::format(
+            "\"{}\"",
+            util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
   } else {
     result.append(util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
   }
@@ -91,7 +94,7 @@ void toJson(
 
 // Convert primitive-type input to Json string.
 template <>
-void toJson<TypeKind::BOOLEAN>(
+inline void toJson<TypeKind::BOOLEAN>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -103,7 +106,7 @@ void toJson<TypeKind::BOOLEAN>(
 }
 
 template <>
-void toJson<TypeKind::TINYINT>(
+inline void toJson<TypeKind::TINYINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -113,7 +116,7 @@ void toJson<TypeKind::TINYINT>(
 }
 
 template <>
-void toJson<TypeKind::SMALLINT>(
+inline void toJson<TypeKind::SMALLINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -123,7 +126,7 @@ void toJson<TypeKind::SMALLINT>(
 }
 
 template <>
-void toJson<TypeKind::INTEGER>(
+inline void toJson<TypeKind::INTEGER>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -137,7 +140,7 @@ void toJson<TypeKind::INTEGER>(
 }
 
 template <>
-void toJson<TypeKind::BIGINT>(
+inline void toJson<TypeKind::BIGINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -151,7 +154,7 @@ void toJson<TypeKind::BIGINT>(
 }
 
 template <>
-void toJson<TypeKind::HUGEINT>(
+inline void toJson<TypeKind::HUGEINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -162,7 +165,7 @@ void toJson<TypeKind::HUGEINT>(
 }
 
 template <>
-void toJson<TypeKind::REAL>(
+inline void toJson<TypeKind::REAL>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -172,7 +175,7 @@ void toJson<TypeKind::REAL>(
 }
 
 template <>
-void toJson<TypeKind::DOUBLE>(
+inline void toJson<TypeKind::DOUBLE>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -182,7 +185,7 @@ void toJson<TypeKind::DOUBLE>(
 }
 
 template <>
-void toJson<TypeKind::VARCHAR>(
+inline void toJson<TypeKind::VARCHAR>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -201,7 +204,7 @@ void toJson<TypeKind::VARCHAR>(
 }
 
 template <>
-void toJson<TypeKind::TIMESTAMP>(
+inline void toJson<TypeKind::TIMESTAMP>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,
@@ -224,7 +227,7 @@ void toJson<TypeKind::TIMESTAMP>(
 
 // Convert complex-type input to Json string.
 template <>
-void toJson<TypeKind::ROW>(
+inline void toJson<TypeKind::ROW>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,
@@ -272,7 +275,7 @@ void toJson<TypeKind::ROW>(
 }
 
 template <>
-void toJson<TypeKind::ARRAY>(
+inline void toJson<TypeKind::ARRAY>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,
@@ -295,7 +298,7 @@ void toJson<TypeKind::ARRAY>(
 }
 
 template <>
-void toJson<TypeKind::MAP>(
+inline void toJson<TypeKind::MAP>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,

@@ -15,7 +15,7 @@
 
 # Global arg default to share across stages
 ARG SPARK_VERSION=3.5.1
-ARG PRESTO_VERSION=0.293
+ARG PRESTO_VERSION=0.295
 
 #########################
 # Stage: Spark Download #
@@ -40,7 +40,7 @@ ARG PRESTO_VERSION
 RUN wget -O presto-server.tar.gz \
     https://repo1.maven.org/maven2/com/facebook/presto/presto-server/${PRESTO_VERSION}/presto-server-${PRESTO_VERSION}.tar.gz
 RUN wget -O presto-cli \
-    https://repo1.maven.org/maven2/com/facebook/presto/presto-cli/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
+    https://github.com/prestodb/presto/releases/download/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
 
 RUN tar -xzf presto-server.tar.gz
 
@@ -49,7 +49,7 @@ RUN tar -xzf presto-server.tar.gz
 #########################
 FROM ghcr.io/facebookincubator/velox-dev:centos9 AS java-base
 
-RUN dnf install -y -q --setopt=install_weak_deps=False java-11-openjdk less procps tzdata
+RUN dnf install -y -q --setopt=install_weak_deps=False java-17-openjdk less procps tzdata
 
 # We set the timezone to America/Los_Angeles due to issue
 # detailed here : https://github.com/facebookincubator/velox/issues/8127

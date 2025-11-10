@@ -209,8 +209,9 @@ class CastBaseTest : public FunctionBaseTest {
       std::optional<bool> isTryCast = std::nullopt) {
     const auto& fromType = input->type();
     const auto& toType = expected->type();
-    SCOPED_TRACE(fmt::format(
-        "Cast from {} to {}", fromType->toString(), toType->toString()));
+    SCOPED_TRACE(
+        fmt::format(
+            "Cast from {} to {}", fromType->toString(), toType->toString()));
     const auto copy = createCopy(input);
     // Test with flat encoding.
     {

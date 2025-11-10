@@ -48,7 +48,8 @@ class OperatorUtilsTest : public OperatorTestBase {
         std::move(planFragment),
         0,
         core::QueryCtx::create(executor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     driver_ = Driver::testingCreate();
     driverCtx_ = std::make_unique<DriverCtx>(task_, 0, 0, 0, 0);
     driverCtx_->driver = driver_.get();
@@ -57,7 +58,8 @@ class OperatorUtilsTest : public OperatorTestBase {
   void gatherCopyTest(
       const std::shared_ptr<const RowType>& targetType,
       const std::shared_ptr<const RowType>& sourceType,
-      int numSources) {
+      int numSources,
+      bool flattenSources = true) {
     folly::Random::DefaultGenerator rng(1);
     const int kNumRows = 500;
     const int kNumColumns = sourceType->size();
@@ -65,8 +67,9 @@ class OperatorUtilsTest : public OperatorTestBase {
     // Build source vectors with nulls.
     std::vector<RowVectorPtr> sources;
     for (int i = 0; i < numSources; ++i) {
-      sources.push_back(std::static_pointer_cast<RowVector>(
-          BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
+      sources.push_back(
+          std::static_pointer_cast<RowVector>(
+              BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
       for (int j = 0; j < kNumColumns; ++j) {
         auto vector = sources.back()->childAt(j);
         int nullRow = (folly::Random::rand32() % kNumRows) / 4;
@@ -75,6 +78,23 @@ class OperatorUtilsTest : public OperatorTestBase {
           nullRow +=
               std::max<int>(1, (folly::Random::rand32() % kNumColumns) / 4);
         }
+      }
+    }
+
+    if (!flattenSources) {
+      for (int i = 0; i < numSources; ++i) {
+        const auto source = sources[i];
+        const auto numRows = source->size();
+        std::vector<vector_size_t> sortIndices(numRows, 0);
+        for (auto i = 0; i < numRows; ++i) {
+          sortIndices[i] = i;
+        }
+        BufferPtr indices = allocateIndices(numRows, pool_.get());
+        auto rawIndices = indices->asMutable<vector_size_t>();
+        for (size_t i = 0; i < numRows; ++i) {
+          rawIndices[i] = sortIndices[i];
+        }
+        sources[i] = wrap(numRows, indices, source);
       }
     }
 
@@ -371,6 +391,56 @@ TEST_F(OperatorUtilsTest, gatherCopy) {
       ASSERT_TRUE(vector->equalValueAt(source, j, sourceIndices[j]));
     }
   }
+}
+
+TEST_F(OperatorUtilsTest, gatherCopyEncoding) {
+  std::shared_ptr<const RowType> rowType;
+  std::shared_ptr<const RowType> reversedRowType;
+  {
+    std::vector<std::string> names = {
+        "bool_val",
+        "tiny_val",
+        "small_val",
+        "int_val",
+        "long_val",
+        "ordinal",
+        "float_val",
+        "double_val",
+        "string_val",
+        "array_val",
+        "struct_val",
+        "map_val"};
+    std::vector<std::string> reversedNames = names;
+    std::reverse(reversedNames.begin(), reversedNames.end());
+
+    std::vector<std::shared_ptr<const Type>> types = {
+        BOOLEAN(),
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        BIGINT(),
+        REAL(),
+        DOUBLE(),
+        VARCHAR(),
+        ARRAY(VARCHAR()),
+        ROW({{"s_int", INTEGER()}, {"s_array", ARRAY(REAL())}}),
+        MAP(VARCHAR(),
+            MAP(BIGINT(),
+                ROW({{"s2_int", INTEGER()}, {"s2_string", VARCHAR()}})))};
+    std::vector<std::shared_ptr<const Type>> reversedTypes = types;
+    std::reverse(reversedTypes.begin(), reversedTypes.end());
+
+    rowType = ROW(std::move(names), std::move(types));
+    reversedRowType = ROW(std::move(reversedNames), std::move(reversedTypes));
+  }
+
+  // Gather copy with identical column mapping.
+  gatherCopyTest(rowType, rowType, 1, false);
+  gatherCopyTest(rowType, rowType, 5, false);
+  // Gather copy with non-identical column mapping.
+  gatherCopyTest(rowType, reversedRowType, 1, false);
+  gatherCopyTest(rowType, reversedRowType, 5, false);
 }
 
 TEST_F(OperatorUtilsTest, makeOperatorSpillPath) {

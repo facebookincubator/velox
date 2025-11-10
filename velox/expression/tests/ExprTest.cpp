@@ -36,8 +36,8 @@
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
-#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -2595,8 +2595,8 @@ TEST_P(ParameterizedExprTest, constantToString) {
 
 TEST_F(ExprTest, constantEqualsNullConsistency) {
   // Constant expr created using variant
-  auto nullVariantToExpr =
-      std::make_shared<core::ConstantTypedExpr>(VARCHAR(), Variant{});
+  auto nullVariantToExpr = std::make_shared<core::ConstantTypedExpr>(
+      VARCHAR(), variant::null(TypeKind::VARCHAR));
   auto nonNullVariantToExpr =
       std::make_shared<core::ConstantTypedExpr>(VARCHAR(), Variant{"test"});
 
@@ -2617,13 +2617,14 @@ TEST_F(ExprTest, constantEqualsNullConsistency) {
 // of a Vector.
 TEST_F(ExprTest, constantToStringEqualsHashConsistency) {
   auto testValue = [&](const TypePtr& type, const Variant& value) {
-    SCOPED_TRACE(fmt::format(
-        "Type: {}, Value: {}", type->toString(), value.toJson(type)));
+    SCOPED_TRACE(
+        fmt::format(
+            "Type: {}, Value: {}", type->toString(), value.toJson(type)));
 
     auto a = std::make_shared<core::ConstantTypedExpr>(type, value);
 
     auto b = std::make_shared<core::ConstantTypedExpr>(
-        variantToVector(type, value, pool()));
+        BaseVector::createConstant(type, value, 1, pool()));
 
     EXPECT_EQ(a->toString(), b->toString());
 
@@ -2818,9 +2819,10 @@ TEST_P(ParameterizedExprTest, constantToSql) {
   ASSERT_EQ(toSql(variant::null(TypeKind::ARRAY)), "NULL");
 
   ASSERT_EQ(
-      toSqlComplex(makeMapVector<int32_t, int32_t>({
-          {{1, 10}, {2, 20}, {3, 30}},
-      })),
+      toSqlComplex(
+          makeMapVector<int32_t, int32_t>({
+              {{1, 10}, {2, 20}, {3, 30}},
+          })),
       "map(ARRAY['1'::INTEGER, '2'::INTEGER, '3'::INTEGER], ARRAY['10'::INTEGER, '20'::INTEGER, '30'::INTEGER])");
   ASSERT_EQ(
       toSqlComplex(
@@ -2831,8 +2833,9 @@ TEST_P(ParameterizedExprTest, constantToSql) {
           1),
       "map(ARRAY['1'::INTEGER, '2'::INTEGER, '3'::INTEGER], ARRAY['10'::INTEGER, '20'::INTEGER, '30'::INTEGER])");
   ASSERT_EQ(
-      toSqlComplex(BaseVector::createNullConstant(
-          MAP(INTEGER(), VARCHAR()), 10, pool())),
+      toSqlComplex(
+          BaseVector::createNullConstant(
+              MAP(INTEGER(), VARCHAR()), 10, pool())),
       "NULL::MAP(INTEGER, VARCHAR)");
 
   ASSERT_EQ(
@@ -2842,14 +2845,17 @@ TEST_P(ParameterizedExprTest, constantToSql) {
       })),
       "row_constructor('1'::INTEGER, TRUE)");
   ASSERT_EQ(
-      toSqlComplex(BaseVector::createNullConstant(
-          ROW({"a", "b"}, {BOOLEAN(), DOUBLE()}), 10, pool())),
+      toSqlComplex(
+          BaseVector::createNullConstant(
+              ROW({"a", "b"}, {BOOLEAN(), DOUBLE()}), 10, pool())),
       "NULL::STRUCT(a BOOLEAN, b DOUBLE)");
   ASSERT_EQ(
-      toSqlComplex(BaseVector::createNullConstant(
-          ROW({"a", "b"}, {BOOLEAN(), ROW({"c", "d"}, {DOUBLE(), VARCHAR()})}),
-          10,
-          pool())),
+      toSqlComplex(
+          BaseVector::createNullConstant(
+              ROW({"a", "b"},
+                  {BOOLEAN(), ROW({"c", "d"}, {DOUBLE(), VARCHAR()})}),
+              10,
+              pool())),
       "NULL::STRUCT(a BOOLEAN, b STRUCT(c DOUBLE, d VARCHAR))");
 }
 
@@ -3651,10 +3657,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
   // not.  Conjuncts have the nice property that they set throwOnError to
   // false and don't check if the result VectorPtr is nullptr.
   assertError(
-      "always_throws_vector_function(c0) AND true",
+      "always_throws_vector_function(c0) AND (c0 = 1)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
-      "Top-level Expression: and(always_throws_vector_function(c0), true:BOOLEAN)",
+      "Top-level Expression: and(always_throws_vector_function(c0), eq(cast((c0) as BIGINT), 1:BIGINT))",
       TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3663,10 +3669,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
       std::make_unique<NoOpVectorFunction>());
 
   assertError(
-      "no_op(c0) AND true",
+      "no_op(c0) AND (c0 = 2)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "no_op(c0)",
-      "Top-level Expression: and(no_op(c0), true:BOOLEAN)",
+      "Top-level Expression: and(no_op(c0), eq(cast((c0) as BIGINT), 2:BIGINT))",
       "Function neither returned results nor threw exception.");
 }
 
@@ -4421,8 +4427,9 @@ TEST_F(ExprTest, commonSubExpressionWithPeeling) {
       // is evaluated twice.
       auto queryCtx = velox::core::QueryCtx::create(
           nullptr,
-          core::QueryConfig(std::unordered_map<std::string, std::string>{
-              {core::QueryConfig::kMaxSharedSubexprResultsCached, "1"}}));
+          core::QueryConfig(
+              std::unordered_map<std::string, std::string>{
+                  {core::QueryConfig::kMaxSharedSubexprResultsCached, "1"}}));
       core::ExecCtx execCtx(pool_.get(), queryCtx.get());
       auto results = makeRowVector(evaluateMultiple(
           {expr1, expr2, expr1, expr2}, data, std::nullopt, &execCtx));

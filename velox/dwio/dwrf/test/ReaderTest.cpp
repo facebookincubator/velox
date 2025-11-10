@@ -1053,8 +1053,9 @@ TEST_F(TestReader, testMismatchSchemaMoreFields) {
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
           "struct<a:int,b:struct<a:int,b:float,c:string>,c:float,d:string>"));
-  rowReaderOpts.select(std::make_shared<ColumnSelector>(
-      requestedType, std::vector<uint64_t>{1, 2, 3}));
+  rowReaderOpts.select(
+      std::make_shared<ColumnSelector>(
+          requestedType, std::vector<uint64_t>{1, 2, 3}));
   auto reader = DwrfReader::create(
       createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -1098,8 +1099,9 @@ TEST_F(TestReader, testMismatchSchemaFewerFields) {
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
           "struct<a:int,b:struct<a:int,b:float,c:string>>"));
-  rowReaderOpts.select(std::make_shared<ColumnSelector>(
-      requestedType, std::vector<uint64_t>{1}));
+  rowReaderOpts.select(
+      std::make_shared<ColumnSelector>(
+          requestedType, std::vector<uint64_t>{1}));
   auto reader = DwrfReader::create(
       createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -1140,8 +1142,9 @@ TEST_F(TestReader, testMismatchSchemaNestedMoreFields) {
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
           "struct<a:int,b:struct<a:int,b:float,c:string,d:binary>,c:float>"));
   LOG(INFO) << requestedType->toString();
-  rowReaderOpts.select(std::make_shared<ColumnSelector>(
-      requestedType, std::vector<std::string>{"b.b", "b.c", "b.d", "c"}));
+  rowReaderOpts.select(
+      std::make_shared<ColumnSelector>(
+          requestedType, std::vector<std::string>{"b.b", "b.c", "b.d", "c"}));
   auto reader = DwrfReader::create(
       createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -1205,8 +1208,9 @@ TEST_F(TestReader, testMismatchSchemaNestedFewerFields) {
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
           "struct<a:int,b:struct<a:int,b:float>,c:float>"));
-  rowReaderOpts.select(std::make_shared<ColumnSelector>(
-      requestedType, std::vector<std::string>{"b.b", "c"}));
+  rowReaderOpts.select(
+      std::make_shared<ColumnSelector>(
+          requestedType, std::vector<std::string>{"b.b", "c"}));
   auto reader = DwrfReader::create(
       createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -1262,8 +1266,9 @@ TEST_F(TestReader, testMismatchSchemaIncompatibleNotSelected) {
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
           "struct<a:float,b:struct<a:string,b:float>,c:int>"));
-  rowReaderOpts.select(std::make_shared<ColumnSelector>(
-      requestedType, std::vector<std::string>{"b.b"}));
+  rowReaderOpts.select(
+      std::make_shared<ColumnSelector>(
+          requestedType, std::vector<std::string>{"b.b"}));
   auto reader = DwrfReader::create(
       createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -2269,24 +2274,25 @@ TEST_F(TestReader, failToReuseReaderNulls) {
 TEST_F(TestReader, readFlatMapsSomeEmpty) {
   // Test reading a flat map where the key filter means that some maps are
   // empty.
-  auto keys = makeFlatVector(std::vector<int64_t>{
-      1,
-      2,
-      3,
-      4,
-      5,
-      6, // map 1 has more than just the selected keys.
-      1,
-      2,
-      3, // map 2 has only selected keys.
-      4,
-      5,
-      6, // map 3 has no selected keys.
-      1,
-      2,
-      5,
-      6 // map 4 has some selected keys.
-  });
+  auto keys = makeFlatVector(
+      std::vector<int64_t>{
+          1,
+          2,
+          3,
+          4,
+          5,
+          6, // map 1 has more than just the selected keys.
+          1,
+          2,
+          3, // map 2 has only selected keys.
+          4,
+          5,
+          6, // map 3 has no selected keys.
+          1,
+          2,
+          5,
+          6 // map 4 has some selected keys.
+      });
   auto values = makeFlatVector<int64_t>(16, folly::identity);
   auto maps =
       makeMapVector(std::vector<vector_size_t>{0, 6, 9, 12, 16}, keys, values);
@@ -2440,32 +2446,36 @@ TEST_F(TestReader, readFlatMapsAsFlatMaps) {
     assertEqualVectors(flatMap, resultMaps);
   };
 
-  testRoundTrip(makeFlatMapVector<int16_t, float>({
-      {},
-      {{1, 1.9}, {2, 2.1}, {0, 3.12}},
-      {{127, 0.12}},
-  }));
+  testRoundTrip(
+      makeFlatMapVector<int16_t, float>({
+          {},
+          {{1, 1.9}, {2, 2.1}, {0, 3.12}},
+          {{127, 0.12}},
+      }));
 
-  testRoundTrip(makeFlatMapVector<StringView, StringView>({
-      {{"a", "a1"}},
-      {{"b", "b1"}},
-      {{"c", "c1"}},
-      {{"d", "d1"}},
-  }));
+  testRoundTrip(
+      makeFlatMapVector<StringView, StringView>({
+          {{"a", "a1"}},
+          {{"b", "b1"}},
+          {{"c", "c1"}},
+          {{"d", "d1"}},
+      }));
 
-  testRoundTrip(makeNullableFlatMapVector<int32_t, int32_t>({
-      {{{101, 1}, {102, 2}, {103, 3}}},
-      {{{105, 0}, {106, 0}}},
-      {std::nullopt},
-      {{{101, 11}, {103, 13}, {105, std::nullopt}}},
-      {{{101, 1}, {102, 2}, {103, 3}}},
-  }));
+  testRoundTrip(
+      makeNullableFlatMapVector<int32_t, int32_t>({
+          {{{101, 1}, {102, 2}, {103, 3}}},
+          {{{105, 0}, {106, 0}}},
+          {std::nullopt},
+          {{{101, 11}, {103, 13}, {105, std::nullopt}}},
+          {{{101, 1}, {102, 2}, {103, 3}}},
+      }));
 
-  testRoundTrip(makeFlatMapVector<int64_t, int64_t>(
-      {{{0, 0}, {1, 1}, {2, 2}, {3, 3}},
-       {{0, 4}, {1, 5}, {2, 6}, {3, 7}},
-       {{0, 8}, {1, 9}, {2, 10}, {3, 11}},
-       {{0, 12}, {1, 13}, {2, 14}, {3, 15}}}));
+  testRoundTrip(
+      makeFlatMapVector<int64_t, int64_t>(
+          {{{0, 0}, {1, 1}, {2, 2}, {3, 3}},
+           {{0, 4}, {1, 5}, {2, 6}, {3, 7}},
+           {{0, 8}, {1, 9}, {2, 10}, {3, 11}},
+           {{0, 12}, {1, 13}, {2, 14}, {3, 15}}}));
 }
 
 TEST_F(TestReader, readStructWithWholeBatchFiltered) {
@@ -2567,8 +2577,9 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
   ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 0);
-  spec->childByName("c0")->setFilter(std::make_unique<common::BytesValues>(
-      std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaa"}, false));
+  spec->childByName("c0")->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaa"}, false));
   spec->resetCachedValues(true);
   rowReader = reader->createRowReader(rowReaderOpts);
   ASSERT_EQ(rowReader->next(20, actual), 20);

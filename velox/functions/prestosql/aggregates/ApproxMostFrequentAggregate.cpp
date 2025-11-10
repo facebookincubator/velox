@@ -345,11 +345,10 @@ class ApproxMostFrequentBooleanAggregate {
   using InputType =
       Row</*buckets*/ int64_t, /*value*/ bool, /*capacity*/ int64_t>;
 
-  using IntermediateType =
-      Row</*buckets*/ int64_t,
-          /*capacity*/ int64_t,
-          /*values*/ Array<bool>,
-          /*counts*/ Array<int64_t>>;
+  using IntermediateType = Row</*buckets*/ int64_t,
+                               /*capacity*/ int64_t,
+                               /*values*/ Array<bool>,
+                               /*counts*/ Array<int64_t>>;
 
   using OutputType = Map<bool, int64_t>;
 
@@ -492,8 +491,9 @@ void registerApproxMostFrequentAggregate(
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .returnType(fmt::format("map({},bigint)", valueType))
-            .intermediateType(fmt::format(
-                "row(bigint, bigint, array({}), array(bigint))", valueType))
+            .intermediateType(
+                fmt::format(
+                    "row(bigint, bigint, array({}), array(bigint))", valueType))
             .argumentType("bigint")
             .argumentType(valueType)
             .argumentType("bigint")

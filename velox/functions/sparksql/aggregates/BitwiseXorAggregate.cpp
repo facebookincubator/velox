@@ -70,7 +70,7 @@ exec::AggregateRegistrationResult registerBitwiseXorAggregate(
     bool withCompanionFunctions,
     bool overwrite) {
   return functions::aggregate::registerBitwise<BitwiseXorAggregate>(
-      prefix + "bit_xor", withCompanionFunctions, false, overwrite);
+      prefix + "bit_xor", false, withCompanionFunctions, false, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

@@ -246,16 +246,17 @@ About comment style:
 * As a general rule, do not use string literals without declaring a named
   constant for them.
   * The best way to make a constant string literal is to use constexpr
-    `std::string_view`/`folly::StringPiece`
+    `std::string_view`
   * **NEVER** use `std::string` - this makes your code more prone to SIOF bugs.
   * Avoid `const char* const` and `const char*` - these are less efficient to
     convert to `std::string` later on in your program if you ever need to
-    because `std::string_view`/ `folly::StringPiece` knows its size and can use
-    a more efficient constructor. `std::string_view`/ `folly::StringPiece` also
-    has richer interfaces and often works as a drop-in replacement to
-    `std::string`.
+    because `std::string_view` knows its size and can use a more efficient
+    constructor. `std::string_view` also has richer interfaces and often
+    works as a drop-in replacement to `std::string`.
   * Need compile-time string concatenation? You can use `folly::FixedString`
     for that.
+  * Do not use `folly::StringPiece` in new code, use `std::string_view`
+    instead.
 
 ## Macros
 

@@ -425,10 +425,12 @@ TYPED_TEST(TestBatchBloomFilter, Basic) {
 
   // Bloom filter fpp parameter
   const double fpp = 0.05;
-  filter.Init(BlockSplitBloomFilter::OptimalNumOfBytes(
-      TestFixture::kTestDataSize, fpp));
-  batch_insert_filter.Init(BlockSplitBloomFilter::OptimalNumOfBytes(
-      TestFixture::kTestDataSize, fpp));
+  filter.Init(
+      BlockSplitBloomFilter::OptimalNumOfBytes(
+          TestFixture::kTestDataSize, fpp));
+  batch_insert_filter.Init(
+      BlockSplitBloomFilter::OptimalNumOfBytes(
+          TestFixture::kTestDataSize, fpp));
 
   std::vector<uint64_t> hashes;
   for (const Type& value : test_data) {

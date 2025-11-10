@@ -310,19 +310,22 @@ TEST_F(TestPrimitiveNode, Equals) {
 }
 
 TEST_F(TestPrimitiveNode, PhysicalLogicalMapping) {
-  ASSERT_NO_THROW(PrimitiveNode::Make(
-      "foo", Repetition::REQUIRED, Type::INT32, ConvertedType::INT_32));
-  ASSERT_NO_THROW(PrimitiveNode::Make(
-      "foo", Repetition::REQUIRED, Type::BYTE_ARRAY, ConvertedType::JSON));
+  ASSERT_NO_THROW(
+      PrimitiveNode::Make(
+          "foo", Repetition::REQUIRED, Type::INT32, ConvertedType::INT_32));
+  ASSERT_NO_THROW(
+      PrimitiveNode::Make(
+          "foo", Repetition::REQUIRED, Type::BYTE_ARRAY, ConvertedType::JSON));
   ASSERT_THROW(
       PrimitiveNode::Make(
           "foo", Repetition::REQUIRED, Type::INT32, ConvertedType::JSON),
       ParquetException);
-  ASSERT_NO_THROW(PrimitiveNode::Make(
-      "foo",
-      Repetition::REQUIRED,
-      Type::INT64,
-      ConvertedType::TIMESTAMP_MILLIS));
+  ASSERT_NO_THROW(
+      PrimitiveNode::Make(
+          "foo",
+          Repetition::REQUIRED,
+          Type::INT64,
+          ConvertedType::TIMESTAMP_MILLIS));
   ASSERT_THROW(
       PrimitiveNode::Make(
           "foo", Repetition::REQUIRED, Type::INT32, ConvertedType::INT_64),
@@ -345,8 +348,9 @@ TEST_F(TestPrimitiveNode, PhysicalLogicalMapping) {
           Type::FIXED_LEN_BYTE_ARRAY,
           ConvertedType::ENUM),
       ParquetException);
-  ASSERT_NO_THROW(PrimitiveNode::Make(
-      "foo", Repetition::REQUIRED, Type::BYTE_ARRAY, ConvertedType::ENUM));
+  ASSERT_NO_THROW(
+      PrimitiveNode::Make(
+          "foo", Repetition::REQUIRED, Type::BYTE_ARRAY, ConvertedType::ENUM));
   ASSERT_THROW(
       PrimitiveNode::Make(
           "foo",
@@ -407,20 +411,22 @@ TEST_F(TestPrimitiveNode, PhysicalLogicalMapping) {
           2,
           4),
       ParquetException);
-  ASSERT_NO_THROW(PrimitiveNode::Make(
-      "foo",
-      Repetition::REQUIRED,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::DECIMAL,
-      10,
-      6,
-      4));
-  ASSERT_NO_THROW(PrimitiveNode::Make(
-      "foo",
-      Repetition::REQUIRED,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::INTERVAL,
-      12));
+  ASSERT_NO_THROW(
+      PrimitiveNode::Make(
+          "foo",
+          Repetition::REQUIRED,
+          Type::FIXED_LEN_BYTE_ARRAY,
+          ConvertedType::DECIMAL,
+          10,
+          6,
+          4));
+  ASSERT_NO_THROW(
+      PrimitiveNode::Make(
+          "foo",
+          Repetition::REQUIRED,
+          Type::FIXED_LEN_BYTE_ARRAY,
+          ConvertedType::INTERVAL,
+          12));
   ASSERT_THROW(
       PrimitiveNode::Make(
           "foo",
@@ -602,10 +608,12 @@ TEST_F(TestSchemaConverter, NestedExample) {
 
   // 3-level list encoding
   NodePtr item = Int64("item", Repetition::OPTIONAL, 4);
-  NodePtr list(GroupNode::Make(
-      "b", Repetition::REPEATED, {item}, ConvertedType::LIST, 3));
-  NodePtr bag(GroupNode::Make(
-      "bag", Repetition::OPTIONAL, {list}, /*logical_type=*/nullptr, 2));
+  NodePtr list(
+      GroupNode::Make(
+          "b", Repetition::REPEATED, {item}, ConvertedType::LIST, 3));
+  NodePtr bag(
+      GroupNode::Make(
+          "bag", Repetition::OPTIONAL, {list}, /*logical_type=*/nullptr, 2));
   fields.push_back(bag);
 
   NodePtr schema = GroupNode::Make(
@@ -751,14 +759,16 @@ TEST_F(TestSchemaFlatten, NestedExample) {
 
   // 3-level list encoding
   NodePtr item = Int64("item", Repetition::OPTIONAL, 4);
-  NodePtr list(GroupNode::Make(
-      "b", Repetition::REPEATED, {item}, ConvertedType::LIST, 3));
-  NodePtr bag(GroupNode::Make(
-      "bag",
-      Repetition::OPTIONAL,
-      {list},
-      /*logical_type=*/nullptr,
-      2));
+  NodePtr list(
+      GroupNode::Make(
+          "b", Repetition::REPEATED, {item}, ConvertedType::LIST, 3));
+  NodePtr bag(
+      GroupNode::Make(
+          "bag",
+          Repetition::OPTIONAL,
+          {list},
+          /*logical_type=*/nullptr,
+          2));
   fields.push_back(bag);
 
   NodePtr schema = GroupNode::Make(
@@ -853,11 +863,12 @@ TEST_F(TestSchemaDescriptor, Equals) {
   NodePtr item1 = Int64("item1", Repetition::REQUIRED);
   NodePtr item2 = Boolean("item2", Repetition::OPTIONAL);
   NodePtr item3 = Int32("item3", Repetition::REPEATED);
-  NodePtr list(GroupNode::Make(
-      "records",
-      Repetition::REPEATED,
-      {item1, item2, item3},
-      ConvertedType::LIST));
+  NodePtr list(
+      GroupNode::Make(
+          "records",
+          Repetition::REPEATED,
+          {item1, item2, item3},
+          ConvertedType::LIST));
 
   NodePtr bag(GroupNode::Make("bag", Repetition::OPTIONAL, {list}));
   NodePtr bag2(GroupNode::Make("bag", Repetition::REQUIRED, {list}));
@@ -869,13 +880,15 @@ TEST_F(TestSchemaDescriptor, Equals) {
   ASSERT_TRUE(descr1.Equals(descr1));
 
   SchemaDescriptor descr2;
-  descr2.Init(GroupNode::Make(
-      "schema", Repetition::REPEATED, {inta, intb, intc, bag2}));
+  descr2.Init(
+      GroupNode::Make(
+          "schema", Repetition::REPEATED, {inta, intb, intc, bag2}));
   ASSERT_FALSE(descr1.Equals(descr2));
 
   SchemaDescriptor descr3;
-  descr3.Init(GroupNode::Make(
-      "schema", Repetition::REPEATED, {inta, intb2, intc, bag}));
+  descr3.Init(
+      GroupNode::Make(
+          "schema", Repetition::REPEATED, {inta, intb2, intc, bag}));
   ASSERT_FALSE(descr1.Equals(descr3));
 
   // Robust to name of parent node
@@ -885,8 +898,9 @@ TEST_F(TestSchemaDescriptor, Equals) {
   ASSERT_TRUE(descr1.Equals(descr4));
 
   SchemaDescriptor descr5;
-  descr5.Init(GroupNode::Make(
-      "schema", Repetition::REPEATED, {inta, intb, intc, bag, intb2}));
+  descr5.Init(
+      GroupNode::Make(
+          "schema", Repetition::REPEATED, {inta, intb, intc, bag, intb2}));
   ASSERT_FALSE(descr1.Equals(descr5));
 
   // Different max repetition / definition levels
@@ -912,11 +926,12 @@ TEST_F(TestSchemaDescriptor, BuildTree) {
   NodePtr item1 = Int64("item1", Repetition::REQUIRED);
   NodePtr item2 = Boolean("item2", Repetition::OPTIONAL);
   NodePtr item3 = Int32("item3", Repetition::REPEATED);
-  NodePtr list(GroupNode::Make(
-      "records",
-      Repetition::REPEATED,
-      {item1, item2, item3},
-      ConvertedType::LIST));
+  NodePtr list(
+      GroupNode::Make(
+          "records",
+          Repetition::REPEATED,
+          {item1, item2, item3},
+          ConvertedType::LIST));
   NodePtr bag(GroupNode::Make("bag", Repetition::OPTIONAL, {list}));
   fields.push_back(bag);
 
@@ -994,11 +1009,12 @@ TEST_F(TestSchemaDescriptor, HasRepeatedFields) {
   NodePtr item1 = Int64("item1", Repetition::REQUIRED);
   NodePtr item2 = Boolean("item2", Repetition::OPTIONAL);
   NodePtr item3 = Int32("item3", Repetition::REPEATED);
-  NodePtr list(GroupNode::Make(
-      "records",
-      Repetition::REPEATED,
-      {item1, item2, item3},
-      ConvertedType::LIST));
+  NodePtr list(
+      GroupNode::Make(
+          "records",
+          Repetition::REPEATED,
+          {item1, item2, item3},
+          ConvertedType::LIST));
   NodePtr bag(GroupNode::Make("bag", Repetition::OPTIONAL, {list}));
   fields.push_back(bag);
 
@@ -1009,8 +1025,12 @@ TEST_F(TestSchemaDescriptor, HasRepeatedFields) {
   // 3-level list encoding
   NodePtr item_key = Int64("key", Repetition::REQUIRED);
   NodePtr item_value = Boolean("value", Repetition::OPTIONAL);
-  NodePtr map(GroupNode::Make(
-      "map", Repetition::REPEATED, {item_key, item_value}, ConvertedType::MAP));
+  NodePtr map(
+      GroupNode::Make(
+          "map",
+          Repetition::REPEATED,
+          {item_key, item_value},
+          ConvertedType::MAP));
   NodePtr my_map(GroupNode::Make("my_map", Repetition::OPTIONAL, {map}));
   fields.push_back(my_map);
 
@@ -1034,29 +1054,33 @@ TEST(TestSchemaPrinter, Examples) {
   // 3-level list encoding
   NodePtr item1 = Int64("item1", Repetition::OPTIONAL, 4);
   NodePtr item2 = Boolean("item2", Repetition::REQUIRED, 5);
-  NodePtr list(GroupNode::Make(
-      "b", Repetition::REPEATED, {item1, item2}, ConvertedType::LIST, 3));
-  NodePtr bag(GroupNode::Make(
-      "bag", Repetition::OPTIONAL, {list}, /*logical_type=*/nullptr, 2));
+  NodePtr list(
+      GroupNode::Make(
+          "b", Repetition::REPEATED, {item1, item2}, ConvertedType::LIST, 3));
+  NodePtr bag(
+      GroupNode::Make(
+          "bag", Repetition::OPTIONAL, {list}, /*logical_type=*/nullptr, 2));
   fields.push_back(bag);
 
-  fields.push_back(PrimitiveNode::Make(
-      "c",
-      Repetition::REQUIRED,
-      Type::INT32,
-      ConvertedType::DECIMAL,
-      -1,
-      3,
-      2,
-      6));
+  fields.push_back(
+      PrimitiveNode::Make(
+          "c",
+          Repetition::REQUIRED,
+          Type::INT32,
+          ConvertedType::DECIMAL,
+          -1,
+          3,
+          2,
+          6));
 
-  fields.push_back(PrimitiveNode::Make(
-      "d",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(10, 5),
-      Type::INT64,
-      /*length=*/-1,
-      7));
+  fields.push_back(
+      PrimitiveNode::Make(
+          "d",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(10, 5),
+          Type::INT64,
+          /*length=*/-1,
+          7));
 
   NodePtr schema = GroupNode::Make(
       "schema",
@@ -2059,86 +2083,100 @@ TEST(TestSchemaNodeCreation, FactoryExceptions) {
   // create an object if compatibility conditions are not met
 
   // Nested logical type on non-group node ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "map", Repetition::REQUIRED, MapLogicalType::Make(), Type::INT64));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "map", Repetition::REQUIRED, MapLogicalType::Make(), Type::INT64));
   // Incompatible primitive type ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "string",
-      Repetition::REQUIRED,
-      StringLogicalType::Make(),
-      Type::BOOLEAN));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "string",
+          Repetition::REQUIRED,
+          StringLogicalType::Make(),
+          Type::BOOLEAN));
   // Incompatible primitive length ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "interval",
-      Repetition::REQUIRED,
-      IntervalLogicalType::Make(),
-      Type::FIXED_LEN_BYTE_ARRAY,
-      11));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "interval",
+          Repetition::REQUIRED,
+          IntervalLogicalType::Make(),
+          Type::FIXED_LEN_BYTE_ARRAY,
+          11));
   // Scale is greater than precision.
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(10, 11),
-      Type::INT64));
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(17, 18),
-      Type::INT64));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(10, 11),
+          Type::INT64));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(17, 18),
+          Type::INT64));
   // Primitive too small for given precision ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(16, 6),
-      Type::INT32));
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(10, 9),
-      Type::INT32));
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(19, 17),
-      Type::INT64));
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(308, 6),
-      Type::FIXED_LEN_BYTE_ARRAY,
-      128));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(16, 6),
+          Type::INT32));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(10, 9),
+          Type::INT32));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(19, 17),
+          Type::INT64));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(308, 6),
+          Type::FIXED_LEN_BYTE_ARRAY,
+          128));
   // Length is too long
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "decimal",
-      Repetition::REQUIRED,
-      DecimalLogicalType::Make(10, 6),
-      Type::FIXED_LEN_BYTE_ARRAY,
-      891723283));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "decimal",
+          Repetition::REQUIRED,
+          DecimalLogicalType::Make(10, 6),
+          Type::FIXED_LEN_BYTE_ARRAY,
+          891723283));
 
   // Incompatible primitive length ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "uuid",
-      Repetition::REQUIRED,
-      UUIDLogicalType::Make(),
-      Type::FIXED_LEN_BYTE_ARRAY,
-      64));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "uuid",
+          Repetition::REQUIRED,
+          UUIDLogicalType::Make(),
+          Type::FIXED_LEN_BYTE_ARRAY,
+          64));
   // Non-positive length argument for fixed length binary ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "negative_length",
-      Repetition::REQUIRED,
-      NoLogicalType::Make(),
-      Type::FIXED_LEN_BYTE_ARRAY,
-      -16));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "negative_length",
+          Repetition::REQUIRED,
+          NoLogicalType::Make(),
+          Type::FIXED_LEN_BYTE_ARRAY,
+          -16));
   // Non-positive length argument for fixed length binary ...
-  ASSERT_ANY_THROW(PrimitiveNode::Make(
-      "zero_length",
-      Repetition::REQUIRED,
-      NoLogicalType::Make(),
-      Type::FIXED_LEN_BYTE_ARRAY,
-      0));
+  ASSERT_ANY_THROW(
+      PrimitiveNode::Make(
+          "zero_length",
+          Repetition::REQUIRED,
+          NoLogicalType::Make(),
+          Type::FIXED_LEN_BYTE_ARRAY,
+          0));
   // Non-nested logical type on group node ...
-  ASSERT_ANY_THROW(GroupNode::Make(
-      "list", Repetition::REPEATED, {}, JSONLogicalType::Make()));
+  ASSERT_ANY_THROW(
+      GroupNode::Make(
+          "list", Repetition::REPEATED, {}, JSONLogicalType::Make()));
 
   // nullptr logical type arguments convert to NoLogicalType/ConvertedType::NONE
   std::shared_ptr<const LogicalType> empty;

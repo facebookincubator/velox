@@ -361,9 +361,10 @@ class ByteOutputStream {
     }
 
     if (current_->position + sizeof(T) * values.size() > current_->size) {
-      appendStringView(std::string_view(
-          reinterpret_cast<const char*>(&values[0]),
-          values.size() * sizeof(T)));
+      appendStringView(
+          std::string_view(
+              reinterpret_cast<const char*>(&values[0]),
+              values.size() * sizeof(T)));
       return;
     }
     auto* target = current_->buffer + current_->position;
@@ -537,9 +538,10 @@ class AppendWindow {
   ~AppendWindow() noexcept {
     if (scratchPtr_.size()) {
       try {
-        stream_.appendStringView(std::string_view(
-            reinterpret_cast<const char*>(scratchPtr_.get()),
-            scratchPtr_.size() * sizeof(T)));
+        stream_.appendStringView(
+            std::string_view(
+                reinterpret_cast<const char*>(scratchPtr_.get()),
+                scratchPtr_.size() * sizeof(T)));
       } catch (const std::exception& e) {
         // This is impossible because construction ensures there is space for
         // the bytes in the stream.

@@ -32,17 +32,17 @@
 
 namespace facebook::velox {
 
-// Variable length string or binary type for use in vectors. This has
-// semantics similar to std::string_view or folly::StringPiece and
-// exposes a subset of the interface. If the string is 12 characters
-// or less, it is inlined and no reference is held. If it is longer, a
-// reference to the string is held and the 4 first characters are
-// cached in the StringView. This allows failing comparisons early and
-// reduces the CPU cache working set when dealing with short strings.
-//
-// Adapted from TU Munich Umbra and CWI DuckDB.
-//
-// TODO: Extend the interface to parity with folly::StringPiece as needed.
+/// Variable length string or binary type for use in vectors. This has
+/// semantics similar to std::string_view or folly::StringPiece and
+/// exposes a subset of the interface. If the string is 12 characters
+/// or less, it is inlined and no reference is held. If it is longer, a
+/// reference to the string is held and the 4 first characters are
+/// cached in the StringView. This allows failing comparisons early and
+/// reduces the CPU cache working set when dealing with short strings.
+///
+/// Adapted from TU Munich Umbra and CWI DuckDB.
+///
+/// TODO: Extend the interface to parity with folly::StringPiece as needed.
 struct StringView {
  public:
   using value_type = char;
@@ -77,11 +77,6 @@ struct StringView {
     }
   }
 
-  static StringView makeInline(std::string str) {
-    VELOX_DCHECK(isInline(str.size()));
-    return StringView{str};
-  }
-
   // Making StringView implicitly constructible/convertible from char* and
   // string literals, in order to allow for a more flexible API and optional
   // interoperability. E.g:
@@ -109,6 +104,18 @@ struct StringView {
 
   FOLLY_ALWAYS_INLINE static constexpr bool isInline(uint32_t size) {
     return size <= kInlineSize;
+  }
+
+  /// Convenience method to create an inline StringView. The API client is
+  /// reponsible for providing a string that is small enough to fit inline
+  /// (i.e <= kInlineSize).
+  static StringView makeInline(std::string_view input) {
+    VELOX_DCHECK(
+        isInline(input.size()),
+        "StringView::makeInline() requires an input string that fits "
+        "inline (got string size of {}).",
+        input.size());
+    return StringView{input};
   }
 
   const char* data() && = delete;

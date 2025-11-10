@@ -23,6 +23,8 @@ add_executable(
   CustomTypeTest.cpp
   ExprCompilerTest.cpp
   ExprEncodingsTest.cpp
+  ExprOptimizerTest.cpp
+  ExprRewriteRegistryTest.cpp
   ExprStatsTest.cpp
   ExprTest.cpp
   ExprToSubfieldFilterTest.cpp
@@ -44,6 +46,9 @@ add_executable(
   SimpleFunctionInitTest.cpp
   SimpleFunctionPresetNullsTest.cpp
   SimpleFunctionTest.cpp
+  SpecialFormRewriteTestBase.cpp
+  SwitchRewriteTest.cpp
+  ConjunctRewriteTest.cpp
   StringWriterTest.cpp
   TryExprTest.cpp
   VariadicViewTest.cpp

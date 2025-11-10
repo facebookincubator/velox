@@ -117,8 +117,9 @@ FOLLY_ALWAYS_INLINE static int32_t findSetBitsNew(uint64_t value) {
     case 57 ... 63:
       return 1;
   }
-  DWIO_RAISE(folly::sformat(
-      "Unexpected leading zeros {} for value {}", leadingZeros, value));
+  DWIO_RAISE(
+      folly::sformat(
+          "Unexpected leading zeros {} for value {}", leadingZeros, value));
 }
 
 size_t iters = 2000;

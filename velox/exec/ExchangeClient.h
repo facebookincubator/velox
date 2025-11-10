@@ -43,9 +43,10 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         kRequestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
         pool_(pool),
         executor_(executor),
-        queue_(std::make_shared<ExchangeQueue>(
-            numberOfConsumers,
-            minOutputBatchBytes)),
+        queue_(
+            std::make_shared<ExchangeQueue>(
+                numberOfConsumers,
+                minOutputBatchBytes)),
         // See comment in 'pickSourcesToRequestLocked' for why this is needed
         // for 'minOutputBatchBytes_'. Note: ExchangeQueue does not need max(1,
         // minOutputBatchBytes) because for 'MergeExchangeSource', we want

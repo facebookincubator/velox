@@ -29,6 +29,7 @@ class AggregationReplayer : public OperatorReplayerBase {
       const std::string& taskId,
       const std::string& nodeId,
       const std::string& operatorType,
+      const std::string& spillBaseDir,
       const std::string& driverIds,
       uint64_t queryCapacity,
       folly::Executor* executor)
@@ -38,6 +39,7 @@ class AggregationReplayer : public OperatorReplayerBase {
             taskId,
             nodeId,
             operatorType,
+            spillBaseDir,
             driverIds,
             queryCapacity,
             executor) {}

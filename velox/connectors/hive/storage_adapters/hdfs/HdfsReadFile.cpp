@@ -103,12 +103,19 @@ class HdfsReadFile::Impl {
     }
   }
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf) const {
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const FileStorageContext& fileStorageContext) const {
     preadInternal(offset, length, static_cast<char*>(buf));
     return {static_cast<char*>(buf), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length) const {
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      const FileStorageContext& fileStorageContext) const {
     std::string result(length, 0);
     char* pos = result.data();
     preadInternal(offset, length, pos);
@@ -163,15 +170,15 @@ std::string_view HdfsReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    filesystems::File::IoStats* stats) const {
-  return pImpl->pread(offset, length, buf);
+    const FileStorageContext& fileStorageContext) const {
+  return pImpl->pread(offset, length, buf, fileStorageContext);
 }
 
 std::string HdfsReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    filesystems::File::IoStats* stats) const {
-  return pImpl->pread(offset, length);
+    const FileStorageContext& fileStorageContext) const {
+  return pImpl->pread(offset, length, fileStorageContext);
 }
 
 uint64_t HdfsReadFile::size() const {

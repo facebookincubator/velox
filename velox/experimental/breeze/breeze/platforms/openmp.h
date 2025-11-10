@@ -31,9 +31,9 @@ template <typename T>
 struct supported_type {
   static T min();
   static T max();
-  static T atomic_load(T *address);
-  static void atomic_store(T *address, T value);
-  static bool atomic_cas(T *address, T *compare, T value, bool weak);
+  static T atomic_load(T* address);
+  static void atomic_store(T* address, T value);
+  static bool atomic_cas(T* address, T* compare, T value, bool weak);
   static int count_leading_zeros(T value);
   static int population_count(T value);
   static T extract_bits(T value, int start_bit, int num_bits);
@@ -44,13 +44,13 @@ template <>
 struct supported_type<unsigned> {
   static unsigned min() { return 0; }
   static unsigned max() { return __INT_MAX__ * 2u + 1; }
-  static unsigned atomic_load(unsigned *address) {
+  static unsigned atomic_load(unsigned* address) {
     return __atomic_load_n(address, __ATOMIC_RELAXED);
   }
-  static void atomic_store(unsigned *address, unsigned value) {
+  static void atomic_store(unsigned* address, unsigned value) {
     __atomic_store_n(address, value, __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(unsigned *address, unsigned *compare, unsigned value,
+  static bool atomic_cas(unsigned* address, unsigned* compare, unsigned value,
                          bool weak) {
     return __atomic_compare_exchange_n(address, compare, value, weak,
                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED);
@@ -72,13 +72,13 @@ template <>
 struct supported_type<int> {
   static int min() { return -__INT_MAX__ - 1; }
   static int max() { return __INT_MAX__; }
-  static int atomic_load(int *address) {
+  static int atomic_load(int* address) {
     return __atomic_load_n(address, __ATOMIC_RELAXED);
   }
-  static void atomic_store(int *address, int value) {
+  static void atomic_store(int* address, int value) {
     __atomic_store_n(address, value, __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(int *address, int *compare, int value, bool weak) {
+  static bool atomic_cas(int* address, int* compare, int value, bool weak) {
     return __atomic_compare_exchange_n(address, compare, value, weak,
                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED);
   }
@@ -89,15 +89,15 @@ template <>
 struct supported_type<unsigned long long> {
   static unsigned long long min() { return 0; }
   static unsigned long long max() { return __LONG_LONG_MAX__ * 2ull + 1; }
-  static unsigned long long atomic_load(unsigned long long *address) {
+  static unsigned long long atomic_load(unsigned long long* address) {
     return __atomic_load_n(address, __ATOMIC_RELAXED);
   }
-  static void atomic_store(unsigned long long *address,
+  static void atomic_store(unsigned long long* address,
                            unsigned long long value) {
     __atomic_store_n(address, value, __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(unsigned long long *address,
-                         unsigned long long *compare, unsigned long long value,
+  static bool atomic_cas(unsigned long long* address,
+                         unsigned long long* compare, unsigned long long value,
                          bool weak) {
     return __atomic_compare_exchange_n(address, compare, value, weak,
                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED);
@@ -120,13 +120,13 @@ template <>
 struct supported_type<long long> {
   static long long min() { return -__LONG_LONG_MAX__ - 1; }
   static long long max() { return __LONG_LONG_MAX__; }
-  static long long atomic_load(long long *address) {
+  static long long atomic_load(long long* address) {
     return __atomic_load_n(address, __ATOMIC_RELAXED);
   }
-  static void atomic_store(long long *address, long long value) {
+  static void atomic_store(long long* address, long long value) {
     __atomic_store_n(address, value, __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(long long *address, long long *compare,
+  static bool atomic_cas(long long* address, long long* compare,
                          long long value, bool weak) {
     return __atomic_compare_exchange_n(address, compare, value, weak,
                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED);
@@ -139,24 +139,24 @@ struct supported_type<float> {
   static_assert(sizeof(float) == sizeof(unsigned), "unexpected type sizes");
   static float min() { return __FLT_MIN__; }
   static float max() { return __FLT_MAX__; }
-  static float atomic_load(float *address) {
+  static float atomic_load(float* address) {
     union {
       float value;
       unsigned raw;
     } content;
-    content.raw = __atomic_load_n(reinterpret_cast<unsigned *>(address),
-                                  __ATOMIC_RELAXED);
+    content.raw =
+        __atomic_load_n(reinterpret_cast<unsigned*>(address), __ATOMIC_RELAXED);
     return content.value;
   }
-  static void atomic_store(float *address, float value) {
-    __atomic_store_n(reinterpret_cast<unsigned *>(address),
-                     *reinterpret_cast<unsigned *>(&value), __ATOMIC_RELAXED);
+  static void atomic_store(float* address, float value) {
+    __atomic_store_n(reinterpret_cast<unsigned*>(address),
+                     *reinterpret_cast<unsigned*>(&value), __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(float *address, float *compare, float value,
+  static bool atomic_cas(float* address, float* compare, float value,
                          bool weak) {
-    return __atomic_compare_exchange_n(reinterpret_cast<unsigned *>(address),
-                                       reinterpret_cast<unsigned *>(compare),
-                                       *reinterpret_cast<unsigned *>(&value),
+    return __atomic_compare_exchange_n(reinterpret_cast<unsigned*>(address),
+                                       reinterpret_cast<unsigned*>(compare),
+                                       *reinterpret_cast<unsigned*>(&value),
                                        weak, __ATOMIC_RELAXED,
                                        __ATOMIC_RELAXED);
   }
@@ -169,26 +169,26 @@ struct supported_type<double> {
                 "unexpected type sizes");
   static double min() { return __DBL_MIN__; }
   static double max() { return __DBL_MAX__; }
-  static double atomic_load(double *address) {
+  static double atomic_load(double* address) {
     union {
       double value;
       unsigned long long raw;
     } content;
     content.raw = __atomic_load_n(
-        reinterpret_cast<unsigned long long *>(address), __ATOMIC_RELAXED);
+        reinterpret_cast<unsigned long long*>(address), __ATOMIC_RELAXED);
     return content.value;
   }
-  static void atomic_store(double *address, double value) {
-    __atomic_store_n(reinterpret_cast<unsigned long long *>(address),
-                     *reinterpret_cast<unsigned long long *>(&value),
+  static void atomic_store(double* address, double value) {
+    __atomic_store_n(reinterpret_cast<unsigned long long*>(address),
+                     *reinterpret_cast<unsigned long long*>(&value),
                      __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(double *address, double *compare, double value,
+  static bool atomic_cas(double* address, double* compare, double value,
                          bool weak) {
     return __atomic_compare_exchange_n(
-        reinterpret_cast<unsigned long long *>(address),
-        reinterpret_cast<unsigned long long *>(compare),
-        *reinterpret_cast<unsigned long long *>(&value), weak, __ATOMIC_RELAXED,
+        reinterpret_cast<unsigned long long*>(address),
+        reinterpret_cast<unsigned long long*>(compare),
+        *reinterpret_cast<unsigned long long*>(&value), weak, __ATOMIC_RELAXED,
         __ATOMIC_RELAXED);
   }
 };
@@ -198,13 +198,13 @@ template <>
 struct supported_type<unsigned char> {
   static unsigned char min() { return 0; }
   static unsigned char max() { return 255; }
-  static unsigned atomic_load(unsigned char *address) {
+  static unsigned atomic_load(unsigned char* address) {
     return __atomic_load_n(address, __ATOMIC_RELAXED);
   }
-  static void atomic_store(unsigned char *address, unsigned char value) {
+  static void atomic_store(unsigned char* address, unsigned char value) {
     __atomic_store_n(address, value, __ATOMIC_RELAXED);
   }
-  static bool atomic_cas(unsigned char *address, unsigned char *compare,
+  static bool atomic_cas(unsigned char* address, unsigned char* compare,
                          unsigned char value, bool weak) {
     return __atomic_compare_exchange_n(address, compare, value, weak,
                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED);
@@ -308,7 +308,7 @@ struct OpenMPPlatform {
     static_assert(WARP_THREADS == BLOCK_THREADS,
                   "WARP_THREADS must be the same as BLOCK_THREADS");
 
-    T *scratch = reinterpret_cast<T *>(shared_scratch_);
+    T* scratch = reinterpret_cast<T*>(shared_scratch_);
 #pragma omp single
     scratch[0] = static_cast<T>(0);
 
@@ -325,7 +325,7 @@ struct OpenMPPlatform {
     static_assert(WARP_THREADS == BLOCK_THREADS,
                   "WARP_THREADS must be the same as BLOCK_THREADS");
 
-    T *scratch = reinterpret_cast<T *>(shared_scratch_);
+    T* scratch = reinterpret_cast<T*>(shared_scratch_);
 
 #pragma omp single
     scratch[0] = supported_type<T>::max();
@@ -343,7 +343,7 @@ struct OpenMPPlatform {
     static_assert(WARP_THREADS == BLOCK_THREADS,
                   "WARP_THREADS must be the same as BLOCK_THREADS");
 
-    T *scratch = reinterpret_cast<T *>(shared_scratch_);
+    T* scratch = reinterpret_cast<T*>(shared_scratch_);
 #pragma omp single
     scratch[0] = supported_type<T>::min();
 
@@ -360,7 +360,7 @@ struct OpenMPPlatform {
     static_assert(WARP_THREADS == BLOCK_THREADS,
                   "WARP_THREADS must be the same as BLOCK_THREADS");
 
-    T *scratch = reinterpret_cast<T *>(shared_scratch_);
+    T* scratch = reinterpret_cast<T*>(shared_scratch_);
 #pragma omp single
     scratch[0] = static_cast<T>(0);
 
@@ -420,7 +420,7 @@ struct OpenMPPlatform {
   template <typename SliceT>
   inline void prefetch(SliceT) {}
   int block_idx_;
-  void *shared_scratch_;
+  void* shared_scratch_;
 };
 
 #pragma GCC diagnostic pop

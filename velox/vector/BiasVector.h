@@ -92,9 +92,11 @@ class BiasVector : public SimpleVector<T> {
   //    bias");
 
  public:
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t>);
+#endif
 
   BiasVector(
       velox::memory::MemoryPool* pool,
@@ -123,6 +125,7 @@ class BiasVector : public SimpleVector<T> {
     return valueAtFast(idx);
   }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /**
    * Loads a SIMD vector of data at the virtual byteOffset given
    * Note this method is implemented on each vector type, but is intentionally
@@ -131,6 +134,7 @@ class BiasVector : public SimpleVector<T> {
    * @param byteOffset - the byte offset to laod from
    */
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+#endif
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
@@ -181,13 +185,19 @@ class BiasVector : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
+    VELOX_UNSUPPORTED("transferTo not defined for BiasVector");
+  }
+
  private:
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   template <typename U>
   inline xsimd::batch<T> loadSIMDInternal(size_t byteOffset) const {
     auto mem = reinterpret_cast<const U*>(
         rawValues_ + byteOffset / sizeof(T) * sizeof(U));
     return xsimd::batch<T>::load_unaligned(mem);
   }
+#endif
 
   TypeKind valueType_;
   BufferPtr values_;
@@ -197,8 +207,10 @@ class BiasVector : public SimpleVector<T> {
   // support is 64 bit and all biasing requires a smaller internal type.
   T bias_;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   // Used to debias several values at a time.
   std::conditional_t<can_simd, xsimd::batch<T>, char> biasBuffer_;
+#endif
 };
 
 template <typename T>

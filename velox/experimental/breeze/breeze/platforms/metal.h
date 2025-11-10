@@ -78,16 +78,15 @@ struct MetalPlatform {
     MetalSpecialization::atomic_store<SliceT, T>(address, value);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline uint atomic_cas(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint expected, uint desired) {
-    volatile device uint *ptr = address.data();
+    volatile device uint* ptr = address.data();
     uint current = expected;
     do {
       if (metal::atomic_compare_exchange_weak_explicit(
-              (device metal::atomic_uint *)ptr, &current, desired,
+              (device metal::atomic_uint*)ptr, &current, desired,
               metal::memory_order_relaxed, metal::memory_order_relaxed)) {
         return expected;
       }
@@ -95,16 +94,15 @@ struct MetalPlatform {
     return current;
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline bool atomic_cas(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, uint> address,
       uint expected, uint desired) {
-    volatile threadgroup uint *ptr = address.data();
+    volatile threadgroup uint* ptr = address.data();
     uint current = expected;
     do {
       if (metal::atomic_compare_exchange_weak_explicit(
-              (threadgroup metal::atomic_uint *)ptr, &current, desired,
+              (threadgroup metal::atomic_uint*)ptr, &current, desired,
               metal::memory_order_relaxed, metal::memory_order_relaxed)) {
         return expected;
       }
@@ -112,110 +110,101 @@ struct MetalPlatform {
     return current;
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline int atomic_add(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int> address,
       int value) {
-    volatile device int *ptr = address.data();
-    return metal::atomic_fetch_add_explicit((device metal::atomic_int *)ptr,
+    volatile device int* ptr = address.data();
+    return metal::atomic_fetch_add_explicit((device metal::atomic_int*)ptr,
                                             value, metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline int atomic_add(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, int> address,
       int value) {
-    volatile threadgroup int *ptr = address.data();
-    return metal::atomic_fetch_add_explicit(
-        (threadgroup metal::atomic_int *)ptr, value,
-        metal::memory_order_relaxed);
-  }
-  template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
-  inline uint atomic_add(
-      SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
-      uint value) {
-    volatile device uint *ptr = address.data();
-    return metal::atomic_fetch_add_explicit((device metal::atomic_uint *)ptr,
+    volatile threadgroup int* ptr = address.data();
+    return metal::atomic_fetch_add_explicit((threadgroup metal::atomic_int*)ptr,
                                             value, metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
+  inline uint atomic_add(
+      SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
+      uint value) {
+    volatile device uint* ptr = address.data();
+    return metal::atomic_fetch_add_explicit((device metal::atomic_uint*)ptr,
+                                            value, metal::memory_order_relaxed);
+  }
+  template <template <breeze::utils::AddressSpace,
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline uint atomic_add(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, uint> address,
       uint value) {
-    volatile threadgroup uint *ptr = address.data();
+    volatile threadgroup uint* ptr = address.data();
     return metal::atomic_fetch_add_explicit(
-        (threadgroup metal::atomic_uint *)ptr, value,
+        (threadgroup metal::atomic_uint*)ptr, value,
         metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline void atomic_min(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int> address,
       int value) {
-    volatile device int *ptr = address.data();
-    int current = metal::atomic_load_explicit((device metal::atomic_int *)ptr,
+    volatile device int* ptr = address.data();
+    int current = metal::atomic_load_explicit((device metal::atomic_int*)ptr,
                                               metal::memory_order_relaxed);
     while (current > value) {
       if (metal::atomic_compare_exchange_weak_explicit(
-              (device metal::atomic_int *)ptr, &current, value,
+              (device metal::atomic_int*)ptr, &current, value,
               metal::memory_order_relaxed, metal::memory_order_relaxed)) {
         break;
       }
     }
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline void atomic_min(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint value) {
-    volatile device uint *ptr = address.data();
-    uint current = metal::atomic_load_explicit((device metal::atomic_uint *)ptr,
+    volatile device uint* ptr = address.data();
+    uint current = metal::atomic_load_explicit((device metal::atomic_uint*)ptr,
                                                metal::memory_order_relaxed);
     while (current > value) {
       if (metal::atomic_compare_exchange_weak_explicit(
-              (device metal::atomic_uint *)ptr, &current, value,
+              (device metal::atomic_uint*)ptr, &current, value,
               metal::memory_order_relaxed, metal::memory_order_relaxed)) {
         break;
       }
     }
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline void atomic_max(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int> address,
       int value) {
-    volatile device int *ptr = address.data();
-    int current = metal::atomic_load_explicit((device metal::atomic_int *)ptr,
+    volatile device int* ptr = address.data();
+    int current = metal::atomic_load_explicit((device metal::atomic_int*)ptr,
                                               metal::memory_order_relaxed);
     while (current < value) {
       if (metal::atomic_compare_exchange_weak_explicit(
-              (device metal::atomic_int *)ptr, &current, value,
+              (device metal::atomic_int*)ptr, &current, value,
               metal::memory_order_relaxed, metal::memory_order_relaxed)) {
         break;
       }
     }
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename>
-            class SliceT>
+                      breeze::utils::DataArrangement, typename> class SliceT>
   inline void atomic_max(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint value) {
-    volatile device uint *ptr = address.data();
-    uint current = metal::atomic_load_explicit((device metal::atomic_uint *)ptr,
+    volatile device uint* ptr = address.data();
+    uint current = metal::atomic_load_explicit((device metal::atomic_uint*)ptr,
                                                metal::memory_order_relaxed);
     while (current < value) {
       if (metal::atomic_compare_exchange_weak_explicit(
-              (device metal::atomic_uint *)ptr, &current, value,
+              (device metal::atomic_uint*)ptr, &current, value,
               metal::memory_order_relaxed, metal::memory_order_relaxed)) {
         break;
       }
@@ -295,8 +284,8 @@ inline uint MetalSpecialization::atomic_load<
     breeze::utils::Slice<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint>>(
     breeze::utils::Slice<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint>
         address) {
-  volatile device uint *ptr = address.data();
-  return metal::atomic_load_explicit((device metal::atomic_uint *)ptr,
+  volatile device uint* ptr = address.data();
+  return metal::atomic_load_explicit((device metal::atomic_uint*)ptr,
                                      metal::memory_order_relaxed);
 }
 
@@ -307,8 +296,8 @@ inline void MetalSpecialization::atomic_store<
     breeze::utils::Slice<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int>
         address,
     int value) {
-  volatile device int *ptr = address.data();
-  metal::atomic_store_explicit((device metal::atomic_int *)ptr, value,
+  volatile device int* ptr = address.data();
+  metal::atomic_store_explicit((device metal::atomic_int*)ptr, value,
                                metal::memory_order_relaxed);
 }
 
@@ -319,7 +308,7 @@ inline void MetalSpecialization::atomic_store<
     breeze::utils::Slice<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint>
         address,
     uint value) {
-  volatile device uint *ptr = address.data();
-  metal::atomic_store_explicit((device metal::atomic_uint *)ptr, value,
+  volatile device uint* ptr = address.data();
+  metal::atomic_store_explicit((device metal::atomic_uint*)ptr, value,
                                metal::memory_order_relaxed);
 }
