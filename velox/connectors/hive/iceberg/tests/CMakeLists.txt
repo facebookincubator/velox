@@ -60,6 +60,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   add_executable(
     velox_hive_iceberg_insert_test
     IcebergInsertTest.cpp
+    IcebergPartitionPathTest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionSpecTest.cpp
