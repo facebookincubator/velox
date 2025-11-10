@@ -542,8 +542,16 @@ PrestoExprToSubfieldFilterParser::toSubfieldFilter(
       auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
     if (call->name() == "or") {
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
+      if (!left.second) {
+        return {};
+      }
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
-      VELOX_CHECK(left.first == right.first);
+      if (!right.second) {
+        return {};
+      }
+      if (left.first != right.first) {
+        return {};
+      }
       return {
           std::move(left.first),
           makeOrFilter(std::move(left.second), std::move(right.second))};
@@ -563,8 +571,7 @@ PrestoExprToSubfieldFilterParser::toSubfieldFilter(
       return std::make_pair(std::move(subfield), std::move(filter));
     }
   }
-  VELOX_UNSUPPORTED(
-      "Unsupported expression for range filter: {}", expr->toString());
+  return {};
 }
 
 } // namespace facebook::velox::exec
