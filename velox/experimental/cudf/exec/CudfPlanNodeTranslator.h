@@ -13,30 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include "velox/benchmarks/tpch/TpchBenchmark.h"
+#include "velox/exec/Operator.h"
 
-#include <memory>
-#include <string>
-#include <vector>
+namespace facebook::velox::cudf_velox {
 
-class CudfTpchBenchmark : public TpchBenchmark {
+/// Translates cuDF plan nodes to cuDF operators. Used by LocalPlanner
+class CudfPlanNodeTranslator : public exec::Operator::PlanNodeTranslator {
  public:
-  void initialize() override;
+  std::unique_ptr<exec::Operator> toOperator(
+      exec::DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node) override;
 
-  facebook::velox::exec::test::TpchPlan getQueryPlanForExecution(
-      int32_t queryId) override;
-
-  std::shared_ptr<facebook::velox::config::ConfigBase> makeConnectorProperties()
-      override;
-
-  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
-  listSplits(
-      const std::string& path,
-      int32_t numSplitsPerFile,
-      const facebook::velox::exec::test::TpchPlan& plan) override;
-
-  void shutdown() override;
+  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override;
 };
+
+} // namespace facebook::velox::cudf_velox

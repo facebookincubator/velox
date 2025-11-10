@@ -26,6 +26,7 @@
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -471,9 +472,36 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
+
+  exec::Operator::registerOperator(std::make_unique<CudfPlanNodeTranslator>());
+
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
-  exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
-  exec::DriverFactory::registerAdapter(cudfAdapter);
+  // exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
+  // exec::DriverFactory::registerAdapter(cudfAdapter);
+
+  exec::DriverAdapter printer{
+      "cuDF-DriverPrinter",
+      {},
+      [](const exec::DriverFactory& /*factory*/, exec::Driver& driver) -> bool {
+        try {
+          auto* ctx = driver.driverCtx();
+          auto ops = driver.operators();
+          std::ostringstream oss;
+          oss << "DRIVER pipeline=" << ctx->pipelineId
+              << " driver=" << ctx->driverId << " operators=";
+          for (size_t i = 0; i < ops.size(); ++i) {
+            if (i) {
+              oss << " -> ";
+            }
+            oss << ops[i]->operatorType() << "[" << ops[i]->planNodeId() << "]";
+          }
+          std::cout << oss.str() << std::endl;
+        } catch (...) {
+        }
+        // Allow other adapters to run. otherwise cudf driver adapter won't run
+        return false;
+      }};
+  // exec::DriverFactory::registerAdapter(printer);
 
   if (CudfConfig::getInstance().astExpressionEnabled) {
     registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);

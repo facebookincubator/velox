@@ -19,10 +19,13 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
@@ -62,6 +65,16 @@ DEFINE_int32(
     "Percentage of GPU memory to allocate for cudf operators.");
 
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
+
+DEFINE_bool(
+    enable_gpu_plan_rewrite,
+    false,
+    "Enable GPU plan rewriting with pipeline separation");
+
+DEFINE_int32(
+    gpu_driver_count,
+    4,
+    "Number of drivers for GPU pipelines (when GPU plan rewriting is enabled)");
 
 void CudfTpchBenchmark::initialize() {
   TpchBenchmark::initialize();
@@ -149,6 +162,29 @@ CudfTpchBenchmark::listSplits(
 void CudfTpchBenchmark::shutdown() {
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
+}
+
+exec::test::TpchPlan CudfTpchBenchmark::getQueryPlanForExecution(
+    int32_t queryId) {
+  auto queryPlan = TpchBenchmark::getQueryPlanForExecution(queryId);
+
+  if (FLAGS_enable_gpu_plan_rewrite) {
+    cudf_velox::CudfPlanRewriter::Config rewriteConfig;
+    rewriteConfig.gpuDriverCount = FLAGS_gpu_driver_count;
+    rewriteConfig.cpuDriverCount = FLAGS_num_drivers;
+
+    std::cout << "Rewriting plan for cudf" << std::endl;
+    std::cout << "  GPU drivers: " << FLAGS_gpu_driver_count << std::endl;
+    std::cout << "  CPU drivers: " << FLAGS_num_drivers << std::endl;
+
+    queryPlan.plan =
+        cudf_velox::CudfPlanRewriter::rewrite(queryPlan.plan, rewriteConfig);
+
+    std::cout << "cudf plan:" << std::endl;
+    std::cout << queryPlan.plan->toString(true, true) << std::endl << std::endl;
+  }
+
+  return queryPlan;
 }
 
 int main(int argc, char** argv) {

@@ -24,6 +24,8 @@ add_library(
   CudfOrderBy.cpp
   CudfTopN.cpp
   DebugUtil.cpp
+  CudfPlanNodeTranslator.cpp
+  CudfPlanRewriter.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp

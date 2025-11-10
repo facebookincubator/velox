@@ -184,6 +184,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ21Plan();
     case 22:
       return getQ22Plan();
+    case 23:
+      return getQ23Plan();
     default:
       VELOX_NYI("TPC-H query {} is not supported yet", queryId);
   }
@@ -2462,6 +2464,62 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
   context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
   context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFiles[customerScanNodeIdWithKey] = getTableFilePaths(kCustomer);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ23Plan() const {
+  // Simplified Q1: single aggregation (no partial/final split)
+  // This makes it easier to test GPU aggregation rewriting
+  // without dealing with existing LocalPartition/LocalExchange nodes
+
+  std::vector<std::string> selectedColumns = {
+      "l_returnflag",
+      "l_linestatus",
+      "l_quantity",
+      "l_extendedprice",
+      "l_discount",
+      "l_tax",
+      "l_shipdate"};
+
+  const auto selectedRowType = getRowType(kLineitem, selectedColumns);
+  const auto& fileColumnNames = getFileColumnNames(kLineitem);
+
+  // shipdate <= '1998-09-02'
+  const auto shipDate = "l_shipdate";
+  auto filter = formatDateFilter(shipDate, selectedRowType, "", "'1998-09-03'");
+
+  core::PlanNodeId lineitemPlanNodeId;
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .filtersAsNode(filtersAsNode_)
+          .tableScan(kLineitem, selectedRowType, fileColumnNames, {filter})
+          .captureScanNodeId(lineitemPlanNodeId)
+          .project(
+              {"l_returnflag",
+               "l_linestatus",
+               "l_quantity",
+               "l_extendedprice",
+               "l_extendedprice * (1.0 - l_discount) AS l_sum_disc_price",
+               "l_extendedprice * (1.0 - l_discount) * (1.0 + l_tax) AS l_sum_charge",
+               "l_discount"})
+          .singleAggregation(
+              {"l_returnflag", "l_linestatus"},
+              {"sum(l_quantity)",
+               "sum(l_extendedprice)",
+               "sum(l_sum_disc_price)",
+               "sum(l_sum_charge)",
+               "avg(l_quantity)",
+               "avg(l_extendedprice)",
+               "avg(l_discount)",
+               "count(0)"})
+          .orderBy({"l_returnflag", "l_linestatus"}, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
   context.dataFileFormat = format_;
   return context;
 }

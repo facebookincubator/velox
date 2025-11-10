@@ -45,16 +45,28 @@ for query_number in ${queries}; do
       CUDF_FLAGS=""
       ;;
     "gpu")
-      num_drivers=${NUM_DRIVERS:-4}
+      num_drivers=${NUM_DRIVERS:-32}
       BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
-      CUDF_FLAGS="--velox_cudf_table_scan=true --cudf_chunk_read_limit=${cudf_chunk_read_limit} --cudf_pass_read_limit=${cudf_pass_read_limit} --cudf_memory_resource=${VELOX_CUDF_MEMORY_RESOURCE} --cudf_memory_percent=${VELOX_CUDF_MEMORY_PERCENT}"
+      CUDF_FLAGS="\
+        --cudf_chunk_read_limit=${cudf_chunk_read_limit} \
+        --cudf_pass_read_limit=${cudf_pass_read_limit} \
+        --velox_cudf_table_scan=false \
+        --enable_gpu_plan_rewrite=true \
+        --gpu_driver_count=1"
+      VELOX_CUDF_ENABLED=true
       ;;
     esac
     echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
     # The benchmarks segfault after reporting results, so we disable errors
     PROFILE_CMD=""
     if [[ ${profile} == "true" ]]; then
-      PROFILE_CMD="nsys profile -t nvtx,cuda,osrt -f true --cuda-memory-usage=true --cuda-um-cpu-page-faults=true --cuda-um-gpu-page-faults=true --output=benchmark_results/q${query_number}_${device}_${num_drivers}_drivers.nsys-rep"
+      PROFILE_CMD="nsys profile \
+        -t nvtx,cuda,osrt \
+        -f true \
+        --cuda-memory-usage=true \
+        --cuda-um-cpu-page-faults=true \
+        --cuda-um-gpu-page-faults=true \
+        --output=benchmark_results/q${query_number}_${device}_${num_drivers}_drivers.nsys-rep"
       # Enable GPU metrics if supported (Ampere or newer)
       if [[ "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader -i 0 | cut -d '.' -f 1)" -gt 7 ]]; then
         device_id=${CUDA_VISIBLE_DEVICES:-"0"}
@@ -65,10 +77,11 @@ for query_number in ${queries}; do
     set +e -x
     ${PROFILE_CMD} \
       ${BENCHMARK_EXECUTABLE} \
-      --data_path=velox-tpch-sf10-data \
+      --data_path=/mydata/velox-tpch-sf0_1-misiu-data/paths_for_velox_bench \
       --data_format=parquet \
       --run_query_verbose=${query_number} \
-      --num_repeats=1 \
+      --num_repeats=10 \
+      --include_results=true \
       --num_drivers=${num_drivers} \
       ${CUDF_FLAGS} 2>&1 |
       tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers

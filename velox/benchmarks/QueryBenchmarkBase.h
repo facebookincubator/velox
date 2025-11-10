@@ -32,6 +32,7 @@ DECLARE_string(test_flags_file);
 DECLARE_bool(include_results);
 DECLARE_bool(include_custom_stats);
 DECLARE_string(data_format);
+DECLARE_int32(num_drivers);
 
 namespace facebook::velox {
 
