@@ -580,3 +580,10 @@ bool PrestoQueryRunner::supportsVeloxVectorResults() const {
 }
 
 } // namespace facebook::velox::exec::test
+
+template <>
+struct fmt::formatter<CURLcode> : formatter<int> {
+  auto format(CURLcode s, format_context& ctx) const {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
