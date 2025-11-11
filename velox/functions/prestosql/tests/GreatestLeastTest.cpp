@@ -439,3 +439,115 @@ TEST_F(GreatestLeastTest, boolean) {
       {true, true, true, false, std::nullopt, std::nullopt});
   test::assertEqualVectors(expected, result);
 }
+// Array overload tests for least() and greatest()
+TEST_F(GreatestLeastTest, arrayLeastBigint) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {-100, 50, 0},
+      }),
+  });
+
+  auto result = evaluate("least(c0)", data);
+  auto expected = makeNullableFlatVector<int64_t>({1, -100});
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(GreatestLeastTest, arrayGreatestBigint) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {-100, 50, 0},
+      }),
+  });
+
+  auto result = evaluate("greatest(c0)", data);
+  auto expected = makeNullableFlatVector<int64_t>({3, 50});
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(GreatestLeastTest, arrayWithNulls) {
+  auto data = makeRowVector({
+      makeNullableArrayVector<int64_t>({
+          {{1, std::nullopt, 3}},
+          {{std::nullopt, std::nullopt}},
+          std::nullopt,
+      }),
+  });
+
+  auto result = evaluate("least(c0)", data);
+  auto expected =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt});
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("greatest(c0)", data);
+  expected = makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt});
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(GreatestLeastTest, arrayEmpty) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({{}}),
+  });
+
+  auto result = evaluate("least(c0)", data);
+  auto expected = makeNullableFlatVector<int64_t>({std::nullopt});
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("greatest(c0)", data);
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(GreatestLeastTest, arrayDouble) {
+  auto data = makeRowVector({
+      makeArrayVector<double>({
+          {1.1, 2.2, 3.3},
+          {-100.5, 50.5, 0.0},
+      }),
+  });
+
+  auto result = evaluate("least(c0)", data);
+  auto expected = makeNullableFlatVector<double>({1.1, -100.5});
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("greatest(c0)", data);
+  expected = makeNullableFlatVector<double>({3.3, 50.5});
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(GreatestLeastTest, arrayNaN) {
+  auto data = makeRowVector({
+      makeArrayVector<double>({
+          {1.0, std::nan("1"), 2.0},
+          {std::nan("1"), -std::numeric_limits<double>::infinity(), 0.0},
+      }),
+  });
+
+  auto result = evaluate("greatest(c0)", data);
+  EXPECT_TRUE(std::isnan(result->asFlatVector<double>()->valueAt(0)));
+  EXPECT_TRUE(std::isnan(result->asFlatVector<double>()->valueAt(1)));
+
+  result = evaluate("least(c0)", data);
+  EXPECT_EQ(result->asFlatVector<double>()->valueAt(0), 1.0);
+  EXPECT_EQ(
+      result->asFlatVector<double>()->valueAt(1),
+      -std::numeric_limits<double>::infinity());
+}
+
+TEST_F(GreatestLeastTest, arrayVarchar) {
+  auto data = makeRowVector({
+      makeArrayVector<StringView>({
+          {"apple"_sv, "banana"_sv, "cherry"_sv},
+          {"zebra"_sv, "aardvark"_sv, "monkey"_sv},
+      }),
+  });
+
+  auto result = evaluate("least(c0)", data);
+  auto expected =
+      makeNullableFlatVector<StringView>({"apple"_sv, "aardvark"_sv});
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("greatest(c0)", data);
+  expected = makeNullableFlatVector<StringView>({"cherry"_sv, "zebra"_sv});
+  test::assertEqualVectors(expected, result);
+}

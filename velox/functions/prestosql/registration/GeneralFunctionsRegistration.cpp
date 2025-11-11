@@ -60,6 +60,73 @@ void registerAllGreatestLeastFunctions(const std::string& prefix) {
   registerGreatestLeastFunction<Timestamp>(prefix);
   registerGreatestLeastFunction<TimestampWithTimezone>(prefix);
   registerGreatestLeastFunction<IPAddress>(prefix);
+
+  // Register array overloads
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, int8_t>,
+      int8_t,
+      Array<int8_t>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, int16_t>,
+      int16_t,
+      Array<int16_t>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, int32_t>,
+      int32_t,
+      Array<int32_t>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, int64_t>,
+      int64_t,
+      Array<int64_t>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, float>,
+      float,
+      Array<float>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, double>,
+      double,
+      Array<double>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, Varchar>,
+      Varchar,
+      Array<Varchar>>({prefix + "greatest"});
+  registerFunction<
+      ParameterBinder<ArrayGreatestFunction, Timestamp>,
+      Timestamp,
+      Array<Timestamp>>({prefix + "greatest"});
+
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, int8_t>,
+      int8_t,
+      Array<int8_t>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, int16_t>,
+      int16_t,
+      Array<int16_t>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, int32_t>,
+      int32_t,
+      Array<int32_t>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, int64_t>,
+      int64_t,
+      Array<int64_t>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, float>,
+      float,
+      Array<float>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, double>,
+      double,
+      Array<double>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, Varchar>,
+      Varchar,
+      Array<Varchar>>({prefix + "least"});
+  registerFunction<
+      ParameterBinder<ArrayLeastFunction, Timestamp>,
+      Timestamp,
+      Array<Timestamp>>({prefix + "least"});
 }
 } // namespace
 

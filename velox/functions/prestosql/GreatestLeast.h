@@ -109,5 +109,87 @@ using LeastFunction = details::ExtremeValueFunction<TExec, T, true>;
 
 template <typename TExec, typename T>
 using GreatestFunction = details::ExtremeValueFunction<TExec, T, false>;
+// Array overloads for least() and greatest()
+template <typename TExec, typename T, bool isLeast>
+struct ArrayExtremeValueFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<T>& result,
+      const arg_type<Array<T>>& array) {
+    if (array.size() == 0) {
+      // Empty array returns null
+      return false;
+    }
+
+    bool hasValue = false;
+    std::optional<typename arg_type<Array<T>>::element_t> currentValue;
+
+    for (const auto& element : array) {
+      if (element.has_value()) {
+        if (!hasValue) {
+          currentValue = element.value();
+          hasValue = true;
+        } else {
+          if constexpr (isLeast) {
+            if (smallerThan(element.value(), currentValue.value())) {
+              currentValue = element.value();
+            }
+          } else {
+            if (greaterThan(element.value(), currentValue.value())) {
+              currentValue = element.value();
+            }
+          }
+        }
+      }
+    }
+
+    if (!hasValue) {
+      // Array contains only nulls
+      return false;
+    }
+
+    result = currentValue.value();
+    return true;
+  }
+
+ private:
+  template <typename K>
+  bool greaterThan(const K& lhs, const K& rhs) const {
+    if constexpr (std::is_same_v<K, double> || std::is_same_v<K, float>) {
+      if (std::isnan(lhs)) {
+        return true;
+      }
+
+      if (std::isnan(rhs)) {
+        return false;
+      }
+    }
+
+    return lhs > rhs;
+  }
+
+  template <typename K>
+  bool smallerThan(const K& lhs, const K& rhs) const {
+    if constexpr (std::is_same_v<K, double> || std::is_same_v<K, float>) {
+      if (std::isnan(lhs)) {
+        return false;
+      }
+
+      if (std::isnan(rhs)) {
+        return true;
+      }
+    }
+
+    return lhs < rhs;
+  }
+};
+
+template <typename TExec, typename T>
+struct ArrayLeastFunction : public ArrayExtremeValueFunction<TExec, T, true> {};
+
+template <typename TExec, typename T>
+struct ArrayGreatestFunction
+    : public ArrayExtremeValueFunction<TExec, T, false> {};
 
 } // namespace facebook::velox::functions
