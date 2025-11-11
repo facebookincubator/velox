@@ -654,7 +654,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
         child->resize(targetSize);
       }
       int count = 0;
-      exec::test::testGatherMerge(
+      testingGatherMerge(
           targetVector, *mergeTree, count, bufferSources, bufferSourceIndices);
       EXPECT_EQ(count, valueEnd - valueBegin);
       auto result = targetVector->childAt(0).get();

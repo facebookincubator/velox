@@ -36,21 +36,19 @@ namespace facebook::velox::exec {
 
 class SpillMergeStream;
 
-namespace test {
-/// Test gatherMerge without exposing the interface in the header. Used in
+/// Testing gatherMerge without exposing the interface in the header. Used in
 /// test only. gatherMerge merges & sorts with the mergeTree and gatherCopy the
 /// results into target. 'target' is the result RowVector, and the copying
 /// starts from row 0 up to row target.size(). 'mergeTree' is the data source.
-/// 'count' is the actual row count that is copied to target. 'bufferSources'
-/// and 'bufferSourceIndices' are buffering vectors that could be reused across
-/// callings.
-void testGatherMerge(
+/// 'totalNumRows' is the actual num of rows that is copied to target.
+/// 'bufferSources' and 'bufferSourceIndices' are buffering vectors that could
+/// be reused across calls.
+void testingGatherMerge(
     RowVectorPtr& target,
     TreeOfLosers<SpillMergeStream>& mergeTree,
-    int32_t& count,
+    int32_t& totalNumRows,
     std::vector<const RowVector*>& bufferSources,
     std::vector<vector_size_t>& bufferSourceIndices);
-} // namespace test
 
 class VectorHasher;
 
