@@ -242,7 +242,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          source scripts/setup-fedora.sh && run_and_time install_roaring
+          scripts/setup-fedora.sh
 
       - name: Clear CCache Statistics
         run: |
