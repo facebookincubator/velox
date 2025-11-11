@@ -4459,6 +4459,66 @@ TEST_F(VectorTest, transferOrCopyTo) {
   for (auto i = 0; i < kNumIterations; ++i) {
     testMemoryStats(kNumIterations * i + i);
   }
+
+  // Test StringView pointer remapping when string buffers are copied.
+  // This test verifies that non-inline StringView pointers are correctly
+  // updated when string buffers are copied during pool transfer.
+  {
+    // Create a separate MemoryManager to ensure pools are incompatible,
+    // forcing buffers to be copied rather than transferred.
+    memory::MemoryManager localManager{memory::MemoryManager::Options{}};
+    auto localRootPool = localManager.addRootPool("short-living");
+    auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+    // Create a FlatVector with a long string (non-inline) that will be
+    // stored in a string buffer.
+    test::VectorMaker maker{localPool.get()};
+    const std::string longString(100, 'x'); // 100 chars, exceeds inline limit
+    vector = maker.flatVector<StringView>(
+        std::vector<StringView>{StringView(longString)});
+
+    auto* flatVector = vector->as<FlatVector<StringView>>();
+    ASSERT_NE(flatVector, nullptr);
+
+    // Store the old string buffer pointer for verification
+    const char* oldBufferPtr = flatVector->stringBuffers()[0]->as<char>();
+    const StringView& oldStringView = flatVector->valueAt(0);
+    ASSERT_FALSE(oldStringView.isInline());
+    const char* oldStringDataPtr = oldStringView.data();
+
+    // Verify the StringView points into the string buffer
+    ASSERT_GE(oldStringDataPtr, oldBufferPtr);
+    ASSERT_LT(
+        oldStringDataPtr,
+        oldBufferPtr + flatVector->stringBuffers()[0]->size());
+
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+
+    // Verify the StringView pointer was updated to point to the new buffer
+    flatVector = vector->as<FlatVector<StringView>>();
+    const char* newBufferPtr = flatVector->stringBuffers()[0]->as<char>();
+    const StringView& newStringView = flatVector->valueAt(0);
+    const char* newStringDataPtr = newStringView.data();
+
+    // The buffer should have been copied to a new address
+    ASSERT_NE(oldBufferPtr, newBufferPtr);
+
+    // The StringView pointer should have been updated to point into the new
+    // buffer
+    ASSERT_GE(newStringDataPtr, newBufferPtr);
+    ASSERT_LT(
+        newStringDataPtr,
+        newBufferPtr + flatVector->stringBuffers()[0]->size());
+
+    // Verify the offset within the buffer is preserved
+    ptrdiff_t oldOffset = oldStringDataPtr - oldBufferPtr;
+    ptrdiff_t newOffset = newStringDataPtr - newBufferPtr;
+    ASSERT_EQ(oldOffset, newOffset);
+  }
 }
 
 } // namespace

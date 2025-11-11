@@ -439,4 +439,138 @@ void FlatVector<StringView>::validate(
   }
 }
 
+namespace {
+
+// Metadata for tracking copied string buffers during pool transfer.
+struct BufferMapping {
+  const char* oldAddr; // Address of the buffer before copy
+  size_t oldSize; // Size of the buffer
+  size_t bufferIdx; // Index in stringBuffers_ array
+};
+
+// Transfers or copies string buffers to a new pool, returning mappings for
+// buffers that were copied (transfer failed).
+std::vector<BufferMapping> transferOrCopyStringBuffers(
+    std::vector<BufferPtr>& stringBuffers,
+    folly::F14FastSet<const Buffer*>& stringBufferSet,
+    velox::memory::MemoryPool* pool) {
+  std::vector<BufferMapping> copiedBuffers;
+  copiedBuffers.reserve(stringBuffers.size());
+
+  for (size_t i = 0; i < stringBuffers.size(); ++i) {
+    auto& buffer = stringBuffers[i];
+    if (!buffer->transferTo(pool)) {
+      // Transfer failed, we need to copy and track the old address
+      const char* oldAddr = buffer->as<char>();
+      size_t oldSize = buffer->size();
+
+      VELOX_CHECK_NE(
+          stringBufferSet.erase(buffer.get()),
+          0,
+          "Erasure of existing string buffer should always succeed.");
+      buffer = AlignedBuffer::copy<char>(buffer, pool);
+      VELOX_CHECK(stringBufferSet.insert(buffer.get()).second);
+
+      copiedBuffers.push_back({oldAddr, oldSize, i});
+    }
+  }
+
+  return copiedBuffers;
+}
+
+// Remaps a StringView pointer if it points into a copied buffer.
+// Returns the updated pointer, or the original pointer if no remapping needed.
+const char* remapStringViewPointer(
+    const char* oldPtr,
+    const std::vector<BufferMapping>& copiedBuffers,
+    const std::vector<BufferPtr>& stringBuffers) {
+  for (const auto& mapping : copiedBuffers) {
+    if (oldPtr >= mapping.oldAddr &&
+        oldPtr < mapping.oldAddr + mapping.oldSize) {
+      // Pointer is in a copied buffer, calculate offset and remap
+      ptrdiff_t offset = oldPtr - mapping.oldAddr;
+      return stringBuffers[mapping.bufferIdx]->as<char>() + offset;
+    }
+  }
+  // Pointer doesn't point into any copied buffer, keep it unchanged
+  return oldPtr;
+}
+
+// Updates StringView values to use remapped pointers after string buffers
+// were copied.
+void remapStringViewValues(
+    BufferPtr& values,
+    StringView*& rawValues,
+    vector_size_t length,
+    const std::vector<BufferMapping>& copiedBuffers,
+    const std::vector<BufferPtr>& stringBuffers,
+    velox::memory::MemoryPool* pool) {
+  bool valuesTransferred = values->transferTo(pool);
+
+  const auto* sourceValues = values->as<StringView>();
+  BufferPtr destBuffer = valuesTransferred
+      ? values // Reuse transferred buffer, update in-place
+      : AlignedBuffer::allocate<StringView>(length, pool);
+  auto* destValues = destBuffer->asMutable<StringView>();
+
+  for (vector_size_t i = 0; i < length; ++i) {
+    const auto& sv = sourceValues[i];
+
+    if (sv.isInline()) {
+      // Inline strings: data is stored in the StringView itself
+      destValues[i] = sv;
+    } else {
+      // Non-inline: remap pointer if it points to a copied buffer
+      const char* newPtr =
+          remapStringViewPointer(sv.data(), copiedBuffers, stringBuffers);
+      destValues[i] = StringView(newPtr, sv.size());
+    }
+  }
+
+  values = destBuffer;
+  rawValues = destValues;
+}
+
+// Transfers or copies the values buffer when no string buffers were copied.
+void transferOrCopyValuesBuffer(
+    BufferPtr& values,
+    StringView*& rawValues,
+    velox::memory::MemoryPool* pool) {
+  if (!values->transferTo(pool)) {
+    // Transfer failed, copy the buffer
+    values = AlignedBuffer::copy<StringView>(values, pool);
+  }
+  // Update rawValues_ pointer to point to the (potentially new) buffer
+  rawValues = values->asMutable<StringView>();
+}
+
+} // namespace
+
+// For StringView, we need to properly update pointers when string buffers are
+// copied to a new memory pool.
+template <>
+void FlatVector<StringView>::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  BaseVector::transferOrCopyTo(pool);
+
+  // Transfer or copy string buffers and track which ones were copied
+  auto copiedBuffers =
+      transferOrCopyStringBuffers(stringBuffers_, stringBufferSet_, pool);
+
+  if (values_) {
+    if (!copiedBuffers.empty()) {
+      // String buffers were copied, need to remap StringView pointers
+      remapStringViewValues(
+          values_,
+          rawValues_,
+          BaseVector::length_,
+          copiedBuffers,
+          stringBuffers_,
+          pool);
+    } else {
+      // No string buffers were copied, just transfer/copy values buffer
+      transferOrCopyValuesBuffer(values_, rawValues_, pool);
+    }
+  }
+}
+
 } // namespace facebook::velox
