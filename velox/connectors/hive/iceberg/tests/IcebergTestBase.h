@@ -65,10 +65,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::vector<std::string> listFiles(const std::string& dirPath);
 
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
-      const std::vector<PartitionField>& partitionFields,
-      const RowTypePtr& rowType);
+      const RowTypePtr& rowType,
+      const std::vector<PartitionField>& partitionFields);
 
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  std::shared_ptr<memory::MemoryPool> opPool_;
+  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
 
  private:
   IcebergInsertTableHandlePtr createInsertTableHandle(
@@ -82,13 +84,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   void setupMemoryPools();
 
   std::shared_ptr<memory::MemoryPool> root_;
-  std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;
-  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   VectorFuzzer::Options fuzzerOptions_;
   std::unique_ptr<VectorFuzzer> fuzzer_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg::test

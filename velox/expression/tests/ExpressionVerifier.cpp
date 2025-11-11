@@ -434,6 +434,7 @@ ExpressionVerifier::verify(
             // Throws in case only one evaluation path throws exception.
             // Otherwise, return false to signal that the expression failed.
             if (exceptionCommonPtr && exceptionReference) {
+              LOG(INFO) << "Both paths threw exception.";
               verificationStates.push_back(VerificationState::kBothPathsThrow);
             } else {
               verificationStates.push_back(

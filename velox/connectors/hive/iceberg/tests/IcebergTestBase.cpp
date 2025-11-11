@@ -20,6 +20,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
@@ -51,6 +52,7 @@ void IcebergTestBase::TearDown() {
   connectorPool_.reset();
   opPool_.reset();
   root_.reset();
+  queryCtx_.reset();
   HiveConnectorTestBase::TearDown();
 }
 
@@ -59,6 +61,7 @@ void IcebergTestBase::setupMemoryPools() {
   opPool_.reset();
   connectorPool_.reset();
   connectorQueryCtx_.reset();
+  queryCtx_.reset();
 
   root_ = memory::memoryManager()->addRootPool(
       "IcebergTest", 1L << 30, exec::MemoryReclaimer::create());
@@ -66,13 +69,17 @@ void IcebergTestBase::setupMemoryPools() {
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
 
-  connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
+  queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
+  auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
+      queryCtx_.get(), opPool_.get());
+
+  connectorQueryCtx_ = std::make_unique<ConnectorQueryCtx>(
       opPool_.get(),
       connectorPool_.get(),
       connectorSessionProperties_.get(),
       nullptr,
       common::PrefixSortConfig(),
-      nullptr,
+      std::move(expressionEvaluator),
       nullptr,
       "query.IcebergTest",
       "task.IcebergTest",
@@ -103,8 +110,8 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
 }
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
-    const std::vector<PartitionField>& partitionFields,
-    const RowTypePtr& rowType) {
+    const RowTypePtr& rowType,
+    const std::vector<PartitionField>& partitionFields) {
   std::vector<IcebergPartitionSpec::Field> fields;
   for (const auto& partitionField : partitionFields) {
     fields.push_back(
@@ -154,7 +161,7 @@ IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
-  auto partitionSpec = createPartitionSpec(partitionFields, rowType);
+  auto partitionSpec = createPartitionSpec(rowType, partitionFields);
 
   return std::make_shared<const IcebergInsertTableHandle>(
       /*inputColumns=*/columnHandles,

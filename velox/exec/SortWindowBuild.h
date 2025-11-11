@@ -46,6 +46,10 @@ class SortWindowBuild : public WindowBuild {
 
   void addInput(RowVectorPtr input) override;
 
+  void addDecodedInputRow(
+      std::vector<DecodedVector>& decodedInputVectors,
+      vector_size_t row);
+
   void spill() override;
 
   std::optional<common::SpillStats> spilledStats() const override;
@@ -56,9 +60,9 @@ class SortWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
- private:
   void ensureInputFits(const RowVectorPtr& input);
 
+ private:
   void ensureSortFits();
 
   void setupSpiller();

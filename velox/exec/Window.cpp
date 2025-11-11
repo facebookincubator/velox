@@ -18,9 +18,21 @@
 #include "velox/exec/PartitionStreamingWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
+#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+common::PrefixSortConfig makePrefixSortConfig(
+    const core::QueryConfig& queryConfig) {
+  return common::PrefixSortConfig{
+      queryConfig.prefixSortNormalizedKeyMaxBytes(),
+      queryConfig.prefixSortMinRows(),
+      queryConfig.prefixSortMaxStringPrefixLength()};
+}
+
+} // namespace
 
 Window::Window(
     int32_t operatorId,
@@ -55,17 +67,28 @@ Window::Window(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
   } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(
-        windowNode,
-        pool(),
-        common::PrefixSortConfig{
-            driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
-            driverCtx->queryConfig().prefixSortMinRows(),
-            driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
-        spillConfig,
-        &nonReclaimableSection_,
-        &stats_,
-        spillStats_.get());
+    if (auto numSubPartitions =
+            operatorCtx_->driverCtx()->queryConfig().windowNumSubPartitions();
+        numSubPartitions > 1) {
+      windowBuild_ = std::make_unique<SubPartitionedSortWindowBuild>(
+          windowNode,
+          numSubPartitions,
+          pool(),
+          makePrefixSortConfig(driverCtx->queryConfig()),
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    } else {
+      windowBuild_ = std::make_unique<SortWindowBuild>(
+          windowNode,
+          pool(),
+          makePrefixSortConfig(driverCtx->queryConfig()),
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    }
   }
 }
 
