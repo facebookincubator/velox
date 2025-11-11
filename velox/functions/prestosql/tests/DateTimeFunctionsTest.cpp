@@ -6269,6 +6269,44 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
 
+TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
+  const auto xxhash64 = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("xxhash64_internal(c0)", TIME(), time);
+  };
+
+  // Test NULL handling
+  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
+
+  // Test determinism - same input should give same output
+  auto result1 = xxhash64(43200000);
+  auto result2 = xxhash64(43200000);
+  EXPECT_EQ(result1, result2);
+
+  // Test that different inputs give different outputs
+  auto hash0 = xxhash64(0);
+  auto hash1 = xxhash64(1);
+  auto hashNoon = xxhash64(43200000);
+  auto hashEnd = xxhash64(86399999);
+
+  EXPECT_NE(hash0, hash1);
+  EXPECT_NE(hash0, hashNoon);
+  EXPECT_NE(hash0, hashEnd);
+  EXPECT_NE(hashNoon, hashEnd);
+
+  // Test boundary values don't crash
+  EXPECT_TRUE(xxhash64(0).has_value());
+  EXPECT_TRUE(xxhash64(86399999).has_value());
+
+  // Test known hash values validated against Presto xxhash64
+  // Query: SELECT from_big_endian_64(xxhash64(to_big_endian_64(value)))
+  EXPECT_EQ(3803688792395291579, xxhash64(0)); // Midnight
+  EXPECT_EQ(-6980583299780818982, xxhash64(1)); // 1 millisecond after midnight
+  EXPECT_EQ(7848233046982034517, xxhash64(43200000)); // Noon (12:00:00.000)
+  EXPECT_EQ(
+      5892092673475229733, xxhash64(86399999)); // End of day (23:59:59.999)
+  EXPECT_EQ(-3599997350390034763, xxhash64(1234)); // Arbitrary value
+}
+
 TEST_F(DateTimeFunctionsTest, localtime) {
   const auto localtime = [&](int64_t sessionStartTime,
                              const std::optional<std::string>& timeZone) {
