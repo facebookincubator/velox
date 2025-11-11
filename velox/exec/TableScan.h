@@ -64,6 +64,9 @@ class TableScan : public SourceOperator {
   static inline const std::string kNumRunningScaleThreads{
       "numRunningScaleThreads"};
 
+  /// Number of splits processed by a single operator
+  static inline const std::string kNumOperatorSplits{"numOperatorSplits"};
+
   std::shared_ptr<ScaledScanController> testingScaledController() const {
     return scaledController_;
   }
@@ -138,6 +141,9 @@ class TableScan : public SourceOperator {
 
   // Count of splits that finished preloading before being read.
   int32_t numReadyPreloadedSplits_{0};
+
+  // Number of splits processed by current operator
+  int32_t numProcessedSplits_{0};
 
   double maxFilteringRatio_{0};
 

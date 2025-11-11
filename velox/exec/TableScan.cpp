@@ -394,6 +394,7 @@ bool TableScan::getSplit() {
         RuntimeCounter(addSplitTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
   }
   ++stats_.wlock()->numSplits;
+  ++numProcessedSplits_;
   return true;
 }
 
@@ -512,20 +513,14 @@ void TableScan::close() {
     dataSource_->cancel();
   }
 
-  if (scaledController_ == nullptr) {
-    return;
-  }
+  stats_.wlock()->addRuntimeStat(
+      TableScan::kNumOperatorSplits, RuntimeCounter(numProcessedSplits_));
 
-  // Report the scaled controller stats by the first finished scan operator at
-  // which point all the splits have been dispatched.
-  if (!scaledController_->close()) {
-    return;
+  if (scaledController_ != nullptr && scaledController_->close()) {
+    const auto scaledStats = scaledController_->stats();
+    stats_.wlock()->addRuntimeStat(
+        TableScan::kNumRunningScaleThreads,
+        RuntimeCounter(scaledStats.numRunningDrivers));
   }
-
-  const auto scaledStats = scaledController_->stats();
-  auto lockedStats = stats_.wlock();
-  lockedStats->addRuntimeStat(
-      TableScan::kNumRunningScaleThreads,
-      RuntimeCounter(scaledStats.numRunningDrivers));
 }
 } // namespace facebook::velox::exec
