@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/Exchange.h"
-
 #include "velox/common/Casts.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/exec/OperatorUtils.h"
@@ -176,46 +175,111 @@ bool Exchange::isFinished() {
 RowVectorPtr Exchange::getOutput() {
   auto* serde = getSerde();
   if (serde->supportsAppendInDeserialize()) {
-    uint64_t rawInputBytes{0};
-    if (currentPages_.empty()) {
-      return nullptr;
-    }
-    vector_size_t resultOffset = 0;
-    for (const auto& page : currentPages_) {
-      rawInputBytes += page->size();
-
-      auto inputStream = page->prepareStreamForDeserialize();
-      while (!inputStream->atEnd()) {
-        serde->deserialize(
-            inputStream.get(),
-            pool(),
-            outputType_,
-            &result_,
-            resultOffset,
-            serdeOptions_.get());
-        resultOffset = result_->size();
-      }
-    }
-    currentPages_.clear();
-    recordInputStats(rawInputBytes);
-    return result_;
+    return getOutputFromColumnarPages(serde);
   }
-  return getOutputFromRows(serde);
+  return getOutputFromRowPages(serde);
 }
 
-RowVectorPtr Exchange::getOutputFromRows(VectorSerde* serde) {
+RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
+  if (currentPages_.empty()) {
+    return nullptr;
+  }
+
+  // Calculate target row count based on estimated row size, similar to
+  // getOutputFromRowPages.
+  // Start conservatively, then use estimates.
+  const auto numRows = estimatedRowSize_.has_value()
+      ? std::max(
+            (preferredOutputBatchBytes_ / estimatedRowSize_.value()),
+            kInitialOutputRows)
+      : kInitialOutputRows;
+
+  // Process pages one-by-one from currentPages_ pointed by columnarPageIdx_.
+  // Within each page, deserialize vectors incrementally until we hit the target
+  // batch size.
+  uint64_t rawInputBytes = 0;
+  vector_size_t resultOffset{0};
+
+  // Should be either starting fresh or continuing from a previous partial page
+  VELOX_CHECK(
+      inputStream_ == nullptr || columnarPageIdx_ < currentPages_.size());
+
+  // Iterate through pages
+  for (; columnarPageIdx_ < currentPages_.size();) {
+    auto& page = currentPages_[columnarPageIdx_];
+
+    // Track raw bytes for stats (only once per page)
+    if (!inputStream_) {
+      rawInputBytes += page->size();
+      // Create stream for this page
+      inputStream_ = page->prepareStreamForDeserialize();
+    }
+
+    // Inner loop: deserialize vectors from current page until batch is full
+    // or page is exhausted.
+    while (!inputStream_->atEnd() && resultOffset < numRows) {
+      serde->deserialize(
+          inputStream_.get(),
+          pool(),
+          outputType_,
+          &result_,
+          resultOffset,
+          serdeOptions_.get());
+
+      resultOffset = result_->size();
+    }
+
+    // If page is fully consumed
+    if (inputStream_->atEnd()) {
+      inputStream_ = nullptr;
+      // free memory immediately
+      page.reset();
+      // move to next page
+      ++columnarPageIdx_;
+    }
+
+    // Stop if accumulated enough rows for this batch
+    if (resultOffset >= numRows) {
+      break;
+    }
+  }
+
+  const auto numOutputRows = result_->size();
+  VELOX_CHECK_GT(numOutputRows, 0);
+
+  estimatedRowSize_ = std::max(
+      result_->estimateFlatSize() / numOutputRows,
+      estimatedRowSize_.value_or(1L));
+
+  // If processed all pages, clear the vector and reset state
+  if (columnarPageIdx_ >= currentPages_.size()) {
+    VELOX_CHECK_NULL(inputStream_);
+    currentPages_.clear();
+    columnarPageIdx_ = 0;
+  }
+
+  // Record stats
+  auto lockedStats = stats_.wlock();
+  lockedStats->rawInputBytes += rawInputBytes;
+  lockedStats->rawInputPositions += numOutputRows;
+  lockedStats->addInputVector(result_->estimateFlatSize(), numOutputRows);
+
+  return result_;
+}
+
+RowVectorPtr Exchange::getOutputFromRowPages(VectorSerde* serde) {
   uint64_t rawInputBytes{0};
   if (currentPages_.empty()) {
-    VELOX_CHECK_NULL(rowInputStream_);
+    VELOX_CHECK_NULL(inputStream_);
     VELOX_CHECK_NULL(rowIterator_);
     return nullptr;
   }
 
-  if (rowInputStream_ == nullptr) {
+  if (inputStream_ == nullptr) {
     std::unique_ptr<folly::IOBuf> mergedBufs = mergePages(currentPages_);
     rawInputBytes += mergedBufs->computeChainDataLength();
-    rowPages_ = std::make_unique<SerializedPage>(std::move(mergedBufs));
-    rowInputStream_ = rowPages_->prepareStreamForDeserialize();
+    mergedRowPage_ = std::make_unique<SerializedPage>(std::move(mergedBufs));
+    inputStream_ = mergedRowPage_->prepareStreamForDeserialize();
   }
 
   auto numRows = kInitialOutputRows;
@@ -227,7 +291,7 @@ RowVectorPtr Exchange::getOutputFromRows(VectorSerde* serde) {
 
   // Check if the serde supports batched deserialization
   serde->deserialize(
-      rowInputStream_.get(),
+      inputStream_.get(),
       rowIterator_,
       numRows,
       outputType_,
@@ -242,12 +306,12 @@ RowVectorPtr Exchange::getOutputFromRows(VectorSerde* serde) {
       result_->estimateFlatSize() / numOutputRows,
       estimatedRowSize_.value_or(1L));
 
-  if (rowInputStream_->atEnd() && rowIterator_ == nullptr) {
+  if (inputStream_->atEnd() && rowIterator_ == nullptr) {
     // only clear the input stream if we have reached the end of the row
     // iterator because row iterator may depend on input stream if serialized
     // rows are not compressed.
-    rowInputStream_ = nullptr;
-    rowPages_ = nullptr;
+    inputStream_ = nullptr;
+    mergedRowPage_ = nullptr;
     currentPages_.clear();
   }
 
@@ -266,6 +330,13 @@ void Exchange::close() {
   SourceOperator::close();
   currentPages_.clear();
   result_ = nullptr;
+
+  // Clean up stateful deserialization state
+  inputStream_ = nullptr;
+  mergedRowPage_ = nullptr;
+  rowIterator_ = nullptr;
+  columnarPageIdx_ = 0;
+
   if (exchangeClient_) {
     recordExchangeClientStats();
     exchangeClient_->close();
