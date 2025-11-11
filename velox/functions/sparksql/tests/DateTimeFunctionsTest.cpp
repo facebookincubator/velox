@@ -1699,8 +1699,14 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
 
 TEST_F(DateTimeFunctionsTest, timestampadd) {
   const auto timestampadd = [&](const std::string& unit,
-                                std::optional<int64_t> value,
+                                std::optional<int32_t> value,
                                 std::optional<Timestamp> timestamp) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
+  };
+  const auto timestampadd1 = [&](const std::string& unit,
+                                 std::optional<int64_t> value,
+                                 std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
         fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
   };
@@ -1708,15 +1714,26 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
   // Check null behaviors.
   EXPECT_EQ(std::nullopt, timestampadd("second", 1, std::nullopt));
   EXPECT_EQ(std::nullopt, timestampadd("month", std::nullopt, Timestamp(0, 0)));
+  EXPECT_EQ(
+      std::nullopt, timestampadd1("month", std::nullopt, Timestamp(0, 0)));
 
   // Check invalid units.
   VELOX_ASSERT_THROW(
       timestampadd("invalid_unit", 1, Timestamp(0, 0)),
       "Unsupported datetime unit: invalid_unit");
+  VELOX_ASSERT_THROW(
+      timestampadd1("invalid_unit", 1, Timestamp(0, 0)),
+      "Unsupported datetime unit: invalid_unit");
 
   EXPECT_EQ(
       Timestamp(1551348061, 999) /*2019-02-28 10:01:01.000000*/,
       timestampadd(
+          "microsecond",
+          60 * 1000000 + 500,
+          Timestamp(1551348000, 999'500'999) /*2019-02-28 10:00:00.999500*/));
+  EXPECT_EQ(
+      Timestamp(1551348061, 999) /*2019-02-28 10:01:01.000000*/,
+      timestampadd1(
           "microsecond",
           60 * 1000000 + 500,
           Timestamp(1551348000, 999'500'999) /*2019-02-28 10:00:00.999500*/));
