@@ -786,9 +786,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     SCOPED_TESTVALUE_SET(
         "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
         std::function<void(memory::MemoryPoolImpl*)>(
-            ([&](memory::MemoryPoolImpl* pool) {
-              ++numReserves;
-            })));
+            ([&](memory::MemoryPoolImpl* pool) { ++numReserves; })));
 
     sortWindowBuild->noMoreInput();
     if (spillEnabled) {
