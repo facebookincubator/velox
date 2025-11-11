@@ -24,7 +24,17 @@
 #include <folly/String.h>
 #include <folly/synchronization/CallOnce.h>
 #include <gflags/gflags.h>
+// Workaround for old Arrow header conflicting with glog
+// macro redefinition. Moving to Arrow 20 addresses the issue.
+// The issue is seen on macOS intel builds with macOS 15.
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmacro-redefined"
+#endif
 #include <glog/logging.h>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #include "velox/common/process/StackTrace.h"
 

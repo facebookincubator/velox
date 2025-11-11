@@ -20,6 +20,11 @@ if(VELOX_ENABLE_ARROW)
     set(THRIFT_SOURCE "BUNDLED")
   endif()
 
+  # Remove no-documentation with Arrow upgrade to Arrow 20.
+  # no-sign-compare only triggers for the Intel build.
+  # macro-redefined only triggers for the Intel build. Also fixed in newer Arrow.
+  set(VELOX_ARROW_SUPPRESS_CXXFLAGS "-Wno-documentation -Wno-sign-compare -Wno-macro-redefined")
+
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(
     ARROW_CMAKE_ARGS
@@ -42,8 +47,7 @@ if(VELOX_ENABLE_ARROW)
     -DThrift_SOURCE=${THRIFT_SOURCE}
     -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-    # Remove with Arrow upgrade to Arrow 20.
-    -DARROW_CXXFLAGS=-Wno-documentation
+    -DARROW_CXXFLAGS=${VELOX_ARROW_SUPPRESS_CXXFLAGS}
   )
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/lib)
 
