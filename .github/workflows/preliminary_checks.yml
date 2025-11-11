@@ -126,8 +126,7 @@ jobs:
           RANGE: ${{ needs.get-changes.outputs.diff-range }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-
-          python ./scripts/checks/run-clang-tidy.py --commit $RANGE $FILES
+          python ./scripts/checks/run-clang-tidy.py -p $(realpath ./_build/release) --commit $RANGE $FILES
 
   title-check:
     name: PR Title Format
