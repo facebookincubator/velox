@@ -3380,9 +3380,12 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
       "POLYGON ((0 0, 0 10, 10 10, 0 0))", 1, {{"1", "3"}});
 
   // Empty geometries
-  testGeometryToBingTilesFunc("POINT EMPTY", 10, {{}});
-  testGeometryToBingTilesFunc("POLYGON EMPTY", 10, {{}});
-  testGeometryToBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+  testGeometryToBingTilesFunc(
+      "POINT EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToBingTilesFunc(
+      "POLYGON EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION EMPTY", 10, common::testutil::optionalEmpty);
 
   // Geometries at MIN_LONGITUDE/MAX_LATITUDE
   testGeometryToBingTilesFunc(
@@ -3501,11 +3504,16 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   };
 
   // Empty geometries
-  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 0, {{}});
-  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 10, {{}});
-  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 23, {{}});
-  testGeometryToDissolvedBingTilesFunc("POLYGON EMPTY", 10, {{}});
-  testGeometryToDissolvedBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT EMPTY", 0, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT EMPTY", 23, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "POLYGON EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION EMPTY", 10, common::testutil::optionalEmpty);
 
   // Geometries at tile borders
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 0, {{""}});
@@ -3970,7 +3978,7 @@ TEST_F(GeometryFunctionsTest, testGeometryUnion) {
       "POLYGON EMPTY");
 
   // Empty array should return null
-  testGeometryUnionFunc({{}}, std::nullopt);
+  testGeometryUnionFunc(common::testutil::optionalEmpty, std::nullopt);
 
   // Null elements in input array should be ignored
   testGeometryUnionFunc({{std::nullopt, "POINT (1 2)"}}, "POINT (1 2)");
@@ -4041,7 +4049,7 @@ TEST_F(GeometryFunctionsTest, testStLineString) {
 
   // < 2 Points returns empty
   testStLineStringFunc({{"POINT (1 2)"}}, "LINESTRING EMPTY");
-  testStLineStringFunc({{}}, "LINESTRING EMPTY");
+  testStLineStringFunc(common::testutil::optionalEmpty, "LINESTRING EMPTY");
   // Duplicate consecutive points throws exception
   VELOX_ASSERT_USER_THROW(
       testStLineStringFunc({{"POINT (1 2)", "POINT (1 2)"}}, std::nullopt),
@@ -4126,7 +4134,7 @@ TEST_F(GeometryFunctionsTest, testStMultiPoint) {
   testStMultiPointFunc({{"POINT (1 2)"}}, "MULTIPOINT (1 2)");
 
   // Empty array
-  testStMultiPointFunc({{}}, std::nullopt);
+  testStMultiPointFunc(common::testutil::optionalEmpty, std::nullopt);
 
   // Only points can be passed
   VELOX_ASSERT_USER_THROW(
