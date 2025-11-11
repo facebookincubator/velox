@@ -126,7 +126,6 @@ jobs:
           RANGE: ${{ needs.get-changes.outputs.diff-range }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-
           python ./scripts/checks/run-clang-tidy.py --commit $RANGE $FILES
 
   title-check:
