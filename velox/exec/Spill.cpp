@@ -29,59 +29,66 @@ namespace {
 /// gatherMerge merges & sorts with the mergeTree and gatherCopy the
 /// results into target. 'target' is the result RowVector, and the copying
 /// starts from row 0 up to row target.size(). 'mergeTree' is the data source.
-/// 'count' is the actual row count that is copied to target. 'bufferSources'
-/// and 'bufferSourceIndices' are buffering vectors that could be reused across
-/// callings.
+/// 'totalNumRows' is the actual num of rows that is copied to target.
+/// 'bufferSources' and 'bufferSourceIndices' are buffering vectors that could
+/// be reused across calls.
 void gatherMerge(
     RowVectorPtr& target,
     TreeOfLosers<SpillMergeStream>& mergeTree,
-    int32_t& count,
+    int32_t& totalNumRows,
     std::vector<const RowVector*>& bufferSources,
     std::vector<vector_size_t>& bufferSourceIndices) {
   VELOX_CHECK_GE(bufferSources.size(), target->size());
   VELOX_CHECK_GE(bufferSourceIndices.size(), target->size());
-  count = 0;
-  int32_t outputSize = 0;
+  totalNumRows = 0;
+  int32_t numBatchRows = 0;
   bool isEndOfBatch = false;
   for (auto currentStream = mergeTree.next();
-       currentStream != nullptr && count + outputSize < target->size();
+       currentStream != nullptr && totalNumRows + numBatchRows < target->size();
        currentStream = mergeTree.next()) {
-    bufferSources[outputSize] = &currentStream->current();
-    bufferSourceIndices[outputSize] =
+    bufferSources[numBatchRows] = &currentStream->current();
+    bufferSourceIndices[numBatchRows] =
         currentStream->currentIndex(&isEndOfBatch);
-    ++outputSize;
+    ++numBatchRows;
     if (FOLLY_UNLIKELY(isEndOfBatch)) {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
-          target.get(), count, outputSize, bufferSources, bufferSourceIndices);
-      count += outputSize;
-      outputSize = 0;
+          target.get(),
+          totalNumRows,
+          numBatchRows,
+          bufferSources,
+          bufferSourceIndices);
+      totalNumRows += numBatchRows;
+      numBatchRows = 0;
     }
     // Advance the stream.
     currentStream->pop();
   }
-  VELOX_CHECK_LE(count + outputSize, target->size());
+  VELOX_CHECK_LE(totalNumRows + numBatchRows, target->size());
 
-  if (FOLLY_LIKELY(outputSize != 0)) {
+  if (FOLLY_LIKELY(numBatchRows != 0)) {
     gatherCopy(
-        target.get(), count, outputSize, bufferSources, bufferSourceIndices);
-    count += outputSize;
-    outputSize = 0;
+        target.get(),
+        totalNumRows,
+        numBatchRows,
+        bufferSources,
+        bufferSourceIndices);
+    totalNumRows += numBatchRows;
+    numBatchRows = 0;
   }
 }
 } // namespace
 
-namespace test {
-void testGatherMerge(
+void testingGatherMerge(
     RowVectorPtr& target,
     TreeOfLosers<SpillMergeStream>& mergeTree,
-    int32_t& count,
+    int32_t& totalNumRows,
     std::vector<const RowVector*>& bufferSources,
     std::vector<vector_size_t>& bufferSourceIndices) {
-  gatherMerge(target, mergeTree, count, bufferSources, bufferSourceIndices);
+  gatherMerge(
+      target, mergeTree, totalNumRows, bufferSources, bufferSourceIndices);
 }
-} // namespace test
 
 void SpillMergeStream::pop() {
   VELOX_CHECK(!closed_);
@@ -376,15 +383,15 @@ SpillPartition::createOrderedReader(
 namespace {
 size_t estimateOutputBatchRows(
     const std::vector<std::unique_ptr<SpillMergeStream>>& streams,
-    const vector_size_t maxRows,
-    const size_t maxBytes) {
+    vector_size_t maxRows,
+    size_t maxBytes) {
   size_t numEstimations{0};
-  int64_t estimateRowSizeSum{0};
+  int64_t totalEstimatedBytes{0};
   for (const auto& stream : streams) {
     const auto streamEstimateRowSize = stream->estimateRowSize();
     if (streamEstimateRowSize.has_value()) {
       ++numEstimations;
-      estimateRowSizeSum += streamEstimateRowSize.value();
+      totalEstimatedBytes += streamEstimateRowSize.value();
     }
   }
 
@@ -393,7 +400,7 @@ size_t estimateOutputBatchRows(
   }
 
   const auto estimateRowSize =
-      std::max<vector_size_t>(1, estimateRowSizeSum / numEstimations);
+      std::max<vector_size_t>(1, totalEstimatedBytes / numEstimations);
   return std::min<vector_size_t>(
       std::max<vector_size_t>(1, maxBytes / estimateRowSize), maxRows);
 }
@@ -464,9 +471,7 @@ SpillFileInfo mergeFiles(
     VectorPtr tmpRowVector = std::move(bufferParams.rowVector);
     BaseVector::prepareForReuse(tmpRowVector, batchRows);
     bufferParams.rowVector = std::static_pointer_cast<RowVector>(tmpRowVector);
-    for (auto& child : bufferParams.rowVector->children()) {
-      child->resize(batchRows);
-    }
+    bufferParams.rowVector->resize(batchRows);
     int32_t outputRow = 0;
     gatherMerge(
         bufferParams.rowVector,
