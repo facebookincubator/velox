@@ -1699,7 +1699,7 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
 
 TEST_F(DateTimeFunctionsTest, timestampadd) {
   const auto timestampadd = [&](const std::string& unit,
-                                std::optional<int32_t> value,
+                                std::optional<int64_t> value,
                                 std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
         fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
