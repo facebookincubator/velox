@@ -18,6 +18,7 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
+#include <absl/strings/match.h>
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -719,54 +720,15 @@ struct LongestCommonPrefixFunction {
     stringImpl::stringToCodePoints(left);
     stringImpl::stringToCodePoints(right);
 
-    if constexpr (isAscii) {
-      // Fast path for ASCII: simple byte comparison.
-      const char* leftData = left.data();
-      const char* rightData = right.data();
-      const size_t minLength = std::min(left.size(), right.size());
-
-      size_t commonLength = 0;
-      while (commonLength < minLength &&
-             leftData[commonLength] == rightData[commonLength]) {
-        commonLength++;
-      }
-
-      if (commonLength == 0) {
-        result.setEmpty();
-      } else {
-        result.setNoCopy(StringView(leftData, commonLength));
-      }
-    } else {
-      // Unicode path: lazy codepoint iteration.
-      const char* leftData = left.data();
-      const char* rightData = right.data();
-      const size_t leftLength = left.size();
-      const size_t rightLength = right.size();
-      size_t leftPos = 0;
-      size_t rightPos = 0;
-
-      while (leftPos < leftLength && rightPos < rightLength) {
-        int leftSize = 0;
-        int rightSize = 0;
-        auto codePointLeft = utf8proc_codepoint(
-            leftData + leftPos, leftData + leftLength, leftSize);
-        auto codePointRight = utf8proc_codepoint(
-            rightData + rightPos, rightData + rightLength, rightSize);
-
-        if (codePointLeft != codePointRight) {
-          break;
-        }
-
-        leftPos += leftSize;
-        rightPos += rightSize;
-      }
-
-      if (leftPos == 0) {
-        result.setEmpty();
-      } else {
-        result.setNoCopy(StringView(leftData, leftPos));
-      }
-    }
+    const char* leftData = left.data();
+    const char* rightData = right.data();
+    const size_t leftLength = left.size();
+    const size_t rightLength = right.size();
+    auto op = absl::FindLongestCommonPrefix(
+        std::string_view(leftData, leftLength),
+        std::string_view(rightData, rightLength));
+    result.setNoCopy(StringView(op));
+    
   }
 };
 
