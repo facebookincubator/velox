@@ -149,36 +149,59 @@ std::optional<folly::Uri> S3ProxyConfigurationBuilder::build() {
   return proxyUri;
 }
 
-std::optional<std::string> parseAWSStandardRegionName(
-    std::string_view endpoint) {
-  // The assumption is that the endpoint ends with
-  // ".amazonaws.com" or ".amazonaws.com/". That means for AWS we don't
-  // expect a port in the endpoint.
-  const std::string_view kAmazonHostSuffix = ".amazonaws.com";
-  auto index = endpoint.size() - kAmazonHostSuffix.size();
-  // Handle the case where the endpoint ends in a trailing slash.
-  if (endpoint.back() == '/') {
-    index--;
-  }
-  if (endpoint.rfind(kAmazonHostSuffix) != index) {
+bool isAWSEndpoint(const std::string_view& endpoint) {
+  return endpoint.find(kAWSHostSuffix) != std::string_view::npos;
+}
+bool isOCIEndpoint(const std::string_view& endpoint) {
+  return endpoint.find(kOCIHostSuffix) != std::string_view::npos;
+}
+
+std::optional<std::string> parseStandardRegionName(std::string_view endpoint) {
+  std::string_view hostSuffix;
+  if (isAWSEndpoint(endpoint)) {
+    hostSuffix = kAWSHostSuffix;
+  } else if (isOCIEndpoint(endpoint)) {
+    hostSuffix = kOCIHostSuffix;
+  } else {
     return std::nullopt;
   }
-  // Remove the kAmazonHostSuffix.
-  std::string_view endpointPrefix = endpoint.substr(0, index);
-  const re2::RE2 pattern("^(?:.+\\.)?s3[-.]([a-z0-9-]+)$");
+
+  if (endpoint.empty()) {
+    return std::nullopt;
+  }
+
+  // Remove trailing slash.
+  if (endpoint.back() == '/') {
+    endpoint.remove_suffix(1);
+  }
+
+  // Ensure endpoint ends with the correct suffix.
+  if (endpoint.size() <= hostSuffix.size() || !endpoint.ends_with(hostSuffix)) {
+    return std::nullopt;
+  }
+
+  // Strip the host suffix.
+  endpoint.remove_suffix(hostSuffix.size());
+
+  static const re2::RE2 awsPattern(R"(^(?:.+\.)?s3[-.]([a-z0-9-]+)$)");
+  static const re2::RE2 ociPattern(
+      R"(^(?:.+\.)?objectstorage(?:\.[a-z0-9-]+)*\.([a-z0-9-]+)$)");
+
   std::string region;
-  if (re2::RE2::FullMatch(endpointPrefix, pattern, &region)) {
-    // endpointPrefix is 'bucket.s3-[region]' or 'bucket.s3.[region]'
+  const re2::RE2& pattern =
+      (hostSuffix == kAWSHostSuffix) ? awsPattern : ociPattern;
+
+  if (re2::RE2::FullMatch(endpoint, pattern, &region)) {
     return region;
   }
 
-  index = endpointPrefix.rfind('.');
-  if (index != std::string::npos) {
-    // endpointPrefix was 'service.[region]'.
-    return std::string(endpointPrefix.substr(index + 1));
+  // Fallback: return the region that should be after the rightmost '.'.
+  // Ex: "foo.a3-reg.amazonaws.com" -> "foo.a3-reg" -> "a3-reg"
+  auto lastDot = endpoint.rfind('.');
+  if (lastDot != std::string_view::npos) {
+    return std::string(endpoint.substr(lastDot + 1));
   }
 
-  // Use default region set by the SDK.
   return std::nullopt;
 }
 
