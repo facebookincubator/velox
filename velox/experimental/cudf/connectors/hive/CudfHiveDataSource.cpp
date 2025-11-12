@@ -266,6 +266,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   std::call_once(*tableMaterialized_, [&]() {
     auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
+    // TODO(mh): We currently need named column references to select filter
+    // columns and filter row groups with stats. Disabling this until we fix
+    // in cuDF.
     if (false and readerOptions_.get_filter().has_value()) {
       // Filter row groups using stats
       rowGroupIndices = splitReader_->filter_row_groups_with_stats(
