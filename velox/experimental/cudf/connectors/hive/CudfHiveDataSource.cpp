@@ -118,6 +118,8 @@ class BufferedInputDataSource : public cudf::io::datasource {
   const size_t fileSize_;
 };
 
+// ---------------- Internal helper ----------------
+// Fetch a host buffer containing parquet source footer from a data source.
 auto fetchFooterBytes(std::shared_ptr<cudf::io::datasource> dataSource) {
   using namespace cudf::io::parquet;
 
