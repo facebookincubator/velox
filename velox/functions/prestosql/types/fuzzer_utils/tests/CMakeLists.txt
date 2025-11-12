@@ -15,7 +15,6 @@
 add_executable(
   velox_presto_types_fuzzer_utils_test
   TimestampWithTimeZoneInputGeneratorTest.cpp
-  TimeWithTimezoneInputGeneratorTest.cpp
   HyperLogLogInputGeneratorTest.cpp
   P4HyperLogLogInputGeneratorTest.cpp
   SfmSketchInputGeneratorTest.cpp
