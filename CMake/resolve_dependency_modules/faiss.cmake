@@ -60,6 +60,7 @@ FetchContent_Declare(
 # Set build options
 block()
   set(BUILD_SHARED_LIBS OFF)
+  set(BUILD_TESTING OFF)
   set(CMAKE_BUILD_TYPE Release)
   set(FAISS_ENABLE_GPU OFF)
   set(FAISS_ENABLE_PYTHON OFF)
@@ -68,4 +69,6 @@ block()
   # Make FAISS available
   FetchContent_MakeAvailable(faiss)
   add_library(FAISS::faiss ALIAS faiss)
+  unset(BUILD_TESTING CACHE)
+  unset(BUILD_SHARED_LIBS CACHE)
 endblock()

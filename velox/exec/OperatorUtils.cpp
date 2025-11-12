@@ -103,7 +103,11 @@ void gatherCopy(
     const std::vector<const RowVector*>& sources,
     const std::vector<vector_size_t>& sourceIndices,
     column_index_t sourceChannel) {
-  if (target->isScalar()) {
+  const bool flattenSources =
+      std::all_of(sources.begin(), sources.end(), [](const auto& source) {
+        return source->isFlatEncoding();
+      });
+  if (target->isScalar() && flattenSources) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         scalarGatherCopy,
         target->type()->kind(),

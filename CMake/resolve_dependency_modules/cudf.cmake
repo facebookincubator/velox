@@ -114,4 +114,5 @@ block(SCOPE_FOR VARIABLES)
   )
 
   unset(BUILD_SHARED_LIBS)
+  unset(BUILD_TESTING CACHE)
 endblock()
