@@ -121,6 +121,7 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
           taskId,
           nodeId,
           operatorType,
+          "",
           driverIds,
           queryCapacity,
           executor),

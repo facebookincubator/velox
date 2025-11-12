@@ -48,6 +48,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
         outputType,
         tableHandle,
         columnHandles,
+        &fileHandleFactory_,
         ioExecutor_,
         connectorQueryCtx,
         cudfHiveConfig_);

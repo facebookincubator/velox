@@ -382,6 +382,23 @@ TEST_F(BinaryFunctionsTest, fromHex) {
   EXPECT_EQ(
       "12PasXXaWBQ0k1T88jiF",
       fromHexToBase64("D763DAB175DA5814349354FCF23885"));
+
+  // Test from_hex with VARBINARY input
+  const auto fromHexVarbinary = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>(
+        "from_hex(cast(c0 as varbinary))", std::move(value));
+  };
+
+  EXPECT_EQ(std::nullopt, fromHexVarbinary(std::nullopt));
+  EXPECT_EQ("", fromHexVarbinary(""));
+  EXPECT_EQ("a", fromHexVarbinary("61"));
+  EXPECT_EQ("abc", fromHexVarbinary("616263"));
+  EXPECT_EQ("hello world", fromHexVarbinary("68656C6C6F20776F726C64"));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromHexVarbinary("48656C6C6F20576F726C642066726F6D2056656C6F7821"));
+
+  EXPECT_THROW(fromHexVarbinary("fff"), VeloxUserError);
 }
 
 TEST_F(BinaryFunctionsTest, toBase64) {
@@ -494,6 +511,25 @@ TEST_F(BinaryFunctionsTest, fromBase64Url) {
   EXPECT_THROW(fromBase64Url("YQ==="), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ=+"), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ=/"), VeloxUserError);
+
+  // Test from_base64url with VARBINARY input
+  const auto fromBase64UrlVarbinary = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>(
+        "from_base64url(cast(c0 as varbinary))", std::move(value));
+  };
+
+  EXPECT_EQ(std::nullopt, fromBase64UrlVarbinary(std::nullopt));
+  EXPECT_EQ("", fromBase64UrlVarbinary(""));
+  EXPECT_EQ("a", fromBase64UrlVarbinary("YQ=="));
+  EXPECT_EQ("a", fromBase64UrlVarbinary("YQ"));
+  EXPECT_EQ("abc", fromBase64UrlVarbinary("YWJj"));
+  EXPECT_EQ("hello world", fromBase64UrlVarbinary("aGVsbG8gd29ybGQ="));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromBase64UrlVarbinary("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
+
+  EXPECT_EQ(fromHex("FF4FBF50"), fromBase64UrlVarbinary("_0-_UA=="));
+  EXPECT_THROW(fromBase64UrlVarbinary("YQ="), VeloxUserError);
 }
 
 TEST_F(BinaryFunctionsTest, fromBigEndian32) {

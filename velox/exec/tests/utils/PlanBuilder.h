@@ -296,6 +296,8 @@ class PlanBuilder {
     /// AND'ed with all the subfieldFilters.
     TableScanBuilder& remainingFilter(std::string remainingFilter);
 
+    TableScanBuilder& sampleRate(double sampleRate);
+
     /// @param dataColumns can be different from 'outputType' for the purposes
     /// of testing queries using missing columns. It is used, if specified, for
     /// parseExpr call and as 'dataColumns' for the TableHandle. You supply more
@@ -323,9 +325,9 @@ class PlanBuilder {
       return *this;
     }
 
-    TableScanBuilder& columnHandles(
-        std::vector<connector::hive::HiveColumnHandlePtr> columnHandles) {
-      columnHandles_ = std::move(columnHandles);
+    TableScanBuilder& filterColumnHandles(
+        std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles) {
+      filterColumnHandles_ = std::move(filterColumnHandles);
       return *this;
     }
 
@@ -353,8 +355,9 @@ class PlanBuilder {
     std::string connectorId_{kHiveDefaultConnectorId};
     RowTypePtr outputType_;
     core::ExprPtr remainingFilter_;
+    double sampleRate_{1.0};
     RowTypePtr dataColumns_;
-    std::vector<connector::hive::HiveColumnHandlePtr> columnHandles_;
+    std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
     connector::ColumnHandleMap assignments_;

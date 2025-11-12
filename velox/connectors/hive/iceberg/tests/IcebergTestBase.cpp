@@ -15,8 +15,11 @@
  */
 
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+
 #include <filesystem>
+
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
@@ -99,42 +102,94 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
   return vectors;
 }
 
-IcebergInsertTableHandlePtr IcebergTestBase::createIcebergInsertTableHandle(
+std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
+    const std::vector<PartitionField>& partitionFields,
+    const RowTypePtr& rowType) {
+  std::vector<IcebergPartitionSpec::Field> fields;
+  for (const auto& partitionField : partitionFields) {
+    fields.push_back(
+        IcebergPartitionSpec::Field{
+            rowType->nameOf(partitionField.id),
+            rowType->childAt(partitionField.id),
+            partitionField.type,
+            partitionField.parameter});
+  }
+
+  return std::make_shared<IcebergPartitionSpec>(1, fields);
+}
+
+void addColumnHandles(
     const RowTypePtr& rowType,
-    const std::string& outputDirectoryPath) {
-  std::vector<HiveColumnHandlePtr> columnHandles;
+    const std::vector<PartitionField>& partitionFields,
+    std::vector<HiveColumnHandlePtr>& columnHandles) {
+  std::unordered_set<int32_t> partitionColumnIds;
+  for (const auto& field : partitionFields) {
+    partitionColumnIds.insert(field.id);
+  }
+
+  columnHandles.reserve(rowType->size());
   for (auto i = 0; i < rowType->size(); ++i) {
-    auto columnName = rowType->nameOf(i);
-    auto columnType = HiveColumnHandle::ColumnType::kRegular;
+    const auto columnType = partitionColumnIds.contains(i)
+        ? HiveColumnHandle::ColumnType::kPartitionKey
+        : HiveColumnHandle::ColumnType::kRegular;
+
     columnHandles.push_back(
         std::make_shared<HiveColumnHandle>(
-            columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
+            rowType->nameOf(i),
+            columnType,
+            rowType->childAt(i),
+            rowType->childAt(i)));
   }
+}
+
+IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
+    const RowTypePtr& rowType,
+    const std::string& outputDirectoryPath,
+    const std::vector<PartitionField>& partitionFields) {
+  std::vector<HiveColumnHandlePtr> columnHandles;
+  addColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(
       outputDirectoryPath,
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
+  auto partitionSpec = createPartitionSpec(partitionFields, rowType);
+
   return std::make_shared<const IcebergInsertTableHandle>(
-      columnHandles,
+      /*inputColumns=*/columnHandles,
       locationHandle,
-      fileFormat_,
-      common::CompressionKind::CompressionKind_ZSTD);
+      /*tableStorageFormat=*/fileFormat_,
+      partitionSpec,
+      /*compressionKind=*/common::CompressionKind::CompressionKind_ZSTD);
 }
 
-std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
+std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<std::string>& partitionTransforms) {
+    const std::vector<PartitionField>& partitionFields) {
   auto tableHandle =
-      createIcebergInsertTableHandle(rowType, outputDirectoryPath);
+      createInsertTableHandle(rowType, outputDirectoryPath, partitionFields);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,
       connectorQueryCtx_.get(),
-      connector::CommitStrategy::kNoCommit,
+      CommitStrategy::kNoCommit,
       connectorConfig_);
+}
+
+std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
+    const RowTypePtr& rowType,
+    const std::vector<RowVectorPtr>& vectors,
+    const std::string& dataPath,
+    const std::vector<PartitionField>& partitionFields) {
+  auto dataSink = createDataSink(rowType, dataPath, partitionFields);
+
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  EXPECT_TRUE(dataSink->finish());
+  return dataSink;
 }
 
 std::vector<std::string> IcebergTestBase::listFiles(

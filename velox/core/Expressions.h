@@ -151,6 +151,9 @@ class ConstantTypedExpr : public ITypedExpr {
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
+  /// Returns a NULL constant expression of given type.
+  static TypedExprPtr makeNull(const TypePtr& type);
+
  private:
   const Variant value_;
   const VectorPtr valueVector_;

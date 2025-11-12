@@ -878,8 +878,6 @@ double getPrestoSampleRate(
   return std::max(0.0, std::min(1.0, rate->value().value<double>()));
 }
 
-} // namespace
-
 core::TypedExprPtr extractFiltersFromRemainingFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
@@ -946,4 +944,15 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
   }
   return expr;
 }
+} // namespace
+
+core::TypedExprPtr extractFiltersFromRemainingFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    common::SubfieldFilters& filters,
+    double& sampleRate) {
+  return extractFiltersFromRemainingFilter(
+      expr, evaluator, /*negated=*/false, filters, sampleRate);
+}
+
 } // namespace facebook::velox::connector::hive

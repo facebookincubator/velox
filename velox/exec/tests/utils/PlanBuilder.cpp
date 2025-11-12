@@ -217,7 +217,8 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
     auto filterExpr = core::Expressions::inferTypes(
         untypedExpr, parseType, planBuilder_.pool_);
     auto [subfield, subfieldFilter] =
-        exec::toSubfieldFilter(filterExpr, &evaluator);
+        exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
+            filterExpr, &evaluator);
 
     auto it = columnAliases_.find(subfield.toString());
     if (it != columnAliases_.end()) {
@@ -251,6 +252,11 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::remainingFilter(
   return *this;
 }
 
+PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::sampleRate(
+    double sampleRate) {
+  sampleRate_ = sampleRate;
+  return *this;
+}
 namespace {
 void addConjunct(
     const core::TypedExprPtr& conjunct,
@@ -292,19 +298,17 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
   }
 
-  RowTypePtr parseType;
-  if (!columnHandles_.empty()) {
-    std::vector<std::string> names;
-    std::vector<TypePtr> types;
-    for (auto& handle : columnHandles_) {
-      names.push_back(handle->name());
-      types.push_back(handle->hiveType());
+  RowTypePtr parseType = dataColumns_ ? dataColumns_ : outputType_;
+  if (!filterColumnHandles_.empty()) {
+    auto names = parseType->names();
+    auto types = parseType->children();
+    for (auto& handle : filterColumnHandles_) {
+      if (!parseType->containsChild(handle->name())) {
+        names.push_back(handle->name());
+        types.push_back(handle->hiveType());
+      }
     }
     parseType = ROW(std::move(names), std::move(types));
-  } else if (dataColumns_) {
-    parseType = dataColumns_;
-  } else {
-    parseType = outputType_;
   }
 
   core::TypedExprPtr filterNodeExpr;
@@ -337,32 +341,15 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = [&]() -> std::shared_ptr<connector::ConnectorTableHandle> {
-#ifdef VELOX_ENABLE_CUDF2
-      if (facebook::velox::cudf_velox::cudfIsRegistered() &&
-          facebook::velox::connector::getAllConnectors().count(
-              cudf_velox::exec::test::kCudfHiveConnectorId) > 0 &&
-          facebook::velox::cudf_velox::cudfTableScanEnabled()) {
-        return std::make_shared<
-            cudf_velox::connector::hive::CudfHiveTableHandle>(
-            cudf_velox::exec::test::kCudfHiveConnectorId,
-            tableName_,
-            filterNodeExpr != nullptr,
-            filtersAsNode_ ? nullptr : std::move(filterNodeExpr),
-            remainingFilterExpr,
-            dataColumns_);
-      }
-#endif
-      return std::make_shared<HiveTableHandle>(
-          connectorId_,
-          tableName_,
-          true,
-          std::move(subfieldFiltersMap_),
-          remainingFilterExpr,
-          dataColumns_,
-          /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-          columnHandles_);
-    }();
+    tableHandle_ = std::make_shared<HiveTableHandle>(
+        connectorId_,
+        tableName_,
+        true,
+        std::move(subfieldFiltersMap_),
+        remainingFilterExpr,
+        dataColumns_,
+        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+        filterColumnHandles_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

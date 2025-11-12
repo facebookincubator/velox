@@ -25,6 +25,7 @@ velox_add_library(
   IPPrefixRegistration.cpp
   JsonCastOperator.cpp
   JsonRegistration.cpp
+  KHyperLogLogRegistration.cpp
   QDigestRegistration.cpp
   P4HyperLogLogRegistration.cpp
   SfmSketchRegistration.cpp
