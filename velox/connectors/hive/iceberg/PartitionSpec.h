@@ -20,35 +20,6 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-/// Prefix for registering Iceberg partition transform functions in Velox's
-/// function registry. Should follow the format "catalog.schema.function_name"
-/// to support namespace isolation and avoid issues such as
-/// https://github.com/prestodb/presto/pull/26584.
-/// The "iceberg.default." prefix is used to:
-/// - Clearly identify these as Iceberg-specific transform functions (bucket,
-///   truncate, years, months, days, hours).
-/// - Separate them from other function namespaces (e.g., Presto, Spark).
-/// - Use "default" as the schema name since Iceberg transforms are not tied to
-///   a specific schema but are part of the Iceberg specification.
-inline constexpr char const* kIcebergFunctionPrefix{"iceberg.default."};
-
-inline const std::string kBucketFunction =
-    std::string(kIcebergFunctionPrefix) + "bucket";
-inline const std::string kTruncateFunction =
-    std::string(kIcebergFunctionPrefix) + "truncate";
-inline const std::string kYearFunction =
-    std::string(kIcebergFunctionPrefix) + "years";
-inline const std::string kMonthFunction =
-    std::string(kIcebergFunctionPrefix) + "months";
-inline const std::string kDayFunction =
-    std::string(kIcebergFunctionPrefix) + "days";
-inline const std::string kHourFunction =
-    std::string(kIcebergFunctionPrefix) + "hours";
-
-/// Registers Iceberg partition transform functions with prefix
-/// kIcebergFunctionPrefix.
-void registerIcebergFunctions();
-
 /// Partition transform types.
 /// Defines how source column values are converted into partition keys.
 /// See https://iceberg.apache.org/spec/#partition-transforms.

@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 
-#include "velox/functions/iceberg/Register.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -102,14 +101,6 @@ const auto& transformCategoryNames() {
 VELOX_DEFINE_ENUM_NAME(TransformType, transformTypeNames);
 
 VELOX_DEFINE_ENUM_NAME(TransformCategory, transformCategoryNames);
-
-void registerIcebergFunctions() {
-  static std::once_flag registerFlag;
-
-  std::call_once(registerFlag, []() {
-    functions::iceberg::registerFunctions(kIcebergFunctionPrefix);
-  });
-}
 
 void IcebergPartitionSpec::checkCompatibility() const {
   folly::F14FastMap<std::string_view, std::vector<TransformType>>

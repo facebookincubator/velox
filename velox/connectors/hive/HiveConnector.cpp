@@ -42,7 +42,6 @@ HiveConnector::HiveConnector(
               : nullptr,
           std::make_unique<FileHandleGenerator>(hiveConfig_->config())),
       ioExecutor_(ioExecutor) {
-  iceberg::registerIcebergFunctions();
   if (hiveConfig_->isFileHandleCacheEnabled()) {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with maximum of "
