@@ -18,10 +18,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::cudf_velox {
 

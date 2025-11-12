@@ -74,6 +74,7 @@ velox_add_library(
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
+  SubPartitionedSortWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
   RowsStreamingWindowBuild.cpp

@@ -8261,6 +8261,52 @@ TEST_F(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
       << result->size() << " rows";
 }
 
+/// Test hash join where build-side keys have a type that supports custom
+/// comparison and come from a small range which would allow for array-based
+/// lookup instead of a hash table for other types.
+TEST_F(HashJoinTest, arrayBasedLookupCustomComparisonType) {
+  std::vector<RowVectorPtr> probeVectors = {
+      makeRowVector({makeFlatVector<int64_t>(
+          1'024,
+          [](auto row) { return row; },
+          nullptr,
+          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+
+  std::vector<RowVectorPtr> buildVectors = {
+      makeRowVector({makeFlatVector<int64_t>(
+          256,
+          [](auto row) { return row; },
+          nullptr,
+          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan = PlanBuilder(planNodeIdGenerator)
+                       .values({buildVectors})
+                       .project({"c0 as right"})
+                       .planNode();
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .project({"c0 as left"})
+                  .hashJoin(
+                      {"left"},
+                      {"right"},
+                      rightPlan,
+                      "",
+                      {"left"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  // The probe side consists of the values 0-1023, the build side consists of
+  // the values 0-255. If custom comparison is not respected, the join will
+  // produce 256 values (0-255). When custom comparison is respected equality is
+  // treated mod 256 so we get 1024 values (0-1023).
+  EXPECT_EQ(result->size(), 1'024);
+}
+
 DEBUG_ONLY_TEST_F(
     HashJoinTest,
     hashProbeShouldYieldWhenFilterConsistentlyRejectAll) {
@@ -8355,51 +8401,97 @@ DEBUG_ONLY_TEST_F(
       testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
 }
 
-/// Test hash join where build-side keys have a type that supports custom
-/// comparison and come from a small range which would allow for array-based
-/// lookup instead of a hash table for other types.
-TEST_F(HashJoinTest, arrayBasedLookupCustomComparisonType) {
-  std::vector<RowVectorPtr> probeVectors = {
-      makeRowVector({makeFlatVector<int64_t>(
-          1'024,
-          [](auto row) { return row; },
-          nullptr,
-          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+// This test validates that when spillOutput() is running (toSpillOutput=true),
+// the operator should NOT yield even when shouldYield() returns true. This is
+// critical because yielding during spillOutput would break the spilling loop.
+DEBUG_ONLY_TEST_F(
+    HashJoinTest,
+    spillOutputShouldNotYieldWhenFilterConsistentlyRejectAll) {
+  const uint32_t kProbeSize = 100;
+  const uint32_t kBuildSize = 10'000;
+  const uint64_t driverCpuTimeSliceLimitMs = 1'000;
+  const std::string largeBatchSize =
+      folly::to<std::string>(kProbeSize * kBuildSize);
 
-  std::vector<RowVectorPtr> buildVectors = {
-      makeRowVector({makeFlatVector<int64_t>(
-          256,
-          [](auto row) { return row; },
-          nullptr,
-          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+  // Create probe data with keys 0-99 and an additional filter column
+  const auto probeData = makeRowVector(
+      {"t_k1", "t_filter"},
+      {
+          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              kProbeSize,
+              [](/*row=*/auto) { return 1; }), // All rows have value 1
+      });
+
+  const auto buildData = makeRowVector(
+      {"u_k1"},
+      {
+          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {probeData});
+  createDuckDbTable("u", {buildData});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData})
+          .hashJoin(
+              {"t_k1"},
+              {"u_k1"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              // Filter that DOES find join matches but then rejects all of them
+              // This ensures numOut > 0 after listJoinResults, but == 0 after
+              // evalFilter. All probe rows have t_filter=1, so the condition
+              // t_filter > 100000 rejects all
+              "t_filter > 100000",
+              {"t_k1", "u_k1"},
+              core::JoinType::kInner)
+          .planNode();
 
-  auto rightPlan = PlanBuilder(planNodeIdGenerator)
-                       .values({buildVectors})
-                       .project({"c0 as right"})
-                       .planNode();
+  std::atomic_bool spillTriggered{false};
+  ::facebook ::velox ::common ::testutil ::ScopedTestValue _scopedTestValue5200(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (spillTriggered.load() || op->operatorType() != "HashProbe" ||
+            !op->testingHasInput()) {
+          return;
+        }
+        spillTriggered = true;
+        testingRunArbitration(op->pool());
+      }));
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .values({probeVectors})
-                  .project({"c0 as left"})
-                  .hashJoin(
-                      {"left"},
-                      {"right"},
-                      rightPlan,
-                      "",
-                      {"left"},
-                      core::JoinType::kInner)
-                  .planNode();
+  // We inject delay in reclaim to trigger shouldYield().
+  // The test verifies that the query completes successfully despite
+  // shouldYield() returning true, which would only happen if the
+  // !toSpillOutput check prevents early return.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashProbe::reclaim",
+      std::function<void(HashProbe*)>([&](HashProbe* probe) {
+        if (!spillTriggered.load()) {
+          return;
+        }
+        // Inject delay once to trigger shouldYield()
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(2 * driverCpuTimeSliceLimitMs));
+      }));
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  AssertQueryBuilder(planNode, duckDbQueryRunner_)
+      .queryCtx(core::QueryCtx::create(driverExecutor_.get()))
+      .maxDrivers(1)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kJoinSpillEnabled, true)
+      .config(core::QueryConfig::kSpillStartPartitionBit, 29)
+      .config(
+          core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+          driverCpuTimeSliceLimitMs)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, largeBatchSize)
+      .assertResults(
+          "SELECT t_k1, u_k1 FROM t, u WHERE t_k1 = u_k1 AND t_filter > 100000");
 
-  // The probe side consists of the values 0-1023, the build side consists of
-  // the values 0-255. If custom comparison is not respected, the join will
-  // produce 256 values (0-255). When custom comparison is respected equality is
-  // treated mod 256 so we get 1024 values (0-1023).
-  EXPECT_EQ(result->size(), 1'024);
+  ASSERT_TRUE(spillTriggered.load());
 }
-
 } // namespace
 } // namespace facebook::velox::exec

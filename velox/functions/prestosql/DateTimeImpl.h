@@ -223,18 +223,20 @@ int64_t diffTime(
     return 0;
   }
 
-  // TIME values are milliseconds since midnight
-  int64_t diffMillis = toTime - fromTime;
+  // Use std::chrono for safe duration arithmetic
+  const auto fromDuration = std::chrono::milliseconds(fromTime);
+  const auto toDuration = std::chrono::milliseconds(toTime);
+  const auto diff = toDuration - fromDuration;
 
   switch (unit) {
     case DateTimeUnit::kMillisecond:
-      return diffMillis;
+      return diff.count();
     case DateTimeUnit::kSecond:
-      return diffMillis / kMillisInSecond;
+      return std::chrono::duration_cast<std::chrono::seconds>(diff).count();
     case DateTimeUnit::kMinute:
-      return diffMillis / kMillisInMinute;
+      return std::chrono::duration_cast<std::chrono::minutes>(diff).count();
     case DateTimeUnit::kHour:
-      return diffMillis / kMillisInHour;
+      return std::chrono::duration_cast<std::chrono::hours>(diff).count();
     default:
       VELOX_USER_FAIL("Unsupported time unit for TIME type");
   }

@@ -1071,14 +1071,12 @@ inline std::optional<DateTimeUnit> getTimeUnit(
   std::optional<DateTimeUnit> unit =
       fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
 
-  if (unit.has_value()) {
-    // Only allow time-related units for TIME type
-    if (unit.value() == DateTimeUnit::kMillisecond ||
-        unit.value() == DateTimeUnit::kSecond ||
-        unit.value() == DateTimeUnit::kMinute ||
-        unit.value() == DateTimeUnit::kHour) {
-      return unit;
-    }
+  // Presto does not support microseconds for TIME type operations.
+  // Only millisecond, second, minute, and hour are valid TIME fields.
+  // See: presto-main-base/.../DateTimeFunctions.java:getTimeField()
+  if (unit.has_value() && isTimeUnit(unit.value()) &&
+      unit.value() != DateTimeUnit::kMicrosecond) {
+    return unit;
   }
 
   if (throwIfInvalid) {
@@ -1134,6 +1132,16 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>* /*timestamp*/) {
     if (unitString != nullptr) {
       unit_ = getTimestampUnit(*unitString);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Time>* /*time*/) {
+    if (unitString != nullptr) {
+      unit_ = getTimeUnit(*unitString);
     }
   }
 
@@ -1217,6 +1225,19 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
 
     result = pack(resultMillis, unpackZoneKeyId(*timestampWithTimezone));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Time>& time) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      unit = getTimeUnit(unitString).value();
+    }
+    result = truncateTime(time, unit);
   }
 };
 
@@ -1917,6 +1938,21 @@ struct XxHash64TimestampFunction {
     // Use the milliseconds representation of the timestamp
     auto timestamp_millis = input.toMillis();
     result = XXH64(&timestamp_millis, sizeof(timestamp_millis), 0);
+  }
+};
+
+/// xxhash64(Time) → bigint
+/// Return a xxhash64 of input Time
+template <typename T>
+struct XxHash64TimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Time>& input) {
+    // TIME is represented as milliseconds since midnight
+    // Convert to big-endian to match Presto's xxhash64 behavior
+    auto bigEndianValue = folly::Endian::big(input);
+    result = XXH64(&bigEndianValue, sizeof(bigEndianValue), 0);
   }
 };
 

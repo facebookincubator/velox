@@ -256,6 +256,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimestampWithTimezone,
       Varchar,
       TimestampWithTimezone>({prefix + "date_trunc"});
+  registerFunction<DateTruncFunction, Time, Varchar, Time>(
+      {prefix + "date_trunc"});
   registerFunction<DateAddFunction, Date, Varchar, int64_t, Date>(
       {prefix + "date_add"});
   registerFunction<DateAddFunction, Timestamp, Varchar, int64_t, Timestamp>(
@@ -322,6 +324,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<XxHash64DateFunction, int64_t, Date>(
       {prefix + "xxhash64_internal"});
   registerFunction<XxHash64TimestampFunction, int64_t, Timestamp>(
+      {prefix + "xxhash64_internal"});
+  registerFunction<XxHash64TimeFunction, int64_t, Time>(
       {prefix + "xxhash64_internal"});
 
   registerFunction<ParseDurationFunction, IntervalDayTime, Varchar>(

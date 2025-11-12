@@ -486,14 +486,13 @@ class CoalesceFunction : public CudfFunction {
     numColumnsBeforeLiteral_ = expr->inputs().size();
     for (size_t i = 0; i < expr->inputs().size(); ++i) {
       const auto& input = expr->inputs()[i];
-      if (input->name() == "literal") {
-        auto c = std::dynamic_pointer_cast<ConstantExpr>(input);
-        if (c && c->value()) {
-          literalScalar_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-              createCudfScalar, c->value()->typeKind(), c->value());
+      if (auto c =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+        if (!c->value()->isNullAt(0)) {
+          literalScalar_ = makeScalarFromConstantExpr(c);
           numColumnsBeforeLiteral_ = i;
+          break;
         }
-        break;
       }
     }
   }
@@ -503,8 +502,8 @@ class CoalesceFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
-    // Starting from first column, we keep calling replace nulls with subsequent
-    // cols until we get an all valid col or run out of columns
+    // Starting from first column, we keep calling replace nulls with
+    // subsequent cols until we get an all valid col or run out of columns
 
     // If a literal comes before any column input, fill the result with it.
     if (literalScalar_ && numColumnsBeforeLiteral_ == 0) {

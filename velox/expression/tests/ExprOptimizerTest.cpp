@@ -210,6 +210,15 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       "filter(a, x -> (2 * 3) = x or (8 / 2) = (3 + 1))",
       "filter(a, x -> true)",
       type);
+
+  // Switch rewrite with constant folding.
+  testExpression(
+      "case when ARRAY[abs(-1)] = ARRAY[2] then 'not_matched' when ARRAY[1] = ARRAY[2 - 1] then 'matched' else 'default' end",
+      "'matched'");
+  testExpression(
+      "case when 10 + a = 100 / 2 then 10 - 2 when a / (2 + 1) = abs(-5) then 10 * 10 when (123 * 10) + 4 = abs(-1234) then 11 * 3 else a end",
+      "case when 10 + a = 50 then 8 when a / 3 = 5 then 100 else 33 end",
+      ROW({"a"}, {BIGINT()}));
 }
 
 /// Test to ensure session queryCtx is used during expression optimization.
@@ -303,8 +312,8 @@ TEST_F(ExprOptimizerTest, makeFailExpr) {
   // Primitive types.
   assertPrestoFailExpr("0 / 0", prestoFailCall(), ROW({}));
   assertPrestoFailExpr(
-      "if(false, a * abs(-1 * 3), 0 / 0)",
-      fmt::format("if(false, a * 3, {})", prestoFailCall()),
+      "if(a = 2 * 2, a / abs(-1 * 3), 0 / 0)",
+      fmt::format("if(a = 4, a / 3, {})", prestoFailCall()),
       ROW({"a"}, {BIGINT()}));
   assertPrestoFailExpr(
       "json_extract(a, substr(b, 1 / 0))",

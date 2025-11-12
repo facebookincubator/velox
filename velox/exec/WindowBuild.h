@@ -70,14 +70,16 @@ class WindowBuild {
 
   /// Returns the average size of input rows in bytes stored in the data
   /// container of the WindowBuild.
-  std::optional<int64_t> estimateRowSize() {
+  virtual std::optional<int64_t> estimateRowSize() {
     return data_->estimateRowSize();
   }
 
   /// Releases the memory held by the window build. This is called by the
   /// window operator when all rows have been processed.
   void release() {
-    data_->clear();
+    if (data_) {
+      data_->clear();
+    }
   }
 
   void setNumRowsPerOutput(vector_size_t numRowsPerOutput) {

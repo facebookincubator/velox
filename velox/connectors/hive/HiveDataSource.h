@@ -39,7 +39,7 @@ class HiveDataSource : public DataSource {
       const connector::ConnectorTableHandlePtr& tableHandle,
       const connector::ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
@@ -161,6 +161,7 @@ class HiveDataSource : public DataSource {
   std::vector<common::Subfield> remainingFilterSubfields_;
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
+  std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
   common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;

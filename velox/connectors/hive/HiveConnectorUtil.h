@@ -32,7 +32,7 @@ struct HiveConnectorSplit;
 
 const std::string& getColumnName(const common::Subfield& subfield);
 
-void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type);
+void checkColumnNameLowerCase(const TypePtr& type);
 
 void checkColumnNameLowerCase(
     const common::SubfieldFilters& filters,
@@ -109,10 +109,46 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     folly::Executor* executor,
     const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
+/// Given a boolean expression, breaks it up into conjuncts and sorts these into
+/// single-column comparisons with constants (filters), rand() < sampleRate, and
+/// the rest (return value).
+///
+/// Multiple rand() < K conjuncts are combined into a single sampleRate by
+/// multiplying individual sample rates. rand() < 0.1 and rand() < 0.2 produces
+/// sampleRate = 0.02.
+///
+/// Multiple single-column comparisons with constants that reference the same
+/// column or subfield are combined into a single filter. Pre-existing entries
+/// in 'filters' are preserved and combined with the ones extracted from the
+/// 'expr'.
+///
+/// NOT(x OR y) is converted to (NOT x) AND (NOT y).
+///
+/// @param expr Boolean expression to break up.
+/// @param evaluator Expression evaluator to use.
+/// @param filters Mapping from a column or a subfield to comparison with
+/// constant.
+/// @param sampleRate Sample rate extracted from rand() < sampleRate conjuncts.
+/// @return Expression with filters and rand() < sampleRate conjuncts removed.
+///
+/// Examples:
+///   expr := a = 1 AND b > 0
+///   filters := {a: eq(1), b: gt(0)}
+//    sampleRate left unmodified
+//    return value is nullptr
+///
+///   expr: not (a > 0 or b > 10)
+///   filters := {a: le(0), b: le(10)}
+///   sampleRate left unmodified
+///   return value is nullptr
+///
+///   expr := a > 0 AND a < b AND rand() < 0.1
+///   filters := {a: gt(0)}
+///   sampleRate := 0.1
+///   return value is a < b
 core::TypedExprPtr extractFiltersFromRemainingFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
-    bool negated,
     common::SubfieldFilters& filters,
     double& sampleRate);
 

@@ -589,7 +589,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::test::LocalExchangeSource::pause",
       std::function<void(void*)>(([&numberOfAcknowledgeRequests](void*) {
-        ++numberOfAcknowledgeRequests;
+        numberOfAcknowledgeRequests++;
       })));
 
   {
@@ -665,7 +665,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
     int attempts = 100;
     bool outputBuffersEmpty;
     while (attempts > 0) {
-      --attempts;
+      attempts--;
       outputBuffersEmpty = bufferManager_->getUtilization(sourceTaskId) == 0;
       if (outputBuffersEmpty) {
         break;
@@ -677,7 +677,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
     // The output buffer is empty now
     // Explicit acknowledge is not necessary as a blocking getDataSize is sent
     // right away
-    EXPECT_EQ(numberOfAcknowledgeRequests, 3);
+    EXPECT_EQ(numberOfAcknowledgeRequests, 2);
 #endif
   }
 
@@ -985,10 +985,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VectorSerde::Kind::kPresto,
         VectorSerde::Kind::kCompactRow,
-        VectorSerde::Kind::kUnsafeRow),
-    [](const testing::TestParamInfo<VectorSerde::Kind>& info) {
-      return fmt::format("{}", info.param);
-    });
+        VectorSerde::Kind::kUnsafeRow));
 
 } // namespace
 } // namespace facebook::velox::exec

@@ -50,10 +50,6 @@ T singleValue(const VectorPtr& vector) {
   return simpleVector->valueAt(0);
 }
 
-const core::CallTypedExpr* asCall(const core::ITypedExpr* expr) {
-  return dynamic_cast<const core::CallTypedExpr*>(expr);
-}
-
 common::BigintRange* asBigintRange(std::unique_ptr<common::Filter>& filter) {
   return dynamic_cast<common::BigintRange*>(filter.get());
 }
@@ -68,39 +64,6 @@ std::unique_ptr<T> asUniquePtr(std::unique_ptr<U> ptr) {
   return std::unique_ptr<T>(static_cast<T*>(ptr.release()));
 }
 
-std::unique_ptr<common::Filter> makeOrFilter(
-    std::unique_ptr<common::Filter> a,
-    std::unique_ptr<common::Filter> b) {
-  if (asBigintRange(a) && asBigintRange(b)) {
-    return bigintOr(
-        asUniquePtr<common::BigintRange>(std::move(a)),
-        asUniquePtr<common::BigintRange>(std::move(b)));
-  }
-
-  if (asBigintRange(a) && asBigintMultiRange(b)) {
-    const auto& ranges = asBigintMultiRange(b)->ranges();
-    std::vector<std::unique_ptr<common::BigintRange>> newRanges;
-    newRanges.emplace_back(asUniquePtr<common::BigintRange>(std::move(a)));
-    for (const auto& range : ranges) {
-      newRanges.emplace_back(asUniquePtr<common::BigintRange>(range->clone()));
-    }
-
-    std::sort(
-        newRanges.begin(), newRanges.end(), [](const auto& a, const auto& b) {
-          return a->lower() < b->lower();
-        });
-
-    return std::make_unique<common::BigintMultiRange>(
-        std::move(newRanges), false);
-  }
-
-  if (asBigintMultiRange(a) && asBigintRange(b)) {
-    return makeOrFilter(std::move(b), std::move(a));
-  }
-
-  return orFilter(std::move(a), std::move(b));
-}
-
 template <typename T>
 std::vector<int64_t>
 toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
@@ -112,14 +75,13 @@ toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
   return values;
 }
 
-static std::shared_ptr<ExprToSubfieldFilterParser> defaultParser =
-    std::make_shared<PrestoExprToSubfieldFilterParser>();
-
 } // namespace
 
-std::function<std::shared_ptr<ExprToSubfieldFilterParser>()>
-    ExprToSubfieldFilterParser::parserFactory_ = [] { return defaultParser; };
+std::shared_ptr<ExprToSubfieldFilterParser>
+    ExprToSubfieldFilterParser::parser_ =
+        std::make_shared<PrestoExprToSubfieldFilterParser>();
 
+// static
 bool ExprToSubfieldFilterParser::toSubfield(
     const core::ITypedExpr* field,
     common::Subfield& subfield) {
@@ -161,6 +123,7 @@ bool ExprToSubfieldFilterParser::toSubfield(
   return true;
 }
 
+// static
 std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
     const core::TypedExprPtr& valueExpr,
     core::ExpressionEvaluator* evaluator) {
@@ -208,6 +171,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeEqualFilter(
     const core::TypedExprPtr& valueExpr,
     core::ExpressionEvaluator* evaluator) {
@@ -237,6 +201,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeEqualFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter>
 ExprToSubfieldFilterParser::makeGreaterThanFilter(
     const core::TypedExprPtr& lowerExpr,
@@ -269,6 +234,7 @@ ExprToSubfieldFilterParser::makeGreaterThanFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeLessThanFilter(
     const core::TypedExprPtr& upperExpr,
     core::ExpressionEvaluator* evaluator) {
@@ -300,6 +266,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeLessThanFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter>
 ExprToSubfieldFilterParser::makeLessThanOrEqualFilter(
     const core::TypedExprPtr& upperExpr,
@@ -332,6 +299,7 @@ ExprToSubfieldFilterParser::makeLessThanOrEqualFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter>
 ExprToSubfieldFilterParser::makeGreaterThanOrEqualFilter(
     const core::TypedExprPtr& lowerExpr,
@@ -364,6 +332,7 @@ ExprToSubfieldFilterParser::makeGreaterThanOrEqualFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
@@ -413,6 +382,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
   }
 }
 
+// static
 std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeBetweenFilter(
     const core::TypedExprPtr& lowerExpr,
     const core::TypedExprPtr& upperExpr,
@@ -465,6 +435,40 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeBetweenFilter(
     default:
       return nullptr;
   }
+}
+
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b) {
+  if (asBigintRange(a) && asBigintRange(b)) {
+    return bigintOr(
+        asUniquePtr<common::BigintRange>(std::move(a)),
+        asUniquePtr<common::BigintRange>(std::move(b)));
+  }
+
+  if (asBigintRange(a) && asBigintMultiRange(b)) {
+    const auto& ranges = asBigintMultiRange(b)->ranges();
+    std::vector<std::unique_ptr<common::BigintRange>> newRanges;
+    newRanges.emplace_back(asUniquePtr<common::BigintRange>(std::move(a)));
+    for (const auto& range : ranges) {
+      newRanges.emplace_back(asUniquePtr<common::BigintRange>(range->clone()));
+    }
+
+    std::sort(
+        newRanges.begin(), newRanges.end(), [](const auto& a, const auto& b) {
+          return a->lower() < b->lower();
+        });
+
+    return std::make_unique<common::BigintMultiRange>(
+        std::move(newRanges), false);
+  }
+
+  if (asBigintMultiRange(a) && asBigintRange(b)) {
+    return makeOrFilter(std::move(b), std::move(a));
+  }
+
+  return orFilter(std::move(a), std::move(b));
 }
 
 std::unique_ptr<common::Filter>
@@ -530,10 +534,12 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
   return nullptr;
 }
 
-std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
+std::pair<common::Subfield, std::unique_ptr<common::Filter>>
+PrestoExprToSubfieldFilterParser::toSubfieldFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator) {
-  if (auto call = asCall(expr.get())) {
+  if (expr->isCallKind();
+      auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
     if (call->name() == "or") {
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
@@ -545,15 +551,13 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     common::Subfield subfield;
     std::unique_ptr<common::Filter> filter;
     if (call->name() == "not") {
-      if (auto* inner = asCall(call->inputs()[0].get())) {
-        filter =
-            ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-                *inner, subfield, evaluator, true);
+      const auto& input = call->inputs()[0];
+      if (input->isCallKind();
+          auto* inner = input->asUnchecked<core::CallTypedExpr>()) {
+        filter = leafCallToSubfieldFilter(*inner, subfield, evaluator, true);
       }
     } else {
-      filter =
-          ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-              *call, subfield, evaluator, false);
+      filter = leafCallToSubfieldFilter(*call, subfield, evaluator, false);
     }
     if (filter) {
       return std::make_pair(std::move(subfield), std::move(filter));
