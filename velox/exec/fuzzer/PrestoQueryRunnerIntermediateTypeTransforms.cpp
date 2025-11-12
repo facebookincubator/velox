@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
@@ -69,6 +70,9 @@ intermediateTypeTransforms() {
           {TIME(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                TIME(), VARCHAR())},
+          {TIME_WITH_TIME_ZONE(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               TIME_WITH_TIME_ZONE(), VARCHAR())},
           {BINGTILE(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                BINGTILE(), BIGINT())},
