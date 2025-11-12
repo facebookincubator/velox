@@ -257,11 +257,11 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  // Record start time before reading chunk
-  auto startTimeUs = getCurrentTimeMicro();
-
   std::unique_ptr<cudf::table> cudfTable;
   cudf::io::table_metadata metadata;
+
+  // Record start time before reading chunk
+  auto startTimeUs = getCurrentTimeMicro();
 
   // TODO(mh): Replace this with chunked hybrid scan APIs when available in the
   // pinned cuDF version
