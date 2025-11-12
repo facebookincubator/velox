@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -42,6 +43,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     rng_.seed(123);
 
@@ -391,6 +393,26 @@ class CudfFilterProjectTest : public OperatorTestBase {
                     .planNode();
 
     runTest(plan, "SELECT c2 = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringLowerOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR lower
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"LOWER(c2) = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT LOWER(c2) = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringUpperOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR upper
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"UPPER(c2) = 'TEST_VALUE' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT UPPER(c2) = 'TEST_VALUE' AS result FROM tmp");
   }
 
   void testMixedLiteralProjection(const std::vector<RowVectorPtr>& input) {
@@ -855,6 +877,22 @@ TEST_F(CudfFilterProjectTest, stringLiteralInComparison) {
   testStringLiteralInComparison(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, stringLowerOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLowerOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringUpperOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringUpperOperation(vectors);
+}
+
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
@@ -863,7 +901,13 @@ TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   testMixedLiteralProjection(vectors);
 }
 
-TEST_F(CudfFilterProjectTest, dereference) {
+// This test checks for CudfExpression's ability to handle nested field
+// references. However, to test this, we need to disable CPU fallback, otherwise
+// the test could pass by using CPU, having not exercised the CudfExpression at
+// all. But this test relies on row_constructor to construct the nested fields,
+// which CudfExpression doesn't support. Disabling this until we have a better
+// test
+TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
   auto vectors = makeVectors(rowType, 10, 100);
