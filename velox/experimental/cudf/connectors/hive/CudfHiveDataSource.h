@@ -31,12 +31,18 @@
 #include "velox/type/Type.h"
 
 #include <cudf/io/datasource.hpp>
+#include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
+
+#include <mutex>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
+
+using CudfParquetReader = cudf::io::parquet::experimental::hybrid_scan_reader;
+using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
@@ -78,8 +84,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  private:
-  // Create a cudf::io::chunked_parquet_reader with the given split.
-  std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
+  // Create a CudfParquetReader with the given split.
+  CudfParquetReaderPtr createSplitReader();
   // Clear split_ and splitReader after split has been fully processed.  Keep
   // readers around to hold adaptation.
   void resetSplit();
@@ -105,10 +111,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   memory::MemoryPool* const pool_;
 
-  // cuDF CudfHive reader stuff.
+  // cuDF split reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
-  std::unique_ptr<cudf::io::datasource> datasource_;
-  std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
+  std::shared_ptr<cudf::io::datasource> dataSource_;
+  std::unique_ptr<std::once_flag> tableMaterialized_;
+  CudfParquetReaderPtr splitReader_;
   rmm::cuda_stream_view stream_;
 
   // Table column names read from the CudfHive file
