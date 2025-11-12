@@ -92,6 +92,14 @@ struct Envelope {
     return !((minX <= maxX) && (minY <= maxY));
   }
 
+  /// Expands this Envelope to also contain the other.
+  inline void merge(const Envelope& other) {
+    minX = std::min(minX, other.minX);
+    minY = std::min(minY, other.minY);
+    maxX = std::max(maxX, other.maxX);
+    maxY = std::max(maxY, other.maxY);
+  }
+
   /// Construct an empty envelope.
   static constexpr inline Envelope empty() {
     return Envelope{
@@ -118,6 +126,14 @@ struct Envelope {
             static_cast<float>(maxY), std::numeric_limits<float>::infinity()),
         .rowIndex = rowIndex};
   }
+
+  static inline Envelope of(const std::vector<Envelope>& envelopes) {
+    Envelope result = Envelope::empty();
+    for (const auto& envelope : envelopes) {
+      result.merge(envelope);
+    }
+    return result;
+  }
 };
 
 /// A spatial index for a set of geometries. The index only cares about the
@@ -138,7 +154,11 @@ class SpatialIndex {
   SpatialIndex& operator=(SpatialIndex&&) = default;
   ~SpatialIndex() = default;
 
-  explicit SpatialIndex(std::vector<Envelope> envelopes);
+  /// Constructs a spatial index from envelopes contained with `bounds`.
+  /// `bounds` must contain all envelopes in `envelopes`, otherwise the
+  /// an assertio will fail.  Envelopes should not contains
+  /// and NaN coordinates.
+  explicit SpatialIndex(Envelope bounds, std::vector<Envelope> envelopes);
 
   /// Returns the row indices of all envelopes that probeEnv intersects.
   /// Order of the returned indices is an implementation detail and cannot be
