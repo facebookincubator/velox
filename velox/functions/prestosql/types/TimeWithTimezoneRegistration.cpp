@@ -202,7 +202,7 @@ inline int64_t packTimeWithTimeZone(
     int64_t timeMillis,
     int16_t timezoneOffsetMinutes) {
   auto encodedOffset = util::biasEncode(timezoneOffsetMinutes);
-  return pack(timeMillis, encodedOffset);
+  return util::pack(timeMillis, encodedOffset);
 }
 
 void castFromTime(
