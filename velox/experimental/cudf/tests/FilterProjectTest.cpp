@@ -540,7 +540,7 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
 }
 
 // The result mismatches.
-TEST_F(CudfFilterProjectTest, DISABLED_caseWhenOperation) {
+TEST_F(CudfFilterProjectTest, caseWhenOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
   createDuckDbTable(vectors);

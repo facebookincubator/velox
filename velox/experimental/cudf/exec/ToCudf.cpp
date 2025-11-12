@@ -44,6 +44,7 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
