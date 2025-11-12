@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+find_package(Thrift REQUIRED)
+include_directories(${THRIFT_INCLUDE_DIR})
+
 add_library(
   velox_fuzzer_util
   ReferenceQueryRunner.cpp
@@ -30,10 +33,8 @@ add_library(
 # TODO Add VeloxQueryRunner to velox_fuzzer_util to support in
 # ExpressionFuzzerTest. More information can be found here:
 # https://github.com/facebookincubator/velox/issues/15414
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
-  target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
-  target_link_libraries(velox_fuzzer_util FBThrift::thriftcpp2)
-endif()
+target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
+target_link_libraries(velox_fuzzer_util thrift)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -130,12 +131,19 @@ target_link_libraries(
 )
 
 # TopNRowNumber Fuzzer.
-add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
+add_executable(velox_topn_row_number_fuzzer
+  TopNRowNumberFuzzerRunner.cpp)
 
-target_link_libraries(velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
+target_link_libraries(
+  velox_topn_row_number_fuzzer
+  velox_topn_row_number_fuzzer_lib)
 
 # Join Fuzzer.
-add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp JoinMaker.cpp)
+add_executable(
+  velox_join_fuzzer
+  JoinFuzzerRunner.cpp
+  JoinFuzzer.cpp
+  JoinMaker.cpp)
 
 target_link_libraries(
   velox_join_fuzzer
@@ -185,7 +193,8 @@ add_library(velox_cache_fuzzer_lib CacheFuzzer.cpp)
 # Cache Fuzzer
 add_executable(velox_cache_fuzzer CacheFuzzerRunner.cpp)
 
-target_link_libraries(velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_util)
+target_link_libraries(
+  velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_util)
 
 target_link_libraries(
   velox_cache_fuzzer_lib
@@ -205,52 +214,76 @@ target_link_libraries(
   velox_vector_fuzzer
 )
 
-# LocalRunnerService (requires FBThrift support)
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
-  # Generate Thrift library for LocalRunnerService
-  include(FBThriftCppLibrary)
-  add_fbthrift_cpp_library(
-    local_runner_service_thrift
-    if/LocalRunnerService.thrift
-    SERVICES
-    LocalRunnerService
-  )
+# LocalRunnerService (using Apache Thrift)
+# Generate Thrift library for LocalRunnerService
+set(THRIFT_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/gen-cpp)
+file(MAKE_DIRECTORY ${THRIFT_GEN_DIR})
 
-  target_compile_options(local_runner_service_thrift PRIVATE -Wno-error=deprecated-declarations)
+add_custom_command(
+  OUTPUT
+    ${THRIFT_GEN_DIR}/LocalRunnerService.cpp
+    ${THRIFT_GEN_DIR}/LocalRunnerService.h
+    ${THRIFT_GEN_DIR}/LocalRunnerService_types.cpp
+    ${THRIFT_GEN_DIR}/LocalRunnerService_types.h
+    ${THRIFT_GEN_DIR}/LocalRunnerService_constants.cpp
+    ${THRIFT_GEN_DIR}/LocalRunnerService_constants.h
+  COMMAND
+    ${THRIFT_COMPILER}
+    --gen cpp
+    -o ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/if/LocalRunnerService.thrift
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/if/LocalRunnerService.thrift
+  COMMENT "Generating Thrift C++ sources for LocalRunnerService"
+)
 
-  # LocalRunnerService Library
-  add_library(velox_local_runner_service_lib LocalRunnerService.cpp)
+add_library(
+  local_runner_service_thrift
+  ${THRIFT_GEN_DIR}/LocalRunnerService.cpp
+  ${THRIFT_GEN_DIR}/LocalRunnerService_types.cpp
+  ${THRIFT_GEN_DIR}/LocalRunnerService_constants.cpp
+)
 
-  target_link_libraries(
-    velox_local_runner_service_lib
-    local_runner_service_thrift
-    velox_core
-    velox_exec
-    velox_exec_test_lib
-    velox_expression
-    velox_functions_prestosql
-    velox_common_base
-    velox_memory
-    Folly::folly
-    FBThrift::thriftcpp2
-    gflags
-    glog::glog
-  )
+target_include_directories(
+  local_runner_service_thrift PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(local_runner_service_thrift thrift)
+target_compile_options(
+  local_runner_service_thrift
+  PRIVATE
+  -Wno-error=deprecated-declarations)
 
-  target_include_directories(velox_local_runner_service_lib PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+# LocalRunnerService Library
+add_library(velox_local_runner_service_lib LocalRunnerService.cpp)
 
-  # LocalRunnerService Executable
-  add_executable(velox_local_runner_service_runner LocalRunnerServiceRunner.cpp)
+target_link_libraries(
+  velox_local_runner_service_lib
+  local_runner_service_thrift
+  velox_core
+  velox_exec
+  velox_exec_test_lib
+  velox_expression
+  velox_functions_prestosql
+  velox_common_base
+  velox_memory
+  Folly::folly
+  thrift
+  gflags
+  glog::glog
+)
 
-  target_link_libraries(
-    velox_local_runner_service_runner
-    velox_local_runner_service_lib
-    velox_functions_prestosql
-    gtest
-    gflags
-    Folly::folly
-  )
-endif()
+target_include_directories(
+  velox_local_runner_service_lib PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+
+# LocalRunnerService Executable
+add_executable(velox_local_runner_service_runner LocalRunnerServiceRunner.cpp)
+
+target_link_libraries(
+  velox_local_runner_service_runner
+  velox_local_runner_service_lib
+  velox_functions_prestosql
+  gtest
+  gflags
+  Folly::folly
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
