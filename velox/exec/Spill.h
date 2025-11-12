@@ -33,6 +33,7 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
+class RowContainer;
 class VectorHasher;
 
 /// A source of sorted spilled RowVectors coming either from a file or memory.
@@ -551,6 +552,7 @@ class SpillState {
   /// target size of a single file.  'pool' owns the memory for state and
   /// results.
   SpillState(
+      RowTypePtr type_,
       const common::GetSpillDirectoryPathCB& getSpillDirectoryPath,
       const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       const std::string& fileNamePrefix,
@@ -606,6 +608,14 @@ class SpillState {
       const SpillPartitionId& id,
       const RowVectorPtr& rows);
 
+  using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;
+  uint64_t appendToPartition(
+      const SpillPartitionId& id,
+      const SpillRows& rows,
+      RowContainer* container,
+      const RowVectorPtr& vector,
+      bool hasProbedFlag);
+
   /// Finishes a sorted run for partition with 'id'. If write is called for
   /// 'partition' again, the data does not have to be sorted relative to the
   /// data written so far.
@@ -645,6 +655,8 @@ class SpillState {
   void updateSpilledInputBytes(uint64_t bytes);
 
   SpillWriter* partitionWriter(const SpillPartitionId& id) const;
+
+  void initPartitionWriter(const SpillPartitionId& id);
 
   const RowTypePtr type_;
 
