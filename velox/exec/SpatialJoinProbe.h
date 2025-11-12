@@ -187,6 +187,7 @@ class SpatialJoinProbe : public Operator {
     probeHasMatch_ = false;
     buildVectorIndex_ = 0;
     candidateIndex_ = 0;
+    candidateOffsetForCurrentBuildVector_ = 0;
     buildRowOffset_ = 0;
     needsFilterEvaluated_ = true;
   }
@@ -212,6 +213,7 @@ class SpatialJoinProbe : public Operator {
     buildRowOffset_ += buildVectors_.value()[buildVectorIndex_]->size();
     ++buildVectorIndex_;
     needsFilterEvaluated_ = true;
+    candidateOffsetForCurrentBuildVector_ = candidateIndex_;
   }
 
   // Calculate candidate build rows from spatialIndex_ for the current probe
@@ -227,10 +229,13 @@ class SpatialJoinProbe : public Operator {
   void evaluateJoinFilter(const RowVectorPtr& buildVector);
 
   // Checks if the spatial join condition matched for a particular row.
-  bool isJoinConditionMatch(vector_size_t i) const {
+  bool isJoinConditionMatch(vector_size_t candidateIndex) const {
+    vector_size_t relativeIndex =
+        candidateIndex - candidateOffsetForCurrentBuildVector_;
+    VELOX_CHECK_GT(decodedFilterResult_.size(), relativeIndex);
     return (
-        !decodedFilterResult_.isNullAt(i) &&
-        decodedFilterResult_.valueAt<bool>(i));
+        !decodedFilterResult_.isNullAt(relativeIndex) &&
+        decodedFilterResult_.valueAt<bool>(relativeIndex));
   }
 
   // Generates the next batch of a cross product between probe and build using
@@ -311,11 +316,14 @@ class SpatialJoinProbe : public Operator {
   // This is always set to all true, but we need it for eval/etc. Reuse between
   // evaluations.
   SelectivityVector filterInputRows_;
-  // The output result of the join condition evaluation.  This is only performed
-  // those in the current build vector. Thus we must index into this with
-  // candidateIndex_.
+  // The output result of the join condition evaluation on the **current**
+  // build vector. We must index into this with
+  // `candidateIndex_ - candidateOffsetForCurrentBuildVector_`.
   VectorPtr filterOutput_;
   // Decoded filterOutput: remove recursive dictionary/etc encodings.
+  // Like filterOutput_, this is only for the current build vector and we
+  // must index into this with
+  // `candidateIndex_ - candidateOffsetForCurrentBuildVector_`.
   DecodedVector decodedFilterResult_;
 
   // Decoded geometry vector.  Must be reset whenever input_ is changed (it
@@ -375,6 +383,14 @@ class SpatialJoinProbe : public Operator {
   // Index of candidate currently being processed from
   // `buildVectors_[buildIndex_]`.
   vector_size_t candidateIndex_{0};
+
+  // How many candidates were in previous build vectors.
+  // This is important because for each build vector, we calculate a
+  // decodedFilterResult_ with only the rows from from the candidates in
+  // that build vector.  candidateIndex_ indexes over _all_ candidates, so
+  // we must substract candidateOffsetForCurrentBuildVector_ to index into the
+  // candidates for this build vector.
+  vector_size_t candidateOffsetForCurrentBuildVector_{0};
 };
 
 } // namespace facebook::velox::exec
