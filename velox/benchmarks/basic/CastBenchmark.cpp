@@ -23,6 +23,15 @@ using namespace facebook;
 
 using namespace facebook::velox;
 
+std::vector<StringView> toStringViews(const std::vector<std::string>& values) {
+  std::vector<StringView> views;
+  views.reserve(values.size());
+  for (const auto& value : values) {
+    views.emplace_back(StringView(value));
+  }
+  return views;
+}
+
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
@@ -88,6 +97,18 @@ int main(int argc, char** argv) {
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
 
+  std::default_random_engine generator;
+  std::uniform_real_distribution<float> distribution(
+      -9999999999.9999, 9999999999.9999);
+
+  std::vector<std::string> doubleVector;
+  for (auto i = 0; i < vectorSize; i++) {
+    auto randomDouble = distribution(generator);
+    doubleVector.push_back(std::to_string(randomDouble));
+  }
+  auto doubleInput =
+      vectorMaker.flatVector<StringView>(toStringViews(doubleVector));
+
   benchmarkBuilder
       .addBenchmarkSet(
           "cast_varhar_as_date",
@@ -124,6 +145,13 @@ int main(int argc, char** argv) {
           "cast_timestamp_as_varchar",
           vectorMaker.rowVector({"timestamp"}, {timestampInput}))
       .addExpression("cast", "cast (timestamp as varchar)");
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "cast_varchar_as_double_fast_float",
+          vectorMaker.rowVector({"string_double"}, {doubleInput}))
+      .addExpression("cast_string_as_double", "cast (string_double as double)")
+      .addExpression("cast_string_as_float", "cast (string_double as float)");
 
   benchmarkBuilder
       .addBenchmarkSet(
