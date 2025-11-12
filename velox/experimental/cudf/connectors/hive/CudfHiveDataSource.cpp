@@ -263,6 +263,8 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   std::unique_ptr<cudf::table> cudfTable;
   cudf::io::table_metadata metadata;
 
+  // TODO(mh): Replace this with chunked hybrid scan APIs when available in the
+  // pinned cuDF version
   std::call_once(*tableMaterialized_, [&]() {
     auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
