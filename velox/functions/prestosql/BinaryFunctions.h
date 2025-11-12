@@ -21,6 +21,7 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/external/md5/md5.h"
@@ -257,9 +258,10 @@ template <typename T>
 struct FromHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
+      const TInput& input) {
     VELOX_USER_CHECK_EQ(
         input.size() % 2,
         0,
@@ -311,11 +313,33 @@ struct FromBase64Function {
   }
 };
 
+template <typename TExec>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    auto inputSize = input.size();
+    auto decodedSize =
+        encoding::Base32::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base32::decode(
+        input.data(), inputSize, result.data(), result.size());
+  }
+};
+
 template <typename T>
 struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE Status
-  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
+  call(out_type<Varbinary>& result, const TInput& input) {
     auto inputSize = input.size();
     auto decodedSize =
         encoding::Base64::calculateDecodedSize(input.data(), inputSize);

@@ -65,6 +65,11 @@ class SpatialJoinBuild : public Operator {
     Operator::close();
   }
 
+  static Envelope readEnvelope(
+      const StringView& serializedGeometry,
+      double radius);
+
+ private:
   std::vector<RowVectorPtr> mergeDataVectors() const;
 
   SpatialIndex buildSpatialIndex(
@@ -72,11 +77,6 @@ class SpatialJoinBuild : public Operator {
       column_index_t geometryIdx,
       std::optional<column_index_t> radiusIdx);
 
-  static Envelope readEnvelope(
-      const StringView& serializedGeometry,
-      double radius);
-
- private:
   std::vector<RowVectorPtr> dataVectors_;
 
   // Channel of geometry variable used to build spatial index

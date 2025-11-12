@@ -112,15 +112,20 @@ HiveTableHandle::HiveTableHandle(
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::string>& tableParameters,
-    std::vector<HiveColumnHandlePtr> filterColumnHandles)
+    std::vector<HiveColumnHandlePtr> filterColumnHandles,
+    double sampleRate)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
       filterPushdownEnabled_(filterPushdownEnabled),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
+      sampleRate_{sampleRate},
       dataColumns_(dataColumns),
       tableParameters_(tableParameters),
-      filterColumnHandles_(std::move(filterColumnHandles)) {}
+      filterColumnHandles_(std::move(filterColumnHandles)) {
+  VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
+  VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
+}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
@@ -141,6 +146,9 @@ std::string HiveTableHandle::toString() const {
       notFirstFilter = true;
     }
     out << "]";
+  }
+  if (sampleRate_ < 1.0) {
+    out << ", sample rate: " << sampleRate_;
   }
   if (remainingFilter_) {
     out << ", remaining filter: (" << remainingFilter_->toString() << ")";
@@ -195,6 +203,11 @@ folly::dynamic HiveTableHandle::serialize() const {
   if (remainingFilter_) {
     obj["remainingFilter"] = remainingFilter_->serialize();
   }
+
+  if (sampleRate_ < 1.0) {
+    obj["sampleRate"] = sampleRate_;
+  }
+
   if (dataColumns_) {
     obj["dataColumns"] = dataColumns_->serialize();
   }
@@ -237,6 +250,11 @@ ConnectorTableHandlePtr HiveTableHandle::create(
         filter->clone();
   }
 
+  double sampleRate = 1.0;
+  if (obj.count("sampleRate")) {
+    sampleRate = obj["sampleRate"].asDouble();
+  }
+
   RowTypePtr dataColumns;
   if (auto it = obj.find("dataColumns"); it != obj.items().end()) {
     dataColumns = ISerializable::deserialize<RowType>(it->second, context);
@@ -265,7 +283,8 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       remainingFilter,
       dataColumns,
       tableParameters,
-      std::move(filterColumnHandles));
+      std::move(filterColumnHandles),
+      sampleRate);
 }
 
 void HiveTableHandle::registerSerDe() {

@@ -382,6 +382,23 @@ TEST_F(BinaryFunctionsTest, fromHex) {
   EXPECT_EQ(
       "12PasXXaWBQ0k1T88jiF",
       fromHexToBase64("D763DAB175DA5814349354FCF23885"));
+
+  // Test from_hex with VARBINARY input
+  const auto fromHexVarbinary = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>(
+        "from_hex(cast(c0 as varbinary))", std::move(value));
+  };
+
+  EXPECT_EQ(std::nullopt, fromHexVarbinary(std::nullopt));
+  EXPECT_EQ("", fromHexVarbinary(""));
+  EXPECT_EQ("a", fromHexVarbinary("61"));
+  EXPECT_EQ("abc", fromHexVarbinary("616263"));
+  EXPECT_EQ("hello world", fromHexVarbinary("68656C6C6F20776F726C64"));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromHexVarbinary("48656C6C6F20576F726C642066726F6D2056656C6F7821"));
+
+  EXPECT_THROW(fromHexVarbinary("fff"), VeloxUserError);
 }
 
 TEST_F(BinaryFunctionsTest, toBase64) {
@@ -494,6 +511,25 @@ TEST_F(BinaryFunctionsTest, fromBase64Url) {
   EXPECT_THROW(fromBase64Url("YQ==="), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ=+"), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ=/"), VeloxUserError);
+
+  // Test from_base64url with VARBINARY input
+  const auto fromBase64UrlVarbinary = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>(
+        "from_base64url(cast(c0 as varbinary))", std::move(value));
+  };
+
+  EXPECT_EQ(std::nullopt, fromBase64UrlVarbinary(std::nullopt));
+  EXPECT_EQ("", fromBase64UrlVarbinary(""));
+  EXPECT_EQ("a", fromBase64UrlVarbinary("YQ=="));
+  EXPECT_EQ("a", fromBase64UrlVarbinary("YQ"));
+  EXPECT_EQ("abc", fromBase64UrlVarbinary("YWJj"));
+  EXPECT_EQ("hello world", fromBase64UrlVarbinary("aGVsbG8gd29ybGQ="));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromBase64UrlVarbinary("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
+
+  EXPECT_EQ(fromHex("FF4FBF50"), fromBase64UrlVarbinary("_0-_UA=="));
+  EXPECT_THROW(fromBase64UrlVarbinary("YQ="), VeloxUserError);
 }
 
 TEST_F(BinaryFunctionsTest, fromBigEndian32) {
@@ -865,6 +901,69 @@ TEST_F(BinaryFunctionsTest, murmur3_x64_128) {
       murmur3_x64_128("hashme"), hexToDec("93192FE805BE23041C8318F67EC4F2BC"));
 
   EXPECT_EQ(murmur3_x64_128(std::nullopt), std::nullopt);
+}
+
+TEST_F(BinaryFunctionsTest, fromBase32) {
+  const auto fromBase32 = [&](const std::optional<std::string>& value) {
+    // from_base32 allows VARCHAR and VARBINARY inputs.
+    auto result =
+        evaluateOnce<std::string>("from_base32(c0)", VARCHAR(), value);
+    auto otherResult =
+        evaluateOnce<std::string>("from_base32(c0)", VARBINARY(), value);
+
+    VELOX_CHECK_EQ(result.has_value(), otherResult.has_value());
+
+    if (!result.has_value()) {
+      return result;
+    }
+
+    EXPECT_EQ(result.value(), otherResult.value());
+    return result;
+  };
+
+  // Basic decoding tests
+  EXPECT_EQ("", fromBase32(""));
+  EXPECT_EQ("a", fromBase32("ME======"));
+  EXPECT_EQ("abc", fromBase32("MFRGG==="));
+  EXPECT_EQ("hello world", fromBase32("NBSWY3DPEB3W64TMMQ======"));
+
+  // Null handling
+  EXPECT_EQ(std::nullopt, fromBase32(std::nullopt));
+
+  // Test padding is optional (RFC 4648)
+  EXPECT_EQ("a", fromBase32("ME"));
+  EXPECT_EQ("abc", fromBase32("MFRGG"));
+
+  // Invalid input tests
+  VELOX_ASSERT_USER_THROW(fromBase32("1="), "Unrecognized character: 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M1======"), "Unrecognized character: 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M!======"), "Unrecognized character: !");
+
+  // Test lowercase is rejected
+  VELOX_ASSERT_USER_THROW(fromBase32("me======"), "Unrecognized character: m");
+  VELOX_ASSERT_USER_THROW(fromBase32("MFRGG===a"), "Unrecognized character: a");
+
+  // Test invalid Base32 characters 0, 1, 8, 9
+  VELOX_ASSERT_USER_THROW(fromBase32("M0======"), "Unrecognized character: 0");
+  VELOX_ASSERT_USER_THROW(fromBase32("M8======"), "Unrecognized character: 8");
+  VELOX_ASSERT_USER_THROW(fromBase32("M9======"), "Unrecognized character: 9");
+
+  // Test invalid input lengths (matching Google Guava's Base32 behavior)
+  // Invalid lengths mod 8 are: 1, 3, 6
+  // Single character (1 mod 8)
+  VELOX_ASSERT_USER_THROW(fromBase32("A"), "Invalid input length 1");
+  VELOX_ASSERT_USER_THROW(fromBase32("M======="), "Invalid input length 1");
+  // Three characters (3 mod 8)
+  VELOX_ASSERT_USER_THROW(fromBase32("XEV"), "Invalid input length 3");
+  VELOX_ASSERT_USER_THROW(fromBase32("ABC"), "Invalid input length 3");
+  // Six characters (6 mod 8)
+  VELOX_ASSERT_USER_THROW(fromBase32("ABCDEF"), "Invalid input length 6");
+  VELOX_ASSERT_USER_THROW(fromBase32("MFRGGM"), "Invalid input length 6");
+  // 11 characters (3 mod 8)
+  VELOX_ASSERT_USER_THROW(fromBase32("NBSWY3DPEB3"), "Invalid input length 11");
+  // 14 characters (6 mod 8)
+  VELOX_ASSERT_USER_THROW(
+      fromBase32("NBSWY3DPEB3W64"), "Invalid input length 14");
 }
 
 } // namespace

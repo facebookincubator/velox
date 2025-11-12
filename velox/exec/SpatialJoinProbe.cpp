@@ -321,7 +321,7 @@ void SpatialJoinProbe::addInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
   VELOX_CHECK_EQ(probeRow_, 0);
   VELOX_CHECK(!probeHasMatch_);
-  VELOX_CHECK_EQ(buildIndex_, 0);
+  VELOX_CHECK_EQ(buildVectorIndex_, 0);
   VELOX_CHECK_EQ(candidateIndex_, 0);
 
   // In getOutput(), we are going to wrap input in dictionaries a few rows at a
@@ -401,16 +401,16 @@ void SpatialJoinProbe::addProbeRowOutput() {
 
   // Find the candidates for each probe row from the spatial index.  Only do
   // this at the start for each row.
-  if (buildIndex_ == 0 && candidateIndex_ == 0) {
+  if (buildVectorIndex_ == 0 && candidateIndex_ == 0) {
     candidateBuildRows_ = querySpatialIndex();
   }
 
   while (!isProbeRowDone()) {
-    addBuildVectorOutput(buildVectors_.value()[buildIndex_]);
+    addBuildVectorOutput(buildVectors_.value()[buildVectorIndex_]);
     if (outputBuilder_.isOutputFull()) {
-      // If full, don't advance buildIndex_ because we may not have exhausted
-      // the current vector.  Return instead of breaking so that we can add a
-      // mismatch row later if necessary.
+      // If full, don't advance buildVectorIndex_ because we may not have
+      // exhausted the current vector.  Return instead of breaking so that we
+      // can add a mismatch row later if necessary.
       return;
     }
     advanceBuildVector();
@@ -466,7 +466,6 @@ std::vector<int32_t> SpatialJoinProbe::querySpatialIndex() {
   return candidates;
 }
 
-// Returns nullopt is there are no matching indices
 BufferPtr SpatialJoinProbe::makeBuildVectorIndices(vector_size_t vectorSize) {
   // Find the slice of candidates that are in this build vector.
   size_t endIndex = candidateIndex_;
