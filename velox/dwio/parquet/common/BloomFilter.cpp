@@ -100,34 +100,28 @@ static void validateBloomFilterHeader(const thrift::BloomFilterHeader& header) {
 BlockSplitBloomFilter BlockSplitBloomFilter::deserialize(
     dwio::common::SeekableInputStream* input,
     memory::MemoryPool& pool) {
-  const void* data;
-  int32_t dataSize;
-  input->Next(&data, &dataSize);
-
   thrift::BloomFilterHeader header;
-  auto headerSize = thrift::deserialize(
-      &header, std::string_view(static_cast<const char*>(data), dataSize));
+  auto result = thrift::deserialize(&header, input, nullptr, 0);
   validateBloomFilterHeader(header);
+  auto headerSize = result.readBytes;
 
+  auto data = result.remainedData;
+  const auto dataSize = result.remainedDataBytes;
   const int32_t bloomFilterSize = *header.numBytes();
-  if (bloomFilterSize + headerSize <= dataSize) {
+  if (bloomFilterSize <= dataSize) {
     // The bloom filter data is entirely contained in the buffer we just read
     // => just return it.
     BlockSplitBloomFilter bloomFilter(&pool);
-    bloomFilter.init(
-        reinterpret_cast<const uint8_t*>(data) + headerSize, bloomFilterSize);
+    bloomFilter.init(data, bloomFilterSize);
     return bloomFilter;
   }
   // We have read a part of the bloom filter already, copy it to the target
   // buffer and read the remaining part from the InputStream.
   auto buffer = AlignedBuffer::allocate<char>(bloomFilterSize, &pool);
 
-  const auto bloomFilterSizeInData = dataSize - headerSize;
+  const auto bloomFilterSizeInData = dataSize;
   if (bloomFilterSizeInData > 0) {
-    std::memcpy(
-        buffer->asMutable<char>(),
-        reinterpret_cast<const uint8_t*>(data) + headerSize,
-        bloomFilterSizeInData);
+    std::memcpy(buffer->asMutable<char>(), data, bloomFilterSizeInData);
   }
   const auto requiredReadSize = bloomFilterSize - bloomFilterSizeInData;
 

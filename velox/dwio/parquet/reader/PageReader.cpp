@@ -82,27 +82,16 @@ void PageReader::seekToPage(int64_t row) {
 PageHeader PageReader::readPageHeader() {
   TestValue::adjust(
       "facebook::velox::parquet::PageReader::readPageHeader", this);
-  if (bufferEnd_ == bufferStart_) {
-    const void* buffer;
-    int32_t size;
-    uint64_t readUs{0};
-    {
-      MicrosecondTimer timer(&readUs);
-      inputStream_->Next(&buffer, &size);
-    }
-    stats_.pageLoadTimeNs += readUs * 1'000;
-    bufferStart_ = reinterpret_cast<const char*>(buffer);
-    bufferEnd_ = bufferStart_ + size;
-  }
-
   PageHeader pageHeader;
-  unsigned long readBytes = thrift::deserialize(
+  auto result = thrift::deserialize(
       &pageHeader,
-      std::string_view(
-          reinterpret_cast<const char*>(bufferStart_),
-          bufferEnd_ - bufferStart_));
-  pageDataStart_ = pageStart_ + readBytes;
-  bufferStart_ += readBytes;
+      inputStream_.get(),
+      reinterpret_cast<const uint8_t*>(bufferStart_),
+      bufferEnd_ - bufferStart_);
+  pageDataStart_ = pageStart_ + result.readBytes;
+  bufferStart_ = reinterpret_cast<const char*>(result.remainedData);
+  bufferEnd_ = bufferStart_ + result.remainedDataBytes;
+  stats_.pageLoadTimeNs += result.readUs * 1'000;
   return pageHeader;
 }
 

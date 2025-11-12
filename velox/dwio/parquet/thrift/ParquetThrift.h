@@ -17,11 +17,12 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types.h"
 #include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types_custom_protocol.h"
 
 #include <fmt/format.h>
-#include <thrift/lib/cpp2/protocol/CompactProtocol.h>
+#include <thrift/lib/cpp2/protocol/ProtocolReaderWithRefill.h>
 #include <ostream>
 #include <string_view>
 
@@ -58,6 +59,85 @@ unsigned long deserialize(ThriftStruct* thriftStruct, std::string_view data) {
   reader.setInput(&buffer);
   try {
     return thriftStruct->read(&reader);
+  } catch (apache::thrift::protocol::TProtocolException& e) {
+    VELOX_FAIL("Thrift deserialize error: {}", e.what());
+  }
+}
+
+struct DeserializeResult {
+  unsigned long readBytes;
+  const uint8_t* remainedData;
+  size_t remainedDataBytes;
+  uint64_t readUs;
+};
+
+template <typename ThriftStruct>
+DeserializeResult deserialize(
+    ThriftStruct* thriftStruct,
+    facebook::velox::dwio::common::SeekableInputStream* input,
+    const uint8_t* initialData,
+    size_t initialDataBytes) {
+  uint64_t totalReadUs{0};
+  auto readData = [&](const void** data, int32_t* dataBytes) {
+    bool haveData;
+    uint64_t readUs{0};
+    {
+      MicrosecondTimer timer(&readUs);
+      haveData = input->Next(data, dataBytes);
+    }
+    totalReadUs += readUs;
+    return haveData;
+  };
+  auto refiller = [&](const uint8_t* currentData,
+                      int currentDataBytes,
+                      int totalBytesRead,
+                      int requestedBytes) -> std::unique_ptr<folly::IOBuf> {
+    std::unique_ptr<folly::IOBuf> buffer;
+    if (currentDataBytes == 0) {
+      const void* data;
+      int32_t dataBytes;
+      if (!readData(&data, &dataBytes)) {
+        return folly::IOBuf::wrapBuffer(nullptr, 0);
+      }
+      if (dataBytes >= requestedBytes) {
+        return folly::IOBuf::wrapBuffer(data, dataBytes);
+      }
+      buffer = folly::IOBuf::copyBuffer(data, dataBytes);
+    } else {
+      buffer = folly::IOBuf::copyBuffer(currentData, currentDataBytes);
+    }
+    while (true) {
+      const void* data;
+      int32_t dataBytes;
+      if (!readData(&data, &dataBytes)) {
+        break;
+      }
+      std::unique_ptr<folly::IOBuf> moreBuffer;
+      auto currentBytes = buffer->computeChainCapacity();
+      if (currentBytes + dataBytes >= requestedBytes) {
+        moreBuffer = folly::IOBuf::wrapBuffer(data, dataBytes);
+      } else {
+        moreBuffer = folly::IOBuf::copyBuffer(data, dataBytes);
+      }
+      buffer->appendToChain(std::move(moreBuffer));
+      if (currentBytes + dataBytes >= requestedBytes) {
+        break;
+      }
+    }
+    return buffer;
+  };
+  apache::thrift::CompactProtocolReaderWithRefill reader(std::move(refiller));
+  folly::IOBuf initialBuffer(
+      folly::IOBuf::WRAP_BUFFER, initialData, initialDataBytes);
+  reader.setInput(&initialBuffer);
+  try {
+    DeserializeResult result;
+    result.readBytes = thriftStruct->read(&reader);
+    auto cursor = reader.getCursor();
+    result.remainedData = cursor.data();
+    result.remainedDataBytes = cursor.length();
+    result.readUs = totalReadUs;
+    return result;
   } catch (apache::thrift::protocol::TProtocolException& e) {
     VELOX_FAIL("Thrift deserialize error: {}", e.what());
   }
