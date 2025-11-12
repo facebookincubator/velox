@@ -1031,9 +1031,10 @@ class FileMetaData::FileMetaDataImpl {
     if (metadata_->schema()->empty()) {
       throw ParquetException("Empty file schema (no root)");
     }
-    schema_.Init(schema::Unflatten(
-        &(*metadata_->schema())[0],
-        static_cast<int>(metadata_->schema()->size())));
+    schema_.Init(
+        schema::Unflatten(
+            &(*metadata_->schema())[0],
+            static_cast<int>(metadata_->schema()->size())));
   }
 
   void InitColumnOrders() {

@@ -201,10 +201,11 @@ class OffsetIndexImpl : public OffsetIndex {
       const facebook::velox::parquet::thrift::OffsetIndex& offset_index) {
     page_locations_.reserve(offset_index.page_locations()->size());
     for (const auto& page_location : *offset_index.page_locations()) {
-      page_locations_.emplace_back(PageLocation{
-          *page_location.offset(),
-          *page_location.compressed_page_size(),
-          *page_location.first_row_index()});
+      page_locations_.emplace_back(
+          PageLocation{
+              *page_location.offset(),
+              *page_location.compressed_page_size(),
+              *page_location.first_row_index()});
     }
   }
 
