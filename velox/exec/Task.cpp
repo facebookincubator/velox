@@ -2452,9 +2452,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       cancellationSource_.requestCancellation();
     }
 
-    LOG(INFO) << "Terminating task " << taskId() << " with state "
-              << taskStateString(state_) << " after running for "
-              << succinctMillis(timeSinceStartMsLocked());
+    VLOG(1) << "Terminating task " << taskId() << " with state "
+            << taskStateString(state_) << " after running for "
+            << succinctMillis(timeSinceStartMsLocked());
 
     taskCompletionNotifier.activate(
         std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
