@@ -115,15 +115,15 @@ core::PlanNodePtr CudfPlanRewriter::insertBoundary(
 
   } else if (fromMode == ExecutionMode::kCpu && toMode == ExecutionMode::kGpu) {
     // cpu -> gpu
+    auto fromVeloxId = boundaryId + "_from_velox";
+    result = std::make_shared<CudfFromVeloxNode>(fromVeloxId, result);
+
     result = std::make_shared<core::LocalPartitionNode>(
         boundaryId,
         partitionType,
         false,
         partitionSpec,
         std::vector<core::PlanNodePtr>{result});
-
-    auto fromVeloxId = boundaryId + "_from_velox";
-    result = std::make_shared<CudfFromVeloxNode>(fromVeloxId, result);
   }
 
   return result;
