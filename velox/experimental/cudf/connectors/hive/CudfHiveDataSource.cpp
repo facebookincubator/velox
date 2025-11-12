@@ -306,20 +306,25 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
           return buffer;
         });
 
-    // Read a table chunk
+    // Create an all true row mask to read the table in one go without output
+    // filtering
     auto const scalarTrue = cudf::numeric_scalar<bool>(true, true, stream_);
-    auto dummyRowMask =
+    auto allTrueRowMask =
         cudf::make_column_from_scalar(scalarTrue, totalRows, stream_);
+
+    // Read the table in one go
     auto tableWithMetadata = splitReader_->materialize_payload_columns(
         rowGroupIndices,
         std::move(columnChunkBuffers),
-        dummyRowMask->view(),
+        allTrueRowMask->view(),
         cudf::io::parquet::experimental::use_data_page_mask::NO,
         readerOptions_,
         stream_);
 
+    // Store the read metadata
     metadata = std::move(tableWithMetadata.metadata);
 
+    // Apply the subfield filter manually since we passed an all true row mask
     if (readerOptions_.get_filter().has_value()) {
       std::unique_ptr<cudf::table> table = std::move(tableWithMetadata.tbl);
       auto filterMask = cudf::compute_column(
@@ -334,6 +339,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     }
   });
 
+  // If we didn't read anything, return nullptr
   if (cudfTable == nullptr) {
     return nullptr;
   }
