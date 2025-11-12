@@ -22,7 +22,8 @@
 
 namespace facebook::velox::exec {
 
-SpatialIndex::SpatialIndex(std::vector<Envelope> envelopes) {
+SpatialIndex::SpatialIndex(Envelope bounds, std::vector<Envelope> envelopes)
+    : bounds_(std::move(bounds)) {
   std::ranges::sort(envelopes, {}, &Envelope::minX);
 
   minXs_.reserve(envelopes.size());
@@ -32,10 +33,6 @@ SpatialIndex::SpatialIndex(std::vector<Envelope> envelopes) {
   rowIndices_.reserve(envelopes.size());
 
   for (const auto& env : envelopes) {
-    bounds_.maxX = std::max(bounds_.maxX, env.maxX);
-    bounds_.maxY = std::max(bounds_.maxY, env.maxY);
-    bounds_.minX = std::min(bounds_.minX, env.minX);
-    bounds_.minY = std::min(bounds_.minY, env.minY);
     minXs_.push_back(env.minX);
     minYs_.push_back(env.minY);
     maxXs_.push_back(env.maxX);

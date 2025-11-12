@@ -28,7 +28,8 @@ class SpatialIndexTest : public virtual testing::Test {
   SpatialIndex index_;
 
   void makeIndex(std::vector<Envelope> envelopes) {
-    index_ = SpatialIndex(std::move(envelopes));
+    Envelope bounds = Envelope::of(envelopes);
+    index_ = SpatialIndex(std::move(bounds), std::move(envelopes));
   }
 
   Envelope indexBounds() const {
@@ -83,6 +84,22 @@ TEST_F(SpatialIndexTest, testNaNHandling) {
   Envelope envWithNaN5{
       .minX = nan, .minY = nan, .maxX = nan, .maxY = nan, .rowIndex = 0};
   ASSERT_TRUE(envWithNaN5.isEmpty());
+}
+
+TEST_F(SpatialIndexTest, testEnvelopeMerge) {
+  Envelope env = Envelope::empty();
+
+  env.merge(Envelope{.minX = 0, .minY = 10, .maxX = 1, .maxY = 11});
+  ASSERT_EQ(env.minX, 0.0);
+  ASSERT_EQ(env.minY, 10.0);
+  ASSERT_EQ(env.maxX, 1.0);
+  ASSERT_EQ(env.maxY, 11.0);
+
+  env.merge(Envelope{.minX = 5, .minY = 1, .maxX = 6, .maxY = 2});
+  ASSERT_EQ(env.minX, 0.0);
+  ASSERT_EQ(env.minY, 1.0);
+  ASSERT_EQ(env.maxX, 6.0);
+  ASSERT_EQ(env.maxY, 11.0);
 }
 
 TEST_F(SpatialIndexTest, testEmptyIndex) {
