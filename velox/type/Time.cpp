@@ -324,7 +324,7 @@ Expected<int64_t> fromTimeWithTimezoneString(const char* buf, size_t len) {
     return folly::makeUnexpected(timeResult.error());
   }
 
-  int64_t millisUtc = timeResult.value();
+  int64_t millisLocal = timeResult.value();
 
   // Parse timezone offset
   auto tzOffsetResult = parseTimezoneOffset(buf + tzStartPos, len - tzStartPos);
@@ -333,6 +333,11 @@ Expected<int64_t> fromTimeWithTimezoneString(const char* buf, size_t len) {
   }
 
   int16_t offsetMinutes = tzOffsetResult.value();
+
+  // Convert local time to UTC using utility function
+  // Example: 12:00:00+05:30 means the local time is 12:00 in UTC+5:30
+  // To get UTC time, we subtract 5:30, resulting in 06:30:00 UTC
+  int64_t millisUtc = localToUtcTime(millisLocal, offsetMinutes);
 
   // Encode timezone offset and pack with time
   int16_t encodedTimezone = biasEncode(offsetMinutes);

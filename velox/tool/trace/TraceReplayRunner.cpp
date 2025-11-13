@@ -108,6 +108,10 @@ DEFINE_string(
     function_prefix,
     "",
     "Prefix for the scalar and aggregate functions.");
+DEFINE_string(
+    spill_directory,
+    "",
+    "Base directory for spilling. If not specified, a local temporary directory will be used.");
 
 namespace facebook::velox::tool::trace {
 namespace {
@@ -335,6 +339,7 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_task_id,
         FLAGS_node_id,
         traceNodeName,
+        FLAGS_spill_directory,
         FLAGS_driver_ids,
         queryCapacityBytes,
         cpuExecutor_.get());
@@ -389,6 +394,7 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_task_id,
         FLAGS_node_id,
         traceNodeName,
+        FLAGS_spill_directory,
         FLAGS_driver_ids,
         queryCapacityBytes,
         cpuExecutor_.get());
@@ -419,6 +425,7 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_task_id,
         FLAGS_node_id,
         traceNodeName,
+        FLAGS_spill_directory,
         FLAGS_driver_ids,
         queryCapacityBytes,
         cpuExecutor_.get());
@@ -429,6 +436,7 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_task_id,
         FLAGS_node_id,
         traceNodeName,
+        FLAGS_spill_directory,
         FLAGS_driver_ids,
         queryCapacityBytes,
         cpuExecutor_.get());

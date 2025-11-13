@@ -70,6 +70,7 @@ add_executable(
   GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
+  KHyperLogLogCastTest.cpp
   P4HyperLogLogCastTest.cpp
   SetDigestCastTest.cpp
   InPredicateTest.cpp

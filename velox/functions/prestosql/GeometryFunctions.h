@@ -1249,22 +1249,10 @@ struct StEnvelopeFunction {
 
   FOLLY_ALWAYS_INLINE Status
   call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
-    std::unique_ptr<const geos::geom::Geometry> geosGeometry =
-        geospatial::GeometryDeserializer::deserialize(geometry);
+    std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
 
-    auto env = geosGeometry->getEnvelope();
-
-    if (env->isEmpty()) {
-      GEOS_TRY(
-          {
-            auto polygon =
-                std::unique_ptr<geos::geom::Polygon>(factory_->createPolygon());
-            geospatial::GeometrySerializer::serialize(*polygon, result);
-          },
-          "Failed to create empty polygon in ST_Envelope");
-    }
-
-    geospatial::GeometrySerializer::serialize(*env, result);
+    geospatial::GeometrySerializer::serializeEnvelope(*env, result);
 
     return Status::OK();
   }

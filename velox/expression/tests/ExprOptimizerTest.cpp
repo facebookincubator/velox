@@ -144,8 +144,8 @@ TEST_F(ExprOptimizerTest, constantFolding) {
       "concat(substr(a, 4), substr(b, 6))",
       ROW({"a", "b"}, {VARCHAR(), VARCHAR()}));
   testExpression(
-      "a = 'z' and b = (1 + 1) or c = (5 - 1) * 3 or 2 * 3 = 6 / 1 and abs(-4) = 2 * 2",
-      "a = 'z' and b = 2 or c = 12 or true",
+      "a = 'z' and b = (1 + 1) or c = (5 - 1) * 3",
+      "a = 'z' and b = 2 or c = 12",
       ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), INTEGER()}));
 }
 
@@ -197,6 +197,28 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       "reduce(c0, length(concat('abc', 'xyz')) * 3, (s, x) -> s + (abs(-2) + (5 - 4)) - x, s -> s)",
       "18 + cast(array_sum_propagate_element_null(transform(c0, x -> 3 - x)) AS BIGINT)",
       ROW({"c0"}, {ARRAY(TINYINT())}));
+
+  // Conjunct rewrites with constant folding.
+  type = ROW({"a"}, {ARRAY(BIGINT())});
+  testExpression("if(array_position(a, 1) > 10 and false, 0, 1)", "1", type);
+  testExpression("if(cardinality(a) > 10 or true, 0, 1)", "0", type);
+  testExpression(
+      "filter(a, x -> (2 * 3) = x and abs(-4) = (3 - 1))",
+      "filter(a, x -> false)",
+      type);
+  testExpression(
+      "filter(a, x -> (2 * 3) = x or (8 / 2) = (3 + 1))",
+      "filter(a, x -> true)",
+      type);
+
+  // Switch rewrite with constant folding.
+  testExpression(
+      "case when ARRAY[abs(-1)] = ARRAY[2] then 'not_matched' when ARRAY[1] = ARRAY[2 - 1] then 'matched' else 'default' end",
+      "'matched'");
+  testExpression(
+      "case when 10 + a = 100 / 2 then 10 - 2 when a / (2 + 1) = abs(-5) then 10 * 10 when (123 * 10) + 4 = abs(-1234) then 11 * 3 else a end",
+      "case when 10 + a = 50 then 8 when a / 3 = 5 then 100 else 33 end",
+      ROW({"a"}, {BIGINT()}));
 }
 
 /// Test to ensure session queryCtx is used during expression optimization.
@@ -290,8 +312,8 @@ TEST_F(ExprOptimizerTest, makeFailExpr) {
   // Primitive types.
   assertPrestoFailExpr("0 / 0", prestoFailCall(), ROW({}));
   assertPrestoFailExpr(
-      "if(false, a * abs(-1 * 3), 0 / 0)",
-      fmt::format("if(false, a * 3, {})", prestoFailCall()),
+      "if(a = 2 * 2, a / abs(-1 * 3), 0 / 0)",
+      fmt::format("if(a = 4, a / 3, {})", prestoFailCall()),
       ROW({"a"}, {BIGINT()}));
   assertPrestoFailExpr(
       "json_extract(a, substr(b, 1 / 0))",

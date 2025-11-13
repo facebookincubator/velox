@@ -178,6 +178,7 @@ TEST_F(TopNRowNumberReplayerTest, basic) {
                                    topNRowNumberId_,
                                    "TopNRowNumber",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -217,6 +218,7 @@ TEST_F(TopNRowNumberReplayerTest, withoutRowNumber) {
                                    task->taskId(),
                                    topNRowNumberId_,
                                    "TopNRowNumber",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())
@@ -258,6 +260,7 @@ TEST_F(TopNRowNumberReplayerTest, multiplePartitions) {
                                    topNRowNumberId_,
                                    "TopNRowNumber",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -297,6 +300,7 @@ TEST_F(TopNRowNumberReplayerTest, noPartitionKeys) {
                                    task->taskId(),
                                    topNRowNumberId_,
                                    "TopNRowNumber",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())
@@ -340,6 +344,7 @@ TEST_F(TopNRowNumberReplayerTest, multipleSortingKeys) {
                                    topNRowNumberId_,
                                    "TopNRowNumber",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -379,6 +384,7 @@ TEST_F(TopNRowNumberReplayerTest, limitOne) {
                                    task->taskId(),
                                    topNRowNumberId_,
                                    "TopNRowNumber",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())

@@ -230,6 +230,7 @@ TEST_F(HashJoinReplayerTest, basic) {
                                    traceNodeId_,
                                    "HashJoin",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -301,6 +302,7 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
             task->taskId(),
             traceNodeId_,
             "HashJoin",
+            "",
             "0",
             0,
             executor_.get())
@@ -313,6 +315,7 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
       task->taskId(),
       traceNodeId_,
       "HashJoin",
+      "",
       "1,3",
       0,
       executor_.get())
@@ -468,6 +471,7 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {
                                    traceNodeId_,
                                    "HashJoin",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -549,6 +553,7 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashProbeSpill) {
                                    task->taskId(),
                                    traceNodeId_,
                                    "HashJoin",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())

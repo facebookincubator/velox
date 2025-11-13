@@ -22,6 +22,7 @@ add_library(
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
+  CudfTopN.cpp
   DebugUtil.cpp
   ToCudf.cpp
   Utilities.cpp

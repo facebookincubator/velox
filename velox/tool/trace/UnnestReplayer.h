@@ -38,6 +38,7 @@ class UnnestReplayer : public OperatorReplayerBase {
             taskId,
             nodeId,
             operatorType,
+            "",
             driverIds,
             queryCapacity,
             executor) {}

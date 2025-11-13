@@ -114,6 +114,10 @@ class ConstantTypedExpr : public ITypedExpr {
     return BaseVector::createConstant(type(), value_, 1, pool);
   }
 
+  /// Returns value of boolean expression, std::nullopt for null booleans.
+  /// Throws an error if expression is not of boolean type.
+  std::optional<bool> toBool() const;
+
   const std::vector<TypedExprPtr>& inputs() const {
     static const std::vector<TypedExprPtr> kEmpty{};
     return kEmpty;
@@ -146,6 +150,9 @@ class ConstantTypedExpr : public ITypedExpr {
   folly::dynamic serialize() const override;
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+  /// Returns a NULL constant expression of given type.
+  static TypedExprPtr makeNull(const TypePtr& type);
 
  private:
   const Variant value_;

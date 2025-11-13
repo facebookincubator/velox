@@ -491,7 +491,7 @@ class ColumnVisitor {
 
  protected:
   const TFilter& filter_;
-  SelectiveColumnReader* reader_;
+  SelectiveColumnReader* const reader_;
   const bool allowNulls_;
   const vector_size_t* rows_;
   vector_size_t numRows_;
