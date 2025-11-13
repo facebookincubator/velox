@@ -389,7 +389,8 @@ Task::Task(
   // execution.
   if (mode_ == Task::ExecutionMode::kParallel) {
     VELOX_CHECK_NULL(
-        dynamic_cast<const folly::InlineLikeExecutor*>(queryCtx_->executor()));
+        dynamic_cast<const folly::InlineLikeExecutor*>(
+            queryCtx_->cpuExecutor()));
   }
   maybeInitTrace();
 
@@ -680,7 +681,7 @@ velox::memory::MemoryPool* Task::getOrAddNodePool(
   childPools_.push_back(pool_->addAggregateChild(
       fmt::format("node.{}", planNodeId), createNodeReclaimer([&]() {
         return exec::ParallelMemoryReclaimer::create(
-            queryCtx_->spillExecutor());
+            queryCtx_->spillIOExecutor());
       })));
   auto* nodePool = childPools_.back().get();
   nodePools_[planNodeId] = nodePool;
@@ -1193,7 +1194,7 @@ void Task::resume(std::shared_ptr<Task> self) {
         }
         VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
         if (!driver->state().hasBlockingFuture &&
-            driver->task()->queryCtx()->isExecutorSupplied()) {
+            driver->task()->queryCtx()->isCPUExecutorSupplied()) {
           if (driver->state().endExecTimeMs != 0) {
             driver->state().totalPauseTimeMs +=
                 getCurrentTimeMs() - driver->state().endExecTimeMs;
@@ -3426,7 +3427,7 @@ void Task::createExchangeClientLocked(
       numberOfConsumers,
       queryCtx()->queryConfig().minExchangeOutputBatchBytes(),
       addExchangeClientPool(planNodeId, pipelineId),
-      queryCtx()->executor(),
+      queryCtx()->cpuExecutor(),
       queryCtx()->queryConfig().requestDataSizesMaxWaitSec());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }

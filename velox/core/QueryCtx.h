@@ -44,13 +44,13 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// be passed in here, but instead, ensure that executor exists when actually
   /// being used.
   static std::shared_ptr<QueryCtx> create(
-      folly::Executor* executor = nullptr,
+      folly::Executor* cpuExecutor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      folly::Executor* spillExecutor = nullptr,
+      folly::Executor* spillIOExecutor = nullptr,
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
@@ -64,12 +64,12 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return cache_;
   }
 
-  folly::Executor* executor() const {
-    return executor_;
+  folly::Executor* cpuExecutor() const {
+    return cpuExecutor_;
   }
 
-  bool isExecutorSupplied() const {
-    return executor_ != nullptr;
+  bool isCPUExecutorSupplied() const {
+    return cpuExecutor_ != nullptr;
   }
 
   const QueryConfig& queryConfig() const {
@@ -110,8 +110,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
         std::make_shared<config::ConfigBase>(std::move(configOverrides));
   }
 
-  folly::Executor* spillExecutor() const {
-    return spillExecutor_;
+  folly::Executor* spillIOExecutor() const {
+    return spillIOExecutor_;
   }
 
   const std::string& queryId() const {
@@ -151,13 +151,13 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// be passed in here, but instead, ensure that executor exists when actually
   /// being used.
   QueryCtx(
-      folly::Executor* executor = nullptr,
+      folly::Executor* cpuExecutor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      folly::Executor* spillExecutor = nullptr,
+      folly::Executor* spillIOExecutor = nullptr,
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
@@ -218,8 +218,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   void finishArbitration();
 
   const std::string queryId_;
-  folly::Executor* const executor_{nullptr};
-  folly::Executor* const spillExecutor_{nullptr};
+  folly::Executor* const cpuExecutor_{nullptr};
+  folly::Executor* const spillIOExecutor_{nullptr};
   cache::AsyncDataCache* const cache_;
 
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>

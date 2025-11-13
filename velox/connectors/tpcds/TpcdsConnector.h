@@ -136,7 +136,7 @@ class TpcdsConnector final : public velox::connector::Connector {
   TpcdsConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* FOLLY_NULLABLE /*executor*/)
+      folly::Executor* FOLLY_NULLABLE /*ioExecutor*/)
       : Connector(id) {}
 
   std::unique_ptr<DataSource> createDataSource(

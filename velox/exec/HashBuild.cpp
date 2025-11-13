@@ -755,7 +755,7 @@ bool HashBuild::finishHashBuild() {
         std::move(otherTables),
         isInputFromSpill() ? spillConfig()->startPartitionBit
                            : BaseHashTable::kNoSpillInputStartPartitionBit,
-        allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+        allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->cpuExecutor()
                                : nullptr);
   }
   stats_.wlock()->addRuntimeStat(

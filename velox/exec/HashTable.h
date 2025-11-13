@@ -310,7 +310,7 @@ class BaseHashTable {
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
-      folly::Executor* executor = nullptr) = 0;
+      folly::Executor* buildCPUExecutor = nullptr) = 0;
 
   /// Returns the memory footprint in bytes for any data structures
   /// owned by 'this'.
@@ -610,7 +610,7 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
-      folly::Executor* executor = nullptr) override;
+      folly::Executor* buildCPUExecutor = nullptr) override;
 
   void prepareForJoinProbe(
       HashLookup& lookup,
@@ -866,7 +866,7 @@ class HashTable : public BaseHashTable {
   bool canApplyParallelJoinBuild() const;
 
   // Builds a join table with '1 + otherTables_.size()' independent
-  // threads using 'executor_'. First all RowContainers get partition
+  // threads using 'buildCPUExecutor_'. First all RowContainers get partition
   // numbers assigned to each row. Next, all threads pick all rows
   // assigned to their thread-specific partition and insert these. If
   // a row would overflow past the end of its partition it is added to
@@ -1094,7 +1094,7 @@ class HashTable : public BaseHashTable {
   // executor for Drivers. If this executor is indefinitely taken by
   // other work, the thread of prepareJoinTable() will sequentially
   // execute the parallel build steps.
-  folly::Executor* buildExecutor_{nullptr};
+  folly::Executor* buildCPUExecutor_{nullptr};
 
   //  Counts parallel build rows. Used for consistency check.
   std::atomic<int64_t> numParallelBuildRows_{0};

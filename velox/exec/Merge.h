@@ -338,7 +338,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
   // If any async reader has thrown an exception, rethrows it.
   void checkError();
 
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   const std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_;
   const std::shared_ptr<memory::MemoryPool> pool_;
 

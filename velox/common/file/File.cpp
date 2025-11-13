@@ -145,9 +145,9 @@ uint64_t InMemoryWriteFile::size() const {
 
 LocalReadFile::LocalReadFile(
     std::string_view path,
-    folly::Executor* executor,
+    folly::Executor* cpuExecutor,
     bool bufferIo)
-    : executor_(executor), path_(path) {
+    : cpuExecutor_(cpuExecutor), path_(path) {
   int32_t flags = O_RDONLY;
 #ifdef linux
   if (!bufferIo) {
@@ -177,8 +177,8 @@ LocalReadFile::LocalReadFile(
   size_ = ret;
 }
 
-LocalReadFile::LocalReadFile(int32_t fd, folly::Executor* executor)
-    : executor_(executor), fd_(fd) {}
+LocalReadFile::LocalReadFile(int32_t fd, folly::Executor* cpuExecutor)
+    : cpuExecutor_(cpuExecutor), fd_(fd) {}
 
 LocalReadFile::~LocalReadFile() {
   const int ret = close(fd_);
@@ -271,15 +271,15 @@ folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
     const FileStorageContext& fileStorageContext) const {
-  if (!executor_) {
+  if (!cpuExecutor_) {
     return ReadFile::preadvAsync(offset, buffers, fileStorageContext);
   }
   auto [promise, future] = folly::makePromiseContract<uint64_t>();
-  executor_->add([this,
-                  _promise = std::move(promise),
-                  _offset = offset,
-                  _buffers = buffers,
-                  _fileStorageContext = fileStorageContext]() mutable {
+  cpuExecutor_->add([this,
+                     _promise = std::move(promise),
+                     _offset = offset,
+                     _buffers = buffers,
+                     _fileStorageContext = fileStorageContext]() mutable {
     auto delegateFuture =
         ReadFile::preadvAsync(_offset, _buffers, _fileStorageContext);
     _promise.setTry(std::move(delegateFuture).getTry());

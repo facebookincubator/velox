@@ -147,7 +147,7 @@ class BufferedInput {
     return input_;
   }
 
-  virtual folly::Executor* executor() const {
+  virtual folly::Executor* ioExecutor() const {
     return nullptr;
   }
 

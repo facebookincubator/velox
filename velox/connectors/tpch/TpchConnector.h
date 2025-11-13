@@ -161,7 +161,7 @@ class TpchConnector final : public Connector {
   TpchConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* /*executor*/);
+      folly::Executor* /*ioExecutor*/);
 
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,

@@ -866,7 +866,7 @@ void syncWorkItems(
 
 template <bool ignoreNullKeys>
 bool HashTable<ignoreNullKeys>::canApplyParallelJoinBuild() const {
-  if (!isJoinBuild_ || buildExecutor_ == nullptr) {
+  if (!isJoinBuild_ || buildCPUExecutor_ == nullptr) {
     return false;
   }
   if (hashMode_ == HashMode::kArray) {
@@ -958,7 +958,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
               return std::make_unique<bool>(true);
             }));
     VELOX_CHECK(!partitionSteps.empty());
-    buildExecutor_->add([driverCtx, step = partitionSteps.back()]() {
+    buildCPUExecutor_->add([driverCtx, step = partitionSteps.back()]() {
       ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
       step->prepare();
     });
@@ -981,7 +981,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
               return std::make_unique<bool>(true);
             }));
     VELOX_CHECK(!buildSteps.empty());
-    buildExecutor_->add([driverCtx, step = buildSteps.back()]() {
+    buildCPUExecutor_->add([driverCtx, step = buildSteps.back()]() {
       ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
       step->prepare();
     });
@@ -1716,8 +1716,8 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
     int8_t spillInputStartPartitionBit,
-    folly::Executor* executor) {
-  buildExecutor_ = executor;
+    folly::Executor* buildCPUExecutor) {
+  buildCPUExecutor_ = buildCPUExecutor;
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
     otherTables_.emplace_back(
