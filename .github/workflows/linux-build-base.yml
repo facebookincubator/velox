@@ -247,7 +247,7 @@ jobs:
 
             mkdir /tmp/build
             cd /tmp/build
-          
+
             # Install basic deps with GCC.
             USE_CLANG=false bash /setup-fedora.sh
 
