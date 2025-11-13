@@ -66,6 +66,7 @@ function install_velox_deps_from_dnf {
   install_faiss_deps
 }
 
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_gcs_sdk_cpp #grpc, abseil, protobuf
