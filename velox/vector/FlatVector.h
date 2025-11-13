@@ -674,6 +674,9 @@ template <>
 VectorPtr FlatVector<StringView>::testingCopyPreserveEncodings(
     velox::memory::MemoryPool* pool) const;
 
+template <>
+void FlatVector<StringView>::transferOrCopyTo(velox::memory::MemoryPool* pool);
+
 template <typename T>
 using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;
 
