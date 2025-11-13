@@ -17,7 +17,9 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/connectors/hive/iceberg/TransformEvaluator.h"
 #include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -114,6 +116,59 @@ class IcebergDataSink : public HiveDataSink {
   /// @return Vector of JSON strings, one per writer, formatted according to
   /// Presto and Spark Iceberg commit protocol.
   std::vector<std::string> commitMessage() const override;
+
+ private:
+  IcebergDataSink(
+      RowTypePtr inputType,
+      IcebergInsertTableHandlePtr insertTableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::vector<column_index_t>& partitionChannels,
+      RowTypePtr partitionRowType);
+
+  void computePartitionAndBucketIds(const RowVectorPtr& input) override;
+
+  // Returns the Iceberg partition directory name for the given partition ID.
+  // Converts the transformed partition values associated with the partition ID
+  // into an Iceberg compliant directory path
+  // (e.g., "date_year=2023/id_bucket=5").
+  std::string getPartitionName(uint32_t partitionId) const override;
+
+  // Iceberg partition specification defining how the table is partitioned.
+  // Contains partition fields with source column names, transform types
+  // (e.g., identity, year, month, day, hour, bucket, truncate), transform
+  // parameters, and result types. Null if the table is unpartitioned.
+  const IcebergPartitionSpecPtr partitionSpec_;
+
+  // Evaluates Iceberg partition transforms on input rows to produce transformed
+  // partition keys. Applies transforms defined in partitionSpec_ (e.g.,
+  // year(date_col), bucket(id, 16)) to the corresponding input columns and
+  // returns a vector of transformed columns. The transformed keys are then
+  // wrapped in a RowVector and passed to IcebergPartitionIdGenerator.
+  // Null if the table is unpartitioned.
+  const std::unique_ptr<TransformEvaluator> transformEvaluator_;
+
+  // Generates Iceberg compliant partition directory names from partition IDs.
+  // Converts transformed partition values to human-readable strings based on
+  // their transform types (e.g., year -> "2025", month -> "2025-11", hour ->
+  // "2025-11-12-13") and constructs URL-encoded partition paths.
+  // Null if the table is unpartitioned.
+  const std::unique_ptr<IcebergPartitionName> icebergPartitionName_;
+
+  // RowType schema for the transformed partition values RowVector.
+  // Contains one column per partition field in partitionSpec, where each
+  // column has:
+  // - Type: The result type of the partition transform (e.g., INTEGER for year
+  //   transform, DATE for day transform).
+  // - Name: Source column name for identity transforms, or
+  //   "columnName_transformName" for non-identity transforms (e.g.,
+  //   "date_year").
+  // Used to construct the RowVector that wraps the transformed partition
+  // columns before passing them to IcebergPartitionIdGenerator for partition ID
+  // generation and to IcebergPartitionNameGenerator for partition path name
+  // generation.
+  RowTypePtr partitionRowType_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

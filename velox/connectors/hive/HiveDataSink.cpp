@@ -200,6 +200,7 @@ FOLLY_ALWAYS_INLINE int32_t
 getBucketCount(const HiveBucketProperty* bucketProperty) {
   return bucketProperty == nullptr ? 0 : bucketProperty->bucketCount();
 }
+
 } // namespace
 
 const HiveWriterId& HiveWriterId::unpartitionedId() {
@@ -382,6 +383,15 @@ HiveDataSink::HiveDataSink(
               ? createBucketFunction(
                     *insertTableHandle->bucketProperty(),
                     inputType)
+              : nullptr,
+          getPartitionChannels(insertTableHandle),
+          !getPartitionChannels(insertTableHandle).empty()
+              ? std::make_unique<PartitionIdGenerator>(
+                    inputType,
+                    getPartitionChannels(insertTableHandle),
+                    hiveConfig->maxPartitionsPerWriters(
+                        connectorQueryCtx->sessionProperties()),
+                    connectorQueryCtx->memoryPool())
               : nullptr) {}
 
 HiveDataSink::HiveDataSink(
@@ -391,7 +401,9 @@ HiveDataSink::HiveDataSink(
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     uint32_t bucketCount,
-    std::unique_ptr<core::PartitionFunction> bucketFunction)
+    std::unique_ptr<core::PartitionFunction> bucketFunction,
+    const std::vector<column_index_t>& partitionChannels,
+    std::unique_ptr<PartitionIdGenerator> partitionIdGenerator)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
@@ -400,17 +412,8 @@ HiveDataSink::HiveDataSink(
       updateMode_(getUpdateMode()),
       maxOpenWriters_(hiveConfig_->maxPartitionsPerWriters(
           connectorQueryCtx->sessionProperties())),
-      partitionChannels_(getPartitionChannels(insertTableHandle_)),
-      partitionIdGenerator_(
-          !partitionChannels_.empty()
-              ? std::make_unique<PartitionIdGenerator>(
-                    inputType_,
-                    partitionChannels_,
-                    maxOpenWriters_,
-                    connectorQueryCtx_->memoryPool(),
-                    hiveConfig_->isPartitionPathAsLowerCase(
-                        connectorQueryCtx->sessionProperties()))
-              : nullptr),
+      partitionChannels_(partitionChannels),
+      partitionIdGenerator_(std::move(partitionIdGenerator)),
       dataChannels_(
           getNonPartitionChannels(partitionChannels_, inputType_->size())),
       bucketCount_(static_cast<int32_t>(bucketCount)),
@@ -421,6 +424,8 @@ HiveDataSink::HiveDataSink(
       sortWriterFinishTimeSliceLimitMs_(getFinishTimeSliceLimitMsFromHiveConfig(
           hiveConfig_,
           connectorQueryCtx->sessionProperties())),
+      partitionKeyAsLowerCase_(hiveConfig_->isPartitionPathAsLowerCase(
+          connectorQueryCtx_->sessionProperties())),
       fileNameGenerator_(insertTableHandle_->fileNameGenerator()) {
   fileSystemStats_ = std::make_unique<filesystems::File::IoStats>();
   if (isBucketed()) {
@@ -757,8 +762,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 
   std::optional<std::string> partitionName;
   if (isPartitioned()) {
-    partitionName =
-        partitionIdGenerator_->partitionName(id.partitionId.value());
+    partitionName = getPartitionName(id.partitionId.value());
   }
 
   // Without explicitly setting flush policy, the default memory based flush
@@ -862,6 +866,15 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 
   writerIndexMap_.emplace(id, writers_.size() - 1);
   return writerIndexMap_[id];
+}
+
+std::string HiveDataSink::getPartitionName(uint32_t partitionId) const {
+  VELOX_CHECK_NOT_NULL(partitionIdGenerator_);
+
+  return HivePartitionName::partitionName(
+      partitionId,
+      partitionIdGenerator_->partitionValues(),
+      partitionKeyAsLowerCase_);
 }
 
 std::unique_ptr<facebook::velox::dwio::common::Writer>

@@ -29,6 +29,9 @@
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
+constexpr std::string_view kDefaultTestIcebergFunctionNamePrefix{
+    "$internal$.test_iceberg."};
+
 struct PartitionField {
   // 0-based column index.
   int32_t id;
