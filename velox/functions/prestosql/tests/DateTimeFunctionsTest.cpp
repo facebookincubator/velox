@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -6133,6 +6134,123 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
       std::nullopt);
 
   EXPECT_EQ(at_timezone(std::nullopt, "Pacific/Fiji"), std::nullopt);
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneTimeTest) {
+  const auto at_timezone_time = [&](std::optional<int64_t> timeWithTimezone,
+                                    std::optional<std::string> targetTimezone) {
+    return evaluateOnce<int64_t>(
+        "at_timezone(c0, c1)",
+        {TIME_WITH_TIME_ZONE(), VARCHAR()},
+        timeWithTimezone,
+        targetTimezone);
+  };
+
+  const int64_t millisTenOClockWarsawWinter = 9 * 60 * 60 * 1000;
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")),
+          "UTC"),
+      pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("UTC")));
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")),
+          "+00:45"),
+      pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("+00:45")));
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")),
+          "America/New_York"),
+      pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("America/New_York")));
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")),
+          "Europe/Berlin"),
+      pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Berlin")));
+
+  const int64_t millisTenOClockUTC = 10 * 60 * 60 * 1000;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockUTC, tz::getTimeZoneID("UTC")), "UTC"),
+      pack(millisTenOClockUTC, tz::getTimeZoneID("UTC")));
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")),
+          "Europe/Warsaw"),
+      pack(millisTenOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")));
+
+  const int64_t millisTwoOClockWarsawWinter = 1 * 60 * 60 * 1000;
+  const int64_t millisTwentyOClockNewYork = 20 * 60 * 60 * 1000;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTwoOClockWarsawWinter, tz::getTimeZoneID("Europe/Warsaw")),
+          "America/New_York"),
+      pack(millisTwentyOClockNewYork, tz::getTimeZoneID("America/New_York")));
+
+  const int64_t millisTwentyTwoOClockNewYork = 22 * 60 * 60 * 1000;
+  const int64_t millisFourOClockWarsaw = 4 * 60 * 60 * 1000;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(
+              millisTwentyTwoOClockNewYork,
+              tz::getTimeZoneID("America/New_York")),
+          "Europe/Warsaw"),
+      pack(millisFourOClockWarsaw, tz::getTimeZoneID("Europe/Warsaw")));
+
+  const int64_t millisMidnight = 0;
+  const int64_t millisTwentyThreeOClock = 23 * 60 * 60 * 1000;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisMidnight, tz::getTimeZoneID("+14:00")), "+13:00"),
+      pack(millisTwentyThreeOClock, tz::getTimeZoneID("+13:00")));
+
+  const int64_t millisTwentyOClock = 20 * 60 * 60 * 1000;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisMidnight, tz::getTimeZoneID("+14:00")), "-14:00"),
+      pack(millisTwentyOClock, tz::getTimeZoneID("-14:00")));
+
+  const int64_t millisMaxTime =
+      23 * 60 * 60 * 1000 + 59 * 60 * 1000 + 59 * 1000 + 999;
+  const int64_t millisTwentyTwoFiftyNine =
+      22 * 60 * 60 * 1000 + 59 * 60 * 1000 + 59 * 1000 + 999;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisMaxTime, tz::getTimeZoneID("+14:00")), "+13:00"),
+      pack(millisTwentyTwoFiftyNine, tz::getTimeZoneID("+13:00")));
+
+  const int64_t millisNineteenFiftyNine =
+      19 * 60 * 60 * 1000 + 59 * 60 * 1000 + 59 * 1000 + 999;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisMaxTime, tz::getTimeZoneID("+14:00")), "-14:00"),
+      pack(millisNineteenFiftyNine, tz::getTimeZoneID("-14:00")));
+
+  const int64_t millisTenOClockKathmandu = 10 * 60 * 60 * 1000;
+  const int64_t millisFourFifteenUTC = 4 * 60 * 60 * 1000 + 15 * 60 * 1000;
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisFourFifteenUTC, tz::getTimeZoneID("Asia/Kathmandu")),
+          "UTC"),
+      pack(millisFourFifteenUTC, tz::getTimeZoneID("UTC")));
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockKathmandu, tz::getTimeZoneID("Asia/Kabul")),
+          "Asia/Kabul"),
+      pack(millisTenOClockKathmandu, tz::getTimeZoneID("Asia/Kabul")));
+
+  EXPECT_EQ(
+      at_timezone_time(
+          pack(millisTenOClockUTC, tz::getTimeZoneID("UTC")), std::nullopt),
+      std::nullopt);
+
+  EXPECT_EQ(at_timezone_time(std::nullopt, "UTC"), std::nullopt);
 }
 
 TEST_F(DateTimeFunctionsTest, toMilliseconds) {
