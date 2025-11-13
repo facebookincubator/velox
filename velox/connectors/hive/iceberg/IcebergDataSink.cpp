@@ -19,6 +19,14 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+void registerIcebergInternalFunctions(const std::string_view& prefix) {
+  static std::once_flag registerFlag;
+
+  std::call_once(registerFlag, [prefix]() {
+    functions::iceberg::registerFunctions(std::string(prefix));
+  });
+}
+
 IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<HiveColumnHandlePtr> inputColumns,
     LocationHandlePtr locationHandle,
@@ -57,7 +65,11 @@ IcebergDataSink::IcebergDataSink(
           commitStrategy,
           hiveConfig,
           0,
-          nullptr) {}
+          nullptr) {
+  static constexpr std::string_view kDefaultIcebergFunctionPrefix{
+      "$internal$.iceberg."};
+  registerIcebergInternalFunctions(kDefaultIcebergFunctionPrefix.data());
+}
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
   std::vector<std::string> commitTasks;
