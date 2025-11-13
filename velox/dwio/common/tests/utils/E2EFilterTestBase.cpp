@@ -168,7 +168,7 @@ void E2EFilterTestBase::readWithFilter(
   auto resultBatch = BaseVector::create(rowType_, 1, leafPool_.get());
   resetReadBatchSizes();
   int32_t clearCnt = 0;
-  auto deletedRowsIter = mutationSpec.deletedRows.begin();
+  auto deletedRowsIter = mutationSpec.deletedRows.cbegin();
   while (true) {
     {
       MicrosecondTimer timer(&time);
@@ -182,7 +182,7 @@ void E2EFilterTestBase::readWithFilter(
       auto readSize = rowReader->nextReadSize(nextReadBatchSize());
       std::vector<uint64_t> isDeleted(bits::nwords(readSize));
       bool haveDelete = false;
-      for (; deletedRowsIter != mutationSpec.deletedRows.end();
+      for (; deletedRowsIter != mutationSpec.deletedRows.cend();
            ++deletedRowsIter) {
         auto i = *deletedRowsIter;
         if (i < nextRowNumber) {

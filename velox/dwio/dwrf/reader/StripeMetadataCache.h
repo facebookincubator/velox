@@ -95,7 +95,7 @@ class StripeMetadataCache {
     std::vector<uint32_t> offsets;
     offsets.reserve(footer.stripeCacheOffsetsSize());
     const auto& from = footer.stripeCacheOffsets();
-    offsets.assign(from.begin(), from.end());
+    offsets.assign(from.cbegin(), from.cend());
     return offsets;
   }
 

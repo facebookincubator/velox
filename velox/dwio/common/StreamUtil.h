@@ -144,7 +144,7 @@ inline void readContiguous(
 
 // Returns the number of elements in rows that are < limit.
 inline int32_t numBelow(folly::Range<const int32_t*> rows, int32_t limit) {
-  return std::lower_bound(rows.begin(), rows.end(), limit) - rows.begin();
+  return std::lower_bound(rows.cbegin(), rows.cend(), limit) - rows.cbegin();
 }
 
 template <typename T, typename SingleValue, typename SparseRange>

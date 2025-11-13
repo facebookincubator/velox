@@ -100,7 +100,7 @@ class DwrfData : public dwio::common::FormatData {
   static std::vector<uint64_t> toPositionsInner(
       const proto::RowIndexEntry& entry) {
     return std::vector<uint64_t>(
-        entry.positions().begin(), entry.positions().end());
+        entry.positions().cbegin(), entry.positions().cend());
   }
 
   memory::MemoryPool& memoryPool_;

@@ -38,7 +38,7 @@ void DataBufferHolder::take(const std::vector<std::string_view>& buffers) {
   auto* data = buf.data();
   for (auto& buffer : buffers) {
     const auto size = buffer.size();
-    ::memcpy(data, buffer.begin(), size);
+    ::memcpy(data, buffer.cbegin(), size);
     data += size;
   }
   // If possibly, write content of the data to output immediately. Otherwise,
