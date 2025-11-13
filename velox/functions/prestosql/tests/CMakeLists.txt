@@ -94,6 +94,7 @@ add_executable(
   MapMatchTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
+  MapExceptTest.cpp
   MultimapFromEntriesTest.cpp
   NotTest.cpp
   ParsePrestoDataSizeTest.cpp

@@ -126,6 +126,17 @@ Map Functions
         SELECT map_intersect(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {}
         SELECT map_intersect(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
 
+.. function:: map_except(map(K,V), array(k)) -> map(K,V)
+
+    Constructs a map from those entries of ``map`` for which the key is not in the array given.
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {1->'a', 2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {1->'a', 2->'b'}
+        SELECT map_except(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+
 .. function:: map_top_n(map(K,V), n) -> map(K, V)
 
     Truncates map items. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.
