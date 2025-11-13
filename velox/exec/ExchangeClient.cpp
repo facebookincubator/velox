@@ -78,6 +78,11 @@ void ExchangeClient::close() {
     if (closed_) {
       return;
     }
+
+    // Capture stats BEFORE clearing sources_.
+    // This allows stats() to return meaningful data even after close().
+    stats_ = collectStatsLocked();
+
     closed_ = true;
     sources = std::move(sources_);
     producingSources = std::move(producingSources_);
@@ -92,8 +97,17 @@ void ExchangeClient::close() {
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
-  folly::F14FastMap<std::string, RuntimeMetric> stats;
   std::lock_guard<std::mutex> l(queue_->mutex());
+  // If sources have been cleared (after close()), return closed stats
+  if (sources_.empty() && !stats_.empty()) {
+    return stats_;
+  }
+  return collectStatsLocked();
+}
+
+folly::F14FastMap<std::string, RuntimeMetric>
+ExchangeClient::collectStatsLocked() const {
+  folly::F14FastMap<std::string, RuntimeMetric> stats;
 
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {
