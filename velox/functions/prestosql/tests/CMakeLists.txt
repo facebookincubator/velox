@@ -83,6 +83,7 @@ add_executable(
   MapEntriesTest.cpp
   MapFilterTest.cpp
   MapFromEntriesTest.cpp
+  MapIntersectTest.cpp
   MapNormalizeTest.cpp
   RemapKeysTest.cpp
   MapTopNTest.cpp
