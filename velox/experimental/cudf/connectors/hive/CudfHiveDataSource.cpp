@@ -285,15 +285,15 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     // `payload_column_chunks_byte_ranges`
     // TODO(mh): Remove this workaround once PR
     // https://github.com/rapidsai/cudf/pull/20604 is merged
-    auto options = readerOptions_;
-    if (not options.get_filter().has_value()) {
-      options.set_filter(cudf::ast::column_reference(0));
+    auto tmpOptions = readerOptions_;
+    if (not tmpOptions.get_filter().has_value()) {
+      tmpOptions.set_filter(cudf::ast::column_reference(0));
     }
 
     // Read compressed row group data
     auto const columnChunkByteRanges =
         splitReader_->payload_column_chunks_byte_ranges(
-            rowGroupIndices, options);
+            rowGroupIndices, tmpOptions);
 
     std::vector<rmm::device_buffer> columnChunkBuffers{};
     columnChunkBuffers.reserve(columnChunkByteRanges.size());
