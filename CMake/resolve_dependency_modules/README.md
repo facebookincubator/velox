@@ -32,18 +32,17 @@ by Velox. See details on bundling below.
 | fmt               | 11.2.0          | Yes      | Used API must be fmt 9 compatible |
 | simdjson          | 4.1.0           | Yes      ||
 | faiss             | 1.11.0          | Yes      ||
-| folly             | v2025.04.28.00  | Yes      ||
-| fizz              | v2025.04.28.00  | No       ||
-| wangle            | v2025.04.28.00  | No       ||
-| mvfst             | v2025.04.28.00  | No       ||
-| fbthrift          | v2025.04.28.00  | No       ||
+| folly             | v2025.09.15.00  | Yes      ||
+| fizz              | v2025.09.15.00  | No       ||
+| wangle            | v2025.09.15.00  | No       ||
+| mvfst             | v2025.09.15.00  | No       ||
+| fbthrift          | v2025.09.15.00  | No       ||
 | libstemmer        | 2.2.0           | Yes      ||
 | DuckDB (testing)  | 0.8.1           | Yes      ||
 | arrow             | 15.0.0          | Yes      ||
 | geos              | 3.10.7          | Yes      ||
 | fast_float        | v8.0.2          | Yes      ||
 | xxhash            | default         | No       ||
-| thrift            | 0.16            | No       ||
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.

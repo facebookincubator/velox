@@ -174,7 +174,18 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps
+          source scripts/setup-ubuntu.sh
+          install_apt_deps
+          install_faiss_deps
+          # We can remove them once we bundle FBThrift.
+          install_fmt
+          install_boost
+          install_fast_float
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
 
       - name: Clear CCache Statistics
         run: |
@@ -185,8 +196,22 @@ jobs:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          # We can remove "-DBoost_SOURCE=SYSTEM",
+          # "-Dfolly_SOURCE=SYSTEM" and "-Dgflags_SOURCE=SYSTEM" once
+          # we add support for bundling FBThrift.
+          #
+          # FBThrift has transitive Boost dependency. We can't mix
+          # bundled Boost and system Boost.
+          #
+          # Recent FBThrift needs recent Folly.
+          #
+          # System FBThrift is built with system GFlags. We need to
+          # use system GFlags with system FBThrift.
           EXTRA_CMAKE_FLAGS: >-
             -DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY
+            -DBoost_SOURCE=SYSTEM
+            -Dfolly_SOURCE=SYSTEM
+            -Dgflags_SOURCE=SYSTEM
             -DVELOX_ENABLE_PARQUET=ON
             -DVELOX_ENABLE_EXAMPLES=ON
         run: |
@@ -237,8 +262,27 @@ jobs:
 
       - uses: actions/checkout@v5
         with:
+          fetch-depth: 2
           path: velox
           persist-credentials: false
+
+      - name: Install Dependencies
+        env:
+          VELOX_BUILD_SHARED: "ON"
+          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            mkdir /tmp/build
+            cd /tmp/build
+            # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
+            USE_CLANG=false bash /setup-fedora.sh
+
+            cd /
+            rm -rf /tmp/build # cleanup to avoid issues with disk space
+          fi
 
       - name: Clear CCache Statistics
         run: |
@@ -248,13 +292,11 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
-          fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
           EXTRA_CMAKE_FLAGS: >-
             -DVELOX_ENABLE_PARQUET=ON
-            -DARROW_THRIFT_USE_SHARED=ON
             -DVELOX_ENABLE_EXAMPLES=ON
         run: |
           uv tool install --force cmake@3.31.1

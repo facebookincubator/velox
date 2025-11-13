@@ -406,56 +406,61 @@ std::shared_ptr<const LogicalType> LogicalType::FromConvertedType(
 
 std::shared_ptr<const LogicalType> LogicalType::FromThrift(
     const facebook::velox::parquet::thrift::LogicalType& type) {
-  if (type.__isset.STRING) {
+  if (type.STRING()) {
     return StringLogicalType::Make();
-  } else if (type.__isset.MAP) {
+  } else if (type.MAP()) {
     return MapLogicalType::Make();
-  } else if (type.__isset.LIST) {
+  } else if (type.LIST()) {
     return ListLogicalType::Make();
-  } else if (type.__isset.ENUM) {
+  } else if (type.ENUM()) {
     return EnumLogicalType::Make();
-  } else if (type.__isset.DECIMAL) {
-    return DecimalLogicalType::Make(type.DECIMAL.precision, type.DECIMAL.scale);
-  } else if (type.__isset.DATE) {
+  } else if (type.DECIMAL()) {
+    return DecimalLogicalType::Make(
+        *type.DECIMAL()->precision(), *type.DECIMAL()->scale());
+  } else if (type.DATE()) {
     return DateLogicalType::Make();
-  } else if (type.__isset.TIME) {
+  } else if (type.TIME()) {
+    const auto& thrift_unit = type.TIME()->unit();
     LogicalType::TimeUnit::unit unit;
-    if (type.TIME.unit.__isset.MILLIS) {
+    if (thrift_unit->MILLIS()) {
       unit = LogicalType::TimeUnit::MILLIS;
-    } else if (type.TIME.unit.__isset.MICROS) {
+    } else if (thrift_unit->MICROS()) {
       unit = LogicalType::TimeUnit::MICROS;
-    } else if (type.TIME.unit.__isset.NANOS) {
+    } else if (thrift_unit->NANOS()) {
       unit = LogicalType::TimeUnit::NANOS;
     } else {
       unit = LogicalType::TimeUnit::UNKNOWN;
     }
-    return TimeLogicalType::Make(type.TIME.isAdjustedToUTC, unit);
-  } else if (type.__isset.TIMESTAMP) {
+    return TimeLogicalType::Make(*type.TIME()->isAdjustedToUTC(), unit);
+  } else if (type.TIMESTAMP()) {
+    const auto& thrift_unit = type.TIMESTAMP()->unit();
     LogicalType::TimeUnit::unit unit;
-    if (type.TIMESTAMP.unit.__isset.MILLIS) {
+    if (thrift_unit->MILLIS()) {
       unit = LogicalType::TimeUnit::MILLIS;
-    } else if (type.TIMESTAMP.unit.__isset.MICROS) {
+    } else if (thrift_unit->MICROS()) {
       unit = LogicalType::TimeUnit::MICROS;
-    } else if (type.TIMESTAMP.unit.__isset.NANOS) {
+    } else if (thrift_unit->NANOS()) {
       unit = LogicalType::TimeUnit::NANOS;
     } else {
       unit = LogicalType::TimeUnit::UNKNOWN;
     }
-    return TimestampLogicalType::Make(type.TIMESTAMP.isAdjustedToUTC, unit);
+    return TimestampLogicalType::Make(
+        *type.TIMESTAMP()->isAdjustedToUTC(), unit);
     // TODO(tpboudreau): activate the commented code after parquet.thrift
     // recognizes IntervalType as a LogicalType
-    //} else if (type.__isset.INTERVAL) {
+    //} else if (type.INTERVAL()) {
     //  return IntervalLogicalType::Make();
-  } else if (type.__isset.INTEGER) {
+  } else if (type.INTEGER()) {
     return IntLogicalType::Make(
-        static_cast<int>(type.INTEGER.bitWidth), type.INTEGER.isSigned);
-  } else if (type.__isset.UNKNOWN) {
+        static_cast<int>(*type.INTEGER()->bitWidth()),
+        *type.INTEGER()->isSigned());
+  } else if (type.UNKNOWN()) {
     return NullLogicalType::Make();
-  } else if (type.__isset.JSON) {
+  } else if (type.JSON()) {
     return JSONLogicalType::Make();
-  } else if (type.__isset.BSON) {
+  } else if (type.BSON()) {
     return BSONLogicalType::Make();
-  } else if (type.__isset.UUID) {
+  } else if (type.UUID()) {
     return UUIDLogicalType::Make();
   } else {
     throw ParquetException(
@@ -905,7 +910,7 @@ class LogicalType::Impl::Inapplicable : public virtual LogicalType::Impl {
   facebook::velox::parquet::thrift::LogicalType ToThrift() const override { \
     facebook::velox::parquet::thrift::LogicalType type;                     \
     facebook::velox::parquet::thrift::t___ subtype;                         \
-    type.__set_##s___(subtype);                                             \
+    type.s___() = subtype;                                                  \
     return type;                                                            \
   }
 
@@ -1100,9 +1105,9 @@ facebook::velox::parquet::thrift::LogicalType
 LogicalType::Impl::Decimal::ToThrift() const {
   facebook::velox::parquet::thrift::LogicalType type;
   facebook::velox::parquet::thrift::DecimalType decimal_type;
-  decimal_type.__set_precision(precision_);
-  decimal_type.__set_scale(scale_);
-  type.__set_DECIMAL(decimal_type);
+  decimal_type.precision() = precision_;
+  decimal_type.scale() = scale_;
+  type.DECIMAL() = decimal_type;
   return type;
 }
 
@@ -1263,17 +1268,17 @@ LogicalType::Impl::Time::ToThrift() const {
   VELOX_DCHECK_NE(unit_, LogicalType::TimeUnit::UNKNOWN);
   if (unit_ == LogicalType::TimeUnit::MILLIS) {
     facebook::velox::parquet::thrift::MilliSeconds millis;
-    time_unit.__set_MILLIS(millis);
+    time_unit.MILLIS() = millis;
   } else if (unit_ == LogicalType::TimeUnit::MICROS) {
     facebook::velox::parquet::thrift::MicroSeconds micros;
-    time_unit.__set_MICROS(micros);
+    time_unit.MICROS() = micros;
   } else if (unit_ == LogicalType::TimeUnit::NANOS) {
     facebook::velox::parquet::thrift::NanoSeconds nanos;
-    time_unit.__set_NANOS(nanos);
+    time_unit.NANOS() = nanos;
   }
-  time_type.__set_isAdjustedToUTC(adjusted_);
-  time_type.__set_unit(time_unit);
-  type.__set_TIME(time_type);
+  time_type.isAdjustedToUTC() = adjusted_;
+  time_type.unit() = time_unit;
+  type.TIME() = time_type;
   return type;
 }
 
@@ -1431,17 +1436,17 @@ LogicalType::Impl::Timestamp::ToThrift() const {
   VELOX_DCHECK_NE(unit_, LogicalType::TimeUnit::UNKNOWN);
   if (unit_ == LogicalType::TimeUnit::MILLIS) {
     facebook::velox::parquet::thrift::MilliSeconds millis;
-    time_unit.__set_MILLIS(millis);
+    time_unit.MILLIS() = millis;
   } else if (unit_ == LogicalType::TimeUnit::MICROS) {
     facebook::velox::parquet::thrift::MicroSeconds micros;
-    time_unit.__set_MICROS(micros);
+    time_unit.MICROS() = micros;
   } else if (unit_ == LogicalType::TimeUnit::NANOS) {
     facebook::velox::parquet::thrift::NanoSeconds nanos;
-    time_unit.__set_NANOS(nanos);
+    time_unit.NANOS() = nanos;
   }
-  timestamp_type.__set_isAdjustedToUTC(adjusted_);
-  timestamp_type.__set_unit(time_unit);
-  type.__set_TIMESTAMP(timestamp_type);
+  timestamp_type.isAdjustedToUTC() = adjusted_;
+  timestamp_type.unit() = time_unit;
+  type.TIMESTAMP() = timestamp_type;
   return type;
 }
 
@@ -1637,9 +1642,9 @@ facebook::velox::parquet::thrift::LogicalType LogicalType::Impl::Int::ToThrift()
   facebook::velox::parquet::thrift::LogicalType type;
   facebook::velox::parquet::thrift::IntType int_type;
   VELOX_DCHECK(width_ == 64 || width_ == 32 || width_ == 16 || width_ == 8);
-  int_type.__set_bitWidth(static_cast<int8_t>(width_));
-  int_type.__set_isSigned(signed_);
-  type.__set_INTEGER(int_type);
+  int_type.bitWidth() = static_cast<int8_t>(width_);
+  int_type.isSigned() = signed_;
+  type.INTEGER() = int_type;
   return type;
 }
 

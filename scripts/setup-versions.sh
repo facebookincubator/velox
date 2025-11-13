@@ -19,7 +19,7 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-FB_OS_VERSION="v2025.04.28.00"
+FB_OS_VERSION="v2025.09.15.00"
 FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="15.0.0"
@@ -35,7 +35,6 @@ GFLAGS_VERSION="v2.2.2"
 GLOG_VERSION="v0.6.0"
 LZO_VERSION="2.10"
 SNAPPY_VERSION="1.1.8"
-THRIFT_VERSION="${THRIFT_VERSION:-v0.16.0}"
 STEMMER_VERSION="2.2.0"
 GEOS_VERSION="3.10.7"
 # shellcheck disable=SC2034
