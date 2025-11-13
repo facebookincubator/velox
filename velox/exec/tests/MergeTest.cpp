@@ -789,7 +789,7 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
           .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
           .copyResults(pool()),
       "Abort merge");
-  spillExecutor_->join();
+  dynamic_cast<folly::ThreadPoolExecutor&>(*spillExecutor_).join();
 }
 
 TEST_F(MergeTest, localMerge) {
