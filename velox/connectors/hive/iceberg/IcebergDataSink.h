@@ -18,15 +18,8 @@
 
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
-#include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-/// Registers Iceberg partition transform functions with prefix.
-/// NOTE: These functions are registered for internal transform usage only.
-/// Upstream engines such as Prestissimo and Gluten should register the same
-/// functions with different prefixes to avoid conflicts.
-void registerIcebergInternalFunctions(const std::string_view& prefix);
 
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {

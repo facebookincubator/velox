@@ -64,7 +64,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergTestBase.cpp
     Main.cpp
     PartitionSpecTest.cpp
-    TransformTest.cpp
   )
 
   add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
