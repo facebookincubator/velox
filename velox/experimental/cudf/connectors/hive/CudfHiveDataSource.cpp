@@ -281,10 +281,19 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     auto const totalRows =
         splitReader_->total_rows_in_row_groups(rowGroupIndices);
 
+    // Workaround: Set a dummy filter expression to avoid erroneous assertion in
+    // `payload_column_chunks_byte_ranges`
+    // TODO(mh): Remove this workaround once PR
+    // https://github.com/rapidsai/cudf/pull/20604 is merged
+    auto options = readerOptions_;
+    if (not options.get_filter().has_value()) {
+      options.set_filter(cudf::ast::column_reference(0));
+    }
+
     // Read compressed row group data
     auto const columnChunkByteRanges =
         splitReader_->payload_column_chunks_byte_ranges(
-            rowGroupIndices, readerOptions_);
+            rowGroupIndices, options);
 
     std::vector<rmm::device_buffer> columnChunkBuffers{};
     columnChunkBuffers.reserve(columnChunkByteRanges.size());
