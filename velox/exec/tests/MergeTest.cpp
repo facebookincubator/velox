@@ -789,8 +789,7 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
           .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
           .copyResults(pool()),
       "Abort merge");
-  std::dynamic_pointer_cast<folly::CPUThreadPoolExecutor>(spillExecutor_)
-      ->join();
+  spillExecutor_->join();
 }
 
 TEST_F(MergeTest, localMerge) {

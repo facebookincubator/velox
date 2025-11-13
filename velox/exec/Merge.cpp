@@ -525,7 +525,7 @@ SpillMerger::SpillMerger(
     const common::SpillConfig* spillConfig,
     const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
     velox::memory::MemoryPool* pool)
-    : executor_(spillConfig->executor),
+    : ioExecutor_(spillConfig->ioExecutor),
       spillStats_(spillStats),
       pool_(pool->shared_from_this()),
       sources_(
@@ -550,7 +550,7 @@ SpillMerger::~SpillMerger() {
 
 void SpillMerger::start() {
   VELOX_CHECK_NOT_NULL(
-      executor_,
+      ioExecutor_,
       "SpillMerge require configure executor to run async spill file stream producer");
   scheduleAsyncSpillFileStreamReads();
 }
@@ -658,7 +658,7 @@ void SpillMerger::readFromSpillFileStream(
     } else {
       VELOX_CHECK(future.valid());
       std::move(future)
-          .via(executor_)
+          .via(ioExecutor_)
           .thenValue([this, mergeHolder, streamIdx](auto&&) {
             readFromSpillFileStream(mergeHolder, streamIdx);
           })
@@ -685,7 +685,7 @@ void SpillMerger::readFromSpillFileStream(
 void SpillMerger::scheduleAsyncSpillFileStreamReads() {
   VELOX_CHECK_EQ(batchStreams_.size(), sources_.size());
   for (auto i = 0; i < batchStreams_.size(); ++i) {
-    executor_->add([&, streamIdx = i]() {
+    ioExecutor_->add([&, streamIdx = i]() {
       readFromSpillFileStream(std::weak_ptr(shared_from_this()), streamIdx);
     });
   }
@@ -734,7 +734,7 @@ LocalMerge::LocalMerge(
       "LocalMerge needs to run single-threaded");
   // Enable local merge spill iff spill is enabled and the spill executor is
   // provided.
-  if (spillConfig_.has_value() && spillConfig_->executor != nullptr) {
+  if (spillConfig_.has_value() && spillConfig_->ioExecutor != nullptr) {
     maxNumMergeSources_ = operatorCtx_->task()
                               ->queryCtx()
                               ->queryConfig()
@@ -817,7 +817,7 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
                 operatorCtx_->task()->destination(),
                 maxQueuedBytesPerSource,
                 pool,
-                operatorCtx_->task()->queryCtx()->executor()));
+                operatorCtx_->task()->queryCtx()->cpuExecutor()));
       }
     }
     // TODO Delay this call until all input data has been processed.

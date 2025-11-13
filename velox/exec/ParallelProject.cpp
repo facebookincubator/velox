@@ -143,7 +143,7 @@ RowVectorPtr ParallelProject::getOutput() {
         std::make_shared<AsyncSource<WorkResult>>(
             [i, &results, this]() { return doWork(i, results); }));
     auto item = pending.back();
-    operatorCtx_->task()->queryCtx()->executor()->add(
+    operatorCtx_->task()->queryCtx()->cpuExecutor()->add(
         [item]() { item->prepare(); });
   }
   std::exception_ptr error;

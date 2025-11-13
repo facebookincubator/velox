@@ -238,7 +238,7 @@ struct HashJoinTableSpillResult {
       : spiller(_spiller) {}
 };
 
-/// Invoked to spill the hash table from a set of spillers. If 'spillExecutor'
+/// Invoked to spill the hash table from a set of spillers. If 'spillIOExecutor'
 /// is provided, then we do parallel spill. This is used by hash build to spill
 /// a partially built hash join table.
 std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(

@@ -23,22 +23,22 @@ namespace facebook::velox::core {
 
 // static
 std::shared_ptr<QueryCtx> QueryCtx::create(
-    folly::Executor* executor,
+    folly::Executor* cpuExecutor,
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorConfigs,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
-    folly::Executor* spillExecutor,
+    folly::Executor* spillIOExecutor,
     const std::string& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
   std::shared_ptr<QueryCtx> queryCtx(new QueryCtx(
-      executor,
+      cpuExecutor,
       std::move(queryConfig),
       std::move(connectorConfigs),
       cache,
       std::move(pool),
-      spillExecutor,
+      spillIOExecutor,
       queryId,
       std::move(tokenProvider)));
   queryCtx->maybeSetReclaimer();
@@ -46,18 +46,18 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
 }
 
 QueryCtx::QueryCtx(
-    folly::Executor* executor,
+    folly::Executor* cpuExecutor,
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorSessionProperties,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
-    folly::Executor* spillExecutor,
+    folly::Executor* spillIOExecutor,
     const std::string& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider)
     : queryId_(queryId),
-      executor_(executor),
-      spillExecutor_(spillExecutor),
+      cpuExecutor_(cpuExecutor),
+      spillIOExecutor_(spillIOExecutor),
       cache_(cache),
       connectorSessionProperties_(connectorSessionProperties),
       pool_(std::move(pool)),

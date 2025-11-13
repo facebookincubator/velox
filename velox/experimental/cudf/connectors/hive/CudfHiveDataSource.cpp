@@ -127,7 +127,7 @@ CudfHiveDataSource::CudfHiveDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     facebook::velox::FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig)
     : NvtxHelper(
@@ -136,7 +136,7 @@ CudfHiveDataSource::CudfHiveDataSource(
           fmt::format("[{}]", tableHandle->name())),
       cudfHiveConfig_(cudfHiveConfig),
       fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
+      ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
       baseReaderOpts_(pool_),
@@ -442,7 +442,7 @@ CudfHiveDataSource::createSplitReader() {
         connectorQueryCtx_,
         ioStats_,
         fsStats_,
-        executor_);
+        ioExecutor_);
     if (not bufferedInput) {
       LOG(WARNING) << fmt::format(
           "Failed to create buffered input source for file {}, falling back to file data source for CudfHiveDataSource",

@@ -36,7 +36,7 @@ class IcebergSplitReader : public SplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const std::shared_ptr<common::ScanSpec>& scanSpec);
 
   ~IcebergSplitReader() override = default;

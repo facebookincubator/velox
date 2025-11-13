@@ -17,6 +17,7 @@
 
 #include <folly/Executor.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/FlatVector.h"
@@ -850,7 +851,7 @@ class VectorTestBase {
       std::make_unique<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
   std::shared_ptr<folly::Executor> spillExecutor_{
-      std::make_shared<folly::CPUThreadPoolExecutor>(
+      std::make_shared<folly::IOThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
 };
 

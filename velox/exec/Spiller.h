@@ -138,7 +138,7 @@ class SpillerBase {
 
   RowContainer* const container_{nullptr};
 
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
 
   const HashBitRange bits_;
 

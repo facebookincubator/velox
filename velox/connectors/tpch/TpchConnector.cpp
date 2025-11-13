@@ -26,7 +26,7 @@ using facebook::velox::tpch::Table;
 TpchConnector::TpchConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
-    folly::Executor* /*executor*/)
+    folly::Executor* /*ioExecutor*/)
     : Connector(id, std::move(config)) {}
 
 namespace {

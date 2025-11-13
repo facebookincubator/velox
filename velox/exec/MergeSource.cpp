@@ -196,7 +196,7 @@ class MergeExchangeSource : public MergeSource {
       int destination,
       int64_t maxQueuedBytes,
       memory::MemoryPool* pool,
-      folly::Executor* executor)
+      folly::Executor* cpuExecutor)
       : mergeExchange_(mergeExchange),
         client_(
             std::make_shared<ExchangeClient>(
@@ -207,7 +207,7 @@ class MergeExchangeSource : public MergeSource {
                 // Deliver right away to avoid blocking other sources
                 0,
                 pool,
-                executor)) {
+                cpuExecutor)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
   }
@@ -303,9 +303,9 @@ std::shared_ptr<MergeSource> MergeSource::createMergeExchangeSource(
     int destination,
     int64_t maxQueuedBytes,
     memory::MemoryPool* pool,
-    folly::Executor* executor) {
+    folly::Executor* cpuExecutor) {
   return std::make_shared<MergeExchangeSource>(
-      mergeExchange, taskId, destination, maxQueuedBytes, pool, executor);
+      mergeExchange, taskId, destination, maxQueuedBytes, pool, cpuExecutor);
 }
 
 BlockingReason MergeJoinSource::next(

@@ -26,7 +26,7 @@ WaveHiveDataSource::WaveHiveDataSource(
     const RowTypePtr& readerOutputType,
     std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const connector::ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -37,7 +37,7 @@ WaveHiveDataSource::WaveHiveDataSource(
   params_.readerOutputType = readerOutputType;
   params_.partitionKeys = partitionKeys;
   params_.fileHandleFactory = fileHandleFactory;
-  params_.executor = executor;
+  params_.ioExecutor = ioExecutor;
   params_.connectorQueryCtx = connectorQueryCtx;
   params_.hiveConfig = hiveConfig;
   params_.ioStats = ioStats;
@@ -171,7 +171,7 @@ void WaveHiveDataSource::registerConnector() {
          const RowTypePtr& readerOutputType,
          std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
          FileHandleFactory* fileHandleFactory,
-         folly::Executor* executor,
+         folly::Executor* ioExecutor,
          const connector::ConnectorQueryCtx* connectorQueryCtx,
          const std::shared_ptr<HiveConfig>& hiveConfig,
          const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -183,7 +183,7 @@ void WaveHiveDataSource::registerConnector() {
             readerOutputType,
             partitionKeys,
             fileHandleFactory,
-            executor,
+            ioExecutor,
             connectorQueryCtx,
             hiveConfig,
             ioStats,

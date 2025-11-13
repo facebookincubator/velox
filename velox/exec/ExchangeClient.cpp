@@ -167,7 +167,7 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
     }
     VELOX_CHECK(future.valid());
     std::move(future)
-        .via(executor_)
+        .via(cpuExecutor_)
         .thenValue(
             [self, spec = std::move(spec), sendTimeMs = getCurrentTimeMs()](
                 ExchangeSource::Response&& response) {
