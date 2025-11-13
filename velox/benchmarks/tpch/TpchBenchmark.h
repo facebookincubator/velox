@@ -15,13 +15,8 @@
  */
 #pragma once
 
-#include <gflags/gflags.h>
-
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
-
-DECLARE_int32(run_query_verbose);
-DECLARE_int32(io_meter_column_pct);
 
 class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
  public:

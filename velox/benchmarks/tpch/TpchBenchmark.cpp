@@ -213,6 +213,7 @@ BENCHMARK(q22) {
 }
 
 void tpchBenchmarkMain() {
+  VELOX_CHECK_NOT_NULL(benchmark);
   benchmark->initialize();
   if (FLAGS_test_flags_file.empty()) {
     RunStats ignore;

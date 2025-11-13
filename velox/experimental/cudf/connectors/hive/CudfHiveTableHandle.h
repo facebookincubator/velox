@@ -19,7 +19,6 @@
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
-#include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
 #include <cudf/types.hpp>
@@ -92,10 +91,6 @@ class CudfHiveTableHandle : public ConnectorTableHandle {
     return subfieldFilterExpr_;
   }
 
-  const common::SubfieldFilters& subfieldFilters() const {
-    return subfieldFilters_;
-  }
-
   const core::TypedExprPtr& remainingFilter() const {
     return remainingFilter_;
   }
@@ -116,7 +111,6 @@ class CudfHiveTableHandle : public ConnectorTableHandle {
   const bool filterPushdownEnabled_;
   // This expression is used for predicate pushdown.
   const core::TypedExprPtr subfieldFilterExpr_;
-  const common::SubfieldFilters subfieldFilters_;
   // This expression is used for post-scan filtering.
   const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
