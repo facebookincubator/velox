@@ -960,7 +960,7 @@ TEST_F(TaskTest, testTerminateDeadlock) {
 
   auto cursor = TaskCursor::create(params);
 
-  folly::via(cursor->task()->queryCtx()->executor(), [&]() {
+  folly::via(cursor->task()->queryCtx()->cpuExecutor(), [&]() {
     // We abort after all but last join bridges finish execution. We do this
     // in another thread because cursor->moveNext() will block.
     std::this_thread::sleep_for(std::chrono::seconds(kTaskAbortDelaySeconds));
