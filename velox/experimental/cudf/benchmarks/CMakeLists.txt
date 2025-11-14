@@ -12,20 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_hive_connector
-  CudfHiveConfig.cpp
-  CudfHiveConnector.cpp
-  CudfHiveConnectorSplit.cpp
-  CudfHiveDataSource.cpp
-  CudfHiveDataSink.cpp
-  CudfHiveTableHandle.cpp
-)
-
-set_target_properties(velox_cudf_hive_connector PROPERTIES CUDA_ARCHITECTURES native)
+add_executable(velox_cudf_tpch_benchmark CudfTpchBenchmark.cpp)
 
 target_link_libraries(
-  velox_cudf_hive_connector
-  PRIVATE velox_hive_connector
-  PUBLIC cudf::cudf velox_cudf_expression
+  velox_cudf_tpch_benchmark
+  velox_cudf_exec
+  velox_cudf_exec_test_lib
+  velox_tpch_benchmark_lib
 )
