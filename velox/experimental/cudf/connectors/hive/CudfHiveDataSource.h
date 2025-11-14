@@ -41,8 +41,12 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 
-using CudfParquetReader = cudf::io::parquet::experimental::hybrid_scan_reader;
+using CudfParquetReader = cudf::io::chunked_parquet_reader;
 using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
+
+using CudfHybridScanReader =
+    cudf::io::parquet::experimental::hybrid_scan_reader;
+using CudfHybridScanReaderPtr = std::unique_ptr<CudfHybridScanReader>;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
@@ -86,6 +90,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
  private:
   // Create a CudfParquetReader with the given split.
   CudfParquetReaderPtr createSplitReader();
+  CudfHybridScanReaderPtr createExperimentalSplitReader();
+
   // Clear split_ and splitReader after split has been fully processed.  Keep
   // readers around to hold adaptation.
   void resetSplit();
@@ -98,6 +104,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
     }
     return emptyOutput_;
   }
+
+  // Setup the cuDF data source and options
+  void setupCudfDataSourceAndOptions();
+
   RowVectorPtr emptyOutput_;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
@@ -116,6 +126,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::shared_ptr<cudf::io::datasource> dataSource_;
   std::unique_ptr<std::once_flag> tableMaterialized_;
   CudfParquetReaderPtr splitReader_;
+  CudfHybridScanReaderPtr exptSplitReader_;
+  bool useExperimentalSplitReader_;
   rmm::cuda_stream_view stream_;
 
   // Output type from file reader.  This is different from outputType_ that it
