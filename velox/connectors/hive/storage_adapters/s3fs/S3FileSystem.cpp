@@ -294,6 +294,7 @@ class S3FileSystem::Impl {
 
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
+    s3Config_ = std::make_shared<S3Config>(s3Config);
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
@@ -433,6 +434,10 @@ class S3FileSystem::Impl {
     return client_.get();
   }
 
+  S3Config* s3Config() const {
+    return s3Config_.get();
+  }
+
   std::string getLogLevelName() const {
     return getAwsInstance()->getLogLevelName();
   }
@@ -443,6 +448,7 @@ class S3FileSystem::Impl {
 
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
+  std::shared_ptr<S3Config> s3Config_;
 };
 
 S3FileSystem::S3FileSystem(
@@ -474,8 +480,8 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file =
-      std::make_unique<S3WriteFile>(path, impl_->s3Client(), options.pool);
+  auto s3file = std::make_unique<S3WriteFile>(
+      path, impl_->s3Client(), options.pool, impl_->s3Config());
   return s3file;
 }
 
