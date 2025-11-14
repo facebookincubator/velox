@@ -146,6 +146,19 @@ target_link_libraries(
   velox_expression_test_utility
 )
 
+# Spatial Join Fuzzer.
+add_executable(velox_spatial_join_fuzzer SpatialJoinFuzzerRunner.cpp SpatialJoinFuzzer.cpp)
+
+target_link_libraries(
+  velox_spatial_join_fuzzer
+  velox_type
+  velox_vector_fuzzer
+  velox_fuzzer_util
+  velox_exec_test_lib
+  velox_expression_test_utility
+  velox_vector_test_lib
+)
+
 add_library(velox_writer_fuzzer WriterFuzzer.cpp)
 
 target_link_libraries(
