@@ -604,4 +604,85 @@ inline void FlatVector<bool>::resizeValues(
   rawValues_ = values_->asMutable<bool>();
 }
 
+template <typename T>
+void FlatVector<T>::transferAndUpdateStringBuffers(
+    velox::memory::MemoryPool* /*pool*/) {
+  VELOX_CHECK(stringBuffers_.empty());
+}
+
+template <>
+inline void FlatVector<StringView>::transferAndUpdateStringBuffers(
+    velox::memory::MemoryPool* pool) {
+  struct StringBufferRemapping {
+    const char* oldStart;
+    const char* newStart;
+    size_t size;
+  };
+  std::vector<StringBufferRemapping> stringBufferRemapping;
+  for (auto& buffer : stringBuffers_) {
+    if (!buffer->transferTo(pool)) {
+      VELOX_CHECK_NE(
+          stringBufferSet_.erase(buffer.get()),
+          0,
+          "Easure of existing string buffer should always succeed.");
+      auto newBuffer = AlignedBuffer::copy<char>(buffer, pool);
+      stringBufferRemapping.push_back(
+          {buffer->as<char>(), newBuffer->as<char>(), buffer->size()});
+      buffer = std::move(newBuffer);
+      VELOX_CHECK(stringBufferSet_.insert(buffer.get()).second);
+    }
+  }
+  if (stringBufferRemapping.empty()) {
+    return;
+  }
+
+  std::sort(
+      stringBufferRemapping.begin(),
+      stringBufferRemapping.end(),
+      [](const StringBufferRemapping& lhs, const StringBufferRemapping& rhs) {
+        return lhs.oldStart < rhs.oldStart;
+      });
+  auto rawValues = values_->asMutable<StringView>();
+  for (auto i = 0; i < BaseVector::length_; ++i) {
+    if (BaseVector::isNullAt(i)) {
+      continue;
+    }
+    auto& stringView = rawValues[i];
+    if (stringView.isInline()) {
+      continue;
+    }
+    // Find the first remapping whose oldStart is strictly greater than
+    // stringView.data(). The remapping before it is the candidate that
+    // contains stringView.data().
+    auto remapping = std::upper_bound(
+        stringBufferRemapping.cbegin(),
+        stringBufferRemapping.cend(),
+        stringView.data(),
+        [](const char* lhs, const StringBufferRemapping& rhs) {
+          return lhs < rhs.oldStart;
+        });
+    // There is no remapping whose oldStart is smaller than or equal to
+    // stringView.data().
+    if (remapping == stringBufferRemapping.begin()) {
+      continue;
+    }
+    remapping--;
+    if (stringView.data() >= remapping->oldStart &&
+        stringView.data() < remapping->oldStart + remapping->size) {
+      auto offset = stringView.data() - remapping->oldStart;
+      stringView = StringView(remapping->newStart + offset, stringView.size());
+    }
+  }
+}
+
+template <typename T>
+void FlatVector<T>::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  BaseVector::transferOrCopyTo(pool);
+  if (values_ && !values_->transferTo(pool)) {
+    values_ = AlignedBuffer::copy<T>(values_, pool);
+    rawValues_ = const_cast<T*>(values_->as<T>());
+  }
+  transferAndUpdateStringBuffers(pool);
+}
+
 } // namespace facebook::velox

@@ -290,23 +290,7 @@ class FlatVector final : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
-  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
-    BaseVector::transferOrCopyTo(pool);
-    if (values_ && !values_->transferTo(pool)) {
-      values_ = AlignedBuffer::copy<T>(values_, pool);
-      rawValues_ = const_cast<T*>(values_->as<T>());
-    }
-    for (auto& buffer : stringBuffers_) {
-      if (!buffer->transferTo(pool)) {
-        VELOX_CHECK_NE(
-            stringBufferSet_.erase(buffer.get()),
-            0,
-            "Easure of existing string buffer should always succeed.");
-        buffer = AlignedBuffer::copy<char>(buffer, pool);
-        VELOX_CHECK(stringBufferSet_.insert(buffer.get()).second);
-      }
-    }
-  }
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
@@ -597,6 +581,11 @@ class FlatVector final : public SimpleVector<T> {
       clearStringBuffers();
     }
   }
+
+  // Transfer or copy string buffers to 'pool'. Update StringViews in values_ to
+  // reference addresses in the new buffers. Non-StringView-typed FlatVector
+  // should not have string buffers.
+  void transferAndUpdateStringBuffers(velox::memory::MemoryPool* pool);
 
   // Contiguous values.
   // If strings, these are velox::StringViews into memory held by
