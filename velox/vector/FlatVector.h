@@ -574,10 +574,11 @@ class FlatVector final : public SimpleVector<T> {
       const vector_size_t* toSourceRow);
 
   // Ensures that the values buffer has space for 'newSize' elements and is
-  // mutable. Sets elements between the old and new sizes to 'initialValue' if
-  // the new size > old size.
+  // mutable. Sets elements between the previous and new sizes to 'initialValue'
+  // if the new size > previous size.
   void resizeValues(
       vector_size_t newSize,
+      vector_size_t previousSize,
       const std::optional<T>& initialValue);
 
   // Check string buffers. Keep at most one singly-referenced buffer if it is

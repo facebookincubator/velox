@@ -749,14 +749,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       // immutable. This is true for a slice since it creates buffer views over
       // the buffers of the original vector that it sliced.
       auto newSize = slice->size() * 2;
+      auto sliceCopy = BaseVector::copy(*slice);
       slice->resize(newSize);
       EXPECT_EQ(slice->size(), newSize);
+      slice->resize(sliceCopy->size());
+      test::assertEqualVectors(slice, sliceCopy);
     }
   }
 
   static void testSlices(const VectorPtr& slice, int level = 2) {
     for (vector_size_t offset : {0, 16, 17}) {
-      for (vector_size_t length : {0, 1, 83}) {
+      for (vector_size_t length : {0, 1, 83, 100}) {
         if (offset + length <= slice->size()) {
           testSlice(slice, level, offset, length);
         }

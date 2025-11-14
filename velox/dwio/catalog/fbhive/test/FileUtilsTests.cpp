@@ -22,7 +22,7 @@
 using namespace ::testing;
 using namespace facebook::velox::dwio::catalog::fbhive;
 
-TEST(FileUtilsTests, MakePartName) {
+TEST(FileUtilsTests, makePartName) {
   std::vector<std::pair<std::string, std::string>> pairs{
       {"ds", "2016-01-01"}, {"FOO", ""}, {"a\nb:c", "a#b=c"}};
   ASSERT_EQ(
@@ -33,7 +33,19 @@ TEST(FileUtilsTests, MakePartName) {
       "ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Dc");
 }
 
-TEST(FileUtilsTests, ParsePartKeyValues) {
+TEST(FileUtilsTests, makePartNameWithoutDefaultPartitionValue) {
+  std::vector<std::pair<std::string, std::string>> pairs{
+      {"ds", "2016-01-01"}, {"FOO", ""}, {"a\nb:c", "a#b=c"}};
+  // Test with useDefaultPartitionValue = false.
+  ASSERT_EQ(
+      FileUtils::makePartName(pairs, true, false),
+      "ds=2016-01-01/foo=/a%0Ab%3Ac=a%23b%3Dc");
+  ASSERT_EQ(
+      FileUtils::makePartName(pairs, false, false),
+      "ds=2016-01-01/FOO=/a%0Ab%3Ac=a%23b%3Dc");
+}
+
+TEST(FileUtilsTests, parsePartKeyValues) {
   EXPECT_THROW(
       FileUtils::parsePartKeyValues("ds"), facebook::velox::VeloxRuntimeError);
   EXPECT_THROW(
@@ -60,7 +72,7 @@ TEST(FileUtilsTests, ParsePartKeyValues) {
           std::make_pair("a\nb:c", "a#b=c/")));
 }
 
-TEST(FileUtilsTests, ExtractPartitionName) {
+TEST(FileUtilsTests, extractPartitionName) {
   struct TestCase {
    public:
     TestCase(const std::string& filePath, const std::string& partitionName)
