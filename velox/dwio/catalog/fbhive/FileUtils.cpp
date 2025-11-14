@@ -161,6 +161,7 @@ std::string FileUtils::makePartName(
     bool partitionPathAsLowerCase,
     bool useDefaultPartitionValue,
     const EncodeFunction& encodeFunc) {
+  VELOX_CHECK(!entries.empty());
   std::ostringstream out;
 
   for (const auto& [key, value] : entries) {
