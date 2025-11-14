@@ -61,8 +61,8 @@ class DecimalAverageAggregate {
       const TypePtr& resultType) {
     VELOX_CHECK_EQ(argTypes.size(), 1);
     auto inputType = argTypes[0];
-    this->sumType = detail::getSumType(inputType);
-    this->resultType = resultType;
+    this->sumType_ = detail::getSumType(inputType);
+    this->resultType_ = resultType;
   }
 
   static bool toIntermediate(
@@ -204,17 +204,17 @@ class DecimalAverageAggregate {
       }
 
       auto [resultPrecision, resultScale] =
-          getDecimalPrecisionScale(*fn->resultType.get());
+          getDecimalPrecisionScale(*fn->resultType_.get());
       auto [sumPrecision, sumScale] =
-          getDecimalPrecisionScale(*fn->sumType.get());
+          getDecimalPrecisionScale(*fn->sumType_.get());
 
       // Spark use DECIMAL(20,0) to represent long value.
       static const uint8_t countPrecision = 20;
       static const uint8_t countScale = 0;
 
       auto [dividePrecision, divideScale] =
-          functions::sparksql::DecimalUtil::computeResultPrecisionScale<true>(
-              sumPrecision, sumScale, countPrecision, countScale);
+          functions::sparksql::DecimalUtil::computeDivideResultPrecisionScale<
+              true>(sumPrecision, sumScale, countPrecision, countScale);
       divideScale = std::max<uint8_t>(divideScale, resultScale);
       auto sumRescale = divideScale - sumScale + countScale;
       int128_t avg;
@@ -239,9 +239,8 @@ class DecimalAverageAggregate {
     }
   };
 
- private:
-  TypePtr resultType;
-  TypePtr sumType;
+  TypePtr resultType_;
+  TypePtr sumType_;
 };
 
 } // namespace facebook::velox::functions::aggregate::sparksql

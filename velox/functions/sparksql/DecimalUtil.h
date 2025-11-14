@@ -216,7 +216,7 @@ class DecimalUtil {
   /// exceed 38, we reduce both the number of fraction digits and whole digits
   /// to fit within this limit.
   template <bool allowPrecisionLoss>
-  static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+  static std::pair<uint8_t, uint8_t> computeDivideResultPrecisionScale(
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,

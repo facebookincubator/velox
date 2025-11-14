@@ -455,7 +455,7 @@ struct DecimalDivideFunction {
     auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
     auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
     auto [rPrecision, rScale] =
-        DecimalUtil::computeResultPrecisionScale<allowPrecisionLoss>(
+        DecimalUtil::computeDivideResultPrecisionScale<allowPrecisionLoss>(
             aPrecision, aScale, bPrecision, bScale);
     rPrecision_ = rPrecision;
     aRescale_ = rScale - aScale + bScale;
