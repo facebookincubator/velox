@@ -118,9 +118,6 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   CudfParquetReaderPtr splitReader_;
   rmm::cuda_stream_view stream_;
 
-  // Table column names read from the CudfHive file
-  std::vector<std::string> columnNames_;
-
   // Output type from file reader.  This is different from outputType_ that it
   // contains column names before assignment, and columns that only used in
   // remaining filter.

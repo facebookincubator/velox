@@ -18,6 +18,7 @@ add_library(
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp
   CudfHiveDataSource.cpp
+  CudfHiveDataSourceHelpers.cpp
   CudfHiveDataSink.cpp
   CudfHiveTableHandle.cpp
 )
