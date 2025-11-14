@@ -228,6 +228,24 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
 
   auto files = listFiles(directory);
   for (const auto& filePath : files) {
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+
+    // Extract partition keys from path if any.
+    std::vector<std::string> pathComponents;
+    folly::split("/", filePath, pathComponents);
+    for (const auto& component : pathComponents) {
+      if (component.find('=') != std::string::npos) {
+        std::vector<std::string> keys;
+        folly::split('=', component, keys);
+        if (keys.size() == 2) {
+          partitionKeys[keys[0]] = keys[1];
+          if (keys[1] == "null") {
+            partitionKeys[keys[0]] = std::nullopt;
+          }
+        }
+      }
+    }
+
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
     splits.push_back(
@@ -237,7 +255,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
             fileFormat_,
             0,
             file->size(),
-            std::unordered_map<std::string, std::optional<std::string>>{},
+            partitionKeys,
             std::nullopt,
             customSplitInfo,
             nullptr,

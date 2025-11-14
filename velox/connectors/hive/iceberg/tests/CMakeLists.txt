@@ -65,6 +65,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     PartitionNameTest.cpp
     PartitionSpecTest.cpp
     PartitionValueFormatterTest.cpp
+    TransformE2ETest.cpp
     TransformTest.cpp
   )
 
@@ -81,7 +82,11 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   )
 
   if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
+    target_link_libraries(
+      velox_hive_iceberg_test
+      velox_dwio_parquet_writer
+      velox_dwio_parquet_reader
+    )
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
