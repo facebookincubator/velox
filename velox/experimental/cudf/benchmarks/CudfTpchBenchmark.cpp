@@ -15,13 +15,13 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
-#include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
@@ -63,95 +63,93 @@ DEFINE_int32(
 
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
-class CudfTpchBenchmark : public TpchBenchmark {
- public:
-  void initialize() override {
-    TpchBenchmark::initialize();
+void CudfTpchBenchmark::initialize() {
+  TpchBenchmark::initialize();
 
-    if (FLAGS_velox_cudf_table_scan) {
-      facebook::velox::connector::unregisterConnector(
-          facebook::velox::exec::test::kHiveConnectorId);
+  if (FLAGS_velox_cudf_table_scan) {
+    connector::unregisterConnector(
+        facebook::velox::exec::test::kHiveConnectorId);
 
-      // Add new values into the cudfHive configuration...
-      auto cudfHiveConfigurationValues =
-          std::unordered_map<std::string, std::string>();
-      cudfHiveConfigurationValues
-          [cudf_velox::connector::hive::CudfHiveConfig::kMaxChunkReadLimit] =
-              std::to_string(FLAGS_cudf_chunk_read_limit);
-      cudfHiveConfigurationValues
-          [cudf_velox::connector::hive::CudfHiveConfig::kMaxPassReadLimit] =
-              std::to_string(FLAGS_cudf_pass_read_limit);
-      cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
-                                      kAllowMismatchedCudfHiveSchemas] =
-          std::to_string(true);
-      auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
-          std::move(cudfHiveConfigurationValues));
+    // Add new values into the cudfHive configuration...
+    auto cudfHiveConfigurationValues =
+        std::unordered_map<std::string, std::string>();
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kMaxChunkReadLimit] =
+            std::to_string(FLAGS_cudf_chunk_read_limit);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kMaxPassReadLimit] =
+            std::to_string(FLAGS_cudf_pass_read_limit);
+    cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
+                                    kAllowMismatchedCudfHiveSchemas] =
+        std::to_string(true);
+    auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
+        std::move(cudfHiveConfigurationValues));
 
-      // Create cudfHive connector with config...
-      cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
-      auto cudfHiveConnector = factory.newConnector(
-          facebook::velox::exec::test::kHiveConnectorId,
-          cudfHiveProperties,
-          ioExecutor_.get());
-      facebook::velox::connector::registerConnector(cudfHiveConnector);
+    // Create cudfHive connector with config...
+    cudf_velox::connector::hive::CudfHiveConnectorFactory cudfHiveFactory;
+    auto cudfHiveConnector = cudfHiveFactory.newConnector(
+        facebook::velox::exec::test::kHiveConnectorId,
+        cudfHiveProperties,
+        ioExecutor_.get());
+    connector::registerConnector(cudfHiveConnector);
+  }
+
+  cudf_velox::CudfConfig::getInstance().memoryResource =
+      FLAGS_cudf_memory_resource;
+  cudf_velox::CudfConfig::getInstance().memoryPercent =
+      FLAGS_cudf_memory_percent;
+
+  // Enable cuDF operators
+  cudf_velox::registerCudf();
+
+  // Add custom configs
+  queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
+      std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+}
+
+std::shared_ptr<config::ConfigBase>
+CudfTpchBenchmark::makeConnectorProperties() {
+  auto cfg = TpchBenchmark::makeConnectorProperties();
+  using CudfHiveCfg = cudf_velox::connector::hive::CudfHiveConfig;
+
+  // CuDF-specific properties.
+  cfg->set(
+      CudfHiveCfg::kMaxChunkReadLimit,
+      std::to_string(FLAGS_cudf_chunk_read_limit));
+  cfg->set(
+      CudfHiveCfg::kMaxPassReadLimit,
+      std::to_string(FLAGS_cudf_pass_read_limit));
+  cfg->set(CudfHiveCfg::kAllowMismatchedCudfHiveSchemas, "true");
+
+  return cfg;
+}
+
+std::vector<std::shared_ptr<connector::ConnectorSplit>>
+CudfTpchBenchmark::listSplits(
+    const std::string& path,
+    int32_t numSplitsPerFile,
+    const exec::test::TpchPlan& plan) {
+  // TODO (dm): Figure out a way to enforce 1 split per file in
+  // CudfHiveDataSource outside of this benchmark
+  if (FLAGS_velox_cudf_table_scan) {
+    // TODO (dm): Instead of this, we can maybe use
+    // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>& filePaths)
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
+    auto temp = HiveConnectorTestBase::makeHiveConnectorSplits(
+        path, 1, plan.dataFileFormat);
+    for (auto& i : temp) {
+      result.push_back(i);
     }
-
-    cudf_velox::CudfConfig::getInstance().memoryResource =
-        FLAGS_cudf_memory_resource;
-    cudf_velox::CudfConfig::getInstance().memoryPercent =
-        FLAGS_cudf_memory_percent;
-
-    // Enable cuDF operators
-    cudf_velox::registerCudf();
-
-    // Add custom configs
-    queryConfigs_
-        [facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
-            std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+    return result;
   }
 
-  std::shared_ptr<config::ConfigBase> makeConnectorProperties() override {
-    auto cfg = TpchBenchmark::makeConnectorProperties();
-    using CudfHiveCfg = cudf_velox::connector::hive::CudfHiveConfig;
+  return TpchBenchmark::listSplits(path, numSplitsPerFile, plan);
+}
 
-    // CuDF-specific properties.
-    cfg->set(
-        CudfHiveCfg::kMaxChunkReadLimit,
-        std::to_string(FLAGS_cudf_chunk_read_limit));
-    cfg->set(
-        CudfHiveCfg::kMaxPassReadLimit,
-        std::to_string(FLAGS_cudf_pass_read_limit));
-    cfg->set(CudfHiveCfg::kAllowMismatchedCudfHiveSchemas, "true");
-
-    return cfg;
-  }
-
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> listSplits(
-      const std::string& path,
-      int32_t numSplitsPerFile,
-      const exec::test::TpchPlan& plan) override {
-    // TODO (dm): Figure out a way to enforce 1 split per file in
-    // CudfHiveDataSource outside of this benchmark
-    if (FLAGS_velox_cudf_table_scan) {
-      // TODO (dm): Instead of this, we can maybe use
-      // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>& filePaths)
-      std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
-      auto temp = HiveConnectorTestBase::makeHiveConnectorSplits(
-          path, 1, plan.dataFileFormat);
-      for (auto& i : temp) {
-        result.push_back(i);
-      }
-      return result;
-    }
-
-    return TpchBenchmark::listSplits(path, numSplitsPerFile, plan);
-  }
-
-  void shutdown() override {
-    cudf_velox::unregisterCudf();
-    TpchBenchmark::shutdown();
-  }
-};
+void CudfTpchBenchmark::shutdown() {
+  cudf_velox::unregisterCudf();
+  TpchBenchmark::shutdown();
+}
 
 int main(int argc, char** argv) {
   std::string kUsage(
