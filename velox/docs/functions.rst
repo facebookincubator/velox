@@ -199,3 +199,35 @@ for :doc:`all <functions/presto/coverage>` and :doc:`most used
     :func:`geometry_nearest_points`                    :func:`secure_rand`                                :func:`zip`
     :func:`greatest`                                   :func:`secure_random`                              :func:`zip_with`
     =================================================  =================================================  =================================================  ==  =================================================  ==  =================================================
+
+Function Name Prefixes for Presto
+==================================
+
+When integrating Velox with Presto in a multi-catalog environment, Presto functions
+can optionally be registered with a prefix to support catalog and schema namespacing.
+This is **not a mandatory requirement** for using Presto functions in Velox. Functions
+can be registered without any prefix and will work correctly in most scenarios.
+
+However, when working in a multi-catalog Presto deployment, you may choose to use the
+**catalog.schema.** prefix pattern (e.g., ``presto.default.``), resulting in fully
+qualified names like **catalog.schema.function_name**.
+
+For example, when registering Presto functions with an optional prefix:
+
+.. code-block:: c++
+
+    // Optional: Register all Presto functions with catalog.schema prefix
+    facebook::velox::functions::prestosql::registerAllScalarFunctions("presto.default.");
+
+Using a prefix allows Presto to call functions using their fully qualified names in SQL queries,
+which can be useful for proper function resolution in multi-catalog environments.
+
+Consider using this optional prefix pattern when:
+
+- Integrating Velox with Presto deployments that support multiple catalogs and schemas
+- Avoiding naming conflicts between Presto functions and functions from other sources
+- Ensuring Presto can correctly resolve functions in a multi-catalog context
+
+**Note:** This prefix pattern is specific to Presto integration scenarios. Other function
+libraries (Spark, Delta, etc.) may have different conventions. Internal functions
+(prefixed with ``$internal$``) do not use this prefix pattern.
