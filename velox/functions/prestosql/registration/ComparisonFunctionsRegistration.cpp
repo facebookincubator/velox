@@ -19,6 +19,8 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixRegistration.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
@@ -34,6 +36,7 @@ void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
   registerFunction<T, TReturn, TimestampWithTimezone, TimestampWithTimezone>(
       aliases);
   registerFunction<T, TReturn, Time, Time>(aliases);
+  registerFunction<T, TReturn, TimeWithTimezone, TimeWithTimezone>(aliases);
   registerFunction<T, TReturn, IPAddress, IPAddress>(aliases);
 }
 } // namespace
@@ -42,6 +45,7 @@ void registerComparisonFunctions(const std::string& prefix) {
   // Comparison functions also need TimestampWithTimezoneType,
   // independent of DateTimeFunctions
   registerTimestampWithTimeZoneType();
+  registerTimeWithTimezoneType();
   registerIPAddressType();
   registerIPPrefixType();
 
@@ -97,6 +101,12 @@ void registerComparisonFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, Time, Time, Time>(
       {prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      TimeWithTimezone>({prefix + "between"});
   registerFunction<
       BetweenFunction,
       bool,

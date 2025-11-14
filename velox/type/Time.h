@@ -63,7 +63,7 @@ inline int64_t unpackMillisUtc(int64_t timeWithTimeZone) {
 }
 
 /// Unpacks the timezone offset from a packed TIME WITH TIME ZONE value
-inline int16_t unpackZoneKeyId(int64_t timeWithTimeZone) {
+inline int16_t unpackZoneOffset(int64_t timeWithTimeZone) {
   return timeWithTimeZone & kTimezoneMask;
 }
 
