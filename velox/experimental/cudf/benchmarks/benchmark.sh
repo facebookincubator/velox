@@ -30,7 +30,6 @@ queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
 
-output_batch_rows=${BATCH_SIZE_ROWS:-100000}
 cudf_chunk_read_limit=$((1024 * 1024 * 1024 * 1))
 cudf_pass_read_limit=0
 VELOX_CUDF_MEMORY_RESOURCE="async"
