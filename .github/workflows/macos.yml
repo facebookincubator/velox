@@ -53,9 +53,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 = x86_64 Mac
+        # macos-15-intel = x86_64 Mac
         # macos-15 = arm64 Mac and cmake 4.0
-        os: [macos-13, macos-15]
+        os: [macos-15-intel, macos-15]
     runs-on: ${{ matrix.os }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -73,6 +73,9 @@ jobs:
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 'TRUE'
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
+          echo "Show memory configuration: "
+          sysctl -a | grep hw.memsize
+          echo "---------"
           source scripts/setup-macos.sh
           install_build_prerequisites
           install_velox_deps_from_brew
