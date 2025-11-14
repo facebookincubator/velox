@@ -130,4 +130,12 @@ class ConfigBase : public IConfig {
   const bool mutable_;
 };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+using OldConfig = ConfigBase;
+using ConfigPtr = std::shared_ptr<const ConfigBase>;
+#else
+// Remove this using declaration once backward compatibility is removed.
+using OldConfig = IConfig;
+#endif
+
 } // namespace facebook::velox::config
