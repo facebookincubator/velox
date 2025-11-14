@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/GeometryFunctions.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
+#include "velox/functions/prestosql/types/SphericalGeographyRegistration.h"
 
 namespace facebook::velox::functions {
 
@@ -41,6 +42,10 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "ST_LineString"}});
   registerFunction<StMultiPointFunction, Geometry, Array<Geometry>>(
       {{prefix + "ST_MultiPoint"}});
+  registerFunction<ToSphericalGeographyFunction, SphericalGeography, Geometry>(
+      {{prefix + "to_spherical_geography"}});
+  registerFunction<ToGeometryFunction, Geometry, SphericalGeography>(
+      {{prefix + "to_geometry"}});
 }
 
 void registerRelationPredicates(const std::string& prefix) {
@@ -198,6 +203,7 @@ void registerBingTileGeometryFunctions(const std::string& prefix) {
 
 void registerGeometryFunctions(const std::string& prefix) {
   registerGeometryType();
+  registerSphericalGeographyType();
   registerConstructors(prefix);
   registerRelationPredicates(prefix);
   registerOverlayOperations(prefix);
