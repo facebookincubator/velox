@@ -16,10 +16,10 @@ name: Ubuntu Benchmark
 
 on:
   pull_request:
-    paths:
-      - .github/workflows/benchmark.yml
-      - scripts/ci/benchmark-requirements.txt
-      - scripts/setup-ubuntu.sh
+    # paths:
+    #   - .github/workflows/benchmark.yml
+    #   - scripts/ci/benchmark-requirements.txt
+    #   - scripts/setup-ubuntu.sh
 
   push:
     branches: [main]

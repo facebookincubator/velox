@@ -69,7 +69,7 @@ struct StringView {
       // small string: inlined. Zero the last 8 bytes first to allow for whole
       // word comparison.
       value_.data = nullptr;
-      memcpy(prefix_, data, size_);
+      memcpy(prefix_, data, static_cast<size_t>(size_));
     } else {
       // large string: store pointer
       memcpy(prefix_, data, kPrefixSize);
