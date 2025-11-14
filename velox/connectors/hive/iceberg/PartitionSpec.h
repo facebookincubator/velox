@@ -113,7 +113,6 @@ struct IcebergPartitionSpec {
         case TransformType::kTruncate:
           return type;
       }
-      VELOX_UNREACHABLE("Unknown transform type");
     }
   };
 
