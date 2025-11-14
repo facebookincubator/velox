@@ -40,7 +40,7 @@ function prompt {
     while true; do
       local input="${PROMPT_ALWAYS_RESPOND:-}"
       echo -n "$(tput bold)$* [Y, n]$(tput sgr0) "
-      [[ -z ${input} ]] && read input
+      [[ -z ${input} ]] && read -r input
       if [[ ${input} == "Y" || ${input} == "y" || ${input} == "" ]]; then
         return 0
       elif [[ ${input} == "N" || ${input} == "n" ]]; then
@@ -113,7 +113,7 @@ function get_cxx_flags {
         CPU_ARCH="aarch64"
       else # x86_64
         local CPU_CAPABILITIES
-        CPU_CAPABILITIES=$(cat /proc/cpuinfo | grep flags | head -n 1 | awk '{print tolower($0)}')
+        CPU_CAPABILITIES=$(grep flags /proc/cpuinfo | head -n 1 | awk '{print tolower($0)}')
         if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
           CPU_ARCH="avx"
         elif [[ $CPU_CAPABILITIES =~ "sse" ]]; then

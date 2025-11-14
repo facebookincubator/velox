@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# shellcheck source-path=SCRIPT_DIR
+# shellcheck source-path=SCRIPTDIR
 
 # This script documents setting up a Fedora host for Velox
 # development.  Running it should make you ready to compile.
@@ -87,6 +87,7 @@ function install_velox_deps {
 (return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (
+  # shellcheck disable=SC2031
   if [[ $# -ne 0 ]]; then
     if [[ ${USE_CLANG} != "false" ]]; then
       export CC=/usr/bin/clang-15
