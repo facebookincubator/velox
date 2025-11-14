@@ -38,7 +38,8 @@ class ValueStatisticsBuilder {
   static std::unique_ptr<const ValueStatisticsBuilder> create(
       WriterContext& context,
       const dwio::common::TypeWithId& root) {
-    auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+    auto options = StatisticsBuilderOptions::fromConfig(
+        context.getConfigs(), context.fileFormat());
     return create_(context, root, options);
   }
 
@@ -214,7 +215,9 @@ class ValueWriter {
       std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory) {
     inMap_->flush();
     columnWriter_->flush(encodingFactory, [&](auto encoding) {
-      *encoding.mutableKey() = keyInfo_;
+      if (encoding.format() == DwrfFormat::kDwrf) {
+        *encoding.mutableKey() = keyInfo_;
+      }
     });
   }
 

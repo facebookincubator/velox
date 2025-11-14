@@ -16,20 +16,20 @@
 
 #pragma once
 
-#include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 
 namespace facebook::velox::orc {
 
-class OrcReaderFactory : public dwio::common::ReaderFactory {
+class OrcWriterFactory : public dwio::common::WriterFactory {
  public:
-  OrcReaderFactory() : ReaderFactory(dwio::common::FileFormat::ORC) {}
+  OrcWriterFactory() : WriterFactory(dwio::common::FileFormat::ORC) {}
 
-  std::unique_ptr<dwio::common::Reader> createReader(
-      std::unique_ptr<dwio::common::BufferedInput> input,
-      const dwio::common::ReaderOptions& options) override {
-    return velox::dwrf::DwrfReader::create(std::move(input), options);
-  }
+  std::unique_ptr<dwio::common::Writer> createWriter(
+      std::unique_ptr<dwio::common::FileSink> sink,
+      const std::shared_ptr<dwio::common::WriterOptions>& options) override;
+
+  std::unique_ptr<dwio::common::WriterOptions> createWriterOptions() override;
 };
 
 } // namespace facebook::velox::orc

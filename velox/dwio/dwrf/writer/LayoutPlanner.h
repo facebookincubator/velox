@@ -86,7 +86,8 @@ class EncodingContainer {
 class EncodingManager : public EncodingContainer {
  public:
   explicit EncodingManager(
-      const encryption::EncryptionHandler& encryptionHandler);
+      const encryption::EncryptionHandler& encryptionHandler,
+      dwio::common::FileFormat fileFormat);
   virtual ~EncodingManager() override = default;
 
   ColumnEncodingWriteWrapper addEncodingToFooter(uint32_t nodeId);
@@ -131,6 +132,7 @@ class LayoutPlanner {
   virtual ~LayoutPlanner() = default;
 
   virtual LayoutResult plan(
+      dwio::common::FileFormat format,
       const EncodingContainer& encoding,
       StreamList streamList) const;
 

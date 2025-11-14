@@ -26,6 +26,7 @@ constexpr uint32_t MIN_INDEX_STRIDE = 1000;
 WriterContext::WriterContext(
     const std::shared_ptr<const Config>& config,
     std::shared_ptr<memory::MemoryPool> pool,
+    dwio::common::FileFormat fileFormat,
     const dwio::common::MetricsLogPtr& metricLogger,
     const tz::TimeZone* sessionTimezone,
     const bool adjustTimestampToTimezone,
@@ -56,7 +57,8 @@ WriterContext::WriterContext(
       metricLogger_{metricLogger},
       sessionTimezone_{sessionTimezone},
       adjustTimestampToTimezone_{adjustTimestampToTimezone},
-      handler_{std::move(handler)} {
+      handler_{std::move(handler)},
+      fileFormat_{fileFormat} {
   const bool forceLowMemoryMode{getConfig(Config::FORCE_LOW_MEMORY_MODE)};
   const bool disableLowMemoryMode{getConfig(Config::DISABLE_LOW_MEMORY_MODE)};
   VELOX_CHECK(!(forceLowMemoryMode && disableLowMemoryMode));

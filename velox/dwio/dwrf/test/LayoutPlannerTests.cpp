@@ -123,7 +123,8 @@ TEST_F(LayoutPlannerTest, Basic) {
 
   auto encryptionHandler =
       std::make_unique<velox::dwrf::encryption::EncryptionHandler>();
-  EncodingManager encodingManager{*encryptionHandler};
+  EncodingManager encodingManager{
+      *encryptionHandler, dwio::common::FileFormat::DWRF};
   auto addEncoding = [&](uint32_t node,
                          uint32_t seq,
                          proto::ColumnEncoding_Kind kind,
@@ -171,7 +172,8 @@ TEST_F(LayoutPlannerTest, Basic) {
   // we expect index streams to be sorted by ascending size (7, 6)
   auto typeWithId = dwio::common::TypeWithId::create(type);
   LayoutPlanner planner{*typeWithId};
-  auto result = planner.plan(encodingManager, getStreamList(context));
+  auto result = planner.plan(
+      dwio::common::FileFormat::DWRF, encodingManager, getStreamList(context));
   std::vector<size_t> indices{7, 6, 12};
   size_t pos = 0;
   result.iterateIndexStreams([&](auto& stream, auto& /* ignored */) {

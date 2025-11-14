@@ -332,21 +332,22 @@ void testDataTypeWriter(
     const TypePtr& type,
     std::vector<std::optional<T>>& data,
     const uint32_t sequence = 0,
-    DwrfFormat format = DwrfFormat::kDwrf) {
+    dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF) {
   // Generate a seed and randomly shuffle the data
   uint32_t seed = Random::rand32();
   std::shuffle(data.begin(), data.end(), std::default_random_engine(seed));
 
   auto config = std::make_shared<Config>();
   auto pool = memory::memoryManager()->addLeafPool();
-  WriterContext context{config, memory::memoryManager()->addRootPool()};
+  WriterContext context{
+      config, memory::memoryManager()->addRootPool(), fileFormat};
   context.initBuffer();
   auto rowType = ROW({type});
   auto dataTypeWithId = TypeWithId::create(type, 1);
 
   // write
-  auto writer = BaseColumnWriter::create(
-      context, *dataTypeWithId, sequence, nullptr, format);
+  auto writer =
+      BaseColumnWriter::create(context, *dataTypeWithId, sequence, nullptr);
   auto size = data.size();
   auto batch = populateBatch(data, pool.get(), type);
   const size_t stripeCount = 2;
@@ -466,7 +467,7 @@ TEST_F(ColumnWriterTest, TestNullBooleanWriter) {
 }
 
 TEST_F(ColumnWriterTest, testDecimalWriter) {
-  const auto format = DwrfFormat::kOrc;
+  const auto format = dwio::common::FileFormat::ORC;
   auto genShortDecimals = [&](bool hasNull) {
     std::vector<std::optional<int64_t>> shortDecimals;
     for (auto i = 0; i < ITERATIONS; ++i) {

@@ -20,7 +20,17 @@
 
 namespace facebook::velox::dwrf {
 
-void WriterBase::writeFooter(const Type& type) {
+uint64_t WriterBase::writeMetadata() {
+  if (fileFormat_ == dwio::common::FileFormat::ORC) {
+    auto pos = writerSink_->size();
+    writeProto(&metadata_);
+    return writerSink_->size() - pos;
+  }
+
+  return 0;
+}
+
+void WriterBase::writeFooter(const Type& type, uint64_t metadataLength) {
   auto pos = writerSink_->size();
   footer_->setHeaderLength(ORC_MAGIC_LEN);
   footer_->setContentLength(pos - ORC_MAGIC_LEN);
@@ -28,7 +38,7 @@ void WriterBase::writeFooter(const Type& type) {
 
   // write cache when available
   auto cacheSize = writerSink_->getCacheSize();
-  if (cacheSize > 0) {
+  if (fileFormat_ == dwio::common::FileFormat::DWRF && cacheSize > 0) {
     writerSink_->writeCache();
     for (auto& i : writerSink_->getCacheOffsets()) {
       footer_->addStripeCacheOffsets(i);
@@ -49,20 +59,46 @@ void WriterBase::writeFooter(const Type& type) {
     // rawSize.
     footer_->setRawDataSize(context_->fileRawSize());
   }
-  auto* checksum = writerSink_->getChecksum();
-  footer_->setCheckSumAlgorithm(
-      (checksum != nullptr) ? checksum->getType()
-                            : proto::ChecksumAlgorithm::NULL_);
-  writeProto(footer_->getDwrfPtr());
+
+  // 0 = ORC Java
+  // 1 = ORC C++
+  // 2 = Presto
+  // 3 = Scritchley Go from https://github.com/scritchley/orc
+  // 4 = Trino
+  // 5 = CUDF
+  footer_->setWriter(1);
+
+  std::unique_ptr<PostScriptWriteWrapper> ps;
+  if (fileFormat_ == dwio::common::FileFormat::DWRF) {
+    auto* checksum = writerSink_->getChecksum();
+    footer_->setCheckSumAlgorithm(
+        (checksum != nullptr) ? checksum->getType()
+                              : proto::ChecksumAlgorithm::NULL_);
+    writeProto(footer_->getDwrfPtr());
+
+    auto dwrfPostScript =
+        google::protobuf::Arena::CreateMessage<proto::PostScript>(arena_.get());
+    ps = std::make_unique<PostScriptWriteWrapper>(dwrfPostScript);
+    ps->setCacheMode(writerSink_->getCacheMode());
+    ps->setCacheSize(cacheSize);
+  } else {
+    writeProto(footer_->getOrcPtr());
+
+    auto orcPostScript =
+        google::protobuf::Arena::CreateMessage<proto::orc::PostScript>(
+            arena_.get());
+    ps = std::make_unique<PostScriptWriteWrapper>(orcPostScript);
+  }
+
   const auto footerLength = writerSink_->size() - pos;
 
   // write postscript
   pos = writerSink_->size();
-  auto dwrfPostScript =
-      google::protobuf::Arena::CreateMessage<proto::PostScript>(arena_.get());
-  std::unique_ptr<PostScriptWriteWrapper> ps =
-      std::make_unique<PostScriptWriteWrapper>(dwrfPostScript);
+
   ps->setWriterVersion(writerVersion);
+  // ORC File Version: 0.12
+  ps->addVersion(0);
+  ps->addVersion(12);
   ps->setFooterLength(footerLength);
   ps->setCompression(context_->compression());
   if (context_->compression() !=
@@ -70,8 +106,7 @@ void WriterBase::writeFooter(const Type& type) {
     ps->setCompressionBlockSize(context_->compressionBlockSize());
   }
 
-  ps->setCacheMode(writerSink_->getCacheMode());
-  ps->setCacheSize(cacheSize);
+  ps->setMetaDataLength(metadataLength);
   writeProto(ps, common::CompressionKind::CompressionKind_NONE);
   auto psLength = writerSink_->size() - pos;
   DWIO_ENSURE_LE(psLength, 0xff, "PostScript is too large: ", psLength);

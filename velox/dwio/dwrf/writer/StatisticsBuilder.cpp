@@ -118,27 +118,57 @@ void StatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
 
 std::unique_ptr<dwio::common::ColumnStatistics> StatisticsBuilder::build()
     const {
-  auto columnStatistics =
-      google::protobuf::Arena::CreateMessage<proto::ColumnStatistics>(
-          arena_.get());
-  auto stats = ColumnStatisticsWriteWrapper(columnStatistics);
-  toProto(stats);
+  if (options_.fileFormat == dwio::common::FileFormat::DWRF) {
+    auto columnStatistics =
+        google::protobuf::Arena::CreateMessage<proto::ColumnStatistics>(
+            arena_.get());
+    auto stats = ColumnStatisticsWriteWrapper(columnStatistics);
+    toProto(stats);
 
-  StatsContext context{WriterVersion_CURRENT};
-  auto result = buildColumnStatisticsFromProto(
-      ColumnStatisticsWrapper(columnStatistics), context);
-  // We do not alter the proto since this is part of the file format
-  // and the file format. The distinct count does not exist in the
-  // file format but is added here for use in on demand sampling.
-  if (hll_) {
-    result->setNumDistinct(hll_->cardinality());
+    StatsContext context{WriterVersion_CURRENT};
+    auto result = buildColumnStatisticsFromProto(
+        ColumnStatisticsWrapper(columnStatistics), context);
+    // We do not alter the proto since this is part of the file format
+    // and the file format. The distinct count does not exist in the
+    // file format but is added here for use in on demand sampling.
+    if (hll_) {
+      result->setNumDistinct(hll_->cardinality());
+    }
+    return result;
+  } else {
+    auto columnStatistics =
+        google::protobuf::Arena::CreateMessage<proto::orc::ColumnStatistics>(
+            arena_.get());
+    auto stats = ColumnStatisticsWriteWrapper(columnStatistics);
+    toProto(stats);
+
+    StatsContext context{WriterVersion_CURRENT};
+    auto result = buildColumnStatisticsFromProto(
+        ColumnStatisticsWrapper(columnStatistics), context);
+    // We do not alter the proto since this is part of the file format
+    // and the file format. The distinct count does not exist in the
+    // file format but is added here for use in on demand sampling.
+    if (hll_) {
+      result->setNumDistinct(hll_->cardinality());
+    }
+    return result;
   }
-  return result;
 }
 
 std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
     const Type& type,
-    const StatisticsBuilderOptions& options) {
+    const StatisticsBuilderOptions& options,
+    dwio::common::FileFormat fileFormat) {
+  if (fileFormat == dwio::common::FileFormat::ORC) {
+    if (type.isDate()) {
+      return std::make_unique<DateStatisticsBuilder>(options);
+    } else if (type.isTimestamp()) {
+      return std::make_unique<TimestampStatisticsBuilder>(options);
+    } else if (type.isDecimal()) {
+      return std::make_unique<DecimalStatisticsBuilder>(options, type);
+    }
+  }
+
   switch (type.kind()) {
     case TypeKind::BOOLEAN:
       return std::make_unique<BooleanStatisticsBuilder>(options);
@@ -285,6 +315,134 @@ void IntegerStatisticsBuilder::toProto(
       iStats.setSum(sum_.value());
     }
   }
+}
+
+void DateStatisticsBuilder::merge(
+    const dwio::common::ColumnStatistics& other,
+    bool ignoreSize) {
+  StatisticsBuilder::merge(other, ignoreSize);
+  auto stats = dynamic_cast<const dwio::common::DateColumnStatistics*>(&other);
+  if (!stats) {
+    // We only care about the case when type specific stats is missing yet
+    // it has non-null values.
+    if (!isEmpty(other)) {
+      min_.reset();
+      max_.reset();
+    }
+    return;
+  }
+
+  // Now the case when both sides have type specific stats
+  mergeMin(min_, stats->getMinimum());
+  mergeMax(max_, stats->getMaximum());
+}
+
+void DateStatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
+  StatisticsBuilder::toProto(stats);
+  // Serialize type specific stats only if there is non-null values
+  if (!isEmpty(*this) && (min_.has_value() || max_.has_value())) {
+    auto iStats = stats.mutableDateStatistics();
+    if (min_.has_value()) {
+      iStats->set_minimum(min_.value());
+    }
+    if (max_.has_value()) {
+      iStats->set_maximum(max_.value());
+    }
+  }
+}
+
+void TimestampStatisticsBuilder::merge(
+    const dwio::common::ColumnStatistics& other,
+    bool ignoreSize) {
+  StatisticsBuilder::merge(other, ignoreSize);
+  auto stats =
+      dynamic_cast<const dwio::common::TimestampColumnStatistics*>(&other);
+  if (!stats) {
+    // We only care about the case when type specific stats is missing yet
+    // it has non-null values.
+    if (!isEmpty(other)) {
+      min_.reset();
+      max_.reset();
+    }
+    return;
+  }
+
+  // Now the case when both sides have type specific stats
+  mergeMin(min_, stats->getMinimum());
+  mergeMax(max_, stats->getMaximum());
+}
+
+void TimestampStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
+  StatisticsBuilder::toProto(stats);
+  // Serialize type specific stats only if there is non-null values
+  if (!isEmpty(*this) && (min_.has_value() || max_.has_value())) {
+    auto iStats = stats.mutableTimestampStatistics();
+    if (min_.has_value()) {
+      iStats->set_minimum(min_.value());
+    }
+    if (max_.has_value()) {
+      iStats->set_maximum(max_.value());
+    }
+  }
+}
+
+void DecimalStatisticsBuilder::merge(
+    const dwio::common::ColumnStatistics& other,
+    bool ignoreSize) {
+  // min_/max_ is not initialized with default that can be compared against
+  // easily. So we need to capture whether self is empty and handle
+  // differently.
+  auto isSelfEmpty = isEmpty(*this);
+  StatisticsBuilder::merge(other, ignoreSize);
+  auto stats =
+      dynamic_cast<const dwio::common::DecimalColumnStatistics*>(&other);
+  if (!stats) {
+    // We only care about the case when type specific stats is missing yet
+    // it has non-null values.
+    if (!isEmpty(other)) {
+      min_.reset();
+      max_.reset();
+    }
+    return;
+  }
+
+  // If the other stats is empty, there is nothing to merge at decimal stats
+  // level.
+  if (isEmpty(other)) {
+    return;
+  }
+
+  if (isSelfEmpty) {
+    min_ = stats->getMinimum();
+    max_ = stats->getMaximum();
+  } else {
+    // Now the case when both sides have type specific stats
+    mergeMin(min_, stats->getMinimum());
+    mergeMax(max_, stats->getMaximum());
+  }
+}
+
+void DecimalStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
+  StatisticsBuilder::toProto(stats);
+  // Serialize type specific stats only if there is non-null values
+  if (!isEmpty(*this) && (min_.has_value() || max_.has_value())) {
+    auto [precision, scale] = getDecimalPrecisionScale(getType());
+    auto iStats = stats.mutableDecimalStatistics();
+    if (min_.has_value()) {
+      iStats->set_minimum(
+          DecimalUtil::toString(min_.value(), DECIMAL(precision, scale)));
+    }
+    if (max_.has_value()) {
+      iStats->set_maximum(
+          DecimalUtil::toString(max_.value(), DECIMAL(precision, scale)));
+    }
+  }
+}
+
+const Type& DecimalStatisticsBuilder::getType() const {
+  return type_;
 }
 
 void DoubleStatisticsBuilder::merge(

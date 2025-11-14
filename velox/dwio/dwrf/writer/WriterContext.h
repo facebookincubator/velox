@@ -42,6 +42,7 @@ class WriterContext : public CompressionBufferPool {
   WriterContext(
       const std::shared_ptr<const Config>& config,
       std::shared_ptr<memory::MemoryPool> pool,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
       const dwio::common::MetricsLogPtr& metricLogger =
           dwio::common::MetricsLog::voidLog(),
       const tz::TimeZone* sessionTimezone = nullptr,
@@ -140,7 +141,7 @@ class WriterContext : public CompressionBufferPool {
       std::unique_ptr<BufferedOutputStream> stream) const {
     return indexBuilderFactory_
         ? indexBuilderFactory_(std::move(stream))
-        : std::make_unique<IndexBuilder>(std::move(stream));
+        : std::make_unique<IndexBuilder>(std::move(stream), fileFormat_);
   }
 
   void suppressStream(const DwrfStreamIdentifier& stream) {
@@ -481,6 +482,10 @@ class WriterContext : public CompressionBufferPool {
     return flushTiming_;
   }
 
+  const dwio::common::FileFormat fileFormat() const {
+    return fileFormat_;
+  }
+
   void buildPhysicalSizeAggregators(
       const velox::dwio::common::TypeWithId& type,
       PhysicalSizeAggregator* parent = nullptr) {
@@ -684,6 +689,8 @@ class WriterContext : public CompressionBufferPool {
   uint64_t stripeRawSize_{0};
 
   CpuWallTiming flushTiming_{};
+
+  dwio::common::FileFormat fileFormat_;
 
   friend class IntegerColumnWriterDirectEncodingIndexTest;
   friend class StringColumnWriterDictionaryEncodingIndexTest;
