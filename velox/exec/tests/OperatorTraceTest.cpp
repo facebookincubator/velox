@@ -1163,7 +1163,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
       .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
       .config(core::QueryConfig::kQueryTraceNodeId, "0")
       .splits(splits)
-      .runWithoutResults(task);
+      .countResults(task);
   const auto taskTraceDir =
       getTaskTraceDirectory(traceDirPath->getPath(), *task);
   const auto reader = trace::TaskTraceMetadataReader(taskTraceDir, pool());
