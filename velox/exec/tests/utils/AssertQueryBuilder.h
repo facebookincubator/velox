@@ -194,7 +194,11 @@ class AssertQueryBuilder {
   std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
 
   /// Run the query and return the number of result rows.
-  uint64_t runWithoutResults(std::shared_ptr<Task>& task);
+  uint64_t countResults(std::shared_ptr<Task>& task);
+
+  /// Run the query and return the number of result rows without requiring a
+  /// task parameter.
+  uint64_t countResults();
 
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
