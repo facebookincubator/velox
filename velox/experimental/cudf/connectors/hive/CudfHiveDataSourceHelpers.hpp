@@ -109,4 +109,10 @@ class referenceToNameConverter
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource);
 
+std::vector<std::unique_ptr<cudf::io::datasource>>
+makeDataSourcesFromSourceInfo(
+    const cudf::io::source_info& info,
+    size_t offset = 0,
+    size_t maxSizeEstimate = 0);
+
 } // namespace facebook::velox::cudf_velox::connector::hive

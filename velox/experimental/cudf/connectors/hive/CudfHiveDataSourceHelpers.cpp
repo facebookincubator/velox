@@ -207,4 +207,30 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
       len - ender->footer_len - ender_len, ender->footer_len);
 }
 
+std::vector<std::unique_ptr<cudf::io::datasource>>
+makeDataSourcesFromSourceInfo(
+    const cudf::io::source_info& info,
+    size_t offset,
+    size_t maxSizeEstimate) {
+  switch (info.type()) {
+    case cudf::io::io_type::FILEPATH: {
+      std::vector<std::unique_ptr<cudf::io::datasource>> sources;
+      sources.reserve(info.filepaths().size());
+      for (auto const& filepath : info.filepaths()) {
+        sources.emplace_back(
+            cudf::io::datasource::create(filepath, offset, maxSizeEstimate));
+      }
+      return sources;
+    }
+    case cudf::io::io_type::HOST_BUFFER:
+      return cudf::io::datasource::create(info.host_buffers());
+    case cudf::io::io_type::DEVICE_BUFFER:
+      return cudf::io::datasource::create(info.device_buffers());
+    case cudf::io::io_type::USER_IMPLEMENTED:
+      return cudf::io::datasource::create(info.user_sources());
+    default:
+      CUDF_FAIL("Unsupported source type");
+  }
+}
+
 } // namespace facebook::velox::cudf_velox::connector::hive
