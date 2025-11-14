@@ -44,7 +44,7 @@ TEST(TimeWithTimezoneInputGeneratorTest, generate) {
     EXPECT_LT(timeMillis, util::kMillisInDay);
 
     // Verify timezone offset is in valid bias-encoded range [0, 1680]
-    const auto timezoneOffset = util::unpackZoneKeyId(value);
+    const auto timezoneOffset = util::unpackZoneOffset(value);
     EXPECT_GE(timezoneOffset, 0);
     EXPECT_LE(timezoneOffset, 2 * util::kTimeZoneBias);
   }
@@ -62,7 +62,7 @@ TEST(TimeWithTimezoneInputGeneratorTest, generatesBothOffsetTypes) {
 
   for (int i = 0; i < 100 && (!foundFrequentlyUsed || !foundOther); ++i) {
     auto value = generator.generate().value<TypeKind::BIGINT>();
-    auto encoded = util::unpackZoneKeyId(value);
+    auto encoded = util::unpackZoneOffset(value);
     auto offset = util::decodeTimezoneOffset(encoded);
 
     if (frequentlyUsed.count(offset)) {
