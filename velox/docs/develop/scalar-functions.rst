@@ -538,6 +538,20 @@ The code below shows an example of a function that concatenates a variable numbe
        }
      };
 
+Error Handling
+^^^^^^^^^^^^^^
+
+Simple functions do not need to handle exceptions in the "call" function (or any of
+its variations) or the "initialize" function. If an exception is thrown, the
+framework will ensure it is either propagated to the Task or the semantics of
+Velox's builtin TRY expression are respected if applicable.
+
+It is important that VeloxRuntimeErrors not be caught and ignored or wrapped in
+another exception type. This exception type represents a system error, and we cannot
+guarantee Velox's internal state for the function is valid after such an exception is
+thrown. They need to be able to propagate to the Task, not allowing them to do so can
+lead to undefined behavior.
+
 Vector Functions
 ----------------
 
