@@ -35,7 +35,6 @@ void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
   registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
   registerFunction<T, TReturn, TimestampWithTimezone, TimestampWithTimezone>(
       aliases);
-  registerFunction<T, TReturn, Time, Time>(aliases);
   registerFunction<T, TReturn, TimeWithTimezone, TimeWithTimezone>(aliases);
   registerFunction<T, TReturn, IPAddress, IPAddress>(aliases);
 }
