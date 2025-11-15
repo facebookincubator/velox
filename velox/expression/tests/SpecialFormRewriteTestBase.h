@@ -35,6 +35,13 @@ class SpecialFormRewriteTestBase : public functions::test::FunctionBaseTest {
       const std::string& expr,
       const std::string& expected,
       const RowTypePtr& type = ROW({}));
+
+  /// Variant of `testRewrite` which takes in a `TypedExprPtr` for the input and
+  /// expected expressions.
+  void testRewrite(
+      const core::TypedExprPtr& expr,
+      const core::TypedExprPtr& expected,
+      const RowTypePtr& type = ROW({}));
 };
 
 } // namespace facebook::velox::expression::test
