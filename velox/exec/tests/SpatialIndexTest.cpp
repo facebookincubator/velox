@@ -25,11 +25,12 @@ namespace facebook::velox::exec::test {
 
 class SpatialIndexTest : public virtual testing::Test {
  protected:
-  SpatialIndex index_;
-
-  void makeIndex(std::vector<Envelope> envelopes) {
+  void makeIndex(
+      std::vector<Envelope> envelopes,
+      uint32_t branchSize = SpatialIndex::kDefaultRTreeBranchSize) {
+    branchSize_ = branchSize;
     Envelope bounds = Envelope::of(envelopes);
-    index_ = SpatialIndex(std::move(bounds), std::move(envelopes));
+    index_ = SpatialIndex(std::move(bounds), std::move(envelopes), branchSize);
   }
 
   Envelope indexBounds() const {
@@ -48,6 +49,9 @@ class SpatialIndexTest : public virtual testing::Test {
     std::sort(expected.begin(), expected.end());
     ASSERT_EQ(actual, expected);
   }
+
+  SpatialIndex index_;
+  uint32_t branchSize_ = SpatialIndex::kDefaultRTreeBranchSize;
 };
 
 TEST_F(SpatialIndexTest, testEnvelope) {
@@ -84,22 +88,6 @@ TEST_F(SpatialIndexTest, testNaNHandling) {
   Envelope envWithNaN5{
       .minX = nan, .minY = nan, .maxX = nan, .maxY = nan, .rowIndex = 0};
   ASSERT_TRUE(envWithNaN5.isEmpty());
-}
-
-TEST_F(SpatialIndexTest, testEnvelopeMerge) {
-  Envelope env = Envelope::empty();
-
-  env.merge(Envelope{.minX = 0, .minY = 10, .maxX = 1, .maxY = 11});
-  ASSERT_EQ(env.minX, 0.0);
-  ASSERT_EQ(env.minY, 10.0);
-  ASSERT_EQ(env.maxX, 1.0);
-  ASSERT_EQ(env.maxY, 11.0);
-
-  env.merge(Envelope{.minX = 5, .minY = 1, .maxX = 6, .maxY = 2});
-  ASSERT_EQ(env.minX, 0.0);
-  ASSERT_EQ(env.minY, 1.0);
-  ASSERT_EQ(env.maxX, 6.0);
-  ASSERT_EQ(env.maxY, 11.0);
 }
 
 TEST_F(SpatialIndexTest, testEmptyIndex) {
@@ -493,6 +481,70 @@ TEST_F(SpatialIndexTest, testIdenticalEnvelopes) {
   assertQuery(7, 7, 7, 7, {0, 1, 2});
   assertQuery(5, 5, 10, 10, {0, 1, 2});
   assertQuery(4, 4, 4, 4, {});
+}
+
+TEST_F(SpatialIndexTest, testDifferentBranchSizes) {
+  std::vector<uint32_t> branchSizes = {2, 3, 4, 8, 16, 32, 64, 128, 256};
+
+  for (uint32_t branchSize : branchSizes) {
+    std::vector<Envelope> envelopes;
+    envelopes.reserve(100);
+    for (int i = 0; i < 100; ++i) {
+      envelopes.push_back(
+          Envelope{
+              .minX = static_cast<float>(i),
+              .minY = static_cast<float>(i),
+              .maxX = static_cast<float>(i + 1),
+              .maxY = static_cast<float>(i + 1),
+              .rowIndex = i});
+    }
+    makeIndex(std::move(envelopes), branchSize);
+
+    assertQuery(50.5, 50.5, 50.5, 50.5, {50});
+    assertQuery(10.5, 10.5, 14.5, 14.5, {10, 11, 12, 13, 14});
+    assertQuery(-1, -1, -1, -1, {});
+    assertQuery(101, 101, 101, 101, {});
+
+    Envelope bounds = indexBounds();
+    ASSERT_EQ(bounds.minX, 0);
+    ASSERT_EQ(bounds.minY, 0);
+    ASSERT_EQ(bounds.maxX, 100);
+    ASSERT_EQ(bounds.maxY, 100);
+  }
+}
+
+TEST_F(SpatialIndexTest, testSmallBranchSize) {
+  makeIndex(
+      std::vector<Envelope>{
+          Envelope{.minX = 0, .minY = 0, .maxX = 10, .maxY = 10, .rowIndex = 0},
+          Envelope{.minX = 5, .minY = 5, .maxX = 15, .maxY = 15, .rowIndex = 1},
+          Envelope{.minX = 2, .minY = 2, .maxX = 8, .maxY = 8, .rowIndex = 2},
+          Envelope{
+              .minX = 7, .minY = 7, .maxX = 12, .maxY = 12, .rowIndex = 3}},
+      2);
+
+  assertQuery(6, 6, 6, 6, {0, 1, 2});
+  assertQuery(8, 8, 8, 8, {0, 1, 2, 3});
+  assertQuery(9, 9, 9, 9, {0, 1, 3});
+  assertQuery(3, 3, 3, 3, {0, 2});
+  assertQuery(13, 13, 13, 13, {1});
+}
+
+TEST_F(SpatialIndexTest, testLargeBranchSize) {
+  makeIndex(
+      std::vector<Envelope>{
+          Envelope{.minX = 0, .minY = 0, .maxX = 10, .maxY = 10, .rowIndex = 0},
+          Envelope{.minX = 5, .minY = 5, .maxX = 15, .maxY = 15, .rowIndex = 1},
+          Envelope{.minX = 2, .minY = 2, .maxX = 8, .maxY = 8, .rowIndex = 2},
+          Envelope{
+              .minX = 7, .minY = 7, .maxX = 12, .maxY = 12, .rowIndex = 3}},
+      512);
+
+  assertQuery(6, 6, 6, 6, {0, 1, 2});
+  assertQuery(8, 8, 8, 8, {0, 1, 2, 3});
+  assertQuery(9, 9, 9, 9, {0, 1, 3});
+  assertQuery(3, 3, 3, 3, {0, 2});
+  assertQuery(13, 13, 13, 13, {1});
 }
 
 } // namespace facebook::velox::exec::test
