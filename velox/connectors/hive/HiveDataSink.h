@@ -260,7 +260,9 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
         serdeParameters_(serdeParameters),
         writerOptions_(writerOptions),
         ensureFiles_(ensureFiles),
-        fileNameGenerator_(std::move(fileNameGenerator)) {
+        fileNameGenerator_(std::move(fileNameGenerator)),
+        partitionChannels_(computePartitionChannels()),
+        nonPartitionChannels_(computeNonPartitionChannels()) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
           compressionKind.value() != common::CompressionKind_MAX,
@@ -330,6 +332,16 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   bool isExistingTable() const;
 
+  /// Returns a subset of column indices corresponding to partition keys.
+  const std::vector<column_index_t>& getPartitionChannels() const {
+    return partitionChannels_;
+  }
+
+  /// Returns the column indices of non-partition data columns.
+  const std::vector<column_index_t>& getNonPartitionChannels() const {
+    return nonPartitionChannels_;
+  }
+
   folly::dynamic serialize() const override;
 
   static HiveInsertTableHandlePtr create(const folly::dynamic& obj);
@@ -343,6 +355,26 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<const LocationHandle> locationHandle_;
 
  private:
+  std::vector<column_index_t> computePartitionChannels() const {
+    std::vector<column_index_t> channels;
+    for (auto i = 0; i < inputColumns_.size(); i++) {
+      if (inputColumns_[i]->isPartitionKey()) {
+        channels.push_back(i);
+      }
+    }
+    return channels;
+  }
+
+  std::vector<column_index_t> computeNonPartitionChannels() const {
+    std::vector<column_index_t> channels;
+    for (auto i = 0; i < inputColumns_.size(); i++) {
+      if (!inputColumns_[i]->isPartitionKey()) {
+        channels.push_back(i);
+      }
+    }
+    return channels;
+  }
+
   const dwio::common::FileFormat storageFormat_;
   const std::shared_ptr<const HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
@@ -350,6 +382,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
   const std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
+  const std::vector<column_index_t> partitionChannels_;
+  const std::vector<column_index_t> nonPartitionChannels_;
 };
 
 /// Parameters for Hive writers.
@@ -564,6 +598,8 @@ class HiveDataSink : public DataSink {
   /// @param partitionChannels Column indices used for partitioning (empty if
   /// not partitioned). These columns are extracted to determine partition
   /// directories.
+  /// @param dataChannels Column indices for the actual data columns to be
+  /// written.
   /// @param partitionIdGenerator Generates partition IDs from partition column
   /// values (nullptr if not partitioned). Compute partition key combinations to
   /// unique IDs.
@@ -576,6 +612,7 @@ class HiveDataSink : public DataSink {
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction,
       const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels,
       std::unique_ptr<PartitionIdGenerator> partitionIdGenerator);
 
   void appendData(RowVectorPtr input) override;
@@ -671,7 +708,19 @@ class HiveDataSink : public DataSink {
 
   // Get the HiveWriter corresponding to the row
   // from partitionIds and bucketIds.
-  FOLLY_ALWAYS_INLINE HiveWriterId getWriterId(size_t row) const;
+  FOLLY_ALWAYS_INLINE HiveWriterId getWriterId(size_t row) const {
+    std::optional<int32_t> partitionId;
+    if (isPartitioned()) {
+      VELOX_CHECK_LT(partitionIds_[row], std::numeric_limits<uint32_t>::max());
+      partitionId = static_cast<uint32_t>(partitionIds_[row]);
+    }
+
+    std::optional<int32_t> bucketId;
+    if (isBucketed()) {
+      bucketId = bucketIds_[row];
+    }
+    return HiveWriterId{partitionId, bucketId};
+  }
 
   // Computes the number of input rows as well as the actual input row indices
   // to each corresponding (bucketed) partition based on the partition and
@@ -681,11 +730,17 @@ class HiveDataSink : public DataSink {
 
   // Makes sure to create one writer for the given writer id. The function
   // returns the corresponding index in 'writers_'.
-  uint32_t ensureWriter(const HiveWriterId& id);
+  virtual uint32_t ensureWriter(const HiveWriterId& id);
 
   // Appends a new writer for the given 'id'. The function returns the index of
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
+
+  // Creates and configures WriterOptions based on file format.
+  // Sets up compression, schema, and other writer configuration based on the
+  // insert table handle and connector settings.
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
+      const;
 
   // Returns the Hive partition directory name for the given partition ID.
   // Converts the partition values associated with the partition ID into a
@@ -696,6 +751,14 @@ class HiveDataSink : public DataSink {
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
+
+  // Records a row index for a specific partition. This method maintains the
+  // mapping of which input rows belong to which partition by storing row
+  // indices in partition-specific buffers. If the buffer for the partition
+  // doesn't exist or is too small, it allocates/reallocates the buffer to
+  // accommodate all rows.
+  void
+  updatePartitionRows(uint32_t index, vector_size_t numRows, vector_size_t row);
 
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,

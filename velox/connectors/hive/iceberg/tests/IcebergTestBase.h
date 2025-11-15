@@ -71,7 +71,7 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::vector<PartitionField>& partitionFields);
 
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::PARQUET};
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
 
