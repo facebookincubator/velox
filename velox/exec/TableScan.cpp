@@ -171,6 +171,7 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
+    checkPreload();
     if (needNewSplit_) {
       const auto hasNewSplit = getSplit();
       if (!hasNewSplit) {
@@ -204,7 +205,6 @@ RowVectorPtr TableScan::getOutput() {
       dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     }
 
-    checkPreload();
     {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
@@ -338,17 +338,8 @@ bool TableScan::getSplit() {
       "Got splits with different connector IDs");
 
   if (dataSource_ == nullptr) {
-    connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
-        connectorSplit->connectorId, planNodeId(), connectorPool_);
-    dataSource_ = createDataSource(
-        driverCtx_->driver->pushdownFilters()->at(0),
-        *connector_,
-        outputType_,
-        tableHandle_,
-        columnHandles_,
-        connectorQueryCtx_.get());
+    createDatasource();
   }
-
   debugString_ = fmt::format(
       "Split [{}] Task {}",
       connectorSplit->toString(),
@@ -472,6 +463,9 @@ void TableScan::checkPreload() {
       !connector_->supportsSplitPreload()) {
     return;
   }
+  if (dataSource_ == nullptr) {
+    createDatasource();
+  }
   if (dataSource_->allPrefetchIssued()) {
     maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
         maxSplitPreloadPerDriver_;
@@ -528,4 +522,21 @@ void TableScan::close() {
       TableScan::kNumRunningScaleThreads,
       RuntimeCounter(scaledStats.numRunningDrivers));
 }
+
+void TableScan::createDatasource() {
+  if (connectorQueryCtx_ == nullptr) {
+    connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
+        connector_->connectorId(), planNodeId(), connectorPool_);
+  }
+  if (dataSource_ == nullptr) {
+    dataSource_ = createDataSource(
+        driverCtx_->driver->pushdownFilters()->at(0),
+        *connector_,
+        outputType_,
+        tableHandle_,
+        columnHandles_,
+        connectorQueryCtx_.get());
+  }
+}
+
 } // namespace facebook::velox::exec

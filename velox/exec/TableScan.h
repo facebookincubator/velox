@@ -99,6 +99,8 @@ class TableScan : public SourceOperator {
   // processing or not.
   void tryScaleUp();
 
+  void createDatasource();
+
   const connector::ConnectorTableHandlePtr tableHandle_;
   const connector::ColumnHandleMap columnHandles_;
   DriverCtx* const driverCtx_;
