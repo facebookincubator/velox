@@ -2913,6 +2913,44 @@ TEST(MemoryPoolTest, debugModeWithFilter) {
   }
 }
 
+TEST_P(MemoryPoolTest, debugModeWrapCapException) {
+  FLAGS_velox_memory_pool_debug_enabled = true;
+  const uint64_t kMaxCap = 128L * MB;
+  MemoryManager::Options options;
+  options.allocatorCapacity = kMaxCap;
+  options.arbitratorCapacity = kMaxCap;
+  options.extraArbitratorConfigs = {
+      {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+       folly::to<std::string>(kMaxCap / 2) + "B"}};
+  setupMemory(options);
+  auto manager = getMemoryManager();
+  auto root =
+      manager->addRootPool("MemoryCapExceptions", kMaxCap, nullptr, {{".*"}});
+  auto pool1 = root->addLeafChild("static_quota_1", isLeafThreadSafe_);
+  auto pool2 = root->addLeafChild("static_quota_2", isLeafThreadSafe_);
+  {
+    std::vector<void*> buffers{
+        pool1->allocate(64L * MB), pool1->allocate(64L * MB)};
+    try {
+      pool2->allocate(1L * MB);
+    } catch (const velox::VeloxRuntimeError& ex) {
+      ASSERT_EQ(error_source::kErrorSourceRuntime.c_str(), ex.errorSource());
+      ASSERT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
+      EXPECT_TRUE(
+          ex.message().find(
+              "Exceeded memory pool capacity.\n\n"
+              "======= Current Allocations ======\n"
+              "Memory pool 'static_quota_1' - Found 2 allocations with 128.00MB total size:\n"
+              "======== 2 allocations of 128.00MB total size ========") !=
+          std::string::npos)
+          << "Actual error message: " << ex.message();
+    }
+    for (auto buffer : buffers) {
+      pool1->free(buffer, 64L * MB);
+    }
+  }
+}
+
 TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
   MemoryManager& manager = *getMemoryManager();
   std::vector<uint64_t> capacities = {kMaxMemory, 128 * MB};
