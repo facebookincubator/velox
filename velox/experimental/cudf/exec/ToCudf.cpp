@@ -44,6 +44,7 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
@@ -116,21 +117,28 @@ bool CompileState::compile(bool allowCpuFallback) {
     return true;
   };
 
-  auto isFilterProjectSupported = [getPlanNode](const exec::Operator* op) {
+  auto isFilterProjectSupported = [getPlanNode, ctx](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
       auto filterNode = filterProjectOp->filterNode();
-      bool canBeEvaluated = true;
-      if (projectPlanNode &&
-          !canBeEvaluatedByCudf(projectPlanNode->projections())) {
-        canBeEvaluated = false;
+
+      // Check filter separately.
+      if (filterNode) {
+        if (!canBeEvaluatedByCudf(
+                {filterNode->filter()}, ctx->task->queryCtx().get())) {
+          return false;
+        }
       }
-      if (canBeEvaluated && filterNode &&
-          !canBeEvaluatedByCudf({filterNode->filter()})) {
-        canBeEvaluated = false;
+
+      // Check projects separately.
+      if (projectPlanNode) {
+        if (!canBeEvaluatedByCudf(
+                projectPlanNode->projections(), ctx->task->queryCtx().get())) {
+          return false;
+        }
       }
-      return canBeEvaluated;
+      return true;
     }
     return false;
   };
