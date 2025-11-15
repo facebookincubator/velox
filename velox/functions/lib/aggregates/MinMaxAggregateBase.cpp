@@ -17,12 +17,12 @@
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 
 #include <limits>
-#include "velox/exec/AggregationHook.h"
 #include "velox/functions/lib/CheckNestedNulls.h"
 #include "velox/functions/lib/aggregates/Compare.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/vector/AggregationHook.h"
 
 namespace facebook::velox::functions::aggregate {
 
