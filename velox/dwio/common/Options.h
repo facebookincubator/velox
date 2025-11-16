@@ -290,6 +290,14 @@ class RowReaderOptions {
     ioExecutor_ = ioExecutor;
   }
 
+  folly::Executor* cpuExecutor() const {
+    return cpuExecutor_;
+  }
+
+  void setCpuExecutor(folly::Executor* const cpuExecutor) {
+    cpuExecutor_ = cpuExecutor;
+  }
+
   const size_t parallelUnitLoadCount() const {
     return parallelUnitLoadCount_;
   }
@@ -471,8 +479,8 @@ class RowReaderOptions {
   // Whether to generate FlatMapVectors when reading flat maps from the file. By
   // default, converts flat maps in the file to MapVectors.
   bool preserveFlatMapsInMemory_ = false;
-  // Optional io executor to enable parallel unit loader.
   folly::Executor* ioExecutor_;
+  folly::Executor* cpuExecutor_;
   // Optional executors to enable internal reader parallelism.
   // 'decodingExecutor' allow parallelising the vector decoding process.
   // 'ioExecutor' enables parallelism when performing file system read
