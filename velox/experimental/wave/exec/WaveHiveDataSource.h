@@ -30,7 +30,7 @@ class WaveHiveDataSource : public WaveDataSource {
       std::unordered_map<std::string, connector::hive::HiveColumnHandlePtr>*
           partitionKeys,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const connector::ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<connector::hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStats,

@@ -54,7 +54,7 @@ class MergeSource {
       int destination,
       int64_t maxQueuedBytes,
       memory::MemoryPool* pool,
-      folly::Executor* executor);
+      folly::Executor* cpuExecutor);
 };
 
 /// Coordinates data transfer between single producer and single consumer. Used

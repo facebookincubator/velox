@@ -261,7 +261,7 @@ class SsdFile {
         bool _disableFileCow = false,
         bool _checksumEnabled = false,
         bool _checksumReadVerificationEnabled = false,
-        folly::Executor* _executor = nullptr)
+        folly::Executor* _ioExecutor = nullptr)
         : fileName(_fileName),
           shardId(_shardId),
           maxRegions(_maxRegions),
@@ -270,7 +270,7 @@ class SsdFile {
           checksumEnabled(_checksumEnabled),
           checksumReadVerificationEnabled(
               _checksumEnabled && _checksumReadVerificationEnabled),
-          executor(_executor) {}
+          ioExecutor(_ioExecutor) {}
 
     /// Name of cache file, used as prefix for checkpoint files.
     const std::string fileName;
@@ -295,7 +295,7 @@ class SsdFile {
     bool checksumReadVerificationEnabled;
 
     /// Executor for async fsync in checkpoint.
-    folly::Executor* executor;
+    folly::Executor* ioExecutor;
   };
 
   static constexpr uint64_t kRegionSize = 1 << 26; // 64MB
@@ -608,7 +608,7 @@ class SsdFile {
   int64_t checkpointIntervalBytes_{0};
 
   // Executor for async fsync in checkpoint.
-  folly::Executor* executor_;
+  folly::Executor* ioExecutor_;
 
   // Count of bytes written after last checkpoint.
   std::atomic<uint64_t> bytesAfterCheckpoint_{0};

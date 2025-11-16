@@ -624,7 +624,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     spillConfig_.fileNamePrefix = "prefix";
     spillConfig_.writeBufferSize = writeBufferSize;
     spillConfig_.readBufferSize = readBufferSize;
-    spillConfig_.executor = executor();
+    spillConfig_.ioExecutor = executor();
     spillConfig_.compressionKind = compressionKind_;
     enablePrefixSort_ ? spillConfig_.prefixSortConfig =
                             std::optional<common::PrefixSortConfig>(

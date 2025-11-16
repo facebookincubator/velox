@@ -69,7 +69,7 @@ struct SpillConfig {
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
       uint64_t _readBufferSize,
-      folly::Executor* _executor,
+      folly::Executor* _ioExecutor,
       int32_t _minSpillableReservationPct,
       int32_t _spillableReservationGrowthPct,
       uint8_t _startPartitionBit,
@@ -123,7 +123,7 @@ struct SpillConfig {
   uint64_t readBufferSize;
 
   /// Executor for spilling. If nullptr spilling writes on the Driver's thread.
-  folly::Executor* executor; // Not owned.
+  folly::Executor* ioExecutor; // Not owned.
 
   /// The minimal spillable memory reservation in percentage of the current
   /// memory usage.

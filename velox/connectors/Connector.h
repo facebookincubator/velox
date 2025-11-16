@@ -683,9 +683,9 @@ class Connector {
     return nullptr;
   }
 
-  // This is for backward compatibility, todo: remove after verax repo is
-  // updated
-  virtual folly::Executor* executor() const {
+  /// Returns the CPUExecutor used by the connector. It is used to run CPU
+  /// intensive operations by the connector.
+  virtual folly::Executor* cpuExecutor() const {
     return nullptr;
   }
 

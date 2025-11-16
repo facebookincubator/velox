@@ -186,7 +186,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        options_.decodingExecutor().get(),
+        options_.decodingCPUExecutor().get(),
         options_.decodingParallelismFactor(),
         flatMapContext);
   }

@@ -1936,7 +1936,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
   };
 
   std::vector<std::shared_ptr<AsyncSource<SpillResult>>> spillTasks;
-  auto* spillExecutor = spillConfig()->executor;
+  auto* spillIOExecutor = spillConfig()->ioExecutor;
   for (auto* op : operators) {
     HashProbe* probeOp = static_cast<HashProbe*>(op);
     spillTasks.push_back(
@@ -1951,8 +1951,9 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
             return std::make_unique<SpillResult>(std::current_exception());
           }
         }));
-    if ((spillTasks.size() > 1) && (spillExecutor != nullptr)) {
-      spillExecutor->add([source = spillTasks.back()]() { source->prepare(); });
+    if ((spillTasks.size() > 1) && (spillIOExecutor != nullptr)) {
+      spillIOExecutor->add(
+          [source = spillTasks.back()]() { source->prepare(); });
     }
   }
 

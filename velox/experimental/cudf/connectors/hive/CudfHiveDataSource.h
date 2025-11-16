@@ -45,7 +45,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& columnHandles,
       facebook::velox::FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
 
@@ -100,7 +100,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   facebook::velox::FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
   memory::MemoryPool* const pool_;

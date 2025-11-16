@@ -139,19 +139,19 @@ class TaskCursorBase : public TaskCursor {
  public:
   TaskCursorBase(
       const CursorParameters& params,
-      const std::shared_ptr<folly::Executor>& executor) {
+      const std::shared_ptr<folly::Executor>& cpuExecutor) {
     static std::atomic<int32_t> cursorId;
     taskId_ = fmt::format("test_cursor_{}", ++cursorId);
 
     if (params.queryCtx) {
       queryCtx_ = params.queryCtx;
     } else {
-      // NOTE: the destructor of 'executor_' will wait for all the async task
+      // NOTE: the destructor of 'cpuExecutor_' will wait for all the async task
       // activities to finish on TaskCursor destruction.
-      executor_ = executor;
+      cpuExecutor_ = cpuExecutor;
       static std::atomic<uint64_t> cursorQueryId{0};
       queryCtx_ = core::QueryCtx::create(
-          executor_.get(),
+          cpuExecutor_.get(),
           core::QueryConfig({}),
           std::
               unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
@@ -204,7 +204,7 @@ class TaskCursorBase : public TaskCursor {
   std::function<std::string()> taskSpillDirectoryCb_;
 
  private:
-  std::shared_ptr<folly::Executor> executor_;
+  std::shared_ptr<folly::Executor> cpuExecutor_;
 };
 
 class MultiThreadedTaskCursor : public TaskCursorBase {
@@ -219,7 +219,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         numSplitGroups_{params.numSplitGroups} {
     VELOX_CHECK(!params.serialExecution);
     VELOX_CHECK(
-        queryCtx_->isExecutorSupplied(),
+        queryCtx_->isCPUExecutorSupplied(),
         "Executor should be set in parallel task cursor");
 
     queue_ =
@@ -362,7 +362,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         .within(std::chrono::microseconds(5'000'000))
         .wait();
 
-    // Wait for all task drivers to finish to avoid destroying the executor_
+    // Wait for all task drivers to finish to avoid destroying the cpuExecutor_
     // before task_ finished using it and causing a crash.
     waitForTaskDriversToFinish(task_.get());
     std::rethrow_exception(task_->error());
@@ -387,7 +387,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
       : TaskCursorBase(params, nullptr) {
     VELOX_CHECK(params.serialExecution);
     VELOX_CHECK(
-        !queryCtx_->isExecutorSupplied(),
+        !queryCtx_->isCPUExecutorSupplied(),
         "Executor should not be set in serial task cursor");
     std::optional<common::SpillDiskOptions> spillDiskOpts;
     if (!taskSpillDirectory_.empty()) {

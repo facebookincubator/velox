@@ -1847,7 +1847,7 @@ class StructColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       FlatMapContext flatMapContext,
       ColumnReaderFactory& factory);
@@ -1876,7 +1876,7 @@ StructColumnReader::StructColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    folly::Executor* executor,
+    folly::Executor* decodingCPUExecutor,
     size_t decodingParallelismFactor,
     FlatMapContext flatMapContext,
     ColumnReaderFactory& factory)
@@ -1924,7 +1924,7 @@ StructColumnReader::StructColumnReader(
             fileType_->childAt(i),
             stripe,
             streamLabels.append(folly::to<std::string>(i)),
-            executor,
+            decodingCPUExecutor,
             decodingParallelismFactor,
             makeCopyWithNullDecoder(flatMapContext_));
         canParallelize = canParallelize && !childColumnReader->isFlatMap();
@@ -1939,7 +1939,7 @@ StructColumnReader::StructColumnReader(
   }
 
   parallelForOnChildren_ = std::make_unique<dwio::common::ParallelFor>(
-      executor,
+      decodingCPUExecutor,
       0,
       children_.size(),
       canParallelize ? decodingParallelismFactor : 0);
@@ -2036,7 +2036,7 @@ class ListColumnReader : public ColumnReader {
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       FlatMapContext flatMapContext,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       ColumnReaderFactory& factory);
   ~ListColumnReader() override = default;
@@ -2053,7 +2053,7 @@ ListColumnReader::ListColumnReader(
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     FlatMapContext flatMapContext,
-    folly::Executor* executor,
+    folly::Executor* decodingCPUExecutor,
     size_t decodingParallelismFactor,
     ColumnReaderFactory& factory)
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
@@ -2084,7 +2084,7 @@ ListColumnReader::ListColumnReader(
         fileType_->childAt(0),
         stripe,
         streamLabels,
-        executor,
+        decodingCPUExecutor,
         decodingParallelismFactor,
         makeCopyWithNullDecoder(flatMapContext_));
   }
@@ -2213,7 +2213,7 @@ class MapColumnReader : public ColumnReader {
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       FlatMapContext flatMapContext,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       ColumnReaderFactory& factory);
   ~MapColumnReader() override = default;
@@ -2230,7 +2230,7 @@ MapColumnReader::MapColumnReader(
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     FlatMapContext flatMapContext,
-    folly::Executor* executor,
+    folly::Executor* decodingCPUExecutor,
     size_t decodingParallelismFactor,
     ColumnReaderFactory& factory)
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
@@ -2261,7 +2261,7 @@ MapColumnReader::MapColumnReader(
         fileType_->childAt(0),
         stripe,
         streamLabels,
-        executor,
+        decodingCPUExecutor,
         decodingParallelismFactor,
         makeCopyWithNullDecoder(flatMapContext_));
   }
@@ -2273,7 +2273,7 @@ MapColumnReader::MapColumnReader(
         fileType_->childAt(1),
         stripe,
         streamLabels,
-        executor,
+        decodingCPUExecutor,
         decodingParallelismFactor,
         makeCopyWithNullDecoder(flatMapContext_));
   }
@@ -2543,7 +2543,7 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    folly::Executor* executor,
+    folly::Executor* decodingCPUExecutor,
     size_t decodingParallelismFactor,
     FlatMapContext flatMapContext,
     ColumnReaderFactory& factory) {
@@ -2623,7 +2623,7 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
           stripe,
           streamLabels,
           std::move(flatMapContext),
-          executor,
+          decodingCPUExecutor,
           decodingParallelismFactor,
           factory);
     case TypeKind::MAP:
@@ -2635,7 +2635,7 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
             fileType,
             stripe,
             streamLabels,
-            executor,
+            decodingCPUExecutor,
             decodingParallelismFactor,
             std::move(flatMapContext),
             factory);
@@ -2646,7 +2646,7 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
           stripe,
           streamLabels,
           std::move(flatMapContext),
-          executor,
+          decodingCPUExecutor,
           decodingParallelismFactor,
           factory);
     case TypeKind::ROW:
@@ -2655,7 +2655,7 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
           fileType,
           stripe,
           streamLabels,
-          executor,
+          decodingCPUExecutor,
           decodingParallelismFactor,
           std::move(flatMapContext),
           factory);
@@ -2705,7 +2705,7 @@ std::unique_ptr<ColumnReader> ColumnReaderFactory::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    folly::Executor* executor,
+    folly::Executor* decodingCPUExecutor,
     size_t decodingParallelismFactor,
     FlatMapContext flatMapContext) {
   return ColumnReader::build(
@@ -2713,7 +2713,7 @@ std::unique_ptr<ColumnReader> ColumnReaderFactory::build(
       fileType,
       stripe,
       streamLabels,
-      executor,
+      decodingCPUExecutor,
       decodingParallelismFactor,
       std::move(flatMapContext),
       *this);

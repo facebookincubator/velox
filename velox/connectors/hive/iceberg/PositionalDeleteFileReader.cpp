@@ -29,7 +29,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     const std::string& baseFilePath,
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
@@ -39,7 +39,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     : deleteFile_(deleteFile),
       baseFilePath_(baseFilePath),
       fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
+      ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       ioStats_(ioStats),
@@ -103,7 +103,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       connectorQueryCtx,
       ioStats_,
       fsStats_,
-      executor_);
+      ioExecutor_);
 
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())

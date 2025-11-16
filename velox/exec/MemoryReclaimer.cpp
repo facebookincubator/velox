@@ -72,22 +72,24 @@ void MemoryReclaimer::abort(
 }
 
 /*static*/ std::unique_ptr<memory::MemoryReclaimer>
-ParallelMemoryReclaimer::create(folly::Executor* executor, int32_t priority) {
+ParallelMemoryReclaimer::create(
+    folly::Executor* spillIOExecutor,
+    int32_t priority) {
   return std::unique_ptr<memory::MemoryReclaimer>(
-      new ParallelMemoryReclaimer(executor, priority));
+      new ParallelMemoryReclaimer(spillIOExecutor, priority));
 }
 
 ParallelMemoryReclaimer::ParallelMemoryReclaimer(
-    folly::Executor* executor,
+    folly::Executor* spillIOExecutor,
     int32_t priority)
-    : MemoryReclaimer(priority), executor_(executor) {}
+    : MemoryReclaimer(priority), spillIOExecutor_(spillIOExecutor) {}
 
 uint64_t ParallelMemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
     uint64_t targetBytes,
     uint64_t maxWaitMs,
     Stats& stats) {
-  if (executor_ == nullptr) {
+  if (spillIOExecutor_ == nullptr) {
     return memory::MemoryReclaimer::reclaim(
         pool, targetBytes, maxWaitMs, stats);
   }
@@ -153,7 +155,8 @@ uint64_t ParallelMemoryReclaimer::reclaim(
               }
             }));
     if (reclaimTasks.size() > 1) {
-      executor_->add([source = reclaimTasks.back()]() { source->prepare(); });
+      spillIOExecutor_->add(
+          [source = reclaimTasks.back()]() { source->prepare(); });
     }
   }
 

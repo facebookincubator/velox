@@ -35,14 +35,14 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       int32_t numberOfConsumers,
       uint64_t minOutputBatchBytes,
       memory::MemoryPool* pool,
-      folly::Executor* executor,
+      folly::Executor* cpuExecutor,
       int32_t requestDataSizesMaxWaitSec = 10)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
         kRequestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
         pool_(pool),
-        executor_(executor),
+        cpuExecutor_(cpuExecutor),
         queue_(
             std::make_shared<ExchangeQueue>(
                 numberOfConsumers,
@@ -55,7 +55,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         minOutputBatchBytes_(
             std::max(static_cast<uint64_t>(1), minOutputBatchBytes)) {
     VELOX_CHECK_NOT_NULL(pool_);
-    VELOX_CHECK_NOT_NULL(executor_);
+    VELOX_CHECK_NOT_NULL(cpuExecutor_);
     // NOTE: the executor is used to run async response callback from the
     // exchange source. The provided executor must not be
     // folly::InlineLikeExecutor, otherwise it might cause potential deadlock as
@@ -64,7 +64,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
     // exchange client might inline close the exchange source from a background
     // thread of the exchange source, and the close needs to wait for this
     // background thread to complete first.
-    VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
+    VELOX_CHECK_NULL(
+        dynamic_cast<const folly::InlineLikeExecutor*>(cpuExecutor_));
     VELOX_CHECK_GE(
         destination, 0, "Exchange client destination must not be negative");
   }
@@ -143,7 +144,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   const std::chrono::seconds kRequestDataSizesMaxWaitSec_;
 
   memory::MemoryPool* const pool_;
-  folly::Executor* const executor_;
+  folly::Executor* const cpuExecutor_;
   const std::shared_ptr<ExchangeQueue> queue_;
 
   std::unordered_set<std::string> remoteTaskIds_;

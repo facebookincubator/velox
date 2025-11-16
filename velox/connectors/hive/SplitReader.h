@@ -150,7 +150,7 @@ class SplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const std::shared_ptr<common::ScanSpec>& scanSpec);
 
   /// Create the dwio::common::Reader object baseReader_, which will be used to

@@ -133,7 +133,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.maxSpillFileSize(),
       queryConfig.spillWriteBufferSize(),
       queryConfig.spillReadBufferSize(),
-      task->queryCtx()->spillExecutor(),
+      task->queryCtx()->spillIOExecutor(),
       queryConfig.minSpillableReservationPct(),
       queryConfig.spillableReservationGrowthPct(),
       queryConfig.spillStartPartitionBit(),
@@ -241,7 +241,7 @@ void Driver::enqueue(std::shared_ptr<Driver> driver) {
   if (driver->closed_) {
     return;
   }
-  driver->task()->queryCtx()->executor()->add(
+  driver->task()->queryCtx()->cpuExecutor()->add(
       [driver]() { Driver::run(driver); });
 }
 

@@ -37,7 +37,7 @@ class SsdCache {
         const std::string& _filePrefix,
         uint64_t _maxBytes,
         int32_t _numShards,
-        folly::Executor* _executor,
+        folly::Executor* _ioExecutor,
         uint64_t _checkpointIntervalBytes = 0,
         bool _disableFileCow = false,
         bool _checksumEnabled = false,
@@ -49,7 +49,7 @@ class SsdCache {
           disableFileCow(_disableFileCow),
           checksumEnabled(_checksumEnabled),
           checksumReadVerificationEnabled(_checksumReadVerificationEnabled),
-          executor(_executor) {}
+          ioExecutor(_ioExecutor) {}
 
     std::string filePrefix;
     uint64_t maxBytes;
@@ -69,7 +69,7 @@ class SsdCache {
     bool checksumReadVerificationEnabled;
 
     /// Executor for async fsync in checkpoint.
-    folly::Executor* executor;
+    folly::Executor* ioExecutor;
 
     std::string toString() const {
       return fmt::format(
@@ -178,7 +178,7 @@ class SsdCache {
   const int32_t numShards_;
   // Stats for selecting entries to save from AsyncDataCache.
   const std::unique_ptr<FileGroupStats> groupStats_;
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   mutable std::mutex mutex_;
 
   std::vector<std::unique_ptr<SsdFile>> files_;

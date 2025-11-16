@@ -32,14 +32,14 @@ SsdCache::SsdCache(const Config& config)
     : filePrefix_(config.filePrefix),
       numShards_(config.numShards),
       groupStats_(std::make_unique<FileGroupStats>()),
-      executor_(config.executor) {
+      ioExecutor_(config.ioExecutor) {
   // Make sure the given path of Ssd files has the prefix for local file system.
   // Local file system would be derived based on the prefix.
   VELOX_CHECK(
       filePrefix_.find('/') == 0 || filePrefix_.find("faulty:/") == 0,
       "Ssd path '{}' does not start with '/' that points to local file system.",
       filePrefix_);
-  VELOX_CHECK_NOT_NULL(executor_);
+  VELOX_CHECK_NOT_NULL(ioExecutor_);
 
   VELOX_SSD_CACHE_LOG(INFO) << "SSD cache config: " << config.toString();
 
@@ -67,7 +67,7 @@ SsdCache::SsdCache(const Config& config)
         config.disableFileCow,
         config.checksumEnabled,
         checksumReadVerificationEnabled,
-        executor_);
+        ioExecutor_);
     files_.push_back(std::make_unique<SsdFile>(fileConfig));
   }
 }
@@ -122,7 +122,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
     // We move the mutable vector of pins to the executor. These must be wrapped
     // in a shared struct to be passed via lambda capture.
     auto pinHolder = std::make_shared<PinHolder>(std::move(shards[i]));
-    executor_->add([this, i, pinHolder, bytes, startTimeUs]() {
+    ioExecutor_->add([this, i, pinHolder, bytes, startTimeUs]() {
       try {
         files_[i]->write(pinHolder->pins);
       } catch (const std::exception& e) {
@@ -149,7 +149,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
 void SsdCache::checkpoint() {
   VELOX_CHECK_EQ(numShards_, writesInProgress_);
   for (auto i = 0; i < numShards_; ++i) {
-    executor_->add([this, i]() {
+    ioExecutor_->add([this, i]() {
       files_[i]->checkpoint(/*force=*/true);
       --writesInProgress_;
     });
