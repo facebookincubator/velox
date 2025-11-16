@@ -180,5 +180,8 @@ class OperatorTestBase : public virtual testing::Test,
 
   // Used for IO prefetch and spilling.
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
+
+  // Used for CPU-intensive parallel operations.
+  std::unique_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_;
 };
 } // namespace facebook::velox::exec::test

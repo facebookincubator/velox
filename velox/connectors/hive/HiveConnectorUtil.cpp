@@ -615,6 +615,7 @@ void configureRowReaderOptions(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
     folly::Executor* const ioExecutor,
+    folly::Executor* const cpuExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
@@ -623,6 +624,7 @@ void configureRowReaderOptions(
   }
   rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setIOExecutor(ioExecutor);
+  rowReaderOptions.setCpuExecutor(cpuExecutor);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);

@@ -41,7 +41,8 @@ void HiveConnectorTestBase::SetUp() {
       kHiveConnectorId,
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()),
-      ioExecutor_.get());
+      ioExecutor_.get(),
+      cpuExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
@@ -53,6 +54,7 @@ void HiveConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
+  cpuExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
@@ -65,8 +67,8 @@ void HiveConnectorTestBase::resetHiveConnector(
   connector::unregisterConnector(kHiveConnectorId);
 
   connector::hive::HiveConnectorFactory factory;
-  auto hiveConnector =
-      factory.newConnector(kHiveConnectorId, config, ioExecutor_.get());
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId, config, ioExecutor_.get(), cpuExecutor_.get());
   connector::registerConnector(hiveConnector);
 }
 

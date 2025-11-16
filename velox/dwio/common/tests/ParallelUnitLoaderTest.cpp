@@ -30,10 +30,10 @@ class ParallelUnitLoaderTest
     : public UnitLoaderBaseTest<ParallelUnitLoaderFactory> {
  protected:
   ParallelUnitLoaderFactory createFactory() override {
-    return ParallelUnitLoaderFactory(ioExecutor_.get(), 2);
+    return ParallelUnitLoaderFactory(cpuExecutor_.get(), 2);
   }
 
-  std::unique_ptr<folly::CPUThreadPoolExecutor> ioExecutor_ =
+  std::unique_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_ =
       std::make_unique<folly::CPUThreadPoolExecutor>(10);
 };
 

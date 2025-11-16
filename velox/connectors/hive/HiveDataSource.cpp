@@ -90,10 +90,12 @@ HiveDataSource::HiveDataSource(
     const connector::ColumnHandleMap& assignments,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
+    folly::Executor* cpuExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
     : fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
+      cpuExecutor_(cpuExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
@@ -254,6 +256,7 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       fsStats_,
       fileHandleFactory_,
       ioExecutor_,
+      cpuExecutor_,
       scanSpec_);
 }
 

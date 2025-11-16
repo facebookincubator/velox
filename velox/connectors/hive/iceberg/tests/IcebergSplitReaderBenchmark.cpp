@@ -345,6 +345,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             fsStats,
             &fileHandleFactory,
             nullptr,
+            nullptr,
             scanSpec);
 
     std::shared_ptr<random::RandomSkipTracker> randomSkip;

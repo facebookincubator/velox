@@ -26,16 +26,16 @@ namespace facebook::velox::dwio::common {
 class ParallelUnitLoaderFactory : public UnitLoaderFactory {
  public:
   ParallelUnitLoaderFactory(
-      folly::Executor* ioExecutor,
+      folly::Executor* cpuExecutor,
       size_t maxConcurrentLoads)
-      : ioExecutor_(ioExecutor), maxConcurrentLoads_(maxConcurrentLoads) {}
+      : cpuExecutor_(cpuExecutor), maxConcurrentLoads_(maxConcurrentLoads) {}
 
   std::unique_ptr<UnitLoader> create(
       std::vector<std::unique_ptr<LoadUnit>> loadUnits,
       uint64_t rowsToSkip) override;
 
  private:
-  folly::Executor* ioExecutor_;
+  folly::Executor* cpuExecutor_;
   size_t maxConcurrentLoads_;
 };
 
