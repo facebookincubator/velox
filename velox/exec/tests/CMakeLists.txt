@@ -59,6 +59,7 @@ add_executable(
   HashJoinTest.cpp
   HashPartitionFunctionTest.cpp
   HashTableTest.cpp
+  HybridSortBufferTest.cpp
   IndexLookupJoinTest.cpp
   LimitTest.cpp
   LocalPartitionTest.cpp

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/exec/HybridSortBuffer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/SortBuffer.h"
@@ -62,7 +63,7 @@ class OrderBy : public Operator {
   void close() override;
 
  private:
-  std::unique_ptr<SortBuffer> sortBuffer_;
+  std::unique_ptr<ISortBuffer> sortBuffer_;
   bool finished_ = false;
   vector_size_t maxOutputRows_;
 };

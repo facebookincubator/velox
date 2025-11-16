@@ -16,34 +16,26 @@
 
 #pragma once
 
-#include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/exec/SortBuffer.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
-class SortInputSpiller;
-class SortOutputSpiller;
-
-class ISortBuffer {
- public:
-  virtual ~ISortBuffer() = default;
-  virtual void addInput(const VectorPtr& input) = 0;
-  virtual void noMoreInput() = 0;
-  virtual RowVectorPtr getOutput(vector_size_t maxOutputRows) = 0;
-  virtual bool canSpill() const = 0;
-  virtual void spill() = 0;
-  virtual std::optional<uint64_t> estimateOutputRowSize() const = 0;
-};
-
 /// A utility class to accumulate data inside and output the sorted result.
 /// Spilling would be triggered if spilling is enabled and memory usage exceeds
 /// limit.
-class SortBuffer : public ISortBuffer {
+///
+/// Uses hybrid mode to sort input vectors, serializing only the sort key
+/// columns and two additional index columns into the RowContainer. These index
+/// columns are the vector indices and the row indices of each vector. After
+/// sorting, rows are gathered and copied from the input vectors using these
+/// indices.
+class HybridSortBuffer final : public ISortBuffer {
  public:
-  SortBuffer(
+  HybridSortBuffer(
       const RowTypePtr& input,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
@@ -53,32 +45,32 @@ class SortBuffer : public ISortBuffer {
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
-  ~SortBuffer();
+  ~HybridSortBuffer() override;
 
-  void addInput(const VectorPtr& input);
+  void addInput(const VectorPtr& input) override;
 
   /// Indicates no more input and triggers either of:
   ///  - In-memory sorting on rows stored in 'data_' if spilling is not enabled.
   ///  - Finish spilling and setup the sort merge reader for the un-spilling
   ///  processing for the output.
-  void noMoreInput();
+  void noMoreInput() override;
 
   /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput(vector_size_t maxOutputRows);
+  RowVectorPtr getOutput(vector_size_t maxOutputRows) override;
 
   /// Indicates if this sort buffer can spill or not.
-  bool canSpill() const {
+  bool canSpill() const override {
     return spillConfig_ != nullptr;
   }
 
   /// Invoked to spill all the rows from 'data_'.
-  void spill();
+  void spill() override;
 
   memory::MemoryPool* pool() const {
     return pool_;
   }
 
-  std::optional<uint64_t> estimateOutputRowSize() const;
+  std::optional<uint64_t> estimateOutputRowSize() const override;
 
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
@@ -92,10 +84,25 @@ class SortBuffer : public ISortBuffer {
   // to make output fit.
   void ensureSortFits();
 
-  void updateEstimatedOutputRowSize();
+  void prepareOutputVector(
+      RowVectorPtr& output,
+      const RowTypePtr& outputType,
+      vector_size_t outputBatchSize) const;
 
   // Invoked to initialize or reset the reusable output buffer to get output.
   void prepareOutput(vector_size_t outputBatchSize);
+
+  void gatherCopyOutput(
+      const RowVectorPtr& output,
+      const RowVectorPtr& indexOutput,
+      const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
+      uint64_t offset) const;
+
+  // Sort the pointers to the rows in RowContainer (data_) instead of sorting
+  // the rows.
+  //
+  // TODO: Adds offset to make it can do multiple round sorting.
+  void sortInput(uint64_t numRows);
 
   // Invoked to initialize reader to read the spilled data from storage for
   // output processing.
@@ -111,9 +118,16 @@ class SortBuffer : public ISortBuffer {
   // Spill during output stage.
   void spillOutput();
 
-  // Finish spill, and we shouldn't get any rows from non-spilled partition as
-  // there is only one hash partition for SortBuffer.
-  void finishSpill();
+  // Spill remaining sorted input vectors.
+  void runSpill(
+      NoRowContainerSpiller* spiller,
+      int64_t numInputs,
+      uint64_t offset) const;
+
+  void finishInputSpill();
+
+  // Finish output spill, there is only one spill partition;
+  void finishOutputSpill();
 
   // Returns true if the sort buffer has spilled, regardless of during input or
   // output processing. If spilled() is true, it means the sort buffer is in
@@ -121,7 +135,8 @@ class SortBuffer : public ISortBuffer {
   bool hasSpilled() const;
 
   const RowTypePtr input_;
-
+  std::vector<RowVectorPtr> inputs_;
+  const std::vector<SpillSortKey> sortingKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
 
   velox::memory::MemoryPool* const pool_;
@@ -138,9 +153,19 @@ class SortBuffer : public ISortBuffer {
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
-  // The column projection map between 'input_' and 'spillerStoreType_' as sort
-  // buffer stores the sort columns first in 'data_'.
+  // SpillFiles group for the input spills.
+  std::vector<SpillFiles> inputSpillFileGroups_;
+
+  // Two additional index columns the vector indices and the row indices of each
+  // vector.
+  const RowTypePtr indexType_{ROW({BIGINT(), BIGINT()})};
+
+  // The column projection map between 'input_' and sort columns in 'data_'.
   std::vector<IdentityProjection> columnMap_;
+
+  // The column projection map between 'data_' and 'indexOutput_', containing
+  // two columns: 0 for vector indices and 1 for row indices.
+  std::vector<IdentityProjection> indexColumnMap_;
 
   // Indicates no more input. Once it is set, addInput() can't be called on this
   // sort buffer object.
@@ -149,23 +174,24 @@ class SortBuffer : public ISortBuffer {
   // The number of received input rows.
   uint64_t numInputRows_ = 0;
 
+  // The number of received input bytes.
+  uint64_t numInputBytes_ = 0;
+
   // Used to store the input data in row format.
   std::unique_ptr<RowContainer> data_;
 
   std::vector<char*, memory::StlAllocator<char*>> sortedRows_;
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
+  std::unique_ptr<NoRowContainerSpiller> outputSpiller_;
 
-  // The data type of the rows stored in 'data_' and spilled on disk. The
-  // sort key columns are stored first then the non-sorted data columns.
-  RowTypePtr spillerStoreType_;
-
-  std::unique_ptr<SortInputSpiller> inputSpiller_;
-
-  std::unique_ptr<SortOutputSpiller> outputSpiller_;
-
-  SpillPartitionSet spillPartitionSet_;
+  SpillPartitionSet outputSpillPartitionSet_;
 
   // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
+
+  // Used to read vectors sequentially from spill files, which have already been
+  // sorted before spilling.
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> batchStreamReader_;
 
   // Records the source rows to copy to 'output_' in order.
   std::vector<const RowVector*> spillSources_;
@@ -174,6 +200,8 @@ class SortBuffer : public ISortBuffer {
 
   // Reusable output vector.
   RowVectorPtr output_;
+  // Reusable indices vector.
+  RowVectorPtr indexOutput_;
 
   // Estimated size of a single output row by using the max
   // 'data_->estimateRowSize()' across all accumulated data set.
