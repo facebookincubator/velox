@@ -122,9 +122,14 @@ bool CompileState::compile(bool allowCpuFallback) {
           getPlanNode(filterProjectOp->planNodeId()));
       auto filterNode = filterProjectOp->filterNode();
       bool canBeEvaluated = true;
-      if (projectPlanNode &&
-          !canBeEvaluatedByCudf(projectPlanNode->projections())) {
-        canBeEvaluated = false;
+      if (projectPlanNode) {
+        if (projectPlanNode->sources()[0]->outputType()->size() == 0 ||
+            projectPlanNode->outputType()->size() == 0) {
+          canBeEvaluated = false;
+        }
+        if (!canBeEvaluatedByCudf(projectPlanNode->projections())) {
+          canBeEvaluated = false;
+        }
       }
       if (canBeEvaluated && filterNode &&
           !canBeEvaluatedByCudf({filterNode->filter()})) {
@@ -133,6 +138,27 @@ bool CompileState::compile(bool allowCpuFallback) {
       return canBeEvaluated;
     }
     return false;
+  };
+
+  auto isAggregationSupported = [getPlanNode, ctx](const exec::Operator* op) {
+    if (!isAnyOf<exec::HashAggregation, exec::StreamingAggregation>(op)) {
+      return false;
+    }
+
+    auto aggregationPlanNode =
+        std::dynamic_pointer_cast<const core::AggregationNode>(
+            getPlanNode(op->planNodeId()));
+    if (!aggregationPlanNode) {
+      return false;
+    }
+
+    if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
+      // We cannot hande RowVectors with a length but no data.
+      // This is the case with count(*) global (without groupby)
+      return false;
+    }
+
+    return true;
   };
 
   auto isJoinSupported = [getPlanNode](const exec::Operator* op) {
@@ -156,19 +182,19 @@ bool CompileState::compile(bool allowCpuFallback) {
   };
 
   auto isSupportedGpuOperator =
-      [isFilterProjectSupported, isJoinSupported, isTableScanSupported](
-          const exec::Operator* op) {
+      [isFilterProjectSupported,
+       isJoinSupported,
+       isAggregationSupported,
+       isTableScanSupported](const exec::Operator* op) {
         return isAnyOf<
                    exec::OrderBy,
                    exec::TopN,
-                   exec::HashAggregation,
-                   exec::StreamingAggregation,
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange,
                    exec::AssignUniqueId>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
-            isTableScanSupported(op);
+            isAggregationSupported(op) || isTableScanSupported(op);
       };
 
   std::vector<bool> isSupportedGpuOperators(operators.size());
@@ -178,31 +204,30 @@ bool CompileState::compile(bool allowCpuFallback) {
       isSupportedGpuOperators.begin(),
       isSupportedGpuOperator);
   auto acceptsGpuInput = [isFilterProjectSupported,
-                          isJoinSupported](const exec::Operator* op) {
+                          isJoinSupported,
+                          isAggregationSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
                exec::TopN,
-               exec::HashAggregation,
-               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalPartition,
                exec::AssignUniqueId>(op) ||
-        isFilterProjectSupported(op) || isJoinSupported(op);
+        isFilterProjectSupported(op) || isJoinSupported(op) ||
+        isAggregationSupported(op);
   };
   auto producesGpuOutput = [isFilterProjectSupported,
                             isJoinSupported,
+                            isAggregationSupported,
                             isTableScanSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
                exec::TopN,
-               exec::HashAggregation,
-               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalExchange,
                exec::AssignUniqueId>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
-        (isTableScanSupported(op));
+        (isTableScanSupported(op)) || (isAggregationSupported(op));
   };
 
   int32_t operatorsOffset = 0;
