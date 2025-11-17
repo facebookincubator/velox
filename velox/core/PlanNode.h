@@ -1301,10 +1301,10 @@ class AggregationNode : public PlanNode {
   bool isPreGrouped() const {
     return !preGroupedKeys_.empty() &&
         std::equal(
-            preGroupedKeys_.begin(),
-            preGroupedKeys_.end(),
-            groupingKeys_.begin(),
-            groupingKeys_.end(),
+            preGroupedKeys_.cbegin(),
+            preGroupedKeys_.cend(),
+            groupingKeys_.cbegin(),
+            groupingKeys_.cend(),
             [](const FieldAccessTypedExprPtr& x,
                const FieldAccessTypedExprPtr& y) -> bool {
               return (*x == *y);

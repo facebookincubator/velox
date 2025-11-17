@@ -312,8 +312,8 @@ class RowReaderOptions {
           flatmapNodeIdsAsStruct) {
     VELOX_CHECK(
         std::all_of(
-            flatmapNodeIdsAsStruct.begin(),
-            flatmapNodeIdsAsStruct.end(),
+            flatmapNodeIdsAsStruct.cbegin(),
+            flatmapNodeIdsAsStruct.cend(),
             [](const auto& kv) { return !kv.second.empty(); }),
         "To use struct encoding for flatmap, keys to project must be specified");
     flatmapNodeIdAsStruct_ = std::move(flatmapNodeIdsAsStruct);
