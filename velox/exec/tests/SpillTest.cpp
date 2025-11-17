@@ -402,9 +402,13 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       int numDuplicates,
       const std::vector<CompareFlags>& compareFlags,
       uint64_t expectedNumSpilledFiles) {
-    int mergeWayThresholdBegin = 1;
+    int mergeWayThresholdBegin = 0;
     int mergeWayThresholdEnd = 4;
     for (int i = mergeWayThresholdBegin; i < mergeWayThresholdEnd; i++) {
+      if (i == 1) {
+        // Skip invalid value.
+        continue;
+      }
       spillStateTest(
           targetFileSize,
           numPartitions,
