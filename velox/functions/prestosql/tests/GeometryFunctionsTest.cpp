@@ -18,7 +18,6 @@
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
@@ -4171,4 +4170,48 @@ TEST_F(GeometryFunctionsTest, testStMultiPoint) {
   VELOX_ASSERT_USER_THROW(
       testStMultiPointFunc({{"POINT (1 2)", "POINT EMPTY"}}, std::nullopt),
       "Empty point in ST_MultiPoint input at index 1.");
+}
+
+TEST_F(GeometryFunctionsTest, testToFromSphericalGeography) {
+  const auto testToFromSphericalGeographyFunc = [&](const std::optional<
+                                                    std::string>& wkt) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ST_AsText(to_geometry(to_spherical_geography(ST_GeometryFromText(c0))))",
+        wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(wkt.value(), result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testToFromSphericalGeographyFunc("POINT EMPTY");
+  testToFromSphericalGeographyFunc("MULTIPOINT EMPTY");
+  testToFromSphericalGeographyFunc("POLYGON EMPTY");
+  testToFromSphericalGeographyFunc("MULTIPOLYGON EMPTY");
+  testToFromSphericalGeographyFunc("LINESTRING EMPTY");
+  testToFromSphericalGeographyFunc("MULTILINESTRING EMPTY");
+  testToFromSphericalGeographyFunc("GEOMETRYCOLLECTION EMPTY");
+
+  testToFromSphericalGeographyFunc("POINT (180 90)");
+  testToFromSphericalGeographyFunc("POINT (-180 -90)");
+  testToFromSphericalGeographyFunc("POINT (1 2)");
+  testToFromSphericalGeographyFunc("MULTIPOINT (1 2, 3 4, 5 6, 7 8)");
+  testToFromSphericalGeographyFunc("POLYGON ((1 3, 1 4, 3 4, 3 3, 1 3))");
+  testToFromSphericalGeographyFunc(
+      "MULTIPOLYGON (((0 0, 0 2, 2 2, 2 0, 0 0)), ((3 0, 3 2, 5 2, 5 0, 3 0)), ((0 3, 0 5, 2 5, 2 3, 0 3)), ((3 3, 3 5, 5 5, 5 3, 3 3)))");
+  testToFromSphericalGeographyFunc(
+      "GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), GEOMETRYCOLLECTION (POLYGON ((2 2, 2 3, 3 3, 3 2, 2 2)))))");
+
+  // Error cases
+  VELOX_ASSERT_USER_THROW(
+      testToFromSphericalGeographyFunc("POINT (200 200)"),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 200 and longitude: 200");
+  VELOX_ASSERT_USER_THROW(
+      testToFromSphericalGeographyFunc(
+          "GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), GEOMETRYCOLLECTION (POLYGON ((2 2, 2 -300, 3 3, 3 2, 2 2)))))"),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: -300 and longitude: 0");
 }
