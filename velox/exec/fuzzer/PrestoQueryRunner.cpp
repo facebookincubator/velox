@@ -42,6 +42,7 @@
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/functions/prestosql/types/parser/TypeParser.h"
@@ -322,8 +323,7 @@ bool PrestoQueryRunner::isConstantExprSupported(
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
         !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
         !isTDigestType(type) && !isQDigestType(type) && !isBingTileType(type) &&
-        !isSfmSketchType(type);
-    ;
+        !isSfmSketchType(type) && !isTimeWithTimeZone(type);
   }
   return true;
 }
