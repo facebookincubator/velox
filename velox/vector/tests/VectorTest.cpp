@@ -25,6 +25,7 @@
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -118,6 +119,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    common::testutil::TestValue::enable();
   }
 
   void SetUp() override {
@@ -296,6 +298,24 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       flat->resize(size * 2);
       EXPECT_EQ(flat->valueAt(size * 2 - 1).size(), 0);
     }
+
+// This part of the test relies on TestValues to inject a failure, these are
+// only enabled in debug builds.
+#ifndef NDEBUG
+    {
+      // Make a copy so we don't modify the original Vector.
+      const auto slice = flat->slice(0, flat->size());
+
+      const std::string errorMessage = "Simulated failure in memory allocation";
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::FlatVector::resizeValues",
+          std::function<void(FlatVector<T>*)>(
+              [&](FlatVector<T>*) { VELOX_FAIL(errorMessage); }));
+
+      VELOX_ASSERT_THROW(slice->resize(slice->size() * 2), errorMessage);
+      slice->validate();
+    }
+#endif
 
     // Fill, the values at size * 2 - 1 gets assigned a second time.
     for (int32_t i = 0; i < flat->size(); ++i) {

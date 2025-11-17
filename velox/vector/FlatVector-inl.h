@@ -18,6 +18,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -450,34 +451,36 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
   if (newSize == previousSize) {
     return;
   }
-  BaseVector::resize(newSize, setNotNull);
-  if (!values_) {
-    return;
+
+  if (values_) {
+    if constexpr (std::is_same_v<T, StringView>) {
+      resizeValues(newSize, previousSize, StringView());
+      if (newSize < previousSize) {
+        // If we downsize, just invalidate ascii, because we might have become
+        // 'all ascii' from 'not all ascii'.
+        SimpleVector<StringView>::invalidateIsAscii();
+      } else {
+        // Properly init stringView objects. This is useful when vectors are
+        // re-used where the size changes but not the capacity.
+        // TODO: remove this when resizeValues() checks against size() instead
+        // of capacity() when deciding to init values.
+        auto stringViews = reinterpret_cast<StringView*>(rawValues_);
+        for (auto index = previousSize; index < newSize; ++index) {
+          new (&stringViews[index]) StringView();
+        }
+        SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(newSize, false);
+      }
+      if (newSize == 0) {
+        keepAtMostOneStringBuffer();
+      }
+    } else {
+      resizeValues(newSize, previousSize, std::nullopt);
+    }
   }
 
-  if constexpr (std::is_same_v<T, StringView>) {
-    resizeValues(newSize, previousSize, StringView());
-    if (newSize < previousSize) {
-      // If we downsize, just invalidate ascii, because we might have become
-      // 'all ascii' from 'not all ascii'.
-      SimpleVector<StringView>::invalidateIsAscii();
-    } else {
-      // Properly init stringView objects. This is useful when vectors are
-      // re-used where the size changes but not the capacity.
-      // TODO: remove this when resizeValues() checks against size() instead of
-      // capacity() when deciding to init values.
-      auto stringViews = reinterpret_cast<StringView*>(rawValues_);
-      for (auto index = previousSize; index < newSize; ++index) {
-        new (&stringViews[index]) StringView();
-      }
-      SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(newSize, false);
-    }
-    if (newSize == 0) {
-      keepAtMostOneStringBuffer();
-    }
-  } else {
-    resizeValues(newSize, previousSize, std::nullopt);
-  }
+  // Call resize on the BaseVector at the end, so we only update length_ if we
+  // successfully resized the values Buffer.
+  BaseVector::resize(newSize, setNotNull);
 }
 
 template <typename T>
@@ -539,6 +542,8 @@ void FlatVector<T>::resizeValues(
     vector_size_t newSize,
     vector_size_t previousSize,
     const std::optional<T>& initialValue) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::FlatVector::resizeValues", this);
   // TODO: change this to isMutable(). See
   // https://github.com/facebookincubator/velox/issues/6562.
   if (values_ && !values_->isView()) {
@@ -579,6 +584,8 @@ inline void FlatVector<bool>::resizeValues(
     vector_size_t newSize,
     vector_size_t previousSize,
     const std::optional<bool>& initialValue) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::FlatVector::resizeValues", this);
   // TODO: change this to isMutable(). See
   // https://github.com/facebookincubator/velox/issues/6562.
   if (values_ && !values_->isView()) {
