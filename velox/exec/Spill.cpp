@@ -523,7 +523,7 @@ SpillPartition::createOrderedReader(
   for (uint32_t round = 0; orderedFiles.size() > numMaxMergeFiles; round++) {
     const uint64_t numMergeFiles = std::min(
         static_cast<uint64_t>(numMaxMergeFiles),
-        orderedFiles.size() + 1 - numMaxMergeFiles);
+        static_cast<uint64_t>(orderedFiles.size() + 1 - numMaxMergeFiles));
     // Choose the top 'numMergeFiles' smallest files for merging to minimize IO.
     for (uint32_t i = 0; i < numMergeFiles; i++) {
       files.push_back(orderedFiles.top());
