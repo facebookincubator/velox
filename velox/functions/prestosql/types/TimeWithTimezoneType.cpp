@@ -50,7 +50,7 @@ StringView TimeWithTimezoneType::valueToString(
   // This represents a range of -14:00 to +14:00, with 0 representing UTC.
   // The range is from -840 to 840 minutes, we thus encode by doing bias
   // encoding and taking 840 as the bias.
-  auto timezoneMinutes = util::unpackZoneKeyId(value);
+  auto timezoneMinutes = util::unpackZoneOffset(value);
 
   VELOX_CHECK_GE(timezoneMinutes, 0, "Timezone offset is less than -14:00");
   VELOX_CHECK_LE(
