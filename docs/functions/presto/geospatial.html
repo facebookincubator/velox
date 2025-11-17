@@ -151,6 +151,22 @@ in the array is null or empty. The returned geometry may not be simple
 and may contain duplicate points if input array has duplicates.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="to_spherical_geography">
+<span class="sig-name descname"><span class="pre">to_spherical_geography</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">SphericalGeography</span></span></span><a class="headerlink" href="#to_spherical_geography" title="Link to this definition">¶</a></dt>
+<dd><p>Converts a <code class="docutils literal notranslate"><span class="pre">Geometry</span></code> object to a SphericalGeography object on the sphere
+of the Earth’s radius. For each point of the input geometry, it verifies that
+point.x is within [-180.0, 180.0] and point.y is within [-90.0, 90.0],
+and uses them as (longitude, latitude) degrees to construct the shape
+of the <code class="docutils literal notranslate"><span class="pre">SphericalGeography</span></code> result.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="to_geometry">
+<span class="sig-name descname"><span class="pre">to_geometry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#to_geometry" title="Link to this definition">¶</a></dt>
+<dd><p>Converts a SphericalGeography object to a Geometry object.</p>
+</dd></dl>
+
 </section>
 <section id="spatial-predicates">
 <h2>Spatial Predicates<a class="headerlink" href="#spatial-predicates" title="Link to this heading">¶</a></h2>
@@ -765,6 +781,8 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#ST_LineFromText"><code class="docutils literal notranslate"><span class="pre">ST_LineFromText()</span></code></a></li>
 <li><a class="reference internal" href="#ST_LineString"><code class="docutils literal notranslate"><span class="pre">ST_LineString()</span></code></a></li>
 <li><a class="reference internal" href="#ST_MultiPoint"><code class="docutils literal notranslate"><span class="pre">ST_MultiPoint()</span></code></a></li>
+<li><a class="reference internal" href="#to_spherical_geography"><code class="docutils literal notranslate"><span class="pre">to_spherical_geography()</span></code></a></li>
+<li><a class="reference internal" href="#to_geometry"><code class="docutils literal notranslate"><span class="pre">to_geometry()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#spatial-predicates">Spatial Predicates</a><ul>
