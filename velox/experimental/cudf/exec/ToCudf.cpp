@@ -133,6 +133,10 @@ bool CompileState::compile(bool allowCpuFallback) {
 
       // Check projects separately.
       if (projectPlanNode) {
+        if (projectPlanNode->sources()[0]->outputType()->size() == 0 ||
+            projectPlanNode->outputType()->size() == 0) {
+          return false;
+        }
         if (!canBeEvaluatedByCudf(
                 projectPlanNode->projections(), ctx->task->queryCtx().get())) {
           return false;
@@ -152,6 +156,12 @@ bool CompileState::compile(bool allowCpuFallback) {
         std::dynamic_pointer_cast<const core::AggregationNode>(
             getPlanNode(op->planNodeId()));
     if (!aggregationPlanNode) {
+      return false;
+    }
+
+    if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
+      // We cannot hande RowVectors with a length but no data.
+      // This is the case with count(*) global (without groupby)
       return false;
     }
 
