@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <limits>
 #include <vector>
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::exec {
 
@@ -73,11 +74,11 @@ namespace facebook::velox::exec {
 /// nextUp to maxX/Ys, the float32 envelope intersects in all cases that the
 /// float64 envelope would (but not necessarily the converse).
 struct Envelope {
-  float minX;
-  float minY;
-  float maxX;
-  float maxY;
-  int32_t rowIndex = -1;
+  float minX{std::numeric_limits<float>::infinity()};
+  float minY{std::numeric_limits<float>::infinity()};
+  float maxX{-std::numeric_limits<float>::infinity()};
+  float maxY{-std::numeric_limits<float>::infinity()};
+  vector_size_t rowIndex = -1;
 
   /// Returns true if the intersection of two envelopes is not empty.
   static inline bool intersects(const Envelope& left, const Envelope& right) {
@@ -90,6 +91,14 @@ struct Envelope {
   inline bool isEmpty() const {
     // This negation handles NaNs correctly.
     return !((minX <= maxX) && (minY <= maxY));
+  }
+
+  /// Expands this Envelope to also contain the other.
+  inline void merge(const Envelope& other) {
+    minX = std::min(minX, other.minX);
+    minY = std::min(minY, other.minY);
+    maxX = std::max(maxX, other.maxX);
+    maxY = std::max(maxY, other.maxY);
   }
 
   /// Construct an empty envelope.
@@ -106,7 +115,7 @@ struct Envelope {
       double minY,
       double maxX,
       double maxY,
-      int32_t rowIndex = -1) {
+      vector_size_t rowIndex = -1) {
     return Envelope{
         .minX = std::nextafterf(
             static_cast<float>(minX), -std::numeric_limits<float>::infinity()),
@@ -118,6 +127,60 @@ struct Envelope {
             static_cast<float>(maxY), std::numeric_limits<float>::infinity()),
         .rowIndex = rowIndex};
   }
+
+  static inline Envelope of(const std::vector<Envelope>& envelopes) {
+    Envelope result = Envelope::empty();
+    for (const auto& envelope : envelopes) {
+      result.merge(envelope);
+    }
+    return result;
+  }
+};
+
+/// A single level of an R-tree.  It is a set of envelopes that can be linearly
+/// scanned for envelope intersection.
+class RTreeLevel {
+ public:
+  RTreeLevel(const RTreeLevel&) = delete;
+  RTreeLevel& operator=(const RTreeLevel&) = delete;
+
+  RTreeLevel() = default;
+  RTreeLevel(RTreeLevel&&) = default;
+  RTreeLevel& operator=(RTreeLevel&&) = default;
+  ~RTreeLevel() = default;
+
+  explicit RTreeLevel(
+      size_t branchSize,
+      std::vector<float> minXs,
+      std::vector<float> minYs,
+      std::vector<float> maxXs,
+      std::vector<float> maxYs)
+      : branchSize_{branchSize},
+        minXs_(std::move(minXs)),
+        minYs_(std::move(minYs)),
+        maxXs_(std::move(maxXs)),
+        maxYs_(std::move(maxYs)) {}
+
+  /// Returns the internal indices of all envelopes that probeEnv intersects.
+  /// Order of the returned indices is an implementation detail and cannot be
+  /// relied upon.
+  /// This does not do a short-circuit bounds check: the caller should do that
+  /// first.
+  std::vector<size_t> query(
+      const Envelope& queryEnv,
+      const std::vector<size_t>& branchIndices) const;
+
+  size_t size() const {
+    return minXs_.size();
+  }
+
+ private:
+  size_t branchSize_{};
+  Envelope bounds_;
+  std::vector<float> minXs_{};
+  std::vector<float> minYs_{};
+  std::vector<float> maxXs_{};
+  std::vector<float> maxYs_{};
 };
 
 /// A spatial index for a set of geometries. The index only cares about the
@@ -138,25 +201,31 @@ class SpatialIndex {
   SpatialIndex& operator=(SpatialIndex&&) = default;
   ~SpatialIndex() = default;
 
-  explicit SpatialIndex(std::vector<Envelope> envelopes);
+  static const uint32_t kDefaultRTreeBranchSize = 32;
+
+  /// Constructs a spatial index from envelopes contained with `bounds`.
+  /// `bounds` must contain all envelopes in `envelopes`, otherwise the
+  /// an assertio will fail.  Envelopes should not contain NaN coordinates.
+  explicit SpatialIndex(
+      Envelope bounds,
+      std::vector<Envelope> envelopes,
+      uint32_t branchSize = kDefaultRTreeBranchSize);
 
   /// Returns the row indices of all envelopes that probeEnv intersects.
   /// Order of the returned indices is an implementation detail and cannot be
   /// relied upon.
-  std::vector<int32_t> query(const Envelope& queryEnv) const;
+  std::vector<vector_size_t> query(const Envelope& queryEnv) const;
 
   /// Returns the envelope of the all envelopes in the index.
   /// The returned envelope will have index = -1.
   Envelope bounds() const;
 
  private:
-  Envelope bounds_ = Envelope::empty();
+  uint32_t branchSize_ = kDefaultRTreeBranchSize;
 
-  std::vector<double> minXs_{};
-  std::vector<double> minYs_{};
-  std::vector<double> maxXs_{};
-  std::vector<double> maxYs_{};
-  std::vector<int32_t> rowIndices_{};
+  Envelope bounds_ = Envelope::empty();
+  std::vector<RTreeLevel> levels_{};
+  std::vector<vector_size_t> rowIndices_{};
 };
 
 } // namespace facebook::velox::exec

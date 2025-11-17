@@ -89,6 +89,11 @@ struct DynamicFilterStats {
 };
 
 struct OperatorStats {
+  /// Runtime stat name for per-driver CPU time (actual work time, not including
+  /// blocked time) for this operator. The max field will contain the CPU time
+  /// from the longest running single driver.
+  static constexpr const char* kDriverCpuTime = "driverCpuTimeNanos";
+
   /// Initial ordinal position in the operator's pipeline.
   int32_t operatorId = 0;
   int32_t pipelineId = 0;

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -165,6 +166,15 @@ class TimeZone {
 
   const tzdb::time_zone* tz() const {
     return tz_;
+  }
+
+  /// Returns the fixed offset for offset-based time zones (e.g., "+05:30").
+  /// Returns std::nullopt for time zones with a tzdb::time_zone pointer.
+  std::optional<std::chrono::minutes> offset() const {
+    if (tz_ == nullptr) {
+      return offset_;
+    }
+    return std::nullopt;
   }
 
   /// Returns the short name (abbreviation) of the time zone for the given

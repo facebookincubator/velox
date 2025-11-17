@@ -16,7 +16,6 @@
 
 #include "velox/exec/fuzzer/VeloxQueryRunner.h"
 
-#include <cpr/cpr.h> // @manual
 #include <fmt/format.h>
 #include <folly/Uri.h>
 #include <folly/json.h>

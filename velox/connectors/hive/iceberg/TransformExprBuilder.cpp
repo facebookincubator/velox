@@ -30,10 +30,12 @@ namespace {
 /// @param field Partition field containing transform type, source column
 /// type, and optional parameter (e.g., bucket count, truncate width).
 /// @param inputFieldName Name of the source column in the input RowVector.
+/// @param icebergFuncPrefix Prefix of iceberg transform function names.
 /// @return Typed expression representing the transform.
 core::TypedExprPtr toExpression(
     const IcebergPartitionSpec::Field& field,
-    const std::string& inputFieldName) {
+    const std::string& inputFieldName,
+    const std::string& icebergFuncPrefix) {
   // For identity transform, just return a field access expression.
   if (field.transformType == TransformType::kIdentity) {
     return std::make_shared<core::FieldAccessTypedExpr>(
@@ -44,22 +46,22 @@ core::TypedExprPtr toExpression(
   std::string functionName;
   switch (field.transformType) {
     case TransformType::kBucket:
-      functionName = kBucketFunction;
+      functionName = icebergFuncPrefix + "bucket";
       break;
     case TransformType::kTruncate:
-      functionName = kTruncateFunction;
+      functionName = icebergFuncPrefix + "truncate";
       break;
     case TransformType::kYear:
-      functionName = kYearFunction;
+      functionName = icebergFuncPrefix + "years";
       break;
     case TransformType::kMonth:
-      functionName = kMonthFunction;
+      functionName = icebergFuncPrefix + "months";
       break;
     case TransformType::kDay:
-      functionName = kDayFunction;
+      functionName = icebergFuncPrefix + "days";
       break;
     case TransformType::kHour:
-      functionName = kHourFunction;
+      functionName = icebergFuncPrefix + "hours";
       break;
     case TransformType::kIdentity:
       break;
@@ -84,7 +86,8 @@ core::TypedExprPtr toExpression(
 std::vector<core::TypedExprPtr> TransformExprBuilder::toExpressions(
     const IcebergPartitionSpecPtr& partitionSpec,
     const std::vector<column_index_t>& partitionChannels,
-    const RowTypePtr& inputType) {
+    const RowTypePtr& inputType,
+    const std::string& icebergFuncPrefix) {
   VELOX_CHECK_EQ(
       partitionSpec->fields.size(),
       partitionChannels.size(),
@@ -96,8 +99,10 @@ std::vector<core::TypedExprPtr> TransformExprBuilder::toExpressions(
 
   for (auto i = 0; i < numTransforms; i++) {
     const auto channel = partitionChannels[i];
-    transformExprs.emplace_back(
-        toExpression(partitionSpec->fields.at(i), inputType->nameOf(channel)));
+    transformExprs.emplace_back(toExpression(
+        partitionSpec->fields.at(i),
+        inputType->nameOf(channel),
+        icebergFuncPrefix));
   }
 
   return transformExprs;

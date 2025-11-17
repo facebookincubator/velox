@@ -64,10 +64,10 @@ constexpr double kPolygonSize = 10.0;
 // Constants for benchmark configuration.
 constexpr int32_t kDefaultBatchSize = 10000;
 constexpr int32_t kSmallBenchmarkSize = 1000;
-constexpr int32_t kMediumProbeBenchmarkSize = 10000;
-constexpr int32_t kMediumBuildBenchmarkSize = 1000;
-constexpr int32_t kLargeProbeBenchmarkSize = 20000;
-constexpr int32_t kLargeBuildBenchmarkSize = 2000;
+constexpr int32_t kMediumProbeBenchmarkSize = 50000;
+constexpr int32_t kMediumBuildBenchmarkSize = 5000;
+constexpr int32_t kLargeProbeBenchmarkSize = 200000;
+constexpr int32_t kLargeBuildBenchmarkSize = 50000;
 
 /// Parameters for a spatial join benchmark test case.
 struct SpatialJoinBenchmarkParams {
@@ -311,7 +311,7 @@ int main(int argc, char** argv) {
        core::JoinType::kInner,
        Distribution::kClustered});
 
-  // Medium scale benchmarks (10K x 1K)
+  // Medium scale benchmarks (50K x 5K)
   bm.addBenchmark(
       {kMediumProbeBenchmarkSize,
        kMediumBuildBenchmarkSize,
@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
        core::JoinType::kInner,
        Distribution::kClustered});
 
-  // Left join benchmarks (5K x 1K)
+  // Left join benchmarks (50K x 5K)
   bm.addBenchmark(
       {kMediumProbeBenchmarkSize / 2,
        kMediumBuildBenchmarkSize,
@@ -339,7 +339,7 @@ int main(int argc, char** argv) {
        core::JoinType::kLeft,
        Distribution::kClustered});
 
-  // Contains predicate benchmarks (5K x 1K)
+  // Contains predicate benchmarks (50K x 5K)
   bm.addBenchmark(
       {kMediumProbeBenchmarkSize / 2,
        kMediumBuildBenchmarkSize,
@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
        core::JoinType::kInner,
        Distribution::kUniform});
 
-  // Large scale benchmark (20K x 2K)
+  // Large scale benchmark (200K x 50K)
   bm.addBenchmark(
       {kLargeProbeBenchmarkSize,
        kLargeBuildBenchmarkSize,

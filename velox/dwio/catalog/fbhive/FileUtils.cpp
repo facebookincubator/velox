@@ -158,46 +158,29 @@ std::string FileUtils::unescapePathName(const std::string& data) {
 
 std::string FileUtils::makePartName(
     const std::vector<std::pair<std::string, std::string>>& entries,
-    bool partitionPathAsLowerCase) {
-  size_t size = 0;
-  size_t escapeCount = 0;
-  std::for_each(entries.begin(), entries.end(), [&](auto& pair) {
-    auto keySize = pair.first.size();
-    VELOX_CHECK_GT(keySize, 0);
-    size += keySize;
-    escapeCount += countEscape(pair.first);
+    bool partitionPathAsLowerCase,
+    bool useDefaultPartitionValue,
+    const EncodeFunction& encodeFunc) {
+  VELOX_CHECK(!entries.empty());
+  std::ostringstream out;
 
-    auto valSize = pair.second.size();
-    if (valSize == 0) {
-      size += kDefaultPartitionValue.size();
+  for (const auto& [key, value] : entries) {
+    VELOX_CHECK(!key.empty());
+    if (out.tellp() > 0) {
+      out << '/';
+    }
+
+    std::string keyToEncode = partitionPathAsLowerCase ? toLower(key) : key;
+    out << encodeFunc(keyToEncode) << '=';
+
+    if (value.empty() && useDefaultPartitionValue) {
+      out << kDefaultPartitionValue;
     } else {
-      size += valSize;
-      escapeCount += countEscape(pair.second);
+      out << encodeFunc(value);
     }
-  });
+  }
 
-  std::string ret;
-  ret.reserve(size + escapeCount * HEX_WIDTH + entries.size() - 1);
-
-  std::for_each(entries.begin(), entries.end(), [&](auto& pair) {
-    if (ret.size() > 0) {
-      ret += "/";
-    }
-    if (partitionPathAsLowerCase) {
-      ret += escapePathName(toLower(pair.first));
-    } else {
-      ret += escapePathName(pair.first);
-    }
-
-    ret += "=";
-    if (pair.second.size() == 0) {
-      ret += kDefaultPartitionValue;
-    } else {
-      ret += escapePathName(pair.second);
-    }
-  });
-
-  return ret;
+  return out.str();
 }
 
 std::vector<std::pair<std::string, std::string>> FileUtils::parsePartKeyValues(

@@ -18,55 +18,155 @@
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/HilbertIndex.h"
 #include "velox/exec/SpatialIndex.h"
 
 namespace facebook::velox::exec {
 
-SpatialIndex::SpatialIndex(std::vector<Envelope> envelopes) {
-  std::ranges::sort(envelopes, {}, &Envelope::minX);
+std::vector<size_t> RTreeLevel::query(
+    const Envelope& queryEnv,
+    const std::vector<size_t>& branchIndices) const {
+  std::vector<size_t> result;
 
-  minXs_.reserve(envelopes.size());
-  minYs_.reserve(envelopes.size());
-  maxXs_.reserve(envelopes.size());
-  maxYs_.reserve(envelopes.size());
-  rowIndices_.reserve(envelopes.size());
-
-  for (const auto& env : envelopes) {
-    bounds_.maxX = std::max(bounds_.maxX, env.maxX);
-    bounds_.maxY = std::max(bounds_.maxY, env.maxY);
-    bounds_.minX = std::min(bounds_.minX, env.minX);
-    bounds_.minY = std::min(bounds_.minY, env.minY);
-    minXs_.push_back(env.minX);
-    minYs_.push_back(env.minY);
-    maxXs_.push_back(env.maxX);
-    maxYs_.push_back(env.maxY);
-    rowIndices_.push_back(env.rowIndex);
+  for (size_t branchIdx : branchIndices) {
+    size_t startIdx = branchIdx * branchSize_;
+    size_t endIdx = std::min(startIdx + branchSize_, minXs_.size());
+    for (size_t idx = startIdx; idx < endIdx; ++idx) {
+      bool intersects = (queryEnv.maxX >= minXs_[idx]) &&
+          (queryEnv.maxY >= minYs_[idx]) && (queryEnv.minX <= maxXs_[idx]) &&
+          (queryEnv.minY <= maxYs_[idx]);
+      if (intersects) {
+        result.push_back(idx);
+      }
+    }
   }
+
+  return result;
 }
 
-std::vector<int32_t> SpatialIndex::query(const Envelope& queryEnv) const {
-  std::vector<int32_t> result;
+namespace {
+std::pair<RTreeLevel, std::vector<Envelope>> buildLevel(
+    uint32_t branchSize,
+    const std::vector<Envelope>& envelopes) {
+  std::vector<float> minXs;
+  minXs.reserve(envelopes.size());
+  std::vector<float> minYs;
+  minYs.reserve(envelopes.size());
+  std::vector<float> maxXs;
+  maxXs.reserve(envelopes.size());
+  std::vector<float> maxYs;
+  maxYs.reserve(envelopes.size());
+
+  std::vector<Envelope> parentEnvelopes;
+  parentEnvelopes.reserve((envelopes.size() + branchSize - 1) / branchSize);
+  Envelope currentBounds = Envelope::empty();
+
+  uint32_t idx = 0;
+  for (const auto& env : envelopes) {
+    ++idx;
+    currentBounds.maxX = std::max(currentBounds.maxX, env.maxX);
+    currentBounds.maxY = std::max(currentBounds.maxY, env.maxY);
+    currentBounds.minX = std::min(currentBounds.minX, env.minX);
+    currentBounds.minY = std::min(currentBounds.minY, env.minY);
+    if (idx % branchSize == 0) {
+      parentEnvelopes.push_back(currentBounds);
+      currentBounds = Envelope::empty();
+    }
+
+    minXs.push_back(env.minX);
+    minYs.push_back(env.minY);
+    maxXs.push_back(env.maxX);
+    maxYs.push_back(env.maxY);
+  }
+
+  if (!currentBounds.isEmpty()) {
+    parentEnvelopes.push_back(currentBounds);
+  }
+
+  return {
+      RTreeLevel(
+          branchSize,
+          std::move(minXs),
+          std::move(minYs),
+          std::move(maxXs),
+          std::move(maxYs)),
+      std::move(parentEnvelopes)};
+}
+} // namespace
+
+SpatialIndex::SpatialIndex(
+    Envelope bounds,
+    std::vector<Envelope> envelopes,
+    uint32_t branchSize)
+    : branchSize_(branchSize), bounds_(std::move(bounds)) {
+  VELOX_CHECK_GT(branchSize_, 1);
+
+  if (!bounds_.isEmpty()) {
+    HilbertIndex hilbert(
+        bounds_.minX, bounds_.minY, bounds_.maxX, bounds_.maxY);
+
+    std::sort(
+        envelopes.begin(), envelopes.end(), [&](const auto& a, const auto& b) {
+          return hilbert.indexOf(a.minX, a.minY) <
+              hilbert.indexOf(b.minX, b.minY);
+        });
+  }
+
+  rowIndices_.reserve(envelopes.size());
+  for (const auto& env : envelopes) {
+    VELOX_CHECK(env.minX >= bounds_.minX);
+    VELOX_CHECK(env.minY >= bounds_.minY);
+    VELOX_CHECK(env.maxX <= bounds_.maxX);
+    VELOX_CHECK(env.maxY <= bounds_.maxY);
+    rowIndices_.push_back(env.rowIndex);
+  }
+
+  if (envelopes.size() > 0) {
+    size_t numLevels =
+        std::ceil(std::log(envelopes.size()) / std::log(branchSize_));
+    levels_.reserve(numLevels);
+  }
+
+  while (envelopes.size() > branchSize_) {
+    auto [level, parentEnvelopes] = buildLevel(branchSize_, envelopes);
+    levels_.push_back(std::move(level));
+    envelopes = std::move(parentEnvelopes);
+  }
+
+  if (envelopes.size() > 1 || levels_.empty()) {
+    levels_.push_back(buildLevel(branchSize_, envelopes).first);
+  }
+
+  VELOX_CHECK_GT(branchSize_ + 1, levels_.back().size());
+}
+
+std::vector<vector_size_t> SpatialIndex::query(const Envelope& queryEnv) const {
+  std::vector<vector_size_t> result;
   if (!Envelope::intersects(queryEnv, bounds_)) {
     return result;
   }
 
-  // Find the last minX that is <= queryEnv.maxX . These first envelopes
-  // are the only ones that can intersect the query envelope.
-  // `it` is _one past_ the last element, so we iterate up to it - 1.
-  auto it = std::upper_bound(minXs_.begin(), minXs_.end(), queryEnv.maxX);
-  if (it == minXs_.begin()) {
-    return result;
+  size_t thisLevel = levels_.size() - 1;
+  VELOX_CHECK_GT(levels_[thisLevel].size(), 0);
+  VELOX_CHECK_GT(branchSize_ + 1, levels_[thisLevel].size());
+
+  // The top level should have only one branch.
+  std::vector<size_t> childIndices = {0};
+  for (; thisLevel > 0; --thisLevel) {
+    // Avoiding thisLevel = 0 due to int underflow
+    childIndices = levels_[thisLevel].query(queryEnv, childIndices);
+    // If we have no matches, return.
+    if (childIndices.empty()) {
+      return result;
+    }
   }
 
-  auto lastIdx = std::distance(minXs_.begin(), it);
-  VELOX_CHECK_GT(lastIdx, 0);
-
-  for (size_t idx = 0; idx < lastIdx; ++idx) {
-    bool intersects = (queryEnv.maxY >= minYs_[idx]) &&
-        (queryEnv.minX <= maxXs_[idx]) && (queryEnv.minY <= maxYs_[idx]);
-    if (intersects) {
-      result.push_back(rowIndices_[idx]);
-    }
+  // We're at level 0 now.  The indices index into rowIndices.
+  VELOX_DCHECK_EQ(thisLevel, 0);
+  childIndices = levels_[thisLevel].query(queryEnv, childIndices);
+  result.reserve(childIndices.size());
+  for (auto idx : childIndices) {
+    result.push_back(rowIndices_[idx]);
   }
 
   return result;

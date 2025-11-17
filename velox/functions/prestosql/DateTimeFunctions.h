@@ -1941,6 +1941,21 @@ struct XxHash64TimestampFunction {
   }
 };
 
+/// xxhash64(Time) → bigint
+/// Return a xxhash64 of input Time
+template <typename T>
+struct XxHash64TimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Time>& input) {
+    // TIME is represented as milliseconds since midnight
+    // Convert to big-endian to match Presto's xxhash64 behavior
+    auto bigEndianValue = folly::Endian::big(input);
+    result = XXH64(&bigEndianValue, sizeof(bigEndianValue), 0);
+  }
+};
+
 template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/connectors/hive/iceberg/IcebergPartitionPath.h"
+#include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -25,7 +25,7 @@ namespace {
 
 template <typename T>
 std::string toPath(TransformType transform, T value, const TypePtr& type) {
-  return IcebergPartitionPath(transform).toPartitionString(value, type);
+  return IcebergPartitionName::toName(value, type, transform);
 }
 
 std::string timestampToPath(const Timestamp& timestamp) {
@@ -48,12 +48,12 @@ std::string testVarbinary(const std::string& value) {
 }
 
 std::string testInteger(int32_t value) {
-  auto identity = toPath(TransformType::kIdentity, value, INTEGER());
-  auto bucket = toPath(TransformType::kBucket, value, INTEGER());
-  auto trunc = toPath(TransformType::kTruncate, value, INTEGER());
-  EXPECT_EQ(identity, trunc);
-  EXPECT_EQ(bucket, trunc);
-  return trunc;
+  auto identityResult = toPath(TransformType::kIdentity, value, INTEGER());
+  auto bucketResult = toPath(TransformType::kBucket, value, INTEGER());
+  auto truncResult = toPath(TransformType::kTruncate, value, INTEGER());
+  EXPECT_EQ(identityResult, truncResult);
+  EXPECT_EQ(bucketResult, truncResult);
+  return truncResult;
 }
 
 TEST(IcebergPartitionPathTest, integer) {

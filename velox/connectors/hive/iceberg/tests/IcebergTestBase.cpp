@@ -21,6 +21,7 @@
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
@@ -31,6 +32,9 @@ void IcebergTestBase::SetUp() {
   parquet::registerParquetWriterFactory();
 #endif
   Type::registerSerDe();
+
+  functions::iceberg::registerFunctions(
+      std::string(kDefaultTestIcebergFunctionNamePrefix));
 
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), true);
@@ -122,7 +126,8 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
             partitionField.parameter});
   }
 
-  return std::make_shared<IcebergPartitionSpec>(1, fields);
+  return fields.empty() ? nullptr
+                        : std::make_shared<IcebergPartitionSpec>(1, fields);
 }
 
 void addColumnHandles(

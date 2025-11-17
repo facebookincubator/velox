@@ -39,11 +39,13 @@ class TransformExprBuilder {
   /// FieldAccessTypedExpr must be built using the actual column names from
   /// inputType that will be present at runtime. The partitionChannels provide
   /// the positional mapping to locate the correct columns.
+  /// @param icebergFuncPrefix Prefix for Iceberg transform function names.
   /// @return Vector of typed expressions, one for each partition field.
   static std::vector<core::TypedExprPtr> toExpressions(
       const IcebergPartitionSpecPtr& partitionSpec,
       const std::vector<column_index_t>& partitionChannels,
-      const RowTypePtr& inputType);
+      const RowTypePtr& inputType,
+      const std::string& icebergFuncPrefix);
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

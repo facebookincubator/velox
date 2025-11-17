@@ -773,8 +773,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterMap) {
       }
       std::string remainingFilter;
       if (filterColumn == kWholeColumn) {
-        remainingFilter =
-            "coalesce(b, cast(null AS MAP(BIGINT, BIGINT)))[0] == 0";
+        remainingFilter = "coalesce(b, map_concat(b, b))[0] == 0";
       } else {
         remainingFilter = "b[0] == 0";
       }

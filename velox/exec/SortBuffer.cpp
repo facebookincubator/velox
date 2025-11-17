@@ -37,7 +37,7 @@ SortBuffer::SortBuffer(
       spillConfig_(spillConfig),
       spillStats_(spillStats),
       sortedRows_(0, memory::StlAllocator<char*>(*pool)) {
-  VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
+  VELOX_CHECK_GE(input_->children().size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
@@ -90,12 +90,12 @@ void SortBuffer::addInput(const VectorPtr& input) {
   VELOX_CHECK(!noMoreInput_);
   ensureInputFits(input);
 
-  SelectivityVector allRows(input->size());
+  const SelectivityVector allRows(input->size());
   std::vector<char*> rows(input->size());
   for (int row = 0; row < input->size(); ++row) {
     rows[row] = data_->newRow();
   }
-  auto* inputRow = input->as<RowVector>();
+  const auto* inputRow = input->as<RowVector>();
   for (const auto& columnProjection : columnMap_) {
     DecodedVector decoded(
         *inputRow->childAt(columnProjection.outputChannel), allRows);
@@ -310,7 +310,7 @@ void SortBuffer::ensureSortFits() {
   }
 
   // The memory for std::vector sorted rows and prefix sort required buffer.
-  uint64_t sortBufferToReserve =
+  const auto sortBufferToReserve =
       numInputRows_ * sizeof(char*) +
       PrefixSort::maxRequiredBytes(
           data_.get(), sortCompareFlags_, prefixSortConfig_, pool_);

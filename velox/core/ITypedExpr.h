@@ -38,6 +38,14 @@ class ITypedExprVisitorContext;
 
 using TypedExprPtr = std::shared_ptr<const ITypedExpr>;
 
+struct ITypedExprHasher {
+  size_t operator()(const ITypedExpr* expr) const;
+};
+
+struct ITypedExprComparer {
+  bool operator()(const ITypedExpr* lhs, const ITypedExpr* rhs) const;
+};
+
 /// Strongly-typed expression, e.g. literal, function call, etc.
 class ITypedExpr : public ISerializable {
  public:

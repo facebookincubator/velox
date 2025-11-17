@@ -54,6 +54,7 @@ target_link_libraries(
   velox_presto_types
   velox_temp_path
   velox_type_test_lib
+  velox_common_fuzzer_util
   Boost::atomic
   Boost::context
   Boost::date_time

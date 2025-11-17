@@ -408,8 +408,14 @@ class ConstantVector final : public SimpleVector<T> {
     if (valueVector_) {
       valueVector_->transferOrCopyTo(pool);
     }
-    if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
-      stringBuffer_ = AlignedBuffer::copy<char>(stringBuffer_, pool);
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
+        auto newBuffer = AlignedBuffer::copy<char>(stringBuffer_, pool);
+        auto offset = value_.data() - stringBuffer_->template as<char>();
+        value_ =
+            StringView(newBuffer->template as<char>() + offset, value_.size());
+        stringBuffer_ = std::move(newBuffer);
+      }
     }
   }
 

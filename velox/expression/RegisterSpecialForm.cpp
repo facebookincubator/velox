@@ -19,6 +19,7 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/CoalesceExpr.h"
+#include "velox/expression/CoalesceRewrite.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConjunctRewrite.h"
 #include "velox/expression/RowConstructor.h"
@@ -52,6 +53,7 @@ void registerFunctionCallToSpecialForms() {
       expression::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
 
+  expression::CoalesceRewrite::registerRewrite();
   expression::ConjunctRewrite::registerRewrite();
   expression::SwitchRewrite::registerRewrite();
 }

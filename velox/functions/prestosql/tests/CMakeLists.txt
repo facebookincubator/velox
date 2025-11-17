@@ -83,6 +83,7 @@ add_executable(
   MapEntriesTest.cpp
   MapFilterTest.cpp
   MapFromEntriesTest.cpp
+  MapIntersectTest.cpp
   MapNormalizeTest.cpp
   RemapKeysTest.cpp
   MapTopNTest.cpp
@@ -93,6 +94,7 @@ add_executable(
   MapMatchTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
+  MapExceptTest.cpp
   MultimapFromEntriesTest.cpp
   NotTest.cpp
   ParsePrestoDataSizeTest.cpp

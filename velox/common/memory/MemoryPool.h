@@ -1008,6 +1008,24 @@ class MemoryPoolImpl : public MemoryPool {
   // pool is enabled.
   void leakCheckDbg();
 
+  // Holds formatted string of dumped allocation records for a leaf memory pool,
+  // along with the total pool size in bytes.
+  struct MemoryPoolDump {
+    std::string dumpedRecords;
+    int64_t bytes;
+  };
+
+  // Recursively collects 'MemoryPoolDump' records for this memory pool and
+  // all its descendants in the tree. Called during memory capacity-exceeded
+  // exceptions to extend the error message with additional debug information.
+  void treeAllocationRecordsDbg(std::vector<MemoryPoolDump>& poolDumps) const;
+
+  // Wraps the message of a memory capacity exceeded exception with debug
+  // allocation records from all memory pools in the subtree. This function is
+  // called from the root memory pool.
+  std::exception_ptr wrapExceptionDbg(
+      const VeloxRuntimeError& veloxError) const;
+
   // Dump the recorded call sites of the memory allocations in
   // 'debugAllocRecords_' to the string.
   std::string dumpRecordsDbgLocked() const;

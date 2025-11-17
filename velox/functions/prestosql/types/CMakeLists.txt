@@ -32,6 +32,7 @@ velox_add_library(
   TDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
   TimeWithTimezoneRegistration.cpp
+  TimeWithTimezoneType.cpp
   SetDigestRegistration.cpp
   UuidRegistration.cpp
   VarcharEnumRegistration.cpp
