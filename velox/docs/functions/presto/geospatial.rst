@@ -304,6 +304,18 @@ Accessors
     Returns the point value that is the mathematical centroid of ``geometry``.
     Empty geometry inputs result in empty output.
 
+.. function:: ST_Centroid(SphericalGeography) -> Point
+
+    Returns the point value that is the mathematical centroid of a spherical geometry.
+    Empty geometry inputs result in null output.
+
+    It supports Points and MultiPoints as input and returns the three-dimensional
+    centroid projected onto the surface of the (spherical) Earth.
+    For example, MULTIPOINT (0 -45, 0 45, 30 0, -30 0) returns Point(0, 0).
+    Note: In the case that the three-dimensional centroid is at (0, 0, 0)
+    (e.g. MULTIPOINT (0 0, -180 0)), the spherical centroid is undefined and an
+    arbitrary point will be returned.
+
 .. function:: ST_Distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
 
     Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
