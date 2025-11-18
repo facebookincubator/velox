@@ -60,7 +60,7 @@ class TestPyVeloxPlanBuidler(unittest.TestCase):
 
     def test_multiple_plan_builders(self):
         """
-        Tests that mutliple plan builders (used to create plans with multiple
+        Tests that multiple plan builders (used to create plans with multiple
         pipelines, like containing joins), generate expected disjoins node ids.
         """
         plan_builder1 = PlanBuilder()
