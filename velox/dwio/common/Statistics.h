@@ -628,10 +628,10 @@ struct ColumnMetricsSet {
                 nodeId,
                 TypeKindName::toName(stats->typeKind)),
             RuntimeMetric{
-                static_cast<int64_t>(decompressCounter.sum()),
-                static_cast<int64_t>(decompressCounter.count()),
-                static_cast<int64_t>(decompressCounter.min()),
-                static_cast<int64_t>(decompressCounter.max()),
+                saturateCast(decompressCounter.sum()),
+                decompressCounter.count(),
+                saturateCast(decompressCounter.min()),
+                saturateCast(decompressCounter.max()),
                 RuntimeCounter::Unit::kNanos});
       }
       // Export decode timing.
@@ -643,10 +643,10 @@ struct ColumnMetricsSet {
                 nodeId,
                 TypeKindName::toName(stats->typeKind)),
             RuntimeMetric{
-                static_cast<int64_t>(decodeCounter.sum()),
-                static_cast<int64_t>(decodeCounter.count()),
-                static_cast<int64_t>(decodeCounter.min()),
-                static_cast<int64_t>(decodeCounter.max()),
+                saturateCast(decodeCounter.sum()),
+                decodeCounter.count(),
+                saturateCast(decodeCounter.min()),
+                saturateCast(decodeCounter.max()),
                 RuntimeCounter::Unit::kNanos});
       }
     }
