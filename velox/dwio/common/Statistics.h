@@ -22,6 +22,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwio::common {
@@ -540,7 +541,7 @@ struct ColumnReaderStatistics {
   int64_t flattenStringDictionaryValues{0};
 
   // Total time spent in loading pages, in nanoseconds.
-  uint64_t pageLoadTimeNs{0};
+  io::IoCounter pageLoadTimeNs;
 };
 
 struct RuntimeStatistics {
@@ -601,11 +602,14 @@ struct RuntimeStatistics {
           "flattenStringDictionaryValues",
           RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
     }
-    if (columnReaderStatistics.pageLoadTimeNs > 0) {
+    if (columnReaderStatistics.pageLoadTimeNs.sum() > 0) {
       result.emplace(
           "pageLoadTimeNs",
           RuntimeMetric(
-              columnReaderStatistics.pageLoadTimeNs,
+              columnReaderStatistics.pageLoadTimeNs.sum(),
+              columnReaderStatistics.pageLoadTimeNs.count(),
+              columnReaderStatistics.pageLoadTimeNs.min(),
+              columnReaderStatistics.pageLoadTimeNs.max(),
               RuntimeCounter::Unit::kNanos));
     }
     return result;

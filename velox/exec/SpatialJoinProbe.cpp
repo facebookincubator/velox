@@ -321,7 +321,7 @@ void SpatialJoinProbe::addInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
   VELOX_CHECK_EQ(probeRow_, 0);
   VELOX_CHECK(!probeHasMatch_);
-  VELOX_CHECK_EQ(buildIndex_, 0);
+  VELOX_CHECK_EQ(buildVectorIndex_, 0);
   VELOX_CHECK_EQ(candidateIndex_, 0);
 
   // In getOutput(), we are going to wrap input in dictionaries a few rows at a
@@ -401,16 +401,16 @@ void SpatialJoinProbe::addProbeRowOutput() {
 
   // Find the candidates for each probe row from the spatial index.  Only do
   // this at the start for each row.
-  if (buildIndex_ == 0 && candidateIndex_ == 0) {
+  if (buildVectorIndex_ == 0 && candidateIndex_ == 0) {
     candidateBuildRows_ = querySpatialIndex();
   }
 
   while (!isProbeRowDone()) {
-    addBuildVectorOutput(buildVectors_.value()[buildIndex_]);
+    addBuildVectorOutput(buildVectors_.value()[buildVectorIndex_]);
     if (outputBuilder_.isOutputFull()) {
-      // If full, don't advance buildIndex_ because we may not have exhausted
-      // the current vector.  Return instead of breaking so that we can add a
-      // mismatch row later if necessary.
+      // If full, don't advance buildVectorIndex_ because we may not have
+      // exhausted the current vector.  Return instead of breaking so that we
+      // can add a mismatch row later if necessary.
       return;
     }
     advanceBuildVector();
@@ -466,22 +466,23 @@ std::vector<int32_t> SpatialJoinProbe::querySpatialIndex() {
   return candidates;
 }
 
-// Returns nullopt is there are no matching indices
 BufferPtr SpatialJoinProbe::makeBuildVectorIndices(vector_size_t vectorSize) {
   // Find the slice of candidates that are in this build vector.
-  size_t endIndex = candidateIndex_;
+  vector_size_t endIndex = candidateIndex_;
   for (; endIndex < candidateBuildRows_.size(); ++endIndex) {
     if (relativeBuildRow(endIndex) >= vectorSize) {
       break;
     }
   }
 
+  // Make an index vector to fit the candidates.  Populate each entry with its
+  // relative build row.
   vector_size_t indexCount =
       static_cast<vector_size_t>(endIndex - candidateIndex_);
   auto rowIndices = allocateIndices(indexCount, operatorCtx_->pool());
   auto rawIndices = rowIndices->asMutable<vector_size_t>();
-  for (size_t idx = candidateIndex_; idx < endIndex; ++idx) {
-    rawIndices[idx] = relativeBuildRow(idx);
+  for (vector_size_t idx = 0; idx < indexCount; ++idx) {
+    rawIndices[idx] = relativeBuildRow(idx + candidateIndex_);
   }
 
   return rowIndices;

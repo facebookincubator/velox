@@ -337,7 +337,12 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
-  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+  void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
+    // TODO: enable this after
+    // https://github.com/facebookincubator/velox/issues/15485 is resolved to
+    // allow proper testing.
+    VELOX_NYI("{} unsupported", __FUNCTION__);
+  }
 
  private:
   void setDistinctKeysImpl(VectorPtr distinctKeys) {

@@ -178,15 +178,16 @@ class SpatialJoinProbe : public Operator {
   // Returns true if all output for the current probe row has been produced.
   bool isProbeRowDone() const {
     return candidateIndex_ >= candidateBuildRows_.size() ||
-        buildIndex_ >= buildVectors_.value().size();
+        buildVectorIndex_ >= buildVectors_.value().size();
   }
 
   // Increment probeRow_ and reset associated fields
   void advanceProbeRow() {
     ++probeRow_;
     probeHasMatch_ = false;
-    buildIndex_ = 0;
+    buildVectorIndex_ = 0;
     candidateIndex_ = 0;
+    candidateOffsetForCurrentBuildVector_ = 0;
     buildRowOffset_ = 0;
     needsFilterEvaluated_ = true;
   }
@@ -205,13 +206,14 @@ class SpatialJoinProbe : public Operator {
         outputBuilder_.isOutputFull();
   }
 
-  // Increment buildIndex_ and reset associated fields
+  // Increment buildVectorIndex_ and reset associated fields
   void advanceBuildVector() {
     VELOX_CHECK(buildVectors_.has_value());
 
-    buildRowOffset_ += buildVectors_.value()[buildIndex_]->size();
-    ++buildIndex_;
+    buildRowOffset_ += buildVectors_.value()[buildVectorIndex_]->size();
+    ++buildVectorIndex_;
     needsFilterEvaluated_ = true;
+    candidateOffsetForCurrentBuildVector_ = candidateIndex_;
   }
 
   // Calculate candidate build rows from spatialIndex_ for the current probe
@@ -227,10 +229,13 @@ class SpatialJoinProbe : public Operator {
   void evaluateJoinFilter(const RowVectorPtr& buildVector);
 
   // Checks if the spatial join condition matched for a particular row.
-  bool isJoinConditionMatch(vector_size_t i) const {
+  bool isJoinConditionMatch(vector_size_t candidateIndex) const {
+    vector_size_t relativeIndex =
+        candidateIndex - candidateOffsetForCurrentBuildVector_;
+    VELOX_CHECK_GT(decodedFilterResult_.size(), relativeIndex);
     return (
-        !decodedFilterResult_.isNullAt(i) &&
-        decodedFilterResult_.valueAt<bool>(i));
+        !decodedFilterResult_.isNullAt(relativeIndex) &&
+        decodedFilterResult_.valueAt<bool>(relativeIndex));
   }
 
   // Generates the next batch of a cross product between probe and build using
@@ -311,11 +316,14 @@ class SpatialJoinProbe : public Operator {
   // This is always set to all true, but we need it for eval/etc. Reuse between
   // evaluations.
   SelectivityVector filterInputRows_;
-  // The output result of the join condition evaluation.  This is only performed
-  // those in the current build vector. Thus we must index into this with
-  // candidateIndex_.
+  // The output result of the join condition evaluation on the **current**
+  // build vector. We must index into this with
+  // `candidateIndex_ - candidateOffsetForCurrentBuildVector_`.
   VectorPtr filterOutput_;
   // Decoded filterOutput: remove recursive dictionary/etc encodings.
+  // Like filterOutput_, this is only for the current build vector and we
+  // must index into this with
+  // `candidateIndex_ - candidateOffsetForCurrentBuildVector_`.
   DecodedVector decodedFilterResult_;
 
   // Decoded geometry vector.  Must be reset whenever input_ is changed (it
@@ -336,33 +344,53 @@ class SpatialJoinProbe : public Operator {
   // Whether the current probeRow_ has found a match.  Needed for left join.
   bool probeHasMatch_{false};
 
+  ///////////////
+  // BUILD STATE
+  // Variables used to track the build-side state state during exection.
+  // These will change throughout setup and execution.
+  //
+  // The build rows are stored in a vector of RowVectorPtrs.  These are
+  // conceptually indexed by an absolute build row, which indexes into a
+  // flattened vector of rows.  buildVectorIndex_ is the index to the current
+  // RowVectorPtr in buildVectors_, buildRowOffset_ is the sum of the sizes
+  // of the previous build vectors and should be subtracted from buildRow
+  // to index into the current build vector.
+  //
+  // We primarily use candidateBuildRows_, which is a vector of (absolute)
+  // build rows.  candidateIndex_ indexes the entry in candidateBuildRows_,
+  // so candidateBuildrows_[candidiateIndex_] is the absolute build row
+  // of the current candidate.
+
+  // Whether we need to evaluate the join filter on this build vector.  It
+  // should be done once per build vector/probe row pair.
+  bool needsFilterEvaluated_{true};
+
+  // Index into `buildVectors_` for the build vector being currently
+  // processed.
+  size_t buildVectorIndex_{0};
+
+  // Keep track of how many build rows we've traversed in previous build
+  // RowVectors. Subtract this from the current element in candidateBuildRows_
+  // to index into the current build RowVector.
+  vector_size_t buildRowOffset_{0};
+
   // Build rows returned from the spatial index.
   // The value is the row number over all build vectors, so if the have two
   // build vectors of size 100 and 200, candidate row 50 is the 50th entry of
   // the first vector, and 101 is the 2nd entry of the second vector.
   std::vector<vector_size_t> candidateBuildRows_{};
 
-  ///////////////
-  // BUILD STATE
-  // Variables used to track the build-side state state during exection.
-  // These will change throughout setup and execution.
-
-  // Index into `buildVectors_` for the build vector being currently
-  // processed.
-  size_t buildIndex_{0};
-
-  // Whether we need to evaluate the join filter on this build vector.  It
-  // should be done once per build vector/probe row pair.
-  bool needsFilterEvaluated_{true};
-
   // Index of candidate currently being processed from
   // `buildVectors_[buildIndex_]`.
   vector_size_t candidateIndex_{0};
 
-  // Keep track of how many build rows we've traversed in previous build
-  // RowVectors. Subtract this from the current element in candidateBuildRows_
-  // to index into the current build RowVector.
-  vector_size_t buildRowOffset_{0};
+  // How many candidates were in previous build vectors.
+  // This is important because for each build vector, we calculate a
+  // decodedFilterResult_ with only the rows from from the candidates in
+  // that build vector.  candidateIndex_ indexes over _all_ candidates, so
+  // we must substract candidateOffsetForCurrentBuildVector_ to index into the
+  // candidates for this build vector.
+  vector_size_t candidateOffsetForCurrentBuildVector_{0};
 };
 
 } // namespace facebook::velox::exec
