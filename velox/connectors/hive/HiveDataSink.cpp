@@ -1365,7 +1365,9 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
       ioStats_->rawBytesWritten() - writtenBytesBeforeReclaim;
   addThreadLocalRuntimeStat(
       kEarlyFlushedRawBytes,
-      RuntimeCounter(earlyFlushedRawBytes, RuntimeCounter::Unit::kBytes));
+      RuntimeCounter(
+          unsignedToSigned(earlyFlushedRawBytes),
+          RuntimeCounter::Unit::kBytes));
   if (earlyFlushedRawBytes > 0) {
     RECORD_METRIC_VALUE(
         kMetricFileWriterEarlyFlushedRawBytes, earlyFlushedRawBytes);
