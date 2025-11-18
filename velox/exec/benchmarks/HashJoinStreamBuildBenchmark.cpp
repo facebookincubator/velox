@@ -185,9 +185,9 @@ class HashJoinStreamBuildBenchmark : public VectorTestBase {
           cache::AsyncDataCache::getInstance(),
           rootPool_);
       cursorParams.queryCtx->testingOverrideConfigUnsafe({
-          {core::QueryConfig::kAbandonBuildNoDupHashMinPct,
+          {core::QueryConfig::kAbandonDedupHashMapMinPct,
            std::to_string(params_.abandonPct)},
-          {core::QueryConfig::kAbandonBuildNoDupHashMinRows, "1000000"},
+          {core::QueryConfig::kAbandonDedupHashMapMinRows, "1000000"},
       });
 
       cursorParams.maxDrivers = 1;
