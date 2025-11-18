@@ -16,8 +16,9 @@
 
 #pragma once
 
+#include "velox/core/PlanNode.h"
+
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -27,7 +28,7 @@ class CudfOperator : public NvtxHelper {
  public:
   CudfOperator(
       int32_t operatorId,
-      const PlanNodeId& nodeId,
+      const core::PlanNodeId& nodeId,
       nvtx3::color color = nvtx3::rgb{160, 82, 45} /* Sienna */)
       : facebook::velox::cudf_velox::NvtxHelper(
             color,
