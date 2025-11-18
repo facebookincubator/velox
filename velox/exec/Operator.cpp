@@ -406,61 +406,58 @@ void Operator::recordSpillStats() {
     lockedStats->addRuntimeStat(
         kSpillFillTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillFillTimeNanos),
+            lockedSpillStats->spillFillTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   if (lockedSpillStats->spillSortTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillSortTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillSortTimeNanos),
+            lockedSpillStats->spillSortTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   if (lockedSpillStats->spillExtractVectorTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillExtractVectorTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillExtractVectorTimeNanos),
+            lockedSpillStats->spillExtractVectorTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   if (lockedSpillStats->spillSerializationTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillSerializationTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillSerializationTimeNanos),
+            lockedSpillStats->spillSerializationTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   if (lockedSpillStats->spillFlushTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillFlushTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillFlushTimeNanos),
+            lockedSpillStats->spillFlushTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   if (lockedSpillStats->spillWrites != 0) {
     lockedStats->addRuntimeStat(
-        kSpillWrites,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillWrites)});
+        kSpillWrites, RuntimeCounter{lockedSpillStats->spillWrites});
   }
   if (lockedSpillStats->spillWriteTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillWriteTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillWriteTimeNanos),
+            lockedSpillStats->spillWriteTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   if (lockedSpillStats->spillRuns != 0) {
     lockedStats->addRuntimeStat(
-        kSpillRuns,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillRuns)});
+        kSpillRuns, RuntimeCounter{lockedSpillStats->spillRuns});
     common::updateGlobalSpillRunStats(lockedSpillStats->spillRuns);
   }
 
   if (lockedSpillStats->spillMaxLevelExceededCount != 0) {
     lockedStats->addRuntimeStat(
         kExceededMaxSpillLevel,
-        RuntimeCounter{static_cast<int64_t>(
-            lockedSpillStats->spillMaxLevelExceededCount)});
+        RuntimeCounter{lockedSpillStats->spillMaxLevelExceededCount});
     common::updateGlobalMaxSpillLevelExceededCount(
         lockedSpillStats->spillMaxLevelExceededCount);
   }
@@ -469,21 +466,19 @@ void Operator::recordSpillStats() {
     lockedStats->addRuntimeStat(
         kSpillReadBytes,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadBytes),
-            RuntimeCounter::Unit::kBytes});
+            lockedSpillStats->spillReadBytes, RuntimeCounter::Unit::kBytes});
   }
 
   if (lockedSpillStats->spillReads != 0) {
     lockedStats->addRuntimeStat(
-        kSpillReads,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReads)});
+        kSpillReads, RuntimeCounter{lockedSpillStats->spillReads});
   }
 
   if (lockedSpillStats->spillReadTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadTimeNanos),
+            lockedSpillStats->spillReadTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
 
@@ -491,8 +486,7 @@ void Operator::recordSpillStats() {
     lockedStats->addRuntimeStat(
         kSpillDeserializationTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillDeserializationTimeNanos),
+            lockedSpillStats->spillDeserializationTimeNanos,
             RuntimeCounter::Unit::kNanos});
   }
   lockedSpillStats->reset();
