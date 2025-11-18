@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "velox/core/PlanNode.h"
-
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+
+#include "velox/core/PlanNode.h"
 
 namespace facebook::velox::cudf_velox {
 
