@@ -24,7 +24,7 @@ class RuntimeMetricsTest : public testing::Test {
   static void testMetric(
       const RuntimeMetric& rm1,
       int64_t expectedSum,
-      int64_t expectedCount,
+      uint64_t expectedCount,
       int64_t expectedMin = std::numeric_limits<int64_t>::max(),
       int64_t expectedMax = std::numeric_limits<int64_t>::min()) {
     EXPECT_EQ(expectedSum, rm1.sum);
