@@ -17,7 +17,6 @@
 #include "velox/functions/prestosql/IPAddressFunctions.h"
 #include "velox/functions/prestosql/UuidFunctions.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogRegistration.h"
-#include "velox/functions/prestosql/types/SetDigestRegistration.h"
 
 namespace facebook::velox::functions {
 
@@ -33,6 +32,7 @@ extern void registerGeneralFunctions(const std::string& prefix);
 extern void registerHyperLogFunctions(const std::string& prefix);
 extern void registerTDigestFunctions(const std::string& prefix);
 extern void registerQDigestFunctions(const std::string& prefix);
+extern void registerSetDigestFunctions(const std::string& prefix);
 extern void registerSfmSketchFunctions(const std::string& prefix);
 extern void registerEnumFunctions(const std::string& prefix);
 extern void registerIntegerFunctions(const std::string& prefix);
@@ -148,9 +148,6 @@ void registerBitwiseFunctions(const std::string& prefix) {
 
 void registerAllScalarFunctions(const std::string& prefix) {
   registerP4HyperLogLogType();
-  // TODO: Remove type registration after SetDigestFunctionsRegistration.cpp
-  // is created.
-  registerSetDigestType();
   registerArithmeticFunctions(prefix);
   registerCheckedArithmeticFunctions(prefix);
   registerComparisonFunctions(prefix);
@@ -161,6 +158,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerTDigestFunctions(prefix);
   registerQDigestFunctions(prefix);
   registerSfmSketchFunctions(prefix);
+  registerSetDigestFunctions(prefix);
   registerEnumFunctions(prefix);
   registerIntegerFunctions(prefix);
   registerFloatingPointFunctions(prefix);
