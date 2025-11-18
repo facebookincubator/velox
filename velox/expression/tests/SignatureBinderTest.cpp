@@ -15,13 +15,13 @@
  */
 #include "velox/expression/SignatureBinder.h"
 #include <gtest/gtest.h>
-#include <velox/type/HugeInt.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/BigintEnumRegistration.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/HugeInt.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::exec::test {
@@ -1267,6 +1267,57 @@ TEST(SignatureBinderTest, homogeneousRow) {
 
     assertCannotResolve(signature, {ARRAY(ROW({}))});
   }
+}
+
+TEST(SignatureBinderTest, varcharN) {
+  // varchar(x) -> varchar(x).
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("x")
+                       .argumentType("varchar(x)")
+                       .returnType("varchar(x)")
+                       .build();
+  testSignatureBinder(signature, {VARCHAR(10)}, VARCHAR(10));
+
+  // varchar(x) -> varchar.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .argumentType("varchar(x)")
+                  .returnType("varchar")
+                  .build();
+  testSignatureBinder(signature, {VARCHAR(10)}, VARCHAR());
+
+  // int -> varchar(1).
+  signature = exec::FunctionSignatureBuilder()
+                  .argumentType("integer")
+                  .returnType("varchar(1)")
+                  .build();
+  testSignatureBinder(signature, {INTEGER()}, VARCHAR(1));
+
+  // Test with map.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .integerVariable("y")
+                  .argumentType("map(varchar(x), varchar(y))")
+                  .returnType("map(varchar(x), varchar(y))")
+                  .build();
+  testSignatureBinder(
+      signature, {MAP(VARCHAR(5), VARCHAR(10))}, MAP(VARCHAR(5), VARCHAR(10)));
+
+  // Test with Array.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .argumentType("array(varchar(x))")
+                  .returnType("varchar(x)")
+                  .build();
+  testSignatureBinder(signature, {ARRAY(VARCHAR(5))}, VARCHAR(5));
+
+  // Test with Row.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .argumentType("row(varchar(x))")
+                  .returnType("varchar(x)")
+                  .build();
+  testSignatureBinder(signature, {ROW({VARCHAR(5)})}, VARCHAR(5));
 }
 
 } // namespace

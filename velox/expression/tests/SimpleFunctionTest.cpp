@@ -26,9 +26,9 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/SimpleFunctionAdapter.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -1701,6 +1701,84 @@ TEST_F(SimpleFunctionTest, timeTypeTest) {
     auto expected = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 6}}, TIME());
     assertEqualVectors(expected, result);
   }
+}
+
+template <typename TExec>
+struct VarcharTrimFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    functions::stringImpl::trimUnicodeWhiteSpace<true, true>(result, input);
+  }
+};
+
+TEST_F(SimpleFunctionTest, varcharNWithTrim) {
+  const auto& registry = exec::simpleFunctions();
+
+  registerFunction<VarcharTrimFunction, VarcharN<L1>, VarcharN<L1>>(
+      {"varchar_trim"});
+
+  auto signatures = registry.getFunctionSignatures("varchar_trim");
+
+  EXPECT_EQ(1, signatures.size());
+  EXPECT_EQ("(varchar(i10)) -> varchar(i10)", signatures[0]->toString());
+
+  {
+    auto resolved = registry.resolveFunction("varchar_trim", {VARCHAR(10)});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(VARCHAR(10)->toString(), resolved->type()->toString());
+  }
+
+  auto data = makeRowVector(
+      {makeFlatVector<std::string>({"abcde  ", "    edfghj"}, VARCHAR(10))});
+
+  auto result = evaluate("varchar_trim(c0)", data);
+
+  VectorPtr expected =
+      makeFlatVector<std::string>({"abcde", "edfghj"}, VARCHAR(10));
+  assertEqualVectors(expected, result);
+}
+
+template <typename T>
+struct VarcharCodePointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Varchar>& inputChar) {
+    result = functions::stringImpl::charToCodePoint(inputChar);
+  }
+};
+
+TEST_F(SimpleFunctionTest, varcharNConstantParameter) {
+  const auto& registry = exec::simpleFunctions();
+
+  registerFunction<VarcharCodePointFunction, int32_t, VarcharN<C1>>(
+      {"varchar_1_codepoint"});
+
+  auto signatures = registry.getFunctionSignatures("varchar_1_codepoint");
+
+  EXPECT_EQ(1, signatures.size());
+  EXPECT_EQ("(varchar(1)) -> integer", signatures[0]->toString());
+
+  {
+    auto resolved =
+        registry.resolveFunction("varchar_1_codepoint", {VARCHAR(1)});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(INTEGER()->toString(), resolved->type()->toString());
+  }
+
+  EXPECT_FALSE(registry.resolveFunction("varchar_1_codepoint", {VARCHAR(2)}));
+
+  auto data =
+      makeRowVector({makeFlatVector<std::string>({"a", "b"}, VARCHAR(1))});
+
+  auto result = evaluate("varchar_1_codepoint(c0)", data);
+
+  VectorPtr expected = makeFlatVector<int32_t>({0x61, 0x62}, INTEGER());
+  assertEqualVectors(expected, result);
 }
 
 } // namespace
