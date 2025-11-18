@@ -369,6 +369,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
     case TypeKind::VARCHAR: {
       auto stringElements = elements->as<SimpleVector<StringView>>();
       std::vector<std::string> values;
+      values.reserve(size);
       for (auto i = 0; i < size; i++) {
         values.push_back(std::string(stringElements->valueAt(offset + i)));
       }
@@ -555,40 +556,6 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
     }
   }
   return std::nullopt;
-}
-
-std::pair<common::Subfield, std::unique_ptr<common::Filter>>
-PrestoExprToSubfieldFilterParser::toSubfieldFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator* evaluator) {
-  if (expr->isCallKind();
-      auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
-    if (call->name() == "or") {
-      VELOX_CHECK_EQ(call->inputs().size(), 2);
-      auto left = toSubfieldFilter(call->inputs()[0], evaluator);
-      auto right = toSubfieldFilter(call->inputs()[1], evaluator);
-      VELOX_CHECK(left.first == right.first);
-      return {
-          std::move(left.first),
-          makeOrFilter(std::move(left.second), std::move(right.second))};
-    }
-
-    if (call->name() == "not") {
-      const auto& input = call->inputs()[0];
-      if (input->isCallKind();
-          auto* inner = input->asUnchecked<core::CallTypedExpr>()) {
-        if (auto result = leafCallToSubfieldFilter(*inner, evaluator, true)) {
-          return std::move(result.value());
-        }
-      }
-    } else {
-      if (auto result = leafCallToSubfieldFilter(*call, evaluator, false)) {
-        return std::move(result.value());
-      }
-    }
-  }
-  VELOX_UNSUPPORTED(
-      "Unsupported expression for range filter: {}", expr->toString());
 }
 
 } // namespace facebook::velox::exec
