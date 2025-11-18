@@ -77,6 +77,9 @@ When allow-precision-loss is false:
 Integer Division
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Integer division operators return a ``bigint`` result and are not affected by the ``allow-precision-loss`` configuration.
+The input precision formula ``p1-s1+s2`` determines the valid range for the operands.
+
 .. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
 
     Returns the results of dividing x by y. Performs the integer division truncates toward zero.
@@ -90,8 +93,8 @@ Integer Division
 
 .. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
 
-    Returns the result of integer division of x by y, truncating toward zero.
-    Truncation occurs if the result is within the precision(p1-s1+s2) but exceeds the BIGINT range.
+    Returns the result of integer division of ``x`` by ``y``, truncating toward zero.
+    Truncation occurs if the result is within the precision(``p1-s1+s2``) but exceeds the BIGINT range.
     Division by zero or overflow results in an error. This function operates in ANSI mode (error on invalid input).
     Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
