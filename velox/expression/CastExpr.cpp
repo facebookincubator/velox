@@ -594,8 +594,7 @@ VectorPtr CastExpr::applyRow(
 
   // Extract the flag indicating matching of children must be done by
   // name or position
-  auto matchByName =
-      context.execCtx()->queryCtx()->queryConfig().isMatchStructByName();
+  auto matchByName = hooks_->matchRowFieldsByName();
 
   // Cast each row child to its corresponding output child
   std::vector<VectorPtr> newChildren;

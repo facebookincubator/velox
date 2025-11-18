@@ -20,6 +20,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
@@ -1646,6 +1647,130 @@ TEST_F(CastExprTest, rowCast) {
     expected->setNull(1, true);
     testCast(data, expected, true);
   }
+}
+
+TEST_F(CastExprTest, matchRowFieldsByName) {
+  // Test that CastExpr respects the matchRowFieldsByName value from
+  // CastHooks.
+
+  // Custom CastHooks for testing that allows controlling
+  // matchRowFieldsByName.
+  class TestCastHooks : public exec::CastHooks {
+   public:
+    explicit TestCastHooks(bool matchRowFieldsByName)
+        : matchRowFieldsByName_(matchRowFieldsByName) {}
+
+    Expected<Timestamp> castStringToTimestamp(
+        const StringView& /*view*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    Expected<Timestamp> castIntToTimestamp(int64_t /*seconds*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    Expected<int64_t> castTimestampToInt(
+        Timestamp /*timestamp*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    Expected<std::optional<Timestamp>> castDoubleToTimestamp(
+        double /*seconds*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    Expected<int32_t> castStringToDate(
+        const StringView& /*dateString*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    Expected<float> castStringToReal(
+        const StringView& /*data*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    Expected<double> castStringToDouble(
+        const StringView& /*data*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    StringView removeWhiteSpaces(const StringView& view) const override {
+      return view;
+    }
+
+    const TimestampToStringOptions& timestampToStringOptions() const override {
+      return options_;
+    }
+
+    bool truncate() const override {
+      return false;
+    }
+
+    bool applyTryCastRecursively() const override {
+      return false;
+    }
+
+    exec::PolicyType getPolicy() const override {
+      return exec::PolicyType::PrestoCastPolicy;
+    }
+
+    Expected<Timestamp> castBooleanToTimestamp(bool /*val*/) const override {
+      return folly::makeUnexpected(Status::UserError("Not implemented"));
+    }
+
+    bool matchRowFieldsByName() const override {
+      return matchRowFieldsByName_;
+    }
+
+   private:
+    const bool matchRowFieldsByName_;
+    const TimestampToStringOptions options_;
+  };
+
+  auto testmatchRowFieldsByName =
+      [this](const std::shared_ptr<exec::CastHooks>& hooks) {
+        const auto input = makeRowVector(
+            {"a", "b"},
+            {makeFlatVector<int64_t>({1, 2}),
+             makeFlatVector<StringView>({"x", "y"})});
+
+        const auto expected = makeRowVector(
+            {"b", "a"},
+            {makeFlatVector<StringView>({"x", "y"}),
+             makeFlatVector<double>({1.0, 2.0})});
+
+        const auto inputExpr = std::make_shared<exec::FieldReference>(
+            input->type(), std::vector<exec::ExprPtr>{}, "c0");
+
+        // Cast the Row swapping the order of the fields.
+        const auto castExpr = std::make_shared<exec::CastExpr>(
+            ROW({"b", "a"}, {VARCHAR(), DOUBLE()}),
+            std::move(inputExpr),
+            false /* trackCpuUsage */,
+            false /* isTryCast */,
+            hooks);
+
+        auto data = makeRowVector({input});
+        // Create a dummy ExprSet for EvalCtx (required but not used).
+        exec::ExprSet dummyExprSet({}, &execCtx_);
+        exec::EvalCtx evalCtx(&execCtx_, &dummyExprSet, data.get());
+
+        const SelectivityVector rows(input->size());
+        VectorPtr result;
+        castExpr->eval(rows, evalCtx, result);
+
+        assertEqualVectors(expected, result);
+      };
+
+  // Test matching fields by name turned off. We expect this to fail, as it will
+  // try to cast non-numeric strings to double.
+  EXPECT_THROW(
+      testmatchRowFieldsByName(std::make_shared<TestCastHooks>(false)),
+      VeloxUserError);
+
+  // Test matching fields by name only turned on, this should
+  // succeed, reordering the fields and casting the bigints to doubles.
+  testmatchRowFieldsByName(std::make_shared<TestCastHooks>(true));
 }
 
 TEST_F(CastExprTest, nulls) {
