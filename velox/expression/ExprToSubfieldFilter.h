@@ -424,6 +424,8 @@ class ExprToSubfieldFilterParser {
     parser_ = std::move(parser);
   }
 
+  /// Test-only API. Do not use in production code.
+  ///
   /// Analyzes 'expr' to determine if it can be expressed as a subfield filter.
   /// Returns a pair of subfield and filter if so. Otherwise, throws.
   ///
