@@ -64,8 +64,7 @@ class TestReadFile : public velox::ReadFile {
     if (context.ioStats) {
       context.ioStats->addCounter(
           "read",
-          RuntimeCounter(
-              static_cast<int64_t>(res), RuntimeCounter::Unit::kBytes));
+          RuntimeCounter(unsignedToSigned(res), RuntimeCounter::Unit::kBytes));
     }
     ++numIos_;
     return res;
