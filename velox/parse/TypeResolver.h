@@ -102,7 +102,12 @@ class Expressions {
 /// Assumes no overlap in function names between scalar and aggregate
 // functions,
 /// i.e. 'foo' is either a scalar or aggregate function.
-const exec::FunctionSignature* findLambdaSignature(
+/// Performs first a partial type matching on non-lambda arguments only to allow
+/// multiple function signatures with different non-lambda argument types.
+/// The first match is then evaluated for a matching lambda signature. Others
+/// are discarded. That means the function can be overloaded with different
+/// non-lambda function arguments only.
+std::vector<const exec::FunctionSignature*> findLambdaSignature(
     const std::shared_ptr<const CallExpr>& callExpr);
 
 } // namespace facebook::velox::core

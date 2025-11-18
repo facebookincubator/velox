@@ -103,11 +103,15 @@ TEST_F(FindFirstTest, basic) {
   verify("find_first_index(c0, -2, x -> (x > 0))", data, expected);
 
   expected = makeNullConstant(TypeKind::INTEGER, 4);
-  verify("find_first(c0, cast(null as INTEGER), x -> (x > 0))", data, expected);
+  // The second argument is of type BIGINT so cast null as BIGINT to allow function
+  // binding.
+  verify("find_first(c0, cast(null as BIGINT), x -> (x > 0))", data, expected);
 
   expected = makeNullConstant(TypeKind::BIGINT, 4);
+  // The second argument is of type BIGINT so cast null as BIGINT to allow function
+  // binding.
   verify(
-      "find_first_index(c0, cast(null as INTEGER), x -> (x > 0))",
+      "find_first_index(c0, cast(null as BIGINT), x -> (x > 0))",
       data,
       expected);
 }

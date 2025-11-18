@@ -23,21 +23,46 @@ namespace facebook::velox::functions {
 void registerURLFunctions(const std::string& prefix) {
   registerFunction<UrlExtractHostFunction, Varchar, Varchar>(
       {prefix + "url_extract_host"});
+  registerFunction<UrlExtractHostFunction, VarcharN<L1>, VarcharN<L1>>(
+      {prefix + "url_extract_host"});
   registerFunction<UrlExtractFragmentFunction, Varchar, Varchar>(
+      {prefix + "url_extract_fragment"});
+  registerFunction<UrlExtractFragmentFunction, VarcharN<L1>, VarcharN<L1>>(
       {prefix + "url_extract_fragment"});
   registerFunction<UrlExtractPathFunction, Varchar, Varchar>(
       {prefix + "url_extract_path"});
+  registerFunction<UrlExtractPathFunction, VarcharN<L1>, VarcharN<L1>>(
+      {prefix + "url_extract_path"});
   registerFunction<UrlExtractParameterFunction, Varchar, Varchar, Varchar>(
       {prefix + "url_extract_parameter"});
+  registerFunction<
+      UrlExtractParameterFunction,
+      VarcharN<L1>,
+      VarcharN<L1>,
+      VarcharN<L2>>({prefix + "url_extract_parameter"});
   registerFunction<UrlExtractProtocolFunction, Varchar, Varchar>(
+      {prefix + "url_extract_protocol"});
+  registerFunction<UrlExtractProtocolFunction, VarcharN<L1>, VarcharN<L1>>(
       {prefix + "url_extract_protocol"});
   registerFunction<UrlExtractPortFunction, int64_t, Varchar>(
       {prefix + "url_extract_port"});
+  registerFunction<UrlExtractPortFunction, int64_t, VarcharN<L1>>(
+      {prefix + "url_extract_port"});
   registerFunction<UrlExtractQueryFunction, Varchar, Varchar>(
+      {prefix + "url_extract_query"});
+  registerFunction<UrlExtractQueryFunction, VarcharN<L1>, VarcharN<L1>>(
       {prefix + "url_extract_query"});
   registerFunction<UrlEncodeFunction, Varchar, Varchar>(
       {prefix + "url_encode"});
+  exec::SignatureVariable urlEncodeConstraint = exec::SignatureVariable(
+      L2::name(),
+      fmt::format("min(2147483647, {x} * 12)", fmt::arg("x", L1::name())),
+      exec::ParameterType::kIntegerParameter);
+  registerFunction<UrlEncodeFunction, VarcharN<L2>, VarcharN<L1>>(
+      {prefix + "url_encode"}, {urlEncodeConstraint});
   registerFunction<UrlDecodeFunction, Varchar, Varchar>(
+      {prefix + "url_decode"});
+  registerFunction<UrlDecodeFunction, VarcharN<L1>, VarcharN<L1>>(
       {prefix + "url_decode"});
 }
 } // namespace facebook::velox::functions

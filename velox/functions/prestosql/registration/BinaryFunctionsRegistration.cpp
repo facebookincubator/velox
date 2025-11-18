@@ -47,12 +47,16 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<ToHexFunction, Varchar, Varbinary>({prefix + "to_hex"});
   registerFunction<FromHexFunction, Varbinary, Varchar>({prefix + "from_hex"});
+  registerFunction<FromHexFunction, Varbinary, VarcharN<L1>>(
+      {prefix + "from_hex"});
   registerFunction<FromHexFunction, Varbinary, Varbinary>(
       {prefix + "from_hex"});
   registerFunction<ToBase64Function, Varchar, Varbinary>(
       {prefix + "to_base64"});
 
   registerFunction<FromBase64Function, Varbinary, Varchar>(
+      {prefix + "from_base64"});
+  registerFunction<FromBase64Function, Varbinary, VarcharN<L1>>(
       {prefix + "from_base64"});
   registerFunction<FromBase64Function, Varbinary, Varbinary>(
       {prefix + "from_base64"});
@@ -65,6 +69,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<ToBase64UrlFunction, Varchar, Varbinary>(
       {prefix + "to_base64url"});
   registerFunction<FromBase64UrlFunction, Varbinary, Varchar>(
+      {prefix + "from_base64url"});
+  registerFunction<FromBase64UrlFunction, Varbinary, VarcharN<L1>>(
       {prefix + "from_base64url"});
   registerFunction<FromBase64UrlFunction, Varbinary, Varbinary>(
       {prefix + "from_base64url"});

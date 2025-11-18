@@ -63,6 +63,23 @@ exec::AggregateRegistrationResult registerApproxDistinct(
             .argumentType(inputType)
             .argumentType("double")
             .build());
+    if (inputType == "varchar") {
+      signatures.push_back(
+          exec::AggregateFunctionSignatureBuilder()
+              .returnType(returnType)
+              .integerVariable("x")
+              .intermediateType("varbinary")
+              .argumentType("varchar(x)")
+              .build());
+      signatures.push_back(
+          exec::AggregateFunctionSignatureBuilder()
+              .returnType(returnType)
+              .intermediateType("varbinary")
+              .integerVariable("x")
+              .argumentType("varchar(x)")
+              .argumentType("double")
+              .build());
+    }
   }
   if (!hllAsFinalResult) {
     signatures.push_back(

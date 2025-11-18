@@ -44,6 +44,25 @@ class SignatureBinderBase {
       const TypePtr& actualType,
       Coercion& coercion);
 
+  /// Try to bind only non-null arguments.
+  /// Returns true if all non-null arguments bind successfully.
+  /// This allows partial binding, for example, where lambda arguments (nullptr)
+  /// are deferred.
+  bool tryBindPartial(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType);
+
+  /// Like 'tryBindPartial', but allows implicit type conversion if actualType
+  /// doesn't match typeSignature exactly.
+  ///
+  /// @param coercion Type coercion necessary to bind actualType to
+  /// typeSignature if there is no exact match. 'coercion.type' is null if
+  /// there is exact match.
+  bool tryBindPartialWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      Coercion& coercion);
+
   // Return the variables of the signature.
   auto& variables() const {
     return signature_.variables();
@@ -85,10 +104,13 @@ class SignatureBinderBase {
       const std::vector<exec::TypeSignature>& parameters,
       const TypePtr& actualType);
 
-  bool tryBind(
+  /// Internal template to support both full and partial binding.
+  /// @param allowCoercion If true, allow implicit type conversions.
+  /// @param allowPartialBind If true, null types (lambda args) are skipped.
+  template <bool AllowCoercion = false, bool AllowPartialBind = false>
+  bool tryBindImpl(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType,
-      bool allowCoercion,
       Coercion& coercion);
 };
 
@@ -117,6 +139,17 @@ class SignatureBinder : private SignatureBinderBase {
   /// signature. There is one entry per argument. Coercion.type is null if no
   /// coercion is required for that argument.
   bool tryBindWithCoercions(std::vector<Coercion>& coercions);
+
+  /// Returns true if successfully resolved all non-null generic type names.
+  /// Null types (for example, lambda arguments) are skipped and can be resolved
+  /// later.
+  bool tryBindPartial();
+
+  /// Like 'tryBindPartial', but allows implicit type conversion.
+  /// @param coercions Type coercions necessary to bind non-null actualTypes.
+  /// There is one entry per argument. Coercion.type is null if no
+  /// coercion is required for that argument.
+  bool tryBindPartialWithCoercions(std::vector<Coercion>& coercions);
 
   /// Returns concrete return type or nullptr if couldn't fully resolve.
   TypePtr tryResolveReturnType() {
@@ -184,7 +217,10 @@ class SignatureBinder : private SignatureBinderBase {
           varcharEnumVariablesBindings);
 
  private:
-  bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
+  /// @param allowCoercions If true, allow implicit type conversions.
+  /// @param allowPartialBind If true, null types (lambda args) are skipped.
+  template <bool AllowCoercions = false, bool AllowPartialBind = false>
+  bool tryBindImpl(std::vector<Coercion>& coercions);
 
   const std::vector<TypePtr>& actualTypes_;
 };
