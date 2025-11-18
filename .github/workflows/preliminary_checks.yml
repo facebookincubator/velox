@@ -23,8 +23,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
@@ -86,6 +84,9 @@ jobs:
     needs: get-changes
     if: ${{ needs.get-changes.outputs.run-clang-tidy == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      id-token: write
     container: ghcr.io/facebookincubator/velox-dev:adapters
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -130,14 +131,11 @@ jobs:
           git config --global --add safe.directory /__w/velox/velox
 
           python ./scripts/checks/run-clang-tidy.py --commit $RANGE $FILES
-          
+
       - name: Run Claude Code Review
         id: claude-review
         continue-on-error: true
-        if: |
-          github.event.action == 'opened' ||
-          github.event.action == 'synchronize'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@ac1a3207f3f00b4a37e2f3a6f0935733c7c64651 # 2.0.9
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           track_progress: true
@@ -164,7 +162,8 @@ jobs:
 
             Use `gh pr comment` to post your review on PR #${{ github.event.pull_request.number }}.
 
-          claude_args: '--allowed-tools "Read,Grep,Glob,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
+          claude_args: |
+            --allowed-tools "Read,Grep,Glob,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
 
   title-check:
     name: PR Title Format
