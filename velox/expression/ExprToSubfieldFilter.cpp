@@ -541,6 +541,7 @@ PrestoExprToSubfieldFilterParser::toSubfieldFilter(
   if (expr->isCallKind();
       auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
     if (call->name() == "or") {
+      VELOX_CHECK_EQ(call->inputs().size(), 2);
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
       VELOX_CHECK(left.first == right.first);
@@ -548,6 +549,7 @@ PrestoExprToSubfieldFilterParser::toSubfieldFilter(
           std::move(left.first),
           makeOrFilter(std::move(left.second), std::move(right.second))};
     }
+
     common::Subfield subfield;
     std::unique_ptr<common::Filter> filter;
     if (call->name() == "not") {
