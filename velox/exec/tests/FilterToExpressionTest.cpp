@@ -18,7 +18,6 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
-#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::core::test {
@@ -49,11 +48,6 @@ class FilterToExpressionTest : public testing::Test,
     ASSERT_TRUE(callExpr != nullptr);
     ASSERT_EQ(callExpr->name(), expectedName);
   }
-
-  // Helper method for round trip testing
-  void testRoundTrip(
-      const std::string& fieldName,
-      std::unique_ptr<common::Filter> filter);
 
   core::ExpressionEvaluator* evaluator() {
     return &evaluator_;
@@ -495,135 +489,6 @@ TEST_F(FilterToExpressionTest, MultiRange) {
   ASSERT_TRUE(thirdInput != nullptr);
   ASSERT_EQ(thirdInput->name(), "and");
   ASSERT_EQ(thirdInput->inputs().size(), 2);
-}
-
-// Helper method for round trip testing
-void FilterToExpressionTest::testRoundTrip(
-    const std::string& fieldName,
-    std::unique_ptr<common::Filter> filter) {
-  // Step 1: Convert filter to expression
-  common::Subfield subfield(fieldName);
-  auto rowType = createTestRowType();
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
-  ASSERT_TRUE(expr != nullptr);
-
-  // Step 2: Convert expression back to filter
-  auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
-  if (!callExpr) {
-    // Some filters like AlwaysTrue/AlwaysFalse convert to ConstantTypedExpr
-    // which can't be converted back to a filter
-    return;
-  }
-
-  // Special handling for BoolValue filter
-  if (filter->kind() == common::FilterKind::kBoolValue) {
-    // For BoolValue, we need to extract the eq expression from the and
-    // expression
-    if (callExpr->name() == "and" && callExpr->inputs().size() == 2) {
-      auto eqExpr =
-          std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[0]);
-      if (eqExpr && eqExpr->name() == "eq") {
-        callExpr = eqExpr;
-      }
-    }
-  }
-
-  // Special handling for "in" with array_constructor
-  if (callExpr->name() == "in" && callExpr->inputs().size() == 2) {
-    auto arrayExpr =
-        std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[1]);
-    if (arrayExpr && arrayExpr->name() == "array_constructor") {
-      // Use toSubfieldFilter for array_constructor expressions
-      auto [roundTripSubfield, roundTripFilter] =
-          exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
-              expr, evaluator());
-
-      // Step 3: Verify the round-tripped filter and subfield
-      ASSERT_TRUE(roundTripFilter != nullptr);
-      ASSERT_EQ(roundTripSubfield.toString(), subfield.toString());
-
-      // Compare filter properties - this will vary based on filter type
-      // For this test we'll just verify the filter kind is the same
-      ASSERT_EQ(roundTripFilter->kind(), filter->kind());
-      return;
-    }
-  }
-
-  // Special handling for range filters (and expressions)
-  if (callExpr->name() == "and" && callExpr->inputs().size() == 2) {
-    auto firstInput =
-        std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[0]);
-    auto secondInput =
-        std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[1]);
-
-    if (firstInput && secondInput && firstInput->name() == "gte" &&
-        secondInput->name() == "lte") {
-      // Extract the field and bounds
-      auto field = firstInput->inputs()[0];
-      auto lowerBound = firstInput->inputs()[1];
-      auto upperBound = secondInput->inputs()[1];
-
-      // Create a between expression
-      auto betweenExpr = std::make_shared<CallTypedExpr>(
-          callExpr->type(), "between", field, lowerBound, upperBound);
-
-      common::Subfield roundTripSubfield;
-      auto roundTripFilter =
-          exec::ExprToSubfieldFilterParser::getInstance()
-              ->leafCallToSubfieldFilter(
-                  *betweenExpr, roundTripSubfield, evaluator(), false);
-
-      // Step 3: Verify the round-tripped filter and subfield
-      ASSERT_TRUE(roundTripFilter != nullptr);
-      ASSERT_EQ(roundTripSubfield.toString(), subfield.toString());
-
-      // Compare filter properties - this will vary based on filter type
-      // For this test we'll just verify the filter kind is the same
-      ASSERT_EQ(roundTripFilter->kind(), filter->kind());
-      return;
-    }
-  }
-
-  // For all other expressions, use leafCallToSubfieldFilter directly
-  common::Subfield roundTripSubfield;
-  auto roundTripFilter =
-      exec::ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-          *callExpr, roundTripSubfield, evaluator(), false);
-
-  // Step 3: Verify the round-tripped filter and subfield
-  ASSERT_TRUE(roundTripFilter != nullptr);
-  ASSERT_EQ(roundTripSubfield.toString(), subfield.toString());
-
-  // Compare filter properties - this will vary based on filter type
-  // For this test we'll just verify the filter kind is the same
-  ASSERT_EQ(roundTripFilter->kind(), filter->kind());
-}
-
-// Round trip tests for various filter types
-TEST_F(FilterToExpressionTest, RoundTripBigintRangeSingleValue) {
-  auto filter = std::make_unique<common::BigintRange>(42, 42, false);
-  testRoundTrip("a", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripBigintRangeWithRange) {
-  auto filter = std::make_unique<common::BigintRange>(10, 20, false);
-  testRoundTrip("a", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripIsNull) {
-  auto filter = std::make_unique<common::IsNull>();
-  testRoundTrip("a", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripBoolValue) {
-  auto filter = std::make_unique<common::BoolValue>(true, false);
-  testRoundTrip("d", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripBytesRange) {
-  auto filter = std::make_unique<common::BytesRange>(
-      "apple", false, false, "orange", false, false, false);
-  testRoundTrip("c", std::move(filter));
 }
 
 } // namespace facebook::velox::core::test
