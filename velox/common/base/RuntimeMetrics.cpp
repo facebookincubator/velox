@@ -22,7 +22,7 @@
 
 namespace facebook::velox {
 
-void RuntimeMetric::addValue(int64_t value) {
+void RuntimeMetric::addValue(uint64_t value) {
   sum += value;
   count++;
   min = std::min(min, value);
@@ -30,17 +30,11 @@ void RuntimeMetric::addValue(int64_t value) {
 }
 
 void RuntimeMetric::aggregate() {
-  count = std::min(count, static_cast<int64_t>(1));
+  count = std::min(count, static_cast<uint64_t>(1));
   min = max = sum;
 }
 
-void RuntimeMetric::merge(const RuntimeMetric& other)
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-    __attribute__((__no_sanitize__("signed-integer-overflow")))
-#endif
-#endif
-{
+void RuntimeMetric::merge(const RuntimeMetric& other) {
   VELOX_CHECK_EQ(unit, other.unit);
   sum += other.sum;
   count += other.count;

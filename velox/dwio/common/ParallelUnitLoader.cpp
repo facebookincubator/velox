@@ -129,8 +129,8 @@ class ParallelUnitLoader : public UnitLoader {
     stats.addCounter(
         "waitForUnitReadyNanos",
         RuntimeCounter(
-            waitForUnitReadyNanos_ > std::numeric_limits<int64_t>::max()
-                ? std::numeric_limits<int64_t>::max()
+            waitForUnitReadyNanos_ > std::numeric_limits<uint64_t>::max()
+                ? std::numeric_limits<uint64_t>::max()
                 : waitForUnitReadyNanos_,
             RuntimeCounter::Unit::kNanos));
     return stats;
