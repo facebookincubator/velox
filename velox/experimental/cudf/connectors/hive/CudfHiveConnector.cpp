@@ -27,8 +27,8 @@ using namespace facebook::velox::connector;
 CudfHiveConnector::CudfHiveConnector(
     const std::string& id,
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
-    folly::Executor* executor)
-    : ::facebook::velox::connector::hive::HiveConnector(id, config, executor),
+    folly::Executor* ioExecutor)
+    : ::facebook::velox::connector::hive::HiveConnector(id, config, ioExecutor),
       cudfHiveConfig_(std::make_shared<CudfHiveConfig>(config)) {
   LOG(INFO) << "cuDF Hive connector created";
 }

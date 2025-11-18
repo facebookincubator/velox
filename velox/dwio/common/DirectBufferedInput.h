@@ -123,7 +123,7 @@ class DirectBufferedInput : public BufferedInput {
       StringIdLease groupId,
       std::shared_ptr<IoStatistics> ioStats,
       std::shared_ptr<filesystems::File::IoStats> fsStats,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const io::ReaderOptions& readerOptions,
       folly::F14FastMap<std::string, std::string> fileReadOps = {})
       : BufferedInput(
@@ -140,7 +140,7 @@ class DirectBufferedInput : public BufferedInput {
         groupId_(std::move(groupId)),
         ioStats_(std::move(ioStats)),
         fsStats_(std::move(fsStats)),
-        executor_(executor),
+        ioExecutor_(ioExecutor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
 
@@ -183,7 +183,7 @@ class DirectBufferedInput : public BufferedInput {
         groupId_,
         ioStats_,
         fsStats_,
-        executor_,
+        ioExecutor_,
         options_));
   }
 
@@ -201,8 +201,8 @@ class DirectBufferedInput : public BufferedInput {
   std::unique_ptr<SeekableInputStream>
   read(uint64_t offset, uint64_t length, LogType logType) const override;
 
-  folly::Executor* executor() const override {
-    return executor_;
+  folly::Executor* ioExecutor() const override {
+    return ioExecutor_;
   }
 
   uint64_t nextFetchSize() const override {
@@ -218,7 +218,7 @@ class DirectBufferedInput : public BufferedInput {
       StringIdLease groupId,
       std::shared_ptr<IoStatistics> ioStats,
       std::shared_ptr<filesystems::File::IoStats> fsStats,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.memoryPool()),
         fileNum_(std::move(fileNum)),
@@ -226,7 +226,7 @@ class DirectBufferedInput : public BufferedInput {
         groupId_(std::move(groupId)),
         ioStats_(std::move(ioStats)),
         fsStats_(std::move(fsStats)),
-        executor_(executor),
+        ioExecutor_(ioExecutor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
 
@@ -236,13 +236,13 @@ class DirectBufferedInput : public BufferedInput {
 
   // Makes a CoalescedLoad for 'requests' to be read together, coalescing IO if
   // appropriate. If 'prefetch' is set, schedules the CoalescedLoad on
-  // 'executor_'. Links the CoalescedLoad  to all DirectInputStreams that it
+  // 'ioExecutor_'. Links the CoalescedLoad  to all DirectInputStreams that it
   // covers.
   void readRegion(const std::vector<LoadRequest*>& requests, bool prefetch);
 
-  // Read coalesced regions.  Regions are grouped together using `groupEnds'.
+  // Read coalesced regions.  Regions are grouped together using 'groupEnds'.
   // For example if there are 5 regions, 1 and 2 are coalesced together and 3,
-  // 4, 5 are coalesced together, we will have {2, 5} in `groupEnds'.
+  // 4, 5 are coalesced together, we will have {2, 5} in 'groupEnds'.
   void readRegions(
       const std::vector<LoadRequest*>& requests,
       bool prefetch,
@@ -271,7 +271,7 @@ class DirectBufferedInput : public BufferedInput {
   const StringIdLease groupId_;
   const std::shared_ptr<IoStatistics> ioStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   const uint64_t fileSize_;
 
   // Regions that are candidates for loading.

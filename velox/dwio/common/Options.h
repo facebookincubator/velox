@@ -328,8 +328,8 @@ class RowReaderOptions {
     preserveFlatMapsInMemory_ = preserveFlatMapsInMemory;
   }
 
-  void setDecodingExecutor(std::shared_ptr<folly::Executor> executor) {
-    decodingExecutor_ = executor;
+  void setDecodingExecutor(std::shared_ptr<folly::Executor> cpuExecutor) {
+    decodingCPUExecutor_ = std::move(cpuExecutor);
   }
 
   void setDecodingParallelismFactor(size_t factor) {
@@ -410,8 +410,8 @@ class RowReaderOptions {
     return unitLoaderFactory_;
   }
 
-  const std::shared_ptr<folly::Executor>& decodingExecutor() const {
-    return decodingExecutor_;
+  const std::shared_ptr<folly::Executor>& decodingCPUExecutor() const {
+    return decodingCPUExecutor_;
   }
 
   size_t decodingParallelismFactor() const {
@@ -474,10 +474,10 @@ class RowReaderOptions {
   // Optional io executor to enable parallel unit loader.
   folly::Executor* ioExecutor_{nullptr};
   // Optional executors to enable internal reader parallelism.
-  // 'decodingExecutor' allow parallelising the vector decoding process.
+  // 'decodingCPUExecutor' allow parallelising the vector decoding process.
   // 'ioExecutor' enables parallelism when performing file system read
   // operations.
-  std::shared_ptr<folly::Executor> decodingExecutor_;
+  std::shared_ptr<folly::Executor> decodingCPUExecutor_;
   size_t decodingParallelismFactor_{0};
   std::optional<RowNumberColumnInfo> rowNumberColumnInfo_{std::nullopt};
 

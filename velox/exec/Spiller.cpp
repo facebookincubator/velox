@@ -39,7 +39,7 @@ SpillerBase::SpillerBase(
     const common::SpillConfig* spillConfig,
     folly::Synchronized<common::SpillStats>* spillStats)
     : container_(container),
-      executor_(spillConfig->executor),
+      ioExecutor_(spillConfig->ioExecutor),
       bits_(bits),
       rowType_(rowType),
       maxSpillRunRows_(maxSpillRunRows),
@@ -157,8 +157,8 @@ void SpillerBase::runSpill(bool lastRun) {
     writes.push_back(
         memory::createAsyncMemoryReclaimTask<SpillStatus>(
             [partitionId = id, this]() { return writeSpill(partitionId); }));
-    if ((writes.size() > 1) && executor_ != nullptr) {
-      executor_->add([source = writes.back()]() { source->prepare(); });
+    if ((writes.size() > 1) && ioExecutor_ != nullptr) {
+      ioExecutor_->add([source = writes.back()]() { source->prepare(); });
     }
   }
   auto sync = folly::makeGuard([&]() {

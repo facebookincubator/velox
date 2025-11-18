@@ -500,12 +500,12 @@ void CachedBufferedInput::readRegions(
     readRegion(group, prefetch);
     group.clear();
   }
-  if (prefetch && executor_) {
+  if (prefetch && ioExecutor_) {
     std::vector<int32_t> doneIndices;
     for (auto i = 0; i < allCoalescedLoads_.size(); ++i) {
       auto& load = allCoalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
-        executor_->add(
+        ioExecutor_->add(
             [pendingLoad = load, ssdSavable = !options_.noCacheRetention()]() {
               process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);

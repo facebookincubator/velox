@@ -85,7 +85,7 @@ queue.
         if (closed_) {
             return;
         }
-        task()->queryCtx()->executor()->add([driver]() { Driver::run(driver); });
+        task()->queryCtx()->cpuExecutor()->add([driver]() { Driver::run(driver); });
     }
 
 Drivers are added to the executor’s queue from the following places:

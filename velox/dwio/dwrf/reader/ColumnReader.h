@@ -41,7 +41,7 @@ class ColumnReaderFactory {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       FlatMapContext flatMapContext = {});
 
@@ -137,7 +137,7 @@ class ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       FlatMapContext flatMapContext = {},
       ColumnReaderFactory& factory = ColumnReaderFactory::defaultFactory());

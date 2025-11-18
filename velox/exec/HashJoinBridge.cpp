@@ -114,7 +114,7 @@ std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(
     const std::vector<HashBuildSpiller*>& spillers,
     const common::SpillConfig* spillConfig) {
   VELOX_CHECK_NOT_NULL(spillConfig);
-  auto spillExecutor = spillConfig->executor;
+  auto spillIOExecutor = spillConfig->ioExecutor;
   std::vector<std::shared_ptr<AsyncSource<HashJoinTableSpillResult>>>
       spillTasks;
   for (auto* spiller : spillers) {
@@ -132,8 +132,9 @@ std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(
                     std::current_exception());
               }
             }));
-    if ((spillTasks.size() > 1) && (spillExecutor != nullptr)) {
-      spillExecutor->add([source = spillTasks.back()]() { source->prepare(); });
+    if ((spillTasks.size() > 1) && (spillIOExecutor != nullptr)) {
+      spillIOExecutor->add(
+          [source = spillTasks.back()]() { source->prepare(); });
     }
   }
 

@@ -52,7 +52,7 @@ class LazyCPUThreadPoolExecutor : public folly::DefaultKeepAliveExecutor {
 
  private:
   Executor& getInstance() {
-    return executor_.try_emplace_with([&]() {
+    return cpuExecutor_.try_emplace_with([&]() {
       return folly::CPUThreadPoolExecutor(
           numThreads_, std::make_shared<folly::NamedThreadFactory>(prefix_));
     });
@@ -60,7 +60,7 @@ class LazyCPUThreadPoolExecutor : public folly::DefaultKeepAliveExecutor {
 
   const size_t numThreads_;
   const std::string prefix_;
-  folly::DelayedInit<folly::CPUThreadPoolExecutor> executor_;
+  folly::DelayedInit<folly::CPUThreadPoolExecutor> cpuExecutor_;
 };
 
 } // namespace facebook::velox

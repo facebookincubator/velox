@@ -114,7 +114,7 @@ SsdFile::SsdFile(const Config& config)
       shardId_(config.shardId),
       fs_(filesystems::getFileSystem(fileName_, nullptr)),
       checkpointIntervalBytes_(config.checkpointIntervalBytes),
-      executor_(config.executor) {
+      ioExecutor_(config.ioExecutor) {
   process::TraceContext trace("SsdFile::SsdFile");
   filesystems::FileOptions fileOptions;
   fileOptions.shouldThrowOnFileAlreadyExists = false;
@@ -749,7 +749,7 @@ void SsdFile::checkpoint(bool force) {
       return std::make_unique<int>(0);
     });
 
-    executor_->add([source = fileSync]() { source->prepare(); });
+    ioExecutor_->add([source = fileSync]() { source->prepare(); });
 
     try {
       VELOX_CHECK_NOT_NULL(checkpointWriteFile_);

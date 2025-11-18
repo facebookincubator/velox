@@ -301,12 +301,12 @@ class LocalReadFile final : public ReadFile {
  public:
   LocalReadFile(
       std::string_view path,
-      folly::Executor* executor = nullptr,
+      folly::Executor* cpuExecutor = nullptr,
       bool bufferIo = true);
 
   /// TODO: deprecate this after creating local file all through velox fs
   /// interface.
-  LocalReadFile(int32_t fd, folly::Executor* executor = nullptr);
+  LocalReadFile(int32_t fd, folly::Executor* cpuExecutor = nullptr);
 
   ~LocalReadFile();
 
@@ -329,7 +329,7 @@ class LocalReadFile final : public ReadFile {
       const FileStorageContext& fileStorageContext = {}) const override;
 
   bool hasPreadvAsync() const override {
-    return executor_ != nullptr;
+    return cpuExecutor_ != nullptr;
   }
 
   uint64_t memoryUsage() const final;
@@ -352,7 +352,7 @@ class LocalReadFile final : public ReadFile {
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
 
-  folly::Executor* const executor_;
+  folly::Executor* const cpuExecutor_;
   std::string path_;
   int32_t fd_;
   long size_;

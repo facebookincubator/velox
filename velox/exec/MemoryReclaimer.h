@@ -46,7 +46,7 @@ class ParallelMemoryReclaimer : public memory::MemoryReclaimer {
   virtual ~ParallelMemoryReclaimer() = default;
 
   static std::unique_ptr<memory::MemoryReclaimer> create(
-      folly::Executor* executor,
+      folly::Executor* spillIOExecutor,
       int32_t priority = 0);
 
   uint64_t reclaim(
@@ -56,9 +56,9 @@ class ParallelMemoryReclaimer : public memory::MemoryReclaimer {
       Stats& stats) override;
 
  protected:
-  ParallelMemoryReclaimer(folly::Executor* executor, int32_t priority);
+  ParallelMemoryReclaimer(folly::Executor* spillIOExecutor, int32_t priority);
 
-  folly::Executor* const executor_{nullptr};
+  folly::Executor* const spillIOExecutor_{nullptr};
 };
 
 /// Callback used by memory arbitration to check if a driver thread under memory

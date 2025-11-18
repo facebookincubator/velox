@@ -35,7 +35,7 @@ class CudfHiveConnector final
   CudfHiveConnector(
       const std::string& id,
       std::shared_ptr<const ConfigBase> config,
-      folly::Executor* executor);
+      folly::Executor* ioExecutor);
 
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,

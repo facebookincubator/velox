@@ -149,7 +149,7 @@ class FlatMapColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       FlatMapContext flatMapContext,
       ColumnReaderFactory& factory);
@@ -169,7 +169,7 @@ class FlatMapColumnReader : public ColumnReader {
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes_;
   std::unique_ptr<StringKeyBuffer> stringKeyBuffer_;
   bool returnFlatVector_;
-  folly::Executor* executor_;
+  folly::Executor* decodingCPUExecutor_;
   std::unique_ptr<dwio::common::ParallelFor> parallelForOnKeyNodes_;
 
   void initStringKeyBuffer() {}
@@ -185,7 +185,7 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       FlatMapContext flatMapContext,
       ColumnReaderFactory& factory);
@@ -204,7 +204,7 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes_;
   std::unique_ptr<NullColumnReader> nullColumnReader_;
-  folly::Executor* executor_;
+  folly::Executor* decodingCPUExecutor_;
   dwio::common::ParallelFor parallelForOnKeyNodes_;
   BufferPtr mergedNulls_;
   std::shared_ptr<const Type> actualType_;
@@ -217,7 +217,7 @@ class FlatMapColumnReaderFactory {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* executor,
+      folly::Executor* decodingCPUExecutor,
       size_t decodingParallelismFactor,
       FlatMapContext flatMapContext,
       ColumnReaderFactory& factory);

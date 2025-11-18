@@ -32,7 +32,8 @@ class HiveConnector : public Connector {
   HiveConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* executor);
+      folly::Executor* ioExecutor,
+      folly::Executor* cpuExecutor);
 
   bool canAddDynamicFilter() const override {
     return true;
@@ -58,6 +59,10 @@ class HiveConnector : public Connector {
     return ioExecutor_;
   }
 
+  folly::Executor* cpuExecutor() const override {
+    return cpuExecutor_;
+  }
+
   FileHandleCacheStats fileHandleCacheStats() {
     return fileHandleFactory_.cacheStats();
   }
@@ -74,6 +79,7 @@ class HiveConnector : public Connector {
   const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
   folly::Executor* ioExecutor_;
+  folly::Executor* cpuExecutor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {
@@ -90,7 +96,7 @@ class HiveConnectorFactory : public ConnectorFactory {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) override {
-    return std::make_shared<HiveConnector>(id, config, ioExecutor);
+    return std::make_shared<HiveConnector>(id, config, ioExecutor, cpuExecutor);
   }
 };
 

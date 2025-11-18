@@ -38,7 +38,7 @@ void JoinSpillInputBenchmarkBase::setUp() {
   spillConfig.updateAndCheckSpillLimitCb = [&](uint64_t) {};
   spillConfig.fileNamePrefix = FLAGS_spiller_benchmark_name;
   spillConfig.writeBufferSize = FLAGS_spiller_benchmark_write_buffer_size;
-  spillConfig.executor = executor_.get();
+  spillConfig.ioExecutor = executor_.get();
   spillConfig.compressionKind =
       stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind);
   spillConfig.maxFileSize = FLAGS_spiller_benchmark_max_spill_file_size;

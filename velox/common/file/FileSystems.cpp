@@ -84,7 +84,7 @@ class LocalFileSystem : public FileSystem {
       std::shared_ptr<const config::ConfigBase> config,
       const FileSystemOptions& options)
       : FileSystem(config),
-        executor_(
+        cpuExecutor_(
             options.readAheadEnabled
                 ? std::make_unique<folly::CPUThreadPoolExecutor>(
                       std::max(
@@ -96,9 +96,9 @@ class LocalFileSystem : public FileSystem {
                 : nullptr) {}
 
   ~LocalFileSystem() override {
-    if (executor_) {
-      executor_->stop();
-      LOG(INFO) << "Executor " << executor_->getName() << " stopped.";
+    if (cpuExecutor_) {
+      cpuExecutor_->stop();
+      LOG(INFO) << "Executor " << cpuExecutor_->getName() << " stopped.";
     }
   }
 
@@ -117,7 +117,7 @@ class LocalFileSystem : public FileSystem {
       std::string_view path,
       const FileOptions& options) override {
     return std::make_unique<LocalReadFile>(
-        extractPath(path), executor_.get(), options.bufferIo);
+        extractPath(path), cpuExecutor_.get(), options.bufferIo);
   }
 
   std::unique_ptr<WriteFile> openFileForWrite(
@@ -250,7 +250,8 @@ class LocalFileSystem : public FileSystem {
   }
 
  private:
-  const std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
+  // TODO: maybe should use IOThreadPoolExecutor?
+  const std::unique_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_;
 };
 } // namespace
 
