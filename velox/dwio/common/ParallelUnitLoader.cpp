@@ -39,7 +39,7 @@ class ParallelUnitLoader : public UnitLoader {
   ///
   /// **Parameters:**
   /// @param units All units to be loaded
-  /// @param ioExecutor Thread pool for asynchronous unit loading operations
+  /// @param cpuExecutor Thread pool for asynchronous unit loading operations
   /// @param maxConcurrentLoads Maximum units to load concurrently (sliding
   /// window size)
   ///
@@ -53,12 +53,12 @@ class ParallelUnitLoader : public UnitLoader {
   /// ```
   ParallelUnitLoader(
       std::vector<std::unique_ptr<LoadUnit>> units,
-      folly::Executor* ioExecutor,
+      folly::Executor* cpuExecutor,
       uint16_t maxConcurrentLoads)
       : loadUnits_(std::move(units)),
-        ioExecutor_(ioExecutor),
+        cpuExecutor_(cpuExecutor),
         maxConcurrentLoads_(maxConcurrentLoads) {
-    VELOX_CHECK_NOT_NULL(ioExecutor, "ParallelUnitLoader ioExecutor is null");
+    VELOX_CHECK_NOT_NULL(cpuExecutor, "ParallelUnitLoader cpuExecutor is null");
     VELOX_CHECK_GT(
         maxConcurrentLoads_,
         0,
@@ -72,8 +72,10 @@ class ParallelUnitLoader : public UnitLoader {
   /// and waited for to prevent resource leaks and dangling references.
   ~ParallelUnitLoader() override {
     for (auto& future : futures_) {
-      future.cancel();
-      future.wait();
+      if (future.valid()) {
+        future.cancel();
+        future.wait();
+      }
     }
   }
 
@@ -94,7 +96,7 @@ class ParallelUnitLoader : public UnitLoader {
     uint64_t unitLoadNanos{0};
     try {
       NanosecondTimer timer{&unitLoadNanos};
-      futures_[unit].wait();
+      std::move(futures_[unit]).get();
     } catch (const std::exception& e) {
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
     }
@@ -133,13 +135,14 @@ class ParallelUnitLoader : public UnitLoader {
   }
 
  private:
-  /// Submits the unit's load() to the I/O thread pool
+  /// Submits the unit's load() to the CPU thread pool
   void load(uint32_t unitIndex) {
     VELOX_CHECK_LT(unitIndex, loadUnits_.size(), "Unit index out of bounds");
-    VELOX_CHECK_NOT_NULL(ioExecutor_, "ParallelUnitLoader ioExecutor is null");
+    VELOX_CHECK_NOT_NULL(
+        cpuExecutor_, "ParallelUnitLoader cpuExecutor is null");
 
     futures_[unitIndex] = folly::via(
-        ioExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
+        cpuExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
     unitsLoaded_[unitIndex] = true;
   }
 
@@ -157,7 +160,7 @@ class ParallelUnitLoader : public UnitLoader {
   std::vector<std::unique_ptr<LoadUnit>> loadUnits_;
   std::vector<folly::Future<folly::Unit>> futures_;
   std::vector<folly::Future<folly::Unit>> unloadFutures_;
-  folly::Executor* ioExecutor_;
+  folly::Executor* cpuExecutor_;
   size_t maxConcurrentLoads_;
 
   // Stats
@@ -177,7 +180,7 @@ std::unique_ptr<UnitLoader> ParallelUnitLoaderFactory::create(
       totalRows,
       "Can only skip up to the past-the-end row of the file.");
   return std::make_unique<ParallelUnitLoader>(
-      std::move(loadUnits), ioExecutor_, maxConcurrentLoads_);
+      std::move(loadUnits), cpuExecutor_, maxConcurrentLoads_);
 }
 
 } // namespace facebook::velox::dwio::common

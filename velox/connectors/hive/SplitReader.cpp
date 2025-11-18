@@ -98,6 +98,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
+    folly::Executor* cpuExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
@@ -113,6 +114,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         fsStats,
         fileHandleFactory,
         ioExecutor,
+        cpuExecutor,
         scanSpec);
   } else {
     return std::unique_ptr<SplitReader>(new SplitReader(
@@ -126,6 +128,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         fsStats,
         fileHandleFactory,
         ioExecutor,
+        cpuExecutor,
         scanSpec));
   }
 }
@@ -141,6 +144,7 @@ SplitReader::SplitReader(
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
+    folly::Executor* cpuExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
@@ -152,6 +156,7 @@ SplitReader::SplitReader(
       fsStats_(fsStats),
       fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
+      cpuExecutor_(cpuExecutor),
       pool_(connectorQueryCtx->memoryPool()),
       scanSpec_(scanSpec),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
@@ -399,6 +404,7 @@ void SplitReader::createRowReader(
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
+      cpuExecutor_,
       baseRowReaderOpts_);
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()

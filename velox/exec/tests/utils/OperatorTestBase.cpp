@@ -137,6 +137,7 @@ void OperatorTestBase::SetUp() {
   }
   driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
+  cpuExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   PeriodicStatsReporter::Options options;
   options.allocator = memory::memoryManager()->allocator();
   options.allocatorStatsIntervalMs = 2'000;

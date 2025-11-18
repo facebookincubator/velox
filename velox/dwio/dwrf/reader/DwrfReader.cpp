@@ -344,10 +344,10 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
       options_.unitLoaderFactory();
   if (!unitLoaderFactory) {
     if (loadUnits.size() > 1 && options_.parallelUnitLoadCount() > 1 &&
-        options_.ioExecutor() != nullptr) {
+        options_.cpuExecutor() != nullptr) {
       unitLoaderFactory =
           std::make_shared<dwio::common::ParallelUnitLoaderFactory>(
-              options_.ioExecutor(), options_.parallelUnitLoadCount());
+              options_.cpuExecutor(), options_.parallelUnitLoadCount());
     } else {
       unitLoaderFactory =
           std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(

@@ -87,6 +87,7 @@ void configureRowReaderOptions(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
     folly::Executor* ioExecutor,
+    folly::Executor* cpuExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions);
 
 bool testFilters(
