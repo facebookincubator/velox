@@ -85,8 +85,8 @@ Mathematical Functions
 
 .. function:: checked_div(x, y) -> bigint
 
-    Returns the result of integer division of x by y, truncating toward zero.
-    Supported types are integral types, x and y must have the same type.
+    Returns the result of integer division of ``x`` by ``y``, truncating toward zero.
+    Supported types are integral types, ``x`` and ``y`` must have the same type.
     Division by zero or overflow results in an error. This function operates in ANSI mode (error on invalid input).
     Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
