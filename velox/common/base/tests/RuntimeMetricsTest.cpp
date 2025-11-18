@@ -24,7 +24,7 @@ class RuntimeMetricsTest : public testing::Test {
   static void testMetric(
       const RuntimeMetric& rm1,
       int64_t expectedSum,
-      int64_t expectedCount,
+      uint64_t expectedCount,
       int64_t expectedMin = std::numeric_limits<int64_t>::max(),
       int64_t expectedMax = std::numeric_limits<int64_t>::min()) {
     EXPECT_EQ(expectedSum, rm1.sum);
@@ -82,6 +82,21 @@ TEST_F(RuntimeMetricsTest, basic) {
   ASSERT_EQ(
       timeRm.toString(),
       "sum:2.00us, count:1, min:2.00us, max:2.00us, avg: 2.00us");
+}
+
+TEST_F(RuntimeMetricsTest, saturateCast) {
+  auto maxUint64 = std::numeric_limits<uint64_t>::max();
+  RuntimeMetric rm{
+      saturateCast(maxUint64),
+      maxUint64,
+      saturateCast(maxUint64),
+      saturateCast(maxUint64)};
+
+  auto maxInt64 = std::numeric_limits<int64_t>::max();
+  EXPECT_EQ(rm.sum, maxInt64);
+  EXPECT_EQ(rm.count, maxUint64);
+  EXPECT_EQ(rm.min, maxInt64);
+  EXPECT_EQ(rm.max, maxInt64);
 }
 
 } // namespace facebook::velox
