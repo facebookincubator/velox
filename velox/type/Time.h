@@ -63,7 +63,7 @@ inline int64_t unpackMillisUtc(int64_t timeWithTimeZone) {
 }
 
 /// Unpacks the timezone offset from a packed TIME WITH TIME ZONE value
-inline int16_t unpackZoneKeyId(int64_t timeWithTimeZone) {
+inline int16_t unpackZoneOffset(int64_t timeWithTimeZone) {
   return timeWithTimeZone & kTimezoneMask;
 }
 
@@ -91,9 +91,7 @@ inline int16_t biasEncode(int16_t timeZoneOffsetMinutes) {
 /// @param encodedTimezone Bias-encoded timezone [0, 1680]
 /// @return Timezone offset in minutes [-840, 840]
 inline int16_t decodeTimezoneOffset(int16_t encodedTimezone) {
-  return (encodedTimezone >= kTimeZoneBias)
-      ? (encodedTimezone - kTimeZoneBias)
-      : -(kTimeZoneBias - encodedTimezone);
+  return encodedTimezone - kTimeZoneBias;
 }
 
 /// Parse a TIME WITH TIME ZONE string and return packed 64-bit value

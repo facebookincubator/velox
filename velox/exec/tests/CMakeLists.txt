@@ -90,6 +90,7 @@ add_executable(
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
   SpatialIndexTest.cpp
+  HilbertIndexTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp
@@ -371,14 +372,6 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_spiller_aggregate_benchmark_base
   )
 endif()
-
-add_executable(cpr_http_client_test CprHttpClientTest.cpp)
-add_test(
-  NAME cpr_http_client_test
-  COMMAND cpr_http_client_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(cpr_http_client_test cpr::cpr GTest::gtest GTest::gtest_main)
 
 add_executable(velox_driver_test OperatorReplacementTest.cpp Main.cpp)
 add_test(

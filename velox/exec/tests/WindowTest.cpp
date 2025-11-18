@@ -432,6 +432,122 @@ DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
   ASSERT_TRUE(isStreamCreated.load());
 }
 
+TEST_F(WindowTest, prePartitionedSortBuild) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  const int numSubPartitions = 4;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
+TEST_F(WindowTest, prePartitionedSortBuildSkewed) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 4;
+  const int numSubPartitions = 16;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
+TEST_F(WindowTest, prePartitionedBuildWithSpill) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  const int numSubPartitions = 4;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(
+              core::QueryConfig::kWindowNumSubPartitions,
+              std::to_string(numSubPartitions))
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .config(core::QueryConfig::kOrderBySpillEnabled, "false")
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
+}
+
 DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
   const vector_size_t size = 1'00;
 

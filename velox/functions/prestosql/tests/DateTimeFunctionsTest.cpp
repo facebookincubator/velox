@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -5810,6 +5811,155 @@ TEST_F(DateTimeFunctionsTest, timeComparisons) {
   EXPECT_EQ(std::nullopt, between(500, 0, std::nullopt));
 }
 
+TEST_F(DateTimeFunctionsTest, timeWithTimezoneComparisons) {
+  const auto eq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 = c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto neq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 != c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto lt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 < c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto lte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 <= c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto gt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 > c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto gte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 >= c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto between = [&](std::optional<int64_t> value,
+                           std::optional<int64_t> lower,
+                           std::optional<int64_t> upper) {
+    return evaluateOnce<bool>(
+        "c0 between c1 and c2",
+        {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()},
+        value,
+        lower,
+        upper);
+  };
+
+  // test distinct_from - unlike regular comparison operators,
+  // distinct_from treats NULLs as values that can be compared
+  const auto distinctFrom = [&](std::optional<int64_t> a,
+                                std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 is distinct from c1",
+        {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()},
+        a,
+        b);
+  };
+
+  // Helper to parse TIME WITH TIME ZONE from string
+  const auto parse = [](const std::string& timeStr) -> std::optional<int64_t> {
+    auto result =
+        util::fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // test equality - same UTC time in different timezones should be equal
+  EXPECT_EQ(true, eq(parse("00:00:00.000+00:00"), parse("01:00:00.000+01:00")));
+  EXPECT_EQ(true, eq(parse("12:30:45.123+00:00"), parse("20:30:45.123+08:00")));
+  EXPECT_EQ(
+      false, eq(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(std::nullopt, eq(std::nullopt, parse("00:00:00.000+00:00")));
+
+  // test inequality
+  EXPECT_EQ(
+      true, neq(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      true, neq(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      true, neq(parse("01:00:00.000+01:00"), parse("01:00:00.000+03:00")));
+
+  // test less than
+  EXPECT_EQ(
+      false, lt(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(true, lt(parse("00:00:01.000+01:00"), parse("00:00:00.000+00:00")));
+  EXPECT_EQ(
+      false, lt(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, lt(parse("01:00:00.000+01:00"), parse("02:00:00.000+03:00")));
+
+  // test less than or equal
+  EXPECT_EQ(
+      false, lte(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, lte(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+
+  // test greater than
+  EXPECT_EQ(true, gt(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, gt(parse("01:00:00.000+03:00"), parse("02:00:00.000+01:00")));
+
+  // test greater than or equal
+  EXPECT_EQ(
+      true, gte(parse("00:00:00.000+00:00"), parse("00:00:00.000+00:00")));
+  EXPECT_EQ(
+      true, gte(parse("00:00:00.000+00:00"), parse("00:00:01.000+01:00")));
+  EXPECT_EQ(
+      true, gte(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+
+  // test between
+  EXPECT_EQ(
+      true,
+      between(
+          parse("02:00:00.000+02:00"),
+          parse("00:00:00.000+01:00"),
+          parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      std::nullopt,
+      between(
+          parse("00:00:00.500+00:00"),
+          parse("00:00:00.000+01:00"),
+          std::nullopt));
+
+  // test distinct from
+  // Same UTC time in different timezones should not be distinct
+  EXPECT_EQ(
+      false,
+      distinctFrom(parse("01:00:00.000+01:00"), parse("02:00:00.000+02:00")));
+
+  // Different times should be distinct
+  EXPECT_EQ(
+      true,
+      distinctFrom(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      true,
+      distinctFrom(parse("01:00:00.000+01:00"), parse("02:00:00.000+03:00")));
+
+  // NULL handling: NULL is distinct from non-NULL
+  EXPECT_EQ(true, distinctFrom(std::nullopt, parse("00:00:00.000+00:00")));
+
+  // NULL is NOT distinct from NULL
+  EXPECT_EQ(false, distinctFrom(std::nullopt, std::nullopt));
+
+  // Test edge cases with day wrap-around (normalization logic)
+  EXPECT_EQ(
+      false, eq(parse("01:00:00.000+08:00"), parse("02:00:00.000+00:00")));
+  EXPECT_EQ(
+      false, gt(parse("01:00:00.000+08:00"), parse("02:00:00.000+00:00")));
+
+  EXPECT_EQ(
+      false, eq(parse("23:00:00.000-08:00"), parse("16:00:00.000+08:00")));
+  EXPECT_EQ(true, lt(parse("23:00:00.000-08:00"), parse("18:00:00.000-14:00")));
+
+  EXPECT_EQ(
+      false, eq(parse("00:30:00.000-02:00"), parse("00:30:00.000+02:00")));
+  EXPECT_EQ(true, gt(parse("00:30:00.000-02:00"), parse("00:30:00.000+02:00")));
+}
+
 TEST_F(DateTimeFunctionsTest, castDateToTimestamp) {
   const int64_t kSecondsInDay = kMillisInDay / 1'000;
   const auto castDateToTimestamp = [&](const std::optional<int32_t> date) {
@@ -6267,6 +6417,44 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   // Past time
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
+}
+
+TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
+  const auto xxhash64 = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("xxhash64_internal(c0)", TIME(), time);
+  };
+
+  // Test NULL handling
+  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
+
+  // Test determinism - same input should give same output
+  auto result1 = xxhash64(43200000);
+  auto result2 = xxhash64(43200000);
+  EXPECT_EQ(result1, result2);
+
+  // Test that different inputs give different outputs
+  auto hash0 = xxhash64(0);
+  auto hash1 = xxhash64(1);
+  auto hashNoon = xxhash64(43200000);
+  auto hashEnd = xxhash64(86399999);
+
+  EXPECT_NE(hash0, hash1);
+  EXPECT_NE(hash0, hashNoon);
+  EXPECT_NE(hash0, hashEnd);
+  EXPECT_NE(hashNoon, hashEnd);
+
+  // Test boundary values don't crash
+  EXPECT_TRUE(xxhash64(0).has_value());
+  EXPECT_TRUE(xxhash64(86399999).has_value());
+
+  // Test known hash values validated against Presto xxhash64
+  // Query: SELECT from_big_endian_64(xxhash64(to_big_endian_64(value)))
+  EXPECT_EQ(3803688792395291579, xxhash64(0)); // Midnight
+  EXPECT_EQ(-6980583299780818982, xxhash64(1)); // 1 millisecond after midnight
+  EXPECT_EQ(7848233046982034517, xxhash64(43200000)); // Noon (12:00:00.000)
+  EXPECT_EQ(
+      5892092673475229733, xxhash64(86399999)); // End of day (23:59:59.999)
+  EXPECT_EQ(-3599997350390034763, xxhash64(1234)); // Arbitrary value
 }
 
 TEST_F(DateTimeFunctionsTest, localtime) {

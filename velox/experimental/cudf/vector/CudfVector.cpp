@@ -107,7 +107,7 @@ CudfVector::CudfVector(
           std::move(type),
           BufferPtr(nullptr),
           size,
-          std::vector<VectorPtr>(),
+          std::vector<VectorPtr>(table->num_columns()),
           std::nullopt),
       table_{std::move(table)},
       stream_{stream} {

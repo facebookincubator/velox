@@ -36,6 +36,7 @@ class DecodedArgs {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       exec::EvalCtx& context) {
+    holders_.reserve(args.size());
     for (auto& arg : args) {
       holders_.emplace_back(context, *arg, rows);
     }

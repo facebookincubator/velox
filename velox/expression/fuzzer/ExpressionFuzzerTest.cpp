@@ -257,6 +257,8 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_to_bing_tiles",
     "geometry_to_dissolved_bing_tiles",
     "geometry_union",
+    "to_geometry",
+    "to_spherical_geography",
     "localtime",
 };
 
@@ -266,6 +268,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
                      // instances
     "array_subset", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
+    "map_intersect", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -309,6 +312,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
     "array_position", // https://github.com/facebookincubator/velox/issues/10580
     "chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/12327
+    "map_except",
     "bitwise_left_shift", // https://github.com/facebookincubator/velox/issues/12330
     "log2", // https://github.com/facebookincubator/velox/issues/12338
     "bitwise_right_shift", // https://github.com/facebookincubator/velox/issues/12339
