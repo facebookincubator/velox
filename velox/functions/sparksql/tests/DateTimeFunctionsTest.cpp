@@ -1876,5 +1876,30 @@ TEST_F(DateTimeFunctionsTest, monthsBetween) {
           parseTimestamp("1996-03-21 11:00:00"),
           true));
 }
+TEST_F(DateTimeFunctionsTest, dateFormat) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              std::optional<std::string> format) {
+    return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
+  };
+
+  // Check invalid format.
+  EXPECT_THROW(dateFormat(parseTimestamp("1970-01-01"), "u"), VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
+
+  // Check Simple tests.
+  EXPECT_EQ("AD", dateFormat(parseTimestamp("1970-01-01"), "G"));
+  EXPECT_EQ("19", dateFormat(parseTimestamp("1900-01-01"), "C"));
+  EXPECT_EQ("2020", dateFormat(parseTimestamp("2020-01-01"), "Y"));
+  EXPECT_EQ("1", dateFormat(parseTimestamp("2022-01-01"), "D"));
+  EXPECT_EQ("1", dateFormat(parseTimestamp("2022-01-01"), "d"));
+  EXPECT_EQ("AM", dateFormat(parseTimestamp("2022-01-01 00:00:00"), "a"));
+  EXPECT_EQ(
+      "2022-01-01 00:00:00",
+      dateFormat(parseTimestamp("2022-01-01"), "yyyy-MM-dd HH:mm:ss"));
+
+  enableLegacyFormatter();
+  EXPECT_EQ("4", dateFormat(parseTimestamp("1970-01-01"), "u"));
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

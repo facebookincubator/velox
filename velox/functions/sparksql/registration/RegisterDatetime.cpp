@@ -56,7 +56,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
-  registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
+  registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
   registerFunction<DateFromUnixDateFunction, Date, int32_t>(
       {prefix + "date_from_unix_date"});
