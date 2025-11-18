@@ -346,10 +346,10 @@ void Exchange::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serdeKind_)));
+        RuntimeCounter(static_cast<uint64_t>(serdeKind_)));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
-        RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
+        RuntimeCounter(static_cast<uint64_t>(serdeOptions_->compressionKind)));
   }
 }
 

@@ -472,10 +472,10 @@ void PartitionedOutput::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serde_->kind())));
+        RuntimeCounter(static_cast<uint64_t>(serde_->kind())));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
-        RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
+        RuntimeCounter(static_cast<uint64_t>(serdeOptions_->compressionKind)));
   }
   destinations_.clear();
 }

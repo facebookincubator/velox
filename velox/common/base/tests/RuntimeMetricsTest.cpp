@@ -23,10 +23,10 @@ class RuntimeMetricsTest : public testing::Test {
  protected:
   static void testMetric(
       const RuntimeMetric& rm1,
-      int64_t expectedSum,
-      int64_t expectedCount,
-      int64_t expectedMin = std::numeric_limits<int64_t>::max(),
-      int64_t expectedMax = std::numeric_limits<int64_t>::min()) {
+      uint64_t expectedSum,
+      uint64_t expectedCount,
+      uint64_t expectedMin = std::numeric_limits<uint64_t>::max(),
+      uint64_t expectedMax = std::numeric_limits<uint64_t>::min()) {
     EXPECT_EQ(expectedSum, rm1.sum);
     EXPECT_EQ(expectedCount, rm1.count);
     EXPECT_EQ(expectedMin, rm1.min);
