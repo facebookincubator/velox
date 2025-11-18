@@ -204,9 +204,15 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
+  /// Number of input rows to receive before starting to check whether to
+  /// abandon building a HashTable without duplicates in HashBuild for left
+  /// semi/anti join.
   static constexpr const char* kAbandonDedupHashMapMinRows =
       "abandon_dedup_hashmap_min_rows";
 
+  /// Abandons building a HashTable without duplicates in HashBuild for left
+  /// semi/anti join if the percentage of distinct keys in the HashTable exceeds
+  /// this threshold. Zero means 'disable this optimization'.
   static constexpr const char* kAbandonDedupHashMapMinPct =
       "abandon_dedup_hashmap_min_pct";
 
