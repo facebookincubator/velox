@@ -1793,11 +1793,16 @@ struct CurrentTimestampFunction {
       const core::QueryConfig& config) {
     Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
     timeZone_ = getTimeZoneFromConfig(config);
-    if (timeZone_ != nullptr) {
-      result_ = pack(ts, timeZone_->id());
-      return;
+    // if (timeZone_ != nullptr) {
+    //   result_ = pack(ts, timeZone_->id());
+    //   return;
+    // }
+    // result_ = pack(ts, Timestamp::defaultTimezone().id());
+    // result_ = pack(ts, 0);
+    if(timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
     }
-    result_ = pack(ts, Timestamp::defaultTimezone().id());
+    result_ = pack(ts, timeZone_->id());
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {

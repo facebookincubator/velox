@@ -6457,38 +6457,77 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
   EXPECT_EQ(-3599997350390034763, xxhash64(1234)); // Arbitrary value
 }
 
+// TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+//   setQueryTimeZone("Asia/Kolkata");
+//
+//   auto emptyRowVector = makeRowVector(ROW({}), 1);
+//   auto before = Timestamp::now().toMillis();
+//
+//   auto packedNow = evaluateOnce<int64_t>("now()", emptyRowVector);
+//   auto packedCurrentTimestamp =
+//       evaluateOnce<int64_t>("current_timestamp()", emptyRowVector);
+//
+//   auto after = Timestamp::now().toMillis();
+//
+//   ASSERT_TRUE(packedNow.has_value()) << "now() returned nullopt";
+//   auto unpackedNow = TimestampWithTimezone::unpack(packedNow);
+//   ASSERT_TRUE(unpackedNow.has_value()) << "Failed to unpack now() result";
+//
+//   ASSERT_TRUE(packedCurrentTimestamp.has_value())
+//       << "current_timestamp() returned nullopt";
+//   auto unpackedCurrent = TimestampWithTimezone::unpack(packedCurrentTimestamp);
+//   ASSERT_TRUE(unpackedCurrent.has_value())
+//       << "Failed to unpack current_timestamp() result";
+//
+//   EXPECT_LE(before, unpackedNow->milliSeconds_);
+//   EXPECT_LE(unpackedNow->milliSeconds_, after);
+//   EXPECT_LE(before, unpackedCurrent->milliSeconds_);
+//   EXPECT_LE(unpackedCurrent->milliSeconds_, after);
+//
+//   EXPECT_EQ(unpackedNow->timezone_->name(), "Asia/Kolkata");
+//   EXPECT_EQ(unpackedCurrent->timezone_->name(), "Asia/Kolkata");
+//   EXPECT_EQ(unpackedNow->timezone_->name(), unpackedCurrent->timezone_->name());
+//
+//   EXPECT_NEAR(unpackedNow->milliSeconds_, unpackedCurrent->milliSeconds_, 200);
+// }
+
 TEST_F(DateTimeFunctionsTest, currentTimestamp) {
-  setQueryTimeZone("Asia/Kolkata");
+  const auto callCurrentTimestamp =
+      [&](int64_t sessionStartTime,
+          const std::optional<std::string>& timeZone) {
+        if (timeZone.has_value()) {
+          setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+        } else {
+          setQuerySessionStartTime(sessionStartTime);
+        }
 
-  auto emptyRowVector = makeRowVector(ROW({}), 1);
-  auto before = Timestamp::now().toMillis();
+        auto rowVector = makeRowVector({});
+        rowVector->resize(1);
 
-  auto packedNow = evaluateOnce<int64_t>("now()", emptyRowVector);
-  auto packedCurrentTimestamp =
-      evaluateOnce<int64_t>("current_timestamp()", emptyRowVector);
+        auto result = evaluate("current_timestamp()", rowVector);
+        DecodedVector decoded(*result);
+        return decoded.valueAt<int64_t>(0);
+  };
 
-  auto after = Timestamp::now().toMillis();
+  // Test without timezone (UTC)
+  EXPECT_THROW(
+    {
+      try {
+        callCurrentTimestamp(0, std::nullopt);
+      } catch (const VeloxException& e) {
+        EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
+        throw;
+      }
+    },
+    VeloxException);
 
-  ASSERT_TRUE(packedNow.has_value()) << "now() returned nullopt";
-  auto unpackedNow = TimestampWithTimezone::unpack(packedNow);
-  ASSERT_TRUE(unpackedNow.has_value()) << "Failed to unpack now() result";
+  // Test with timezone America/Los_Angeles
+  auto laPacked = callCurrentTimestamp(1758499200000, "America/Los_Angeles");
+  auto la = TimestampWithTimezone::unpack(laPacked);
+  ASSERT_TRUE(la.has_value());
 
-  ASSERT_TRUE(packedCurrentTimestamp.has_value())
-      << "current_timestamp() returned nullopt";
-  auto unpackedCurrent = TimestampWithTimezone::unpack(packedCurrentTimestamp);
-  ASSERT_TRUE(unpackedCurrent.has_value())
-      << "Failed to unpack current_timestamp() result";
-
-  EXPECT_LE(before, unpackedNow->milliSeconds_);
-  EXPECT_LE(unpackedNow->milliSeconds_, after);
-  EXPECT_LE(before, unpackedCurrent->milliSeconds_);
-  EXPECT_LE(unpackedCurrent->milliSeconds_, after);
-
-  EXPECT_EQ(unpackedNow->timezone_->name(), "Asia/Kolkata");
-  EXPECT_EQ(unpackedCurrent->timezone_->name(), "Asia/Kolkata");
-  EXPECT_EQ(unpackedNow->timezone_->name(), unpackedCurrent->timezone_->name());
-
-  EXPECT_NEAR(unpackedNow->milliSeconds_, unpackedCurrent->milliSeconds_, 200);
+  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
+  EXPECT_EQ(la->milliSeconds_, 1758499200000);
 }
 
 TEST_F(DateTimeFunctionsTest, localtime) {
