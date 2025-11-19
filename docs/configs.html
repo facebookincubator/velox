@@ -169,117 +169,124 @@ client. Enforced approximately, not strictly. A larger size can increase network
 for larger clusters and thus decrease query processing time at the expense of reducing the
 amount of memory available for other usage.</p></td>
 </tr>
-<tr class="row-even"><td><p>local_merge_source_queue_size</p></td>
+<tr class="row-even"><td><p>skip_request_data_size_with_single_source_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, skip request data size if there is only single source.
+This is used to optimize the Presto-on-Spark use case where each exchange client
+has only one shuffle partition source.</p></td>
+</tr>
+<tr class="row-odd"><td><p>local_merge_source_queue_size</p></td>
 <td><p>integer</p></td>
 <td><p>2</p></td>
 <td><p>Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_page_partitioning_buffer_size</p></td>
+<tr class="row-even"><td><p>max_page_partitioning_buffer_size</p></td>
 <td><p>integer</p></td>
 <td><p>32MB</p></td>
 <td><p>The maximum size in bytes for the task’s buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
 The producer Drivers are blocked when the buffered size exceeds this.
 The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.</p></td>
 </tr>
-<tr class="row-even"><td><p>max_output_buffer_size</p></td>
+<tr class="row-odd"><td><p>max_output_buffer_size</p></td>
 <td><p>integer</p></td>
 <td><p>32MB</p></td>
 <td><p>The maximum size in bytes for the task’s buffered output.
 The producer Drivers are blocked when the buffered size exceeds this.
 The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.</p></td>
 </tr>
-<tr class="row-odd"><td><p>min_table_rows_for_parallel_join_build</p></td>
+<tr class="row-even"><td><p>min_table_rows_for_parallel_join_build</p></td>
 <td><p>integer</p></td>
 <td><p>1000</p></td>
 <td><p>The minimum number of table rows that can trigger the parallel hash join table build.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug.validate_output_from_operators</p></td>
+<tr class="row-odd"><td><p>debug.validate_output_from_operators</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If set to true, then during execution of tasks, the output vectors of every operator are validated for consistency.
 This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
 cause failures or crashes by helping identify which operator is generating them.</p></td>
 </tr>
-<tr class="row-odd"><td><p>enable_expression_evaluation_cache</p></td>
+<tr class="row-even"><td><p>enable_expression_evaluation_cache</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
 evalWithMemo are enabled.</p></td>
 </tr>
-<tr class="row-even"><td><p>max_shared_subexpr_results_cached</p></td>
+<tr class="row-odd"><td><p>max_shared_subexpr_results_cached</p></td>
 <td><p>integer</p></td>
 <td><p>10</p></td>
 <td><p>For a given shared subexpression, the maximum distinct sets of inputs we cache results for. Lambdas can call
 the same expression with different inputs many times, causing the results we cache to explode in size. Putting
 a limit contains the memory usage.</p></td>
 </tr>
-<tr class="row-odd"><td><p>driver_cpu_time_slice_limit_ms</p></td>
+<tr class="row-even"><td><p>driver_cpu_time_slice_limit_ms</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>If it is not zero, specifies the time limit that a driver can continuously
 run on a thread before yield. If it is zero, then it no limit.</p></td>
 </tr>
-<tr class="row-even"><td><p>window_num_sub_partitions</p></td>
+<tr class="row-odd"><td><p>window_num_sub_partitions</p></td>
 <td><p>integer</p></td>
 <td><p>1</p></td>
 <td><p>Window operator can be configured to sub-divide window partitions on each thread of execution into groups of
 sub partitions for sequential processing. This setting specifies how many sub-partitions to create for each
 thread. Use 1 to disable sub partitioning.</p></td>
 </tr>
-<tr class="row-odd"><td><p>prefixsort_normalized_key_max_bytes</p></td>
+<tr class="row-even"><td><p>prefixsort_normalized_key_max_bytes</p></td>
 <td><p>integer</p></td>
 <td><p>128</p></td>
 <td><p>Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.</p></td>
 </tr>
-<tr class="row-even"><td><p>prefixsort_min_rows</p></td>
+<tr class="row-odd"><td><p>prefixsort_min_rows</p></td>
 <td><p>integer</p></td>
 <td><p>128</p></td>
 <td><p>Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.</p></td>
 </tr>
-<tr class="row-odd"><td><p>prefixsort_max_string_prefix_length</p></td>
+<tr class="row-even"><td><p>prefixsort_max_string_prefix_length</p></td>
 <td><p>integer</p></td>
 <td><p>16</p></td>
 <td><p>Byte length of the string prefix stored in the prefix-sort buffer. This doesn’t include the null byte.</p></td>
 </tr>
-<tr class="row-even"><td><p>shuffle_compression_codec</p></td>
+<tr class="row-odd"><td><p>shuffle_compression_codec</p></td>
 <td><p>string</p></td>
 <td><p>none</p></td>
 <td><p>Specifies the compression algorithm type to compress the shuffle data to
 trade CPU for network IO efficiency. The supported compression codecs
 are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.</p></td>
 </tr>
-<tr class="row-odd"><td><p>throw_exception_on_duplicate_map_keys</p></td>
+<tr class="row-even"><td><p>throw_exception_on_duplicate_map_keys</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>By default, if a key is found in multiple given maps, that key’s value in the resulting map comes from the last one of those maps.
 If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions <cite>CreateMap</cite>, <cite>MapFromArrays</cite>, <cite>MapFromEntries</cite>, <cite>StringToMap</cite>, <cite>MapConcat</cite>, <cite>TransformKeys</cite>.</p></td>
 </tr>
-<tr class="row-even"><td><p>index_lookup_join_max_prefetch_batches</p></td>
+<tr class="row-odd"><td><p>index_lookup_join_max_prefetch_batches</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
 then process one input batch at a time.</p></td>
 </tr>
-<tr class="row-odd"><td><p>index_lookup_join_split_output</p></td>
+<tr class="row-even"><td><p>index_lookup_join_split_output</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If this is true, then the index join operator might split output for each input batch based
 on the output batch size control. Otherwise, it tries to produce a single output for each input
 batch.</p></td>
 </tr>
-<tr class="row-even"><td><p>unnest_split_output_batch</p></td>
+<tr class="row-odd"><td><p>unnest_split_output_batch</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If this is true, then the unnest operator might split output for each input batch based on the
 output batch size control. Otherwise, it produces a single output for each input batch.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_num_splits_listened_to</p></td>
+<tr class="row-even"><td><p>max_num_splits_listened_to</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Specifies The max number of input splits to listen to by SplitListener per table scan node per
 worker. It’s up to the SplitListener implementation to respect this config.</p></td>
 </tr>
-<tr class="row-even"><td><p>operator_track_expression_stats</p></td>
+<tr class="row-odd"><td><p>operator_track_expression_stats</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If this is true, then operators that evaluate expressions will track stats for expressions that

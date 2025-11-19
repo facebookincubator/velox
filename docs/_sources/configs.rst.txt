@@ -106,6 +106,12 @@ Generic Configuration
        client. Enforced approximately, not strictly. A larger size can increase network throughput
        for larger clusters and thus decrease query processing time at the expense of reducing the
        amount of memory available for other usage.
+   * - skip_request_data_size_with_single_source_enabled
+     - bool
+     - false
+     -  If true, skip request data size if there is only single source.
+        This is used to optimize the Presto-on-Spark use case where each exchange client
+        has only one shuffle partition source.
    * - local_merge_source_queue_size
      - integer
      - 2
