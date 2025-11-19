@@ -52,9 +52,10 @@ inline std::unique_ptr<common::BigintRange> greaterThanOrEqual(
 }
 
 inline std::unique_ptr<common::NegatedBigintRange> notEqual(
-    int64_t val,
+    int64_t value,
     bool nullAllowed = false) {
-  return std::make_unique<common::NegatedBigintRange>(val, val, nullAllowed);
+  return std::make_unique<common::NegatedBigintRange>(
+      value, value, nullAllowed);
 }
 
 inline std::unique_ptr<common::NegatedBigintRange>

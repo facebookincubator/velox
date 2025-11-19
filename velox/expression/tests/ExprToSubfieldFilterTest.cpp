@@ -23,6 +23,10 @@
 
 using facebook::velox::common::Subfield;
 
+#define VELOX_ASSERT_FILTER(expected, actual)   \
+  ASSERT_TRUE(expected->testingEquals(*actual)) \
+      << expected->toString() << " vs " << actual->toString();
+
 namespace facebook::velox::exec {
 namespace {
 
@@ -83,149 +87,132 @@ class ExprToSubfieldFilterTest : public testing::Test {
 };
 
 TEST_F(ExprToSubfieldFilterTest, eq) {
-  auto call = parseCallExpr("a = 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a = 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  auto bigintRange = dynamic_cast<common::BigintRange*>(filter.get());
-  ASSERT_TRUE(bigintRange);
-  ASSERT_EQ(bigintRange->lower(), 42);
-  ASSERT_EQ(bigintRange->upper(), 42);
-  ASSERT_FALSE(bigintRange->testNull());
+
+  VELOX_ASSERT_FILTER(equal(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, eqExpr) {
-  auto call = parseCallExpr("a = 21 * 2", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a = 21 * 2", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  auto bigintRange = dynamic_cast<common::BigintRange*>(filter.get());
-  ASSERT_TRUE(bigintRange);
-  ASSERT_EQ(bigintRange->lower(), 42);
-  ASSERT_EQ(bigintRange->upper(), 42);
-  ASSERT_FALSE(bigintRange->testNull());
+
+  VELOX_ASSERT_FILTER(equal(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, eqSubfield) {
-  auto call = parseCallExpr("a.b = 42", ROW({{"a", ROW({{"b", BIGINT()}})}}));
+  auto call = parseCallExpr("a.b = 42", ROW("a", ROW("b", BIGINT())));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a", "b"});
-  auto bigintRange = dynamic_cast<common::BigintRange*>(filter.get());
-  ASSERT_TRUE(bigintRange);
-  ASSERT_EQ(bigintRange->lower(), 42);
-  ASSERT_EQ(bigintRange->upper(), 42);
-  ASSERT_FALSE(bigintRange->testNull());
+
+  VELOX_ASSERT_FILTER(equal(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, neq) {
-  auto call = parseCallExpr("a <> 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a <> 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  ASSERT_TRUE(filter->testInt64(41));
-  ASSERT_FALSE(filter->testInt64(42));
-  ASSERT_TRUE(filter->testInt64(43));
+
+  // TODO Optimize to notEqual(42).
+  VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, lte) {
-  auto call = parseCallExpr("a <= 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a <= 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  ASSERT_TRUE(filter->testInt64(41));
-  ASSERT_TRUE(filter->testInt64(42));
-  ASSERT_FALSE(filter->testInt64(43));
+
+  VELOX_ASSERT_FILTER(lessThanOrEqual(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, lt) {
-  auto call = parseCallExpr("a < 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a < 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  ASSERT_TRUE(filter->testInt64(41));
-  ASSERT_FALSE(filter->testInt64(42));
-  ASSERT_FALSE(filter->testInt64(43));
+
+  VELOX_ASSERT_FILTER(lessThan(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, gte) {
-  auto call = parseCallExpr("a >= 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a >= 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  ASSERT_FALSE(filter->testInt64(41));
-  ASSERT_TRUE(filter->testInt64(42));
-  ASSERT_TRUE(filter->testInt64(43));
+
+  VELOX_ASSERT_FILTER(greaterThanOrEqual(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, gt) {
-  auto call = parseCallExpr("a > 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a > 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  ASSERT_FALSE(filter->testInt64(41));
-  ASSERT_FALSE(filter->testInt64(42));
-  ASSERT_TRUE(filter->testInt64(43));
+
+  VELOX_ASSERT_FILTER(greaterThan(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, between) {
-  auto call = parseCallExpr("a between 40 and 42", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a between 40 and 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  for (int i = 39; i <= 43; ++i) {
-    ASSERT_EQ(filter->testInt64(i), 40 <= i && i <= 42);
-  }
+
+  VELOX_ASSERT_FILTER(between(40, 42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, in) {
-  auto call = parseCallExpr("a in (40, 42)", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a in (40, 42)", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  for (int i = 39; i <= 43; ++i) {
-    ASSERT_EQ(filter->testInt64(i), i == 40 || i == 42);
-  }
+
+  VELOX_ASSERT_FILTER(in({40, 42}), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, isNull) {
-  auto call = parseCallExpr("a is null", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a is null", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
-  ASSERT_FALSE(filter->testInt64(0));
-  ASSERT_FALSE(filter->testInt64(42));
-  ASSERT_TRUE(filter->testNull());
+
+  VELOX_ASSERT_FILTER(isNull(), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, like) {
-  auto call = parseCallExpr("a like 'foo%'", ROW({{"a", VARCHAR()}}));
+  auto call = parseCallExpr("a like 'foo%'", ROW("a", VARCHAR()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_FALSE(filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, nonConstant) {
-  auto call =
-      parseCallExpr("a = b + 1", ROW({{"a", BIGINT()}, {"b", BIGINT()}}));
+  auto call = parseCallExpr("a = b + 1", ROW({"a", "b"}, BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_FALSE(filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, userError) {
-  auto call = parseCallExpr("a = 1 / 0", ROW({{"a", BIGINT()}}));
+  auto call = parseCallExpr("a = 1 / 0", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_FALSE(filter);
@@ -238,10 +225,9 @@ TEST_F(ExprToSubfieldFilterTest, dereferenceWithEmptyField) {
       std::make_shared<core::DereferenceTypedExpr>(
           REAL(),
           std::make_shared<core::FieldAccessTypedExpr>(
-              ROW({{"", DOUBLE()}, {"", REAL()}, {"", BIGINT()}}),
-              std::make_shared<core::InputTypedExpr>(ROW(
-                  {{"c0",
-                    ROW({{"", DOUBLE()}, {"", REAL()}, {"", BIGINT()}})}})),
+              ROW({DOUBLE(), REAL(), BIGINT()}),
+              std::make_shared<core::InputTypedExpr>(
+                  ROW("c0", ROW({DOUBLE(), REAL(), BIGINT()}))),
               "c0"),
           1));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
@@ -251,3 +237,5 @@ TEST_F(ExprToSubfieldFilterTest, dereferenceWithEmptyField) {
 
 } // namespace
 } // namespace facebook::velox::exec
+
+#undef VELOX_ASSERT_FILTER
