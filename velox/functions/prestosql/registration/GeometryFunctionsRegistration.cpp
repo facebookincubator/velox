@@ -32,6 +32,8 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "ST_GeomFromBinary"}});
   registerFunction<StAsTextFunction, Varchar, Geometry>(
       {{prefix + "ST_AsText"}});
+  registerFunction<SphericalAsTextFunction, Varchar, SphericalGeography>(
+      {{prefix + "ST_AsText"}});
   registerFunction<StAsBinaryFunction, Varbinary, Geometry>(
       {{prefix + "ST_AsBinary"}});
   registerFunction<StPointFunction, Geometry, double, double>(
