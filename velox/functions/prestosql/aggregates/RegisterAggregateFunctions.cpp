@@ -49,6 +49,7 @@
 #include "velox/functions/prestosql/aggregates/NumericHistogramAggregate.h"
 #include "velox/functions/prestosql/aggregates/QDigestAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/ReduceAgg.h"
+#include "velox/functions/prestosql/aggregates/ReservoirSampleAggregate.h"
 #include "velox/functions/prestosql/aggregates/SetAggregates.h"
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
@@ -239,6 +240,7 @@ void registerAllAggregateFunctions(
       prefix, withCompanionFunctions, overwrite);
   registerNoisySumGaussianAggregate(prefix, withCompanionFunctions, overwrite);
   registerReduceAgg(prefix, withCompanionFunctions, overwrite);
+  registerReservoirSampleAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerSumAggregate(prefix, withCompanionFunctions, overwrite);

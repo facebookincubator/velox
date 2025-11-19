@@ -138,6 +138,7 @@ int main(int argc, char** argv) {
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
+      "reservoir_sample",
   };
 
   if (!FLAGS_presto_url.empty()) {
