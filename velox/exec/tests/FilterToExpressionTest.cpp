@@ -45,7 +45,7 @@ class FilterToExpressionTest : public testing::Test,
   }
 };
 
-TEST_F(FilterToExpressionTest, AlwaysTrue) {
+TEST_F(FilterToExpressionTest, alwaysTrue) {
   auto filter = std::make_unique<common::AlwaysTrue>();
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -57,7 +57,7 @@ TEST_F(FilterToExpressionTest, AlwaysTrue) {
   ASSERT_TRUE(constantExpr->value().value<TypeKind::BOOLEAN>());
 }
 
-TEST_F(FilterToExpressionTest, AlwaysFalse) {
+TEST_F(FilterToExpressionTest, alwaysFalse) {
   auto filter = std::make_unique<common::AlwaysFalse>();
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -69,7 +69,7 @@ TEST_F(FilterToExpressionTest, AlwaysFalse) {
   ASSERT_FALSE(constantExpr->value().value<TypeKind::BOOLEAN>());
 }
 
-TEST_F(FilterToExpressionTest, IsNull) {
+TEST_F(FilterToExpressionTest, isNull) {
   auto filter = std::make_unique<common::IsNull>();
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -78,7 +78,7 @@ TEST_F(FilterToExpressionTest, IsNull) {
   ASSERT_EQ(callExpr->inputs().size(), 1);
 }
 
-TEST_F(FilterToExpressionTest, IsNotNull) {
+TEST_F(FilterToExpressionTest, isNotNull) {
   auto filter = std::make_unique<common::IsNotNull>();
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -93,7 +93,7 @@ TEST_F(FilterToExpressionTest, IsNotNull) {
   ASSERT_EQ(isNullExpr->name(), "is_null");
 }
 
-TEST_F(FilterToExpressionTest, BoolValue) {
+TEST_F(FilterToExpressionTest, boolValue) {
   auto filter = std::make_unique<common::BoolValue>(true, false);
   auto expr = toExpr(filter.get(), BOOLEAN());
 
@@ -112,7 +112,7 @@ TEST_F(FilterToExpressionTest, BoolValue) {
   ASSERT_EQ(constantExpr->value().value<TypeKind::BOOLEAN>(), true);
 }
 
-TEST_F(FilterToExpressionTest, BigintRangeSingleValue) {
+TEST_F(FilterToExpressionTest, bigintRangeSingleValue) {
   auto filter = std::make_unique<common::BigintRange>(42, 42, false);
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -126,7 +126,7 @@ TEST_F(FilterToExpressionTest, BigintRangeSingleValue) {
   ASSERT_EQ(constantExpr->value().value<TypeKind::BIGINT>(), 42);
 }
 
-TEST_F(FilterToExpressionTest, BigintRangeWithRange) {
+TEST_F(FilterToExpressionTest, bigintRangeWithRange) {
   auto filter = std::make_unique<common::BigintRange>(10, 20, false);
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -145,7 +145,7 @@ TEST_F(FilterToExpressionTest, BigintRangeWithRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, NegatedBigintRangeSingleValue) {
+TEST_F(FilterToExpressionTest, negatedBigintRangeSingleValue) {
   auto filter = std::make_unique<common::NegatedBigintRange>(42, 42, false);
   auto expr = toExpr(filter.get(), BIGINT());
 
@@ -189,7 +189,7 @@ TEST_F(FilterToExpressionTest, NegatedBigintRangeSingleValue) {
   }
 }
 
-TEST_F(FilterToExpressionTest, DoubleRange) {
+TEST_F(FilterToExpressionTest, doubleRange) {
   auto filter = std::make_unique<common::DoubleRange>(
       1.5, false, false, 3.5, false, false, false);
   auto expr = toExpr(filter.get(), DOUBLE());
@@ -209,7 +209,7 @@ TEST_F(FilterToExpressionTest, DoubleRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, FloatRange) {
+TEST_F(FilterToExpressionTest, floatRange) {
   auto filter = std::make_unique<common::FloatRange>(
       1.5f, false, true, 3.5f, false, true, false);
   auto expr = toExpr(filter.get(), REAL());
@@ -229,7 +229,7 @@ TEST_F(FilterToExpressionTest, FloatRange) {
   ASSERT_EQ(lessThan->name(), "lt");
 }
 
-TEST_F(FilterToExpressionTest, BytesRange) {
+TEST_F(FilterToExpressionTest, bytesRange) {
   auto filter = std::make_unique<common::BytesRange>(
       "apple", false, false, "orange", false, false, false);
   auto expr = toExpr(filter.get(), VARCHAR());
@@ -249,7 +249,7 @@ TEST_F(FilterToExpressionTest, BytesRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, BigintValuesUsingHashTable) {
+TEST_F(FilterToExpressionTest, bigintValuesUsingHashTable) {
   std::vector<int64_t> values = {10, 20, 30};
   auto filter = common::createBigintValues(values, false);
   auto expr = toExpr(filter.get(), BIGINT());
@@ -280,7 +280,7 @@ TEST_F(FilterToExpressionTest, BigintValuesUsingHashTable) {
   ASSERT_EQ(arrayExpr->inputs().size(), 3);
 }
 
-TEST_F(FilterToExpressionTest, BytesValues) {
+TEST_F(FilterToExpressionTest, bytesValues) {
   std::vector<std::string> values = {"apple", "banana", "orange"};
   auto filter = std::make_unique<common::BytesValues>(values, false);
   auto expr = toExpr(filter.get(), VARCHAR());
@@ -296,7 +296,7 @@ TEST_F(FilterToExpressionTest, BytesValues) {
   ASSERT_EQ(arrayExpr->inputs().size(), 3);
 }
 
-TEST_F(FilterToExpressionTest, NegatedBytesValues) {
+TEST_F(FilterToExpressionTest, negatedBytesValues) {
   std::vector<std::string> values = {"apple", "banana", "orange"};
   auto filter = std::make_unique<common::NegatedBytesValues>(values, false);
   auto expr = toExpr(filter.get(), VARCHAR());
@@ -312,7 +312,7 @@ TEST_F(FilterToExpressionTest, NegatedBytesValues) {
   ASSERT_TRUE(containsExpr->name() == "in" || containsExpr->name() == "or");
 }
 
-TEST_F(FilterToExpressionTest, NegatedBigintValuesUsingHashTable) {
+TEST_F(FilterToExpressionTest, negatedBigintValuesUsingHashTable) {
   std::vector<int64_t> values = {10, 20, 30};
   auto filter = std::make_unique<common::NegatedBigintValuesUsingHashTable>(
       10, 30, values, false);
@@ -343,7 +343,7 @@ TEST_F(FilterToExpressionTest, NegatedBigintValuesUsingHashTable) {
   ASSERT_EQ(isNullExpr->name(), "is_null");
 }
 
-TEST_F(FilterToExpressionTest, TimestampRange) {
+TEST_F(FilterToExpressionTest, timestampRange) {
   auto timestamp1 = Timestamp::fromMillis(1609459200000); // 2021-01-01
   auto timestamp2 = Timestamp::fromMillis(1640995200000); // 2022-01-01
   auto filter =
@@ -365,7 +365,7 @@ TEST_F(FilterToExpressionTest, TimestampRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, BigintMultiRange) {
+TEST_F(FilterToExpressionTest, bigintMultiRange) {
   std::vector<std::unique_ptr<common::BigintRange>> ranges;
   ranges.push_back(std::make_unique<common::BigintRange>(10, 20, false));
   ranges.push_back(std::make_unique<common::BigintRange>(30, 40, false));
@@ -378,7 +378,7 @@ TEST_F(FilterToExpressionTest, BigintMultiRange) {
   ASSERT_EQ(callExpr->inputs().size(), 2);
 }
 
-TEST_F(FilterToExpressionTest, MultiRange) {
+TEST_F(FilterToExpressionTest, multiRange) {
   // Create a MultiRange filter with compatible filters for BIGINT field
   std::vector<std::unique_ptr<common::Filter>> filters;
 
