@@ -39,6 +39,7 @@
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::functions {
@@ -1982,6 +1983,45 @@ struct StMultiPointFunction {
 
  private:
   geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct ToGeometryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<SphericalGeography>& input) {
+    // Every SphericalGeography object is a valid geometry object
+    result = input;
+  }
+};
+
+template <typename T>
+struct ToSphericalGeographyFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<SphericalGeography>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::GeometryDeserializer::deserializeEnvelope(input);
+    Status status = Status::OK();
+    if (!env->isNull()) {
+      status =
+          geospatial::validateLatitudeLongitude(env->getMinY(), env->getMinX());
+      if (FOLLY_UNLIKELY(!status.ok())) {
+        return status;
+      }
+      status =
+          geospatial::validateLatitudeLongitude(env->getMaxY(), env->getMaxX());
+      if (FOLLY_UNLIKELY(!status.ok())) {
+        return status;
+      }
+    }
+
+    result = input;
+    return status;
+  }
 };
 
 } // namespace facebook::velox::functions

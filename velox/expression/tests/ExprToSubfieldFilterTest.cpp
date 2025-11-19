@@ -68,17 +68,13 @@ class ExprToSubfieldFilterTest : public testing::Test {
 
   std::pair<common::Subfield, std::unique_ptr<common::Filter>>
   leafCallToSubfieldFilter(const core::CallTypedExprPtr& call) {
-    Subfield subfield;
-    auto filter =
-        ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-            *call, subfield, evaluator());
-    return {std::move(subfield), std::move(filter)};
-  }
+    if (auto result =
+            ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
+                *call, evaluator())) {
+      return std::move(result.value());
+    }
 
-  std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-      const core::TypedExprPtr& expr) {
-    return ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
-        expr, evaluator());
+    return std::make_pair(common::Subfield(), nullptr);
   }
 
  private:
@@ -215,55 +211,6 @@ TEST_F(ExprToSubfieldFilterTest, isNull) {
   ASSERT_TRUE(filter->testNull());
 }
 
-TEST_F(ExprToSubfieldFilterTest, isNotNull) {
-  auto call = parseCallExpr("a is not null", ROW({{"a", BIGINT()}}));
-  auto [subfield, filter] = toSubfieldFilter(call);
-
-  ASSERT_TRUE(filter);
-  validateSubfield(subfield, {"a"});
-  ASSERT_TRUE(filter->testInt64(0));
-  ASSERT_TRUE(filter->testInt64(42));
-  ASSERT_FALSE(filter->testNull());
-}
-
-TEST_F(ExprToSubfieldFilterTest, or) {
-  auto call = parseExpr("a = 42 OR a = 43", ROW({{"a", BIGINT()}}));
-  auto [subfield, filter] = toSubfieldFilter(call);
-
-  ASSERT_TRUE(filter);
-  validateSubfield(subfield, {"a"});
-  ASSERT_TRUE(filter->testInt64(42));
-  ASSERT_TRUE(filter->testInt64(43));
-  ASSERT_FALSE(filter->testInt64(41));
-  ASSERT_FALSE(filter->testNull());
-}
-
-TEST_F(ExprToSubfieldFilterTest, unsupported) {
-  const auto type = ROW({"a", "b", "c"}, BIGINT());
-
-  VELOX_ASSERT_THROW(
-      toSubfieldFilter(parseExpr("123", type)),
-      "Unsupported expression for range filter");
-
-  VELOX_ASSERT_THROW(
-      toSubfieldFilter(parseCallExpr("a + b", type)),
-      "Unsupported expression for range filter");
-
-  VELOX_ASSERT_THROW(
-      toSubfieldFilter(parseCallExpr("(a + b > 0) OR (c = 1)", type)),
-      "Unsupported expression for range filter");
-
-  // TODO Improve error message for this specific use case. Then use
-  // VELOX_ASSERT_THROW.
-  EXPECT_THROW(
-      toSubfieldFilter(parseCallExpr("a = 1 OR c = 2", type)),
-      VeloxRuntimeError);
-
-  VELOX_ASSERT_THROW(
-      toSubfieldFilter(parseCallExpr("a = 1 AND b = 2", type)),
-      "Unsupported expression for range filter");
-}
-
 TEST_F(ExprToSubfieldFilterTest, like) {
   auto call = parseCallExpr("a like 'foo%'", ROW({{"a", VARCHAR()}}));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
@@ -302,112 +249,6 @@ TEST_F(ExprToSubfieldFilterTest, dereferenceWithEmptyField) {
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
   ASSERT_FALSE(filter);
-}
-
-class CustomExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
- public:
-  std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator) override {
-    if (expr->isCallKind();
-        auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
-      if (call->name() == "or") {
-        auto left = toSubfieldFilter(call->inputs()[0], evaluator);
-        auto right = toSubfieldFilter(call->inputs()[1], evaluator);
-        VELOX_CHECK(left.first == right.first);
-        return {
-            std::move(left.first),
-            makeOrFilter(std::move(left.second), std::move(right.second))};
-      }
-      common::Subfield subfield;
-      std::unique_ptr<common::Filter> filter;
-      if (call->name() == "not") {
-        if (auto* inner =
-                call->inputs()[0]->asUnchecked<core::CallTypedExpr>()) {
-          filter = leafCallToSubfieldFilter(*inner, subfield, evaluator, true);
-        }
-      } else {
-        filter = leafCallToSubfieldFilter(*call, subfield, evaluator, false);
-      }
-      if (filter) {
-        return std::make_pair(std::move(subfield), std::move(filter));
-      }
-    }
-    VELOX_UNSUPPORTED(
-        "Unsupported expression for range filter: {}", expr->toString());
-  }
-
-  std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
-      const core::CallTypedExpr& call,
-      common::Subfield& subfield,
-      core::ExpressionEvaluator* evaluator,
-      bool negated) override {
-    if (call.inputs().empty()) {
-      return nullptr;
-    }
-
-    const auto* leftSide = call.inputs()[0].get();
-
-    if (call.name() == "custom_eq") {
-      if (toSubfield(leftSide, subfield)) {
-        return negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
-                       : makeEqualFilter(call.inputs()[1], evaluator);
-      }
-    } else if (call.name() == "is_null") {
-      if (toSubfield(call.inputs()[0].get(), subfield)) {
-        if (negated) {
-          return isNotNull();
-        }
-        return isNull();
-      }
-    }
-    return nullptr;
-  }
-};
-
-class CustomExprToSubfieldFilterTest : public ExprToSubfieldFilterTest {
- public:
-  static void SetUpTestSuite() {
-    functions::prestosql::registerAllScalarFunctions("custom_");
-    functions::registerIsNullFunction("is_null");
-    parse::registerTypeResolver();
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    ExprToSubfieldFilterParser::registerParser(
-        std::make_unique<CustomExprToSubfieldFilterParser>());
-  }
-
-  static void TearDownTestSuite() {
-    ExprToSubfieldFilterParser::registerParser(
-        std::make_unique<PrestoExprToSubfieldFilterParser>());
-  }
-};
-
-TEST_F(CustomExprToSubfieldFilterTest, isNull) {
-  auto call = parseCallExpr("a is null", ROW({{"a", BIGINT()}}));
-  auto [subfield, filter] = toSubfieldFilter(call);
-  ASSERT_TRUE(filter);
-  validateSubfield(subfield, {"a"});
-  ASSERT_FALSE(filter->testInt64(0));
-  ASSERT_FALSE(filter->testInt64(42));
-  ASSERT_TRUE(filter->testNull());
-}
-
-TEST_F(CustomExprToSubfieldFilterTest, eq) {
-  auto call = parseCallExpr("custom_eq(a, 42)", ROW({{"a", BIGINT()}}));
-  auto [subfield, filter] = toSubfieldFilter(call);
-  ASSERT_TRUE(filter);
-  validateSubfield(subfield, {"a"});
-  auto bigintRange = dynamic_cast<common::BigintRange*>(filter.get());
-  ASSERT_TRUE(bigintRange);
-  ASSERT_EQ(bigintRange->lower(), 42);
-  ASSERT_EQ(bigintRange->upper(), 42);
-  ASSERT_FALSE(bigintRange->testNull());
-}
-
-TEST_F(CustomExprToSubfieldFilterTest, unsupported) {
-  auto call = parseCallExpr("custom_neq(a, 42)", ROW({{"a", BIGINT()}}));
-  VELOX_ASSERT_USER_THROW(
-      toSubfieldFilter(call), "Unsupported expression for range filter");
 }
 
 } // namespace

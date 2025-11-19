@@ -365,15 +365,15 @@ std::vector<std::unique_ptr<StreamLoader>> writeToNimbleAndGetStreamLoaders(
     auto numChildren = chunkVectors[0]->as<RowVector>()->childrenSize();
 
     auto readFile = std::make_unique<InMemoryReadFile>(file);
-    TabletReader tablet(*pool, std::move(readFile));
-    auto stripeIdentifier = tablet.getStripeIdentifier(0);
+    auto tablet = TabletReader::create(std::move(readFile), *pool);
+    auto stripeIdentifier = tablet->stripeIdentifier(0);
     // VELOX_CHECK_EQ(numChildren + 1, tablet.streamCount(stripeIdentifier));
 
     std::vector<uint32_t> streamIds;
     streamIds.resize(numChildren);
     std::iota(streamIds.begin(), streamIds.end(), 1);
     auto streamLoaders =
-        tablet.load(stripeIdentifier, std::span<const uint32_t>(streamIds));
+        tablet->load(stripeIdentifier, std::span<const uint32_t>(streamIds));
 
     for (auto& loader : streamLoaders) {
       allStreamLoaders.push_back(std::move(loader));

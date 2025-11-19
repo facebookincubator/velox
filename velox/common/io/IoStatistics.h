@@ -43,6 +43,24 @@ struct OperationCounters {
 
 class IoCounter {
  public:
+  IoCounter& operator=(const IoCounter& other) noexcept {
+    if (this != &other) {
+      count_.store(
+          other.count_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+      sum_.store(
+          other.sum_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+      min_.store(
+          other.min_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+      max_.store(
+          other.max_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+    }
+    return *this;
+  }
+
   uint64_t count() const {
     return count_;
   }

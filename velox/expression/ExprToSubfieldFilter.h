@@ -424,39 +424,25 @@ class ExprToSubfieldFilterParser {
     parser_ = std::move(parser);
   }
 
-  /// Analyzes 'expr' to determine if it can be expressed as a subfield filter.
-  /// Returns a pair of subfield and filter if so. Otherwise, throws.
-  ///
-  /// Supports all expressions supported by leafCallToSubfieldFilter + negations
-  /// and disjunctions over same subfield.
-  ///  Examples:
-  ///    a = 1
-  ///    a = 1 OR a > 10
-  ///    not (a = 1)
-  ///
-  /// TODO Improve the API by returning std::optional instead of throwing.
-  virtual std::pair<common::Subfield, std::unique_ptr<common::Filter>>
-  toSubfieldFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator*) = 0;
-
   /// Analyzes 'call' expression to determine if it can be expressed as a
-  /// subfield filter. Returns the filter and sets 'subfield' output argument if
-  /// so. Otherwise, returns nullptr. If 'negated' is true, considers the
-  /// negation of 'call' expressions (not(call)). It is possible that 'call'
-  /// expression can be represented as subfield filter, but its negation cannot.
-  ///
-  /// TODO Make this and toSubfieldFilter APIs consistent. Both should not throw
-  /// and return std::optional pair of filter and subfield.
-  virtual std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
+  /// subfield filter. Returns the subfield and filter if so. Otherwise, returns
+  /// std::nullopt. If 'negated' is true, considers the negation of 'call'
+  /// expressions (not(call)). It is possible that 'call' expression can be
+  /// represented as subfield filter, but its negation cannot.
+  virtual std::optional<
+      std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+  leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
-      common::Subfield& subfield,
       core::ExpressionEvaluator* evaluator,
       bool negated = false) = 0;
 
+  static std::unique_ptr<common::Filter> makeOrFilter(
+      std::unique_ptr<common::Filter> a,
+      std::unique_ptr<common::Filter> b);
+
  protected:
-  // Converts an expression into a subfield. Returns false if the expression is
-  // not a valid field expression.
+  // Converts an expression into a subfield. Returns false if the expression
+  // is not a valid field expression.
   static bool toSubfield(
       const core::ITypedExpr* field,
       common::Subfield& subfield);
@@ -505,10 +491,6 @@ class ExprToSubfieldFilterParser {
       core::ExpressionEvaluator* evaluator,
       bool negated);
 
-  static std::unique_ptr<common::Filter> makeOrFilter(
-      std::unique_ptr<common::Filter> a,
-      std::unique_ptr<common::Filter> b);
-
  private:
   // Singleton parser instance.
   static std::shared_ptr<ExprToSubfieldFilterParser> parser_;
@@ -517,13 +499,9 @@ class ExprToSubfieldFilterParser {
 // Parser for Presto expressions.
 class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
  public:
-  std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator) override;
-
-  std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
+  std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+  leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
-      common::Subfield& subfield,
       core::ExpressionEvaluator* evaluator,
       bool negated = false) override;
 };

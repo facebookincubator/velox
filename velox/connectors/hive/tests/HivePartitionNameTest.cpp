@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/connectors/hive/HivePartitionName.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -26,7 +26,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::dwio::catalog::fbhive;
 
-class HivePartitionUtilTest : public ::testing::Test,
+class HivePartitionNameTest : public ::testing::Test,
                               public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -62,9 +62,26 @@ class HivePartitionUtilTest : public ::testing::Test,
         input->size(),
         partitions);
   }
+
+  static auto toPartitionName() {
+    return [](auto value, const TypePtr& type, int /*columnIndex*/) {
+      return HivePartitionName::toName(value, type);
+    };
+  }
+
+  std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
+      RowVectorPtr input,
+      const std::vector<column_index_t>& partitionChannels,
+      vector_size_t rowIndex = 0) {
+    return HivePartitionName::partitionKeyValues(
+        rowIndex,
+        makePartitionsVector(input, partitionChannels),
+        /*nullValueString=*/"",
+        toPartitionName());
+  }
 };
 
-TEST_F(HivePartitionUtilTest, partitionName) {
+TEST_F(HivePartitionNameTest, partitionName) {
   {
     RowVectorPtr input = makeRowVector(
         {"flat_bool_col",
@@ -102,9 +119,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
 
       EXPECT_EQ(
           FileUtils::makePartName(
-              HivePartitionUtil::extractPartitionKeyValues(
-                  makePartitionsVector(input, partitionChannels), 0),
-              true),
+              extractPartitionKeyValues(input, partitionChannels), true),
           folly::join(
               "/",
               std::vector<std::string>(
@@ -124,14 +139,12 @@ TEST_F(HivePartitionUtilTest, partitionName) {
 
     VELOX_ASSERT_THROW(
         FileUtils::makePartName(
-            HivePartitionUtil::extractPartitionKeyValues(
-                makePartitionsVector(input, partitionChannels), 0),
-            true),
+            extractPartitionKeyValues(input, partitionChannels), true),
         "Unsupported partition type: MAP");
   }
 }
 
-TEST_F(HivePartitionUtilTest, partitionNameForNull) {
+TEST_F(HivePartitionNameTest, partitionNameForNull) {
   std::vector<std::string> partitionColumnNames{
       "flat_bool_col",
       "flat_tinyint_col",
@@ -155,15 +168,14 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
 
   for (auto i = 0; i < partitionColumnNames.size(); i++) {
     std::vector<column_index_t> partitionChannels = {(column_index_t)i};
-    auto partitionEntries = HivePartitionUtil::extractPartitionKeyValues(
-        makePartitionsVector(input, partitionChannels), 0);
+    auto partitionEntries = extractPartitionKeyValues(input, partitionChannels);
     EXPECT_EQ(1, partitionEntries.size());
     EXPECT_EQ(partitionColumnNames[i], partitionEntries[0].first);
     EXPECT_EQ("", partitionEntries[0].second);
   }
 }
 
-TEST_F(HivePartitionUtilTest, timestampPartitionValueFormatting) {
+TEST_F(HivePartitionNameTest, timestampPartitionValueFormatting) {
   // Test timestamp partition value formatting to match Presto's
   // java.sql.Timestamp.toString() behavior: removes trailing zeros but keeps at
   // least one decimal place
@@ -192,11 +204,10 @@ TEST_F(HivePartitionUtilTest, timestampPartitionValueFormatting) {
       makeRowVector({"timestamp_col"}, {makeFlatVector<Timestamp>(timestamps)});
 
   std::vector<column_index_t> partitionChannels{0};
-  auto partitionsVector = makePartitionsVector(input, partitionChannels);
 
   for (size_t i = 0; i < timestamps.size(); i++) {
-    auto partitionEntries = HivePartitionUtil::extractPartitionKeyValues(
-        partitionsVector, static_cast<vector_size_t>(i));
+    auto partitionEntries =
+        extractPartitionKeyValues(input, partitionChannels, i);
 
     EXPECT_EQ(1, partitionEntries.size());
     EXPECT_EQ("timestamp_col", partitionEntries[0].first);

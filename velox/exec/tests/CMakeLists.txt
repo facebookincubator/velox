@@ -90,6 +90,7 @@ add_executable(
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
   SpatialIndexTest.cpp
+  HilbertIndexTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp

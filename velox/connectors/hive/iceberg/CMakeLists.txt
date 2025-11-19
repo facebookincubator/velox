@@ -15,11 +15,20 @@
 velox_add_library(
   velox_hive_iceberg_splitreader
   IcebergDataSink.cpp
-  IcebergPartitionPath.cpp
+  IcebergPartitionName.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
   PartitionSpec.cpp
   PositionalDeleteFileReader.cpp
+  TransformEvaluator.cpp
+  TransformExprBuilder.cpp
+)
+
+velox_link_libraries(
+  velox_hive_iceberg_splitreader
+  velox_connector
+  velox_functions_iceberg
+  Folly::folly
 )
 
 velox_link_libraries(velox_hive_iceberg_splitreader velox_connector Folly::folly)
