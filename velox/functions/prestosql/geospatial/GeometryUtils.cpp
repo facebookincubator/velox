@@ -498,4 +498,84 @@ bool isPointOrRectangle(const geos::geom::Geometry& geometry) {
   return true;
 }
 
+std::pair<double, double> computeSphericalCentroid(
+    const geos::geom::MultiPoint& multiPoint) {
+  VELOX_CHECK(
+      !multiPoint.isEmpty(),
+      "computeSphericalCentroid does not handle empty geometries");
+  auto numPoints = multiPoint.getNumGeometries();
+
+  // If only one point in the multipoint, return it
+  if (numPoints == 1) {
+    const geos::geom::Point* point =
+        static_cast<const geos::geom::Point*>(multiPoint.getGeometryN(0));
+    double longitude = point->getX();
+    double latitude = point->getY();
+
+    return {longitude, latitude};
+  }
+
+  // Convert all points to Cartesian coordinates and sum
+  double x3DTotal = 0.0;
+  double y3DTotal = 0.0;
+  double z3DTotal = 0.0;
+
+  for (int i = 0; i < numPoints; i++) {
+    const geos::geom::Point* point = multiPoint.getGeometryN(i);
+    double longitude = point->getX();
+    double latitude = point->getY();
+
+    // Convert to Cartesian coordinates
+    CartesianPoint cp(longitude, latitude);
+    x3DTotal += cp.getX();
+    y3DTotal += cp.getY();
+    z3DTotal += cp.getZ();
+  }
+
+  // Calculate the length of the centroid vector
+  double centroidVectorLength = std::sqrt(
+      x3DTotal * x3DTotal + y3DTotal * y3DTotal + z3DTotal * z3DTotal);
+
+  VELOX_CHECK(
+      centroidVectorLength != 0.0,
+      fmt::format(
+          "Unexpected error. Average vector length adds to zero ({}, {}, {})",
+          x3DTotal,
+          y3DTotal,
+          z3DTotal));
+
+  // Normalize and convert back to spherical coordinates
+  CartesianPoint centroid(
+      x3DTotal / centroidVectorLength,
+      y3DTotal / centroidVectorLength,
+      z3DTotal / centroidVectorLength);
+
+  return centroid.toSphericalPoint();
+}
+
+CartesianPoint::CartesianPoint(double longitude, double latitude) {
+  // Angle from North Pole down to Latitude, in Radians
+  double phi = (90.0 - latitude) * M_PI / 180.0;
+  double sinPhi = std::sin(phi);
+  // Angle from Greenwich to Longitude, in Radians
+  double theta = longitude * M_PI / 180.0;
+
+  x_ = BingTileType::kEarthRadiusKm * sinPhi * std::cos(theta);
+  y_ = BingTileType::kEarthRadiusKm * sinPhi * std::sin(theta);
+  z_ = BingTileType::kEarthRadiusKm * std::cos(phi);
+}
+
+CartesianPoint::CartesianPoint(double x, double y, double z)
+    : x_(x), y_(y), z_(z) {}
+
+std::pair<double, double> CartesianPoint::toSphericalPoint() const {
+  // Angle from North Pole down to Latitude, in Radians
+  double phi = std::atan2(std::sqrt(x_ * x_ + y_ * y_), z_);
+  // Angle from Greenwich to Longitude, in Radians
+  double theta = std::atan2(y_, x_);
+  double latitude = 90.0 - phi * 180.0 / M_PI;
+  double longitude = theta * 180.0 / M_PI;
+  return {longitude, latitude};
+}
+
 } // namespace facebook::velox::functions::geospatial
