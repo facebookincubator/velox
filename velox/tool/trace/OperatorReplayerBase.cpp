@@ -64,7 +64,7 @@ OperatorReplayerBase::OperatorReplayerBase(
   VELOX_USER_CHECK(!taskId_.empty());
   VELOX_USER_CHECK(!nodeId_.empty());
   VELOX_USER_CHECK(!nodeName_.empty());
-  if (nodeName_ == "HashJoin") {
+  if (nodeName_ == "HashJoin" || nodeName_ == "MergeJoin") {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 2);
   } else {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 1);
