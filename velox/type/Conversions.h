@@ -248,6 +248,9 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
 /// a StringView of the trimmed string.
 std::string_view trimWhiteSpace(const char* data, size_t length);
 
+/// Removes trailing numeric type suffix ('f', 'F', 'd', 'D') from the input.
+StringView trimNumericSuffix(const StringView& view);
+
 /// To TINYINT, SMALLINT, INTEGER, BIGINT, and HUGEINT converter.
 template <TypeKind KIND, typename TPolicy>
 struct Converter<

@@ -110,24 +110,14 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
       removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
 }
 
-StringView trimNumericSuffix(const StringView& v) {
-  if (!v.empty()) {
-    char last = *(v.end() - 1);
-    if (last == 'f' || last == 'F' || last == 'd' || last == 'D') {
-      return StringView(v.data(), v.size() - 1);
-    }
-  }
-  return v;
-}
-
 Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {
-  auto trimmed = trimNumericSuffix(data);
+  auto trimmed = util::trimNumericSuffix(data);
   return util::Converter<TypeKind::REAL>::tryCast(trimmed);
 }
 
 Expected<double> SparkCastHooks::castStringToDouble(
     const StringView& data) const {
-  auto trimmed = trimNumericSuffix(data);
+  auto trimmed =  util::trimNumericSuffix(data);
   return util::Converter<TypeKind::DOUBLE>::tryCast(trimmed);
 }
 
