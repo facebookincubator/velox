@@ -24,8 +24,52 @@ on:
         type: boolean
 
 jobs:
+
+  get-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
+      changed-files: ${{ steps.changes.outputs.files}}
+      diff-range: ${{ steps.changes.outputs.range }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          merge_base_commit=$(gh api -q '.merge_base_commit.sha' \
+            /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+          )
+
+          range="$merge_base_commit..$HEAD_SHA"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+
+          git diff --name-only $range > changed_files.txt
+
+          cpp_files='.+\.(cpp|h|hpp)$'
+
+          {
+            echo 'files<<EOF'
+            cat changed_files.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          if grep -qE $cpp_files changed_files.txt; then
+            echo "run_clang_tidy=true" >> "$GITHUB_OUTPUT"
+          fi
+
   adapters:
     name: Linux release with adapters
+    needs: get-changes
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 8-core-ubuntu-22.04
@@ -145,6 +189,21 @@ jobs:
 
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
+
+      # Clang-tidy needs a complete build because some files are only generated during the build
+      # that clang tidy will not find and report errors otherwise.
+      # When clang is used a number of dependencies are excluded from the build so we don't
+      # need to run clang-tidy for that.
+      # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
+      - name: Run clang-tidy
+        if: ${{ ! inputs.use-clang }}
+        env:
+          FILES: ${{ needs.get-changes.outputs.changed-files }}
+          RANGE: ${{ needs.get-changes.outputs.diff-range }}
+        run: |
+          git config --global --add safe.directory /__w/velox/velox
+
+          python ./scripts/checks/run-clang-tidy.py -p $(realpath ./_build/release) --commit $RANGE $FILES
 
   ubuntu-debug:
     runs-on: 8-core-ubuntu-22.04
