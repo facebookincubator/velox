@@ -47,12 +47,12 @@ class CudfHiveConnectorTestBase
   void resetCudfHiveConnector(
       const std::shared_ptr<const facebook::velox::config::ConfigBase>& config);
 
-  void writeToFile(
+  static void writeToFile(
       const std::string& filePath,
       RowVectorPtr vector,
       std::string prefix = "c");
 
-  void writeToFile(
+  static void writeToFile(
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,
       std::string prefix = "c");
