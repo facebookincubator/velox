@@ -15,6 +15,7 @@
  */
 #include "velox/exec/GroupingSet.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -1246,6 +1247,9 @@ void GroupingSet::prepareSpillResultWithoutAggregates(
     spillResultWithoutAggregates_->childAt(groupingKeyOutputProjections_[i]) =
         std::move(result->childAt(i));
   }
+
+  spillSources_.resize(maxOutputRows);
+  spillSourceRows_.resize(maxOutputRows);
 }
 
 void GroupingSet::projectResult(const RowVectorPtr& result) {
@@ -1266,6 +1270,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
   VELOX_CHECK_EQ(
       numDistinctSpillFilesPerPartition_.size(),
       1 << spillConfig_->numPartitionBits);
+  VELOX_CHECK(pool_ == result->pool());
 
   // We are looping over sorted rows produced by tree-of-losers. We logically
   // split the stream into runs of duplicate rows. As we process each run we
@@ -1280,9 +1285,11 @@ bool GroupingSet::mergeNextWithoutAggregates(
   // less than 'numDistinctSpillFilesPerPartition_'.
   bool newDistinct{true};
   int32_t numOutputRows{0};
+  int32_t outputSize{0};
+  bool isEndOfBatch = false;
   prepareSpillResultWithoutAggregates(maxOutputRows, result);
 
-  while (numOutputRows < maxOutputRows) {
+  while (numOutputRows + outputSize < maxOutputRows) {
     const auto next = merge_->nextWithEquals();
     auto* stream = next.first;
     if (stream == nullptr) {
@@ -1296,6 +1303,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
       VELOX_CHECK_NOT_NULL(merge_);
       continue;
     }
+    auto index = stream->currentIndex(&isEndOfBatch);
     if (stream->id() <
         numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
       newDistinct = false;
@@ -1306,11 +1314,34 @@ bool GroupingSet::mergeNextWithoutAggregates(
     }
     if (newDistinct) {
       // Yield result for new distinct.
-      spillResultWithoutAggregates_->copy(
-          &stream->current(), numOutputRows++, stream->currentIndex(), 1);
+      spillSources_[outputSize] = &stream->current();
+      spillSourceRows_[outputSize] = index;
+      ++outputSize;
+    }
+
+    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+      // The stream is at end of input batch. Need to copy out the rows before
+      // fetching next batch in 'pop'.
+      gatherCopy(
+          spillResultWithoutAggregates_.get(),
+          numOutputRows,
+          outputSize,
+          spillSources_,
+          spillSourceRows_);
+      numOutputRows += outputSize;
+      outputSize = 0;
     }
     stream->pop();
     newDistinct = true;
+  }
+  if (FOLLY_LIKELY(outputSize != 0)) {
+    gatherCopy(
+        spillResultWithoutAggregates_.get(),
+        numOutputRows,
+        outputSize,
+        spillSources_,
+        spillSourceRows_);
+    numOutputRows += outputSize;
   }
   spillResultWithoutAggregates_->resize(numOutputRows);
   projectResult(result);
