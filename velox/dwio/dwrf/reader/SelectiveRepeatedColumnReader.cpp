@@ -60,7 +60,6 @@ SelectiveListColumnReader::SelectiveListColumnReader(
           params,
           scanSpec),
       length_(makeLengthDecoder(*fileType_, params, *memoryPool_)) {
-  VELOX_CHECK_EQ(fileType_->id(), fileType->id(), "working on the same node");
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   // count the number of selected sub-columns
@@ -84,6 +83,45 @@ SelectiveListColumnReader::SelectiveListColumnReader(
   children_ = {child_.get()};
 }
 
+namespace {
+
+void makeMapChildrenReaders(
+    const dwio::common::TypeWithId& fileType,
+    const Type& requestedType,
+    DwrfParams& params,
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    const common::ScanSpec& scanSpec,
+    std::unique_ptr<dwio::common::SelectiveColumnReader>& keyReader,
+    std::unique_ptr<dwio::common::SelectiveColumnReader>& elementReader) {
+  const EncodingKey encodingKey{
+      fileType.id(), params.flatMapContext().sequence};
+  auto& stripe = params.stripeStreams();
+  DwrfParams keyParams(
+      stripe,
+      params.streamLabels(),
+      params.runtimeStatistics(),
+      flatMapContextFromEncodingKey(encodingKey));
+  keyReader = SelectiveDwrfReader::build(
+      columnReaderOptions,
+      requestedType.childAt(0),
+      fileType.childAt(0),
+      keyParams,
+      *scanSpec.children()[0]);
+  DwrfParams elementParams = DwrfParams(
+      stripe,
+      params.streamLabels(),
+      params.runtimeStatistics(),
+      flatMapContextFromEncodingKey(encodingKey));
+  elementReader = SelectiveDwrfReader::build(
+      columnReaderOptions,
+      requestedType.childAt(1),
+      fileType.childAt(1),
+      elementParams,
+      *scanSpec.children()[1]);
+}
+
+} // namespace
+
 SelectiveMapColumnReader::SelectiveMapColumnReader(
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
     const TypePtr& requestedType,
@@ -96,42 +134,37 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
           params,
           scanSpec),
       length_(makeLengthDecoder(*fileType_, params, *memoryPool_)) {
-  VELOX_CHECK_EQ(fileType_->id(), fileType->id(), "working on the same node");
-  const EncodingKey encodingKey{
-      fileType_->id(), params.flatMapContext().sequence};
-  auto& stripe = params.stripeStreams();
-  if (scanSpec_->children().empty()) {
-    scanSpec_->getOrCreateChild(common::ScanSpec::kMapKeysFieldName);
-    scanSpec_->getOrCreateChild(common::ScanSpec::kMapValuesFieldName);
-  }
-  scanSpec_->children()[0]->setProjectOut(true);
-  scanSpec_->children()[1]->setProjectOut(true);
-
-  auto& keyType = requestedType_->childAt(0);
-  auto keyParams = DwrfParams(
-      stripe,
-      params.streamLabels(),
-      params.runtimeStatistics(),
-      flatMapContextFromEncodingKey(encodingKey));
-  keyReader_ = SelectiveDwrfReader::build(
+  makeMapChildrenReaders(
+      *fileType_,
+      *requestedType_,
+      params,
       columnReaderOptions,
-      keyType,
-      fileType_->childAt(0),
-      keyParams,
-      *scanSpec_->children()[0].get());
+      *scanSpec_,
+      keyReader_,
+      elementReader_);
+  children_ = {keyReader_.get(), elementReader_.get()};
+}
 
-  auto& valueType = requestedType_->childAt(1);
-  auto elementParams = DwrfParams(
-      stripe,
-      params.streamLabels(),
-      params.runtimeStatistics(),
-      flatMapContextFromEncodingKey(encodingKey));
-  elementReader_ = SelectiveDwrfReader::build(
+SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    const TypePtr& requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+    DwrfParams& params,
+    common::ScanSpec& scanSpec)
+    : dwio::common::SelectiveMapAsStructColumnReader(
+          requestedType,
+          fileType,
+          params,
+          scanSpec),
+      length_(makeLengthDecoder(*fileType_, params, *memoryPool_)) {
+  makeMapChildrenReaders(
+      *fileType_,
+      *requestedType_,
+      params,
       columnReaderOptions,
-      valueType,
-      fileType_->childAt(1),
-      elementParams,
-      *scanSpec_->children()[1]);
+      mapScanSpec_,
+      keyReader_,
+      elementReader_);
   children_ = {keyReader_.get(), elementReader_.get()};
 }
 

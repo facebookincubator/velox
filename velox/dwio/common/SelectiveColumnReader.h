@@ -27,6 +27,8 @@
 
 namespace facebook::velox::dwio::common {
 
+using ScanSpec = velox::common::ScanSpec;
+
 /// Generalized representation of a set of distinct values for dictionary
 /// encodings.
 struct DictionaryValues {
