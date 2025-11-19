@@ -68,11 +68,13 @@ class ExprToSubfieldFilterTest : public testing::Test {
 
   std::pair<common::Subfield, std::unique_ptr<common::Filter>>
   leafCallToSubfieldFilter(const core::CallTypedExprPtr& call) {
-    Subfield subfield;
-    auto filter =
-        ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-            *call, subfield, evaluator());
-    return {std::move(subfield), std::move(filter)};
+    if (auto result =
+            ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
+                *call, evaluator())) {
+      return std::move(result.value());
+    }
+
+    return std::make_pair(common::Subfield(), nullptr);
   }
 
   std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
@@ -319,49 +321,53 @@ class CustomExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
             std::move(left.first),
             makeOrFilter(std::move(left.second), std::move(right.second))};
       }
-      common::Subfield subfield;
-      std::unique_ptr<common::Filter> filter;
       if (call->name() == "not") {
         if (auto* inner =
                 call->inputs()[0]->asUnchecked<core::CallTypedExpr>()) {
-          filter = leafCallToSubfieldFilter(*inner, subfield, evaluator, true);
+          if (auto result = leafCallToSubfieldFilter(*inner, evaluator, true)) {
+            return std::move(result.value());
+          }
         }
       } else {
-        filter = leafCallToSubfieldFilter(*call, subfield, evaluator, false);
-      }
-      if (filter) {
-        return std::make_pair(std::move(subfield), std::move(filter));
+        if (auto result = leafCallToSubfieldFilter(*call, evaluator, false)) {
+          return std::move(result.value());
+        }
       }
     }
     VELOX_UNSUPPORTED(
         "Unsupported expression for range filter: {}", expr->toString());
   }
 
-  std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
+  std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+  leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
-      common::Subfield& subfield,
       core::ExpressionEvaluator* evaluator,
       bool negated) override {
     if (call.inputs().empty()) {
-      return nullptr;
+      return std::nullopt;
     }
 
     const auto* leftSide = call.inputs()[0].get();
 
+    common::Subfield subfield;
     if (call.name() == "custom_eq") {
       if (toSubfield(leftSide, subfield)) {
-        return negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
-                       : makeEqualFilter(call.inputs()[1], evaluator);
+        auto filter = negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
+                              : makeEqualFilter(call.inputs()[1], evaluator);
+        if (filter != nullptr) {
+          return std::make_pair(std::move(subfield), std::move(filter));
+        }
+        return std::nullopt;
       }
     } else if (call.name() == "is_null") {
       if (toSubfield(call.inputs()[0].get(), subfield)) {
         if (negated) {
-          return isNotNull();
+          return std::make_pair(std::move(subfield), isNotNull());
         }
-        return isNull();
+        return std::make_pair(std::move(subfield), isNull());
       }
     }
-    return nullptr;
+    return std::nullopt;
   }
 };
 
