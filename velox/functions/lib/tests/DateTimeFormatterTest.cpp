@@ -2368,16 +2368,16 @@ TEST_F(SimpleDateTimeFormatterTest, parseSimpleWeekOfMonth) {
     // Format contains year, month, weekOfMonth and dayOfWeek.
     EXPECT_EQ(
         fromTimestampString("2024-08-02"),
-        parseSimple("2024 08 01 5", "yyyy MM WW e", lenient).timestamp);
+        parseSimple("2024 08 01 5", "yyyy MM WW u", lenient).timestamp);
     EXPECT_EQ(
         fromTimestampString("2024-08-03"),
-        parseSimple("2024 08 01 6", "yyyy MM WW e", lenient).timestamp);
+        parseSimple("2024 08 01 6", "yyyy MM WW u", lenient).timestamp);
     EXPECT_EQ(
         fromTimestampString("2024-08-09"),
-        parseSimple("2024 08 02 5", "yyyy MM WW e", lenient).timestamp);
+        parseSimple("2024 08 02 5", "yyyy MM WW u", lenient).timestamp);
     EXPECT_EQ(
         fromTimestampString("2024-08-12"),
-        parseSimple("2024 08 03 1", "yyyy MM WW e", lenient).timestamp);
+        parseSimple("2024 08 03 1", "yyyy MM WW u", lenient).timestamp);
 
     // Format contains year, month and weekOfMonth.
     EXPECT_EQ(
@@ -2398,25 +2398,25 @@ TEST_F(SimpleDateTimeFormatterTest, parseSimpleWeekOfMonth) {
   // Field out of range for lenient mode.
   EXPECT_EQ(
       fromTimestampString("2024-09-30"),
-      parseSimple("2024 08 10 1", "yyyy MM WW e", true).timestamp);
+      parseSimple("2024 08 10 1", "yyyy MM WW u", true).timestamp);
   EXPECT_EQ(
       fromTimestampString("2024-07-28"),
       parseSimple("2024 08 01", "yyyy MM WW", true).timestamp);
   EXPECT_EQ(
       fromTimestampString("2025-02-24"),
-      parseSimple("2024 15 01 1", "yyyy MM WW e", true).timestamp);
+      parseSimple("2024 15 01 1", "yyyy MM WW u", true).timestamp);
   EXPECT_EQ(
       fromTimestampString("2024-07-29"),
-      parseSimple("2024 08 01 9", "yyyy MM WW e", true).timestamp);
+      parseSimple("2024 08 01 9", "yyyy MM WW u", true).timestamp);
 
   // Field out of range for strict mode.
   EXPECT_THROW(
-      parseSimple("2024 08 10 1", "yyyy MM WW e", false), VeloxUserError);
+      parseSimple("2024 08 10 1", "yyyy MM WW u", false), VeloxUserError);
   EXPECT_THROW(parseSimple("2024 08 10", "yyyy MM WW", false), VeloxUserError);
   EXPECT_THROW(
-      parseSimple("2024 15 01 1", "yyyy MM WW e", false), VeloxUserError);
+      parseSimple("2024 15 01 1", "yyyy MM WW u", false), VeloxUserError);
   EXPECT_THROW(
-      parseSimple("2024 08 01 9", "yyyy MM WW e", false), VeloxUserError);
+      parseSimple("2024 08 01 9", "yyyy MM WW u", false), VeloxUserError);
 }
 
 TEST_F(SimpleDateTimeFormatterTest, formatResultSize) {
