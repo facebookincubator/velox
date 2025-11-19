@@ -1697,6 +1697,29 @@ bool HashProbe::hasMoreInput() const {
   return !noMoreInput_ || (spillInputReader_ != nullptr && !noMoreSpillInput_);
 }
 
+void HashProbe::addRuntimeStats() {
+  const auto hashTableStats = table_->stats();
+  auto lockedStats = stats_.wlock();
+
+  if (hashTableStats.numRowLoads != 0) {
+    lockedStats->runtimeStats[BaseHashTable::kNumRowLoads] =
+        RuntimeMetric(hashTableStats.numRowLoads);
+  }
+  if (hashTableStats.numHits != 0) {
+    lockedStats->runtimeStats[BaseHashTable::kNumHits] =
+        RuntimeMetric(hashTableStats.numHits);
+  }
+
+  if (hashTableStats.numBloomFilterProbes != 0) {
+    lockedStats->runtimeStats[BaseHashTable::kNumBloomFilterProbes] =
+        RuntimeMetric(hashTableStats.numBloomFilterProbes);
+  }
+  if (hashTableStats.numBloomFilterHits != 0) {
+    lockedStats->runtimeStats[BaseHashTable::kNumBloomFilterHits] =
+        RuntimeMetric(hashTableStats.numBloomFilterHits);
+  }
+}
+
 void HashProbe::noMoreInputInternal() {
   checkRunning();
 
@@ -1739,6 +1762,9 @@ void HashProbe::noMoreInputInternal() {
   // that needs to restore.
   VELOX_CHECK(hasSpillEnabled || peers.empty());
   lastProber_ = true;
+  if (!hasSpillEnabled) {
+    wakeupPeerOperators();
+  }
 }
 
 bool HashProbe::isFinished() {
