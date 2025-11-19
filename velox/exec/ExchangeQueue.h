@@ -162,6 +162,10 @@ class ExchangeQueue {
 
   void noMoreSources();
 
+  bool hasNoMoreSources() const {
+    return noMoreSources_;
+  }
+
   void close();
 
  private:
@@ -216,7 +220,7 @@ class ExchangeQueue {
 
   int numCompleted_{0};
   int numSources_{0};
-  bool noMoreSources_{false};
+  tsan_atomic<bool> noMoreSources_{false};
   bool atEnd_{false};
 
   std::mutex mutex_;

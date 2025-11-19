@@ -60,3 +60,5 @@ set(re2_INCLUDE_DIRS ${re2_SOURCE_DIR})
 
 set(RE2_ROOT ${re2_BINARY_DIR})
 set(re2_ROOT ${re2_BINARY_DIR})
+
+unset(BUILD_TESTING CACHE)

@@ -36,7 +36,10 @@ class TransformTest : public test::IcebergTestBase {
     }
     // Build and evaluate transform expressions.
     auto transformExprs = TransformExprBuilder::toExpressions(
-        spec, partitionChannels, input->rowType());
+        spec,
+        partitionChannels,
+        input->rowType(),
+        std::string(test::kDefaultTestIcebergFunctionNamePrefix));
     auto transformEvaluator = std::make_unique<TransformEvaluator>(
         transformExprs, connectorQueryCtx_.get());
     auto result = transformEvaluator->evaluate(input);

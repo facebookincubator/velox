@@ -29,6 +29,10 @@ namespace fbhive {
 
 class FileUtils {
  public:
+  /// Function type for encoding partition key/value strings.
+  /// Takes a string to encode and returns the encoded string.
+  using EncodeFunction = std::function<std::string(const std::string&)>;
+
   /// Converts the path name to be hive metastore compliant, will do
   /// url-encoding when needed.
   static std::string escapePathName(const std::string& data);
@@ -39,9 +43,19 @@ class FileUtils {
 
   /// Creates the partition directory path from the list of partition key/value
   /// pairs, will do url-encoding when needed.
+  /// @param entries Vector of (key, value) pairs for partition columns. Cannot
+  ///        be empty.
+  /// @param partitionPathAsLowerCase Whether to convert keys to lowercase
+  /// @param useDefaultPartitionValue If true, empty values are replaced with
+  ///        kDefaultPartitionValue. If false, empty values are encoded as-is.
+  ///        Defaults to true for Hive compatibility.
+  /// @param encodeFunc Function to use for encoding keys and values.
+  ///                   Defaults to escapePathName.
   static std::string makePartName(
       const std::vector<std::pair<std::string, std::string>>& entries,
-      bool partitionPathAsLowerCase);
+      bool partitionPathAsLowerCase,
+      bool useDefaultPartitionValue = true,
+      const EncodeFunction& encodeFunc = escapePathName);
 
   /// Converts the hive-metastore-compliant path name back to the corresponding
   /// partition key/value pairs.

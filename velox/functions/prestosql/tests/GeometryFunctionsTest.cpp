@@ -18,7 +18,6 @@
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
@@ -3380,9 +3379,12 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
       "POLYGON ((0 0, 0 10, 10 10, 0 0))", 1, {{"1", "3"}});
 
   // Empty geometries
-  testGeometryToBingTilesFunc("POINT EMPTY", 10, {{}});
-  testGeometryToBingTilesFunc("POLYGON EMPTY", 10, {{}});
-  testGeometryToBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+  testGeometryToBingTilesFunc(
+      "POINT EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToBingTilesFunc(
+      "POLYGON EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION EMPTY", 10, common::testutil::optionalEmpty);
 
   // Geometries at MIN_LONGITUDE/MAX_LATITUDE
   testGeometryToBingTilesFunc(
@@ -3501,11 +3503,16 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   };
 
   // Empty geometries
-  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 0, {{}});
-  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 10, {{}});
-  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 23, {{}});
-  testGeometryToDissolvedBingTilesFunc("POLYGON EMPTY", 10, {{}});
-  testGeometryToDissolvedBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT EMPTY", 0, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT EMPTY", 23, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "POLYGON EMPTY", 10, common::testutil::optionalEmpty);
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION EMPTY", 10, common::testutil::optionalEmpty);
 
   // Geometries at tile borders
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 0, {{""}});
@@ -3970,7 +3977,7 @@ TEST_F(GeometryFunctionsTest, testGeometryUnion) {
       "POLYGON EMPTY");
 
   // Empty array should return null
-  testGeometryUnionFunc({{}}, std::nullopt);
+  testGeometryUnionFunc(common::testutil::optionalEmpty, std::nullopt);
 
   // Null elements in input array should be ignored
   testGeometryUnionFunc({{std::nullopt, "POINT (1 2)"}}, "POINT (1 2)");
@@ -4041,7 +4048,7 @@ TEST_F(GeometryFunctionsTest, testStLineString) {
 
   // < 2 Points returns empty
   testStLineStringFunc({{"POINT (1 2)"}}, "LINESTRING EMPTY");
-  testStLineStringFunc({{}}, "LINESTRING EMPTY");
+  testStLineStringFunc(common::testutil::optionalEmpty, "LINESTRING EMPTY");
   // Duplicate consecutive points throws exception
   VELOX_ASSERT_USER_THROW(
       testStLineStringFunc({{"POINT (1 2)", "POINT (1 2)"}}, std::nullopt),
@@ -4126,7 +4133,7 @@ TEST_F(GeometryFunctionsTest, testStMultiPoint) {
   testStMultiPointFunc({{"POINT (1 2)"}}, "MULTIPOINT (1 2)");
 
   // Empty array
-  testStMultiPointFunc({{}}, std::nullopt);
+  testStMultiPointFunc(common::testutil::optionalEmpty, std::nullopt);
 
   // Only points can be passed
   VELOX_ASSERT_USER_THROW(
@@ -4163,4 +4170,118 @@ TEST_F(GeometryFunctionsTest, testStMultiPoint) {
   VELOX_ASSERT_USER_THROW(
       testStMultiPointFunc({{"POINT (1 2)", "POINT EMPTY"}}, std::nullopt),
       "Empty point in ST_MultiPoint input at index 1.");
+}
+
+TEST_F(GeometryFunctionsTest, testToFromSphericalGeography) {
+  const auto testToFromSphericalGeographyFunc = [&](const std::optional<
+                                                    std::string>& wkt) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ST_AsText(to_geometry(to_spherical_geography(ST_GeometryFromText(c0))))",
+        wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(wkt.value(), result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testToFromSphericalGeographyFunc("POINT EMPTY");
+  testToFromSphericalGeographyFunc("MULTIPOINT EMPTY");
+  testToFromSphericalGeographyFunc("POLYGON EMPTY");
+  testToFromSphericalGeographyFunc("MULTIPOLYGON EMPTY");
+  testToFromSphericalGeographyFunc("LINESTRING EMPTY");
+  testToFromSphericalGeographyFunc("MULTILINESTRING EMPTY");
+  testToFromSphericalGeographyFunc("GEOMETRYCOLLECTION EMPTY");
+
+  testToFromSphericalGeographyFunc("POINT (180 90)");
+  testToFromSphericalGeographyFunc("POINT (-180 -90)");
+  testToFromSphericalGeographyFunc("POINT (1 2)");
+  testToFromSphericalGeographyFunc("MULTIPOINT (1 2, 3 4, 5 6, 7 8)");
+  testToFromSphericalGeographyFunc("POLYGON ((1 3, 1 4, 3 4, 3 3, 1 3))");
+  testToFromSphericalGeographyFunc(
+      "MULTIPOLYGON (((0 0, 0 2, 2 2, 2 0, 0 0)), ((3 0, 3 2, 5 2, 5 0, 3 0)), ((0 3, 0 5, 2 5, 2 3, 0 3)), ((3 3, 3 5, 5 5, 5 3, 3 3)))");
+  testToFromSphericalGeographyFunc(
+      "GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), GEOMETRYCOLLECTION (POLYGON ((2 2, 2 3, 3 3, 3 2, 2 2)))))");
+
+  // Error cases
+  VELOX_ASSERT_USER_THROW(
+      testToFromSphericalGeographyFunc("POINT (200 200)"),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 200 and longitude: 200");
+  VELOX_ASSERT_USER_THROW(
+      testToFromSphericalGeographyFunc(
+          "GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), GEOMETRYCOLLECTION (POLYGON ((2 2, 2 -300, 3 3, 3 2, 2 2)))))"),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: -300 and longitude: 0");
+}
+
+TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
+  const auto testStSphericalCentroidFunction = [&](const std::optional<
+                                                       std::string>& wkt,
+                                                   const std::optional<
+                                                       std::string>&
+                                                       expectedWkt) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "st_astext(to_geometry(st_centroid(to_spherical_geography(ST_GeometryFromText(c0)))))",
+        wkt);
+
+    if (expectedWkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expectedWkt.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Empty geometries return null. Note that functions that return empty
+  // geometries might choose any type, so we should cover all types.
+  testStSphericalCentroidFunction("POINT EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("MULTIPOINT EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("LINESTRING EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("MULTILINESTRING EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("POLYGON EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("MULTIPOLYGON EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("GEOMETRYCOLLECTION EMPTY", std::nullopt);
+
+  // Single point returns same point
+  testStSphericalCentroidFunction("POINT (3 5)", "POINT (3 5)");
+
+  // Single point in multipoint returns same point
+  testStSphericalCentroidFunction("MULTIPOINT (3 5)", "POINT (3 5)");
+
+  // Two points on opposite sides of equator at same longitude
+  testStSphericalCentroidFunction("MULTIPOINT (0 -45, 0 45)", "POINT (0 0)");
+
+  // Two points on equator at opposite longitudes
+  testStSphericalCentroidFunction("MULTIPOINT (45 0, -45 0)", "POINT (0 0)");
+
+  // Two antipodal points on the equator (0, 0) and (-180, 0)
+  // The result is arbitrary but GEOS calculates it as (-90 45)
+  testStSphericalCentroidFunction("MULTIPOINT (0 0, -180 0)", "POINT (-90 45)");
+
+  // Three points - the Java test expects (12.36780515862267, 0)
+  // We'll check with some tolerance
+  auto result = evaluateOnce<std::string>(
+      "st_astext(to_geometry(st_centroid(to_spherical_geography(ST_GeometryFromText(c0)))))",
+      std::optional<std::string>("MULTIPOINT (0 -45, 0 45, 30 0)"));
+  ASSERT_TRUE(result.has_value());
+
+  // Parse the result to check longitude is approximately 12.3678
+  std::string resultStr = result.value();
+  ASSERT_TRUE(resultStr.find("POINT (12.3678") != std::string::npos);
+
+  // Four symmetric points should give centroid at (0, 0)
+  testStSphericalCentroidFunction(
+      "MULTIPOINT (0 -45, 0 45, 30 0, -30 0)", "POINT (0 0)");
+
+  // Non-point/multipoint geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalCentroidFunction("LINESTRING (0 0, 1 1)", std::nullopt),
+      "ST_Centroid[SphericalGeography] only applies to Point or MultiPoint. Input type is: LineString");
+
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalCentroidFunction(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
+      "ST_Centroid[SphericalGeography] only applies to Point or MultiPoint. Input type is: Polygon");
 }

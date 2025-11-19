@@ -37,10 +37,14 @@ repos:
     hooks:
       - id: clang-tidy
         name: clang-tidy
-        description: Run clang-tidy on C/C++ files
+        description: >-
+          Run clang-tidy on C/C++ files, requires 'compile_commands.json'
+          to be available in the repo root (e.g. symlinked) or BUILD_PATH
+          set to it's path e.g. _build/release.
         stages:
-          - manual # Needs compile_commands.json
-        entry: clang-tidy
+          - pre-commit
+        entry: ./scripts/checks/run-clang-tidy.py
+        args: [--commit, HEAD]
         language: python
         types_or: [c++, c]
         additional_dependencies: [clang-tidy==18.1.8]

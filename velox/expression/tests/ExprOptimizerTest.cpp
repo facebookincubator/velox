@@ -173,8 +173,8 @@ TEST_F(ExprOptimizerTest, lambdas) {
       "reduce(c0, 100.0E0, (s, x) -> s + x * 0.1E0, s -> (s < 101.0E0))",
       ROW({"c0"}, {ARRAY(DOUBLE())}));
   testExpression(
-      "reduce(c0, 1 - 1, (s, x) -> s + x, s -> coalesce(s, abs(2 - 10), 5 * 3) * (5 * 2))",
-      "reduce(c0, 0, (s, x) -> s + x, s -> coalesce(s, 8, 15) * 10)",
+      "reduce(c0, 1 - 1, (s, x) -> s + x, s -> coalesce(s, abs(2 - 10)) * (5 * 2))",
+      "reduce(c0, 0, (s, x) -> s + x, s -> coalesce(s, 8) * 10)",
       ROW({"c0"}, {ARRAY(SMALLINT())}));
 }
 
@@ -219,6 +219,17 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       "case when 10 + a = 100 / 2 then 10 - 2 when a / (2 + 1) = abs(-5) then 10 * 10 when (123 * 10) + 4 = abs(-1234) then 11 * 3 else a end",
       "case when 10 + a = 50 then 8 when a / 3 = 5 then 100 else 33 end",
       ROW({"a"}, {BIGINT()}));
+
+  // Coalesce rewrite with constant folding.
+  type = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+  testExpression(
+      "coalesce(a - (4 / 2), a - (1 * 2), null::bigint, 1 - 1, b, null::bigint)",
+      "coalesce(a - 2, 0)",
+      type);
+  testExpression(
+      "coalesce(null::bigint, a / abs(-2 * 3), coalesce(coalesce(b, 8 / 2), a * b), b)",
+      "coalesce(a / 6, b, 4)",
+      type);
 }
 
 /// Test to ensure session queryCtx is used during expression optimization.

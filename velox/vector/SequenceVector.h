@@ -215,7 +215,7 @@ class SequenceVector : public SimpleVector<T> {
   }
 
   void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
-    VELOX_UNSUPPORTED("transferTo not defined for SequenceVector");
+    VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
  private:

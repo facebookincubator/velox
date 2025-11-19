@@ -33,24 +33,12 @@ namespace {
 using core::ITypedExpr;
 using core::TypedExprPtr;
 
-struct ITypedExprHasher {
-  size_t operator()(const ITypedExpr* expr) const {
-    return expr->hash();
-  }
-};
-
-struct ITypedExprComparer {
-  bool operator()(const ITypedExpr* lhs, const ITypedExpr* rhs) const {
-    return *lhs == *rhs;
-  }
-};
-
 // Map for deduplicating ITypedExpr trees.
 using ExprDedupMap = folly::F14FastMap<
     const ITypedExpr*,
     std::shared_ptr<Expr>,
-    ITypedExprHasher,
-    ITypedExprComparer>;
+    core::ITypedExprHasher,
+    core::ITypedExprComparer>;
 
 /// Represents a lexical scope. A top level scope corresponds to a top
 /// level Expr and is shared among the Exprs of the ExprSet. Each

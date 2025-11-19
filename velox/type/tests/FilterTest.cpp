@@ -26,7 +26,9 @@
 
 #include <gtest/gtest.h>
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
+
 using namespace facebook::velox::common;
 using namespace facebook::velox::exec;
 
@@ -39,8 +41,7 @@ TEST(FilterTest, alwaysFalse) {
   EXPECT_FALSE(alwaysFalse.testNull());
 
   EXPECT_EQ(
-      "Filter(AlwaysFalse, deterministic, null not allowed)",
-      alwaysFalse.toString());
+      "Filter(AlwaysFalse, deterministic, no nulls)", alwaysFalse.toString());
 }
 
 TEST(FilterTest, alwaysTrue) {
@@ -63,7 +64,7 @@ TEST(FilterTest, alwaysTrue) {
       simd::allSetBitMask<int16_t>(),
       simd::toBitMask(alwaysTrue.testValues(int16s)));
   EXPECT_EQ(
-      "Filter(AlwaysTrue, deterministic, null allowed)", alwaysTrue.toString());
+      "Filter(AlwaysTrue, deterministic, with nulls)", alwaysTrue.toString());
 }
 
 TEST(FilterTest, isNotNull) {
@@ -86,7 +87,7 @@ TEST(FilterTest, isNull) {
   EXPECT_FALSE(isNull.testInt128Range(0, 0, false));
   EXPECT_TRUE(isNull.testInt128Range(0, 0, true));
 
-  EXPECT_EQ("Filter(IsNull, deterministic, null allowed)", isNull.toString());
+  EXPECT_EQ("Filter(IsNull, deterministic, with nulls)", isNull.toString());
 }
 
 // Applies 'filter' to all T type lanes of 'values' and compares the result to
@@ -792,11 +793,17 @@ TEST(FilterTest, floatRange) {
   EXPECT_TRUE(filter->testFloat(100));
 }
 
+bool testBytes(const Filter& filter, std::string_view value) {
+  bool result = filter.testBytes(value.data(), value.size());
+  VELOX_CHECK_EQ(filter.testStringView(StringView(value)), result);
+  return result;
+}
+
 TEST(FilterTest, bytesRange) {
   {
     auto filter = equal("abc");
-    EXPECT_TRUE(filter->testBytes("abc", 3));
-    EXPECT_FALSE(filter->testBytes("acb", 3));
+    EXPECT_TRUE(testBytes(*filter, "abc"));
+    EXPECT_FALSE(testBytes(*filter, "acb"));
     EXPECT_TRUE(filter->testLength(3));
     // The bit for lane 2 should be set.
     int32_t lens[] = {0, 1, 3, 0, 4, 10, 11, 12};
@@ -804,8 +811,8 @@ TEST(FilterTest, bytesRange) {
         4, simd::toBitMask(filter->testLengths(xsimd::load_unaligned(lens))));
 
     EXPECT_FALSE(filter->testNull());
-    EXPECT_FALSE(filter->testBytes("apple", 5));
-    EXPECT_FALSE(filter->testBytes(nullptr, 0));
+    EXPECT_FALSE(testBytes(*filter, "apple"));
+    EXPECT_FALSE(testBytes(*filter, {}));
     EXPECT_FALSE(filter->testLength(4));
 
     EXPECT_TRUE(filter->testBytesRange("abc", "abc", false));
@@ -824,132 +831,132 @@ TEST(FilterTest, bytesRange) {
 
     // = ''
     filter = equal("");
-    EXPECT_TRUE(filter->testBytes(nullptr, 0));
-    EXPECT_FALSE(filter->testBytes("abc", 3));
+    EXPECT_TRUE(testBytes(*filter, {}));
+    EXPECT_FALSE(testBytes(*filter, "abc"));
   }
 
   char const* theBestOfTimes =
       "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity,...";
   auto filter = lessThanOrEqual(theBestOfTimes);
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, std::strlen(theBestOfTimes)));
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, 5));
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, 50));
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, 100));
+  EXPECT_TRUE(testBytes(*filter, theBestOfTimes));
+  EXPECT_TRUE(testBytes(*filter, {theBestOfTimes, 5}));
+  EXPECT_TRUE(testBytes(*filter, {theBestOfTimes, 50}));
+  EXPECT_TRUE(testBytes(*filter, {theBestOfTimes, 100}));
   // testLength is true of all lengths for a range filter.
   EXPECT_TRUE(filter->testLength(1));
   EXPECT_TRUE(filter->testLength(1000));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("Zzz", 3));
-  EXPECT_FALSE(filter->testBytes("It was the best of times, zzz", 30));
+  EXPECT_FALSE(testBytes(*filter, "Zzz"));
+  EXPECT_FALSE(testBytes(*filter, {"It was the best of times, zzz", 30}));
 
   EXPECT_TRUE(filter->testBytesRange("Apple", "banana", false));
   EXPECT_FALSE(filter->testBytesRange("Pear", "Plum", false));
   EXPECT_FALSE(filter->testBytesRange("apple", "banana", false));
 
   filter = greaterThanOrEqual("abc");
-  EXPECT_TRUE(filter->testBytes("abc", 3));
-  EXPECT_TRUE(filter->testBytes("ad", 2));
-  EXPECT_TRUE(filter->testBytes("apple", 5));
-  EXPECT_TRUE(filter->testBytes("banana", 6));
+  EXPECT_TRUE(testBytes(*filter, "abc"));
+  EXPECT_TRUE(testBytes(*filter, "ad"));
+  EXPECT_TRUE(testBytes(*filter, "apple"));
+  EXPECT_TRUE(testBytes(*filter, "banana"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("ab", 2));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "ab"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   filter = between("apple", "banana");
-  EXPECT_TRUE(filter->testBytes("apple", 5));
-  EXPECT_TRUE(filter->testBytes("banana", 6));
-  EXPECT_TRUE(filter->testBytes("avocado", 7));
+  EXPECT_TRUE(testBytes(*filter, "apple"));
+  EXPECT_TRUE(testBytes(*filter, "banana"));
+  EXPECT_TRUE(testBytes(*filter, "avocado"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("camel", 5));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "camel"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   filter = std::make_unique<BytesRange>(
       "apple", false, true, "banana", false, false, false);
-  EXPECT_TRUE(filter->testBytes("banana", 6));
-  EXPECT_TRUE(filter->testBytes("avocado", 7));
+  EXPECT_TRUE(testBytes(*filter, "banana"));
+  EXPECT_TRUE(testBytes(*filter, "avocado"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("apple", 5));
-  EXPECT_FALSE(filter->testBytes("camel", 5));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "apple"));
+  EXPECT_FALSE(testBytes(*filter, "camel"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   filter = std::make_unique<BytesRange>(
       "apple", false, true, "banana", false, true, false);
-  EXPECT_TRUE(filter->testBytes("avocado", 7));
+  EXPECT_TRUE(testBytes(*filter, "avocado"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("apple", 5));
-  EXPECT_FALSE(filter->testBytes("banana", 6));
-  EXPECT_FALSE(filter->testBytes("camel", 5));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "apple"));
+  EXPECT_FALSE(testBytes(*filter, "banana"));
+  EXPECT_FALSE(testBytes(*filter, "camel"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   // < b
   filter = lessThan("b");
-  EXPECT_TRUE(filter->testBytes("a", 1));
-  EXPECT_FALSE(filter->testBytes("b", 1));
-  EXPECT_FALSE(filter->testBytes("c", 1));
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
+  EXPECT_TRUE(testBytes(*filter, "a"));
+  EXPECT_FALSE(testBytes(*filter, "b"));
+  EXPECT_FALSE(testBytes(*filter, "c"));
+  EXPECT_TRUE(testBytes(*filter, {}));
   EXPECT_FALSE(filter->testBytesRange("b", "c", false));
 
   // <= b
   filter = lessThanOrEqual("b");
-  EXPECT_TRUE(filter->testBytes("a", 1));
-  EXPECT_TRUE(filter->testBytes("b", 1));
-  EXPECT_FALSE(filter->testBytes("c", 1));
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
+  EXPECT_TRUE(testBytes(*filter, "a"));
+  EXPECT_TRUE(testBytes(*filter, "b"));
+  EXPECT_FALSE(testBytes(*filter, "c"));
+  EXPECT_TRUE(testBytes(*filter, {}));
   EXPECT_TRUE(filter->testBytesRange("b", "c", false));
 
   // >= b
   filter = greaterThanOrEqual("b");
-  EXPECT_FALSE(filter->testBytes("a", 1));
-  EXPECT_TRUE(filter->testBytes("b", 1));
-  EXPECT_TRUE(filter->testBytes("c", 1));
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
+  EXPECT_FALSE(testBytes(*filter, "a"));
+  EXPECT_TRUE(testBytes(*filter, "b"));
+  EXPECT_TRUE(testBytes(*filter, "c"));
+  EXPECT_FALSE(testBytes(*filter, {}));
   EXPECT_TRUE(filter->testBytesRange("a", "b", false));
 
   // > b
   filter = greaterThan("b");
-  EXPECT_FALSE(filter->testBytes("a", 1));
-  EXPECT_FALSE(filter->testBytes("b", 1));
-  EXPECT_TRUE(filter->testBytes("c", 1));
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
+  EXPECT_FALSE(testBytes(*filter, "a"));
+  EXPECT_FALSE(testBytes(*filter, "b"));
+  EXPECT_TRUE(testBytes(*filter, "c"));
+  EXPECT_FALSE(testBytes(*filter, {}));
   EXPECT_FALSE(filter->testBytesRange("a", "b", false));
 
   // < ''
   filter = lessThan("");
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
-  EXPECT_FALSE(filter->testBytes("abc", 3));
+  EXPECT_FALSE(testBytes(*filter, {}));
+  EXPECT_FALSE(testBytes(*filter, "abc"));
 
   // <= ''
   filter = lessThanOrEqual("");
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
-  EXPECT_FALSE(filter->testBytes("abc", 3));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_FALSE(testBytes(*filter, "abc"));
 
   // > ''
   filter = greaterThan("");
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
-  EXPECT_TRUE(filter->testBytes("abc", 3));
+  EXPECT_FALSE(testBytes(*filter, {}));
+  EXPECT_TRUE(testBytes(*filter, "abc"));
 
   // >= ''
   filter = greaterThanOrEqual("");
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
-  EXPECT_TRUE(filter->testBytes("abc", 3));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_TRUE(testBytes(*filter, "abc"));
 }
 
 TEST(FilterTest, negatedBytesRange) {
   auto filter = notBetween("a", "c");
 
-  EXPECT_TRUE(filter->testBytes("A", 1));
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
-  EXPECT_TRUE(filter->testBytes("ca", 2));
-  EXPECT_TRUE(filter->testBytes("z", 1));
+  EXPECT_TRUE(testBytes(*filter, "A"));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_TRUE(testBytes(*filter, "ca"));
+  EXPECT_TRUE(testBytes(*filter, "z"));
 
-  EXPECT_FALSE(filter->testBytes("a", 1));
-  EXPECT_FALSE(filter->testBytes("apple", 5));
-  EXPECT_FALSE(filter->testBytes("c", 1));
+  EXPECT_FALSE(testBytes(*filter, "a"));
+  EXPECT_FALSE(testBytes(*filter, "apple"));
+  EXPECT_FALSE(testBytes(*filter, "c"));
   EXPECT_FALSE(filter->testNull());
 
   EXPECT_TRUE(filter->testLength(1));
@@ -974,8 +981,8 @@ TEST(FilterTest, negatedBytesRange) {
   EXPECT_FALSE(filter->isUpperExclusive());
 
   filter = notBetweenExclusive("b", "d");
-  EXPECT_TRUE(filter->testBytes("b", 1));
-  EXPECT_TRUE(filter->testBytes("d", 1));
+  EXPECT_TRUE(testBytes(*filter, "b"));
+  EXPECT_TRUE(testBytes(*filter, "d"));
 
   EXPECT_TRUE(filter->testBytesRange("b", "c", false));
   EXPECT_TRUE(filter->testBytesRange("c", "d", false));
@@ -2039,3 +2046,6 @@ TEST(FilterTest, timestampRange) {
   EXPECT_TRUE(filter->testTimestampRange(
       Timestamp(5, 123000000), Timestamp(30, 123000000), true));
 }
+
+} // namespace
+} // namespace facebook::velox

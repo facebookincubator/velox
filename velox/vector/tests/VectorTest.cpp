@@ -22,8 +22,10 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -117,6 +119,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    common::testutil::TestValue::enable();
   }
 
   void SetUp() override {
@@ -295,6 +298,24 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       flat->resize(size * 2);
       EXPECT_EQ(flat->valueAt(size * 2 - 1).size(), 0);
     }
+
+// This part of the test relies on TestValues to inject a failure, these are
+// only enabled in debug builds.
+#ifndef NDEBUG
+    {
+      // Make a copy so we don't modify the original Vector.
+      const auto slice = flat->slice(0, flat->size());
+
+      const std::string errorMessage = "Simulated failure in memory allocation";
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::FlatVector::resizeValues",
+          std::function<void(FlatVector<T>*)>(
+              [&](FlatVector<T>*) { VELOX_FAIL(errorMessage); }));
+
+      VELOX_ASSERT_THROW(slice->resize(slice->size() * 2), errorMessage);
+      slice->validate();
+    }
+#endif
 
     // Fill, the values at size * 2 - 1 gets assigned a second time.
     for (int32_t i = 0; i < flat->size(); ++i) {
@@ -749,14 +770,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       // immutable. This is true for a slice since it creates buffer views over
       // the buffers of the original vector that it sliced.
       auto newSize = slice->size() * 2;
+      auto sliceCopy = BaseVector::copy(*slice);
       slice->resize(newSize);
       EXPECT_EQ(slice->size(), newSize);
+      slice->resize(sliceCopy->size());
+      test::assertEqualVectors(slice, sliceCopy);
     }
   }
 
   static void testSlices(const VectorPtr& slice, int level = 2) {
     for (vector_size_t offset : {0, 16, 17}) {
-      for (vector_size_t length : {0, 1, 83}) {
+      for (vector_size_t length : {0, 1, 83, 100}) {
         if (offset + length <= slice->size()) {
           testSlice(slice, level, offset, length);
         }
@@ -4295,56 +4319,86 @@ TEST_F(VectorTest, estimateFlatSize) {
   arrayVector->prepareForReuse();
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 TEST_F(VectorTest, transferOrCopyTo) {
   auto rootPool = memory::memoryManager()->addRootPool("long-living");
   auto pool = rootPool->addLeafChild("long-living leaf");
+  memory::MemoryManager anotherManager{memory::MemoryManager::Options{}};
 
   VectorPtr vector;
   VectorPtr expected;
 
   // Test primitive type.
-  {
-    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
-    auto localPool = localRootPool->addLeafChild("short-living leaf");
-    test::VectorMaker maker{localPool.get()};
-    vector = maker.flatVector<int64_t>(
-        3, [](auto row) { return row; }, [](auto row) { return row == 2; });
-    expected = BaseVector::copy(*vector, pool.get());
-    vector->transferOrCopyTo(pool.get());
-  }
-  ASSERT_EQ(vector->pool(), pool.get());
-  test::assertEqualVectors(expected, vector);
+  auto testPrimitive = [&](memory::MemoryManager* memoryManager) {
+    std::vector<int64_t> c0;
+    std::vector<std::string> c1;
+    {
+      auto localRootPool = memoryManager->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+      FuzzerGenerator rng{123};
+      std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+      for (auto i = 0; i < 1000; ++i) {
+        c0.push_back(fuzzer::rand<int64_t>(rng, fuzzer::DataSpec{}));
+        std::string buf;
+        fuzzer::randString(
+            rng,
+            fuzzer::rand<uint64_t>(rng, 0, 100),
+            {fuzzer::UTF8CharList::ASCII,
+             fuzzer::UTF8CharList::UNICODE_CASE_SENSITIVE,
+             fuzzer::UTF8CharList::EXTENDED_UNICODE},
+            buf,
+            converter);
+        c1.push_back(buf);
+      }
+      test::VectorMaker maker{localPool.get()};
+      vector = maker.rowVector(
+          {maker.flatVector<int64_t>(c0), maker.flatVector<std::string>(c1)});
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::VectorMaker maker{pool.get()};
+    expected = maker.rowVector(
+        {maker.flatVector<int64_t>(c0), maker.flatVector<std::string>(c1)});
+    test::assertEqualVectors(expected, vector);
+  };
+  testPrimitive(memory::memoryManager());
+  testPrimitive(&anotherManager);
 
   // Test complex type.
-  {
-    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
-    auto localPool = localRootPool->addLeafChild("short-living leaf");
-    test::VectorMaker maker{localPool.get()};
-    vector = maker.rowVector(
-        {maker.flatVector<double>(
-             3,
-             [](auto row) { return row; },
-             [](auto row) { return row == 2; }),
-         maker.constantVector<bool>({true, true, true}),
-         maker.dictionaryVector<int64_t>({1, std::nullopt, 1}),
-         maker.arrayVector<int64_t>(
-             3,
-             [](auto row) { return row; },
-             [](auto row) { return row; },
-             [](auto row) { return row == 0; },
-             [](auto row) { return row == 1; }),
-         maker.mapVector<int64_t, int64_t>(
-             3,
-             [](auto row) { return row; },
-             [](auto row) { return row; },
-             [](auto row) { return row + 1; },
-             [](auto row) { return row == 1; },
-             [](auto row) { return row == 2; })});
-    expected = BaseVector::copy(*vector, pool.get());
-    vector->transferOrCopyTo(pool.get());
-  }
-  ASSERT_EQ(vector->pool(), pool.get());
-  test::assertEqualVectors(expected, vector);
+  auto testComplex = [&](memory::MemoryManager* memoryManager) {
+    {
+      auto localRootPool = memoryManager->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+      test::VectorMaker maker{localPool.get()};
+      vector = maker.rowVector(
+          {maker.flatVector<double>(
+               3,
+               [](auto row) { return row; },
+               [](auto row) { return row == 2; }),
+           maker.constantVector<bool>({true, true, true}),
+           maker.dictionaryVector<int64_t>({1, std::nullopt, 1}),
+           maker.arrayVector<int64_t>(
+               3,
+               [](auto row) { return row; },
+               [](auto row) { return row; },
+               [](auto row) { return row == 0; },
+               [](auto row) { return row == 1; }),
+           maker.mapVector<int64_t, int64_t>(
+               3,
+               [](auto row) { return row; },
+               [](auto row) { return row; },
+               [](auto row) { return row + 1; },
+               [](auto row) { return row == 1; },
+               [](auto row) { return row == 2; })});
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  };
+  testComplex(memory::memoryManager());
+  testComplex(&anotherManager);
 
   // Test with fuzzing.
   // TODO: FlatMapVector doesn't support copy() yet. Add it later when it
@@ -4355,77 +4409,75 @@ TEST_F(VectorTest, transferOrCopyTo) {
       .allowLazyVector = true,
       .allowFlatMapVector = false};
   const int kNumIterations = 500;
-  for (auto i = 0; i < kNumIterations; ++i) {
-    {
-      auto localRootPool = memory::memoryManager()->addRootPool("short-living");
-      auto localPool = localRootPool->addLeafChild("short-living leaf");
+  auto testFuzz = [&](memory::MemoryManager* memoryManager) {
+    for (auto i = 0; i < kNumIterations; ++i) {
+      {
+        auto localRootPool = memoryManager->addRootPool("short-living");
+        auto localPool = localRootPool->addLeafChild("short-living leaf");
 
-      VectorFuzzer fuzzer{options, localPool.get(), 123};
-      auto type = fuzzer.randType();
-      vector = fuzzer.fuzz(type);
-      expected = BaseVector::copy(*vector, pool.get());
-      vector->transferOrCopyTo(pool.get());
+        VectorFuzzer fuzzer{options, localPool.get(), 123};
+        auto type = fuzzer.randType();
+        vector = fuzzer.fuzz(type);
+        expected = BaseVector::copy(*vector, pool.get());
+        vector->transferOrCopyTo(pool.get());
+      }
+      ASSERT_EQ(vector->pool(), pool.get());
+      test::assertEqualVectors(expected, vector);
     }
-    ASSERT_EQ(vector->pool(), pool.get());
-    test::assertEqualVectors(expected, vector);
-  }
+  };
+  testFuzz(memory::memoryManager());
+  testFuzz(&anotherManager);
 
   // Test complex-typed vectors with buffers from different pools.
-  VectorFuzzer fuzzer{options, pool.get(), 123};
-  for (auto i = 0; i < kNumIterations; ++i) {
+  auto testBufferFromDifferentPools =
+      [&](memory::MemoryManager* memoryManager) {
+        VectorFuzzer fuzzer{options, pool.get(), 123};
+        for (auto i = 0; i < kNumIterations; ++i) {
+          {
+            auto localRootPool = memoryManager->addRootPool("short-living");
+            auto localPool = localRootPool->addLeafChild("short-living leaf");
+            VectorFuzzer localFuzzer{options, localPool.get(), 123};
+
+            auto type = fuzzer.randType();
+            auto elements = localFuzzer.fuzz(type);
+            auto arrays = fuzzer.fuzzArray(elements, 70);
+            fuzzer.setOptions({});
+            auto keys = fuzzer.fuzz(BIGINT());
+            fuzzer.setOptions(options);
+            auto maps = localFuzzer.fuzzMap(keys, arrays, 50);
+            vector = localFuzzer.fuzzRow({maps}, 50);
+
+            expected = BaseVector::copy(*vector, pool.get());
+            vector->transferOrCopyTo(pool.get());
+          }
+          ASSERT_EQ(vector->pool(), pool.get());
+          test::assertEqualVectors(expected, vector);
+        }
+      };
+  testBufferFromDifferentPools(memory::memoryManager());
+  testBufferFromDifferentPools(&anotherManager);
+
+  // Test opaque vector.
+  auto testOpaque = [&](memory::MemoryManager* memoryManager) {
     {
-      auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+      auto localRootPool = memoryManager->addRootPool("short-living");
       auto localPool = localRootPool->addLeafChild("short-living leaf");
-      VectorFuzzer localFuzzer{options, localPool.get(), 123};
 
-      auto type = fuzzer.randType();
-      auto elements = localFuzzer.fuzz(type);
-      auto arrays = fuzzer.fuzzArray(elements, 70);
-      fuzzer.setOptions({});
-      auto keys = fuzzer.fuzz(BIGINT());
-      fuzzer.setOptions(options);
-      auto maps = localFuzzer.fuzzMap(keys, arrays, 50);
-      vector = localFuzzer.fuzzRow({maps}, 50);
-
+      auto type = OPAQUE<NonPOD>();
+      auto size = 100;
+      vector = BaseVector::create(type, size, localPool.get());
+      auto opaqueObj = std::make_shared<NonPOD>();
+      for (auto i = 0; i < size; ++i) {
+        vector->as<FlatVector<std::shared_ptr<void>>>()->set(i, opaqueObj);
+      }
       expected = BaseVector::copy(*vector, pool.get());
       vector->transferOrCopyTo(pool.get());
     }
     ASSERT_EQ(vector->pool(), pool.get());
     test::assertEqualVectors(expected, vector);
-  }
-
-  // Test memory pool with different allocator.
-  {
-    memory::MemoryManager anotherManager{memory::MemoryManager::Options{}};
-    auto anotherRootPool = anotherManager.addRootPool("another root pool");
-    auto anotherPool = anotherRootPool->addLeafChild("another leaf pool");
-    VectorFuzzer localFuzzer{options, anotherPool.get(), 789};
-
-    auto type = fuzzer.randType();
-    vector = fuzzer.fuzz(type);
-    expected = BaseVector::copy(*vector, pool.get());
-    vector->transferOrCopyTo(pool.get());
-  }
-  ASSERT_EQ(vector->pool(), pool.get());
-  test::assertEqualVectors(expected, vector);
-
-  // Test opaque vector.
-  {
-    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
-    auto localPool = localRootPool->addLeafChild("short-living leaf");
-
-    auto type = OPAQUE<NonPOD>();
-    auto size = 100;
-    vector = BaseVector::create(type, size, localPool.get());
-    auto opaqueObj = std::make_shared<NonPOD>();
-    for (auto i = 0; i < size; ++i) {
-      vector->as<FlatVector<std::shared_ptr<void>>>()->set(i, opaqueObj);
-    }
-    expected = BaseVector::copy(*vector, pool.get());
-    vector->transferOrCopyTo(pool.get());
-  }
-  ASSERT_EQ(vector->pool(), pool.get());
-  test::assertEqualVectors(expected, vector);
+  };
+  testOpaque(memory::memoryManager());
+  testOpaque(&anotherManager);
 
   auto testMemoryStats = [&options](size_t seed) {
     auto localRoot1 = memory::memoryManager()->addRootPool("local root 1");
@@ -4460,6 +4512,7 @@ TEST_F(VectorTest, transferOrCopyTo) {
     testMemoryStats(kNumIterations * i + i);
   }
 }
+#pragma GCC diagnostic pop
 
 } // namespace
 } // namespace facebook::velox

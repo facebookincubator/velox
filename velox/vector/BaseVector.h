@@ -542,6 +542,11 @@ class BaseVector {
   virtual VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const = 0;
 
+  /// Transfer or copy this vector and all its buffers recursively to 'pool'.
+  /// The transfer of a buffer is allowed if its original pool and 'pool' are
+  /// from the same MemoryAllocator and the buffer is not a BufferView. If a
+  /// buffer is not allowed to be transferred, it is copied to pool. After this
+  /// call, this vector and all its buffers are owned by 'pool'.
   virtual void transferOrCopyTo(velox::memory::MemoryPool* pool);
 
   /// Construct a zero-copy slice of the vector with the indicated offset and

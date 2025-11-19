@@ -1746,8 +1746,8 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
         [&thrift_encodings](
             facebook::velox::parquet::thrift::Encoding::type value) {
           auto it = std::find(
-              thrift_encodings.begin(), thrift_encodings.end(), value);
-          if (it == thrift_encodings.end()) {
+              thrift_encodings.cbegin(), thrift_encodings.cend(), value);
+          if (it == thrift_encodings.cend()) {
             thrift_encodings.push_back(value);
           }
         };

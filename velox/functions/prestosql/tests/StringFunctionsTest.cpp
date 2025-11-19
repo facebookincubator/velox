@@ -1453,6 +1453,65 @@ TEST_F(StringFunctionsTest, invalidLevenshteinDistance) {
       "The combined inputs size exceeded max Levenshtein distance combined input size");
 }
 
+TEST_F(StringFunctionsTest, longestCommonPrefix) {
+  const auto longestCommonPrefix = [&](std::optional<std::string> left,
+                                       std::optional<std::string> right) {
+    return evaluateOnce<std::string>(
+        "longest_common_prefix(c0, c1)", std::move(left), std::move(right));
+  };
+
+  // Test basic cases.
+  EXPECT_EQ(longestCommonPrefix("", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", "hello"), "");
+  EXPECT_EQ(longestCommonPrefix("hello", ""), "");
+  EXPECT_EQ(longestCommonPrefix("hello", "hello"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello world", "hello"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello", "hello world"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello world", "hel wold"), "hel");
+  EXPECT_EQ(longestCommonPrefix("hel wold", "hello world"), "hel");
+
+  // Test for non-ASCII.
+  EXPECT_EQ(longestCommonPrefix("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"), "");
+  EXPECT_EQ(
+      longestCommonPrefix(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B");
+  EXPECT_EQ(
+      longestCommonPrefix(
+          "\u4FE1\u5FF5,\u7221,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      "\u4FE1\u5FF5,");
+  EXPECT_EQ(
+      longestCommonPrefix("hello na\u00EFve world", "hello na\u00EFve"),
+      "hello na\u00EFve");
+
+  // Test null cases.
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, "hello"), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix("hello", std::nullopt), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, std::nullopt), std::nullopt);
+
+  // Test different lengths.
+  EXPECT_EQ(longestCommonPrefix("a", "abcdef"), "a");
+  EXPECT_EQ(longestCommonPrefix("abcdef", "a"), "a");
+
+  // Additional Unicode tests.
+  EXPECT_EQ(longestCommonPrefix("café", "cat"), "ca");
+  EXPECT_EQ(longestCommonPrefix("préfix", "prefix"), "pr");
+  EXPECT_EQ(longestCommonPrefix("🚀🌟", "🚀🔥"), "🚀");
+  EXPECT_EQ(longestCommonPrefix("Ψ", "Ψmore"), "Ψ");
+  EXPECT_EQ(longestCommonPrefix("hellö", "hell"), "hell");
+
+  // Test for invalid UTF-8 characters.
+  VELOX_ASSERT_THROW(
+      longestCommonPrefix("hello world", "\x81"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      longestCommonPrefix("hello world", "2\x81"),
+      "Invalid UTF-8 encoding in characters");
+}
+
 void StringFunctionsTest::testReplaceFlatVector(
     const replace_input_test_t& tests,
     bool withReplaceArgument,

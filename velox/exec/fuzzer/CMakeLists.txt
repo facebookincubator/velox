@@ -43,7 +43,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_functions
   velox_presto_types
-  cpr::cpr
+  CURL::libcurl
   velox_presto_type_parser
   Folly::folly
   velox_hive_connector

@@ -686,6 +686,12 @@ class QueryConfig {
   static constexpr const char* kStreamingAggregationEagerFlush =
       "streaming_aggregation_eager_flush";
 
+  // If true, skip request data size if there is only single source.
+  // This is used to optimize the Presto-on-Spark use case where each
+  // exchange client has only one shuffle partition source.
+  static constexpr const char* kSkipRequestDataSizeWithSingleSourceEnabled =
+      "skip_request_data_size_with_single_source_enabled";
+
   /// If this is true, then it allows you to get the struct field names
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
@@ -1288,6 +1294,10 @@ class QueryConfig {
 
   int32_t streamingAggregationMinOutputBatchRows() const {
     return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
+  }
+
+  bool singleSourceExchangeOptimizationEnabled() const {
+    return get<bool>(kSkipRequestDataSizeWithSingleSourceEnabled, false);
   }
 
   bool isFieldNamesInJsonCastEnabled() const {

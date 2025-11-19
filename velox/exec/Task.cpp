@@ -2452,9 +2452,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       cancellationSource_.requestCancellation();
     }
 
-    LOG(INFO) << "Terminating task " << taskId() << " with state "
-              << taskStateString(state_) << " after running for "
-              << succinctMillis(timeSinceStartMsLocked());
+    VLOG(1) << "Terminating task " << taskId() << " with state "
+            << taskStateString(state_) << " after running for "
+            << succinctMillis(timeSinceStartMsLocked());
 
     taskCompletionNotifier.activate(
         std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
@@ -3427,7 +3427,8 @@ void Task::createExchangeClientLocked(
       queryCtx()->queryConfig().minExchangeOutputBatchBytes(),
       addExchangeClientPool(planNodeId, pipelineId),
       queryCtx()->executor(),
-      queryCtx()->queryConfig().requestDataSizesMaxWaitSec());
+      queryCtx()->queryConfig().requestDataSizesMaxWaitSec(),
+      queryCtx()->queryConfig().singleSourceExchangeOptimizationEnabled());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 
