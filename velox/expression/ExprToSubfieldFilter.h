@@ -424,24 +424,6 @@ class ExprToSubfieldFilterParser {
     parser_ = std::move(parser);
   }
 
-  /// Test-only API. Do not use in production code.
-  ///
-  /// Analyzes 'expr' to determine if it can be expressed as a subfield filter.
-  /// Returns a pair of subfield and filter if so. Otherwise, throws.
-  ///
-  /// Supports all expressions supported by leafCallToSubfieldFilter + negations
-  /// and disjunctions over same subfield.
-  ///  Examples:
-  ///    a = 1
-  ///    a = 1 OR a > 10
-  ///    not (a = 1)
-  ///
-  /// TODO Improve the API by returning std::optional instead of throwing.
-  virtual std::pair<common::Subfield, std::unique_ptr<common::Filter>>
-  toSubfieldFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator*) = 0;
-
   /// Analyzes 'call' expression to determine if it can be expressed as a
   /// subfield filter. Returns the subfield and filter if so. Otherwise, returns
   /// std::nullopt. If 'negated' is true, considers the negation of 'call'
@@ -453,6 +435,10 @@ class ExprToSubfieldFilterParser {
       const core::CallTypedExpr& call,
       core::ExpressionEvaluator* evaluator,
       bool negated = false) = 0;
+
+  static std::unique_ptr<common::Filter> makeOrFilter(
+      std::unique_ptr<common::Filter> a,
+      std::unique_ptr<common::Filter> b);
 
  protected:
   // Converts an expression into a subfield. Returns false if the expression
@@ -505,10 +491,6 @@ class ExprToSubfieldFilterParser {
       core::ExpressionEvaluator* evaluator,
       bool negated);
 
-  static std::unique_ptr<common::Filter> makeOrFilter(
-      std::unique_ptr<common::Filter> a,
-      std::unique_ptr<common::Filter> b);
-
  private:
   // Singleton parser instance.
   static std::shared_ptr<ExprToSubfieldFilterParser> parser_;
@@ -517,10 +499,6 @@ class ExprToSubfieldFilterParser {
 // Parser for Presto expressions.
 class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
  public:
-  std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator) override;
-
   std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
   leafCallToSubfieldFilter(
       const core::CallTypedExpr& call,
