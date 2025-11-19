@@ -4425,6 +4425,8 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ("+05:30", formatDatetime(parseTimestamp("1970-01-01"), "ZZ"));
   EXPECT_EQ("+0530", formatDatetime(parseTimestamp("1970-01-01"), "Z"));
 
+  // Time zone test cases - 'z'
+  // Timezone that has an abbreviation
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "zzz"));
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "zz"));
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "z"));
@@ -4433,6 +4435,18 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       formatDatetime(parseTimestamp("1970-01-01"), "zzzz"));
   EXPECT_EQ(
       "India Standard Time",
+      formatDatetime(parseTimestamp("1970-01-01"), "zzzzzzzzzzzzzzzzzzzzzz"));
+
+  // Timezone that has no abbreviations so uses GMT offset
+  setQueryTimeZone("Asia/Atyrau");
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "zzz"));
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "zz"));
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "z"));
+  EXPECT_EQ(
+      "West Kazakhstan Time",
+      formatDatetime(parseTimestamp("1970-01-01"), "zzzz"));
+  EXPECT_EQ(
+      "West Kazakhstan Time",
       formatDatetime(parseTimestamp("1970-01-01"), "zzzzzzzzzzzzzzzzzzzzzz"));
 
   // Test daylight savings.
