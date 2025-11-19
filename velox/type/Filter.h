@@ -136,11 +136,6 @@ class Filter : public velox::ISerializable {
   /// @return Whether an object is the same as itself.
   virtual bool testingEquals(const Filter& other) const = 0;
 
-  bool testingBaseEquals(const Filter& other) const {
-    return deterministic_ == other.isDeterministic() &&
-        nullAllowed_ == other.nullAllowed_ && kind_ == other.kind();
-  }
-
   /// @return number of positions remaining until the end of the current
   /// top-level position
   virtual int getSucceedingPositionsToFail() const {
@@ -293,6 +288,16 @@ class Filter : public velox::ISerializable {
   virtual std::string toString() const;
 
  protected:
+  template <typename TFilter>
+  const TFilter* testingBaseEquals(const Filter& other) const {
+    if (deterministic_ == other.isDeterministic() &&
+        nullAllowed_ == other.nullAllowed_ && kind_ == other.kind()) {
+      return other.as<TFilter>();
+    }
+
+    return nullptr;
+  }
+
   folly::dynamic serializeBase() const;
 
  protected:
@@ -327,7 +332,7 @@ class AlwaysFalse final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<AlwaysFalse>(other);
   }
 
   std::unique_ptr<Filter> clone(
@@ -423,7 +428,7 @@ class AlwaysTrue final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<AlwaysTrue>(other);
   }
 
   bool testNull() const final {
@@ -509,7 +514,7 @@ class IsNull final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<IsNull>(other);
   }
 
   std::unique_ptr<Filter> clone(
@@ -597,7 +602,7 @@ class IsNotNull final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<IsNotNull>(other);
   }
 
   std::unique_ptr<Filter> clone(
@@ -1387,6 +1392,20 @@ class AbstractRange : public Filter {
         "A range filter must have  a lower or upper  bound");
   }
 
+  template <typename TFilter>
+  const TFilter* testingBaseEquals(const Filter& other) const {
+    if (const auto* otherRange = Filter::testingBaseEquals<TFilter>(other)) {
+      if (lowerUnbounded_ == otherRange->lowerUnbounded_ &&
+          lowerExclusive_ == otherRange->lowerExclusive_ &&
+          upperUnbounded_ == otherRange->upperUnbounded_ &&
+          upperExclusive_ == otherRange->upperExclusive_) {
+        return otherRange;
+      }
+    }
+
+    return nullptr;
+  }
+
   folly::dynamic serializeBase() const {
     auto obj = Filter::serializeBase();
     obj["lowerUnbounded"] = lowerUnbounded_;
@@ -1457,7 +1476,12 @@ class FloatingPointRange final : public AbstractRange {
     VELOX_CHECK(upperUnbounded_ || !std::isnan(upper_));
   }
 
-  folly::dynamic serialize() const override;
+  folly::dynamic serialize() const override {
+    auto obj = AbstractRange::serializeBase();
+    obj["lower"] = lower_;
+    obj["upper"] = upper_;
+    return obj;
+  }
 
   double lower() const {
     return lower_;
@@ -1555,17 +1579,27 @@ class FloatingPointRange final : public AbstractRange {
 
   std::string toString() const override;
 
-  bool testingEquals(const Filter& other) const final;
+  bool testingEquals(const Filter& other) const final {
+    if (const auto* otherRange =
+            AbstractRange::testingBaseEquals<FloatingPointRange<T>>(other)) {
+      return (lowerUnbounded_ || lower_ == otherRange->lower_) &&
+          (upperUnbounded_ || upper_ == otherRange->upper_);
+    }
+
+    return false;
+  }
 
  private:
   std::string toString(const std::string& name) const {
     return fmt::format(
         "{}: {}{}, {}{} {}",
         name,
-        (lowerExclusive_ || lowerUnbounded_) ? "(" : "[",
+        (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
         lowerUnbounded_ ? "-inf" : std::to_string(lower_),
+        // "nan" is considered valid value(s) and
+        // "nan > +inf" so "nan" is the upper bound in case of unbounded range.
         upperUnbounded_ ? "nan" : std::to_string(upper_),
-        (upperExclusive_ && !upperUnbounded_) ? ")" : "]",
+        (upperUnbounded_ || upperExclusive_) ? ")" : "]",
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
@@ -1636,18 +1670,6 @@ inline std::string FloatingPointRange<double>::toString() const {
 template <>
 inline std::string FloatingPointRange<float>::toString() const {
   return toString("FloatRange");
-}
-
-template <>
-inline bool FloatingPointRange<float>::testingEquals(
-    const Filter& other) const {
-  return toString() == other.toString();
-}
-
-template <>
-inline bool FloatingPointRange<double>::testingEquals(
-    const Filter& other) const {
-  return toString() == other.toString();
 }
 
 template <>
