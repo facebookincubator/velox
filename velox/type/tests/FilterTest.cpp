@@ -41,8 +41,7 @@ TEST(FilterTest, alwaysFalse) {
   EXPECT_FALSE(alwaysFalse.testNull());
 
   EXPECT_EQ(
-      "Filter(AlwaysFalse, deterministic, null not allowed)",
-      alwaysFalse.toString());
+      "Filter(AlwaysFalse, deterministic, no nulls)", alwaysFalse.toString());
 }
 
 TEST(FilterTest, alwaysTrue) {
@@ -65,7 +64,7 @@ TEST(FilterTest, alwaysTrue) {
       simd::allSetBitMask<int16_t>(),
       simd::toBitMask(alwaysTrue.testValues(int16s)));
   EXPECT_EQ(
-      "Filter(AlwaysTrue, deterministic, null allowed)", alwaysTrue.toString());
+      "Filter(AlwaysTrue, deterministic, with nulls)", alwaysTrue.toString());
 }
 
 TEST(FilterTest, isNotNull) {
@@ -88,7 +87,7 @@ TEST(FilterTest, isNull) {
   EXPECT_FALSE(isNull.testInt128Range(0, 0, false));
   EXPECT_TRUE(isNull.testInt128Range(0, 0, true));
 
-  EXPECT_EQ("Filter(IsNull, deterministic, null allowed)", isNull.toString());
+  EXPECT_EQ("Filter(IsNull, deterministic, with nulls)", isNull.toString());
 }
 
 // Applies 'filter' to all T type lanes of 'values' and compares the result to
