@@ -16,7 +16,9 @@
 
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Task.h"
+#include "velox/vector/DictionaryVector.h"
 #include "velox/vector/EncodedVectorCopy.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -438,6 +440,120 @@ void LocalPartition::copy(
   target->copyRanges(input.get(), ranges);
 }
 
+template <TypeKind KIND>
+uint64_t retainedSizeWithSharedStringBuffers(
+    const VectorPtr& vector,
+    size_t numPartitions) {
+  using T = typename KindToFlatVector<KIND>::WrapperType;
+
+  uint64_t size = 0;
+  size += vector->nulls() ? vector->nulls()->capacity() : 0;
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::FLAT:
+      if constexpr (
+          KIND != TypeKind::ARRAY && KIND != TypeKind::MAP &&
+          KIND != TypeKind::ROW) {
+        size += vector->values()->capacity();
+        auto* vectorTyped = vector->asFlatVector<T>();
+        for (const auto& stringBuffer : vectorTyped->stringBuffers()) {
+          size += stringBuffer->capacity() / numPartitions;
+        }
+      }
+      break;
+    case VectorEncoding::Simple::CONSTANT: {
+      auto* vectorTyped = vector->as<ConstantVector<T>>();
+      if (vectorTyped->getStringBuffer()) {
+        size += vectorTyped->getStringBuffer()->capacity() / numPartitions;
+      }
+      if (vector->valueVector()) {
+        size += retainedSizeWithSharedStringBuffers<KIND>(
+            vector->valueVector(), numPartitions);
+      }
+      break;
+    }
+    case VectorEncoding::Simple::DICTIONARY: {
+      auto* vectorTyped = vector->as<DictionaryVector<T>>();
+      size += vectorTyped->indices()->capacity();
+      VELOX_CHECK_NOT_NULL(vectorTyped->valueVector());
+      size += retainedSizeWithSharedStringBuffers<KIND>(
+          vectorTyped->valueVector(), numPartitions);
+      break;
+    }
+    case VectorEncoding::Simple::LAZY: {
+      auto* vectorTyped = vector->as<LazyVector>();
+      size += retainedSizeWithSharedStringBuffers<KIND>(
+          vectorTyped->loadedVectorShared(), numPartitions);
+      break;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* vectorTyped = vector->as<ArrayVector>();
+      size += vectorTyped->offsets()->capacity();
+      size += vectorTyped->sizes()->capacity();
+      VELOX_CHECK_NOT_NULL(vectorTyped->elements());
+      size += VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          retainedSizeWithSharedStringBuffers,
+          vectorTyped->elements()->typeKind(),
+          vectorTyped->elements(),
+          numPartitions);
+      break;
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* vectorTyped = vector->as<MapVector>();
+      size += vectorTyped->offsets()->capacity();
+      size += vectorTyped->sizes()->capacity();
+      VELOX_CHECK_NOT_NULL(vectorTyped->mapKeys());
+      VELOX_CHECK_NOT_NULL(vectorTyped->mapValues());
+      size = size +
+          VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+                 retainedSizeWithSharedStringBuffers,
+                 vectorTyped->mapKeys()->typeKind(),
+                 vectorTyped->mapKeys(),
+                 numPartitions) +
+          VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+                 retainedSizeWithSharedStringBuffers,
+                 vectorTyped->mapValues()->typeKind(),
+                 vectorTyped->mapValues(),
+                 numPartitions);
+      break;
+    }
+    case VectorEncoding::Simple::ROW: {
+      auto* vectorTyped = vector->as<RowVector>();
+      for (const auto& child : vectorTyped->children()) {
+        size += VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            retainedSizeWithSharedStringBuffers,
+            child->typeKind(),
+            child,
+            numPartitions);
+      }
+      break;
+    }
+    case VectorEncoding::Simple::FLAT_MAP: {
+      auto* vectorTyped = vector->as<FlatMapVector>();
+      for (const auto& mapValue : vectorTyped->mapValues()) {
+        size += VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            retainedSizeWithSharedStringBuffers,
+            mapValue->typeKind(),
+            mapValue,
+            numPartitions);
+      }
+      for (const auto& inMap : vectorTyped->inMaps()) {
+        size += inMap->capacity();
+      }
+      if (vectorTyped->distinctKeys()) {
+        size += VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            retainedSizeWithSharedStringBuffers,
+            vectorTyped->distinctKeys()->typeKind(),
+            vectorTyped->distinctKeys(),
+            numPartitions);
+      }
+      break;
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+  return size;
+}
+
 RowVectorPtr LocalPartition::processPartition(
     const RowVectorPtr& input,
     vector_size_t size,
@@ -469,7 +585,11 @@ RowVectorPtr LocalPartition::processPartition(
         partitionBuffer);
 
     if (partitionBuffer &&
-        partitionBuffer->retainedSize() >= singlePartitionBufferSize_) {
+        VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            retainedSizeWithSharedStringBuffers,
+            partitionBuffer->typeKind(),
+            partitionBuffer,
+            numPartitions_) >= singlePartitionBufferSize_) {
       partitionData = std::dynamic_pointer_cast<RowVector>(partitionBuffer);
       VELOX_CHECK(partitionData);
       partitionBuffers_[partition] = nullptr;
