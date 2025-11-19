@@ -135,9 +135,9 @@ referenceToNameConverter::visit(const cudf::ast::column_reference& expr) {
   const auto columnName = indicesToColumnNames_.find(columnIdx);
   VELOX_CHECK(
       columnName != indicesToColumnNames_.end(), "Column index not found");
-  columnNameReferences_.emplace_back(columnName->second);
+  convertedExpr_.push(cudf::ast::column_name_reference{columnName->second});
   return std::reference_wrapper<const cudf::ast::expression>(
-      columnNameReferences_.back());
+      convertedExpr_.back());
 }
 
 std::reference_wrapper<const cudf::ast::expression>

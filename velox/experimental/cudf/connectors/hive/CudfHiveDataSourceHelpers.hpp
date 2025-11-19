@@ -101,7 +101,6 @@ class referenceToNameConverter
       cudf::host_span<const std::reference_wrapper<const cudf::ast::expression>>
           operands);
   cudf::ast::tree convertedExpr_;
-  std::list<cudf::ast::column_name_reference> columnNameReferences_;
   std::unordered_map<cudf::size_type, std::string> indicesToColumnNames_;
 };
 
