@@ -226,4 +226,49 @@ std::vector<int64_t> getDissolvedTilesCoveringGeometry(
 
 bool isPointOrRectangle(const geos::geom::Geometry& geometry);
 
+/// Computes the centroid of a non-empty MultiPoint geometry on a sphere.
+/// Uses 3D Cartesian coordinates to properly average points on a spherical
+/// surface.
+/// @param geometry A MultiPoint geometry (must not be empty)
+/// @return A pair of (longitude, latitude) in degrees representing the centroid
+std::pair<double, double> computeSphericalCentroid(
+    const geos::geom::MultiPoint& multiPoint);
+
+/// Represents a point in 3D Cartesian coordinates, useful for spherical
+/// geometry calculations. Provides conversions to/from spherical coordinates
+/// (longitude, latitude).
+class CartesianPoint {
+ public:
+  /// Constructs a CartesianPoint from a spherical point (longitude, latitude)
+  /// in degrees. Assumes the point is on Earth's surface.
+  /// @param longitude Longitude in degrees (x-coordinate in spherical system)
+  /// @param latitude Latitude in degrees (y-coordinate in spherical system)
+  CartesianPoint(double longitude, double latitude);
+
+  /// Constructs a CartesianPoint from Cartesian coordinates.
+  /// @param x X-coordinate in Cartesian system
+  /// @param y Y-coordinate in Cartesian system
+  /// @param z Z-coordinate in Cartesian system
+  CartesianPoint(double x, double y, double z);
+
+  double getX() const {
+    return x_;
+  }
+  double getY() const {
+    return y_;
+  }
+  double getZ() const {
+    return z_;
+  }
+
+  /// Converts this Cartesian point back to spherical coordinates.
+  /// @return A pair of (longitude, latitude) in degrees
+  std::pair<double, double> toSphericalPoint() const;
+
+ private:
+  double x_;
+  double y_;
+  double z_;
+};
+
 } // namespace facebook::velox::functions::geospatial

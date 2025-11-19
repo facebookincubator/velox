@@ -46,6 +46,10 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "to_spherical_geography"}});
   registerFunction<ToGeometryFunction, Geometry, SphericalGeography>(
       {{prefix + "to_geometry"}});
+  registerFunction<
+      StSphericalCentroidFunction,
+      SphericalGeography,
+      SphericalGeography>({{prefix + "st_centroid"}});
 }
 
 void registerRelationPredicates(const std::string& prefix) {
