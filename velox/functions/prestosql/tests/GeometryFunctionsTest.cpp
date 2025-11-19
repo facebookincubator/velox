@@ -211,6 +211,11 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
         "to_hex(ST_AsBinary(ST_GeomFromBinary(from_hex(c0))))", wkt);
   };
 
+  const auto wktRoundTripSpherical = [&](const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>(
+        "ST_AsText(to_spherical_geography(ST_GeometryFromText(c0)))", a);
+  };
+
   const std::vector<std::string> wkts = {
       "POINT (1 2)",
       "LINESTRING (0 0, 10 10)",
@@ -243,6 +248,7 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
   for (size_t i = 0; i < wkts.size(); i++) {
     assert(i < wkbs.size() && i < bigEndianWkbs.size());
     EXPECT_EQ(wkts[i], wktRoundTrip(wkts[i]));
+    EXPECT_EQ(wkts[i], wktRoundTripSpherical(wkts[i]));
     EXPECT_EQ(wkbs[i], wktToWkb(wkts[i]));
     EXPECT_EQ(wkts[i], wkbToWkT(wkbs[i]));
     EXPECT_EQ(wkbs[i], wkbRoundTrip(wkbs[i]));
@@ -272,6 +278,8 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
   for (size_t i = 0; i < emptyGeometryWkts.size(); i++) {
     assert(i < emptyGeometryWkbs.size());
     EXPECT_EQ(wktRoundTrip(emptyGeometryWkts[i]), emptyGeometryWkts[i]);
+    EXPECT_EQ(
+        wktRoundTripSpherical(emptyGeometryWkts[i]), emptyGeometryWkts[i]);
     EXPECT_EQ(emptyGeometryWkbs[i], wktToWkb(emptyGeometryWkts[i]));
     EXPECT_EQ(emptyGeometryWkts[i], wkbToWkT(emptyGeometryWkbs[i]));
     EXPECT_EQ(emptyGeometryWkbs[i], wkbRoundTrip(emptyGeometryWkbs[i]));

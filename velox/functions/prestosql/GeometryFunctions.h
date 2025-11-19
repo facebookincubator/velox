@@ -103,6 +103,27 @@ struct StAsTextFunction {
 };
 
 template <typename T>
+struct SphericalAsTextFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Varchar>& result,
+      const arg_type<SphericalGeography>& geography) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geography);
+
+    GEOS_TRY(
+        {
+          geos::io::WKTWriter writer;
+          writer.setTrim(true);
+          result = writer.write(geosGeometry.get());
+        },
+        "Failed to write WKT");
+    return Status::OK();
+  }
+};
+
+template <typename T>
 struct StAsBinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
