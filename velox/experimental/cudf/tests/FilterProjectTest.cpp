@@ -686,6 +686,42 @@ TEST_F(CudfFilterProjectTest, round) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+// TODO (dm): Enable after adding decimal support to velox-cudf
+TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  auto decimalData = makeRowVector(
+      {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({decimalData})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  auto decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({decimalData})
+             .project({"round(c0) as c1"})
+             .planNode();
+  decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({410000, -460000}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({decimalData})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+}
+
 TEST_F(CudfFilterProjectTest, simpleFilter) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);

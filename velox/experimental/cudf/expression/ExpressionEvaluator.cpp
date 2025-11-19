@@ -873,13 +873,54 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<RoundFunction>(expr);
       },
-      {FunctionSignatureBuilder()
-           .returnType("double")
-           .argumentType("double")
+      {// TODO(dm): Enable after adding decimal support to velox-cudf
+       //   FunctionSignatureBuilder()
+       //      .integerVariable("p")
+       //      .integerVariable("s")
+       //      .returnType("decimal(p,s)")
+       //      .argumentType("decimal(p,s)")
+       //      .build(),
+       //  FunctionSignatureBuilder()
+       //      .integerVariable("p")
+       //      .integerVariable("s")
+       //      .returnType("decimal(p,s)")
+       //      .argumentType("decimal(p,s)")
+       //      .constantArgumentType("integer")
+       //      .build(),
+       FunctionSignatureBuilder()
+           .returnType("tinyint")
+           .argumentType("tinyint")
            .build(),
        FunctionSignatureBuilder()
-           .returnType("double")
-           .argumentType("double")
+           .returnType("tinyint")
+           .argumentType("tinyint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("smallint")
+           .argumentType("smallint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("smallint")
+           .argumentType("smallint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("integer")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
            .constantArgumentType("integer")
            .build()});
 
