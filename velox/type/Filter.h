@@ -2163,15 +2163,7 @@ class BigintMultiRange final : public Filter {
     return ranges_;
   }
 
-  std::string toString() const override {
-    std::ostringstream out;
-    out << "BigintMultiRange: [";
-    for (const auto& range : ranges_) {
-      out << " " << range->toString();
-    }
-    out << " ]" << (nullAllowed_ ? "with nulls" : "no nulls");
-    return out.str();
-  }
+  std::string toString() const override;
 
   bool testingEquals(const Filter& other) const final;
 

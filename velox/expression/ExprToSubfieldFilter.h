@@ -338,6 +338,10 @@ inline std::unique_ptr<common::IsNotNull> isNotNull() {
   return std::make_unique<common::IsNotNull>();
 }
 
+inline std::unique_ptr<common::AlwaysTrue> alwaysTrue() {
+  return std::make_unique<common::AlwaysTrue>();
+}
+
 template <typename T>
 std::unique_ptr<common::MultiRange>
 orFilter(std::unique_ptr<T> a, std::unique_ptr<T> b, bool nullAllowed = false) {
@@ -461,9 +465,21 @@ class ExprToSubfieldFilterParser {
       core::ExpressionEvaluator* evaluator,
       bool negated = false) = 0;
 
+  /// Combines 2 or more filters with an OR.
+  /// Detects overlapping ranges of bigint and floating point values.
+  /// Detects a list of single-value bigint filters and combines them into a
+  /// single IN list.
   static std::unique_ptr<common::Filter> makeOrFilter(
-      std::unique_ptr<common::Filter> a,
-      std::unique_ptr<common::Filter> b);
+      std::vector<std::unique_ptr<common::Filter>> disjuncts);
+
+  template <typename... Disjuncts>
+  static std::unique_ptr<common::Filter> makeOrFilter(
+      Disjuncts&&... disjuncts) {
+    std::vector<std::unique_ptr<common::Filter>> filters;
+    filters.reserve(sizeof...(Disjuncts));
+    (filters.emplace_back(std::forward<Disjuncts>(disjuncts)), ...);
+    return makeOrFilter(std::move(filters));
+  }
 
  protected:
   // Converts an expression into a subfield. Returns false if the expression
