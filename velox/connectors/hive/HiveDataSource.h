@@ -40,6 +40,7 @@ class HiveDataSource : public DataSource {
       const connector::ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
+      folly::Executor* cpuExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
@@ -103,6 +104,7 @@ class HiveDataSource : public DataSource {
 
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
+  folly::Executor* const cpuExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
   memory::MemoryPool* const pool_;

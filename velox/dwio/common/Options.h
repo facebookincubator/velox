@@ -290,6 +290,14 @@ class RowReaderOptions {
     ioExecutor_ = ioExecutor;
   }
 
+  folly::Executor* cpuExecutor() const {
+    return cpuExecutor_;
+  }
+
+  void setCpuExecutor(folly::Executor* const cpuExecutor) {
+    cpuExecutor_ = cpuExecutor;
+  }
+
   const size_t parallelUnitLoadCount() const {
     return parallelUnitLoadCount_;
   }
@@ -473,6 +481,7 @@ class RowReaderOptions {
   bool preserveFlatMapsInMemory_ = false;
   // Optional io executor to enable parallel unit loader.
   folly::Executor* ioExecutor_{nullptr};
+  folly::Executor* cpuExecutor_{nullptr};
   // Optional executors to enable internal reader parallelism.
   // 'decodingExecutor' allow parallelising the vector decoding process.
   // 'ioExecutor' enables parallelism when performing file system read
