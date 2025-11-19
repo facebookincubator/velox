@@ -16,9 +16,7 @@
 
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include <gtest/gtest.h>
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
-#include "velox/functions/lib/IsNull.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"

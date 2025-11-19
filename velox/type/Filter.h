@@ -91,6 +91,20 @@ class Filter : public velox::ISerializable {
     return kind_ == kind;
   }
 
+  /// @pre The caller must ensure this filter's kind matches TFilter.
+  template <typename TFilter>
+  TFilter* as() {
+    static_assert(std::is_base_of_v<Filter, TFilter>);
+    return static_cast<TFilter*>(this);
+  }
+
+  /// @pre The caller must ensure this filter's kind matches TFilter.
+  template <typename TFilter>
+  const TFilter* as() const {
+    static_assert(std::is_base_of_v<Filter, TFilter>);
+    return static_cast<const TFilter*>(this);
+  }
+
   bool nullAllowed() const {
     return nullAllowed_;
   }

@@ -281,10 +281,22 @@ inline std::unique_ptr<common::Filter> in(
   return common::createBigintValues(values, nullAllowed);
 }
 
+inline std::unique_ptr<common::Filter> in(
+    std::initializer_list<int64_t> values,
+    bool nullAllowed = false) {
+  return in(std::vector<int64_t>(values), nullAllowed);
+}
+
 inline std::unique_ptr<common::Filter> notIn(
     const std::vector<int64_t>& values,
     bool nullAllowed = false) {
   return common::createNegatedBigintValues(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::Filter> notIn(
+    std::initializer_list<int64_t> values,
+    bool nullAllowed = false) {
+  return notIn(std::vector<int64_t>(values), nullAllowed);
 }
 
 inline std::unique_ptr<common::BytesValues> in(
@@ -293,10 +305,22 @@ inline std::unique_ptr<common::BytesValues> in(
   return std::make_unique<common::BytesValues>(values, nullAllowed);
 }
 
+inline std::unique_ptr<common::BytesValues> in(
+    std::initializer_list<std::string> values,
+    bool nullAllowed = false) {
+  return in(std::vector<std::string>(values), nullAllowed);
+}
+
 inline std::unique_ptr<common::NegatedBytesValues> notIn(
     const std::vector<std::string>& values,
     bool nullAllowed = false) {
   return std::make_unique<common::NegatedBytesValues>(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesValues> notIn(
+    std::initializer_list<std::string> values,
+    bool nullAllowed = false) {
+  return notIn(std::vector<std::string>(values), nullAllowed);
 }
 
 inline std::unique_ptr<common::BoolValue> boolEqual(
