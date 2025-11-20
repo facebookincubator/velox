@@ -38,7 +38,7 @@ The HiveQL behavior:
 https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
 
 Additionally, the computation of decimal division adapts to the allow-precision-loss flag,
-while the decimal addition, subtraction, and multiplication do not.
+while the decimal addition, subtraction, multiplication and integer division do not.
 
 Addition and Subtraction
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -75,30 +75,13 @@ When allow-precision-loss is false:
     s = fractionalDigits
 
 Integer Division
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
-Integer division operators return a ``bigint`` result and are not affected by the ``allow-precision-loss`` configuration.
-The input precision formula ``p1-s1+s2`` (capped at 38) determines the valid range for the operands.
-If ``p1-s1+s2`` exceeds 38, the effective precision is 38. For example, with ``p1``=38, ``s1``=1, ``s2``=2,
-the formula yields 39 but the effective precision used is 38.
+::
 
-.. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
-
-    Returns the results of dividing x by y. Performs the integer division truncates toward zero.
-    Truncation occurs if the result is within the precision(min(p1-s1+s2, 38)) but exceeds the BIGINT range.
-    Division by zero or overflow results in null. ::
-
-        SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
-        SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
-        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
-        SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
-
-.. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
-
-    Returns the result of integer division of ``x`` by ``y``, truncating toward zero.
-    Truncation occurs if the result is within the precision(min(``p1-s1+s2``, 38)) but exceeds the BIGINT range.
-    Division by zero or overflow results in an error. This function operates in ANSI mode (error on invalid input).
-    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
+    precision = p1 - s1 + s2
+    p = precision == 0 ? 1 : min(38,  precision)
+    s = 0
 
 Decimal Precision and Scale Adjustment
 --------------------------------------
@@ -137,6 +120,28 @@ Decimal division uses a different formula:
     scale = fractionalDigits - (wholeDigits + fractionalDigits - 38) / 2 - 1
 
 Returns NULL when the actual result cannot be represented with the calculated decimal type.
+
+Arithmetic Functions
+--------------------
+
+.. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+
+    Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
+    Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+    Division by zero or overflow results in NULL. Does not respect the ``allow-precision-loss`` configuration.
+    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
+        SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
+        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
+        SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
+
+.. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+
+    Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
+    Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+    Division by zero or overflow results in an error.
+    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
 Decimal Functions
 -----------------
