@@ -22,6 +22,7 @@
 #include "velox/functions/prestosql/MapFunctions.h"
 #include "velox/functions/prestosql/MapIntersect.h"
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
+#include "velox/functions/prestosql/MapKeysOverlap.h"
 #include "velox/functions/prestosql/MapNormalize.h"
 #include "velox/functions/prestosql/MapSubset.h"
 #include "velox/functions/prestosql/MapTopN.h"
@@ -135,6 +136,39 @@ void registerMapExcept(const std::string& prefix) {
       Array<Generic<T1>>>({prefix + "map_except"});
 }
 
+template <typename T>
+void registerMapKeysOverlapPrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapKeysOverlapPrimitiveFunction, T>,
+      bool,
+      Map<T, Generic<T1>>,
+      Array<T>>({prefix + "map_keys_overlap"});
+}
+
+void registerMapKeysOverlap(const std::string& prefix) {
+  registerMapKeysOverlapPrimitive<bool>(prefix);
+  registerMapKeysOverlapPrimitive<int8_t>(prefix);
+  registerMapKeysOverlapPrimitive<int16_t>(prefix);
+  registerMapKeysOverlapPrimitive<int32_t>(prefix);
+  registerMapKeysOverlapPrimitive<int64_t>(prefix);
+  registerMapKeysOverlapPrimitive<float>(prefix);
+  registerMapKeysOverlapPrimitive<double>(prefix);
+  registerMapKeysOverlapPrimitive<Timestamp>(prefix);
+  registerMapKeysOverlapPrimitive<Date>(prefix);
+
+  registerFunction<
+      MapKeysOverlapVarcharFunction,
+      bool,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>>({prefix + "map_keys_overlap"});
+
+  registerFunction<
+      MapKeysOverlapFunction,
+      bool,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>>({prefix + "map_keys_overlap"});
+}
+
 void registerMapRemoveNullValues(const std::string& prefix) {
   registerFunction<
       MapRemoveNullValues,
@@ -212,6 +246,8 @@ void registerMapFunctions(const std::string& prefix) {
   registerMapIntersect(prefix);
 
   registerMapExcept(prefix);
+
+  registerMapKeysOverlap(prefix);
 
   registerMapRemoveNullValues(prefix);
 
