@@ -235,6 +235,125 @@ TEST_F(ExprToSubfieldFilterTest, dereferenceWithEmptyField) {
   ASSERT_FALSE(filter);
 }
 
+template <typename... Disjuncts>
+static std::unique_ptr<common::Filter> makeOr(Disjuncts&&... disjuncts) {
+  return ExprToSubfieldFilterParser::makeOrFilter(
+      std::forward<Disjuncts>(disjuncts)...);
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterBigint) {
+  // a = 1 or a = 5
+  {
+    auto expected = in({1, 5});
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(1), equal(5)));
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(5), equal(1)));
+  }
+
+  // a = 1 or a = 2 ==> a between 1 and 2
+  {
+    auto expected = between(1, 2);
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(1), equal(2)));
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(2), equal(1)));
+    VELOX_ASSERT_FILTER(expected, makeOr(between(1, 2), equal(1)));
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(2), between(1, 2)));
+  }
+
+  // a = 1 or a between 5 and 10 or a = 11 ==> a = 1 or a between 5 and 11
+  {
+    auto expected = bigintOr(equal(1), between(5, 11));
+
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(1), between(5, 10), equal(11)));
+    VELOX_ASSERT_FILTER(expected, makeOr(equal(1), equal(11), between(5, 10)));
+    VELOX_ASSERT_FILTER(expected, makeOr(between(5, 10), equal(11), equal(1)));
+  }
+
+  // a < 10 or a > 0
+  {
+    VELOX_ASSERT_FILTER(isNotNull(), makeOr(lessThan(10), greaterThan(0)));
+    VELOX_ASSERT_FILTER(
+        alwaysTrue(),
+        makeOr(lessThan(10), greaterThan(0, /*nullAllowed=*/true)));
+  }
+
+  // a > 10 or a between 12 and 100
+  {
+    auto expected = greaterThanOrEqual(11);
+    VELOX_ASSERT_FILTER(expected, makeOr(greaterThan(10), between(12, 100)));
+    VELOX_ASSERT_FILTER(expected, makeOr(between(12, 100), greaterThan(10)));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterDouble) {
+  // a < 1.5 or a > 1.0 ==> not null
+  {
+    VELOX_ASSERT_FILTER(
+        isNotNull(), makeOr(lessThanDouble(1.5), greaterThanDouble(1.0)));
+
+    VELOX_ASSERT_FILTER(
+        alwaysTrue(),
+        makeOr(
+            lessThanDouble(1.5, /*nullAllowed=*/true), greaterThanDouble(1.0)));
+  }
+
+  // a < 10.1 or a between 9.0 and 12.0 or a between 11.0 and 15.0 ==> a <= 15.0
+  {
+    auto expected = lessThanOrEqualDouble(15.0);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(
+            lessThanDouble(10.1),
+            betweenDouble(9.0, 12.0),
+            betweenDouble(11.0, 15.0)));
+  }
+
+  // a < 0.0 or a > 4.5
+  {
+    auto expected = orFilter(lessThanDouble(0.0), greaterThanDouble(4.5));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(lessThanDouble(0.0), greaterThanDouble(4.5)));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterFloat) {
+  // a < 1.5 or a > 1.0 ==> not null
+  {
+    VELOX_ASSERT_FILTER(
+        isNotNull(), makeOr(lessThanFloat(1.5), greaterThanFloat(1.0)));
+
+    VELOX_ASSERT_FILTER(
+        alwaysTrue(),
+        makeOr(
+            lessThanFloat(1.5, /*nullAllowed=*/true), greaterThanFloat(1.0)));
+  }
+
+  // a < 10.1 or a between 9.0 and 12.0 or a between 11.0 and 15.0 ==> a <= 15.0
+  {
+    auto expected = lessThanOrEqualFloat(15.0);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(
+            lessThanFloat(10.1),
+            betweenFloat(9.0, 12.0),
+            betweenFloat(11.0, 15.0)));
+  }
+
+  // a < 0.0 or a > 4.5
+  {
+    auto expected = orFilter(lessThanFloat(0.0), greaterThanFloat(4.5));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(lessThanFloat(0.0), greaterThanFloat(4.5)));
+  }
+
+  // a < 1 or a > 1
+  {
+    auto expected = orFilter(lessThanFloat(1.0), greaterThanFloat(1.0));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(lessThanFloat(1.0), greaterThanFloat(1.0)));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(greaterThanFloat(1.0), lessThanFloat(1.0)));
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec
 

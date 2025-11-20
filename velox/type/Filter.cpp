@@ -1195,6 +1195,20 @@ BigintMultiRange::BigintMultiRange(
   }
 }
 
+std::string BigintMultiRange::toString() const {
+  std::ostringstream out;
+  out << "BigintMultiRange: [";
+  for (auto i = 0; i < ranges_.size(); i++) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << fmt::format("[{}, {}]", ranges_[i]->lower(), ranges_[i]->upper());
+  }
+
+  out << "] " << (nullAllowed_ ? "with nulls" : "no nulls");
+  return out.str();
+}
+
 namespace {
 int compareRanges(const char* lhs, size_t length, const std::string& rhs) {
   int size = std::min(length, rhs.length());
