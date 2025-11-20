@@ -74,6 +74,16 @@ class SpillerBase {
   // RowContainerSpillMergeStream.
   virtual void extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr);
 
+  // Extracts accumulators for 'rows' into '*result'.
+  // Creates '*results' in spillPool() if nullptr.
+  virtual void extractNonSerializable(
+      folly::Range<char**> rows,
+      RowVectorPtr& resultPtr);
+
+  virtual bool hasProbedFlag() const {
+    return false;
+  }
+
   virtual bool needSort() const = 0;
 
   virtual std::string type() const = 0;
@@ -156,6 +166,10 @@ class SpillerBase {
   // that one can start reading these back.
   bool finalized_{false};
 
+  bool serializeRowContainer_{false};
+
+  RowTypePtr accumulatorType_;
+
   SpillState state_;
 
   // Collects the rows to spill for each partition.
@@ -190,6 +204,14 @@ class SpillerBase {
       int32_t maxRows,
       int64_t maxBytes,
       RowVectorPtr& spillVector,
+      size_t& nextBatchIndex);
+
+  int64_t extractSpillRows(
+      SpillRows& rows,
+      int32_t maxRows,
+      int64_t maxBytes,
+      SpillRows& spillRows,
+      RowVectorPtr& accumulatorVector,
       size_t& nextBatchIndex);
 
   // Invoked to finalize the spiller and flush any buffered spill to disk.
