@@ -670,7 +670,14 @@ PlanBuilder& PlanBuilder::parallelProject(
       std::move(exprGroups),
       noLoadColumns,
       planNode_);
+  return *this;
+}
 
+PlanBuilder& PlanBuilder::projectTypedExpressions(
+    const std::vector<std::string>& projectNames,
+    const std::vector<core::TypedExprPtr>& projections) {
+  planNode_ = std::make_shared<core::ProjectNode>(
+      nextPlanNodeId(), projectNames, projections, planNode_);
   return *this;
 }
 

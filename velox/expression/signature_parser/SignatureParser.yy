@@ -28,12 +28,12 @@
 }
 
 %token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION ELLIPSIS
-%token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
+%token <std::string> WORD VARIABLE QUOTED_ID DECIMAL VARCHAR VARBINARY
 %token YYEOF         0
 
 %expect 0
 
-%nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
+%nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type varchar_type varbinary_type
 %nterm <std::shared_ptr<exec::TypeSignature>> type named_type row_field
 %nterm <std::vector<exec::TypeSignature>> type_list row_field_list
 %nterm <std::vector<std::string>> type_with_spaces
@@ -55,6 +55,8 @@ special_type : array_type                  { $$ = $1; }
              | row_type                    { $$ = $1; }
              | function_type               { $$ = $1; }
              | decimal_type                { $$ = $1; }
+             | varchar_type                { $$ = $1; }
+             | varbinary_type              { $$ = $1; }
              ;
 
 named_type : QUOTED_ID type          { $1.erase(0, 1); $1.pop_back(); $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($2->baseName(), $2->parameters(), $1)); }  // Remove the quotes.
@@ -68,6 +70,14 @@ type_with_spaces : type_with_spaces WORD { $1.push_back($2); $$ = std::move($1);
 
 decimal_type : DECIMAL LPAREN WORD COMMA WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}), exec::TypeSignature($5, {}) })); }
              ;
+
+varchar_type : VARCHAR { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, {} )); }
+             | VARCHAR LPAREN WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}) } )); }
+             ;
+
+varbinary_type : VARBINARY { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { } )); }
+               | VARBINARY LPAREN WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}) } )); }
+               ;
 
 type_list : type                   { $$.push_back(*($1)); }
           | type_list COMMA type   { $1.push_back(*($3)); $$ = std::move($1); }

@@ -29,6 +29,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   };
   registerFunction<ParsePrestoDataSizeFunction, LongDecimal<P1, S1>, Varchar>(
       {prefix + "parse_presto_data_size"}, constraints);
+  registerFunction<
+      ParsePrestoDataSizeFunction,
+      LongDecimal<P1, S1>,
+      VarcharN<L1>>({prefix + "parse_presto_data_size"}, constraints);
 }
 } // namespace
 
