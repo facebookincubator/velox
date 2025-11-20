@@ -78,12 +78,14 @@ Integer Division
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Integer division operators return a ``bigint`` result and are not affected by the ``allow-precision-loss`` configuration.
-The input precision formula ``p1-s1+s2`` determines the valid range for the operands.
+The input precision formula ``p1-s1+s2`` (capped at 38) determines the valid range for the operands.
+If ``p1-s1+s2`` exceeds 38, the effective precision is 38. For example, with ``p1``=38, ``s1``=1, ``s2``=2,
+the formula yields 39 but the effective precision used is 38.
 
 .. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
 
     Returns the results of dividing x by y. Performs the integer division truncates toward zero.
-    Truncation occurs if the result is within the precision(p1-s1+s2) but exceeds the BIGINT range.
+    Truncation occurs if the result is within the precision(min(p1-s1+s2, 38)) but exceeds the BIGINT range.
     Division by zero or overflow results in null. ::
 
         SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
@@ -94,7 +96,7 @@ The input precision formula ``p1-s1+s2`` determines the valid range for the oper
 .. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
 
     Returns the result of integer division of ``x`` by ``y``, truncating toward zero.
-    Truncation occurs if the result is within the precision(``p1-s1+s2``) but exceeds the BIGINT range.
+    Truncation occurs if the result is within the precision(min(``p1-s1+s2``, 38)) but exceeds the BIGINT range.
     Division by zero or overflow results in an error. This function operates in ANSI mode (error on invalid input).
     Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
