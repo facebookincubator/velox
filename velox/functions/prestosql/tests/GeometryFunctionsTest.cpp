@@ -108,6 +108,12 @@ class GeometryFunctionsTest : public FunctionBaseTest {
     auto vec = makeNullableFlatVector<std::string>({input});
     return makeRowVector({vec});
   }
+
+  bool aboutEquals(double a, double b) {
+    double diff = std::abs(a - b);
+    double scale = std::max(std::abs(a), std::abs(b));
+    return diff <= std::max(1e-5, 1e-5 * scale);
+  }
 };
 
 TEST_F(GeometryFunctionsTest, errorStGeometryFromTextAndParsing) {
@@ -4292,4 +4298,111 @@ TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
       testStSphericalCentroidFunction(
           "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
       "ST_Centroid[SphericalGeography] only applies to Point or MultiPoint. Input type is: Polygon");
+}
+TEST_F(GeometryFunctionsTest, testStSphericalDistance) {
+  const auto testStSphericalDistanceFunc = [&](const std::optional<std::string>&
+                                                   leftWkt,
+                                               const std::optional<std::string>&
+                                                   rightWkt,
+                                               const std::optional<double>&
+                                                   expected) {
+    std::optional<double> result = evaluateOnce<double>(
+        "st_distance(to_spherical_geography(ST_GeometryFromText(c0)), to_spherical_geography(ST_GeometryFromText(c1)))",
+        leftWkt,
+        rightWkt);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testStSphericalDistanceFunc(
+      "POINT (-86.67 36.12)", "POINT (-118.40 33.94)", 2886448.973436703);
+  testStSphericalDistanceFunc(
+      "POINT (-118.40 33.94)", "POINT (-86.67 36.12)", 2886448.973436703);
+  testStSphericalDistanceFunc(
+      "POINT (-71.0589 42.3601)",
+      "POINT (-71.2290 42.4430)",
+      16734.69743457461);
+  testStSphericalDistanceFunc(
+      "POINT (-86.67 36.12)", "POINT (-86.67 36.12)", 0.0);
+
+  // Non-point geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalDistanceFunc(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))",
+          "POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))",
+          std::nullopt),
+      "ST_Distance[SphericalGeography] only applies to Point. Input type is: Polygon");
+
+  // Empty points should return null
+  testStSphericalDistanceFunc("POINT EMPTY", "POINT (40 30)", std::nullopt);
+  testStSphericalDistanceFunc("POINT (20 10)", "POINT EMPTY", std::nullopt);
+  testStSphericalDistanceFunc("POINT EMPTY", "POINT EMPTY", std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testStSphericalLength) {
+  const auto testStSphericalLengthFunction =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& expected) {
+        std::optional<double> result = evaluateOnce<double>(
+            "st_length(to_spherical_geography(ST_GeometryFromText(c0)))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  double length = 4350866.6362;
+
+  // Empty linestring returns null
+  testStSphericalLengthFunction("LINESTRING EMPTY", std::nullopt);
+
+  // ST_Length is equivalent to sums of ST_DISTANCE between points in the
+  // LineString
+  testStSphericalLengthFunction(
+      "LINESTRING (-71.05 42.36, -87.62 41.87, -122.41 37.77)", length);
+
+  // Linestring has same length as its reverse
+  testStSphericalLengthFunction(
+      "LINESTRING (-122.41 37.77, -87.62 41.87, -71.05 42.36)", length);
+
+  // Path north pole -> south pole -> north pole should be roughly the
+  // circumference of the Earth
+  testStSphericalLengthFunction(
+      "LINESTRING (0.0 90.0, 0.0 -90.0, 0.0 90.0)", 4.003e7);
+
+  // Empty multi-linestring returns null
+  testStSphericalLengthFunction("MULTILINESTRING EMPTY", std::nullopt);
+
+  // Multi-linestring with one path is equivalent to a single linestring
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87, -122.41 37.77))", length);
+
+  // Multi-linestring with two disjoint paths has length equal to sum of lengths
+  // of lines
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87, -122.41 37.77), (-73.05 42.36, -89.62 41.87, -124.41 37.77))",
+      2 * length);
+
+  // Multi-linestring with adjacent paths is equivalent to a single linestring
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87), (-87.62 41.87, -122.41 37.77))",
+      length);
+
+  // Non-linestring geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalLengthFunction(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
+      "ST_Length[SphericalGeography] only applies to LineString or MultiLineString. Input type is: Polygon");
+
+  // Invalid linestring should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalLengthFunction("LINESTRING (0.0)", std::nullopt),
+      "Failed to parse WKT: ParseException: Expected number but encountered ')'");
 }

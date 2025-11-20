@@ -271,4 +271,6 @@ class CartesianPoint {
   double z_;
 };
 
+double getSphericalLength(const geos::geom::LineString& lineString);
+
 } // namespace facebook::velox::functions::geospatial
