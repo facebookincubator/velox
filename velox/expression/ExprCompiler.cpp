@@ -467,9 +467,8 @@ ExprPtr compileExpression(
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
-  auto rewritten = enableConstantFolding
-      ? expression::optimize(expr, queryCtx, pool)
-      : expression::ExprRewriteRegistry::instance().rewrite(expr);
+  auto rewritten =
+      enableConstantFolding ? expression::optimize(expr, queryCtx, pool) : expr;
   if (rewritten.get() != expr.get()) {
     scope->rewrittenExpressions.push_back(rewritten);
   }
