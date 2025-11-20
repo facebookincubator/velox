@@ -126,6 +126,7 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
 // testing. Use function signature to exclude only a specific signature.
 std::unordered_set<std::string> skipFunctions = {
     "noisy_empty_approx_set_sfm", // Non-deterministic because of privacy.
+    "array_frequency", // velox rewrite due to inline function in presto.
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
