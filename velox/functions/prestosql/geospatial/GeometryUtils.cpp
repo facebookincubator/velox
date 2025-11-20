@@ -578,4 +578,19 @@ std::pair<double, double> CartesianPoint::toSphericalPoint() const {
   return {longitude, latitude};
 }
 
+double getSphericalLength(const geos::geom::LineString& lineString) {
+  double sum = 0.0;
+  auto numPoints = lineString.getNumPoints();
+  auto lastPoint = lineString.getCoordinateN(0);
+
+  for (int i = 1; i < numPoints; i++) {
+    auto thisPoint = lineString.getCoordinateN(i);
+    sum += BingTileType::greatCircleDistance(
+        lastPoint.y, lastPoint.x, thisPoint.y, thisPoint.x);
+    lastPoint = thisPoint;
+  }
+
+  return sum;
+}
+
 } // namespace facebook::velox::functions::geospatial
