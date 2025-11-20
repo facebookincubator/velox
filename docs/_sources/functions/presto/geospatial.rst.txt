@@ -254,6 +254,12 @@ Accessors
    on a two dimensional plane (based on spatial ref) in projected units. Will
    return an error if the input geometry is not a LineString or MultiLineString.
 
+.. function:: ST_Length(sphericalgeography: SphericalGeography) -> length: double
+
+    Returns the length of a ``LineString`` or ``MultiLineString`` on a spherical model of the
+    Earth. This is equivalent to the sum of great-circle distances between adjacent points
+    on the ``LineString``.
+
 .. function:: ST_PointN(linestring: Geometry, index: integer) -> point: geometry
 
    Returns the vertex of a LineString at a given index (indices start at 1).
@@ -320,6 +326,10 @@ Accessors
 
     Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
     between two geometries in projected units. Empty geometries result in null output.
+
+.. function:: ST_Distance(sphericalgeography1: SphericalGeography, sphericalgeography2: SphericalGeography) -> distance: double
+
+    Returns the great-circle distance in meters between two SphericalGeography points.
 
 .. function:: ST_GeometryType(geometry: Geometry) -> type: varchar
 
