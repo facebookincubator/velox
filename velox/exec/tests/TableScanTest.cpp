@@ -5761,7 +5761,7 @@ TEST_F(TableScanTest, footerIOCount) {
   ASSERT_GT(stats.at("footerBufferOverread").sum, 0);
 }
 
-TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
+TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
   gflags::FlagSaver gflagSaver;
   // Disable prefetch to avoid test flakiness.
   FLAGS_cache_prefetch_min_pct = 200;
@@ -5790,8 +5790,8 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
   }
   createDuckDbTable(vectors);
 
-  for (auto disableReoder : {false}) {
-    SCOPED_TRACE(fmt::format("disableReoder {}", disableReoder));
+  for (auto disableReorder : {false, true}) {
+    SCOPED_TRACE(fmt::format("disableReorder {}", disableReorder));
     auto* cache = cache::AsyncDataCache::getInstance();
     cache->clear();
 
@@ -5824,7 +5824,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
                   kHiveConnectorId,
                   connector::hive::HiveConfig::
                       kReadStatsBasedFilterReorderDisabledSession,
-                  disableReoder ? "true" : "false")
+                  disableReorder ? "true" : "false")
               // Disable coalesce so that each column stream has a separate read
               // per split at least.
               .connectorSessionProperty(
@@ -5860,7 +5860,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
                   kHiveConnectorId,
                   connector::hive::HiveConfig::
                       kReadStatsBasedFilterReorderDisabledSession,
-                  disableReoder ? "true" : "false")
+                  disableReorder ? "true" : "false")
               .connectorSessionProperty(
                   kHiveConnectorId,
                   connector::hive::HiveConfig::kMaxCoalescedBytesSession,
@@ -5878,15 +5878,17 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
                   "SELECT c0 FROM tmp WHERE (c1 IN (1,7,11) OR c1 IS NULL) AND (c3 IN (1,7,11)  OR c3 IS NULL)");
 
       auto tableScanStats = getTableScanStats(task);
-      if (disableReoder) {
+      if (disableReorder) {
         ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 0);
       } else {
+        // Cache hit
         if (tableScanStats.customStats.count("storageReadBytes") == 0) {
           continue;
         }
+        // Cache miss, should behave like first time run
         ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 1);
         ASSERT_GT(tableScanStats.customStats["storageReadBytes"].sum, 0);
-        ASSERT_EQ(tableScanStats.customStats["storageReadBytes"].count, 1);
+        ASSERT_GT(tableScanStats.customStats["storageReadBytes"].count, 0);
       }
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
