@@ -17,6 +17,7 @@ velox_add_library(
   DenseHll.cpp
   SparseHll.cpp
   Murmur3Hash128.cpp
+  KHyperLogLog.cpp
 )
 
 velox_link_libraries(velox_common_hyperloglog PUBLIC velox_memory PRIVATE velox_exception)
