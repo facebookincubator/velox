@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Spatial Join Fuzzer &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Writer Fuzzer" href="writer-fuzzer.html" />
+    <link rel="prev" title="RowNumber and TopNRowNumber Fuzzer" href="row-number-fuzzer.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="writer-fuzzer.html" title="Writer Fuzzer"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="row-number-fuzzer.html" title="RowNumber and TopNRowNumber Fuzzer"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Spatial Join Fuzzer</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="spatial-join-fuzzer">
+<h1>Spatial Join Fuzzer<a class="headerlink" href="#spatial-join-fuzzer" title="Link to this heading">¶</a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
+<p>The Spatial Join Fuzzer tests the correctness of the SpatialJoin operator by generating random geometry data and spatial join plans. It verifies that SpatialJoin produces the same results as NestedLoopJoin for equivalent queries.</p>
+</section>
+<section id="supported-features">
+<h2>Supported Features<a class="headerlink" href="#supported-features" title="Link to this heading">¶</a></h2>
+<section id="join-types">
+<h3>Join Types<a class="headerlink" href="#join-types" title="Link to this heading">¶</a></h3>
+<p>The fuzzer tests the two join types supported by SpatialJoin (as defined in <code class="docutils literal notranslate"><span class="pre">SpatialJoinNode::isSupported()</span></code>):</p>
+<ul class="simple">
+<li><p><strong>INNER</strong> - Only matching rows from both sides</p></li>
+<li><p><strong>LEFT</strong> - All rows from left side, matched rows from right side</p></li>
+</ul>
+</section>
+<section id="spatial-predicates">
+<h3>Spatial Predicates<a class="headerlink" href="#spatial-predicates" title="Link to this heading">¶</a></h3>
+<p>The fuzzer tests these spatial predicates:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ST_Intersects(geometry1,</span> <span class="pre">geometry2)</span></code> - Tests if geometries intersect</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ST_Contains(geometry1,</span> <span class="pre">geometry2)</span></code> - Tests if one geometry contains another</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ST_Within(geometry1,</span> <span class="pre">geometry2)</span></code> - Tests if one geometry is within another</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ST_Distance(geometry1,</span> <span class="pre">geometry2)</span> <span class="pre">&lt;</span> <span class="pre">threshold</span></code> - Tests distance with threshold</p></li>
+</ul>
+</section>
+<section id="geometry-types">
+<h3>Geometry Types<a class="headerlink" href="#geometry-types" title="Link to this heading">¶</a></h3>
+<p>The fuzzer generates Well-Known Text (WKT) strings for three geometry types:</p>
+<ul class="simple">
+<li><p><strong>POINT</strong> - Single coordinate point (e.g., <code class="docutils literal notranslate"><span class="pre">POINT</span> <span class="pre">(10.5</span> <span class="pre">20.3)</span></code>)</p></li>
+<li><p><strong>POLYGON</strong> - Closed shape with vertices</p></li>
+<li><p><strong>LINESTRING</strong> - Line segment between two points</p></li>
+</ul>
+</section>
+<section id="distribution-patterns">
+<h3>Distribution Patterns<a class="headerlink" href="#distribution-patterns" title="Link to this heading">¶</a></h3>
+<p>Geometries are generated using three distribution patterns:</p>
+<ul class="simple">
+<li><p><strong>Uniform</strong> - Geometries uniformly distributed in space (0-1000 range)</p></li>
+<li><p><strong>Clustered</strong> - Geometries grouped in 5 specific regions to test overlap scenarios</p></li>
+<li><p><strong>Sparse</strong> - Geometries widely spread (0-2000 range) with low overlap probability</p></li>
+</ul>
+</section>
+</section>
+<section id="implementation-details">
+<h2>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading">¶</a></h2>
+<section id="geometry-generation">
+<h3>Geometry Generation<a class="headerlink" href="#geometry-generation" title="Link to this heading">¶</a></h3>
+<p>Geometries are generated using <code class="docutils literal notranslate"><span class="pre">AbstractInputGenerator</span></code> subclasses:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">PointInputGenerator</span></code> - Generates POINT WKT strings</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PolygonInputGenerator</span></code> - Generates POLYGON WKT strings</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">LineStringInputGenerator</span></code> - Generates LINESTRING WKT strings</p></li>
+</ul>
+<p>Each generator implements the <code class="docutils literal notranslate"><span class="pre">generate(vector_size_t</span> <span class="pre">index)</span></code> method to produce geometry strings based on the distribution pattern.</p>
+<p><strong>Uniform Distribution</strong>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">POINT</span> <span class="p">(</span><span class="n">x</span> <span class="n">y</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><strong>Clustered Distribution</strong>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cluster</span> <span class="o">=</span> <span class="n">row</span> <span class="o">%</span> <span class="mi">5</span>  <span class="o">//</span> <span class="mi">5</span> <span class="n">clusters</span>
+<span class="n">centerX</span> <span class="o">=</span> <span class="n">cluster</span> <span class="o">*</span> <span class="mi">200</span> <span class="o">+</span> <span class="mi">100</span>
+<span class="n">centerY</span> <span class="o">=</span> <span class="n">cluster</span> <span class="o">*</span> <span class="mi">200</span> <span class="o">+</span> <span class="mi">100</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">centerX</span> <span class="o">+</span> <span class="n">random</span><span class="p">(</span><span class="o">-</span><span class="mi">50</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">centerY</span> <span class="o">+</span> <span class="n">random</span><span class="p">(</span><span class="o">-</span><span class="mi">50</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>
+<span class="n">POINT</span> <span class="p">(</span><span class="n">x</span> <span class="n">y</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><strong>Sparse Distribution</strong>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2000</span><span class="p">)</span>  <span class="o">//</span> <span class="n">Larger</span> <span class="n">Range</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2000</span><span class="p">)</span>
+<span class="n">POINT</span> <span class="p">(</span><span class="n">x</span> <span class="n">y</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="data-matching-strategy">
+<h3>Data Matching Strategy<a class="headerlink" href="#data-matching-strategy" title="Link to this heading">¶</a></h3>
+<p>To ensure some matches occur during joins:</p>
+<ul class="simple">
+<li><p>Build side copies ~30% of geometries from probe side</p></li>
+<li><p>10% chance of empty build side to test edge cases</p></li>
+</ul>
+</section>
+<section id="verification">
+<h3>Verification<a class="headerlink" href="#verification" title="Link to this heading">¶</a></h3>
+<p>The fuzzer compares results from two equivalent plans:</p>
+<ol class="arabic simple">
+<li><p><strong>SpatialJoin plan</strong> - Using the specialized SpatialJoin operator</p></li>
+<li><p><strong>NestedLoopJoin plan</strong> - Using NestedLoopJoin with the same spatial predicate as a filter</p></li>
+</ol>
+<p>Results must match exactly, validating that SpatialJoin implements spatial predicates correctly.</p>
+</section>
+</section>
+<section id="key-differences-from-joinfuzzer">
+<h2>Key Differences from JoinFuzzer<a class="headerlink" href="#key-differences-from-joinfuzzer" title="Link to this heading">¶</a></h2>
+<section id="join-conditions">
+<h3>Join Conditions<a class="headerlink" href="#join-conditions" title="Link to this heading">¶</a></h3>
+<p>Unlike regular joins with simple equality predicates:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">//</span> <span class="n">Regular</span> <span class="n">join</span>
+<span class="n">probe</span><span class="o">.</span><span class="n">id</span> <span class="o">=</span> <span class="n">build</span><span class="o">.</span><span class="n">id</span>
+
+<span class="o">//</span> <span class="n">Spatial</span> <span class="n">join</span>
+<span class="n">ST_Intersects</span><span class="p">(</span><span class="n">probe_geom</span><span class="p">,</span> <span class="n">build_geom</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Spatial joins use <strong>function call expressions</strong> as join conditions rather than simple column references.</p>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Spatial Join Fuzzer</a><ul>
+<li><a class="reference internal" href="#overview">Overview</a></li>
+<li><a class="reference internal" href="#supported-features">Supported Features</a><ul>
+<li><a class="reference internal" href="#join-types">Join Types</a></li>
+<li><a class="reference internal" href="#spatial-predicates">Spatial Predicates</a></li>
+<li><a class="reference internal" href="#geometry-types">Geometry Types</a></li>
+<li><a class="reference internal" href="#distribution-patterns">Distribution Patterns</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#implementation-details">Implementation Details</a><ul>
+<li><a class="reference internal" href="#geometry-generation">Geometry Generation</a></li>
+<li><a class="reference internal" href="#data-matching-strategy">Data Matching Strategy</a></li>
+<li><a class="reference internal" href="#verification">Verification</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#key-differences-from-joinfuzzer">Key Differences from JoinFuzzer</a><ul>
+<li><a class="reference internal" href="#join-conditions">Join Conditions</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="row-number-fuzzer.html"
+                          title="previous chapter">RowNumber and TopNRowNumber Fuzzer</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="writer-fuzzer.html"
+                          title="next chapter">Writer Fuzzer</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/testing/spatial-join-fuzzer.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="writer-fuzzer.html" title="Writer Fuzzer"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="row-number-fuzzer.html" title="RowNumber and TopNRowNumber Fuzzer"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Spatial Join Fuzzer</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

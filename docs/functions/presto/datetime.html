@@ -263,6 +263,16 @@ DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.</p>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> as a UNIX timestamp.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="current_timezone">
+<span class="sig-name descname"><span class="pre">current_timezone</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#current_timezone" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the current session time zone as a varchar.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">current_timezone</span><span class="p">;</span>   <span class="o">--</span> <span class="n">Asia</span><span class="o">/</span><span class="n">Kolkata</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 <section id="truncation-function">
 <h2>Truncation Function<a class="headerlink" href="#truncation-function" title="Link to this heading">¶</a></h2>
@@ -788,6 +798,7 @@ list of supported timezones follow the definition <a class="reference external" 
 <li><a class="reference internal" href="#to_iso8601"><code class="docutils literal notranslate"><span class="pre">to_iso8601()</span></code></a></li>
 <li><a class="reference internal" href="#to_milliseconds"><code class="docutils literal notranslate"><span class="pre">to_milliseconds()</span></code></a></li>
 <li><a class="reference internal" href="#to_unixtime"><code class="docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a></li>
+<li><a class="reference internal" href="#current_timezone"><code class="docutils literal notranslate"><span class="pre">current_timezone()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#truncation-function">Truncation Function</a><ul>
