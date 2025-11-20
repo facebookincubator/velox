@@ -1384,12 +1384,12 @@ class AbstractRange : public Filter {
       FilterKind kind)
       : Filter(true, nullAllowed, kind),
         lowerUnbounded_(lowerUnbounded),
-        lowerExclusive_(lowerExclusive),
+        lowerExclusive_(lowerUnbounded ? true : lowerExclusive),
         upperUnbounded_(upperUnbounded),
-        upperExclusive_(upperExclusive) {
+        upperExclusive_(upperUnbounded ? true : upperExclusive) {
     VELOX_CHECK(
         !lowerUnbounded_ || !upperUnbounded_,
-        "A range filter must have  a lower or upper  bound");
+        "A range filter must have a lower or upper bound");
   }
 
   template <typename TFilter>
@@ -1582,14 +1582,19 @@ class FloatingPointRange final : public AbstractRange {
   bool testingEquals(const Filter& other) const final {
     if (const auto* otherRange =
             AbstractRange::testingBaseEquals<FloatingPointRange<T>>(other)) {
-      return (lowerUnbounded_ || lower_ == otherRange->lower_) &&
-          (upperUnbounded_ || upper_ == otherRange->upper_);
+      return (lowerUnbounded_ ||
+              approximatelyEqual(lower_, otherRange->lower_)) &&
+          (upperUnbounded_ || approximatelyEqual(upper_, otherRange->upper_));
     }
 
     return false;
   }
 
  private:
+  static bool approximatelyEqual(T a, T b) {
+    return std::fabs(a - b) < std::numeric_limits<T>::epsilon();
+  }
+
   std::string toString(const std::string& name) const {
     return fmt::format(
         "{}: {}{}, {}{} {}",
