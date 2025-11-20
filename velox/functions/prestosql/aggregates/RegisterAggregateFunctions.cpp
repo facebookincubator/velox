@@ -32,6 +32,7 @@
 #include "velox/functions/prestosql/aggregates/EntropyAggregates.h"
 #include "velox/functions/prestosql/aggregates/GeometricMeanAggregate.h"
 #include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
+#include "velox/functions/prestosql/aggregates/KHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionSumAggregate.h"
@@ -190,6 +191,15 @@ extern void registerVarianceAggregates(
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
+extern void registerKHyperLogLogAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
+extern void registerKHyperLogLogAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
 
 void registerAllAggregateFunctions(
     const std::string& prefix,
@@ -246,6 +256,7 @@ void registerAllAggregateFunctions(
   registerTDigestAggregate(prefix, overwrite);
   registerNoisyApproxSfmAggregate(prefix, withCompanionFunctions, overwrite);
   registerNumericHistogramAggregate(prefix, withCompanionFunctions, overwrite);
+  registerKHyperLogLogAggregates(prefix, withCompanionFunctions, overwrite);
 }
 
 void registerInternalAggregateFunctions(const std::string& prefix) {
