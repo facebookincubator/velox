@@ -1053,11 +1053,12 @@ template <typename T>
 struct TimestampAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* unitString,
-      const int32_t* /*value*/,
+      const TInput* /*value*/,
       const arg_type<Timestamp>* /*timestamp*/) {
     VELOX_USER_CHECK_NOT_NULL(unitString);
     std::string unitStr(*unitString);
@@ -1071,10 +1072,11 @@ struct TimestampAddFunction {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& /*unitString*/,
-      const int32_t value,
+      const TInput value,
       const arg_type<Timestamp>& timestamp) {
     const auto unit = unit_.value();
     result = addToTimestamp(unit, value, timestamp, sessionTimeZone_);

@@ -292,11 +292,12 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
       outTimestamp;
 
   switch (unit) {
-    // Year, quarter or month are not uniformly incremented in terms of number
-    // of days. So we treat them differently.
+    // Year, quarter, month or week are not uniformly incremented in terms of
+    // number of days. So we treat them differently.
     case DateTimeUnit::kYear:
     case DateTimeUnit::kQuarter:
     case DateTimeUnit::kMonth:
+    case DateTimeUnit::kWeek:
     case DateTimeUnit::kDay: {
       const int32_t inDate =
           std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
@@ -320,15 +321,6 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
     }
     case DateTimeUnit::kMillisecond: {
       outTimestamp = inTimestamp + std::chrono::milliseconds(value);
-      break;
-    }
-    case DateTimeUnit::kWeek: {
-      const int32_t inDate =
-          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
-              .count();
-      const int32_t outDate = addToDate(inDate, DateTimeUnit::kDay, 7 * value);
-
-      outTimestamp = inTimestamp + date::days(outDate - inDate);
       break;
     }
     default:
