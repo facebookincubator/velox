@@ -848,8 +848,7 @@ void CompileState::planSegment(
       } else if (dynamic_cast<const core::ValuesNode*>(node)) {
         candidate.currentBox->steps.push_back(segment.steps[0]);
         needNewKernel = true;
-      } else if (
-          auto* read = dynamic_cast<const core::AggregationNode*>(node)) {
+      } else if (dynamic_cast<const core::AggregationNode*>(node)) {
         auto* step = segment.steps[0];
         candidate.currentBox->steps.push_back(step);
       }
