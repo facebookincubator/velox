@@ -72,8 +72,10 @@ class ParallelUnitLoader : public UnitLoader {
   /// and waited for to prevent resource leaks and dangling references.
   ~ParallelUnitLoader() override {
     for (auto& future : futures_) {
-      future.cancel();
-      future.wait();
+      if (future.valid()) {
+        future.cancel();
+        future.wait();
+      }
     }
   }
 
@@ -94,7 +96,9 @@ class ParallelUnitLoader : public UnitLoader {
     uint64_t unitLoadNanos{0};
     try {
       NanosecondTimer timer{&unitLoadNanos};
-      futures_[unit].wait();
+      if (futures_[unit].valid()) {
+        std::move(futures_[unit]).get();
+      }
     } catch (const std::exception& e) {
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
     }
