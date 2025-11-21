@@ -32,7 +32,7 @@ add_library(
 # https://github.com/facebookincubator/velox/issues/15414
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
-  target_link_libraries(velox_fuzzer_util FBThrift::thriftcpp2)
+  target_link_libraries(velox_fuzzer_util velox_local_runner_service_lib)
 endif()
 
 target_link_libraries(
