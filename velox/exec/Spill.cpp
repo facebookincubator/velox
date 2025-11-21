@@ -502,7 +502,7 @@ SpillPartition::createOrderedReader(
     const common::SpillConfig& spillConfig,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats) {
-  auto numMaxMergeFiles = spillConfig.numMaxMergeFiles;
+  const auto numMaxMergeFiles = spillConfig.numMaxMergeFiles;
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
     return createOrderedReaderInternal(
