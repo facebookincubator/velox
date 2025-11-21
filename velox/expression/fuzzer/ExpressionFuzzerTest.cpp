@@ -415,6 +415,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     // https://github.com/prestodb/presto/pull/25521
     "xxhash64(varbinary,bigint) -> varbinary",
     "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
+    "$internal$split_to_map",
     "$internal$canonicalize",
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
