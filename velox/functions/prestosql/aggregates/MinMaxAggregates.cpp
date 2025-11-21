@@ -17,12 +17,12 @@
 #include "velox/functions/prestosql/aggregates/MinMaxAggregates.h"
 #include <limits>
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/AggregationHook.h"
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/ValueSet.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/vector/AggregationHook.h"
 
 using namespace facebook::velox::functions::aggregate;
 

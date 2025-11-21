@@ -29,6 +29,18 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
  public:
   virtual ~ReadFileMock() override = default;
 
+// On Centos9 the gtest mock header doesn't initialize the
+// buffer_ member in MatcherBase correctly - the default constructor only
+// initializes one: /usr/include/gtest/gtest-matchers.h:302:33 resulting in
+// error:
+// '<unnamed>.testing::Matcher<const
+// facebook::velox::FileStorageContext&>::<unnamed>.testing::internal::MatcherBase<const
+// facebook::velox::FileStorageContext&>::buffer_' is used uninitialized
+// [-Werror=uninitialized]
+//  302 |       : vtable_(other.vtable_), buffer_(other.buffer_) {
+// Fix: https://github.com/google/googletest/pull/3797
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
   MOCK_METHOD(
       std::string_view,
       pread,
@@ -111,6 +123,7 @@ void expectPreadvs(
             return length;
           });
 }
+#pragma GCC diagnostic pop
 
 std::optional<std::string> getNext(SeekableInputStream& input) {
   const void* buf = nullptr;

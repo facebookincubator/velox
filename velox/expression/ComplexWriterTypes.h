@@ -125,8 +125,14 @@ class ArrayWriter {
     auto currentSize = size + valuesOffset_;
 
     if (UNLIKELY(currentSize > elementsVectorCapacity_)) {
-      elementsVectorCapacity_ = std::pow(2, std::ceil(std::log2(currentSize)));
-      childWriter_->ensureSize(elementsVectorCapacity_);
+      const vector_size_t childCapacity =
+          std::pow(2, std::ceil(std::log2(currentSize)));
+      childWriter_->ensureSize(childCapacity);
+
+      // Only update capacity_ after the writer has been successfully resized
+      // to ensure it accurately reflects the size of the elements even in the
+      // presence of failures.
+      elementsVectorCapacity_ = childCapacity;
     }
   }
 
@@ -605,10 +611,16 @@ class MapWriter {
     auto currentSize = size + innerOffset_;
 
     if (UNLIKELY(currentSize > capacity_)) {
-      capacity_ = std::pow(2, std::ceil(std::log2(currentSize)));
+      const vector_size_t childCapacity =
+          std::pow(2, std::ceil(std::log2(currentSize)));
 
-      keysWriter_->ensureSize(capacity_);
-      valuesWriter_->ensureSize(capacity_);
+      keysWriter_->ensureSize(childCapacity);
+      valuesWriter_->ensureSize(childCapacity);
+
+      // Only update capacity_ after the writers have been successfully resized
+      // to ensure it accurately reflects the minimum size of keys and values
+      // even in the presence of failures.
+      capacity_ = childCapacity;
     }
   }
 

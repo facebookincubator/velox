@@ -169,6 +169,18 @@ bool isStackTraceEnabled(VeloxException::Type type) {
   return last->compare_exchange_strong(latest, now, std::memory_order_relaxed);
 }
 
+void stringAppendNumber(std::string& str, size_t number) {
+  // Manual implementation of itoa to avoid the cost of std::to_string.
+  const auto numberStartOffset = str.end() -
+      str.begin(); // Not `size()`. We need distance. The type is different.
+  size_t remaining = number;
+  do {
+    str += static_cast<char>('0' + remaining % 10);
+    remaining /= 10;
+  } while (remaining);
+  reverse(str.begin() + numberStartOffset, str.end());
+}
+
 } // namespace
 
 template <typename F>
@@ -248,13 +260,7 @@ void VeloxException::State::finalize() const {
 
   if (line) {
     elaborateMessage += "Line: ";
-    auto len = elaborateMessage.size();
-    size_t t = line;
-    do {
-      elaborateMessage += static_cast<char>('0' + t % 10);
-      t /= 10;
-    } while (t);
-    reverse(elaborateMessage.begin() + len, elaborateMessage.end());
+    stringAppendNumber(elaborateMessage, line);
     elaborateMessage += '\n';
   }
 

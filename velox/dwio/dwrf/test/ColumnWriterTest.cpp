@@ -213,7 +213,7 @@ VectorPtr populateBatch(
   auto valuesPtr = values->asMutableRange<T>();
 
   const size_t nulloptCount =
-      std::count(data.begin(), data.end(), std::nullopt);
+      std::count(data.cbegin(), data.cend(), std::nullopt);
   if (nulloptCount == 0) {
     size_t index = 0;
     for (auto val : data) {

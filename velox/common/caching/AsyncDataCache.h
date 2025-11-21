@@ -559,6 +559,8 @@ struct CacheStats {
 /// and other housekeeping.
 class CacheShard {
  public:
+  static constexpr uint64_t kMinBytesToEvict = 8UL << 20; // 8MB
+
   CacheShard(AsyncDataCache* cache, double maxWriteRatio)
       : cache_(cache), maxWriteRatio_(maxWriteRatio) {}
 
@@ -632,6 +634,8 @@ class CacheShard {
  private:
   static constexpr uint32_t kMaxFreeEntries = 1 << 10;
   static constexpr int32_t kNoThreshold = std::numeric_limits<int32_t>::max();
+  static constexpr int32_t kMaxEvictionSamples = 10;
+  static constexpr int32_t kEvictionPercentile = 80;
 
   void calibrateThresholdLocked();
 

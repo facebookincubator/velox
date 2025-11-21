@@ -169,6 +169,9 @@ class SsdCache {
   void waitForWriteToFinish();
 
  private:
+  // Polling interval for waiting on write completion
+  static constexpr auto kWriteWaitMs = std::chrono::milliseconds(100);
+
   void checkNotShutdownLocked() {
     VELOX_CHECK(
         !shutdown_, "Unexpected write after SSD cache has been shutdown");

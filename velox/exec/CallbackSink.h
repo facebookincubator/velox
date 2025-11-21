@@ -26,8 +26,9 @@ class CallbackSink : public Operator {
       int32_t operatorId,
       DriverCtx* driverCtx,
       Consumer consumeCb,
-      std::function<BlockingReason(ContinueFuture*)> startedCb = nullptr)
-      : Operator(driverCtx, nullptr, operatorId, "N/A", "CallbackSink"),
+      std::function<BlockingReason(ContinueFuture*)> startedCb = nullptr,
+      const std::string& planNodeId = "N/A")
+      : Operator(driverCtx, nullptr, operatorId, planNodeId, "CallbackSink"),
         startedCb_{std::move(startedCb)},
         consumeCb_{std::move(consumeCb)} {}
 

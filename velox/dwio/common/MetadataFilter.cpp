@@ -208,13 +208,14 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
     return fromExpression(*call->inputs()[0], evaluator, !negated);
   }
   try {
-    Subfield subfield;
-    auto filter =
+    auto subfieldAndFilter =
         exec::ExprToSubfieldFilterParser::getInstance()
-            ->leafCallToSubfieldFilter(*call, subfield, evaluator, negated);
-    if (!filter) {
+            ->leafCallToSubfieldFilter(*call, evaluator, negated);
+    if (!subfieldAndFilter.has_value()) {
       return nullptr;
     }
+
+    auto& [subfield, filter] = subfieldAndFilter.value();
     VELOX_CHECK(
         subfield.valid(),
         "Invalid subfield from expression: {}",

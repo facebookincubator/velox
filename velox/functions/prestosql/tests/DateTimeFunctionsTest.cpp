@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -4424,6 +4425,8 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ("+05:30", formatDatetime(parseTimestamp("1970-01-01"), "ZZ"));
   EXPECT_EQ("+0530", formatDatetime(parseTimestamp("1970-01-01"), "Z"));
 
+  // Time zone test cases - 'z'
+  // Timezone that has an abbreviation
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "zzz"));
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "zz"));
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "z"));
@@ -4432,6 +4435,18 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       formatDatetime(parseTimestamp("1970-01-01"), "zzzz"));
   EXPECT_EQ(
       "India Standard Time",
+      formatDatetime(parseTimestamp("1970-01-01"), "zzzzzzzzzzzzzzzzzzzzzz"));
+
+  // Timezone that has no abbreviations so uses GMT offset
+  setQueryTimeZone("Asia/Atyrau");
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "zzz"));
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "zz"));
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "z"));
+  EXPECT_EQ(
+      "West Kazakhstan Time",
+      formatDatetime(parseTimestamp("1970-01-01"), "zzzz"));
+  EXPECT_EQ(
+      "West Kazakhstan Time",
       formatDatetime(parseTimestamp("1970-01-01"), "zzzzzzzzzzzzzzzzzzzzzz"));
 
   // Test daylight savings.
@@ -5810,6 +5825,155 @@ TEST_F(DateTimeFunctionsTest, timeComparisons) {
   EXPECT_EQ(std::nullopt, between(500, 0, std::nullopt));
 }
 
+TEST_F(DateTimeFunctionsTest, timeWithTimezoneComparisons) {
+  const auto eq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 = c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto neq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 != c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto lt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 < c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto lte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 <= c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto gt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 > c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto gte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 >= c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto between = [&](std::optional<int64_t> value,
+                           std::optional<int64_t> lower,
+                           std::optional<int64_t> upper) {
+    return evaluateOnce<bool>(
+        "c0 between c1 and c2",
+        {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()},
+        value,
+        lower,
+        upper);
+  };
+
+  // test distinct_from - unlike regular comparison operators,
+  // distinct_from treats NULLs as values that can be compared
+  const auto distinctFrom = [&](std::optional<int64_t> a,
+                                std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 is distinct from c1",
+        {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()},
+        a,
+        b);
+  };
+
+  // Helper to parse TIME WITH TIME ZONE from string
+  const auto parse = [](const std::string& timeStr) -> std::optional<int64_t> {
+    auto result =
+        util::fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // test equality - same UTC time in different timezones should be equal
+  EXPECT_EQ(true, eq(parse("00:00:00.000+00:00"), parse("01:00:00.000+01:00")));
+  EXPECT_EQ(true, eq(parse("12:30:45.123+00:00"), parse("20:30:45.123+08:00")));
+  EXPECT_EQ(
+      false, eq(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(std::nullopt, eq(std::nullopt, parse("00:00:00.000+00:00")));
+
+  // test inequality
+  EXPECT_EQ(
+      true, neq(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      true, neq(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      true, neq(parse("01:00:00.000+01:00"), parse("01:00:00.000+03:00")));
+
+  // test less than
+  EXPECT_EQ(
+      false, lt(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(true, lt(parse("00:00:01.000+01:00"), parse("00:00:00.000+00:00")));
+  EXPECT_EQ(
+      false, lt(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, lt(parse("01:00:00.000+01:00"), parse("02:00:00.000+03:00")));
+
+  // test less than or equal
+  EXPECT_EQ(
+      false, lte(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, lte(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+
+  // test greater than
+  EXPECT_EQ(true, gt(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, gt(parse("01:00:00.000+03:00"), parse("02:00:00.000+01:00")));
+
+  // test greater than or equal
+  EXPECT_EQ(
+      true, gte(parse("00:00:00.000+00:00"), parse("00:00:00.000+00:00")));
+  EXPECT_EQ(
+      true, gte(parse("00:00:00.000+00:00"), parse("00:00:01.000+01:00")));
+  EXPECT_EQ(
+      true, gte(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+
+  // test between
+  EXPECT_EQ(
+      true,
+      between(
+          parse("02:00:00.000+02:00"),
+          parse("00:00:00.000+01:00"),
+          parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      std::nullopt,
+      between(
+          parse("00:00:00.500+00:00"),
+          parse("00:00:00.000+01:00"),
+          std::nullopt));
+
+  // test distinct from
+  // Same UTC time in different timezones should not be distinct
+  EXPECT_EQ(
+      false,
+      distinctFrom(parse("01:00:00.000+01:00"), parse("02:00:00.000+02:00")));
+
+  // Different times should be distinct
+  EXPECT_EQ(
+      true,
+      distinctFrom(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      true,
+      distinctFrom(parse("01:00:00.000+01:00"), parse("02:00:00.000+03:00")));
+
+  // NULL handling: NULL is distinct from non-NULL
+  EXPECT_EQ(true, distinctFrom(std::nullopt, parse("00:00:00.000+00:00")));
+
+  // NULL is NOT distinct from NULL
+  EXPECT_EQ(false, distinctFrom(std::nullopt, std::nullopt));
+
+  // Test edge cases with day wrap-around (normalization logic)
+  EXPECT_EQ(
+      false, eq(parse("01:00:00.000+08:00"), parse("02:00:00.000+00:00")));
+  EXPECT_EQ(
+      false, gt(parse("01:00:00.000+08:00"), parse("02:00:00.000+00:00")));
+
+  EXPECT_EQ(
+      false, eq(parse("23:00:00.000-08:00"), parse("16:00:00.000+08:00")));
+  EXPECT_EQ(true, lt(parse("23:00:00.000-08:00"), parse("18:00:00.000-14:00")));
+
+  EXPECT_EQ(
+      false, eq(parse("00:30:00.000-02:00"), parse("00:30:00.000+02:00")));
+  EXPECT_EQ(true, gt(parse("00:30:00.000-02:00"), parse("00:30:00.000+02:00")));
+}
+
 TEST_F(DateTimeFunctionsTest, castDateToTimestamp) {
   const int64_t kSecondsInDay = kMillisInDay / 1'000;
   const auto castDateToTimestamp = [&](const std::optional<int32_t> date) {
@@ -6650,4 +6814,22 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
       DATE());
 
   assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimezone) {
+  {
+    setQueryTimeZone("Asia/Kolkata");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "Asia/Kolkata");
+  }
+
+  {
+    setQueryTimeZone("America/New_York");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "America/New_York");
+  }
 }

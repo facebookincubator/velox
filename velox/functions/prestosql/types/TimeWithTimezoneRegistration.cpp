@@ -36,7 +36,7 @@ void castToTime(
 
   auto convertToLocalTime = [](int64_t timeWithTimezone) {
     int64_t millisUtc = util::unpackMillisUtc(timeWithTimezone);
-    auto timezoneMinutes = util::unpackZoneKeyId(timeWithTimezone);
+    auto timezoneMinutes = util::unpackZoneOffset(timeWithTimezone);
     int16_t offsetMinutes = util::decodeTimezoneOffset(timezoneMinutes);
     return util::utcToLocalTime(millisUtc, offsetMinutes);
   };

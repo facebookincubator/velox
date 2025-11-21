@@ -464,7 +464,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
       std::vector<int16_t> definitionLevels(batchNullCount, 0);
       definitionLevels.insert(
           definitionLevels.end(), batchNumValues - batchNullCount, 1);
-      auto beg = this->values_.begin() + i * numValues / 2;
+      auto beg = this->values_.cbegin() + i * numValues / 2;
       auto end = beg + batchNumValues;
       std::vector<c_type> batch = GetDeepCopy(std::vector<c_type>(beg, end));
       c_type* batchValuesPtr = GetValuesPointer(batch);

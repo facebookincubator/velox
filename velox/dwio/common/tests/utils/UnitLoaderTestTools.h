@@ -87,7 +87,7 @@ class ReaderMock {
   void seek(uint64_t rowNumber);
 
   std::vector<bool> unitsLoaded() const {
-    return {unitsLoaded_.begin(), unitsLoaded_.end()};
+    return {unitsLoaded_.cbegin(), unitsLoaded_.cend()};
   }
 
  private:

@@ -156,7 +156,7 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
   if (scanState_.dictionary2.numValues > 0) {
     // seek stride dictionary related streams
     std::vector<uint64_t> pos(
-        positions.begin() + positionOffset_, positions.end());
+        positions.cbegin() + positionOffset_, positions.cend());
     PositionProvider pp(pos);
     strideDictStream_->seekToPosition(pp);
     strideDictLengthDecoder_->seekToRowGroup(pp);

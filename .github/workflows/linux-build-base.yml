@@ -71,8 +71,6 @@ jobs:
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
           fi
-          # Install GCC14 until it is also available in the dependency image.
-          dnf install -y gcc-toolset-14
 
       - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -116,7 +114,10 @@ jobs:
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           source /opt/rh/gcc-toolset-14/enable
-          make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+          g++ --version
+          # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
+          # after sourcing GCC14.
+          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 
       - name: Ccache after
         run: ccache -s

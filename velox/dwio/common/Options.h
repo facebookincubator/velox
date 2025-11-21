@@ -312,8 +312,8 @@ class RowReaderOptions {
           flatmapNodeIdsAsStruct) {
     VELOX_CHECK(
         std::all_of(
-            flatmapNodeIdsAsStruct.begin(),
-            flatmapNodeIdsAsStruct.end(),
+            flatmapNodeIdsAsStruct.cbegin(),
+            flatmapNodeIdsAsStruct.cend(),
             [](const auto& kv) { return !kv.second.empty(); }),
         "To use struct encoding for flatmap, keys to project must be specified");
     flatmapNodeIdAsStruct_ = std::move(flatmapNodeIdsAsStruct);
@@ -472,7 +472,7 @@ class RowReaderOptions {
   // default, converts flat maps in the file to MapVectors.
   bool preserveFlatMapsInMemory_ = false;
   // Optional io executor to enable parallel unit loader.
-  folly::Executor* ioExecutor_;
+  folly::Executor* ioExecutor_{nullptr};
   // Optional executors to enable internal reader parallelism.
   // 'decodingExecutor' allow parallelising the vector decoding process.
   // 'ioExecutor' enables parallelism when performing file system read

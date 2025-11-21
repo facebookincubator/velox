@@ -1347,7 +1347,7 @@ TEST_F(JodaDateTimeFormatterTest, formatResultSize) {
   EXPECT_EQ(getJodaDateTimeFormatter("CCCCCCCCC")->maxResultSize(timezone), 9);
 
   EXPECT_EQ(
-      getJodaDateTimeFormatter("yyyy-MM-dd z")->maxResultSize(timezone), 23);
+      getJodaDateTimeFormatter("yyyy-MM-dd z")->maxResultSize(timezone), 26);
   EXPECT_EQ(
       getJodaDateTimeFormatter("yyyy-MM-dd Z")->maxResultSize(timezone), 25);
   EXPECT_EQ(

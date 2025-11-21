@@ -179,4 +179,82 @@ TEST_F(TimeWithTimezoneTypeTest, valueToString) {
   ASSERT_EQ(type->valueToString(value, buffer), "22:30:45.123-14:00");
 }
 
+TEST_F(TimeWithTimezoneTypeTest, compare) {
+  auto compare = [](int32_t expected, int64_t left, int64_t right) {
+    ASSERT_EQ(expected, TIME_WITH_TIME_ZONE()->compare(left, right));
+  };
+
+  // Same UTC time: "12:30:45.123+01:00" == "11:30:45.123+00:00"
+  compare(
+      0,
+      util::pack(41445123, util::biasEncode(60)),
+      util::pack(41445123, util::biasEncode(0)));
+
+  // Different UTC times: "10:00:00.000+01:00" < "15:00:00.000+01:00"
+  compare(
+      -1,
+      util::pack(32400000, util::biasEncode(60)),
+      util::pack(50400000, util::biasEncode(60)));
+  // "15:00:00.000+01:00" > "10:00:00.000+01:00"
+  compare(
+      1,
+      util::pack(50400000, util::biasEncode(60)),
+      util::pack(32400000, util::biasEncode(60)));
+  // "10:00:00.000+01:00" < "15:00:00.000+03:00"
+  compare(
+      -1,
+      util::pack(32400000, util::biasEncode(60)),
+      util::pack(43200000, util::biasEncode(180)));
+
+  // Wrap-around normalization: "00:00:00.000+01:00" < "23:59:59.999+03:00"
+  compare(
+      -1,
+      util::pack(82800000, util::biasEncode(60)),
+      util::pack(75599999, util::biasEncode(180)));
+  // "15:00:00.000+03:00" > "10:00:00.000+01:00"
+  compare(
+      1,
+      util::pack(43200000, util::biasEncode(180)),
+      util::pack(32400000, util::biasEncode(60)));
+  // "23:59:59.999+03:00" > "00:00:00.000+01:00"
+  compare(
+      1,
+      util::pack(75599999, util::biasEncode(180)),
+      util::pack(82800000, util::biasEncode(60)));
+}
+
+TEST_F(TimeWithTimezoneTypeTest, hash) {
+  auto expectHashesEq = [](int64_t millis1,
+                           int16_t tzOffsetMinutes1,
+                           int64_t millis2,
+                           int16_t tzOffsetMinutes2) {
+    int64_t left = util::pack(millis1, util::biasEncode(tzOffsetMinutes1));
+    int64_t right = util::pack(millis2, util::biasEncode(tzOffsetMinutes2));
+
+    ASSERT_EQ(
+        TIME_WITH_TIME_ZONE()->hash(left), TIME_WITH_TIME_ZONE()->hash(right));
+  };
+
+  auto expectHashesNeq = [](int64_t millis1,
+                            int16_t tzOffsetMinutes1,
+                            int64_t millis2,
+                            int16_t tzOffsetMinutes2) {
+    int64_t left = util::pack(millis1, util::biasEncode(tzOffsetMinutes1));
+    int64_t right = util::pack(millis2, util::biasEncode(tzOffsetMinutes2));
+
+    ASSERT_NE(
+        TIME_WITH_TIME_ZONE()->hash(left), TIME_WITH_TIME_ZONE()->hash(right));
+  };
+
+  expectHashesEq(45045123, 60, 45045123, 180);
+  expectHashesEq(45045123, 60, 45045123, -840);
+  expectHashesEq(45045123, 180, 45045123, -840);
+  expectHashesEq(0, 180, 0, -840);
+
+  expectHashesNeq(36000000, 60, 54000000, 180);
+  expectHashesNeq(36000000, 60, 54000000, -840);
+  expectHashesNeq(36000000, 180, 54000000, -840);
+  expectHashesNeq(0, 180, 86399999, -840);
+}
+
 } // namespace facebook::velox::test

@@ -1138,7 +1138,7 @@ std::vector<std::string> allNames(
     const std::vector<std::string>& names,
     const std::vector<std::string>& moreNames) {
   auto result = names;
-  result.insert(result.end(), moreNames.begin(), moreNames.end());
+  result.insert(result.cend(), moreNames.cbegin(), moreNames.cend());
   return result;
 }
 
@@ -1150,7 +1150,7 @@ std::vector<TypedExprPtr> flattenExprs(
     const PlanNodePtr& input) {
   std::vector<TypedExprPtr> result;
   for (auto& group : exprs) {
-    result.insert(result.end(), group.begin(), group.end());
+    result.insert(result.cend(), group.cbegin(), group.cend());
   }
 
   const auto& sourceType = input->outputType();
@@ -2502,7 +2502,7 @@ const char* TopNRowNumberNode::rankFunctionName(
   static const auto kFunctionNames = rankFunctionNames();
   auto it = kFunctionNames.find(function);
   VELOX_CHECK(
-      it != kFunctionNames.end(),
+      it != kFunctionNames.cend(),
       "Invalid rank function {}",
       static_cast<int>(function));
   return it->second.c_str();
@@ -2513,7 +2513,7 @@ TopNRowNumberNode::RankFunction TopNRowNumberNode::rankFunctionFromName(
     std::string_view name) {
   static const auto kFunctionNames = invertMap(rankFunctionNames());
   auto it = kFunctionNames.find(name.data());
-  VELOX_CHECK(it != kFunctionNames.end(), "Invalid rank function {}", name);
+  VELOX_CHECK(it != kFunctionNames.cend(), "Invalid rank function {}", name);
   return it->second;
 }
 

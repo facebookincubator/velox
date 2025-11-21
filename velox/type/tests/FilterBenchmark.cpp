@@ -14,15 +14,10 @@
  * limitations under the License.
  */
 
-#include <limits>
 #include "folly/Benchmark.h"
-#include "folly/Portability.h"
 #include "folly/Random.h"
-#include "folly/Varint.h"
 #include "folly/init/Init.h"
-#include "folly/lang/Bits.h"
-#include "velox/dwio/common/exception/Exception.h"
-
+#include "velox/common/base/SimdUtil.h"
 #include "velox/type/Filter.h"
 
 using namespace facebook::velox;

@@ -223,7 +223,7 @@ void CastExpr::applyCastKernel(
       return;
     }
 
-    const auto output = castResult.value();
+    const auto& output = castResult.value();
 
     if constexpr (
         ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {

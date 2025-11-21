@@ -180,6 +180,14 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: current_timezone() -> varchar
+
+    Returns the current session time zone as a varchar.
+
+    Example::
+
+        SELECT current_timezone;   -- Asia/Kolkata
+
 Truncation Function
 -------------------
 

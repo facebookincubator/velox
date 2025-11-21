@@ -236,14 +236,14 @@ KeyPredicate<T> prepareKeyPredicate(std::string_view expression) {
   // You cannot mix allow key and reject key.
   VELOX_CHECK(
       modes.empty() ||
-      std::all_of(modes.begin(), modes.end(), [&modes](const auto& v) {
+      std::all_of(modes.cbegin(), modes.cend(), [&modes](const auto& v) {
         return v == modes.front();
       }));
 
   auto mode = modes.empty() ? KeyProjectionMode::ALLOW : modes.front();
 
   return KeyPredicate<T>(
-      mode, typename KeyPredicate<T>::Lookup(keys.begin(), keys.end()));
+      mode, typename KeyPredicate<T>::Lookup(keys.cbegin(), keys.cend()));
 }
 
 } // namespace facebook::velox::dwio::common::flatmap

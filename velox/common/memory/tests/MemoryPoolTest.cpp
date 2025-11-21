@@ -61,15 +61,16 @@ struct TestParam {
 class MemoryPoolTest : public testing::TestWithParam<TestParam> {
  public:
   static const std::vector<TestParam> getTestParams() {
-    std::vector<TestParam> params;
-    params.push_back({true, true, false});
-    params.push_back({true, false, false});
-    params.push_back({false, true, false});
-    params.push_back({false, false, false});
-    params.push_back({true, true, true});
-    params.push_back({true, false, true});
-    params.push_back({false, true, true});
-    params.push_back({false, false, true});
+    std::vector<TestParam> params = {
+        {true, true, false},
+        {true, false, false},
+        {false, true, false},
+        {false, false, false},
+        {true, true, true},
+        {true, false, true},
+        {false, true, true},
+        {false, false, true},
+    };
     return params;
   }
 

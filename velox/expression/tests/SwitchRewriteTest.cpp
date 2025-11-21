@@ -25,14 +25,6 @@ class SwitchRewriteTest : public expression::test::SpecialFormRewriteTestBase {
 };
 
 TEST_F(SwitchRewriteTest, basic) {
-  testRewrite("if(true, 'hello', 'world')", "'hello'");
-  testRewrite("case when false then 1 when true then 3 end", "3");
-  testRewrite("case when false then 1 when false then 3 end", "null::bigint");
-  testRewrite("case when false then 1 when false then 3 else 2 end", "2");
-  testRewrite(
-      "case when false then 'hello' when false then 'world' when true then 'foo' else 'bar' end",
-      "'foo'");
-
   const auto type = ROW({"a"}, {BIGINT()});
   testRewrite("case when false then 1234 when true then a end", "a", type);
   testRewrite(

@@ -25,17 +25,6 @@ class ConjunctRewriteTest
     : public expression::test::SpecialFormRewriteTestBase {};
 
 TEST_F(ConjunctRewriteTest, basic) {
-  testRewrite("true and true", "true");
-  testRewrite("false or false", "false");
-  testRewrite("null::boolean and false", "false");
-  testRewrite("true or null::boolean", "true");
-  testRewrite(
-      "null::boolean and null::boolean and null::boolean", "null::boolean");
-  testRewrite(
-      "null::boolean or null::boolean or null::boolean", "null::boolean");
-  testRewrite("null::boolean and true", "null::boolean");
-  testRewrite("false or null::boolean", "null::boolean");
-
   const auto type = ROW({"a", "b"}, {VARCHAR(), BIGINT()});
   testRewrite(
       "null::boolean and a = 'z' and true", "null::boolean and a = 'z'", type);

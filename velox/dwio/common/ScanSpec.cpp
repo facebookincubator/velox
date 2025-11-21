@@ -104,8 +104,8 @@ uint64_t ScanSpec::newRead() {
   if (numReads_ == 0 ||
       (!disableStatsBasedFilterReorder_ &&
        !std::is_sorted(
-           children_.begin(),
-           children_.end(),
+           children_.cbegin(),
+           children_.cend(),
            [this](
                const std::shared_ptr<ScanSpec>& left,
                const std::shared_ptr<ScanSpec>& right) {

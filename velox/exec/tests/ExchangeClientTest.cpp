@@ -589,7 +589,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::test::LocalExchangeSource::pause",
       std::function<void(void*)>(([&numberOfAcknowledgeRequests](void*) {
-        numberOfAcknowledgeRequests++;
+        ++numberOfAcknowledgeRequests;
       })));
 
   {
@@ -665,7 +665,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
     int attempts = 100;
     bool outputBuffersEmpty;
     while (attempts > 0) {
-      attempts--;
+      --attempts;
       outputBuffersEmpty = bufferManager_->getUtilization(sourceTaskId) == 0;
       if (outputBuffersEmpty) {
         break;
@@ -979,13 +979,116 @@ TEST_P(ExchangeClientTest, minOutputBatchBytesMultipleConsumers) {
   client->close();
 }
 
+TEST_P(ExchangeClientTest, skipRequestDataSizeWithSingleSource) {
+  // Test skipRequestDataSizeWithSingleSource flag behavior
+
+  struct {
+    bool skipEnabled;
+
+    std::string debugString() const {
+      return fmt::format("skipEnabled={}", skipEnabled);
+    }
+  } testSettings[] = {
+      // skip enabled
+      {true},
+      // skip disabled
+      {false}};
+
+  for (const auto& setting : testSettings) {
+    SCOPED_TRACE(setting.debugString());
+
+    auto client = std::make_shared<ExchangeClient>(
+        "test-" + setting.debugString(),
+        17,
+        1024,
+        1,
+        kDefaultMinExchangeOutputBatchBytes,
+        pool(),
+        executor(),
+        10,
+        setting.skipEnabled);
+
+    client->close();
+  }
+}
+
+TEST_P(ExchangeClientTest, skipRequestDataSizeNotTriggeredWithMultipleSources) {
+  // Test that optimization is NOT triggered with multiple sources
+
+  auto data = makeRowVector({makeFlatVector<int64_t>(100, folly::identity)});
+  auto page = test::toSerializedPage(data, serdeKind_, bufferManager_, pool());
+
+  // Client with optimization ENABLED but multiple sources
+  auto client = std::make_shared<ExchangeClient>(
+      "test-multi-source",
+      17,
+      page->size() * 10,
+      1,
+      kDefaultMinExchangeOutputBatchBytes,
+      pool(),
+      executor(),
+      10,
+      // enableSingleSourceOptimization = true (but won't trigger with
+      // multiple sources)
+      true);
+
+  // Setup: Create tasks with TWO sources
+  std::vector<std::shared_ptr<Task>> tasks;
+  for (int i = 0; i < 2; ++i) {
+    auto taskId = fmt::format("local://test-source-{}", i);
+    auto task = makeTask(taskId);
+    bufferManager_->initializeTask(
+        task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
+
+    // Enqueue data
+    for (int j = 0; j < 3; ++j) {
+      enqueue(taskId, 17, data);
+    }
+
+    tasks.push_back(task);
+    client->addRemoteTaskId(taskId);
+  }
+
+  client->noMoreRemoteTasks();
+
+  // Fetch pages - should work with regular path (not single source
+  // optimization)
+  // 3 pages from each of 2 sources
+  auto pages = fetchPages(1, *client, 6);
+  ASSERT_EQ(pages.size(), 6);
+
+  // Cleanup
+  for (auto& task : tasks) {
+    task->requestCancel();
+    bufferManager_->removeTask(task->taskId());
+  }
+
+  client->close();
+}
+
+// Test the new hasNoMoreSources() API
+TEST_P(ExchangeClientTest, hasNoMoreSourcesApi) {
+  auto queue = std::make_shared<ExchangeQueue>(1, 0);
+
+  // Initially, should return false
+  EXPECT_FALSE(queue->hasNoMoreSources());
+
+  // After calling noMoreSources(), should return true
+  queue->noMoreSources();
+
+  EXPECT_TRUE(queue->hasNoMoreSources());
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ExchangeClientTest,
     ExchangeClientTest,
     testing::Values(
         VectorSerde::Kind::kPresto,
         VectorSerde::Kind::kCompactRow,
-        VectorSerde::Kind::kUnsafeRow));
+        VectorSerde::Kind::kUnsafeRow),
+    [](const testing::TestParamInfo<VectorSerde::Kind>& info) {
+      return fmt::format("{}", info.param);
+    });
 
 } // namespace
 } // namespace facebook::velox::exec

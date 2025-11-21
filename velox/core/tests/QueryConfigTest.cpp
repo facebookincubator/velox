@@ -251,4 +251,33 @@ TEST_F(QueryConfigTest, sessionStartTime) {
   }
 }
 
+TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
+  // Test default value (should be false)
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.singleSourceExchangeOptimizationEnabled());
+  }
+
+  // Test with optimization enabled
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSkipRequestDataSizeWithSingleSourceEnabled, "true"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.singleSourceExchangeOptimizationEnabled());
+  }
+
+  // Test with optimization explicitly disabled
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSkipRequestDataSizeWithSingleSourceEnabled, "false"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.singleSourceExchangeOptimizationEnabled());
+  }
+}
+
 } // namespace facebook::velox::core::test
