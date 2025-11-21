@@ -14,16 +14,26 @@
  * limitations under the License.
  */
 
-#include <folly/init/Init.h>
-#include <gflags/gflags.h>
+#pragma once
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
 
-int main(int argc, char** argv) {
-  std::string kUsage(
-      "This program benchmarks TPC-H queries. Run 'velox_tpch_benchmark -helpon=TpchBenchmark' for available options.\n");
-  gflags::SetUsageMessage(kUsage);
-  folly::Init init{&argc, &argv, false};
-  benchmark = std::make_unique<TpchBenchmark>();
-  tpchBenchmarkMain();
-}
+#include <memory>
+#include <string>
+#include <vector>
+
+class CudfTpchBenchmark : public TpchBenchmark {
+ public:
+  void initialize() override;
+
+  std::shared_ptr<facebook::velox::config::ConfigBase> makeConnectorProperties()
+      override;
+
+  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+  listSplits(
+      const std::string& path,
+      int32_t numSplitsPerFile,
+      const facebook::velox::exec::test::TpchPlan& plan) override;
+
+  void shutdown() override;
+};
