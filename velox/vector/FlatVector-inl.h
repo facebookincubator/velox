@@ -485,8 +485,8 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
 
 template <typename T>
 void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (values_ && !values_->isMutable()) {
+    auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
     BufferPtr newValues;
     if constexpr (std::is_same_v<T, StringView>) {
       // Make sure to initialize StringView values so they can be safely
