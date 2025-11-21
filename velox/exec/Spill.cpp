@@ -42,15 +42,15 @@ void gatherMerge(
   VELOX_CHECK_GE(bufferSourceIndices.size(), target->size());
   totalNumRows = 0;
   int32_t numBatchRows = 0;
-  bool isEndOfBatch = false;
+  bool endOfBatch = false;
   for (auto currentStream = mergeTree.next();
        currentStream != nullptr && totalNumRows + numBatchRows < target->size();
        currentStream = mergeTree.next()) {
     bufferSources[numBatchRows] = &currentStream->current();
     bufferSourceIndices[numBatchRows] =
-        currentStream->currentIndex(&isEndOfBatch);
+        currentStream->currentIndex(&endOfBatch);
     ++numBatchRows;
-    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+    if (FOLLY_UNLIKELY(endOfBatch)) {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
@@ -361,7 +361,7 @@ SpillPartition::createUnorderedReader(
 }
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
-SpillPartition::createOrderedReader(
+SpillPartition::createOrderedReaderInternal(
     uint64_t bufferSize,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats) {
@@ -430,7 +430,7 @@ struct BatchingBufferParams {
   std::vector<vector_size_t> spillSourceRows;
 };
 
-SpillFileInfo mergeFiles(
+SpillFileInfo mergeSpillFiles(
     const std::vector<SpillFileInfo>& files,
     const std::string& pathPrefix,
     uint64_t readBufferSize,
@@ -470,7 +470,7 @@ SpillFileInfo mergeFiles(
   while (mergeTree->next()) {
     VectorPtr tmpRowVector = std::move(bufferParams.rowVector);
     BaseVector::prepareForReuse(tmpRowVector, batchRows);
-    bufferParams.rowVector = std::static_pointer_cast<RowVector>(tmpRowVector);
+    bufferParams.rowVector = checked_pointer_cast<RowVector>(tmpRowVector);
     bufferParams.rowVector->resize(batchRows);
     int32_t outputRow = 0;
     gatherMerge(
@@ -488,15 +488,13 @@ SpillFileInfo mergeFiles(
   return std::move(resultFiles[0]);
 }
 
-struct SpillFileInfoComp {
+struct SpillFileCompare {
   bool operator()(const SpillFileInfo& lhs, const SpillFileInfo& rhs) const {
     return lhs.size > rhs.size;
   }
 };
-using SpillFileInfoHeap = std::priority_queue<
-    SpillFileInfo,
-    std::vector<SpillFileInfo>,
-    SpillFileInfoComp>;
+using SpillFileHeap = std::
+    priority_queue<SpillFileInfo, std::vector<SpillFileInfo>, SpillFileCompare>;
 } // namespace
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
@@ -510,17 +508,17 @@ SpillPartition::createOrderedReader(
     const std::string& fileCreateConfig) {
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
-    return createOrderedReader(readBufferSize, pool, spillStats);
+    return createOrderedReaderInternal(readBufferSize, pool, spillStats);
   }
 
-  SpillFileInfoHeap orderedFiles(files_.begin(), files_.end());
+  SpillFileHeap orderedFiles(files_.begin(), files_.end());
   SpillFiles files;
   files.reserve(numMaxMergeFiles);
-  const auto filePathPrefix = files_[0].path;
+  const auto mergeFilePathPrefix = files_[0].path;
   BatchingBufferParams bufferParams(files_[0].type, pool);
 
   // Recursively merge the files.
-  for (uint32_t round = 0; orderedFiles.size() > numMaxMergeFiles; round++) {
+  for (uint32_t round = 0; orderedFiles.size() > numMaxMergeFiles; ++round) {
     const uint64_t numMergeFiles = std::min(
         static_cast<uint64_t>(numMaxMergeFiles),
         static_cast<uint64_t>(orderedFiles.size() + 1 - numMaxMergeFiles));
@@ -529,9 +527,9 @@ SpillPartition::createOrderedReader(
       files.push_back(orderedFiles.top());
       orderedFiles.pop();
     }
-    auto mergedFile = mergeFiles(
+    auto mergedFile = mergeSpillFiles(
         files,
-        fmt::format("{}-merge-round-{}", filePathPrefix, round),
+        fmt::format("{}-merge-round-{}", mergeFilePathPrefix, round),
         readBufferSize,
         writeBufferSize,
         bufferParams,
@@ -548,7 +546,7 @@ SpillPartition::createOrderedReader(
     files_.push_back(orderedFiles.top());
     orderedFiles.pop();
   }
-  return createOrderedReader(readBufferSize, pool, spillStats);
+  return createOrderedReaderInternal(readBufferSize, pool, spillStats);
 }
 
 IterableSpillPartitionSet::IterableSpillPartitionSet() {

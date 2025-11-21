@@ -529,7 +529,7 @@ class SpillPartition {
   /// system supports async read mode, then reader allocates two buffers with
   /// one buffer prefetch ahead. 'spillStats' is provided to collect the spill
   /// stats when reading data from spilled files.
-  std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReaderInternal(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* spillStats);
