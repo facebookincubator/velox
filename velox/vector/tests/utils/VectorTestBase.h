@@ -679,7 +679,7 @@ class VectorTestBase {
       vector_size_t size,
       const TypePtr& type = CppToType<EvalType<T>>::create()) {
     return std::make_shared<ConstantVector<EvalType<T>>>(
-        pool(), size, false, type, std::move(value));
+        pool(), size, false, type, EvalType<T>(value));
   }
 
   template <typename T>
