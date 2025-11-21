@@ -1293,6 +1293,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
     const auto next = merge_->nextWithEquals();
     auto* stream = next.first;
     if (stream == nullptr) {
+      VELOX_CHECK_EQ(outputSize, 0);
       if (numOutputRows > 0) {
         break;
       }
@@ -1303,16 +1304,12 @@ bool GroupingSet::mergeNextWithoutAggregates(
       VELOX_CHECK_NOT_NULL(merge_);
       continue;
     }
-    auto index = stream->currentIndex(&isEndOfBatch);
     if (stream->id() <
         numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
       newDistinct = false;
     }
-    if (next.second) {
-      stream->pop();
-      continue;
-    }
-    if (newDistinct) {
+    auto index = stream->currentIndex(&isEndOfBatch);
+    if (!next.second && newDistinct) {
       // Yield result for new distinct.
       spillSources_[outputSize] = &stream->current();
       spillSourceRows_[outputSize] = index;
@@ -1332,7 +1329,10 @@ bool GroupingSet::mergeNextWithoutAggregates(
       outputSize = 0;
     }
     stream->pop();
-    newDistinct = true;
+    // Reset newDistinct flag for new row.
+    if (!next.second) {
+      newDistinct = true;
+    }
   }
   if (FOLLY_LIKELY(outputSize != 0)) {
     gatherCopy(
