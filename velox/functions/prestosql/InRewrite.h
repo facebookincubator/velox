@@ -13,20 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "velox/core/Expressions.h"
 
-#include <string>
+namespace facebook::velox::functions {
 
-namespace facebook::velox::functions::sparksql {
+class InRewrite {
+ public:
+  /// Rewrites IN special form function when the `value` being searched for is
+  /// constant and the IN-list is not constant. Returns `true` if `value` is in
+  /// the IN-list. Returns NULL if the IN-list contains a NULL. Removes constant
+  /// expressions from IN-list that are not equal to `value`.
+  static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
 
-void registerDecimalAdd(const std::string& prefix);
+  static void registerRewrite();
+};
 
-void registerDecimalSubtract(const std::string& prefix);
-
-void registerDecimalMultiply(const std::string& prefix);
-
-void registerDecimalDivide(const std::string& prefix);
-
-void registerDecimalIntegralDivide(const std::string& prefix);
-
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::functions
