@@ -291,13 +291,7 @@ void SortWindowBuild::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        spillConfig_->numMaxMergeFiles,
-        spillConfig_->readBufferSize,
-        spillConfig_->writeBufferSize,
-        spillConfig_->updateAndCheckSpillLimitCb,
-        pool_,
-        spillStats_,
-        spillConfig_->fileCreateConfig);
+        *spillConfig_, pool_, spillStats_);
   } else {
     // At this point we have seen all the input rows. The operator is
     // being prepared to output rows now.

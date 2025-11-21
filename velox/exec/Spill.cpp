@@ -499,16 +499,14 @@ using SpillFileHeap = std::
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReader(
-    uint32_t numMaxMergeFiles,
-    uint64_t readBufferSize,
-    uint64_t writeBufferSize,
-    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    const common::SpillConfig& spillConfig,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    const std::string& fileCreateConfig) {
+    folly::Synchronized<common::SpillStats>* spillStats) {
+  auto numMaxMergeFiles = spillConfig.numMaxMergeFiles;
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
-    return createOrderedReaderInternal(readBufferSize, pool, spillStats);
+    return createOrderedReaderInternal(
+        spillConfig.readBufferSize, pool, spillStats);
   }
 
   SpillFileHeap orderedFiles(files_.begin(), files_.end());
@@ -530,13 +528,13 @@ SpillPartition::createOrderedReader(
     auto mergedFile = mergeSpillFiles(
         files,
         fmt::format("{}-merge-round-{}", mergeFilePathPrefix, round),
-        readBufferSize,
-        writeBufferSize,
+        spillConfig.readBufferSize,
+        spillConfig.writeBufferSize,
         bufferParams,
-        updateAndCheckSpillLimitCb,
+        spillConfig.updateAndCheckSpillLimitCb,
         pool,
         spillStats,
-        fileCreateConfig);
+        spillConfig.fileCreateConfig);
     orderedFiles.push(mergedFile);
     files.clear();
   }
@@ -546,7 +544,8 @@ SpillPartition::createOrderedReader(
     files_.push_back(orderedFiles.top());
     orderedFiles.pop();
   }
-  return createOrderedReaderInternal(readBufferSize, pool, spillStats);
+  return createOrderedReaderInternal(
+      spillConfig.readBufferSize, pool, spillStats);
 }
 
 IterableSpillPartitionSet::IterableSpillPartitionSet() {

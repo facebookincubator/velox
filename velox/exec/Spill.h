@@ -506,19 +506,15 @@ class SpillPartition {
       folly::Synchronized<common::SpillStats>* spillStats);
 
   /// Create an ordered stream reader from this spill partition. If the
-  /// partition has more than numMaxMergeFiles files, the files will be
-  /// pre-merged recursively to make sure the final ordered reader reads no
+  /// partition has more than spillConfig.numMaxMergeFiles files, the files will
+  /// be pre-merged recursively to make sure the final ordered reader reads no
   /// more than numMaxMergeFiles files. This behavior is to avoid OOM problem
   /// when opening and reading too many files at the same time. If
   /// numMaxMergeFiles < 2, the merge way is unlimited.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
-      uint32_t numMaxMergeFiles,
-      uint64_t readBufferSize,
-      uint64_t writeBufferSize,
-      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+      const common::SpillConfig& spillConfig,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats,
-      const std::string& fileCreateConfig);
+      folly::Synchronized<common::SpillStats>* spillStats);
 
   std::string toString() const;
 

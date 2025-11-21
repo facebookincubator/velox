@@ -516,22 +516,17 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(stats.spilledBytes, totalFileBytes);
     ASSERT_EQ(prevGStats.spilledBytes + totalFileBytes, newGStats.spilledBytes);
 
-    common::UpdateAndCheckSpillLimitCB cb = [](int64_t) {};
     bool usePreMerge = mergeWayThreshold >= 2;
     for (const auto& partitionId : partitionIds) {
       auto spillFiles = state_->finish(partitionId);
       ASSERT_EQ(state_->numFinishedFiles(partitionId), 0);
       auto spillPartition =
           SpillPartition(SpillPartitionId(partitionId), std::move(spillFiles));
+      auto spillConfig = common::SpillConfig();
+      spillConfig.numMaxMergeFiles = mergeWayThreshold;
+      spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
-          spillPartition.createOrderedReader(
-              mergeWayThreshold,
-              1 << 20,
-              1 << 20,
-              cb,
-              pool(),
-              &spillStats_,
-              "");
+          spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -745,12 +740,14 @@ TEST_P(SpillTest, spillTimestamp) {
       state.testingNonEmptySpilledPartitionIdSet().contains(partitionId));
 
   SpillPartition spillPartition(SpillPartitionId{0}, state.finish(partitionId));
-  auto merge = spillPartition.createOrderedReader(
-      2, 1 << 20, 1 << 20, [](uint64_t) {}, pool(), &spillStats_, "");
+  auto spillConfig = common::SpillConfig();
+  spillConfig.numMaxMergeFiles = 2;
+  spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+  auto merge =
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(
-      spillPartition.createOrderedReader(
-          2, 1 << 20, 1 << 20, [](uint64_t) {}, pool(), &spillStats_, "") ==
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_) ==
       nullptr);
   for (auto i = 0; i < timeValues.size(); ++i) {
     auto* stream = merge->next();
