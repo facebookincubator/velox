@@ -17,7 +17,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/ExchangeClient.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec::test {
@@ -190,7 +190,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
         {"localExchangeSource.numPages", RuntimeMetric(numPages_)},
         {"localExchangeSource.totalBytes",
          RuntimeMetric(totalBytes_, RuntimeCounter::Unit::kBytes)},
-        {ExchangeClient::kBackgroundCpuTimeMs,
+        {Operator::kBackgroundCpuTimeNanos,
          RuntimeMetric(123 * 1000000, RuntimeCounter::Unit::kNanos)},
     };
   }
