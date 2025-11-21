@@ -2343,8 +2343,12 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
       "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
       "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))");
   testStEnvelopeFunc(
-      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2868119, 119.094024 -27.2871725)))",
-      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2846569, 119.094024 -27.2871725, 119.094024 -27.2871725))");
+      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094124 -27.2846569, 119.094124 -27.2868119, 119.094024 -27.2871725)))",
+      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094124 -27.2846569, 119.094124 -27.2871725, 119.094024 -27.2871725))");
+
+  // Zero area envelope is valid
+  testStEnvelopeFunc(
+      "LINESTRING (1 1, 1 2)", "POLYGON ((1 1, 1 2, 1 2, 1 1, 1 1))");
 
   testStEnvelopeFunc("POLYGON EMPTY", "POLYGON EMPTY");
   testStEnvelopeFunc("MULTIPOLYGON EMPTY", "POLYGON EMPTY");
@@ -4405,4 +4409,151 @@ TEST_F(GeometryFunctionsTest, testStSphericalLength) {
   VELOX_ASSERT_USER_THROW(
       testStSphericalLengthFunction("LINESTRING (0.0)", std::nullopt),
       "Failed to parse WKT: ParseException: Expected number but encountered ')'");
+}
+
+TEST_F(GeometryFunctionsTest, testDegeneratePolygons) {
+  const auto testDegeneratePolygonsFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        auto res = evaluateOnce<std::string>(
+            "ST_AsText(ST_GeometryFromText(c0))", wkt);
+        if (expected.has_value()) {
+          ASSERT_TRUE(res.has_value());
+          ASSERT_EQ(expected.value(), res.value());
+        } else {
+          ASSERT_FALSE(res.has_value());
+        }
+      };
+
+  // Single polygon with CCW orientation - should orient to CW
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 3 4, 5 7, 1 2))",
+      "POLYGON ((1 2, 5 7, 3 4, 1 2))"); // note: this should be fine
+
+  // Single polygons with no area- should not reverse these
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 5 6, 3 4, 1 2))", "POLYGON ((1 2, 5 6, 3 4, 1 2))");
+
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 3 4, 5 6, 1 2))", "POLYGON ((1 2, 3 4, 5 6, 1 2))");
+
+  // Single polygons with interior rings- should canonicalize so any shells have
+  // CW orientation and holes have CCW orientation.
+  testDegeneratePolygonsFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3))",
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))");
+
+  testDegeneratePolygonsFunc(
+      "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))",
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))");
+
+  // Multipolygons where polygons after the first are CCW for shell or CW for
+  // hole. These should be correctly oriented after serde.
+
+  // First polygon has CW shell and CCW hole, second polygon has CCW
+  // shell and CCW hole -> second polygon shell should be reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CW hole, second polygon has CCW
+  // shell and CCW hole -> first polygon hole and second polygon shell should be
+  // reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CCW shell and CW hole, second polygon has CCW
+  // shell and CW hole -> both polygons should have shell and hole reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CCW shell and CCW hole, second polygon has CCW
+  // shell and CCW hole -> both polygons should have shells reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CW hole, second polygon has CW
+  // shell and CW hole -> both polygons should have holes reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // MultiPolygons with zero-area rings. These need to fail because our
+  // serialization format holds MultiPolygons as single vectors that rely on
+  // orientation for determining shell start points.
+
+  // Second polygon is zero area
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((1 1, 2 1, 2 2, 1 1)), ((1 1, 2 2, 3 3, 2 2, 1 1)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // Single polygon with zero area
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((5 10, 25 30, 15 20, 5 10)))", ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc("MULTIPOLYGON (((1 1, 1 2, 1 3, 1 1)))", ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has CW shell and
+  // zero-area hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has zero-area shell
+  // and CCW hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has CW shell
+  // and zero-area hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has zero-area shell
+  // and zero-area hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has zero-area shell and CCW hole, second polygon has CW shell
+  // and CCW hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 0 15, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6))))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and zero-area hole, second polygon has CW shell
+  // and CCW hole-
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has zero-area shell and zero-area hole, second polygon has CW
+  // shell and CCW hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
 }
