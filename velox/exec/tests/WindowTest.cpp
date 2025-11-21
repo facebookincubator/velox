@@ -63,6 +63,7 @@ class WindowTest : public OperatorTestBase {
         0,
         0,
         "none",
+        0,
         prefixSortConfig);
   }
 
