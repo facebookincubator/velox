@@ -71,7 +71,8 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
+    const bool allowPureAstOnly);
 
 // Evaluates the expression tree
 class ASTExpression : public CudfExpression {
@@ -95,8 +96,6 @@ class ASTExpression : public CudfExpression {
   // Check if this specific operation (not its children) can be evaluated by
   // ASTExpression
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
-  // Used for checking before compiling to exec::Expr like in ToCudf.
-  static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
   std::shared_ptr<velox::exec::Expr> expr_;
