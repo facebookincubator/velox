@@ -17,8 +17,8 @@
 #pragma once
 
 #include "velox/dwio/common/Writer.h"
+#include "velox/exec/MaterializedSortBuffer.h"
 #include "velox/exec/MemoryReclaimer.h"
-#include "velox/exec/SortBuffer.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -27,7 +27,7 @@ class SortingWriter : public Writer {
  public:
   SortingWriter(
       std::unique_ptr<Writer> writer,
-      std::unique_ptr<exec::SortBuffer> sortBuffer,
+      std::unique_ptr<exec::MaterializedSortBuffer> sortBuffer,
       vector_size_t maxOutputRowsConfig,
       uint64_t maxOutputBytesConfig,
       uint64_t outputTimeSliceLimitMs);
@@ -85,7 +85,7 @@ class SortingWriter : public Writer {
   memory::MemoryPool* const sortPool_;
   const bool canReclaim_;
 
-  std::unique_ptr<exec::SortBuffer> sortBuffer_;
+  std::unique_ptr<exec::MaterializedSortBuffer> sortBuffer_;
 };
 
 } // namespace facebook::velox::dwio::common

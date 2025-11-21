@@ -16,9 +16,9 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/exec/MaterializedSortBuffer.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeSource.h"
-#include "velox/exec/SortBuffer.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -47,7 +47,7 @@ class MergerTest : public OperatorTestBase {
       const size_t vectorSize) {
     const VectorFuzzer::Options fuzzerOpts{.vectorSize = vectorSize};
     const auto vectors = createVectors(numVectors, inputType_, fuzzerOpts);
-    const auto sortBuffer = std::make_unique<SortBuffer>(
+    const auto sortBuffer = std::make_unique<MaterializedSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -123,7 +123,7 @@ class MergerTest : public OperatorTestBase {
         flatInputs.emplace_back(vector);
       }
     }
-    const auto sortBuffer = std::make_unique<SortBuffer>(
+    const auto sortBuffer = std::make_unique<MaterializedSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,

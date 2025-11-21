@@ -19,7 +19,7 @@
 namespace facebook::velox::dwio::common {
 SortingWriter::SortingWriter(
     std::unique_ptr<Writer> writer,
-    std::unique_ptr<exec::SortBuffer> sortBuffer,
+    std::unique_ptr<exec::MaterializedSortBuffer> sortBuffer,
     vector_size_t maxOutputRowsConfig,
     uint64_t maxOutputBytesConfig,
     uint64_t outputTimeSliceLimitMs)

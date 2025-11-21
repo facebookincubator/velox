@@ -16,9 +16,10 @@
 #pragma once
 
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/exec/MaterializedSortBuffer.h"
+#include "velox/exec/NonMaterializedSortBuffer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
-#include "velox/exec/SortBuffer.h"
 #include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
@@ -62,7 +63,7 @@ class OrderBy : public Operator {
   void close() override;
 
  private:
-  std::unique_ptr<SortBuffer> sortBuffer_;
+  std::unique_ptr<SortBufferBase> sortBuffer_;
   bool finished_ = false;
   vector_size_t maxOutputRows_;
 };

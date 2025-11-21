@@ -190,7 +190,19 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      for (const auto nonMaterializedSortBufferEnabled : {"true", "false"}) {
+        auto queryCtx = core::QueryCtx::create(executor_.get());
+        queryCtx->testingOverrideConfigUnsafe({
+            {core::QueryConfig::kSpillEnabled, "false"},
+            {core::QueryConfig::kOrderBySpillEnabled, "false"},
+            {core::QueryConfig::kNonMaterializedSortBufferEnabled,
+             nonMaterializedSortBufferEnabled},
+        });
+        CursorParameters params;
+        params.planNode = planNode;
+        params.queryCtx = queryCtx;
+        assertQueryOrdered(params, duckDbSql, sortingKeys);
+      }
     }
     {
       SCOPED_TRACE("run with spilling");
@@ -1388,7 +1400,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
 
   std::atomic_bool nonReclaimableSectionEntered{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::SortBuffer::addInput",
+      "facebook::velox::exec::MaterializedSortBuffer::addInput",
       std::function<void(void*)>(
           ([&](void* /* unused */) { nonReclaimableSectionEntered = true; })));
 
