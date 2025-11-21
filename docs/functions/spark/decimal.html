@@ -66,7 +66,7 @@ Without allow-precision-loss, some additions will return NULL.</p>
 <p>The HiveQL behavior:</p>
 <p><a class="reference external" href="https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf">https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf</a></p>
 <p>Additionally, the computation of decimal division adapts to the allow-precision-loss flag,
-while the decimal addition, subtraction, and multiplication do not.</p>
+while the decimal addition, subtraction, multiplication and integer division do not.</p>
 <section id="addition-and-subtraction">
 <h3>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h3>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
@@ -93,6 +93,14 @@ while the decimal addition, subtraction, and multiplication do not.</p>
 <span class="n">fractionalDigits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
 <span class="n">p</span> <span class="o">=</span> <span class="n">wholeDigits</span> <span class="o">+</span> <span class="n">fractionalDigits</span>
 <span class="n">s</span> <span class="o">=</span> <span class="n">fractionalDigits</span>
+</pre></div>
+</div>
+</section>
+<section id="integer-division">
+<h3>Integer Division<a class="headerlink" href="#integer-division" title="Link to this heading">¶</a></h3>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>precision = p1 - s1 + s2
+p = precision == 0 ? 1 : min(38,  precision)
+s = 0
 </pre></div>
 </div>
 </section>
@@ -124,6 +132,33 @@ The below formula shows how the precision and scale are adjusted for decimal add
 </pre></div>
 </div>
 <p>Returns NULL when the actual result cannot be represented with the calculated decimal type.</p>
+</section>
+<section id="arithmetic-functions">
+<h2>Arithmetic Functions<a class="headerlink" href="#arithmetic-functions" title="Link to this heading">¶</a></h2>
+<dl class="spark function">
+<dt class="sig sig-object spark" id="div">
+<span class="sig-name descname"><span class="pre">div</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">decimal(p1,</span> <span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">decimal(p2,</span> <span class="pre">s2)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#div" title="Link to this definition">¶</a></dt>
+<dd><p>Performs integer division and returns the bigint result of dividing <code class="docutils literal notranslate"><span class="pre">x</span></code> by <code class="docutils literal notranslate"><span class="pre">y</span></code>, truncating toward zero.
+Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+Division by zero or overflow results in NULL. Does not respect the <code class="docutils literal notranslate"><span class="pre">allow-precision-loss</span></code> configuration.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">div</span></code> with <code class="docutils literal notranslate"><span class="pre">spark.sql.ansi.enabled</span></code> set to false.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">2</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">21</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">20</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">0</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">99999999999999999999999999999999999</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mf">0.001</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="mi">687399551400672280</span> <span class="o">//</span> <span class="n">Result</span> <span class="ow">is</span> <span class="n">truncated</span> <span class="n">to</span> <span class="n">int64_t</span><span class="o">.</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="checked_div">
+<span class="sig-name descname"><span class="pre">checked_div</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">decimal(p1,</span> <span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">decimal(p2,</span> <span class="pre">s2)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#checked_div" title="Link to this definition">¶</a></dt>
+<dd><p>Performs integer division and returns the bigint result of dividing <code class="docutils literal notranslate"><span class="pre">x</span></code> by <code class="docutils literal notranslate"><span class="pre">y</span></code>, truncating toward zero.
+Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+Division by zero or overflow results in an error.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">div</span></code> with <code class="docutils literal notranslate"><span class="pre">spark.sql.ansi.enabled</span></code> set to true.</p>
+</dd></dl>
+
 </section>
 <section id="decimal-functions">
 <h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
@@ -273,9 +308,15 @@ Otherwise, exception will be thrown when <code class="docutils literal notransla
 <li><a class="reference internal" href="#addition-and-subtraction">Addition and Subtraction</a></li>
 <li><a class="reference internal" href="#multiplication">Multiplication</a></li>
 <li><a class="reference internal" href="#division">Division</a></li>
+<li><a class="reference internal" href="#integer-division">Integer Division</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#decimal-precision-and-scale-adjustment">Decimal Precision and Scale Adjustment</a></li>
+<li><a class="reference internal" href="#arithmetic-functions">Arithmetic Functions</a><ul>
+<li><a class="reference internal" href="#div"><code class="docutils literal notranslate"><span class="pre">div()</span></code></a></li>
+<li><a class="reference internal" href="#checked_div"><code class="docutils literal notranslate"><span class="pre">checked_div()</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
 <li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
 <li><a class="reference internal" href="#decimal_equalto"><code class="docutils literal notranslate"><span class="pre">decimal_equalto()</span></code></a></li>
