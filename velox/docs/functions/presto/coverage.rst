@@ -174,6 +174,7 @@ Here is a list of all scalar, aggregate, and window functions from Presto, with 
     table.coverage tr:nth-child(27) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(27) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(1) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(28) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(7) {background-color: #6BA81E;}
