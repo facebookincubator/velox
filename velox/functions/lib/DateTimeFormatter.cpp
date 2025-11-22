@@ -2020,7 +2020,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
         case 'D':
           builder.appendDayOfYear(count);
           break;
-        case 'e':
+        case 'u':
           builder.appendDayOfWeek1Based(count);
           break;
         case 'E':
