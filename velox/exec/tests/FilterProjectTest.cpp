@@ -351,7 +351,7 @@ TEST_F(FilterProjectTest, statsSplitter) {
                   .planNode();
 
   std::shared_ptr<Task> task;
-  test::AssertQueryBuilder(plan).runWithoutResults(task);
+  test::AssertQueryBuilder(plan).countResults(task);
 
   auto planStats = toPlanStats(task->taskStats());
 

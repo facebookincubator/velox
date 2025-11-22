@@ -57,31 +57,36 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
-  add_executable(
-    velox_hive_iceberg_insert_test
-    IcebergInsertTest.cpp
-    IcebergTestBase.cpp
-    Main.cpp
-    PartitionNameTest.cpp
-    PartitionSpecTest.cpp
-    PartitionValueFormatterTest.cpp
-    TransformTest.cpp
-  )
-
-  add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
-
-  target_link_libraries(
-    velox_hive_iceberg_insert_test
-    velox_exec_test_lib
-    velox_hive_connector
-    velox_hive_iceberg_splitreader
-    velox_vector_fuzzer
-    GTest::gtest
-    GTest::gtest_main
-  )
-
   if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
+    add_executable(
+      velox_hive_iceberg_insert_test
+      IcebergInsertTest.cpp
+      IcebergTestBase.cpp
+      Main.cpp
+      PartitionNameTest.cpp
+      PartitionSpecTest.cpp
+      PartitionValueFormatterTest.cpp
+      TransformE2ETest.cpp
+      TransformTest.cpp
+    )
+
+    add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
+
+    target_link_libraries(
+      velox_hive_iceberg_insert_test
+      velox_exec_test_lib
+      velox_hive_connector
+      velox_hive_iceberg_splitreader
+      velox_vector_fuzzer
+      GTest::gtest
+      GTest::gtest_main
+    )
+
+    target_link_libraries(
+      velox_hive_iceberg_test
+      velox_dwio_parquet_writer
+      velox_dwio_parquet_reader
+    )
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
