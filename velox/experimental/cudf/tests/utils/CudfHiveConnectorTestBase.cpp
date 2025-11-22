@@ -80,10 +80,13 @@ void CudfHiveConnectorTestBase::SetUp() {
   // Register Hive connector
   facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
       factory;
+  auto config = std::unordered_map<std::string, std::string>{};
+  // TODO(mh):Enable experimental cudf reader
+  // config.insert({facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::kUseExperimentalCudfReader,
+  // "true"});
   auto hiveConnector = factory.newConnector(
       kCudfHiveConnectorId,
-      std::make_shared<facebook::velox::config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()),
+      std::make_shared<facebook::velox::config::ConfigBase>(std::move(config)),
       ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
