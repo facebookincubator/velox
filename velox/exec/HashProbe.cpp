@@ -484,7 +484,7 @@ void HashProbe::prepareForSpillRestore() {
 
   // Reset the internal states which are relevant to the previous probe run.
   noMoreSpillInput_ = false;
-  if (lastProber_) {
+  if (lastProber_ && !table_->reused()) {
     table_->clear(true);
   }
   table_.reset();
@@ -1071,7 +1071,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           }
         } else {
           joinBridge_->probeFinished();
-          if (table_ != nullptr) {
+          if (table_ != nullptr && !table_->reused()) {
             table_->clear(true);
           }
         }
@@ -1216,7 +1216,9 @@ bool HashProbe::maybeReadSpillOutput() {
     return false;
   }
 
-  VELOX_DCHECK_EQ(table_->numDistinct(), 0);
+  if (!table_->reused()) {
+    VELOX_DCHECK_EQ(table_->numDistinct(), 0);
+  }
 
   if (!spillOutputReader_->nextBatch(output_)) {
     spillOutputReader_.reset();
@@ -1892,18 +1894,21 @@ void HashProbe::reclaim(
   spillOutput(probeOps);
 
   SpillPartitionSet spillPartitionSet;
-  if (hasMoreProbeInput) {
-    // Only spill hash table if any hash probe operators still has input probe
-    // data, otherwise we skip this step.
-    spillPartitionSet = spillHashJoinTable(
-        table_,
-        restoringPartitionId_,
-        tableSpillHashBits_,
-        joinNode_,
-        spillConfig(),
-        spillStats_.get());
-    VELOX_CHECK(!spillPartitionSet.empty());
+  if (!table_->reused()) {
+    if (hasMoreProbeInput) {
+      // Only spill hash table if any hash probe operators still has input probe
+      // data, otherwise we skip this step.
+      spillPartitionSet = spillHashJoinTable(
+          table_,
+          restoringPartitionId_,
+          tableSpillHashBits_,
+          joinNode_,
+          spillConfig(),
+          spillStats_.get());
+      VELOX_CHECK(!spillPartitionSet.empty());
+    }
   }
+
   const auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
 
   for (auto* probeOp : probeOps) {
@@ -1918,12 +1923,15 @@ void HashProbe::reclaim(
     probeOp->pool()->release();
   }
 
-  // Clears memory resources held by the built hash table.
-  table_->clear(true);
+  if (!table_->reused()) {
+    // Clears memory resources held by the built hash table.
+    table_->clear(true);
 
-  // Sets the spilled hash table in the join bridge.
-  if (!spillPartitionIdSet.empty()) {
-    joinBridge_->appendSpilledHashTablePartitions(std::move(spillPartitionSet));
+    // Sets the spilled hash table in the join bridge.
+    if (!spillPartitionIdSet.empty()) {
+      joinBridge_->appendSpilledHashTablePartitions(
+          std::move(spillPartitionSet));
+    }
   }
 }
 

@@ -328,6 +328,12 @@ class BaseHashTable {
   /// side. This is used for sizing the internal hash table.
   virtual uint64_t numDistinct() const = 0;
 
+  virtual bool reused() const = 0;
+
+  virtual bool joinHasNullKeys() const = 0;
+
+  virtual void setJoinHasNullKeys() = 0;
+
   /// Return a number of current stats that can help with debugging and
   /// profiling.
   virtual HashTableStats stats() const = 0;
@@ -484,7 +490,8 @@ class HashTable : public BaseHashTable {
       bool isJoinBuild,
       bool hasProbedFlag,
       uint32_t minTableSizeForParallelJoinBuild,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      bool reused = false);
 
   ~HashTable() override = default;
 
@@ -509,7 +516,8 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool hasProbedFlag,
       uint32_t minTableSizeForParallelJoinBuild,
-      memory::MemoryPool* pool) {
+      memory::MemoryPool* pool,
+      bool reused = false) {
     return std::make_unique<HashTable>(
         std::move(hashers),
         std::vector<Accumulator>{},
@@ -518,7 +526,8 @@ class HashTable : public BaseHashTable {
         true, // isJoinBuild
         hasProbedFlag,
         minTableSizeForParallelJoinBuild,
-        pool);
+        pool,
+        reused);
   }
 
   void groupProbe(HashLookup& lookup, int8_t spillInputStartPartitionBit)
@@ -575,6 +584,18 @@ class HashTable : public BaseHashTable {
 
   uint64_t numDistinct() const override {
     return numDistinct_;
+  }
+
+  bool reused() const override {
+    return reused_;
+  }
+
+  bool joinHasNullKeys() const override {
+    return joinHasNullKeys_;
+  }
+
+  void setJoinHasNullKeys() override {
+    joinHasNullKeys_ = true;
   }
 
   HashTableStats stats() const override {
@@ -1104,6 +1125,19 @@ class HashTable : public BaseHashTable {
 
   friend class ProbeState;
   friend test::HashTableTestHelper<ignoreNullKeys>;
+
+  // Ensures that the HashTable is prepared only once in concurrent scenarios.
+  std::mutex mutex_;
+
+  // Tracks whether the HashTable has been prepared to avoid redundant
+  // operations.
+  bool prepared_{false};
+
+  // Flags if this HashTable is being reused in a HashJoin operation.
+  bool reused_{false};
+
+  // Indicates if the HashTable contains null keys, affecting join operations.
+  bool joinHasNullKeys_{false};
 };
 
 } // namespace facebook::velox::exec
