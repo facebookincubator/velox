@@ -24,6 +24,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
@@ -2029,6 +2030,31 @@ struct LocalTimeFunction {
 
  private:
   int64_t localTimeSinceMidnight_;
+};
+
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  int64_t result_{0};
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+    currentTimeSinceMidnight_ = sessionStartTimeMs % kMillisInDay;
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+    result_ = pack(currentTimeSinceMidnight_, timeZone_->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    result = result_;
+  }
+private:
+  int64_t currentTimeSinceMidnight_;
 };
 
 } // namespace facebook::velox::functions

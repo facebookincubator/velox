@@ -6833,3 +6833,44 @@ TEST_F(DateTimeFunctionsTest, currentTimezone) {
     EXPECT_EQ(tz.value(), "America/New_York");
   }
 }
+
+TEST_F(DateTimeFunctionsTest, currentTime) {
+  const auto callCurrentTime =
+      [&](int64_t sessionStartTime,
+          const std::optional<std::string>& timeZone) {
+        if (timeZone.has_value()) {
+          setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+        } else {
+          setQuerySessionStartTime(sessionStartTime);
+        }
+
+        auto rowVector = makeRowVector({});
+        rowVector->resize(1);
+
+        auto result = evaluate("current_time()", rowVector);
+        DecodedVector decoded(*result);
+        return decoded.valueAt<int64_t>(0);
+  };
+
+  // Test without timezone
+  EXPECT_THROW(
+      {
+        try {
+           callCurrentTime(0, std::nullopt);
+        } catch (const VeloxException& e) {
+          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
+          throw;
+        }
+      },
+      VeloxException);
+
+  // Test with timezone America/Los_Angeles
+  auto laPacked = callCurrentTime(1710061200000, "America/Los_Angeles");
+  // Reuse TimestampWithTimezone: TIME WITH TIME ZONE uses the same
+  // packed (millis, zoneKey) format, so unpack() works.
+  auto la = TimestampWithTimezone::unpack(laPacked);
+  ASSERT_TRUE(la.has_value());
+
+  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
+  EXPECT_EQ(la->milliSeconds_, 32400000);
+}
