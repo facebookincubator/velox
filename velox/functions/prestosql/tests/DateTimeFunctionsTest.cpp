@@ -6663,6 +6663,40 @@ TEST_F(DateTimeFunctionsTest, localtime) {
   EXPECT_EQ(localVal, 32400000); // 9 AM UTC
 }
 
+TEST_F(DateTimeFunctionsTest, localTimestamp) {
+  const auto localTimestamp = [&](int64_t sessionStartTime,
+                                  const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    return evaluateOnce<Timestamp>(
+        "localtimestamp()", makeRowVector(ROW({}), 1));
+  };
+
+  // Case 1: Epoch — zero nanos
+  auto tsUtc = localTimestamp(0, std::nullopt);
+  ASSERT_TRUE(tsUtc.has_value());
+  EXPECT_EQ(tsUtc->getSeconds(), 0);
+  EXPECT_EQ(tsUtc->getNanos(), 0);
+
+  // Case 2: With timezone, exact second boundary
+  auto tsExact = localTimestamp(1758499200000, "America/Los_Angeles");
+  ASSERT_TRUE(tsExact.has_value());
+  EXPECT_EQ(tsExact->getSeconds(), 1758499200);
+  EXPECT_EQ(tsExact->getNanos(), 0);
+
+  // Case 3: With fractional milliseconds (test nanos)
+  int64_t millisWithFraction = 1758499200123; // +123 ms
+  auto tsWithNanos = localTimestamp(millisWithFraction, "America/Los_Angeles");
+
+  ASSERT_TRUE(tsWithNanos.has_value());
+  EXPECT_EQ(tsWithNanos->getSeconds(), 1758499200);
+  EXPECT_EQ(tsWithNanos->getNanos(), 123'000'000);
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffTime) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int64_t> time1,
