@@ -184,6 +184,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: current_time() -> time with time zone
+
+    Returns the current time with the session timezone.
+
 .. function:: current_timezone() -> varchar
 
     Returns the current session time zone as a varchar.
