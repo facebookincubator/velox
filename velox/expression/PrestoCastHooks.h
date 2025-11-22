@@ -67,8 +67,13 @@ class PrestoCastHooks : public CastHooks {
 
   PolicyType getPolicy() const override;
 
+  bool matchRowFieldsByName() const override {
+    return matchRowFieldsByName_;
+  }
+
  private:
   const bool legacyCast_;
+  const bool matchRowFieldsByName_;
   TimestampToStringOptions options_ = {
       .precision = TimestampToStringOptions::Precision::kMilliseconds};
 };

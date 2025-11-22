@@ -23,8 +23,12 @@ namespace facebook::velox::functions::sparksql {
 
 SparkCastHooks::SparkCastHooks(
     const velox::core::QueryConfig& config,
-    bool allowOverflow)
-    : config_(config), allowOverflow_(allowOverflow) {
+    bool allowOverflow,
+    bool matchRowFieldsByName)
+    : config_(config),
+      allowOverflow_(allowOverflow),
+      matchRowFieldsByName_(
+          matchRowFieldsByName || config.isMatchStructByName()) {
   const auto sessionTzName = config.sessionTimezone();
   if (!sessionTzName.empty()) {
     timestampToStringOptions_.timeZone = tz::locateZone(sessionTzName);

@@ -27,7 +27,9 @@
 namespace facebook::velox::exec {
 
 PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
-    : CastHooks(), legacyCast_(config.isLegacyCast()) {
+    : CastHooks(),
+      legacyCast_(config.isLegacyCast()),
+      matchRowFieldsByName_(config.isMatchStructByName()) {
   if (!legacyCast_) {
     options_.zeroPaddingYear = true;
     options_.dateTimeSeparator = ' ';
