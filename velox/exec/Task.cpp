@@ -1600,7 +1600,9 @@ void Task::addSplitLocked(
   ++taskStats_.numQueuedSplits;
 
   if (split.hasConnectorSplit()) {
-    VELOX_CHECK_NULL(split.connectorSplit->dataSource);
+    if (split.connectorSplit->dataSource) {
+      split.connectorSplit->dataSource.reset();
+    }
     if (splitsState.sourceIsTableScan) {
       ++taskStats_.numQueuedTableScanSplits;
       taskStats_.queuedTableScanSplitWeights +=
