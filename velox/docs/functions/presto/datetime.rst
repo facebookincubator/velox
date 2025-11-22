@@ -188,6 +188,10 @@ Date and Time Functions
 
         SELECT current_timezone;   -- Asia/Kolkata
 
+.. function:: current_time() -> time with time zone
+
+    Returns the current time with the session timezone.
+
 Truncation Function
 -------------------
 
