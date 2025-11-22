@@ -6852,7 +6852,7 @@ TEST_F(DateTimeFunctionsTest, currentTime) {
         return decoded.valueAt<int64_t>(0);
   };
 
-  // Test without timezone (UTC)
+  // Test without timezone
   EXPECT_THROW(
       {
         try {
