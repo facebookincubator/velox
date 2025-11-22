@@ -2113,4 +2113,44 @@ struct LocalTimeFunction {
   int64_t localTimeSinceMidnight_;
 };
 
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+    int64_t currentTimeSinceMidnight = sessionStartTimeMs % kMillisInDay;
+    const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
+    if (timeZone == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+
+    int64_t utcMillisOfDay = sessionStartTimeMs % kMillisInDay;
+    if (utcMillisOfDay < 0) {
+      utcMillisOfDay += kMillisInDay;
+    }
+
+    int32_t offsetAtInstant =
+        timeZone->to_local(std::chrono::milliseconds{sessionStartTimeMs})
+            .count() -
+        sessionStartTimeMs;
+
+    int32_t offsetAtEpoch =
+        timeZone->to_local(std::chrono::milliseconds{0}).count();
+
+    int64_t adjustedMillis = utcMillisOfDay - (offsetAtInstant - offsetAtEpoch);
+
+    currentTime_ = pack(adjustedMillis, timeZone->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    result = currentTime_;
+  }
+
+ private:
+  int64_t currentTime_{0};
+};
+
 } // namespace facebook::velox::functions
