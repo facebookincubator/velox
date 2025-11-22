@@ -315,7 +315,12 @@ class GeometrySerializer {
     }
 
     auto coordinates = geometry.getCoordinates();
-    canonicalizePolygonCoordinates(coordinates, partIndexes, shellPart);
+    bool zeroAreaRingEncountered =
+        canonicalizePolygonCoordinates(coordinates, partIndexes, shellPart);
+    if (FOLLY_UNLIKELY(zeroAreaRingEncountered && multiType)) {
+      VELOX_USER_FAIL(
+          "Input MultiPolygon contains one or more zero-area rings.");
+    }
     writeCoordinates(coordinates, writer);
   }
 
