@@ -33,8 +33,6 @@
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
 
-#include <iostream>
-
 namespace facebook::velox::functions {
 
 template <typename T>
