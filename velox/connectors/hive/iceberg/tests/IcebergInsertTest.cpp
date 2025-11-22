@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -36,7 +37,12 @@ class IcebergInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder().tableScan(rowType).planNode();
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan()
+                    .connectorId(test::kIcebergConnectorId)
+                    .outputType(rowType)
+                    .endTableScan()
+                    .planNode();
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 };
