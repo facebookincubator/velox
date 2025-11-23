@@ -91,8 +91,8 @@ bool DirectInputStream::SkipInt64(int64_t count) {
   return false;
 }
 
-google::protobuf::int64 DirectInputStream::ByteCount() const {
-  return static_cast<google::protobuf::int64>(offsetInRegion_);
+int64_t DirectInputStream::ByteCount() const {
+  return static_cast<int64_t>(offsetInRegion_);
 }
 
 void DirectInputStream::seekToPosition(PositionProvider& seekPosition) {
