@@ -2052,7 +2052,7 @@ struct LocalTimestampFunction {
 
 private:
   int64_t seconds_;
-  int32_t nanos_;
+  uint64_t nanos_;
 };
 
 } // namespace facebook::velox::functions
