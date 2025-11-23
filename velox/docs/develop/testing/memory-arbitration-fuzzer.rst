@@ -9,8 +9,8 @@ It works as follows:
 
 1. Data Generation: It starts by generating a random set of input data, also known as a vector. This data can
    have a variety of encodings and data layouts to ensure thorough testing.
-2. Plan Generation: Generate multiple plans with different query shapes. Currently, it supports HashJoin and
-   HashAggregation plans.
+2. Plan Generation: Generate multiple plans with different query shapes. Currently, it supports HashJoin,
+   HashAggregation, RowNumber, TopNRowNumber, and OrderBy plans.
 3. Query Execution: Create multiple threads, each thread randomly picks a plan with spill enabled or not, and repeatedly
    running this process until ${iteration_duration_sec} seconds. The query thread expects query to succeed or fail with
    query OOM or abort errors, otherwise it throws.
