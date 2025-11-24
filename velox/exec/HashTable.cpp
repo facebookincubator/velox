@@ -1719,8 +1719,8 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
     int8_t spillInputStartPartitionBit,
-    folly::Executor* executor,
-    bool dropDuplicates) {
+    bool dropDuplicates,
+    folly::Executor* executor) {
   buildExecutor_ = executor;
   if (dropDuplicates) {
     if (table_ != nullptr) {

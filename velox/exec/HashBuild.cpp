@@ -64,14 +64,14 @@ HashBuild::HashBuild(
       nullAware_{joinNode_->isNullAware()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
       dropDuplicates_(joinNode_->canDropDuplicates()),
-      joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
-          operatorCtx_->driverCtx()->splitGroupId,
-          planNodeId())),
-      keyChannelMap_(joinNode_->rightKeys().size()),
       abandonHashBuildDedupMinRows_(
           driverCtx->queryConfig().abandonHashBuildDedupMinRows()),
       abandonHashBuildDedupMinPct_(
-          driverCtx->queryConfig().abandonHashBuildDedupMinPct()) {
+          driverCtx->queryConfig().abandonHashBuildDedupMinPct()),
+      joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
+          operatorCtx_->driverCtx()->splitGroupId,
+          planNodeId())),
+      keyChannelMap_(joinNode_->rightKeys().size()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
@@ -181,14 +181,16 @@ void HashBuild::setupTable() {
           pool());
     }
   }
-  lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
   if (abandonHashBuildDedupMinPct_ == 0) {
     // Building a HashTable without duplicates is disabled if
     // abandonBuildNoDupHashMinPct_ is 0.
     abandonHashBuildDedup_ = true;
     table_->setAllowDuplicates(true);
+    return;
   }
+  // Only create HashLookup when dedup is enabled.
+  lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
 }
 
 void HashBuild::setupSpiller(SpillPartition* spillPartition) {
@@ -388,16 +390,9 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (dropDuplicates_ && !abandonHashBuildDedup_) {
-    const bool abandonEarly = abandonBuildNoDupHashEarly(table_->numDistinct());
-    numHashInputRows_ += activeRows_.countSelected();
-    if (abandonEarly) {
-      // The hash table is no longer directly constructed in addInput. The data
-      // that was previously inserted into the hash table is already in the
-      // RowContainer.
-      addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
-      abandonHashBuildDedup_ = true;
-      table_->setAllowDuplicates(true);
-    } else {
+    const bool abandonEarly = abandonHashBuildDedupEarly(table_->numDistinct());
+    if (!abandonEarly) {
+      numHashInputRows_ += activeRows_.countSelected();
       table_->prepareForGroupProbe(
           *lookup_,
           input,
@@ -410,6 +405,7 @@ void HashBuild::addInput(RowVectorPtr input) {
           *lookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
       return;
     }
+    abandonHashBuildDedup();
   }
 
   if (analyzeKeys_ && hashes_.size() < activeRows_.end()) {
@@ -790,9 +786,9 @@ bool HashBuild::finishHashBuild() {
         std::move(otherTables),
         isInputFromSpill() ? spillConfig()->startPartitionBit
                            : BaseHashTable::kNoSpillInputStartPartitionBit,
+        dropDuplicates_,
         allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                               : nullptr,
-        dropDuplicates_);
+                               : nullptr);
   }
   stats_.wlock()->addRuntimeStat(
       BaseHashTable::kBuildWallNanos,
@@ -1278,9 +1274,20 @@ void HashBuildSpiller::extractSpill(
   }
 }
 
-bool HashBuild::abandonBuildNoDupHashEarly(int64_t numDistinct) const {
+bool HashBuild::abandonHashBuildDedupEarly(int64_t numDistinct) const {
   VELOX_CHECK(dropDuplicates_);
   return numHashInputRows_ > abandonHashBuildDedupMinRows_ &&
       100 * numDistinct / numHashInputRows_ >= abandonHashBuildDedupMinPct_;
 }
+
+void HashBuild::abandonHashBuildDedup() {
+  // The hash table is no longer directly constructed in addInput. The data
+  // that was previously inserted into the hash table is already in the
+  // RowContainer.
+  addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
+  abandonHashBuildDedup_ = true;
+  table_->setAllowDuplicates(true);
+  lookup_.reset();
+}
+
 } // namespace facebook::velox::exec

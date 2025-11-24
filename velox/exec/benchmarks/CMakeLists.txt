@@ -72,10 +72,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_hash_join_stream_build_benchmark HashJoinStreamBuildBenchmark.cpp)
+add_executable(velox_hash_join_build_benchmark HashJoinBuildBenchmark.cpp)
 
 target_link_libraries(
-  velox_hash_join_stream_build_benchmark
+  velox_hash_join_build_benchmark
   velox_exec
   velox_exec_test_lib
   velox_vector_fuzzer

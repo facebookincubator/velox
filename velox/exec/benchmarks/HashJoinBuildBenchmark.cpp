@@ -151,9 +151,9 @@ struct BenchmarkResult {
   }
 };
 
-class HashJoinStreamBuildBenchmark : public VectorTestBase {
+class HashJoinBuildBenchmark : public VectorTestBase {
  public:
-  HashJoinStreamBuildBenchmark() : randomEngine_((std::random_device{}())) {}
+  HashJoinBuildBenchmark() : randomEngine_((std::random_device{}())) {}
 
   BenchmarkResult run(BenchmarkParams params) {
     params_ = std::move(params);
@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
   options.mmapArenaCapacityRatio = 1;
   memory::MemoryManager::initialize(options);
 
-  auto bm = std::make_unique<HashJoinStreamBuildBenchmark>();
+  auto bm = std::make_unique<HashJoinBuildBenchmark>();
   std::vector<BenchmarkResult> results;
 
   auto buildRowSize = (2L << 20) - 3;
@@ -349,21 +349,22 @@ int main(int argc, char** argv) {
 
   TypePtr twoKeyType{ROW({"k1"}, {BIGINT()})};
 
-  std::vector<BaseHashTable::HashMode> hashModes = {
+  const std::vector<BaseHashTable::HashMode> hashModes = {
       BaseHashTable::HashMode::kArray,
       BaseHashTable::HashMode::kNormalizedKey,
       BaseHashTable::HashMode::kHash,
   };
-  std::vector<double> dupFactorVector = {
+  const std::vector<double> dupFactorVector = {
       2,
       8,
       32,
   };
-  std::vector<int32_t> abandonPcts = {
+  const std::vector<int32_t> abandonPcts = {
       90,
       80,
       70,
       50,
+      0,
   };
 
   std::vector<BenchmarkParams> params;
