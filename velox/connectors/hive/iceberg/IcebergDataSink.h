@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -44,7 +45,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
   IcebergInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
+      std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
       IcebergPartitionSpecPtr partitionSpec,

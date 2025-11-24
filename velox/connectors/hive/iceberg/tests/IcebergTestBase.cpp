@@ -141,24 +141,58 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
 void addColumnHandles(
     const RowTypePtr& rowType,
     const std::vector<PartitionField>& partitionFields,
-    std::vector<HiveColumnHandlePtr>& columnHandles) {
+    std::vector<IcebergColumnHandlePtr>& columnHandles) {
   std::unordered_set<int32_t> partitionColumnIds;
   for (const auto& field : partitionFields) {
     partitionColumnIds.insert(field.id);
   }
+  HiveColumnHandle::ColumnParseParameters columnParseParameters;
 
+  std::function<IcebergNestedField(const TypePtr&, int32_t&)>
+      collectNestedField = [&](const TypePtr& type,
+                               int32_t& columnOrdinal) -> IcebergNestedField {
+    int32_t currentId = columnOrdinal++;
+    std::vector<IcebergNestedField> children;
+    if (type->isRow()) {
+      auto rowType = asRowType(type);
+      for (auto i = 0; i < rowType->size(); ++i) {
+        children.push_back(
+            collectNestedField(rowType->childAt(i), columnOrdinal));
+      }
+    } else if (type->isArray()) {
+      auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
+      for (auto i = 0; i < arrayType->size(); ++i) {
+        children.push_back(
+            collectNestedField(arrayType->childAt(i), columnOrdinal));
+      }
+    } else if (type->isMap()) {
+      auto mapType = std::dynamic_pointer_cast<const MapType>(type);
+      for (auto i = 0; i < mapType->size(); ++i) {
+        children.push_back(
+            collectNestedField(mapType->childAt(i), columnOrdinal));
+      }
+    }
+
+    return IcebergNestedField{currentId, children};
+  };
+
+  int32_t startIndex = 1;
   columnHandles.reserve(rowType->size());
   for (auto i = 0; i < rowType->size(); ++i) {
-    const auto columnType = partitionColumnIds.contains(i)
-        ? HiveColumnHandle::ColumnType::kPartitionKey
-        : HiveColumnHandle::ColumnType::kRegular;
-
+    auto columnName = rowType->nameOf(i);
+    auto type = rowType->childAt(i);
+    auto field = collectNestedField(type, startIndex);
     columnHandles.push_back(
-        std::make_shared<HiveColumnHandle>(
-            rowType->nameOf(i),
-            columnType,
-            rowType->childAt(i),
-            rowType->childAt(i)));
+        std::make_shared<const IcebergColumnHandle>(
+            columnName,
+            partitionColumnIds.contains(i)
+                ? HiveColumnHandle::ColumnType::kPartitionKey
+                : HiveColumnHandle::ColumnType::kRegular,
+            type,
+            type,
+            field,
+            std::vector<common::Subfield>{},
+            columnParseParameters));
   }
 }
 
@@ -166,7 +200,7 @@ IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
     const std::vector<PartitionField>& partitionFields) {
-  std::vector<HiveColumnHandlePtr> columnHandles;
+  std::vector<IcebergColumnHandlePtr> columnHandles;
   addColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(

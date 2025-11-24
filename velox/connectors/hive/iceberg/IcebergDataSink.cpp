@@ -23,14 +23,16 @@
 namespace facebook::velox::connector::hive::iceberg {
 
 IcebergInsertTableHandle::IcebergInsertTableHandle(
-    std::vector<HiveColumnHandlePtr> inputColumns,
+    std::vector<IcebergColumnHandlePtr> inputColumns,
     LocationHandlePtr locationHandle,
     dwio::common::FileFormat tableStorageFormat,
     IcebergPartitionSpecPtr partitionSpec,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters)
     : HiveInsertTableHandle(
-          std::move(inputColumns),
+          std::vector<HiveColumnHandlePtr>(
+              inputColumns.begin(),
+              inputColumns.end()),
           std::move(locationHandle),
           tableStorageFormat,
           nullptr,
