@@ -290,4 +290,6 @@ class CartesianPoint {
 
 double getSphericalLength(const geos::geom::LineString& lineString);
 
+double computeSphericalExcess(const geos::geom::Polygon& polygon);
+
 } // namespace facebook::velox::functions::geospatial
