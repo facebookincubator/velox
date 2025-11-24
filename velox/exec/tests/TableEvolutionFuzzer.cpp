@@ -495,10 +495,12 @@ std::optional<AggregationConfig> generateAggregationConfig(
 
       auto type = schema->childAt(i);
       // Integer types: randomly choose between min/max or bitwise aggregations
-      // Note: Exclude DATE type as it doesn't support bitwise aggregations
+      // Note: Exclude DATE/Interval type as it doesn't support bitwise
+      // aggregations
       if ((type->isInteger() || type->isBigint() || type->isSmallint() ||
            type->isTinyint()) &&
-          !type->isDate()) {
+          !type->isDate() && !type->isIntervalDayTime() &&
+          !type->isIntervalYearMonth()) {
         if (folly::Random::oneIn(2, rng)) {
           availableIntegerColumns.push_back(i);
         } else {
