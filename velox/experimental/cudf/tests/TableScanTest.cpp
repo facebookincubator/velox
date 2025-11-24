@@ -28,8 +28,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
