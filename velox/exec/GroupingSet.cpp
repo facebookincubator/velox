@@ -1286,7 +1286,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
   bool newDistinct{true};
   int32_t numOutputRows{0};
   int32_t outputSize{0};
-  bool isEndOfBatch = false;
+  bool endOfBatch = false;
   prepareSpillResultWithoutAggregates(maxOutputRows, result);
 
   while (numOutputRows + outputSize < maxOutputRows) {
@@ -1308,7 +1308,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
         numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
       newDistinct = false;
     }
-    auto index = stream->currentIndex(&isEndOfBatch);
+    auto index = stream->currentIndex(&endOfBatch);
     if (!next.second && newDistinct) {
       // Yield result for new distinct.
       spillSources_[outputSize] = &stream->current();
@@ -1316,7 +1316,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
       ++outputSize;
     }
 
-    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+    if (FOLLY_UNLIKELY(endOfBatch)) {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
