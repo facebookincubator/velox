@@ -510,6 +510,10 @@ class QueryConfig {
   static constexpr const char* kPrefixSortMaxStringPrefixLength =
       "prefixsort_max_string_prefix_length";
 
+  /// Enable non-materialized sort buffer.
+  static constexpr const char* kNonMaterializedSortBufferEnabled =
+      "non_materialized_sort_buffer_enabled";
+
   /// Enable query tracing flag.
   static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
 
@@ -1080,6 +1084,10 @@ class QueryConfig {
   int32_t spillableReservationGrowthPct() const {
     constexpr int32_t kDefaultPct = 10;
     return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
+  }
+
+  bool nonMaterializedSortBufferEnabled() const {
+    return get<bool>(kNonMaterializedSortBufferEnabled, false);
   }
 
   bool queryTraceEnabled() const {

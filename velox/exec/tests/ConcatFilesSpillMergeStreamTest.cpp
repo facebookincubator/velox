@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/SortBuffer.h"
+#include "velox/exec/MaterializedSortBuffer.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -44,7 +44,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       const size_t maxOutputRows) {
     const VectorFuzzer::Options fuzzerOpts{.vectorSize = maxOutputRows};
     const auto vectors = createVectors(numVectors, inputType_, fuzzerOpts);
-    const auto sortBuffer = std::make_unique<SortBuffer>(
+    const auto sortBuffer = std::make_unique<MaterializedSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -171,7 +171,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
   std::vector<RowVectorPtr> makeExpectedResults(
       const std::vector<RowVectorPtr>& vectors,
       size_t maxOutputRows) {
-    const auto sortBuffer = std::make_unique<SortBuffer>(
+    const auto sortBuffer = std::make_unique<MaterializedSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
