@@ -524,7 +524,10 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
           SpillPartition(SpillPartitionId(partitionId), std::move(spillFiles));
       auto spillConfig = common::SpillConfig();
       spillConfig.numMaxMergeFiles = mergeWayThreshold;
+      spillConfig.readBufferSize = 1 << 20;
+      spillConfig.writeBufferSize = 1 << 20;
       spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+      spillConfig.fileCreateConfig = "";
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
           spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
       int numReadBatches = 0;
@@ -742,7 +745,10 @@ TEST_P(SpillTest, spillTimestamp) {
   SpillPartition spillPartition(SpillPartitionId{0}, state.finish(partitionId));
   auto spillConfig = common::SpillConfig();
   spillConfig.numMaxMergeFiles = 2;
+  spillConfig.readBufferSize = 1 << 20;
+  spillConfig.writeBufferSize = 1 << 20;
   spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+  spillConfig.fileCreateConfig = "";
   auto merge =
       spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
   ASSERT_TRUE(merge != nullptr);
