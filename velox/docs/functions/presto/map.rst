@@ -137,6 +137,16 @@ Map Functions
         SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {1->'a', 2->'b'}
         SELECT map_except(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
 
+.. function:: map_keys_overlap(map(K,V), array(K)) -> boolean
+
+    Returns true if any key in the map matches any element in the given array, false otherwise.
+    Returns false if either the map or array is empty. Null keys in the array are ignored. ::
+
+        SELECT map_keys_overlap(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[1, 5]); -- true
+        SELECT map_keys_overlap(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[4, 5]); -- false
+        SELECT map_keys_overlap(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), ARRAY['a']); -- true
+        SELECT map_keys_overlap(MAP(ARRAY[], ARRAY[]), ARRAY[1]); -- false
+
 .. function:: map_top_n(map(K,V), n) -> map(K, V)
 
     Truncates map items. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.
