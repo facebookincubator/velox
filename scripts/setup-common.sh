@@ -193,7 +193,7 @@ function install_xsimd {
 
 function install_simdjson {
   wget_and_untar https://github.com/simdjson/simdjson/archive/refs/tags/v"${SIMDJSON_VERSION}".tar.gz simdjson
-  cmake_install_dir simdjson
+  cmake_install_dir simdjson -DSIMDJSON_SKIPUTF8VALIDATION=ON
 }
 
 function install_arrow {
