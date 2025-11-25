@@ -105,6 +105,10 @@ class IExpr {
 
   virtual bool operator==(const IExpr& other) const = 0;
 
+  friend std::ostream& operator<<(std::ostream& os, const IExpr& expr) {
+    return os << expr.toString();
+  }
+
  protected:
   // Returns a hash that include values specific to the expression. Doesn't
   // include inputs, kind or alias.
