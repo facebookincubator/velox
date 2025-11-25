@@ -17,6 +17,8 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/functions/lib/SetDigest.h"
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
@@ -282,7 +284,75 @@ variant TDigestInputGenerator::generate() {
   size_t byteSize = digest.serializedByteSize();
   std::string serializedDigest(byteSize, '\0');
   digest.serialize(&serializedDigest[0]);
-  StringView serializedView(serializedDigest.data(), serializedDigest.size());
+  return variant::create<TypeKind::VARBINARY>(serializedDigest);
+}
+
+SetDigestInputGenerator::SetDigestInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    memory::MemoryPool* pool)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio) {
+  if (pool) {
+    pool_ = pool;
+  } else {
+    ownedPool_ = velox::memory::memoryManager()->addLeafPool();
+    pool_ = ownedPool_.get();
+  }
+
+  // SetDigest supports int64_t and StringView
+  static const std::vector<TypePtr> kBaseTypes{BIGINT(), VARCHAR()};
+  baseType_ = kBaseTypes[rand<int32_t>(rng_, 0, kBaseTypes.size() - 1)];
+}
+
+SetDigestInputGenerator::~SetDigestInputGenerator() = default;
+
+variant SetDigestInputGenerator::generate() {
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+
+  if (baseType_->isBigint()) {
+    return generateTyped<int64_t>();
+  } else {
+    return generateTyped<std::string>();
+  }
+}
+
+template <typename T>
+variant SetDigestInputGenerator::generateTyped() {
+  velox::HashStringAllocator allocator{pool_};
+  velox::functions::SetDigest digest(&allocator);
+
+  // Generate random number of values to add
+  int numValues = rand<int>(rng_, 10, 100);
+
+  if constexpr (std::is_same_v<T, std::string>) {
+    // Generate strings with varied encodings
+    static const std::vector<UTF8CharList> encodings{
+        UTF8CharList::ASCII,
+        UTF8CharList::UNICODE_CASE_SENSITIVE,
+        UTF8CharList::EXTENDED_UNICODE,
+        UTF8CharList::MATHEMATICAL_SYMBOLS};
+    std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+
+    for (int i = 0; i < numValues; ++i) {
+      auto size = rand<int32_t>(rng_, 0, 100);
+      std::string result;
+      auto str = randString(rng_, size, encodings, result, converter);
+      digest.add(StringView(str));
+    }
+  } else {
+    // Generate int64_t values with wide range
+    for (int i = 0; i < numValues; ++i) {
+      int64_t value = rand<int64_t>(rng_);
+      digest.add(value);
+    }
+  }
+
+  size_t byteSize = digest.estimatedSerializedSize();
+  std::string serializedDigest(byteSize, '\0');
+  digest.serialize(&serializedDigest[0]);
   return variant::create<TypeKind::VARBINARY>(serializedDigest);
 }
 

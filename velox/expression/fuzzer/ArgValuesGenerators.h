@@ -173,4 +173,21 @@ class FbDedupNormalizeTextArgValuesGenerator : public ArgValuesGenerator {
       FuzzerGenerator& rng,
       ExpressionFuzzerState& state) override;
 };
+
+class SetDigestArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  explicit SetDigestArgValuesGenerator(std::string functionName) {
+    functionName_ = std::move(functionName);
+  }
+  ~SetDigestArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+
+ private:
+  std::string functionName_;
+};
 } // namespace facebook::velox::fuzzer
