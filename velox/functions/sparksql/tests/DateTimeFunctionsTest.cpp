@@ -798,6 +798,39 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
         return getTimestamp(dateString, format)->toString();
       };
 
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.123456", "yyyy-MM-dd HH:mm:ss.SSS"),
+      std::nullopt);
+  EXPECT_EQ(
+      getTimestamp(
+          "1970-01-01 00:00:00.123456789", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      std::nullopt);
+
+  // Spark precision till microsecond
+  EXPECT_EQ(
+      getTimestamp(
+          "1970-01-01 00:00:00.123456789", "yyyy-MM-dd HH:mm:ss.SSSSSSSSS"),
+      Timestamp(0, 123456000));
+
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.123456", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      Timestamp(0, 123456000));
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.12345", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      Timestamp(0, 123450000));
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.1234", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      Timestamp(0, 123400000));
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.123", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      Timestamp(0, 123000000));
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.12", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      Timestamp(0, 120000000));
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.1", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      Timestamp(0, 100000000));
+
   EXPECT_EQ(getTimestamp("1970-01-01", "yyyy-MM-dd"), Timestamp(0, 0));
   EXPECT_EQ(
       getTimestamp("1970-01-01 00:00:00.010", "yyyy-MM-dd HH:mm:ss.SSS"),

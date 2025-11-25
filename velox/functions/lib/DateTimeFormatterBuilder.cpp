@@ -173,6 +173,18 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendFractionOfSecond(
   return *this;
 }
 
+DateTimeFormatterBuilder&
+DateTimeFormatterBuilder::setFractionOfSecondPrecision(
+    TimestampPrecision fractionOfSecondPrecision) {
+  VELOX_CHECK(
+      fractionOfSecondPrecision == TimestampPrecision::kMilliseconds ||
+          fractionOfSecondPrecision == TimestampPrecision::kMicroseconds,
+      "{} not supported",
+      fractionOfSecondPrecision);
+  fractionOfSecondPrecision_ = fractionOfSecondPrecision;
+  return *this;
+}
+
 DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendTimeZone(
     size_t minDigits) {
   tokens_.emplace_back(
@@ -220,7 +232,11 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::setType(
 std::shared_ptr<DateTimeFormatter> DateTimeFormatterBuilder::build() {
   VELOX_CHECK_NE(type_, DateTimeFormatterType::UNKNOWN);
   return std::make_shared<DateTimeFormatter>(
-      std::move(literalBuf_), bufEnd_, std::move(tokens_), type_);
+      std::move(literalBuf_),
+      bufEnd_,
+      std::move(tokens_),
+      type_,
+      fractionOfSecondPrecision_);
 }
 
 } // namespace facebook::velox::functions
