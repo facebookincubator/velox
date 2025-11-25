@@ -253,6 +253,14 @@ class CudfHiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   static void registerSerDe();
 
+  const std::vector<TypePtr> getColumnHandleDataTypes() const override {
+    std::vector<TypePtr> tableTypes;
+    for (const auto& i : inputColumns_) {
+      tableTypes.emplace_back(i->type());
+    }
+    return tableTypes;
+  }
+
   std::string toString() const override;
 
  private:
