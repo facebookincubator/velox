@@ -53,6 +53,7 @@ velox_add_library(
   NoisySumGaussianAggregate.cpp
   NoisyApproxSfmAggregate.cpp
   SetAggregates.cpp
+  SetDigestAggregate.cpp
   SumAggregate.cpp
   SumDataSizeForStatsAggregate.cpp
   TDigestAggregate.cpp
