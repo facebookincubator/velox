@@ -544,4 +544,32 @@ FbDedupNormalizeTextArgValuesGenerator::generate(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> SetDigestArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  populateInputTypesAndNames(signature, state);
+  const auto seed = rand<uint32_t>(rng);
+  const auto nullRatio = options.nullRatio;
+  std::vector<core::TypedExprPtr> inputExpressions;
+
+  // Only one SetDigest input parameter for hash_counts and cardinality
+  VELOX_CHECK_EQ(signature.args.size(), 1);
+
+  // Use SetDigestInputGenerator for the SetDigest parameter
+  // Pass nullptr - generator will create its own pool
+  state.customInputGenerators_.emplace_back(
+      std::make_shared<fuzzer::SetDigestInputGenerator>(
+          seed, signature.args[0], nullRatio, nullptr));
+
+  VELOX_CHECK_GE(state.inputRowNames_.size(), 1);
+  inputExpressions.emplace_back(
+      std::make_shared<core::FieldAccessTypedExpr>(
+          signature.args[0],
+          state.inputRowNames_[state.inputRowNames_.size() - 1]));
+
+  return inputExpressions;
+}
+
 } // namespace facebook::velox::fuzzer
