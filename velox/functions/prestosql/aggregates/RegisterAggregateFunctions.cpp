@@ -128,6 +128,10 @@ extern void registerMakeSetDigestAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
+extern void registerMergeSetDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
 extern void registerMaxDataSizeForStatsAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
@@ -229,6 +233,7 @@ void registerAllAggregateFunctions(
   registerMapUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionSumAggregate(prefix, withCompanionFunctions, overwrite);
   registerMakeSetDigestAggregate(prefix, withCompanionFunctions, overwrite);
+  registerMergeSetDigestAggregate(prefix, withCompanionFunctions, overwrite);
   registerMaxDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerMultiMapAggAggregate(prefix, withCompanionFunctions, overwrite);

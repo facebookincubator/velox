@@ -157,6 +157,9 @@ int main(int argc, char** argv) {
       "noisy_approx_set_sfm_from_index_and_zeros",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
+      // Skip merge_set_digest - requires valid SetDigest input, not random
+      // VARBINARY. Generator not ready yet.
+      "merge_set_digest",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
   };

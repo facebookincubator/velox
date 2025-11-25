@@ -259,4 +259,198 @@ void registerMakeSetDigestAggregate(
       prefix + kMakeSetDigest, withCompanionFunctions, overwrite);
 }
 
+class MergeSetDigestAggregate : public exec::Aggregate {
+ public:
+  explicit MergeSetDigestAggregate(const TypePtr& resultType)
+      : Aggregate(resultType) {}
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return sizeof(SetDigestAccumulator);
+  }
+
+  bool isFixedSize() const override {
+    return false;
+  }
+
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) SetDigestAccumulator(allocator_);
+    }
+  }
+
+  void addRawInput(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    decodedValue_.decode(*args[0], rows);
+
+    rows.applyToSelected([&](auto row) {
+      if (decodedValue_.isNullAt(row)) {
+        return;
+      }
+
+      auto* accumulator = value<SetDigestAccumulator>(groups[row]);
+      clearNull(groups[row]);
+
+      auto tracker = trackRowSize(groups[row]);
+      auto serialized = decodedValue_.valueAt<StringView>(row);
+
+      SetDigestAccumulator other(allocator_);
+      other.deserialize(serialized.data(), serialized.size());
+      accumulator->mergeWith(other);
+    });
+  }
+
+  void addSingleGroupRawInput(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    decodedValue_.decode(*args[0], rows);
+
+    auto* accumulator = value<SetDigestAccumulator>(group);
+    auto tracker = trackRowSize(group);
+
+    rows.applyToSelected([&](auto row) {
+      if (decodedValue_.isNullAt(row)) {
+        return;
+      }
+
+      clearNull(group);
+
+      auto serialized = decodedValue_.valueAt<StringView>(row);
+
+      SetDigestAccumulator other(allocator_);
+      other.deserialize(serialized.data(), serialized.size());
+      accumulator->mergeWith(other);
+    });
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    decodedIntermediate_.decode(*args[0], rows);
+
+    rows.applyToSelected([&](auto row) {
+      if (decodedIntermediate_.isNullAt(row)) {
+        return;
+      }
+
+      auto* accumulator = value<SetDigestAccumulator>(groups[row]);
+      clearNull(groups[row]);
+
+      auto tracker = trackRowSize(groups[row]);
+      auto serialized = decodedIntermediate_.valueAt<StringView>(row);
+
+      SetDigestAccumulator other(allocator_);
+      other.deserialize(serialized.data(), serialized.size());
+      accumulator->mergeWith(other);
+    });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    decodedIntermediate_.decode(*args[0], rows);
+
+    auto* accumulator = value<SetDigestAccumulator>(group);
+    auto tracker = trackRowSize(group);
+
+    rows.applyToSelected([&](auto row) {
+      if (decodedIntermediate_.isNullAt(row)) {
+        return;
+      }
+
+      clearNull(group);
+
+      auto serialized = decodedIntermediate_.valueAt<StringView>(row);
+
+      SetDigestAccumulator other(allocator_);
+      other.deserialize(serialized.data(), serialized.size());
+      accumulator->mergeWith(other);
+    });
+  }
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    auto* flatResult = (*result)->as<FlatVector<StringView>>();
+    flatResult->resize(numGroups);
+
+    for (auto i = 0; i < numGroups; ++i) {
+      char* group = groups[i];
+      if (isNull(group)) {
+        flatResult->setNull(i, true);
+      } else {
+        auto* accumulator = value<SetDigestAccumulator>(group);
+        auto size = accumulator->estimatedSerializedSize();
+
+        auto* rawBuffer = flatResult->getRawStringBufferWithSpace(size);
+        accumulator->serialize(rawBuffer);
+        flatResult->setNoCopy(i, StringView(rawBuffer, size));
+      }
+    }
+  }
+
+  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    extractValues(groups, numGroups, result);
+  }
+
+ protected:
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto* group : groups) {
+      if (!isNull(group)) {
+        value<SetDigestAccumulator>(group)->~SetDigestAccumulator();
+      }
+    }
+  }
+
+ private:
+  DecodedVector decodedValue_;
+  DecodedVector decodedIntermediate_;
+};
+
+exec::AggregateRegistrationResult registerMergeSetDigest(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
+
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("varbinary")
+          .intermediateType("varbinary")
+          .argumentType("varbinary")
+          .build());
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [](core::AggregationNode::Step /*step*/,
+         const std::vector<TypePtr>& /*argTypes*/,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        return std::make_unique<MergeSetDigestAggregate>(resultType);
+      },
+      withCompanionFunctions,
+      overwrite);
+}
+
+void registerMergeSetDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerMergeSetDigest(
+      prefix + kMergeSetDigest, withCompanionFunctions, overwrite);
+}
+
 } // namespace facebook::velox::aggregate::prestosql
