@@ -71,6 +71,7 @@ SpillerBase::SpillerBase(
 void SpillerBase::spill(const RowContainerIterator* startRowIter) {
   VELOX_CHECK(!finalized_);
 
+  bool spillingFromFirstRow = startRowIter == nullptr;
   RowContainerIterator rowIter;
   if (startRowIter != nullptr) {
     rowIter = *startRowIter;
@@ -78,8 +79,26 @@ void SpillerBase::spill(const RowContainerIterator* startRowIter) {
 
   bool lastRun{false};
   do {
-    lastRun = fillSpillRuns(&rowIter);
-    runSpill(lastRun);
+    int beginAllocIdx = rowIter.allocationIndex;
+    // Spilling may execute on multiple partitions in parallel, and
+    // HashStringAllocator is not thread safe. If any aggregations
+    // allocate/deallocate memory during spilling it can lead to concurrency
+    // bugs. Freeze the HashStringAllocator to make it effectively immutable and
+    // guarantee we don't accidentally enter an unsafe situation.
+    container_->stringAllocator().freezeAndExecute([&]() {
+      lastRun = fillSpillRuns(&rowIter);
+      runSpill(lastRun);
+    });
+    // Currently we only support releasing container data from first row to last
+    // row. Releasing from middle rows is not supported.
+    if (spillingFromFirstRow) {
+      int endAllocIdx = rowIter.allocationIndex;
+      VELOX_CHECK_LE(beginAllocIdx, endAllocIdx);
+      endAllocIdx = std::min(container_->numAllocations(), endAllocIdx);
+      for (int idx = beginAllocIdx; idx < endAllocIdx; idx++) {
+        container_->releaseAllocation(idx);
+      }
+    }
   } while (!lastRun);
 
   checkEmptySpillRuns();
