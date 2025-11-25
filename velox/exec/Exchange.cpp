@@ -365,14 +365,13 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  const auto backgroundCpuTimeMs =
-      exchangeClientStats.find(ExchangeClient::kBackgroundCpuTimeMs);
-  if (backgroundCpuTimeMs != exchangeClientStats.end()) {
+  const auto backgroundCpuTimeNanos =
+      exchangeClientStats.find(Operator::kBackgroundCpuTimeNanos);
+  if (backgroundCpuTimeNanos != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(backgroundCpuTimeMs->second.count),
+        static_cast<uint64_t>(backgroundCpuTimeNanos->second.count),
         0,
-        static_cast<uint64_t>(backgroundCpuTimeMs->second.sum) *
-            Timestamp::kNanosecondsInMillisecond};
+        static_cast<uint64_t>(backgroundCpuTimeNanos->second.sum)};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }

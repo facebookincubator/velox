@@ -16,18 +16,23 @@
 
 #pragma once
 
-#include <memory>
-#include "velox/core/Expressions.h"
-#include "velox/core/QueryCtx.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 
-namespace facebook::velox::exec {
+#include "velox/core/PlanNode.h"
 
-class Expr;
-class ExprSet;
+namespace facebook::velox::cudf_velox {
 
-std::vector<std::shared_ptr<Expr>> compileExpressions(
-    const std::vector<core::TypedExprPtr>& sources,
-    core::ExecCtx* execCtx,
-    ExprSet* exprSet);
-
-} // namespace facebook::velox::exec
+/// The user defined operator will inherit this operator, the operator accepts
+/// CudfOperator and output CudfVector.
+class CudfOperator : public NvtxHelper {
+ public:
+  CudfOperator(
+      int32_t operatorId,
+      const core::PlanNodeId& nodeId,
+      nvtx3::color color = nvtx3::rgb{160, 82, 45} /* Sienna */)
+      : facebook::velox::cudf_velox::NvtxHelper(
+            color,
+            operatorId,
+            fmt::format("[{}]", nodeId)) {}
+};
+} // namespace facebook::velox::cudf_velox
