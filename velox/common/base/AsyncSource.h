@@ -121,7 +121,7 @@ class AsyncSource {
         return nullptr;
       }
       if (making_) {
-        promise_ = std::make_unique<ContinuePromise>();
+        promise_ = std::make_unique<ContinuePromise>("AsyncSource::move");
         wait = promise_->getSemiFuture();
       } else {
         if (!make_) {
@@ -178,7 +178,7 @@ class AsyncSource {
     {
       std::lock_guard<std::mutex> l(mutex_);
       if (making_) {
-        promise_ = std::make_unique<ContinuePromise>();
+        promise_ = std::make_unique<ContinuePromise>("AsyncSource::close");
         wait = promise_->getSemiFuture();
       } else if (make_) {
         make_ = nullptr;
