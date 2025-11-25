@@ -17,6 +17,8 @@
 #include "velox/expression/ExprCompiler.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/ExprUtils.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
@@ -113,14 +115,16 @@ ExprPtr compileExpression(
     Scope* scope,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
-    const std::unordered_set<std::string>& flatteningCandidates);
+    const std::unordered_set<std::string>& flatteningCandidates,
+    bool enableConstantFolding);
 
 std::vector<ExprPtr> compileInputs(
     const TypedExprPtr& expr,
     Scope* scope,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
-    const std::unordered_set<std::string>& flatteningCandidates) {
+    const std::unordered_set<std::string>& flatteningCandidates,
+    bool enableConstantFolding) {
   std::vector<ExprPtr> compiledInputs;
   auto flattenIf = shouldFlatten(expr, flatteningCandidates);
   for (auto& input : expr->inputs()) {
@@ -134,11 +138,21 @@ std::vector<ExprPtr> compileInputs(
         expression::utils::flattenInput(input, flattenIf.value(), flat);
         for (auto& input_2 : flat) {
           compiledInputs.push_back(compileExpression(
-              input_2, scope, queryCtx, pool, flatteningCandidates));
+              input_2,
+              scope,
+              queryCtx,
+              pool,
+              flatteningCandidates,
+              enableConstantFolding));
         }
       } else {
         compiledInputs.push_back(compileExpression(
-            input, scope, queryCtx, pool, flatteningCandidates));
+            input,
+            scope,
+            queryCtx,
+            pool,
+            flatteningCandidates,
+            enableConstantFolding));
       }
     }
   }
@@ -193,12 +207,18 @@ std::shared_ptr<Expr> compileLambda(
     Scope* scope,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
-    const std::unordered_set<std::string>& flatteningCandidates) {
+    const std::unordered_set<std::string>& flatteningCandidates,
+    bool enableConstantFolding) {
   auto signature = lambda->signature();
   auto parameterNames = signature->names();
   Scope lambdaScope(std::move(parameterNames), scope, scope->exprSet);
   auto body = compileExpression(
-      lambda->body(), &lambdaScope, queryCtx, pool, flatteningCandidates);
+      lambda->body(),
+      &lambdaScope,
+      queryCtx,
+      pool,
+      flatteningCandidates,
+      enableConstantFolding);
 
   // The lambda depends on the captures. For a lambda caller to be
   // able to peel off encodings, the captures too must be peelable.
@@ -346,12 +366,13 @@ ExprPtr compileCast(
       trackCpuUsage);
 }
 
-ExprPtr compileExpression(
+ExprPtr compileRewrittenExpression(
     const TypedExprPtr& expr,
     Scope* scope,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
-    const std::unordered_set<std::string>& flatteningCandidates) {
+    const std::unordered_set<std::string>& flatteningCandidates,
+    bool enableConstantFolding) {
   ExprPtr alreadyCompiled =
       getAlreadyCompiled(expr.get(), queryCtx->queryConfig(), &scope->visited);
   if (alreadyCompiled) {
@@ -369,8 +390,8 @@ ExprPtr compileExpression(
   const bool trackCpuUsage = queryCtx->queryConfig().exprTrackCpuUsage();
 
   const auto& resultType = expr->type();
-  auto compiledInputs =
-      compileInputs(expr, scope, queryCtx, pool, flatteningCandidates);
+  auto compiledInputs = compileInputs(
+      expr, scope, queryCtx, pool, flatteningCandidates, enableConstantFolding);
 
   ExprPtr result;
   switch (expr->kind()) {
@@ -425,7 +446,8 @@ ExprPtr compileExpression(
           scope,
           queryCtx,
           pool,
-          flatteningCandidates);
+          flatteningCandidates,
+          enableConstantFolding);
       break;
     }
     default: {
@@ -436,6 +458,27 @@ ExprPtr compileExpression(
   result->computeMetadata();
   scope->visited[expr.get()] = result;
   return result;
+}
+
+ExprPtr compileExpression(
+    const TypedExprPtr& expr,
+    Scope* scope,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    const std::unordered_set<std::string>& flatteningCandidates,
+    bool enableConstantFolding) {
+  auto rewritten =
+      enableConstantFolding ? expression::optimize(expr, queryCtx, pool) : expr;
+  if (rewritten.get() != expr.get()) {
+    scope->rewrittenExpressions.push_back(rewritten);
+  }
+  return compileRewrittenExpression(
+      rewritten == nullptr ? expr : rewritten,
+      scope,
+      queryCtx,
+      pool,
+      flatteningCandidates,
+      enableConstantFolding);
 }
 
 /// Walk expression tree and collect names of functions used in CallTypedExpr
@@ -479,7 +522,8 @@ std::unordered_set<std::string> collectFlatteningCandidates(
 std::vector<std::shared_ptr<Expr>> compileExpressions(
     const std::vector<TypedExprPtr>& sources,
     core::ExecCtx* execCtx,
-    ExprSet* exprSet) {
+    ExprSet* exprSet,
+    bool enableConstantFolding) {
   Scope scope({}, nullptr, exprSet);
   std::vector<std::shared_ptr<Expr>> exprs;
   exprs.reserve(sources.size());
@@ -494,7 +538,8 @@ std::vector<std::shared_ptr<Expr>> compileExpressions(
         &scope,
         execCtx->queryCtx(),
         execCtx->pool(),
-        flatteningCandidates));
+        flatteningCandidates,
+        enableConstantFolding));
   }
   return exprs;
 }
