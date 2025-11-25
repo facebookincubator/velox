@@ -24,12 +24,6 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-/// Registers Iceberg partition transform functions with prefix.
-/// NOTE: These functions are registered for internal transform usage only.
-/// Upstream engines such as Prestissimo and Gluten should register the same
-/// functions with different prefixes to avoid conflicts.
-void registerIcebergInternalFunctions(const std::string_view& prefix);
-
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
@@ -93,7 +87,8 @@ class IcebergDataSink : public HiveDataSink {
       IcebergInsertTableHandlePtr insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
-      const std::shared_ptr<const HiveConfig>& hiveConfig);
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::string& functionPrefix);
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -125,7 +120,8 @@ class IcebergDataSink : public HiveDataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const std::vector<column_index_t>& partitionChannels,
-      RowTypePtr partitionRowType);
+      RowTypePtr partitionRowType,
+      const std::string& functionPrefix);
 
   void computePartitionAndBucketIds(const RowVectorPtr& input) override;
 
