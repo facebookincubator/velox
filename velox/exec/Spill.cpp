@@ -407,11 +407,11 @@ size_t estimateOutputBatchRows(
 
 // This contains batching parameters and various kinds of batching buffers that
 // are reused across multiple merging rounds.
-struct BatchingBufferParams {
+struct SpillFileMergeParams {
   static constexpr size_t kDefaultMaxBatchRows = 1'000;
   static constexpr size_t kDefaultMaxBatchBytes = 64 * 1024;
 
-  BatchingBufferParams(
+  SpillFileMergeParams(
       const TypePtr& type,
       memory::MemoryPool* pool,
       const vector_size_t _maxBatchRows = kDefaultMaxBatchRows,
@@ -433,13 +433,13 @@ struct BatchingBufferParams {
 SpillFileInfo mergeSpillFiles(
     const std::vector<SpillFileInfo>& files,
     const std::string& pathPrefix,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    const std::string& fileCreateConfig,
     uint64_t readBufferSize,
     uint64_t writeBufferSize,
-    BatchingBufferParams& bufferParams,
-    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    SpillFileMergeParams& mergeParams,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    const std::string& fileCreateConfig) {
+    folly::Synchronized<common::SpillStats>* spillStats) {
   VELOX_CHECK_GT(files.size(), 0);
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files.size());
@@ -449,7 +449,7 @@ SpillFileInfo mergeSpillFiles(
             SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
   }
   const auto batchRows = estimateOutputBatchRows(
-      streams, bufferParams.maxBatchRows, bufferParams.maxBatchBytes);
+      streams, mergeParams.maxBatchRows, mergeParams.maxBatchBytes);
 
   auto mergeTree =
       std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
@@ -468,20 +468,20 @@ SpillFileInfo mergeSpillFiles(
       spillStats);
 
   while (mergeTree->next()) {
-    VectorPtr tmpRowVector = std::move(bufferParams.rowVector);
+    VectorPtr tmpRowVector = std::move(mergeParams.rowVector);
     BaseVector::prepareForReuse(tmpRowVector, batchRows);
-    bufferParams.rowVector = checked_pointer_cast<RowVector>(tmpRowVector);
-    bufferParams.rowVector->resize(batchRows);
+    mergeParams.rowVector = checked_pointer_cast<RowVector>(tmpRowVector);
+    mergeParams.rowVector->resize(batchRows);
     int32_t outputRow = 0;
     gatherMerge(
-        bufferParams.rowVector,
+        mergeParams.rowVector,
         *mergeTree,
         outputRow,
-        bufferParams.spillSources,
-        bufferParams.spillSourceRows);
+        mergeParams.spillSources,
+        mergeParams.spillSourceRows);
 
     IndexRange range{0, outputRow};
-    writer->write(bufferParams.rowVector, folly::Range<IndexRange*>(&range, 1));
+    writer->write(mergeParams.rowVector, folly::Range<IndexRange*>(&range, 1));
   }
   auto resultFiles = writer->finish();
   VELOX_CHECK_EQ(resultFiles.size(), 1);
@@ -513,7 +513,7 @@ SpillPartition::createOrderedReader(
   SpillFiles files;
   files.reserve(numMaxMergeFiles);
   const auto mergeFilePathPrefix = files_[0].path;
-  BatchingBufferParams bufferParams(files_[0].type, pool);
+  SpillFileMergeParams mergeParams(files_[0].type, pool);
 
   // Recursively merge the files.
   for (uint32_t round = 0; orderedFiles.size() > numMaxMergeFiles; ++round) {
@@ -528,13 +528,13 @@ SpillPartition::createOrderedReader(
     auto mergedFile = mergeSpillFiles(
         files,
         fmt::format("{}-merge-round-{}", mergeFilePathPrefix, round),
+        spillConfig.updateAndCheckSpillLimitCb,
+        spillConfig.fileCreateConfig,
         spillConfig.readBufferSize,
         spillConfig.writeBufferSize,
-        bufferParams,
-        spillConfig.updateAndCheckSpillLimitCb,
+        mergeParams,
         pool,
-        spillStats,
-        spillConfig.fileCreateConfig);
+        spillStats);
     orderedFiles.push(mergedFile);
     files.clear();
   }

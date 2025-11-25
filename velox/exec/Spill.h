@@ -97,8 +97,8 @@ class SpillMergeStream : public MergeStream {
     return decoded_[index];
   }
 
-  // Returns the estimated row size based on the vector received from the
-  // merge source.
+  /// Returns the estimated row size based on the vector received from the
+  /// merge source.
   std::optional<int64_t> estimateRowSize() const {
     if (rowVector_ == nullptr || rowVector_->size() == 0) {
       return std::nullopt;
