@@ -29,6 +29,7 @@ mkdir -p benchmark_results
 queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
+cudf_exec_mode=${CUDF_EXECUTION_MODE:-plan_rewriter}
 
 cudf_chunk_read_limit=$((1024 * 1024 * 1024 * 1))
 cudf_pass_read_limit=0
@@ -47,12 +48,20 @@ for query_number in ${queries}; do
     "gpu")
       num_drivers=${NUM_DRIVERS:-32}
       BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
+      plan_mode_flags=""
+      if [[ "${cudf_exec_mode}" == "plan_rewriter" ]]; then
+        plan_mode_flags="--velox_cudf_table_scan=true --gpu_driver_count=1"
+      else
+        # When using driver adapter, we want num cpu drivers to also be 1
+        num_drivers=${NUM_DRIVERS:-1}
+        plan_mode_flags="--velox_cudf_table_scan=true"
+      fi
       CUDF_FLAGS="\
         --cudf_chunk_read_limit=${cudf_chunk_read_limit} \
         --cudf_pass_read_limit=${cudf_pass_read_limit} \
-        --velox_cudf_table_scan=false \
-        --enable_gpu_plan_rewrite=true \
-        --gpu_driver_count=1"
+        --cudf_gpu_batch_size_rows=1000000 \
+        --cudf_execution_mode=${cudf_exec_mode} \
+        ${plan_mode_flags}"
       VELOX_CUDF_ENABLED=true
       ;;
     esac
@@ -77,10 +86,10 @@ for query_number in ${queries}; do
     set +e -x
     ${PROFILE_CMD} \
       ${BENCHMARK_EXECUTABLE} \
-      --data_path=/mydata/velox-tpch-sf0_1-misiu-data/paths_for_velox_bench \
+      --data_path=/mydata/velox-tpch-sf10-data \
       --data_format=parquet \
       --run_query_verbose=${query_number} \
-      --num_repeats=10 \
+      --num_repeats=3 \
       --include_results=true \
       --num_drivers=${num_drivers} \
       ${CUDF_FLAGS} 2>&1 |

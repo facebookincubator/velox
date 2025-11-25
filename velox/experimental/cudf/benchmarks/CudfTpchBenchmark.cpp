@@ -17,18 +17,15 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/exec/PlanNodeStats.h"
+#include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
+#include <gflags/gflags.h>
 
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
@@ -76,8 +73,36 @@ DEFINE_int32(
     4,
     "Number of drivers for GPU pipelines (when GPU plan rewriting is enabled)");
 
+DEFINE_string(
+    cudf_execution_mode,
+    "plan_rewriter",
+    "GPU execution mode: 'plan_rewriter' or 'driver_adapter'.");
+
+namespace {
+
+bool validateCudfExecutionMode(const char*, const std::string& value) {
+  if (value == "plan_rewriter" || value == "driver_adapter") {
+    return true;
+  }
+  fprintf(
+      stderr,
+      "Invalid cudf_execution_mode '%s'. Expected 'plan_rewriter' or 'driver_adapter'.\n",
+      value.c_str());
+  return false;
+}
+
+} // namespace
+
+DEFINE_validator(cudf_execution_mode, &validateCudfExecutionMode);
+
 void CudfTpchBenchmark::initialize() {
   TpchBenchmark::initialize();
+
+  const bool usePlanRewriter = FLAGS_cudf_execution_mode == "plan_rewriter";
+
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.enableDriverAdapter = !usePlanRewriter;
+  cudfConfig.enableLocalPartitionAdapter = usePlanRewriter;
 
   if (FLAGS_velox_cudf_table_scan) {
     connector::unregisterConnector(
@@ -168,7 +193,7 @@ exec::test::TpchPlan CudfTpchBenchmark::getQueryPlanForExecution(
     int32_t queryId) {
   auto queryPlan = TpchBenchmark::getQueryPlanForExecution(queryId);
 
-  if (FLAGS_enable_gpu_plan_rewrite) {
+  if (FLAGS_cudf_execution_mode == "plan_rewriter") {
     cudf_velox::CudfPlanRewriter::Config rewriteConfig;
     rewriteConfig.gpuDriverCount = FLAGS_gpu_driver_count;
     rewriteConfig.cpuDriverCount = FLAGS_num_drivers;

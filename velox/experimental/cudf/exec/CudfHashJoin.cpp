@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -1393,8 +1394,15 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     LOG(INFO) << "Calling CudfHashJoinBridgeTranslator::toOperator"
               << std::endl;
   }
-  if (auto joinNode =
+  std::shared_ptr<const core::HashJoinNode> joinNode;
+  if (auto rawJoin =
           std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+    joinNode = rawJoin;
+  } else if (
+      auto cudfJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    joinNode = cudfJoin->hashJoinNode();
+  }
+  if (joinNode) {
     return std::make_unique<CudfHashJoinProbe>(id, ctx, joinNode);
   }
   return nullptr;
@@ -1406,10 +1414,9 @@ std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
     LOG(INFO) << "Calling CudfHashJoinBridgeTranslator::toJoinBridge"
               << std::endl;
   }
-  if (auto joinNode =
-          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-    auto joinBridge = std::make_unique<CudfHashJoinBridge>();
-    return joinBridge;
+  if (std::dynamic_pointer_cast<const core::HashJoinNode>(node) ||
+      std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    return std::make_unique<CudfHashJoinBridge>();
   }
   return nullptr;
 }
@@ -1422,6 +1429,12 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
   }
   if (auto joinNode =
           std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+    return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
+      return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
+    };
+  }
+  if (auto cudfJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    auto joinNode = cudfJoin->hashJoinNode();
     return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
       return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
     };

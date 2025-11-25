@@ -57,7 +57,7 @@ RowVectorPtr mergeRowVectors(
 
 cudf::size_type preferredGpuBatchSizeRows(
     const facebook::velox::core::QueryConfig& queryConfig) {
-  constexpr cudf::size_type kDefaultGpuBatchSizeRows = 100000;
+  constexpr cudf::size_type kDefaultGpuBatchSizeRows = 1000000000;
   const auto batchSize = queryConfig.get<int32_t>(
       CudfFromVelox::kGpuBatchSizeRows, kDefaultGpuBatchSizeRows);
   VELOX_CHECK_GT(batchSize, 0, "velox.cudf.gpu_batch_size_rows must be > 0");
@@ -179,7 +179,7 @@ CudfToVelox::CudfToVelox(
 
 bool CudfToVelox::isPassthroughMode() const {
   return operatorCtx_->driverCtx()->queryConfig().get<bool>(
-      kPassthroughMode, true);
+      kPassthroughMode, false);
 }
 
 void CudfToVelox::addInput(RowVectorPtr input) {

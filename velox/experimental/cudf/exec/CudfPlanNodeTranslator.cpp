@@ -52,6 +52,10 @@ std::optional<uint32_t> CudfPlanNodeTranslator::maxDrivers(
     return gpuAgg->preferredDriverCount();
   }
 
+  if (auto gpuJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    return gpuJoin->preferredProbeDriverCount();
+  }
+
   return std::nullopt;
 }
 

@@ -13,23 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/experimental/cudf/exec/CudfPlanRewriter2.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::velox::cudf_velox {
 
-/// Legacy adapter that forwards to CudfPlanRewriter2.
-class CudfPlanRewriter {
+class CudfPlanRewriter2 {
  public:
-  using ExecutionMode = CudfPlanRewriter2::ExecutionMode;
-  using Config = CudfPlanRewriter2::Config;
+  enum class ExecutionMode { kCpu, kGpu };
+
+  struct Config {
+    int gpuDriverCount = 4;
+    int cpuDriverCount = 32;
+  };
 
   static core::PlanNodePtr rewrite(
       const core::PlanNodePtr& root,
-      const Config& config) {
-    return CudfPlanRewriter2::rewrite(root, config);
-  }
+      const Config& config);
 };
 
 } // namespace facebook::velox::cudf_velox
+

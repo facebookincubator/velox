@@ -78,6 +78,14 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  /// Whether to register the legacy driver adapter which replaces CPU
+  /// operators with cuDF counterparts.
+  bool enableDriverAdapter{false};
+
+  /// Whether to register the lightweight LocalPartition adapter that swaps
+  /// hash repartitions with CudfLocalPartition.
+  bool enableLocalPartitionAdapter{true};
 };
 
 } // namespace facebook::velox::cudf_velox

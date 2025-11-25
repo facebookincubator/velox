@@ -60,6 +60,52 @@ class CudfAggregationNode : public core::PlanNode {
   const int preferredDriverCount_;
 };
 
+class CudfHashJoinNode : public core::PlanNode {
+ public:
+  CudfHashJoinNode(
+      std::shared_ptr<const core::HashJoinNode> joinNode,
+      int preferredBuildDriverCount = 4,
+      int preferredProbeDriverCount = 4)
+      : PlanNode(joinNode->id()),
+        joinNode_(std::move(joinNode)),
+        preferredBuildDriverCount_(preferredBuildDriverCount),
+        preferredProbeDriverCount_(preferredProbeDriverCount) {}
+
+  const RowTypePtr& outputType() const override {
+    return joinNode_->outputType();
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return joinNode_->sources();
+  }
+
+  std::string_view name() const override {
+    return "CudfHashJoin";
+  }
+
+  const std::shared_ptr<const core::HashJoinNode>& hashJoinNode() const {
+    return joinNode_;
+  }
+
+  int preferredBuildDriverCount() const {
+    return preferredBuildDriverCount_;
+  }
+
+  int preferredProbeDriverCount() const {
+    return preferredProbeDriverCount_;
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override {
+    stream << "preferredBuildDrivers=" << preferredBuildDriverCount_
+           << ", preferredProbeDrivers=" << preferredProbeDriverCount_;
+  }
+
+  const std::shared_ptr<const core::HashJoinNode> joinNode_;
+  const int preferredBuildDriverCount_;
+  const int preferredProbeDriverCount_;
+};
+
 class CudfFromVeloxNode : public core::PlanNode {
  public:
   CudfFromVeloxNode(const core::PlanNodeId& id, core::PlanNodePtr source)
