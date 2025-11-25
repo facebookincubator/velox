@@ -20,6 +20,7 @@
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
@@ -41,6 +42,7 @@ TEST(PrestoSqlTest, toTypeSql) {
   EXPECT_EQ(toTypeSql(QDIGEST(DOUBLE())), "QDIGEST(DOUBLE)");
   EXPECT_EQ(toTypeSql(QDIGEST(BIGINT())), "QDIGEST(BIGINT)");
   EXPECT_EQ(toTypeSql(QDIGEST(REAL())), "QDIGEST(REAL)");
+  EXPECT_EQ(toTypeSql(SETDIGEST()), "SETDIGEST");
   EXPECT_EQ(toTypeSql(DATE()), "DATE");
   EXPECT_EQ(toTypeSql(TIMESTAMP_WITH_TIME_ZONE()), "TIMESTAMP WITH TIME ZONE");
   EXPECT_EQ(toTypeSql(ARRAY(BOOLEAN())), "ARRAY(BOOLEAN)");
