@@ -51,13 +51,18 @@ add_executable(
   QDigestAggTest.cpp
   ReduceAggTest.cpp
   SetAggTest.cpp
+  SetDigestAggregateTest.cpp
   SetUnionTest.cpp
   SumDataSizeForStatsTest.cpp
   SumTest.cpp
   VarianceAggregationTest.cpp
 )
 
-add_test(NAME velox_aggregates_test COMMAND velox_aggregates_test WORKING_DIRECTORY .)
+add_test(
+  NAME velox_aggregates_test
+  COMMAND velox_aggregates_test
+  WORKING_DIRECTORY .
+)
 
 target_link_libraries(
   velox_aggregates_test
