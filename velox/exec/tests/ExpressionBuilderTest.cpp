@@ -170,6 +170,19 @@ TEST(ExpressionBuilderTest, casts) {
       "try_cast(\"c0\" as VARBINARY)");
 }
 
+TEST(ExpressionBuilderTest, alias) {
+  EXPECT_EQ(lit("str").alias("col"), parseSql("'str' as col"));
+  EXPECT_EQ(col("c1").alias("col"), parseSql("c1 as col"));
+  EXPECT_EQ((col("c1") > 1.1).alias("col"), parseSql("c1 > 1.1 as col"));
+
+  EXPECT_EQ(
+      col("c1").between(1L, 10L).alias("my_col"),
+      parseSql("c1 between 1 and 10 as my_col"));
+
+  // As a free function.
+  EXPECT_EQ(alias(col("c1") == "bla", "col"), parseSql("c1 = 'bla' as col"));
+}
+
 TEST(ExpressionBuilderTest, lambdas) {
   EXPECT_EQ(lambda("x", 1L), parseSql("x -> 1"));
   EXPECT_EQ(lambda({"x"}, 1L), parseSql("x -> 1"));

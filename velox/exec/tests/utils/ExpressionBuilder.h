@@ -182,6 +182,14 @@ class ExprWrapper {
     return expr_;
   }
 
+  /// Add an alias to the current expression:
+  ///
+  /// > col("c0").alias("my_column");
+  ExprWrapper& alias(const std::string& newAlias) {
+    expr_ = expr_->withAlias(newAlias);
+    return *this;
+  }
+
   /// Add a "subfield" expression to enable access of subfields in
   /// rows/structs:
   ///
@@ -393,6 +401,12 @@ inline detail::ExprWrapper operator!(detail::ExprWrapper expr) {
 template <typename T>
 inline detail::ExprWrapper isNull(const T& expr) {
   return detail::toExprWrapper(expr).isNull();
+}
+
+/// "alias" as a free function.
+template <typename TInput>
+inline detail::ExprWrapper alias(TInput lhs, const std::string& newAlias) {
+  return detail::toExprWrapper(lhs).alias(newAlias);
 }
 
 /// "cast" as a free function.
