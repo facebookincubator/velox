@@ -38,14 +38,14 @@
 #include <memory>
 #include <numeric>
 
+namespace facebook::velox::dwrf {
+namespace {
+
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::type::fbhive;
-using namespace facebook::velox;
-using namespace facebook::velox::dwrf;
 using namespace facebook::velox::test;
 
-namespace {
 const std::string& getStructFile() {
   static const std::string structFile_ = getExampleFilePath("struct.orc");
   return structFile_;
@@ -115,8 +115,6 @@ class TestReader : public testing::Test, public VectorTestBase {
     return batches;
   }
 };
-
-} // namespace
 
 TEST_F(TestReader, testWriterVersions) {
   EXPECT_EQ("original", writerVersionToString(ORIGINAL));
@@ -2732,3 +2730,81 @@ TEST_F(TestReader, skipLongString) {
     validate(batch);
   }
 }
+
+TEST_F(TestReader, mapAsStruct) {
+  auto row = makeRowVector({
+      makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {{1, 6}, {3, 7}}}),
+  });
+  auto [writer, reader] = createWriterReader({row}, pool());
+  auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  spec->childByName("c0")->setFlatMapAsStruct(true);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 2);
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>({std::nullopt, 7}),
+              makeFlatVector<int64_t>({4, 6}),
+          }),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+TEST_F(TestReader, mapAsStructFilterAfterRead) {
+  auto row = makeRowVector({
+      makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {}, {{1, 6}, {3, 7}}}),
+      makeRowVector(
+          {makeConstant<int64_t>(0, 3)}, [](auto i) { return i == 0; }),
+  });
+  auto [writer, reader] = createWriterReader({row}, pool());
+  auto outType =
+      ROW({"c0", "c1"}, {ROW({"3", "1"}, BIGINT()), ROW({"c0"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  auto* c0Spec = spec->childByName("c0");
+  c0Spec->setFlatMapAsStruct(true);
+  c0Spec->setFilter(std::make_shared<common::IsNotNull>());
+  spec->childByName("c1")->setFilter(std::make_shared<common::IsNotNull>());
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 3);
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>({std::nullopt, 7}),
+              makeNullableFlatVector<int64_t>({std::nullopt, 6}),
+          }),
+      makeRowVector({makeConstant<int64_t>(0, 2)}),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+TEST_F(TestReader, mapAsStructAllEmpty) {
+  auto row = makeRowVector({makeMapVector<int32_t, int64_t>({{}, {}})});
+  auto [writer, reader] = createWriterReader({row}, pool());
+  auto outType = ROW({"c0"}, {ROW({"1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  spec->childByName("c0")->setFlatMapAsStruct(true);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 2);
+  auto expected = makeRowVector({
+      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+} // namespace
+} // namespace facebook::velox::dwrf
