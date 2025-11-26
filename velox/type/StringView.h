@@ -275,6 +275,16 @@ inline StringView operator""_sv(const char* str, size_t len) {
   return StringView(str, len);
 }
 
+// Specializations needed for string conversion in folly/Conv.h.
+template <class TString>
+inline void toAppend(const StringView& value, TString* result) {
+  result->append(value);
+}
+
+inline size_t estimateSpaceNeeded(const StringView& value) {
+  return value.size();
+}
+
 } // namespace facebook::velox
 
 namespace std {
@@ -287,6 +297,7 @@ struct hash<::facebook::velox::StringView> {
 } // namespace std
 
 namespace folly {
+
 template <>
 struct hasher<::facebook::velox::StringView> {
   size_t operator()(const ::facebook::velox::StringView view) const {
