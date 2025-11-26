@@ -71,6 +71,7 @@ add_executable(
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   KHyperLogLogCastTest.cpp
+  KHyperLogLogFunctionsTest.cpp
   P4HyperLogLogCastTest.cpp
   SetDigestCastTest.cpp
   InPredicateTest.cpp
