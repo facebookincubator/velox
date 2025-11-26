@@ -44,6 +44,7 @@
 #include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/SetDigestResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -175,6 +176,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::NoisyCountResultVerifier;
   using facebook::velox::exec::test::NoisySumResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
+  using facebook::velox::exec::test::SetDigestResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
   using facebook::velox::exec::test::TDigestAggregateResultVerifier;
   using facebook::velox::exec::test::TransformResultVerifier;
@@ -233,6 +235,7 @@ int main(int argc, char** argv) {
           {"noisy_count_gaussian",
            std::make_shared<NoisyCountResultVerifier>()},
           {"noisy_sum_gaussian", std::make_shared<NoisySumResultVerifier>()},
+          {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
       };
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
