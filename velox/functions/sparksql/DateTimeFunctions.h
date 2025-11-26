@@ -1177,12 +1177,11 @@ struct DateFormatFunction {
     if (!isConstFormat_) {
       auto formatter = detail::initializeFormatter(
           std::string_view(formatString), legacyFormatter_);
-      if (formatter) {
-        formatter_ = formatter;
-        maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
-      } else {
+      if (!formatter) {
         return false;
       }
+      formatter_ = formatter;
+      maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
     }
 
     format(timestamp, sessionTimeZone_, maxResultSize_, result);
