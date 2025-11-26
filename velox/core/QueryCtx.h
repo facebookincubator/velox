@@ -30,6 +30,13 @@ class Config;
 
 namespace facebook::velox::core {
 
+using ConnectorConfigs =
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>;
+#else
+    std::unordered_map<std::string, config::ConfigPtr>;
+#endif
+
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
   ~QueryCtx() {
@@ -46,8 +53,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   static std::shared_ptr<QueryCtx> create(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-          connectorConfigs = {},
+      ConnectorConfigs connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
@@ -76,8 +82,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryConfig_;
   }
 
-  config::ConfigBase* connectorSessionProperties(
-      const std::string& connectorId) const {
+  // Replace auto* with const IConfig* once backward compatibility is removed.
+  auto* connectorSessionProperties(const std::string& connectorId) const {
     auto it = connectorSessionProperties_.find(connectorId);
     if (it == connectorSessionProperties_.end()) {
       return getEmptyConfig();
@@ -85,8 +91,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return it->second.get();
   }
 
-  const std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>&
-  connectorSessionProperties() const {
+  const ConnectorConfigs& connectorSessionProperties() const {
     return connectorSessionProperties_;
   }
 
@@ -151,15 +156,14 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// be passed in here, but instead, ensure that executor exists when actually
   /// being used.
   QueryCtx(
-      folly::Executor* executor = nullptr,
-      QueryConfig&& queryConfig = QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-          connectorConfigs = {},
-      cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
-      std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      folly::Executor* spillExecutor = nullptr,
-      const std::string& queryId = "",
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
+      folly::Executor* executor,
+      QueryConfig&& queryConfig,
+      ConnectorConfigs&& connectorSessionProperties,
+      cache::AsyncDataCache* cache,
+      std::shared_ptr<memory::MemoryPool> pool,
+      folly::Executor* spillExecutor,
+      const std::string& queryId,
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider);
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -194,12 +198,17 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     memory::MemoryPool* const pool_;
   };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   static config::ConfigBase* getEmptyConfig() {
-    static const std::unique_ptr<config::ConfigBase> kEmptyConfig =
-        std::make_unique<config::ConfigBase>(
-            std::unordered_map<std::string, std::string>());
-    return kEmptyConfig.get();
+    static config::ConfigBase gEmptyConfig{{}};
+    return &gEmptyConfig;
   }
+#else
+  static const config::IConfig* getEmptyConfig() {
+    static const config::ConfigBase kEmptyConfig{{}};
+    return &kEmptyConfig;
+  }
+#endif
 
   void initPool(const std::string& queryId) {
     if (pool_ == nullptr) {
@@ -222,8 +231,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   folly::Executor* const spillExecutor_{nullptr};
   cache::AsyncDataCache* const cache_;
 
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-      connectorSessionProperties_;
+  ConnectorConfigs connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};

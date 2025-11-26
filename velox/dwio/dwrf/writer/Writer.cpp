@@ -55,8 +55,8 @@ dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
 }
 
 uint64_t orcWriterMaxStripeSize(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   return config::toCapacity(
       session.get<std::string>(
           dwrf::Config::kOrcWriterMaxStripeSizeSession,
@@ -66,8 +66,8 @@ uint64_t orcWriterMaxStripeSize(
 }
 
 uint64_t orcWriterMaxDictionaryMemory(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   return config::toCapacity(
       session.get<std::string>(
           dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
@@ -77,8 +77,8 @@ uint64_t orcWriterMaxDictionaryMemory(
 }
 
 bool isOrcWriterIntegerDictionaryEncodingEnabled(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   return session.get<bool>(
       dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabledSession,
       config.get<bool>(
@@ -86,8 +86,8 @@ bool isOrcWriterIntegerDictionaryEncodingEnabled(
 }
 
 bool isOrcWriterStringDictionaryEncodingEnabled(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   return session.get<bool>(
       dwrf::Config::kOrcWriterStringDictionaryEncodingEnabledSession,
       config.get<bool>(
@@ -95,8 +95,8 @@ bool isOrcWriterStringDictionaryEncodingEnabled(
 }
 
 bool orcWriterLinearStripeSizeHeuristics(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   return session.get<bool>(
       dwrf::Config::kOrcWriterLinearStripeSizeHeuristicsSession,
       config.get<bool>(
@@ -104,16 +104,16 @@ bool orcWriterLinearStripeSizeHeuristics(
 }
 
 uint64_t orcWriterMinCompressionSize(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   return session.get<uint64_t>(
       dwrf::Config::kOrcWriterMinCompressionSizeSession,
       config.get<uint64_t>(dwrf::Config::kOrcWriterMinCompressionSize, 1024));
 }
 
 std::optional<uint8_t> orcWriterCompressionLevel(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   auto sessionProp =
       session.get<uint8_t>(dwrf::Config::kOrcWriterCompressionLevelSession);
 
@@ -134,16 +134,16 @@ std::optional<uint8_t> orcWriterCompressionLevel(
 }
 
 uint8_t orcWriterZLIBCompressionLevel(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   constexpr uint8_t kDefaultZlibCompressionLevel = 4;
   return orcWriterCompressionLevel(config, session)
       .value_or(kDefaultZlibCompressionLevel);
 }
 
 uint8_t orcWriterZSTDCompressionLevel(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
+    const config::IConfig& config,
+    const config::IConfig& session) {
   constexpr uint8_t kDefaultZstdCompressionLevel = 3;
   return orcWriterCompressionLevel(config, session)
       .value_or(kDefaultZstdCompressionLevel);
@@ -918,8 +918,8 @@ DwrfWriterFactory::createWriterOptions() {
 }
 
 void WriterOptions::processConfigs(
-    const config::ConfigBase& connectorConfig,
-    const config::ConfigBase& session) {
+    const config::OldConfig& connectorConfig,
+    const config::OldConfig& session) {
   auto dwrfWriterOptions = dynamic_cast<dwrf::WriterOptions*>(this);
   VELOX_CHECK_NOT_NULL(
       dwrfWriterOptions, "Expected a DWRF WriterOptions object.");

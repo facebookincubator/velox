@@ -89,7 +89,7 @@ class AbfsWriteFile::Impl {
 
 AbfsWriteFile::AbfsWriteFile(
     std::string_view path,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   const auto abfsPath = std::make_shared<AbfsPath>(path);
   auto client =
       AzureClientProviderFactories::getWriteFileClient(abfsPath, config);
