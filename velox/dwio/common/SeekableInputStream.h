@@ -79,7 +79,7 @@ class SeekableArrayInputStream : public SeekableInputStream {
   virtual bool Next(const void** data, int32_t* size) override;
   virtual void BackUp(int32_t count) override;
   virtual bool SkipInt64(int64_t count) override;
-  virtual google::protobuf::int64 ByteCount() const override;
+  virtual int64_t ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
   virtual std::string getName() const override;
   virtual size_t positionSize() const override;
@@ -120,7 +120,7 @@ class SeekableFileInputStream : public SeekableInputStream {
   virtual bool Next(const void** data, int32_t* size) override;
   virtual void BackUp(int32_t count) override;
   virtual bool SkipInt64(int64_t count) override;
-  virtual google::protobuf::int64 ByteCount() const override;
+  virtual int64_t ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
   virtual std::string getName() const override;
   virtual size_t positionSize() const override;
