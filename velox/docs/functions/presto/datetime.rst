@@ -188,6 +188,10 @@ Date and Time Functions
 
         SELECT current_timezone;   -- Asia/Kolkata
 
+.. function:: localtimestamp -> timestamp
+
+    Returns the timestamp as of the start of the query.
+
 Truncation Function
 -------------------
 
