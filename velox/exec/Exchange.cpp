@@ -109,7 +109,7 @@ void Exchange::getSplits(ContinueFuture* future) {
 
     if (split.hasConnectorSplit()) {
       auto remoteSplit =
-          checked_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
+          checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit);
       if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
         splitTracer_->write(split);
       }

@@ -1829,7 +1829,7 @@ PlanNodePtr IndexLookupJoinNode::create(
   auto sources = deserializeSources(obj, context);
   VELOX_CHECK_EQ(2, sources.size());
   TableScanNodePtr lookupSource =
-      checked_pointer_cast<const TableScanNode>(sources[1]);
+      checkedPointerCast<const TableScanNode>(sources[1]);
 
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
@@ -1910,7 +1910,7 @@ bool IndexLookupJoinNode::isSupported(JoinType joinType) {
 }
 
 bool isIndexLookupJoin(const PlanNode* planNode) {
-  return is_instance_of<IndexLookupJoinNode>(planNode);
+  return isInstanceOf<IndexLookupJoinNode>(planNode);
 }
 
 // static
@@ -3770,7 +3770,7 @@ void EqualIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(key);
   VELOX_CHECK_NOT_NULL(value);
   VELOX_CHECK_NOT_NULL(
-      checked_pointer_cast<const ConstantTypedExpr>(value),
+      checkedPointerCast<const ConstantTypedExpr>(value),
       "Equal condition value must be a constant expression: {}",
       value->toString());
 
