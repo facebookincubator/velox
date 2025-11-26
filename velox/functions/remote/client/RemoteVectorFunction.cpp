@@ -18,6 +18,7 @@
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/GetSerde.h"
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
 
 namespace facebook::velox::functions {
@@ -91,8 +92,10 @@ void RemoteVectorFunction::applyRemote(
   requestInputs->pageFormat_ref() = serdeFormat_;
 
   // TODO: serialize only active rows.
+  serializer::presto::PrestoVectorSerde::PrestoOptions options;
+  options.preserveEncodings = true;
   requestInputs->payload_ref() = rowVectorToIOBuf(
-      remoteRowVector, rows.end(), *context.pool(), serde_.get());
+      remoteRowVector, *context.pool(), serde_.get(), &options);
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
 
