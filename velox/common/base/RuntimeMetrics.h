@@ -24,39 +24,39 @@ namespace facebook::velox {
 
 struct RuntimeCounter {
   enum class Unit { kNone, kNanos, kBytes };
-  int64_t value;
+  uint64_t value;
   Unit unit{Unit::kNone};
 
-  explicit RuntimeCounter(int64_t _value, Unit _unit = Unit::kNone)
+  explicit RuntimeCounter(uint64_t _value, Unit _unit = Unit::kNone)
       : value(_value), unit(_unit) {}
 };
 
 struct RuntimeMetric {
   // Sum, min, max have the same unit, count has kNone.
   RuntimeCounter::Unit unit;
-  int64_t sum{0};
-  int64_t count{0};
-  int64_t min{std::numeric_limits<int64_t>::max()};
-  int64_t max{std::numeric_limits<int64_t>::min()};
+  uint64_t sum{0};
+  uint64_t count{0};
+  uint64_t min{std::numeric_limits<uint64_t>::max()};
+  uint64_t max{std::numeric_limits<uint64_t>::min()};
 
   explicit RuntimeMetric(
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit) {}
 
   explicit RuntimeMetric(
-      int64_t value,
+      uint64_t value,
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit), sum{value}, count{1}, min{value}, max{value} {}
 
   explicit RuntimeMetric(
-      int64_t _sum,
-      int64_t _count,
-      int64_t _min,
-      int64_t _max,
+      uint64_t _sum,
+      uint64_t _count,
+      uint64_t _min,
+      uint64_t _max,
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit), sum{_sum}, count{_count}, min{_min}, max{_max} {}
 
-  void addValue(int64_t value);
+  void addValue(uint64_t value);
 
   /// Aggregate sets 'min' and 'max' to 'sum', also sets 'count' to 1 if
   /// positive.

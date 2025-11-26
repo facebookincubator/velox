@@ -880,7 +880,8 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
     lockedStats->addRuntimeStat("flushRowCount", RuntimeCounter(numOutputRows));
     lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        "partialAggregationPct",
+        RuntimeCounter(static_cast<uint64_t>(aggregationPct)));
   }
 
   numInputRows_ = 0;

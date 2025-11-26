@@ -83,8 +83,8 @@ class OnDemandUnitLoader : public UnitLoader {
     stats.addCounter(
         "unitLoadNanos",
         RuntimeCounter(
-            unitLoadNanos_ > std::numeric_limits<int64_t>::max()
-                ? std::numeric_limits<int64_t>::max()
+            unitLoadNanos_ > std::numeric_limits<uint64_t>::max()
+                ? std::numeric_limits<uint64_t>::max()
                 : unitLoadNanos_,
             RuntimeCounter::Unit::kNanos));
     return stats;
