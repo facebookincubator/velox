@@ -35,7 +35,6 @@ velox_add_library(
   FindFirst.cpp
   FromUtf8.cpp
   InPredicate.cpp
-  InRewrite.cpp
   JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp
