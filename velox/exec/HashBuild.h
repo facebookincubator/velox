@@ -107,6 +107,14 @@ class HashBuild final : public Operator {
   bool isRunning() const;
   void checkRunning() const;
 
+  // Reuse the pre-built hash table.
+  void reuseHashTable(
+      exec::BaseHashTable* baseHashTable,
+      std::shared_ptr<const core::ReusedHashTableInfo> reusedHashTableInfo);
+
+  // Build the hash table.
+  void buildHashTable();
+
   // Invoked to set up hash table to build.
   void setupTable();
 

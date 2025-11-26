@@ -432,6 +432,10 @@ void HashProbe::asyncWaitForHashTable() {
     buildSideHasNullKeys_ = true;
   }
 
+  if (hashBuildResult->reused) {
+    reused_ = true;
+  }
+
   table_ = std::move(hashBuildResult->table);
   initializeResultIter();
 
@@ -484,7 +488,7 @@ void HashProbe::prepareForSpillRestore() {
 
   // Reset the internal states which are relevant to the previous probe run.
   noMoreSpillInput_ = false;
-  if (lastProber_ && !table_->reused()) {
+  if (lastProber_ && !reused_) {
     table_->clear(true);
   }
   table_.reset();
@@ -1071,7 +1075,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           }
         } else {
           joinBridge_->probeFinished();
-          if (table_ != nullptr && !table_->reused()) {
+          if (table_ != nullptr && !reused_) {
             table_->clear(true);
           }
         }
@@ -1216,7 +1220,7 @@ bool HashProbe::maybeReadSpillOutput() {
     return false;
   }
 
-  if (!table_->reused()) {
+  if (!reused_) {
     VELOX_DCHECK_EQ(table_->numDistinct(), 0);
   }
 
@@ -1894,7 +1898,7 @@ void HashProbe::reclaim(
   spillOutput(probeOps);
 
   SpillPartitionSet spillPartitionSet;
-  if (!table_->reused()) {
+  if (!reused_) {
     if (hasMoreProbeInput) {
       // Only spill hash table if any hash probe operators still has input probe
       // data, otherwise we skip this step.
@@ -1923,7 +1927,7 @@ void HashProbe::reclaim(
     probeOp->pool()->release();
   }
 
-  if (!table_->reused()) {
+  if (!reused_) {
     // Clears memory resources held by the built hash table.
     table_->clear(true);
 

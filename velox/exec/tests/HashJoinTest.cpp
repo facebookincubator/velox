@@ -8524,8 +8524,7 @@ TEST_F(HashJoinTest, reuseHashTable) {
       true /*allowDuplicates*/,
       true /*hasProbedFlag*/,
       1 /*minTableSizeForParallelJoinBuild*/,
-      pool(),
-      true);
+      pool());
 
   auto rowContainer = table->rows();
   std::vector<DecodedVector> decodedVectors;
@@ -8541,6 +8540,9 @@ TEST_F(HashJoinTest, reuseHashTable) {
       rowContainer->store(decodedVectors[j], i, row, j);
     }
   }
+
+  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  auto reusedHashTableInfo = std::make_shared<core::ReusedHashTableInfo>();
 
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
@@ -8559,6 +8561,7 @@ TEST_F(HashJoinTest, reuseHashTable) {
                       {"u0", "match"},
                       core::JoinType::kRightSemiProject,
                       true /*nullAware*/,
+                      reusedHashTableInfo,
                       table.get())
                   .planNode();
 

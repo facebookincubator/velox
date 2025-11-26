@@ -46,6 +46,75 @@ BlockingReason fromStateToBlockingReason(HashBuild::State state) {
 }
 } // namespace
 
+void HashBuild::reuseHashTable(
+    exec::BaseHashTable* baseHashTable,
+    std::shared_ptr<const core::ReusedHashTableInfo> reusedHashTableInfo) {
+  VELOX_CHECK_NOT_NULL(joinBridge_);
+  joinBridge_->start();
+  setState(State::kFinish);
+
+  if (reusedHashTableInfo->joinHasNullKeys() && isAntiJoin(joinType_) &&
+      nullAware_ && !joinNode_->filter()) {
+    joinBridge_->setAntiJoinHasNullKeys();
+  } else {
+    VELOX_CHECK_NOT_NULL(joinBridge_);
+    std::unique_ptr<
+        exec::BaseHashTable,
+        std::function<void(exec::BaseHashTable*)>>
+        hashTable(nullptr, [](exec::BaseHashTable* ptr) { /* Do nothing */ });
+
+    if (auto hasheTableWithNullKeys =
+            dynamic_cast<exec::HashTable<true>*>(baseHashTable)) {
+      hashTable.reset(hasheTableWithNullKeys);
+    } else if (
+        auto hasheTableWithoutNullKeys =
+            dynamic_cast<exec::HashTable<false>*>(baseHashTable)) {
+      hashTable.reset(hasheTableWithoutNullKeys);
+    } else {
+      VELOX_UNREACHABLE("Unexpected HashTable {}", baseHashTable->toString());
+    }
+    joinBridge_->setHashTable(
+        std::move(hashTable), reusedHashTableInfo->joinHasNullKeys(), true);
+  }
+}
+
+void HashBuild::buildHashTable() {
+  const auto& inputType = joinNode_->sources()[1]->outputType();
+
+  const auto numKeys = joinNode_->rightKeys().size();
+  keyChannels_.reserve(numKeys);
+
+  for (int i = 0; i < numKeys; ++i) {
+    auto& key = joinNode_->rightKeys()[i];
+    auto channel = exprToChannel(key.get(), inputType);
+    keyChannelMap_[channel] = i;
+    keyChannels_.emplace_back(channel);
+  }
+
+  // Identify the non-key build side columns and make a decoder for each.
+  const int32_t numDependents = inputType->size() - numKeys;
+  if (numDependents > 0) {
+    // Number of join keys (numKeys) may be less then number of input columns
+    // (inputType->size()). In this case numDependents is negative and cannot
+    // be used to call 'reserve'. This happens when we join different probe
+    // side keys with the same build side key: SELECT * FROM t LEFT JOIN u ON
+    // t.k1 = u.k AND t.k2 = u.k.
+    dependentChannels_.reserve(numDependents);
+    decoders_.reserve(numDependents);
+  }
+  for (auto i = 0; i < inputType->size(); ++i) {
+    if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
+      dependentChannels_.emplace_back(i);
+      decoders_.emplace_back(std::make_unique<DecodedVector>());
+    }
+  }
+
+  tableType_ = hashJoinTableType(joinNode_);
+  setupTable();
+  setupSpiller();
+  stateCleared_ = false;
+}
+
 HashBuild::HashBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -73,75 +142,23 @@ HashBuild::HashBuild(
 
   joinBridge_->addBuilder();
 
+  bool reused = false;
+  exec::BaseHashTable* baseHashTable = nullptr;
   if (reusedHashTableAddress_ != nullptr) {
-    auto baseHashTable =
-        reinterpret_cast<exec::BaseHashTable*>(reusedHashTableAddress_);
+    baseHashTable = dynamic_cast<exec::BaseHashTable*>(
+        static_cast<exec::BaseHashTable*>(reusedHashTableAddress_));
+    reused = (baseHashTable != nullptr);
 
-    VELOX_CHECK_NOT_NULL(joinBridge_);
-    joinBridge_->start();
-
-    if (baseHashTable->joinHasNullKeys() && isAntiJoin(joinType_) &&
-        nullAware_ && !joinNode_->filter()) {
-      joinBridge_->setAntiJoinHasNullKeys();
-    } else {
-      baseHashTable->prepareJoinTable(
-          {}, BaseHashTable::kNoSpillInputStartPartitionBit);
-
-      VELOX_CHECK_NOT_NULL(joinBridge_);
-      std::unique_ptr<
-          exec::BaseHashTable,
-          std::function<void(exec::BaseHashTable*)>>
-          hashTable(nullptr, [](exec::BaseHashTable* ptr) { /* Do nothing */ });
-
-      if (auto hasheTableWithNullKeys =
-              dynamic_cast<exec::HashTable<true>*>(baseHashTable)) {
-        hashTable.reset(hasheTableWithNullKeys);
-      } else if (
-          auto hasheTableWithoutNullKeys =
-              dynamic_cast<exec::HashTable<false>*>(baseHashTable)) {
-        hashTable.reset(hasheTableWithoutNullKeys);
-      } else {
-        VELOX_UNREACHABLE("Unexpected HashTable {}", baseHashTable->toString());
-      }
-      joinBridge_->setHashTable(
-          std::move(hashTable), hashTable->joinHasNullKeys());
+    if (!reused) {
+      LOG(WARNING)
+          << "Failed to reuse hash table due to type mismatch and need to build hash table";
     }
+  }
 
+  if (reused) {
+    reuseHashTable(baseHashTable, joinNode_->reusedHashTableInfo());
   } else {
-    const auto& inputType = joinNode_->sources()[1]->outputType();
-
-    const auto numKeys = joinNode_->rightKeys().size();
-    keyChannels_.reserve(numKeys);
-
-    for (int i = 0; i < numKeys; ++i) {
-      auto& key = joinNode_->rightKeys()[i];
-      auto channel = exprToChannel(key.get(), inputType);
-      keyChannelMap_[channel] = i;
-      keyChannels_.emplace_back(channel);
-    }
-
-    // Identify the non-key build side columns and make a decoder for each.
-    const int32_t numDependents = inputType->size() - numKeys;
-    if (numDependents > 0) {
-      // Number of join keys (numKeys) may be less then number of input columns
-      // (inputType->size()). In this case numDependents is negative and cannot
-      // be used to call 'reserve'. This happens when we join different probe
-      // side keys with the same build side key: SELECT * FROM t LEFT JOIN u ON
-      // t.k1 = u.k AND t.k2 = u.k.
-      dependentChannels_.reserve(numDependents);
-      decoders_.reserve(numDependents);
-    }
-    for (auto i = 0; i < inputType->size(); ++i) {
-      if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
-        dependentChannels_.emplace_back(i);
-        decoders_.emplace_back(std::make_unique<DecodedVector>());
-      }
-    }
-
-    tableType_ = hashJoinTableType(joinNode_);
-    setupTable();
-    setupSpiller();
-    stateCleared_ = false;
+    buildHashTable();
   }
 }
 
@@ -1036,9 +1053,6 @@ BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
 }
 
 bool HashBuild::isFinished() {
-  if (reusedHashTableAddress_ != nullptr) {
-    return true;
-  }
   return state_ == State::kFinish;
 }
 

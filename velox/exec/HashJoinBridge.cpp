@@ -258,7 +258,8 @@ void HashJoinBridge::setHashTable(
 
 void HashJoinBridge::setHashTable(
     std::shared_ptr<BaseHashTable> table,
-    bool hasNullKeys) {
+    bool hasNullKeys,
+    bool reused) {
   VELOX_CHECK_NOT_NULL(table, "setHashTable called with null table");
 
   std::vector<ContinuePromise> promises;
@@ -268,7 +269,7 @@ void HashJoinBridge::setHashTable(
     VELOX_CHECK(!buildResult_.has_value());
     VELOX_CHECK(restoringSpillShards_.empty());
 
-    buildResult_ = HashBuildResult(std::move(table), hasNullKeys);
+    buildResult_ = HashBuildResult(std::move(table), hasNullKeys, reused);
     promises = std::move(promises_);
   }
   notify(std::move(promises));

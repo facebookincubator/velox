@@ -53,14 +53,12 @@ HashTable<ignoreNullKeys>::HashTable(
     bool isJoinBuild,
     bool hasProbedFlag,
     uint32_t minTableSizeForParallelJoinBuild,
-    memory::MemoryPool* pool,
-    bool reused)
+    memory::MemoryPool* pool)
     : BaseHashTable(std::move(hashers)),
       pool_(pool),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
       isJoinBuild_(isJoinBuild),
-      buildPartitionBounds_(raw_vector<PartitionBoundIndexType>(pool)),
-      reused_(reused) {
+      buildPartitionBounds_(raw_vector<PartitionBoundIndexType>(pool)) {
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
@@ -1720,66 +1718,61 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
     int8_t spillInputStartPartitionBit,
     folly::Executor* executor) {
-  std::lock_guard<std::mutex> l(mutex_);
-  if (!prepared_) {
-    buildExecutor_ = executor;
-    otherTables_.reserve(tables.size());
-    for (auto& table : tables) {
-      otherTables_.emplace_back(
-          std::unique_ptr<HashTable<ignoreNullKeys>>(
-              dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
-    }
+  buildExecutor_ = executor;
+  otherTables_.reserve(tables.size());
+  for (auto& table : tables) {
+    otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
+        dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
+  }
 
-    // If there are multiple tables, we need to merge the 'columnHasNulls' flags
-    // from the containers of each table and store them in the main table. This
-    // is necessary because, when extracting results, 'rows' may contain row
-    // pointers from multiple containers. We need to ensure the correctness of
-    // the 'columnHasNulls' flags.
-    for (int i = 0; i < rows_->columnTypes().size(); ++i) {
-      columnHasNulls_.emplace_back(rows_->columnHasNulls(i));
-      for (auto& other : otherTables_) {
-        columnHasNulls_[i] =
-            columnHasNulls_[i] || other->rows()->columnHasNulls(i);
+  // If there are multiple tables, we need to merge the 'columnHasNulls' flags
+  // from the containers of each table and store them in the main table. This
+  // is necessary because, when extracting results, 'rows' may contain row
+  // pointers from multiple containers. We need to ensure the correctness of
+  // the 'columnHasNulls' flags.
+  for (int i = 0; i < rows_->columnTypes().size(); ++i) {
+    columnHasNulls_.emplace_back(rows_->columnHasNulls(i));
+    for (auto& other : otherTables_) {
+      columnHasNulls_[i] =
+          columnHasNulls_[i] || other->rows()->columnHasNulls(i);
+    }
+  }
+
+  bool useValueIds = mayUseValueIds(*this);
+  if (useValueIds) {
+    for (auto& other : otherTables_) {
+      if (!mayUseValueIds(*other)) {
+        useValueIds = false;
+        break;
       }
     }
-
-    bool useValueIds = mayUseValueIds(*this);
     if (useValueIds) {
       for (auto& other : otherTables_) {
-        if (!mayUseValueIds(*other)) {
-          useValueIds = false;
-          break;
-        }
-      }
-      if (useValueIds) {
-        for (auto& other : otherTables_) {
-          for (auto i = 0; i < hashers_.size(); ++i) {
-            hashers_[i]->merge(*other->hashers_[i]);
-            if (!hashers_[i]->mayUseValueIds()) {
-              useValueIds = false;
-              break;
-            }
-          }
-          if (!useValueIds) {
+        for (auto i = 0; i < hashers_.size(); ++i) {
+          hashers_[i]->merge(*other->hashers_[i]);
+          if (!hashers_[i]->mayUseValueIds()) {
+            useValueIds = false;
             break;
           }
         }
+        if (!useValueIds) {
+          break;
+        }
       }
     }
-    numDistinct_ = rows()->numRows();
-    for (const auto& other : otherTables_) {
-      numDistinct_ += other->rows()->numRows();
-    }
-    if (!useValueIds) {
-      if (hashMode_ != HashMode::kHash) {
-        setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
-      } else {
-        checkSize(0, true, spillInputStartPartitionBit);
-      }
+  }
+  numDistinct_ = rows()->numRows();
+  for (const auto& other : otherTables_) {
+    numDistinct_ += other->rows()->numRows();
+  }
+  if (!useValueIds) {
+    if (hashMode_ != HashMode::kHash) {
+      setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
     } else {
-      decideHashMode(0, spillInputStartPartitionBit);
+      checkSize(0, true, spillInputStartPartitionBit);
     }
-    prepared_ = true;
+  } else {
+    decideHashMode(0, spillInputStartPartitionBit);
   }
 }
 
