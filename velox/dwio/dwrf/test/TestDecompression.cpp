@@ -20,30 +20,54 @@
 #include <folly/compression/Zlib.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/dwrf/common/Compression.h"
+#include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 
 #include <cstdio>
 #include <cstring>
 
+using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::memory;
 using namespace facebook::velox;
-using namespace folly::io;
+using namespace folly::compression;
 
 const std::string simpleFile(getExampleFilePath("simple-file.binary"));
 
-std::shared_ptr<MemoryPool> pool = addDefaultLeafMemoryPool();
+class DecompressionTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
 
-TEST(TestDecompression, testPrintBufferEmpty) {
+  std::unique_ptr<SeekableInputStream> createTestDecompressor(
+      CompressionKind kind,
+      std::unique_ptr<SeekableInputStream> input,
+      uint64_t bufferSize) {
+    return createDecompressor(
+        kind, std::move(input), bufferSize, *pool_, "Test Decompression");
+  }
+
+  SeekableFileInputStream createSeekableFileInputStream() {
+    auto readFile = std::make_shared<LocalReadFile>(simpleFile);
+    auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+    return SeekableFileInputStream(
+        std::move(file), 0, 200, *pool_, LogType::TEST, 20);
+  }
+
+  std::shared_ptr<MemoryPool> pool_ = memory::memoryManager()->addLeafPool();
+};
+
+TEST_F(DecompressionTest, testPrintBufferEmpty) {
   std::ostringstream str;
   printBuffer(str, nullptr, 0);
   EXPECT_EQ("", str.str());
 }
 
-TEST(TestDecompression, testPrintBufferSmall) {
+TEST_F(DecompressionTest, testPrintBufferSmall) {
   std::vector<char> buffer(10);
   std::ostringstream str;
   for (size_t i = 0; i < 10; ++i) {
@@ -53,7 +77,7 @@ TEST(TestDecompression, testPrintBufferSmall) {
   EXPECT_EQ("0000000 00 01 02 03 04 05 06 07 08 09\n", str.str());
 }
 
-TEST(TestDecompression, testPrintBufferLong) {
+TEST_F(DecompressionTest, testPrintBufferLong) {
   std::vector<char> buffer(300);
   std::ostringstream str;
   for (size_t i = 0; i < 300; ++i) {
@@ -89,7 +113,7 @@ TEST(TestDecompression, testPrintBufferLong) {
   EXPECT_EQ(expected.str(), str.str());
 }
 
-TEST(TestDecompression, testArrayBackup) {
+TEST_F(DecompressionTest, testArrayBackup) {
   std::vector<char> bytes(200);
   for (size_t i = 0; i < bytes.size(); ++i) {
     bytes[i] = static_cast<char>(i);
@@ -97,7 +121,7 @@ TEST(TestDecompression, testArrayBackup) {
   SeekableArrayInputStream stream(bytes.data(), bytes.size(), 20);
   const void* ptr;
   int32_t len;
-  ASSERT_THROW(stream.BackUp(10), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(10), "(10 vs. 0) Can't backup that much!");
   EXPECT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(bytes.data(), static_cast<const char*>(ptr));
   EXPECT_EQ(20, len);
@@ -118,11 +142,11 @@ TEST(TestDecompression, testArrayBackup) {
   EXPECT_EQ(10, len);
   EXPECT_EQ(true, !stream.Next(&ptr, &len));
   EXPECT_EQ(0, len);
-  ASSERT_THROW(stream.BackUp(30), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(30), "(30 vs. 20) Can't backup that much!");
   EXPECT_EQ(200, stream.ByteCount());
 }
 
-TEST(TestDecompression, testArraySkip) {
+TEST_F(DecompressionTest, testArraySkip) {
   std::vector<char> bytes(200);
   for (size_t i = 0; i < bytes.size(); ++i) {
     bytes[i] = static_cast<char>(i);
@@ -133,18 +157,18 @@ TEST(TestDecompression, testArraySkip) {
   ASSERT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(bytes.data(), static_cast<const char*>(ptr));
   EXPECT_EQ(20, len);
-  ASSERT_EQ(true, !stream.Skip(-10));
-  ASSERT_EQ(true, stream.Skip(80));
+  ASSERT_EQ(true, !stream.SkipInt64(-10));
+  ASSERT_EQ(true, stream.SkipInt64(80));
   ASSERT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(bytes.data() + 100, static_cast<const char*>(ptr));
   EXPECT_EQ(20, len);
-  ASSERT_EQ(true, stream.Skip(80));
+  ASSERT_EQ(true, stream.SkipInt64(80));
   ASSERT_EQ(true, !stream.Next(&ptr, &len));
-  ASSERT_EQ(true, !stream.Skip(181));
+  ASSERT_EQ(true, !stream.SkipInt64(181));
   EXPECT_EQ("SeekableArrayInputStream 200 of 200", stream.getName());
 }
 
-TEST(TestDecompression, testArrayCombo) {
+TEST_F(DecompressionTest, testArrayCombo) {
   std::vector<char> bytes(200);
   for (size_t i = 0; i < bytes.size(); ++i) {
     bytes[i] = static_cast<char>(i);
@@ -157,11 +181,11 @@ TEST(TestDecompression, testArrayCombo) {
   EXPECT_EQ(20, len);
   stream.BackUp(10);
   EXPECT_EQ(10, stream.ByteCount());
-  stream.Skip(4);
+  stream.SkipInt64(4);
   EXPECT_EQ(14, stream.ByteCount());
   ASSERT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(bytes.data() + 14, static_cast<const char*>(ptr));
-  EXPECT_EQ(true, !stream.Skip(320));
+  EXPECT_EQ(true, !stream.SkipInt64(320));
   EXPECT_EQ(200, stream.ByteCount());
   EXPECT_EQ(true, !stream.Next(&ptr, &len));
 }
@@ -174,18 +198,11 @@ void checkBytes(const char* data, int32_t length, uint32_t startValue) {
   }
 }
 
-SeekableFileInputStream createSeekableFileInputStream() {
-  auto readFile = std::make_shared<LocalReadFile>(simpleFile);
-  auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
-  return SeekableFileInputStream(
-      std::move(file), 0, 200, *pool, LogType::TEST, 20);
-}
-
-TEST(TestDecompression, testFileBackup) {
+TEST_F(DecompressionTest, testFileBackup) {
   auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
-  ASSERT_THROW(stream.BackUp(10), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(10), "(10 vs. 0) can't backup that far");
   EXPECT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(20, len);
   checkBytes(static_cast<const char*>(ptr), len, 0);
@@ -206,29 +223,29 @@ TEST(TestDecompression, testFileBackup) {
   }
   EXPECT_EQ(true, !stream.Next(&ptr, &len));
   EXPECT_EQ(0, len);
-  ASSERT_THROW(stream.BackUp(30), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(30), "(30 vs. 20) can't backup that far");
   EXPECT_EQ(200, stream.ByteCount());
 }
 
-TEST(TestDecompression, testFileSkip) {
+TEST_F(DecompressionTest, testFileSkip) {
   auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
   ASSERT_EQ(true, stream.Next(&ptr, &len));
   checkBytes(static_cast<const char*>(ptr), len, 0);
   EXPECT_EQ(20, len);
-  ASSERT_EQ(true, !stream.Skip(-10));
-  ASSERT_EQ(true, stream.Skip(80));
+  ASSERT_EQ(true, !stream.SkipInt64(-10));
+  ASSERT_EQ(true, stream.SkipInt64(80));
   ASSERT_EQ(true, stream.Next(&ptr, &len));
   checkBytes(static_cast<const char*>(ptr), len, 100);
   EXPECT_EQ(20, len);
-  ASSERT_EQ(true, !stream.Skip(80));
+  ASSERT_EQ(true, !stream.SkipInt64(80));
   ASSERT_EQ(true, !stream.Next(&ptr, &len));
-  ASSERT_EQ(true, !stream.Skip(181));
+  ASSERT_EQ(true, !stream.SkipInt64(181));
   EXPECT_EQ(std::string(simpleFile) + " from 0 for 200", stream.getName());
 }
 
-TEST(TestDecompression, testFileCombo) {
+TEST_F(DecompressionTest, testFileCombo) {
   auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
@@ -237,16 +254,16 @@ TEST(TestDecompression, testFileCombo) {
   EXPECT_EQ(20, len);
   stream.BackUp(10);
   EXPECT_EQ(10, stream.ByteCount());
-  stream.Skip(4);
+  stream.SkipInt64(4);
   EXPECT_EQ(14, stream.ByteCount());
   ASSERT_EQ(true, stream.Next(&ptr, &len));
   checkBytes(static_cast<const char*>(ptr), len, 14);
-  EXPECT_EQ(true, !stream.Skip(320));
+  EXPECT_EQ(true, !stream.SkipInt64(320));
   EXPECT_EQ(200, stream.ByteCount());
   EXPECT_EQ(true, !stream.Next(&ptr, &len));
 }
 
-TEST(TestDecompression, testFileSeek) {
+TEST_F(DecompressionTest, testFileSeek) {
   auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
@@ -273,22 +290,12 @@ TEST(TestDecompression, testFileSeek) {
   {
     std::vector<uint64_t> offsets(1, 201);
     PositionProvider posn(offsets);
-    EXPECT_THROW(stream.seekToPosition(posn), exception::LoggedException);
+    VELOX_ASSERT_THROW(
+        stream.seekToPosition(posn), "(201 vs. 200) seek too far");
   }
 }
 
-namespace {
-std::unique_ptr<SeekableInputStream> createTestDecompressor(
-    CompressionKind kind,
-    std::unique_ptr<SeekableInputStream> input,
-    uint64_t bufferSize) {
-  return createDecompressor(
-      kind, std::move(input), bufferSize, *pool, "Test Decompression");
-}
-
-} // namespace
-
-TEST(TestDecompression, testCreateNone) {
+TEST_F(DecompressionTest, testCreateNone) {
   std::vector<char> bytes(10);
   for (uint32_t i = 0; i < bytes.size(); ++i) {
     bytes[i] = static_cast<char>(i);
@@ -306,7 +313,7 @@ TEST(TestDecompression, testCreateNone) {
   }
 }
 
-TEST(TestDecompression, testLzoEmpty) {
+TEST_F(DecompressionTest, testLzoEmpty) {
   const unsigned char buffer[] = {0};
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_LZO,
@@ -321,7 +328,7 @@ TEST(TestDecompression, testLzoEmpty) {
   ASSERT_TRUE(!result->Next(&ptr, &length));
 }
 
-TEST(TestDecompression, testLzoSmall) {
+TEST_F(DecompressionTest, testLzoSmall) {
   const unsigned char buffer[] = {
       70,  0,   0,   48,  88,  88,  88, 88, 97, 98, 99, 100, 97,
       98,  99,  100, 65,  66,  67,  68, 65, 66, 67, 68, 119, 120,
@@ -343,7 +350,7 @@ TEST(TestDecompression, testLzoSmall) {
   ASSERT_TRUE(!result->Next(&ptr, &length));
 }
 
-TEST(TestDecompression, testLzoLong) {
+TEST_F(DecompressionTest, testLzoLong) {
   // set up a framed lzo buffer with 100,000 'a'
   unsigned char buffer[482];
   bzero(buffer, VELOX_ARRAY_SIZE(buffer));
@@ -383,7 +390,7 @@ TEST(TestDecompression, testLzoLong) {
   ASSERT_TRUE(!result->Next(&ptr, &length));
 }
 
-TEST(TestDecompression, testLz4Empty) {
+TEST_F(DecompressionTest, testLz4Empty) {
   const unsigned char buffer[] = {0};
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_LZ4,
@@ -398,7 +405,7 @@ TEST(TestDecompression, testLz4Empty) {
   ASSERT_TRUE(!result->Next(&ptr, &length));
 }
 
-TEST(TestDecompression, testLz4Small) {
+TEST_F(DecompressionTest, testLz4Small) {
   const unsigned char buffer[] = {60,  0,   0,   128, 88,  88,  88,  88,  97,
                                   98,  99,  100, 4,   0,   64,  65,  66,  67,
                                   68,  4,   0,   176, 119, 120, 121, 122, 119,
@@ -420,7 +427,7 @@ TEST(TestDecompression, testLz4Small) {
   ASSERT_TRUE(!result->Next(&ptr, &length));
 }
 
-TEST(TestDecompression, testLz4Long) {
+TEST_F(DecompressionTest, testLz4Long) {
   // set up a framed lzo buffer with 100,000 'a'
   unsigned char buffer[406];
   memset(buffer, 255, VELOX_ARRAY_SIZE(buffer));
@@ -453,7 +460,7 @@ TEST(TestDecompression, testLz4Long) {
   ASSERT_TRUE(!result->Next(&ptr, &length));
 }
 
-TEST(TestDecompression, testCreateZlib) {
+TEST_F(DecompressionTest, testCreateZlib) {
   const unsigned char buffer[] = {0x0b, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4};
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
@@ -483,7 +490,7 @@ TEST(TestDecompression, testCreateZlib) {
   }
 }
 
-TEST(TestDecompression, testLiteralBlocks) {
+TEST_F(DecompressionTest, testLiteralBlocks) {
   const unsigned char buffer[] = {0x19, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
                                   0x5,  0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xb,
                                   0x0,  0x0, 0xc, 0xd, 0xe, 0xf, 0x10};
@@ -526,7 +533,7 @@ TEST(TestDecompression, testLiteralBlocks) {
   EXPECT_EQ(16, static_cast<const char*>(ptr)[2]);
 }
 
-TEST(TestDecompression, testInflate) {
+TEST_F(DecompressionTest, testInflate) {
   const unsigned char buffer[] = {
       0xe, 0x0, 0x0, 0x63, 0x60, 0x64, 0x62, 0xc0, 0x8d, 0x0};
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
@@ -545,7 +552,26 @@ TEST(TestDecompression, testInflate) {
   }
 }
 
-TEST(TestDecompression, testInflateSequence) {
+TEST_F(DecompressionTest, testSmallBufferInflate) {
+  const unsigned char buffer[] = {
+      0xe, 0x0, 0x0, 0x63, 0x60, 0x64, 0x62, 0xc0, 0x8d, 0x0};
+  const std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
+      CompressionKind_ZLIB,
+      std::make_unique<SeekableArrayInputStream>(buffer, std::size(buffer)),
+      1 // blockSize 1 to test multiple inflate calls during decompression.
+  );
+  const void* ptr;
+  int32_t length;
+  ASSERT_EQ(true, result->Next(&ptr, &length));
+  ASSERT_EQ(30, length);
+  for (int32_t i = 0; i < 10; ++i) {
+    for (int32_t j = 0; j < 3; ++j) {
+      EXPECT_EQ(j, static_cast<const char*>(ptr)[i * 3 + j]);
+    }
+  }
+}
+
+TEST_F(DecompressionTest, testInflateSequence) {
   const unsigned char buffer[] = {0xe,  0x0,  0x0,  0x63, 0x60, 0x64, 0x62,
                                   0xc0, 0x8d, 0x0,  0xe,  0x0,  0x0,  0x63,
                                   0x60, 0x64, 0x62, 0xc0, 0x8d, 0x0};
@@ -580,7 +606,7 @@ TEST(TestDecompression, testInflateSequence) {
   }
 }
 
-TEST(TestDecompression, testSkipZlib) {
+TEST_F(DecompressionTest, testSkipZlib) {
   const unsigned char buffer[] = {0x19, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
                                   0x5,  0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xb,
                                   0x0,  0x0, 0xc, 0xd, 0xe, 0xf, 0x10};
@@ -593,7 +619,7 @@ TEST(TestDecompression, testSkipZlib) {
   int32_t length;
   ASSERT_EQ(true, result->Next(&ptr, &length));
   ASSERT_EQ(2, length);
-  result->Skip(2);
+  result->SkipInt64(2);
   ASSERT_EQ(true, result->Next(&ptr, &length));
   ASSERT_EQ(3, length);
   EXPECT_EQ(4, static_cast<const char*>(ptr)[0]);
@@ -604,7 +630,7 @@ TEST(TestDecompression, testSkipZlib) {
   ASSERT_EQ(2, length);
   EXPECT_EQ(5, static_cast<const char*>(ptr)[0]);
   EXPECT_EQ(6, static_cast<const char*>(ptr)[1]);
-  result->Skip(8);
+  result->SkipInt64(8);
   ASSERT_EQ(true, result->Next(&ptr, &length));
   ASSERT_EQ(2, length);
   EXPECT_EQ(15, static_cast<const char*>(ptr)[0]);
@@ -626,10 +652,14 @@ class CompressBuffer {
     return buf.data();
   }
 
-  void writeHeader(size_t compressedSize) {
+  static void writeHeader(size_t compressedSize, char* buf) {
     buf[0] = static_cast<char>(compressedSize << 1);
     buf[1] = static_cast<char>(compressedSize >> 7);
     buf[2] = static_cast<char>(compressedSize >> 15);
+  }
+
+  void writeHeader(size_t compressedSize) {
+    writeHeader(compressedSize, buf.data());
   }
 
   void writeUncompressedHeader(size_t compressedSize) {
@@ -654,7 +684,7 @@ class CompressBuffer {
   }
 };
 
-TEST(TestDecompression, testBasic) {
+TEST_F(DecompressionTest, testBasic) {
   const int32_t N = 1024;
   std::vector<char> buf(N * sizeof(int));
   for (int32_t i = 0; i < N; ++i) {
@@ -687,7 +717,7 @@ TEST(TestDecompression, testBasic) {
   }
 }
 
-TEST(TestDecompression, testMultiBuffer) {
+TEST_F(DecompressionTest, testMultiBuffer) {
   const int32_t N = 1024;
   std::vector<char> buf(N * sizeof(int));
   for (int32_t i = 0; i < N; ++i) {
@@ -735,7 +765,7 @@ TEST(TestDecompression, testMultiBuffer) {
   }
 }
 
-TEST(TestDecompression, testSkipSnappy) {
+TEST_F(DecompressionTest, testSkipSnappy) {
   const int32_t N = 1024;
   std::vector<char> buf(N * sizeof(int));
   for (int32_t i = 0; i < N; ++i) {
@@ -762,13 +792,66 @@ TEST(TestDecompression, testSkipSnappy) {
   const void* data;
   int32_t length;
   // skip 1/2; in 2 jumps
-  ASSERT_TRUE(result->Skip(static_cast<int32_t>(((N / 2) - 2) * sizeof(int))));
-  ASSERT_TRUE(result->Skip(static_cast<int32_t>(2 * sizeof(int))));
+  ASSERT_TRUE(
+      result->SkipInt64(static_cast<int32_t>(((N / 2) - 2) * sizeof(int))));
+  ASSERT_TRUE(result->SkipInt64(static_cast<int32_t>(2 * sizeof(int))));
   ASSERT_TRUE(result->Next(&data, &length));
   ASSERT_EQ((N / 2) * sizeof(int), length);
   for (int32_t i = N / 2; i < N; ++i) {
     EXPECT_EQ(i % 8, (reinterpret_cast<const int32_t*>(data))[i - N / 2]);
   }
+}
+
+TEST_F(DecompressionTest, testDelayedSkip) {
+  constexpr int32_t N = 1024;
+  std::vector<int> buf(N);
+  for (int32_t i = 0; i < N; ++i) {
+    buf[i] = i % 8;
+  }
+  const auto bufByteSize = buf.size() * sizeof(int);
+  std::vector<char> compressed(2 * bufByteSize);
+  int totalCompressed = 0;
+  // Create 2 compressed frames, the first one is corrupted in data blocks and
+  // should be skipped without decompression.
+  for (int i = 0; i < 2; ++i) {
+    auto ioBuf = folly::IOBuf::wrapBuffer(buf.data(), bufByteSize);
+    auto cbuf = getCodec(CodecType::ZSTD)->compress(ioBuf.get());
+    ASSERT_LE(
+        totalCompressed + HEADER_SIZE + cbuf->length(), compressed.size());
+    CompressBuffer::writeHeader(cbuf->length(), &compressed[totalCompressed]);
+    totalCompressed += HEADER_SIZE;
+    if (i == 0) {
+      constexpr int kDataBlockOffset = 18;
+      memcpy(&compressed[totalCompressed], cbuf->data(), kDataBlockOffset);
+      memset(
+          &compressed[totalCompressed + kDataBlockOffset],
+          0xAA,
+          cbuf->length() - kDataBlockOffset);
+    } else {
+      memcpy(&compressed[totalCompressed], cbuf->data(), cbuf->length());
+    }
+    totalCompressed += cbuf->length();
+  }
+  constexpr long kBlockSize = 97;
+  auto result = createTestDecompressor(
+      CompressionKind_ZSTD,
+      std::make_unique<SeekableArrayInputStream>(
+          compressed.data(), totalCompressed, kBlockSize),
+      bufByteSize);
+  const void* data;
+  int32_t length;
+  ASSERT_TRUE(result->SkipInt64(bufByteSize / 2));
+  ASSERT_TRUE(result->SkipInt64(bufByteSize / 2));
+  ASSERT_TRUE(result->Next(&data, &length));
+  ASSERT_EQ(length, bufByteSize);
+  auto* dataAsInt = reinterpret_cast<const int*>(data);
+  for (int i = 0; i < N; ++i) {
+    ASSERT_EQ(dataAsInt[i], buf[i]);
+  }
+  std::vector<uint64_t> posVector(2, 0);
+  PositionProvider pos(posVector);
+  result->seekToPosition(pos);
+  ASSERT_THROW(result->Next(&data, &length), VeloxException);
 }
 
 void fillInput(char* buf, size_t size) {
@@ -783,8 +866,12 @@ void writeHeader(char* buffer, size_t compressedSize, bool original) {
   buffer[2] = static_cast<char>(compressedSize >> 15);
 }
 
-size_t
-compress(char* buf, size_t size, char* output, size_t offset, Codec& codec) {
+size_t compress(
+    char* buf,
+    size_t size,
+    char* output,
+    size_t offset,
+    folly::compression::Codec& codec) {
   auto ioBuf = folly::IOBuf::wrapBuffer(buf, size);
   auto compressed = codec.compress(ioBuf.get());
   auto str = compressed->moveToFbString();
@@ -795,8 +882,21 @@ compress(char* buf, size_t size, char* output, size_t offset, Codec& codec) {
 
 class TestSeek : public ::testing::Test {
  public:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   ~TestSeek() override {}
-  static void runTest(Codec& codec, CompressionKind kind) {
+
+  std::unique_ptr<SeekableInputStream> createTestDecompressor(
+      CompressionKind kind,
+      std::unique_ptr<SeekableInputStream> input,
+      uint64_t bufferSize) {
+    return createDecompressor(
+        kind, std::move(input), bufferSize, *pool_, "Test Decompression");
+  }
+
+  void runTest(folly::compression::Codec& codec, CompressionKind kind) {
     constexpr size_t inputSize = 1024;
     constexpr size_t outputSize = 4096;
     char output[outputSize];
@@ -805,14 +905,13 @@ class TestSeek : public ::testing::Test {
     size_t offset1;
     size_t offset2;
     prepareTestData(codec, input1, input2, inputSize, output, offset1, offset2);
-    auto pool = addDefaultLeafMemoryPool();
 
     std::unique_ptr<SeekableInputStream> stream = createDecompressor(
         kind,
         std::unique_ptr<SeekableInputStream>(
             new SeekableArrayInputStream(output, offset2, outputSize / 10)),
         outputSize,
-        *pool,
+        *pool_,
         "TestSeek Decompressor",
         nullptr);
 
@@ -838,7 +937,7 @@ class TestSeek : public ::testing::Test {
   }
 
   static void prepareTestData(
-      Codec& codec,
+      folly::compression::Codec& codec,
       char* input1,
       char* input2,
       size_t inputSize,
@@ -850,6 +949,8 @@ class TestSeek : public ::testing::Test {
     offset1 = compress(input1, inputSize, output, 0, codec);
     offset2 = compress(input2, inputSize, output, offset1, codec);
   }
+
+  std::shared_ptr<MemoryPool> pool_ = memory::memoryManager()->addLeafPool();
 };
 
 TEST_F(TestSeek, Zlib) {
@@ -957,11 +1058,13 @@ class TestingSeekableInputStream : public SeekableInputStream {
     VELOX_CHECK_LE(count, lastSize_);
     position_ -= count;
   }
-  bool Skip(int32_t count) override {
+
+  bool SkipInt64(int64_t count) override {
     VELOX_CHECK_LE(count + position_, length_);
     position_ += count;
     return true;
   }
+
   google::protobuf::int64 ByteCount() const override {
     return position_;
   }
@@ -974,7 +1077,7 @@ class TestingSeekableInputStream : public SeekableInputStream {
     return "testing";
   }
 
-  size_t positionSize() override {
+  size_t positionSize() const override {
     return 1;
   }
 
@@ -1013,7 +1116,7 @@ TEST_F(TestSeek, uncompressedLarge) {
       entry.getCompressed()[i] = static_cast<char>(i);
     }
     written += runSize + kHeaderSize;
-    data.insert(data.end(), entry.data().begin(), entry.data().end());
+    data.insert(data.end(), entry.data().cbegin(), entry.data().cend());
   }
   auto stream = createTestDecompressor(
       CompressionKind_SNAPPY,
@@ -1078,8 +1181,6 @@ TEST_F(TestSeek, uncompressedLarge) {
     return 0;
   };
   // Start and size of last Next as offsets to content (no headers).
-  int32_t lastReadStart = 0;
-  int32_t lastReadSize = 0;
 
   for (auto& pair : ranges) {
     uint64_t target = pair.first;
@@ -1093,8 +1194,6 @@ TEST_F(TestSeek, uncompressedLarge) {
       EXPECT_EQ(result, addressForOffset(target + readSize));
       EXPECT_EQ(
           size, readSizeForAddress(reinterpret_cast<const char*>(result)));
-      lastReadStart = target + readSize;
-      lastReadSize = size;
       readSize += size;
     } while (readSize < targetSize);
   }

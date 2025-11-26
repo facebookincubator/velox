@@ -32,10 +32,12 @@ class ExprCallable : public Callable {
   ExprCallable(
       RowTypePtr signature,
       RowVectorPtr capture,
-      std::shared_ptr<Expr> body)
+      std::shared_ptr<Expr> body,
+      std::vector<std::shared_ptr<Expr>> sharedExprsToReset)
       : signature_(std::move(signature)),
         capture_(std::move(capture)),
-        body_(std::move(body)) {}
+        body_(std::move(body)),
+        sharedExprsToReset_(std::move(sharedExprsToReset)) {}
 
   bool hasCapture() const override {
     return capture_->childrenSize() > signature_->size();
@@ -53,6 +55,7 @@ class ExprCallable : public Callable {
     EvalCtx lambdaCtx = createLambdaCtx(context, row, validRowsInReusedResult);
     ScopedVarSetter throwOnError(
         lambdaCtx.mutableThrowOnError(), context->throwOnError());
+    resetSharedExprs();
     body_->eval(rows, lambdaCtx, *result);
     transformErrorVector(lambdaCtx, context, rows, elementToTopLevelRows);
   }
@@ -63,16 +66,23 @@ class ExprCallable : public Callable {
       const BufferPtr& wrapCapture,
       EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      ErrorVectorPtr& elementErrors,
+      EvalErrorsPtr& elementErrors,
       VectorPtr* result) override {
     auto row = createRowVector(context, wrapCapture, args, rows.end());
     EvalCtx lambdaCtx = createLambdaCtx(context, row, validRowsInReusedResult);
     ScopedVarSetter throwOnError(lambdaCtx.mutableThrowOnError(), false);
+    resetSharedExprs();
     body_->eval(rows, lambdaCtx, *result);
     lambdaCtx.swapErrors(elementErrors);
   }
 
  private:
+  void resetSharedExprs() {
+    for (auto& expr : sharedExprsToReset_) {
+      expr->reset();
+    }
+  }
+
   EvalCtx createLambdaCtx(
       EvalCtx* context,
       std::shared_ptr<RowVector>& row,
@@ -105,6 +115,7 @@ class ExprCallable : public Callable {
       const BufferPtr& wrapCapture,
       const std::vector<VectorPtr>& args,
       vector_size_t size) {
+    VELOX_CHECK_EQ(signature_->size(), args.size());
     std::vector<VectorPtr> allVectors = args;
     for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
       auto values = capture_->childAt(index);
@@ -128,9 +139,57 @@ class ExprCallable : public Callable {
   RowTypePtr signature_;
   RowVectorPtr capture_;
   std::shared_ptr<Expr> body_;
+  // List of Shared Exprs that are decendants of 'body_' for which reset() needs
+  // to be called before calling `body_->eval()`.
+  std::vector<std::shared_ptr<Expr>> sharedExprsToReset_;
 };
 
+void extractSharedExpressions(
+    const ExprPtr& expr,
+    std::unordered_set<ExprPtr>& shared) {
+  for (const auto& input : expr->inputs()) {
+    if (input->isMultiplyReferenced()) {
+      shared.insert(input);
+      continue;
+    }
+    extractSharedExpressions(input, shared);
+  }
+}
+
 } // namespace
+
+LambdaExpr::LambdaExpr(
+    TypePtr type,
+    RowTypePtr&& signature,
+    std::vector<std::shared_ptr<FieldReference>>&& capture,
+    std::shared_ptr<Expr>&& body,
+    bool trackCpuUsage)
+    : SpecialForm(
+          SpecialFormKind::kLambda,
+          std::move(type),
+          std::vector<std::shared_ptr<Expr>>(),
+          "lambda",
+          false /* supportsFlatNoNullsFastPath */,
+          trackCpuUsage),
+      signature_(std::move(signature)),
+      body_(std::move(body)),
+      capture_(std::move(capture)) {
+  std::unordered_set<ExprPtr> shared;
+  extractSharedExpressions(body_, shared);
+  for (auto& expr : shared) {
+    sharedExprsToReset_.push_back(expr);
+  }
+}
+
+void LambdaExpr::computeDistinctFields() {
+  SpecialForm::computeDistinctFields();
+  std::vector<FieldReference*> capturedFields;
+  capturedFields.reserve(capture_.size());
+  for (auto& field : capture_) {
+    capturedFields.push_back(field.get());
+  }
+  mergeFields(distinctFields_, multiplyReferencedFields_, capturedFields);
+}
 
 std::string LambdaExpr::toString(bool recursive) const {
   if (!recursive) {
@@ -195,7 +254,8 @@ void LambdaExpr::evalSpecialForm(
       rows.end(),
       values,
       0);
-  auto callable = std::make_shared<ExprCallable>(signature_, capture, body_);
+  auto callable = std::make_shared<ExprCallable>(
+      signature_, capture, body_, sharedExprsToReset_);
   std::shared_ptr<FunctionVector> functions;
   if (!result) {
     functions = std::make_shared<FunctionVector>(context.pool(), type_);
@@ -227,4 +287,20 @@ void LambdaExpr::makeTypeWithCapture(EvalCtx& context) {
         ROW(std::move(parameterNames), std::move(parameterTypes));
   }
 }
+
+void LambdaExpr::extractSubfieldsImpl(
+    folly::F14FastMap<std::string, int32_t>* shadowedNames,
+    std::vector<common::Subfield>* subfields) const {
+  for (auto& name : signature_->names()) {
+    (*shadowedNames)[name]++;
+  }
+  body_->extractSubfieldsImpl(shadowedNames, subfields);
+  for (auto& name : signature_->names()) {
+    auto it = shadowedNames->find(name);
+    if (--it->second == 0) {
+      shadowedNames->erase(it);
+    }
+  }
+}
+
 } // namespace facebook::velox::exec

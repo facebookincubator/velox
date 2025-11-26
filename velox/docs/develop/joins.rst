@@ -110,7 +110,8 @@ data by probing the hash table and continues execution as specified by
 downstream plan nodes. HashJoinNode is translated into two separate operators:
 HashProbe and HashBuild. HashProbe operator becomes part of the probe-side
 pipeline. HashBuild operator is installed as the last operator of the
-build-side pipeline. The output of the HashBuild operator is a hash table which
+build-side pipeline. The output of the HashBuild operator is a
+`hash table <hash-table.html>`_ which
 HashProbe operator gets access to via a special mechanism: JoinBridge.
 
 .. image:: images/join-pipelines.png
@@ -118,7 +119,7 @@ HashProbe operator gets access to via a special mechanism: JoinBridge.
     :align: center
 
 Both HashBuild and HashAggregation operators use the same data structure for the
-hash table: velox::exec::HashTable. The payload, the non-join key columns
+hash table: `velox::exec::HashTable <hash-table.html>`_. The payload, the non-join key columns
 referred to as dependent columns, are stored row-wise in the RowContainer.
 
 Using the hash table in join and aggregation allows for a future optimization
@@ -138,6 +139,8 @@ be specified independently. HashBuild operator has extra logic to support
 parallel building of the hash table where the operator that finishes building
 its table last is responsible for merging it with all the other hash tables
 before making the hash table available over the JoinBridge.
+
+.. _DynamicFilterPushdown:
 
 Dynamic Filter Pushdown
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -181,8 +184,8 @@ join key values on the build side are unique it is possible to replace the join
 completely with the pushed down filter. Velox detects such opportunities and
 turns the join into a no-op after pushing the filter down.
 
-Dynamic filter pushdown optimization is enabled for inner, left semi, and 
-right semi joins.
+Dynamic filter pushdown optimization is enabled for inner, left semi, right semi
+and right joins.
 
 Broadcast Join
 ~~~~~~~~~~~~~~
@@ -195,7 +198,7 @@ the join is executed using broadcast or partitioned strategy has no effect on
 the join execution itself. The only difference is that broadcast execution
 allows for dynamic filter pushdown while partitioned execution does not.
 
-PartitionedOutput operator and PartitionedOutputBufferManager support
+PartitionedOutput operator and OutputBufferManager support
 broadcasting the results of the plan evaluation. This functionality is enabled
 by setting boolean flag "broadcast" in the PartitionedOutputNode to true.
 
@@ -360,11 +363,11 @@ right side whose values need to match, and an optional filter to apply to join
 results.
 
 To execute a plan with a merge join, Velox creates two separate pipelines. One
-pipeline processes the right side data and puts it into JoinMergeSource. The
+pipeline processes the right side data and puts it into MergeJoinSource. The
 other pipeline processes the data on the left side, joins it with the right
 side data and continues execution as specified by downstream plan nodes.
 MergeJoinNode is translated into MergeJoin operator and a CallbackSink backed
-by JoinMergeSource. MergeJoin operator becomes part of the left-side
+by MergeJoinSource. MergeJoin operator becomes part of the left-side
 pipeline. CallbackSink is installed at the end of the right-side pipeline.
 
 .. image:: images/merge-join-pipelines.png

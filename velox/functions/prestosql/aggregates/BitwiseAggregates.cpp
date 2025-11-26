@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/BitwiseAggregates.h"
 #include "velox/functions/lib/aggregates/BitwiseAggregateBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
@@ -87,7 +88,7 @@ class BitwiseAndAggregate : public BitwiseAggregateBase<T> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    SimpleNumericAggregate<T, T, T>::template updateOneGroup(
+    SimpleNumericAggregate<T, T, T>::updateOneGroup(
         group,
         rows,
         args[0],
@@ -101,9 +102,23 @@ class BitwiseAndAggregate : public BitwiseAggregateBase<T> {
 
 } // namespace
 
-void registerBitwiseAggregates(const std::string& prefix) {
-  registerBitwise<BitwiseOrAggregate>(prefix + kBitwiseOr);
-  registerBitwise<BitwiseAndAggregate>(prefix + kBitwiseAnd);
+void registerBitwiseAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite) {
+  registerBitwise<BitwiseOrAggregate>(
+      prefix + kBitwiseOr,
+      true,
+      withCompanionFunctions,
+      onlyPrestoSignatures,
+      overwrite);
+  registerBitwise<BitwiseAndAggregate>(
+      prefix + kBitwiseAnd,
+      true,
+      withCompanionFunctions,
+      onlyPrestoSignatures,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

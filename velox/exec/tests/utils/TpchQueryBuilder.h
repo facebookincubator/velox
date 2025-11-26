@@ -60,8 +60,10 @@ struct TpchTableMetadata {
 /// should be in the same order as in the TPC-H standard.
 class TpchQueryBuilder {
  public:
-  explicit TpchQueryBuilder(dwio::common::FileFormat format)
-      : format_(format) {}
+  explicit TpchQueryBuilder(
+      dwio::common::FileFormat format,
+      bool filtersAsNode = false)
+      : format_(format), filtersAsNode_(filtersAsNode) {}
 
   /// Read each data file, initialize row types, and determine data paths for
   /// each table.
@@ -91,13 +93,16 @@ class TpchQueryBuilder {
       const std::vector<std::string>& columns);
 
   TpchPlan getQ1Plan() const;
+  TpchPlan getQ2Plan() const;
   TpchPlan getQ3Plan() const;
+  TpchPlan getQ4Plan() const;
   TpchPlan getQ5Plan() const;
   TpchPlan getQ6Plan() const;
   TpchPlan getQ7Plan() const;
   TpchPlan getQ8Plan() const;
   TpchPlan getQ9Plan() const;
   TpchPlan getQ10Plan() const;
+  TpchPlan getQ11Plan() const;
   TpchPlan getQ12Plan() const;
   TpchPlan getQ13Plan() const;
   TpchPlan getQ14Plan() const;
@@ -143,7 +148,8 @@ class TpchQueryBuilder {
   static constexpr const char* kSupplier = "supplier";
   static constexpr const char* kPartsupp = "partsupp";
   std::shared_ptr<memory::MemoryPool> pool_ =
-      memory::addDefaultLeafMemoryPool();
+      memory::memoryManager()->addLeafPool();
+  const bool filtersAsNode_;
 };
 
 } // namespace facebook::velox::exec::test

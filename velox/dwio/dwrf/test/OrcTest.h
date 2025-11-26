@@ -37,19 +37,33 @@ inline std::string getExampleFilePath(const std::string& fileName) {
       "velox/dwio/dwrf/test", "examples/" + fileName);
 }
 
+std::unique_ptr<dwio::common::BufferedInput> createFileBufferedInput(
+    const std::string& path,
+    memory::MemoryPool& pool) {
+  return std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(path), pool);
+}
+
 class MockStripeStreams : public StripeStreams {
  public:
-  MockStripeStreams() : pool_{memory::addDefaultLeafMemoryPool()} {};
+  MockStripeStreams() : pool_{memory::memoryManager()->addLeafPool()} {};
   ~MockStripeStreams() = default;
 
   std::unique_ptr<dwio::common::SeekableInputStream> getStream(
       const DwrfStreamIdentifier& si,
       std::string_view /* unused */,
       bool throwIfNotFound) const override {
-    return std::unique_ptr<dwio::common::SeekableInputStream>(getStreamProxy(
-        si.encodingKey().node,
-        static_cast<proto::Stream_Kind>(si.kind()),
-        throwIfNotFound));
+    return std::unique_ptr<dwio::common::SeekableInputStream>(
+        si.format() == DwrfFormat::kDwrf
+            ? getStreamProxy(
+                  si.encodingKey().node(),
+                  static_cast<proto::Stream_Kind>(si.kind()),
+                  throwIfNotFound)
+            : getStreamOrcProxy(
+                  si.encodingKey().node(),
+                  static_cast<proto::orc::Stream_Kind>(
+                      si.kind() - kStreamKindOrcOffset),
+                  throwIfNotFound));
   }
 
   std::function<BufferPtr()> getIntDictionaryInitializerForNode(
@@ -57,7 +71,7 @@ class MockStripeStreams : public StripeStreams {
       uint64_t /* unused */,
       const StreamLabels& /* streamLabels */,
       uint64_t /* unused */) override {
-    return [this, nodeId = ek.node, sequenceId = ek.sequence]() {
+    return [this, nodeId = ek.node(), sequenceId = ek.sequence()]() {
       BufferPtr dictionaryData;
       genMockDictDataSetter(nodeId, sequenceId)(
           dictionaryData, &getMemoryPool());
@@ -67,7 +81,12 @@ class MockStripeStreams : public StripeStreams {
 
   const proto::ColumnEncoding& getEncoding(
       const EncodingKey& ek) const override {
-    return *getEncodingProxy(ek.node);
+    return *getEncodingProxy(ek.node());
+  }
+
+  const proto::orc::ColumnEncoding& getEncodingOrc(
+      const EncodingKey& ek) const override {
+    return *getEncodingOrcProxy(ek.node());
   }
 
   DwrfFormat format() const override {
@@ -85,12 +104,21 @@ class MockStripeStreams : public StripeStreams {
       getStripeDictionaryCache,
       std::shared_ptr<StripeDictionaryCache>());
   MOCK_CONST_METHOD1(getEncodingProxy, proto::ColumnEncoding*(uint64_t));
+  MOCK_CONST_METHOD1(
+      getEncodingOrcProxy,
+      proto::orc::ColumnEncoding*(uint64_t));
   MOCK_CONST_METHOD2(
       visitStreamsOfNode,
       uint32_t(uint32_t, std::function<void(const StreamInformation&)>));
   MOCK_CONST_METHOD3(
       getStreamProxy,
       dwio::common::SeekableInputStream*(uint32_t, proto::Stream_Kind, bool));
+  MOCK_CONST_METHOD3(
+      getStreamOrcProxy,
+      dwio::common::SeekableInputStream*(
+          uint32_t,
+          proto::orc::Stream_Kind,
+          bool));
   MOCK_CONST_METHOD0(getStrideIndexProviderProxy, StrideIndexProvider*());
   MOCK_CONST_METHOD0(getColumnSelectorProxy, dwio::common::ColumnSelector*());
   MOCK_CONST_METHOD0(
@@ -101,7 +129,15 @@ class MockStripeStreams : public StripeStreams {
     return *getColumnSelectorProxy();
   }
 
-  const dwio::common::RowReaderOptions& getRowReaderOptions() const override {
+  const tz::TimeZone* sessionTimezone() const override {
+    return nullptr;
+  }
+
+  bool adjustTimestampToTimezone() const override {
+    return false;
+  }
+
+  const dwio::common::RowReaderOptions& rowReaderOptions() const override {
     auto ptr = getRowReaderOptionsProxy();
     return ptr ? *ptr : options_;
   }
@@ -116,6 +152,10 @@ class MockStripeStreams : public StripeStreams {
 
   const StrideIndexProvider& getStrideIndexProvider() const override {
     return *getStrideIndexProviderProxy();
+  }
+
+  int64_t stripeRows() const override {
+    return 1'000'000;
   }
 
   uint32_t rowsPerRowGroup() const override {
@@ -236,7 +276,9 @@ class ProtoWriter : public WriterBase {
   ProtoWriter(
       std::shared_ptr<memory::MemoryPool> pool,
       memory::MemoryPool& sinkPool)
-      : WriterBase{std::make_unique<dwio::common::MemorySink>(sinkPool, 1024)} {
+      : WriterBase{std::make_unique<dwio::common::MemorySink>(
+            1024,
+            dwio::common::FileSink::Options{.pool = &sinkPool})} {
     initContext(
         std::make_shared<Config>(), pool->addAggregateChild("proto_writer"));
   }

@@ -19,7 +19,9 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -31,7 +33,6 @@
 #include <algorithm>
 
 using namespace facebook::velox;
-using exec::test::HiveConnectorTestBase;
 
 // This file contains a step-by-step minimal example of a workflow that:
 //
@@ -42,10 +43,11 @@ using exec::test::HiveConnectorTestBase;
 int main(int argc, char** argv) {
   // Velox Tasks/Operators are based on folly's async framework, so we need to
   // make sure we initialize it first.
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   // Default memory allocator used throughout this example.
-  auto pool = memory::addDefaultLeafMemoryPool();
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  auto pool = memory::memoryManager()->addLeafPool();
 
   // For this example, the input dataset will be comprised of a single BIGINT
   // column ("my_col"), containing 10 rows.
@@ -83,24 +85,27 @@ int main(int argc, char** argv) {
   // We need a connector id string to identify the connector.
   const std::string kHiveConnectorId = "test-hive";
 
-  // Create a new connector instance from the connector factory and register
-  // it:
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, nullptr);
+  // Create a new connector instance and register it.
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   connector::registerConnector(hiveConnector);
 
   // To be able to read local files, we need to register the local file
   // filesystem. We also need to register the dwrf reader factory as well as a
   // write protocol, in this case commit is not required:
   filesystems::registerLocalFileSystem();
+  dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
 
   // Create a temporary dir to store the local file created. Note that this
   // directory is automatically removed when the `tempDir` object runs out of
   // scope.
   auto tempDir = exec::test::TempDirectoryPath::create();
+  auto absTempDirPath = tempDir->getPath();
 
   // Once we finalize setting up the Hive connector, let's define our query
   // plan. We use the helper `PlanBuilder` class to generate the query plan
@@ -115,19 +120,7 @@ int main(int argc, char** argv) {
   auto writerPlanFragment =
       exec::test::PlanBuilder()
           .values({rowVector})
-          .tableWrite(
-              inputRowType->names(),
-              nullptr,
-              std::make_shared<core::InsertTableHandle>(
-                  kHiveConnectorId,
-                  HiveConnectorTestBase::makeHiveInsertTableHandle(
-                      inputRowType->names(),
-                      inputRowType->children(),
-                      {},
-                      HiveConnectorTestBase::makeLocationHandle(
-                          tempDir->path))),
-              false,
-              connector::CommitStrategy::kNoCommit)
+          .tableWrite(absTempDirPath, dwio::common::FileFormat::DWRF)
           .planFragment();
 
   std::shared_ptr<folly::Executor> executor(
@@ -141,7 +134,9 @@ int main(int argc, char** argv) {
       "my_write_task",
       writerPlanFragment,
       /*destination=*/0,
-      std::make_shared<core::QueryCtx>(executor.get()));
+      core::QueryCtx::create(executor.get()),
+      exec::Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // next() starts execution using the client thread. The loop pumps output
   // vectors out of the task (there are none in this query fragment).
@@ -170,7 +165,9 @@ int main(int argc, char** argv) {
       "my_read_task",
       readPlanFragment,
       /*destination=*/0,
-      std::make_shared<core::QueryCtx>(executor.get()));
+      core::QueryCtx::create(executor.get()),
+      exec::Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // Now that we have the query fragment and Task structure set up, we will
   // add data to it via `splits`.
@@ -179,7 +176,7 @@ int main(int argc, char** argv) {
   // HiveConnectorSplit for each file, using the same HiveConnector id defined
   // above, the local file path (the "file:" prefix specifies which FileSystem
   // to use; local, in this case), and the file format (DWRF/ORC).
-  for (auto& filePath : fs::directory_iterator(tempDir->path)) {
+  for (auto& filePath : fs::directory_iterator(absTempDirPath)) {
     auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId,
         "file:" + filePath.path().string(),

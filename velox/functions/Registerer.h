@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/core/SimpleFunctionMetadata.h"
-#include "velox/expression/SimpleFunctionAdapter.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/expression/VectorFunction.h"
 
@@ -34,12 +33,25 @@ struct TempWrapper {
 template <template <class...> typename T, typename... TArgs>
 using ParameterBinder = TempWrapper<T<exec::VectorExec, TArgs...>>;
 
+// Register a UDF with the given aliases. If an alias already
+// exists and 'overwrite' is true, the existing entry in the function
+// registry is overwritten by the current UDF. If an alias already exists and
+// 'overwrite' is false, the current UDF is not registered with this alias.
+// This method returns true if all 'aliases' are registered successfully. It
+// returns false if any alias in 'aliases' already exists in the registry and
+// is not overwritten.
 template <typename Func, typename TReturn, typename... TArgs>
-void registerFunction(const std::vector<std::string>& aliases = {}) {
+bool registerFunction(
+    const std::vector<std::string>& aliases = {},
+    bool overwrite = true) {
   using funcClass = typename Func::template udf<exec::VectorExec>;
-  using holderClass =
-      core::UDFHolder<funcClass, exec::VectorExec, TReturn, TArgs...>;
-  exec::registerSimpleFunction<holderClass>(aliases);
+  using holderClass = core::UDFHolder<
+      funcClass,
+      exec::VectorExec,
+      TReturn,
+      ConstantChecker<TArgs...>,
+      typename UnwrapConstantType<TArgs>::type...>;
+  return exec::registerSimpleFunction<holderClass>(aliases, {}, overwrite);
 }
 
 // New registration function; mostly a copy from the function above, but taking
@@ -47,11 +59,19 @@ void registerFunction(const std::vector<std::string>& aliases = {}) {
 // a while to maintain backwards compatibility, but the idea is to remove the
 // one above eventually.
 template <template <class> typename Func, typename TReturn, typename... TArgs>
-void registerFunction(const std::vector<std::string>& aliases = {}) {
+bool registerFunction(
+    const std::vector<std::string>& aliases = {},
+    const std::vector<exec::SignatureVariable>& constraints = {},
+    bool overwrite = true) {
   using funcClass = Func<exec::VectorExec>;
-  using holderClass =
-      core::UDFHolder<funcClass, exec::VectorExec, TReturn, TArgs...>;
-  exec::registerSimpleFunction<holderClass>(aliases);
+  using holderClass = core::UDFHolder<
+      funcClass,
+      exec::VectorExec,
+      TReturn,
+      ConstantChecker<TArgs...>,
+      typename UnwrapConstantType<TArgs>::type...>;
+  return exec::registerSimpleFunction<holderClass>(
+      aliases, constraints, overwrite);
 }
 
 } // namespace facebook::velox

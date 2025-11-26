@@ -19,11 +19,12 @@
 #include <map>
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 
 #include "folly/dynamic.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -31,75 +32,77 @@ namespace facebook::velox {
 // Constant used in comparison of REAL and DOUBLE values.
 constexpr double kEpsilon{0.00001};
 
-// note: while this is not intended for use in real critical code paths,
-//       it's probably worthwhile to make it not completely suck
-// todo(youknowjack): make this class not completely suck
-
-struct VariantConverter;
-
-class variant;
-
-template <TypeKind KIND>
-struct VariantEquality;
-
-template <>
-struct VariantEquality<TypeKind::TIMESTAMP>;
-
-template <>
-struct VariantEquality<TypeKind::ARRAY>;
-
-template <>
-struct VariantEquality<TypeKind::ROW>;
-
-template <>
-struct VariantEquality<TypeKind::MAP>;
-
-bool dispatchDynamicVariantEquality(
-    const variant& a,
-    const variant& b,
-    const bool& enableNullEqualsNull);
+/// NOTE: Variants are not intended to be used in real critical code paths. For
+/// these cases, use Vectors instead.
+class Variant;
 
 namespace detail {
+template <typename T, TypeKind KIND, bool usesCustomComparison>
+struct TypeStorage {
+  T storedValue;
+};
+
+template <typename T, TypeKind KIND>
+struct TypeStorage<T, KIND, true> {
+  T storedValue;
+  std::shared_ptr<const CanProvideCustomComparisonType<KIND>>
+      typeWithCustomComparison;
+};
+
 template <TypeKind KIND>
 using scalar_stored_type = typename TypeTraits<KIND>::DeepCopiedType;
 
-template <TypeKind KIND, typename = void>
+template <TypeKind KIND, bool usesCustomComparison = false, typename = void>
 struct VariantTypeTraits {};
 
-template <TypeKind KIND>
+template <TypeKind KIND, bool usesCustomComparison>
 struct VariantTypeTraits<
     KIND,
+    usesCustomComparison,
     std::enable_if_t<
         TypeTraits<KIND>::isPrimitiveType && KIND != TypeKind::VARCHAR &&
             KIND != TypeKind::VARBINARY,
         void>> {
   using native_type = typename TypeTraits<KIND>::NativeType;
-  using stored_type = scalar_stored_type<KIND>;
+  using stored_type =
+      TypeStorage<scalar_stored_type<KIND>, KIND, usesCustomComparison>;
+  using value_type = scalar_stored_type<KIND>;
 };
 
-template <TypeKind KIND>
+template <TypeKind KIND, bool usesCustomComparison>
 struct VariantTypeTraits<
     KIND,
+    usesCustomComparison,
     std::enable_if_t<
         KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY,
         void>> {
-  using native_type = folly::StringPiece;
-  using stored_type = scalar_stored_type<KIND>;
+  using native_type = std::string_view;
+  using stored_type =
+      TypeStorage<scalar_stored_type<KIND>, KIND, usesCustomComparison>;
+  using value_type = scalar_stored_type<KIND>;
 };
 
-template <>
-struct VariantTypeTraits<TypeKind::ROW> {
-  using stored_type = std::vector<variant>;
+template <bool usesCustomComparison>
+struct VariantTypeTraits<TypeKind::ROW, usesCustomComparison> {
+  using stored_type =
+      TypeStorage<std::vector<Variant>, TypeKind::ROW, usesCustomComparison>;
+  using value_type = std::vector<Variant>;
 };
 
-template <>
-struct VariantTypeTraits<TypeKind::MAP> {
-  using stored_type = std::map<variant, variant>;
+template <bool usesCustomComparison>
+struct VariantTypeTraits<TypeKind::MAP, usesCustomComparison> {
+  using stored_type = TypeStorage<
+      std::map<Variant, Variant>,
+      TypeKind::MAP,
+      usesCustomComparison>;
+  using value_type = std::map<Variant, Variant>;
 };
 
-template <>
-struct VariantTypeTraits<TypeKind::ARRAY> {
-  using stored_type = std::vector<variant>;
+template <bool usesCustomComparison>
+struct VariantTypeTraits<TypeKind::ARRAY, usesCustomComparison> {
+  using stored_type =
+      TypeStorage<std::vector<Variant>, TypeKind::ARRAY, usesCustomComparison>;
+  using value_type = std::vector<Variant>;
 };
 
 struct OpaqueCapsule {
@@ -118,60 +121,57 @@ struct OpaqueCapsule {
   }
 };
 
-template <>
-struct VariantTypeTraits<TypeKind::OPAQUE> {
-  using stored_type = OpaqueCapsule;
+template <bool usesCustomComparison>
+struct VariantTypeTraits<TypeKind::OPAQUE, usesCustomComparison> {
+  using stored_type =
+      TypeStorage<OpaqueCapsule, TypeKind::OPAQUE, usesCustomComparison>;
+  using value_type = OpaqueCapsule;
 };
 } // namespace detail
 
-class variant {
+class Variant {
  private:
-  variant(TypeKind kind, void* ptr) : kind_{kind}, ptr_{ptr} {}
+  Variant(TypeKind kind, void* ptr, bool usesCustomComparison = false)
+      : ptr_{ptr}, kind_{kind}, usesCustomComparison_(usesCustomComparison) {}
 
   template <TypeKind KIND>
-  bool lessThan(const variant& a, const variant& b) const {
-    if (a.isNull() && !b.isNull()) {
-      return true;
-    }
-    if (a.isNull() || b.isNull()) {
-      return false;
-    }
-    return a.value<KIND>() < b.value<KIND>();
-  }
+  bool lessThan(const Variant& other) const;
 
   template <TypeKind KIND>
-  bool equals(const variant& a, const variant& b) const {
-    if (a.isNull() || b.isNull()) {
-      return false;
-    }
-    // todo(youknowjack): centralize equality semantics
-    return a.value<KIND>() == b.value<KIND>();
-  }
+  bool equals(const Variant& other) const;
 
   template <TypeKind KIND>
+  uint64_t hash() const;
+
+  template <bool usesCustomComparison, TypeKind KIND>
   void typedDestroy() {
-    delete static_cast<
-        const typename detail::VariantTypeTraits<KIND>::stored_type*>(ptr_);
+    delete static_cast<const typename detail::VariantTypeTraits<
+        KIND,
+        usesCustomComparison>::stored_type*>(ptr_);
     ptr_ = nullptr;
   }
 
-  template <TypeKind KIND>
+  template <bool usesCustomComparison, TypeKind KIND>
   void typedCopy(const void* other) {
-    using stored_type = typename detail::VariantTypeTraits<KIND>::stored_type;
+    using stored_type = typename detail::
+        VariantTypeTraits<KIND, usesCustomComparison>::stored_type;
     ptr_ = new stored_type{*static_cast<const stored_type*>(other)};
   }
 
   void dynamicCopy(const void* p, const TypeKind kind) {
-    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(typedCopy, kind, p);
+    if (usesCustomComparison_) {
+      VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(typedCopy, true, kind, p);
+    } else {
+      VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(typedCopy, false, kind, p);
+    }
   }
 
   void dynamicFree() {
-    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(typedDestroy, kind_);
-  }
-
-  template <TypeKind K>
-  static const std::shared_ptr<const Type> kind2type() {
-    return TypeFactory<K>::create();
+    if (usesCustomComparison_) {
+      VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(typedDestroy, true, kind_);
+    } else {
+      VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(typedDestroy, false, kind_);
+    }
   }
 
   [[noreturn]] void throwCheckIsKindError(TypeKind kind) const;
@@ -180,22 +180,23 @@ class variant {
 
  public:
   struct Hasher {
-    size_t operator()(variant const& input) const noexcept {
+    size_t operator()(Variant const& input) const noexcept {
       return input.hash();
     }
   };
 
   struct NullEqualsNullsComparator {
-    bool operator()(const variant& a, const variant& b) const {
+    bool operator()(const Variant& a, const Variant& b) const {
       return a.equalsWithNullEqualsNull(b);
     }
   };
 
-#define VELOX_VARIANT_SCALAR_MEMBERS(KIND)                     \
-  /* implicit */ variant(                                      \
-      typename detail::VariantTypeTraits<KIND>::native_type v) \
-      : kind_{KIND},                                           \
-        ptr_{new detail::VariantTypeTraits<KIND>::stored_type{v}} {}
+#define VELOX_VARIANT_SCALAR_MEMBERS(KIND)                                \
+  /* implicit */ Variant(                                                 \
+      typename detail::VariantTypeTraits<KIND, false>::native_type v)     \
+      : ptr_{new detail::VariantTypeTraits<KIND, false>::stored_type{v}}, \
+        kind_{KIND},                                                      \
+        usesCustomComparison_{false} {}
 
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::BOOLEAN)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TINYINT)
@@ -205,12 +206,19 @@ class variant {
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::HUGEINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::REAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
-  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR);
   // VARBINARY conflicts with VARCHAR, so we don't gen these methods
   // VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARBINARY);
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TIMESTAMP)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::UNKNOWN)
 #undef VELOX_VARIANT_SCALAR_MEMBERS
+
+  /* implicit */ Variant(
+      typename detail::VariantTypeTraits<TypeKind::VARCHAR, false>::native_type
+          v)
+      : ptr_{new detail::VariantTypeTraits<TypeKind::VARCHAR, false>::
+                 stored_type{std::string(v)}},
+        kind_{TypeKind::VARCHAR},
+        usesCustomComparison_{false} {}
 
   // On 64-bit platforms `int64_t` is declared as `long int`, not `long long
   // int`, thus adding an extra overload to make literals like 1LL resolve
@@ -221,140 +229,175 @@ class variant {
       std::enable_if_t<
           std::is_same_v<T, long long> && !std::is_same_v<long long, int64_t>,
           bool> = true>
-  /* implicit */ variant(const T& v) : variant(static_cast<int64_t>(v)) {}
+  /* implicit */ Variant(const T& v) : Variant(static_cast<int64_t>(v)) {}
 
-  static variant row(const std::vector<variant>& inputs) {
+  static Variant row(const std::vector<Variant>& inputs) {
     return {
         TypeKind::ROW,
         new
-        typename detail::VariantTypeTraits<TypeKind::ROW>::stored_type{inputs}};
+        typename detail::VariantTypeTraits<TypeKind::ROW, false>::stored_type{
+            inputs}};
   }
 
-  static variant row(std::vector<variant>&& inputs) {
+  static Variant row(std::vector<Variant>&& inputs) {
     return {
         TypeKind::ROW,
-        new typename detail::VariantTypeTraits<TypeKind::ROW>::stored_type{
+        new
+        typename detail::VariantTypeTraits<TypeKind::ROW, false>::stored_type{
             std::move(inputs)}};
   }
 
-  static variant map(const std::map<variant, variant>& inputs) {
+  static Variant map(const std::map<Variant, Variant>& inputs) {
     return {
         TypeKind::MAP,
         new
-        typename detail::VariantTypeTraits<TypeKind::MAP>::stored_type{inputs}};
+        typename detail::VariantTypeTraits<TypeKind::MAP, false>::stored_type{
+            inputs}};
   }
 
-  static variant map(std::map<variant, variant>&& inputs) {
+  static Variant map(std::map<Variant, Variant>&& inputs) {
     return {
         TypeKind::MAP,
-        new typename detail::VariantTypeTraits<TypeKind::MAP>::stored_type{
+        new
+        typename detail::VariantTypeTraits<TypeKind::MAP, false>::stored_type{
             std::move(inputs)}};
   }
 
-  static variant timestamp(const Timestamp& input) {
+  static Variant timestamp(const Timestamp& input) {
     return {
         TypeKind::TIMESTAMP,
-        new
-        typename detail::VariantTypeTraits<TypeKind::TIMESTAMP>::stored_type{
-            input}};
+        new typename detail::VariantTypeTraits<TypeKind::TIMESTAMP, false>::
+            stored_type{input}};
+  }
+
+  template <TypeKind KIND>
+  static Variant typeWithCustomComparison(
+      typename TypeTraits<KIND>::NativeType input,
+      const TypePtr& type) {
+    return {
+        KIND,
+        new typename detail::VariantTypeTraits<KIND, true>::stored_type{
+            input,
+            std::dynamic_pointer_cast<
+                const CanProvideCustomComparisonType<KIND>>(type)},
+        true};
   }
 
   template <class T>
-  static variant opaque(const std::shared_ptr<T>& input) {
-    VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
+  static Variant opaque(const std::shared_ptr<T>& input) {
+    VELOX_CHECK(input.get(), "Can't create a Variant of nullptr opaque type");
     return {
         TypeKind::OPAQUE,
         new detail::OpaqueCapsule{OpaqueType::create<T>(), input}};
   }
 
-  static variant opaque(
+  static Variant opaque(
       const std::shared_ptr<void>& input,
       const std::shared_ptr<const OpaqueType>& type) {
-    VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
+    VELOX_CHECK(input.get(), "Can't create a Variant of nullptr opaque type");
     return {TypeKind::OPAQUE, new detail::OpaqueCapsule{type, input}};
   }
 
-  static variant array(const std::vector<variant>& inputs) {
+  static void verifyArrayElements(const std::vector<Variant>& inputs);
+
+  static Variant array(const std::vector<Variant>& inputs) {
+    verifyArrayElements(inputs);
     return {
         TypeKind::ARRAY,
-        new typename detail::VariantTypeTraits<TypeKind::ARRAY>::stored_type{
+        new
+        typename detail::VariantTypeTraits<TypeKind::ARRAY, false>::stored_type{
             inputs}};
   }
 
-  static variant array(std::vector<variant>&& inputs) {
+  static Variant array(std::vector<Variant>&& inputs) {
+    verifyArrayElements(inputs);
     return {
         TypeKind::ARRAY,
-        new typename detail::VariantTypeTraits<TypeKind::ARRAY>::stored_type{
+        new
+        typename detail::VariantTypeTraits<TypeKind::ARRAY, false>::stored_type{
             std::move(inputs)}};
   }
 
-  variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {}
+  Variant()
+      : ptr_{nullptr}, kind_{TypeKind::UNKNOWN}, usesCustomComparison_(false) {}
 
-  variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {}
+  /* implicit */ Variant(TypeKind kind)
+      : ptr_{nullptr}, kind_{kind}, usesCustomComparison_(false) {}
 
-  variant(const variant& other) : kind_{other.kind_}, ptr_{nullptr} {
+  Variant(const Variant& other)
+      : ptr_{nullptr},
+        kind_{other.kind_},
+        usesCustomComparison_(other.usesCustomComparison_) {
     auto op = other.ptr_;
     if (op != nullptr) {
       dynamicCopy(other.ptr_, other.kind_);
     }
   }
 
-  // Support construction from StringView as well as StringPiece.
-  variant(StringView view) : variant{folly::StringPiece{view}} {}
+  // Support construction from velox::StringView as well as std::string_view.
+  /* implicit */ Variant(StringView view) : Variant{std::string_view{view}} {}
 
-  // Break ties between implicit conversions to StringView/StringPiece.
-  variant(std::string str)
-      : kind_{TypeKind::VARCHAR}, ptr_{new std::string{std::move(str)}} {}
+  // Break ties between implicit conversions to StringView/std::string_view.
+  /* implicit */ Variant(std::string str)
+      : ptr_{new std::string{std::move(str)}},
+        kind_{TypeKind::VARCHAR},
+        usesCustomComparison_(false) {}
 
-  variant(const char* str)
-      : kind_{TypeKind::VARCHAR}, ptr_{new std::string{str}} {}
+  /* implicit */ Variant(const char* str)
+      : ptr_{new std::string{str}},
+        kind_{TypeKind::VARCHAR},
+        usesCustomComparison_(false) {}
 
   template <TypeKind KIND>
-  static variant create(
-      typename detail::VariantTypeTraits<KIND>::stored_type&& v) {
-    return variant{
+  static Variant create(
+      typename detail::VariantTypeTraits<KIND, false>::value_type&& v) {
+    return Variant{
         KIND,
-        new
-        typename detail::VariantTypeTraits<KIND>::stored_type{std::move(v)}};
+        new typename detail::VariantTypeTraits<KIND, false>::stored_type{
+            std::move(v)}};
   }
 
   template <TypeKind KIND>
-  static variant create(
-      const typename detail::VariantTypeTraits<KIND>::stored_type& v) {
-    return variant{
-        KIND, new typename detail::VariantTypeTraits<KIND>::stored_type{v}};
+  static Variant create(
+      const typename detail::VariantTypeTraits<KIND, false>::value_type& v) {
+    return Variant{
+        KIND,
+        new typename detail::VariantTypeTraits<KIND, false>::stored_type{v}};
   }
 
   template <typename T>
-  static variant create(const typename detail::VariantTypeTraits<
-                        CppToType<T>::typeKind>::stored_type& v) {
+  static Variant create(
+      const typename detail::VariantTypeTraits<CppToType<T>::typeKind, false>::
+          value_type& v) {
     return create<CppToType<T>::typeKind>(v);
   }
 
-  static variant null(TypeKind kind) {
-    return variant{kind};
+  static Variant null(TypeKind kind) {
+    return Variant{kind};
   }
 
-  static variant binary(std::string val) {
-    return variant{TypeKind::VARBINARY, new std::string{std::move(val)}};
+  static Variant binary(std::string val) {
+    return Variant{TypeKind::VARBINARY, new std::string{std::move(val)}};
   }
 
-  variant& operator=(const variant& other) {
+  Variant& operator=(const Variant& other) {
     if (ptr_ != nullptr) {
       dynamicFree();
     }
     kind_ = other.kind_;
+    usesCustomComparison_ = other.usesCustomComparison_;
     if (other.ptr_ != nullptr) {
       dynamicCopy(other.ptr_, other.kind_);
     }
     return *this;
   }
 
-  variant& operator=(variant&& other) {
+  Variant& operator=(Variant&& other) noexcept {
     if (ptr_ != nullptr) {
       dynamicFree();
     }
     kind_ = other.kind_;
+    usesCustomComparison_ = other.usesCustomComparison_;
     if (other.ptr_ != nullptr) {
       ptr_ = other.ptr_;
       other.ptr_ = nullptr;
@@ -362,50 +405,46 @@ class variant {
     return *this;
   }
 
-  bool operator<(const variant& other) const {
-    if (other.kind_ != this->kind_) {
-      return other.kind_ < this->kind_;
-    }
-    return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(lessThan, kind_, *this, other);
-  }
+  bool operator<(const Variant& other) const;
 
-  bool equals(const variant& other) const {
-    if (other.kind_ != this->kind_) {
-      return false;
-    }
-    if (other.isNull()) {
-      return this->isNull();
-    }
-    return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, *this, other);
-  }
+  bool equals(const Variant& other) const;
 
-  bool equalsWithNullEqualsNull(const variant& other) const {
-    if (other.kind_ != this->kind_) {
-      return false;
-    }
-    return dispatchDynamicVariantEquality(*this, other, true);
-  }
+  bool equalsWithNullEqualsNull(const Variant& other) const;
 
-  variant(variant&& other) : kind_{other.kind_}, ptr_{other.ptr_} {
+  Variant(Variant&& other) noexcept
+      : ptr_{other.ptr_},
+        kind_{other.kind_},
+        usesCustomComparison_(other.usesCustomComparison_) {
     other.ptr_ = nullptr;
   }
 
-  ~variant() {
+  ~Variant() {
     if (ptr_ != nullptr) {
       dynamicFree();
     }
   }
 
-  std::string toJson(const TypePtr& type = nullptr) const;
+  std::string toJson(const TypePtr& type) const;
+
+  std::string toJson(const Type& type) const;
+
+  std::string toJsonUnsafe(const TypePtr& type = nullptr) const;
 
   /// Used by python binding, do not change signature.
   std::string pyToJson() const {
-    return toJson();
+    return toJsonUnsafe();
   }
+
+  /// Returns a string of the Variant value.
+  std::string toString(const TypePtr& type) const;
+
+  /// Returns a string representation identical to
+  /// BaseVector::createConstant(type, *this)->toString(0).
+  std::string toStringAsVector(const TypePtr& type) const;
 
   folly::dynamic serialize() const;
 
-  static variant create(const folly::dynamic&);
+  static Variant create(const folly::dynamic& obj);
 
   bool hasValue() const {
     return !isNull();
@@ -439,8 +478,15 @@ class variant {
     checkIsKind(KIND);
     checkPtr();
 
-    return *static_cast<
-        const typename detail::VariantTypeTraits<KIND>::stored_type*>(ptr_);
+    if (usesCustomComparison_) {
+      return static_cast<const typename detail::VariantTypeTraits<KIND, true>::
+                             stored_type*>(ptr_)
+          ->storedValue;
+    } else {
+      return static_cast<const typename detail::VariantTypeTraits<KIND, false>::
+                             stored_type*>(ptr_)
+          ->storedValue;
+    }
   }
 
   template <typename T>
@@ -457,8 +503,16 @@ class variant {
   template <TypeKind KIND>
   const auto* valuePointer() const {
     checkIsKind(KIND);
-    return static_cast<
-        const typename detail::VariantTypeTraits<KIND>::stored_type*>(ptr_);
+
+    if (usesCustomComparison_) {
+      return static_cast<
+          const typename detail::VariantTypeTraits<KIND, true>::stored_type*>(
+          ptr_);
+    } else {
+      return static_cast<
+          const typename detail::VariantTypeTraits<KIND, false>::stored_type*>(
+          ptr_);
+    }
   }
 
   template <typename T>
@@ -466,16 +520,156 @@ class variant {
     return valuePointer<CppToType<T>::typeKind>();
   }
 
-  const std::vector<variant>& row() const {
+  const std::vector<Variant>& row() const {
     return value<TypeKind::ROW>();
   }
 
-  const std::map<variant, variant>& map() const {
+  /// Returns a map of Variants.
+  const std::map<Variant, Variant>& map() const {
     return value<TypeKind::MAP>();
   }
 
-  const std::vector<variant>& array() const {
+  /// Returns a map of primitive values. Assumes all keys and values are not
+  /// null.
+  template <typename K, typename V>
+  std::map<K, V> map() const {
+    const auto& variants = value<TypeKind::MAP>();
+
+    std::map<K, V> values;
+    for (const auto& [k, v] : variants) {
+      values.emplace(k.template value<K>(), v.template value<V>());
+    }
+
+    return values;
+  }
+
+  /// Returns a map of optional primitive values. All keys are assumed to be not
+  /// null. Null values are returned as unset optional.
+  template <typename K, typename V>
+  std::map<K, std::optional<V>> nullableMap() const {
+    const auto& variants = value<TypeKind::MAP>();
+
+    std::map<K, std::optional<V>> values;
+    for (const auto& [k, v] : variants) {
+      if (v.isNull()) {
+        values.emplace(k.template value<K>(), std::nullopt);
+      } else {
+        values.emplace(k.template value<K>(), v.template value<V>());
+      }
+    }
+
+    return values;
+  }
+
+  /// Returns a std::map of primitive keys to std::vector of primitive values.
+  /// Assumes all keys and values are not null.
+  template <typename K, typename V>
+  std::map<K, std::vector<V>> mapOfArrays() const {
+    const auto& variants = value<TypeKind::MAP>();
+
+    std::map<K, std::vector<V>> values;
+    for (const auto& [k, v] : variants) {
+      values.emplace(k.template value<K>(), v.template array<V>());
+    }
+
+    return values;
+  }
+
+  /// Returns a std::map of primitive keys to optional std::vector of optional
+  /// primitive values. Null values are returned as unset optional.
+  template <typename K, typename V>
+  std::map<K, std::optional<std::vector<std::optional<V>>>>
+  nullableMapOfArrays() const {
+    const auto& variants = value<TypeKind::MAP>();
+
+    std::map<K, std::optional<std::vector<std::optional<V>>>> values;
+    for (const auto& [k, v] : variants) {
+      if (v.isNull()) {
+        values.emplace(k.template value<K>(), std::nullopt);
+      } else {
+        values.emplace(k.template value<K>(), v.template nullableArray<V>());
+      }
+    }
+
+    return values;
+  }
+
+  /// Returns a std::vector of Variants.
+  const std::vector<Variant>& array() const {
     return value<TypeKind::ARRAY>();
+  }
+
+  /// Returns a std::vector of primitive values. Assumes that all values are not
+  /// null.
+  template <typename T>
+  std::vector<T> array() const {
+    const auto& variants = value<TypeKind::ARRAY>();
+
+    std::vector<T> values;
+    values.reserve(variants.size());
+
+    for (const auto& v : variants) {
+      values.emplace_back(v.template value<T>());
+    }
+
+    return values;
+  }
+
+  /// Returns a std::vector of optional primitive values. Null values are
+  /// returned as unset optional.
+  template <typename T>
+  std::vector<std::optional<T>> nullableArray() const {
+    const auto& variants = value<TypeKind::ARRAY>();
+
+    std::vector<std::optional<T>> values;
+    values.reserve(variants.size());
+
+    for (const auto& v : variants) {
+      if (v.isNull()) {
+        values.emplace_back(std::nullopt);
+      } else {
+        values.emplace_back(v.template value<T>());
+      }
+    }
+
+    return values;
+  }
+
+  /// Returns a std::vector of std::vector of primitive values. Assumes that all
+  /// values are not null.
+  template <typename T>
+  std::vector<std::vector<T>> arrayOfArrays() const {
+    const auto& variants = value<TypeKind::ARRAY>();
+
+    std::vector<std::vector<T>> values;
+    values.reserve(variants.size());
+
+    for (const auto& v : variants) {
+      values.emplace_back(v.template array<T>());
+    }
+
+    return values;
+  }
+
+  /// Returns a std::vector of std::vector of primitive values.Null values are
+  /// returned as unset optional.
+  template <typename T>
+  std::vector<std::optional<std::vector<std::optional<T>>>>
+  nullableArrayOfArrays() const {
+    const auto& variants = value<TypeKind::ARRAY>();
+
+    std::vector<std::optional<std::vector<std::optional<T>>>> values;
+    values.reserve(variants.size());
+
+    for (const auto& v : variants) {
+      if (v.isNull()) {
+        values.emplace_back(std::nullopt);
+      } else {
+        values.emplace_back(v.template nullableArray<T>());
+      }
+    }
+
+    return values;
   }
 
   template <class T>
@@ -489,94 +683,79 @@ class variant {
     return std::static_pointer_cast<T>(capsule.obj);
   }
 
-  std::shared_ptr<const Type> inferType() const {
-    switch (kind_) {
-      case TypeKind::MAP: {
-        TypePtr keyType;
-        TypePtr valueType;
-        auto& m = map();
-        for (auto& pair : m) {
-          if (keyType == nullptr && !pair.first.isNull()) {
-            keyType = pair.first.inferType();
-          }
-          if (valueType == nullptr && !pair.second.isNull()) {
-            valueType = pair.second.inferType();
-          }
-          if (keyType && valueType) {
-            break;
-          }
-        }
-        return MAP(
-            keyType ? keyType : UNKNOWN(), valueType ? valueType : UNKNOWN());
-      }
-      case TypeKind::ROW: {
-        auto& r = row();
-        std::vector<std::shared_ptr<const Type>> children{};
-        for (auto& v : r) {
-          children.push_back(v.inferType());
-        }
-        return ROW(std::move(children));
-      }
-      case TypeKind::ARRAY: {
-        TypePtr elementType = UNKNOWN();
-        if (!isNull()) {
-          auto& a = array();
-          if (!a.empty()) {
-            elementType = a.at(0).inferType();
-          }
-        }
-        return ARRAY(elementType);
-      }
-      case TypeKind::OPAQUE: {
-        return value<TypeKind::OPAQUE>().type;
-      }
-      case TypeKind::UNKNOWN: {
-        return UNKNOWN();
-      }
-      default:
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(kind2type, kind_);
+  /// Try to cast to the target custom type
+  /// Throw if the Variant is not an opaque type
+  /// Return nullptr if it's opaque type but the underlying custom type doesn't
+  /// match the target. Otherwise return the data in custom type.
+  template <class T>
+  std::shared_ptr<T> tryOpaque() const {
+    const auto& capsule = value<TypeKind::OPAQUE>();
+    if (capsule.type->typeIndex() == std::type_index(typeid(T))) {
+      return std::static_pointer_cast<T>(capsule.obj);
     }
+    return nullptr;
   }
 
-  friend std::ostream& operator<<(std::ostream& stream, const variant& k) {
-    stream << k.toJson();
+  TypePtr inferType() const;
+
+  /// Returns true if the type of this Variant is compatible with the specified
+  /// type. Similar to inferType()->kindEquals(type), but treats
+  /// TypeKind::UNKNOWN equal to any other TypeKind.
+  bool isTypeCompatible(const TypePtr& type) const;
+
+  friend std::ostream& operator<<(std::ostream& stream, const Variant& k) {
+    const auto type = k.inferType();
+    stream << k.toJson(type);
     return stream;
   }
 
   // Uses kEpsilon to compare floating point types (REAL and DOUBLE).
   // For testing purposes.
-  bool lessThanWithEpsilon(const variant& other) const;
+  bool lessThanWithEpsilon(const Variant& other) const;
 
   // Uses kEpsilon to compare floating point types (REAL and DOUBLE).
   // For testing purposes.
-  bool equalsWithEpsilon(const variant& other) const;
+  bool equalsWithEpsilon(const Variant& other) const;
 
  private:
-  TypeKind kind_;
-  // TODO: it'd be more efficient to put union here if it ever becomes a problem
+  template <TypeKind KIND>
+  std::shared_ptr<const CanProvideCustomComparisonType<KIND>>
+  customComparisonType() const {
+    return static_cast<const typename detail::VariantTypeTraits<KIND, true>::
+                           stored_type*>(ptr_)
+        ->typeWithCustomComparison;
+  }
+
+  // TODO: it'd be more efficient to put union here if it ever becomes a
+  // problem
   const void* ptr_;
+  TypeKind kind_;
+  // If the Variant represents the value of a type that provides custom
+  // comparisons.
+  bool usesCustomComparison_;
 };
 
-inline bool operator==(const variant& a, const variant& b) {
+inline bool operator==(const Variant& a, const Variant& b) {
   return a.equals(b);
-}
-
-inline bool operator!=(const variant& a, const variant& b) {
-  return !(a == b);
 }
 
 struct VariantConverter {
   template <TypeKind FromKind, TypeKind ToKind>
-  static variant convert(const variant& value) {
+  static Variant convert(const Variant& value) {
     if (value.isNull()) {
-      return variant{value.kind()};
+      return Variant{value.kind()};
     }
-    auto converted = util::Converter<ToKind>::cast(value.value<FromKind>());
+
+    const auto converted =
+        util::Converter<ToKind>::tryCast(value.value<FromKind>())
+            .thenOrThrow(folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
     return {converted};
   }
 
   template <TypeKind ToKind>
-  static variant convert(const variant& value) {
+  static Variant convert(const Variant& value) {
     switch (value.kind()) {
       case TypeKind::BOOLEAN:
         return convert<TypeKind::BOOLEAN, ToKind>(value);
@@ -600,7 +779,8 @@ struct VariantConverter {
       case TypeKind::HUGEINT:
         // Default date/timestamp conversion is prone to errors and implicit
         // assumptions. Block converting timestamp to integer, double and
-        // std::string types. The callers should implement their own conversion
+        // std::string types. The callers should implement their own
+        // conversion
         //  from value.
         VELOX_NYI();
       default:
@@ -608,9 +788,12 @@ struct VariantConverter {
     }
   }
 
-  static variant convert(const variant& value, TypeKind toKind) {
+  static Variant convert(const Variant& value, TypeKind toKind) {
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(convert, toKind, value);
   }
 };
+
+// For backward compatibility.
+using variant = Variant;
 
 } // namespace facebook::velox

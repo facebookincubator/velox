@@ -30,7 +30,7 @@ import sys
 
 try:
     sys.dont_write_bytecode = True
-except:
+except:  # noqa E722
     pass
 
 sys.path.insert(0, os.path.abspath("ext"))
@@ -50,14 +50,16 @@ extensions = [
     "issue",
     "pr",
     "spark",
+    "iceberg",
+    "delta",
     "sphinx.ext.autodoc",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",
     "sphinx.ext.viewcode",
-    "sphinx.ext.imgmath",
     "sphinx.ext.todo",
     "sphinx.ext.intersphinx",
     "sphinx.ext.autosummary",
+    "sphinx.ext.autodoc",
 ]
 
 autosummary_generate = True

@@ -16,84 +16,102 @@
 #include "velox/common/caching/SsdCache.h"
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
 #include <filesystem>
-#include <numeric>
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::cache {
 
-SsdCache::SsdCache(
-    std::string_view filePrefix,
-    uint64_t maxBytes,
-    int32_t numShards,
-    folly::Executor* executor,
-    int64_t checkpointIntervalBytes,
-    bool disableFileCow)
-    : filePrefix_(filePrefix),
-      numShards_(numShards),
+SsdCache::SsdCache(const Config& config)
+    : filePrefix_(config.filePrefix),
+      numShards_(config.numShards),
       groupStats_(std::make_unique<FileGroupStats>()),
-      executor_(executor) {
+      executor_(config.executor) {
   // Make sure the given path of Ssd files has the prefix for local file system.
   // Local file system would be derived based on the prefix.
   VELOX_CHECK(
-      filePrefix_.find("/") == 0,
+      filePrefix_.find('/') == 0 || filePrefix_.find("faulty:/") == 0,
       "Ssd path '{}' does not start with '/' that points to local file system.",
       filePrefix_);
+  VELOX_CHECK_NOT_NULL(executor_);
+
+  VELOX_SSD_CACHE_LOG(INFO) << "SSD cache config: " << config.toString();
+
+  auto checksumReadVerificationEnabled = config.checksumReadVerificationEnabled;
+  if (config.checksumReadVerificationEnabled && !config.checksumEnabled) {
+    VELOX_SSD_CACHE_LOG(WARNING)
+        << "Checksum read has been disabled as checksum is not enabled.";
+    checksumReadVerificationEnabled = false;
+  }
   filesystems::getFileSystem(filePrefix_, nullptr)
-      ->mkdir(std::filesystem::path(filePrefix).parent_path().string());
+      ->mkdir(std::filesystem::path(filePrefix_).parent_path().string());
 
   files_.reserve(numShards_);
   // Cache size must be a multiple of this so that each shard has the same max
   // size.
-  uint64_t sizeQuantum = numShards_ * SsdFile::kRegionSize;
-  int32_t fileMaxRegions = bits::roundUp(maxBytes, sizeQuantum) / sizeQuantum;
+  const uint64_t sizeQuantum = numShards_ * SsdFile::kRegionSize;
+  const int32_t fileMaxRegions =
+      bits::roundUp(config.maxBytes, sizeQuantum) / sizeQuantum;
   for (auto i = 0; i < numShards_; ++i) {
-    files_.push_back(std::make_unique<SsdFile>(
+    const auto fileConfig = SsdFile::Config(
         fmt::format("{}{}", filePrefix_, i),
         i,
         fileMaxRegions,
-        checkpointIntervalBytes / numShards,
-        disableFileCow));
+        config.checkpointIntervalBytes / config.numShards,
+        config.disableFileCow,
+        config.checksumEnabled,
+        checksumReadVerificationEnabled,
+        executor_);
+    files_.push_back(std::make_unique<SsdFile>(fileConfig));
   }
 }
 
 SsdFile& SsdCache::file(uint64_t fileId) {
-  auto index = fileId % numShards_;
+  const auto index = fileId % numShards_;
   return *files_[index];
 }
 
 bool SsdCache::startWrite() {
-  if (isShutdown_) {
-    return false;
-  }
-  if (0 == writesInProgress_.fetch_add(numShards_)) {
+  std::lock_guard<std::mutex> l(mutex_);
+  checkNotShutdownLocked();
+  if (writesInProgress_ == 0) {
     // No write was pending, so now all shards are counted as writing.
+    writesInProgress_ += numShards_;
     return true;
   }
-  // There were writes in progress, so compensate for the increment.
-  writesInProgress_.fetch_sub(numShards_);
+  VELOX_CHECK_GE(writesInProgress_, 0);
   return false;
 }
 
 void SsdCache::write(std::vector<CachePin> pins) {
-  VELOX_CHECK_LE(numShards_, writesInProgress_);
+  VELOX_CHECK_EQ(
+      numShards_, writesInProgress_, "startWrite() have not been called");
+
+  TestValue::adjust("facebook::velox::cache::SsdCache::write", this);
+
+  const auto startTimeUs = getCurrentTimeMicro();
+
   uint64_t bytes = 0;
-  auto start = getCurrentTimeMicro();
   std::vector<std::vector<CachePin>> shards(numShards_);
-  for (auto& pin : pins) {
+  for (const auto& pin : pins) {
     bytes += pin.checkedEntry()->size();
-    auto& target = file(pin.checkedEntry()->key().fileNum.id());
+    const auto& target = file(pin.checkedEntry()->key().fileNum.id());
     shards[target.shardId()].push_back(std::move(pin));
   }
+
   int32_t numNoStore = 0;
   for (auto i = 0; i < numShards_; ++i) {
     if (shards[i].empty()) {
       ++numNoStore;
       continue;
     }
+
     struct PinHolder {
       std::vector<CachePin> pins;
 
@@ -101,28 +119,63 @@ void SsdCache::write(std::vector<CachePin> pins) {
           : pins(std::move(_pins)) {}
     };
 
-    // We move the mutable vector of pins to the executor. These must
-    // be wrapped in a shared struct to be passed via lambda capture.
+    // We move the mutable vector of pins to the executor. These must be wrapped
+    // in a shared struct to be passed via lambda capture.
     auto pinHolder = std::make_shared<PinHolder>(std::move(shards[i]));
-    executor_->add([this, i, pinHolder, bytes, start]() {
+    executor_->add([this, i, pinHolder, bytes, startTimeUs]() {
       try {
         files_[i]->write(pinHolder->pins);
       } catch (const std::exception& e) {
         // Catch so as not to miss updating 'writesInProgress_'. Could
         // theoretically happen for std::bad_alloc or such.
-        LOG(INFO) << "Ignoring error in SsdFile::write: " << e.what();
+        VELOX_SSD_CACHE_LOG(WARNING)
+            << "Ignoring error in SsdFile::write: " << e.what();
       }
+      pinHolder->pins.clear();
       if (--writesInProgress_ == 0) {
         // Typically occurs every few GB. Allows detecting unusually slow rates
         // from failing devices.
-        LOG(INFO) << fmt::format(
-            "SSDCA: Wrote {}MB, {} MB/s",
-            bytes >> 20,
-            static_cast<float>(bytes) / (getCurrentTimeMicro() - start));
+        VELOX_SSD_CACHE_LOG(INFO) << fmt::format(
+            "Wrote {} to SSD, {} bytes/s",
+            succinctBytes(bytes),
+            static_cast<double>(bytes) * 1'000'000 /
+                (getCurrentTimeMicro() - startTimeUs));
       }
     });
   }
   writesInProgress_.fetch_sub(numNoStore);
+}
+
+void SsdCache::checkpoint() {
+  VELOX_CHECK_EQ(numShards_, writesInProgress_);
+  for (auto i = 0; i < numShards_; ++i) {
+    executor_->add([this, i]() {
+      files_[i]->checkpoint(/*force=*/true);
+      --writesInProgress_;
+    });
+  }
+}
+
+bool SsdCache::removeFileEntries(
+    const folly::F14FastSet<uint64_t>& filesToRemove,
+    folly::F14FastSet<uint64_t>& filesRetained) {
+  if (!startWrite()) {
+    return false;
+  }
+
+  bool success = true;
+  for (auto i = 0; i < numShards_; i++) {
+    try {
+      success &= files_[i]->removeFileEntries(filesToRemove, filesRetained);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(ERROR)
+          << "Error removing file entries from SSD shard "
+          << files_[i]->shardId() << ": " << e.what();
+      success = false;
+    }
+    --writesInProgress_;
+  }
+  return success;
 }
 
 SsdCacheStats SsdCache::stats() const {
@@ -133,37 +186,46 @@ SsdCacheStats SsdCache::stats() const {
   return stats;
 }
 
+std::string SsdCache::toString() const {
+  const auto data = stats();
+  const uint64_t capacity = maxBytes();
+  std::stringstream out;
+  out << "Ssd cache IO: Write " << succinctBytes(data.bytesWritten) << " read "
+      << succinctBytes(data.bytesRead) << " Size " << succinctBytes(capacity)
+      << " Occupied " << succinctBytes(data.bytesCached);
+  out << " " << (data.entriesCached >> 10) << "K entries.";
+  out << "\nGroupStats: " << groupStats_->toString(capacity);
+  return out.str();
+}
+
+void SsdCache::shutdown() {
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (shutdown_) {
+      VELOX_SSD_CACHE_LOG(INFO) << "SSD cache has already been shutdown";
+    }
+    shutdown_ = true;
+  }
+
+  VELOX_SSD_CACHE_LOG(INFO) << "SSD cache is shutting down";
+  while (writesInProgress_) {
+    std::this_thread::sleep_for(kWriteWaitMs);
+  }
+  for (auto& file : files_) {
+    file->checkpoint(true);
+  }
+  VELOX_SSD_CACHE_LOG(INFO) << "SSD cache has been shutdown";
+}
+
 void SsdCache::clear() {
   for (auto& file : files_) {
     file->clear();
   }
 }
 
-std::string SsdCache::toString() const {
-  auto data = stats();
-  uint64_t capacity = maxBytes();
-  std::stringstream out;
-  out << "Ssd cache IO: Write " << (data.bytesWritten >> 20) << "MB read "
-      << (data.bytesRead >> 20) << "MB Size " << (capacity >> 30)
-      << "GB Occupied " << (data.bytesCached >> 30) << "GB";
-  out << (data.entriesCached >> 10) << "K entries.";
-  out << "\nGroupStats: " << groupStats_->toString(capacity);
-  return out.str();
-}
-
-void SsdCache::deleteFiles() {
-  for (auto& file : files_) {
-    file->deleteFile();
-  }
-}
-
-void SsdCache::shutdown() {
-  isShutdown_ = true;
-  while (writesInProgress_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-  }
-  for (auto& file : files_) {
-    file->checkpoint(true);
+void SsdCache::waitForWriteToFinish() {
+  while (writesInProgress_ != 0) {
+    std::this_thread::sleep_for(kWriteWaitMs);
   }
 }
 

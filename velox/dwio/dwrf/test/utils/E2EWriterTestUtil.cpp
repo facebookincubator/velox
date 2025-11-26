@@ -29,10 +29,9 @@ using namespace facebook::velox::memory;
 
 namespace facebook::velox::dwrf {
 
-/* static */ std::unique_ptr<Writer> E2EWriterTestUtil::writeData(
-    std::unique_ptr<DataSink> sink,
+/* static */ std::unique_ptr<Writer> E2EWriterTestUtil::createWriter(
+    std::unique_ptr<FileSink> sink,
     const std::shared_ptr<const Type>& type,
-    const std::vector<VectorPtr>& batches,
     const std::shared_ptr<Config>& config,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
@@ -46,17 +45,40 @@ namespace facebook::velox::dwrf {
   options.flushPolicyFactory = flushPolicyFactory;
   options.layoutPlannerFactory = layoutPlannerFactory;
 
-  auto writer = std::make_unique<dwrf::Writer>(
-      std::move(sink),
-      options,
-      velox::memory::defaultMemoryManager().addRootPool());
+  return std::make_unique<dwrf::Writer>(
+      std::move(sink), options, velox::memory::memoryManager()->addRootPool());
+}
 
+/* static */ std::unique_ptr<Writer> E2EWriterTestUtil::writeData(
+    std::unique_ptr<Writer> writer,
+    const std::vector<VectorPtr>& batches) {
   for (size_t i = 0; i < batches.size(); ++i) {
     writer->write(batches[i]);
   }
 
   writer->close();
+  VLOG(1) << "writer root pool usage: "
+          << writer->getContext().testingGetWriterMemoryStats();
   return writer;
+}
+
+/* static */ std::unique_ptr<Writer> E2EWriterTestUtil::writeData(
+    std::unique_ptr<FileSink> sink,
+    const std::shared_ptr<const Type>& type,
+    const std::vector<VectorPtr>& batches,
+    const std::shared_ptr<Config>& config,
+    std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
+    std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
+        layoutPlannerFactory,
+    const int64_t writerMemoryCap) {
+  auto writer = createWriter(
+      std::move(sink),
+      type,
+      config,
+      std::move(flushPolicyFactory),
+      std::move(layoutPlannerFactory),
+      writerMemoryCap);
+  return writeData(std::move(writer), batches);
 }
 
 /* static */ void E2EWriterTestUtil::testWriter(
@@ -74,7 +96,8 @@ namespace facebook::velox::dwrf {
     const int64_t writerMemoryCap,
     const bool verifyContent) {
   // write file to memory
-  auto sink = std::make_unique<MemorySink>(pool, 200 * 1024 * 1024);
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024, FileSink::Options{.pool = &pool});
   auto sinkPtr = sink.get();
 
   // Writer owns sink. Keeping writer alive to avoid deleting the sink.
@@ -88,20 +111,39 @@ namespace facebook::velox::dwrf {
       writerMemoryCap);
   // read it back and compare
   auto readFile = std::make_shared<InMemoryReadFile>(
-      std::string_view(sinkPtr->getData(), sinkPtr->size()));
+      std::string(sinkPtr->data(), sinkPtr->size()));
   auto input = std::make_unique<BufferedInput>(readFile, pool);
 
-  ReaderOptions readerOpts{&pool};
+  dwio::common::ReaderOptions readerOpts{&pool};
   RowReaderOptions rowReaderOpts;
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());
-  if (!verifyContent) {
-    return;
-  }
 
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<DwrfRowReader*>(rowReader.get());
+
+  size_t dictEncodingCount = 0;
+  size_t totalEncodingCount = 0;
+  for (size_t i = 0; i < reader->getNumberOfStripes(); ++i) {
+    bool preload{false};
+    auto stripeMetadata = dwrfRowReader->fetchStripe(i, preload);
+    const auto& stripeFooter = *stripeMetadata->footer;
+    totalEncodingCount += stripeFooter.columnEncodingSize();
+    for (const auto& encoding : stripeFooter.columnEncodingsDwrf()) {
+      if (encoding.kind() == proto::ColumnEncoding_Kind_DICTIONARY) {
+        ++dictEncodingCount;
+      }
+    }
+  }
+  LOG(INFO) << fmt::format(
+      "dict encoding distribution: {}/{}",
+      dictEncodingCount,
+      totalEncodingCount);
+
+  if (!verifyContent) {
+    return;
+  }
 
   auto batchIndex = 0;
   auto rowIndex = 0;

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
 
 namespace facebook::velox::test {
@@ -26,13 +27,15 @@ class JsonTypeTest : public testing::Test, public TypeTestBase {
 };
 
 TEST_F(JsonTypeTest, basic) {
-  ASSERT_EQ(JSON()->name(), "JSON");
-  ASSERT_EQ(JSON()->kindName(), "VARCHAR");
+  ASSERT_STREQ(JSON()->name(), "JSON");
+  ASSERT_STREQ(JSON()->kindName(), "VARCHAR");
   ASSERT_TRUE(JSON()->parameters().empty());
   ASSERT_EQ(JSON()->toString(), "JSON");
 
   ASSERT_TRUE(hasType("JSON"));
   ASSERT_EQ(*getType("JSON", {}), *JSON());
+
+  ASSERT_FALSE(JSON()->isOrderable());
 }
 
 TEST_F(JsonTypeTest, serde) {

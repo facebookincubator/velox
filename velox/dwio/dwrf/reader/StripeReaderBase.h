@@ -18,65 +18,113 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 
 namespace facebook::velox::dwrf {
 
+struct StripeMetadata {
+  dwio::common::BufferedInput* stripeInput;
+  std::shared_ptr<const StripeFooterWrapper> footer;
+  std::unique_ptr<encryption::DecryptionHandler> decryptionHandler;
+  StripeInformationWrapper stripeInfo;
+
+  StripeMetadata(
+      std::shared_ptr<dwio::common::BufferedInput> _stripeInput,
+      std::shared_ptr<const proto::StripeFooter> _footer,
+      std::unique_ptr<encryption::DecryptionHandler> _decryptionHandler,
+      StripeInformationWrapper _stripeInfo)
+      : StripeMetadata(
+            std::move(_stripeInput),
+            std::make_shared<StripeFooterWrapper>(_footer),
+            std::move(_decryptionHandler),
+            _stripeInfo) {}
+
+  StripeMetadata(
+      dwio::common::BufferedInput* _stripeInput,
+      std::shared_ptr<const proto::StripeFooter> _footer,
+      std::unique_ptr<encryption::DecryptionHandler> _decryptionHandler,
+      StripeInformationWrapper _stripeInfo)
+      : StripeMetadata(
+            _stripeInput,
+            std::make_shared<StripeFooterWrapper>(_footer),
+            std::move(_decryptionHandler),
+            _stripeInfo) {}
+
+  StripeMetadata(
+      std::shared_ptr<dwio::common::BufferedInput> _stripeInput,
+      std::shared_ptr<const proto::orc::StripeFooter> _footer,
+      std::unique_ptr<encryption::DecryptionHandler> _decryptionHandler,
+      StripeInformationWrapper _stripeInfo)
+      : StripeMetadata(
+            std::move(_stripeInput),
+            std::make_shared<StripeFooterWrapper>(_footer),
+            std::move(_decryptionHandler),
+            _stripeInfo) {}
+
+  StripeMetadata(
+      dwio::common::BufferedInput* _stripeInput,
+      std::shared_ptr<const proto::orc::StripeFooter> _footer,
+      std::unique_ptr<encryption::DecryptionHandler> _decryptionHandler,
+      StripeInformationWrapper _stripeInfo)
+      : StripeMetadata(
+            _stripeInput,
+            std::make_shared<StripeFooterWrapper>(_footer),
+            std::move(_decryptionHandler),
+            _stripeInfo) {}
+
+ private:
+  StripeMetadata(
+      std::shared_ptr<dwio::common::BufferedInput> _stripeInput,
+      std::shared_ptr<const StripeFooterWrapper> _footer,
+      std::unique_ptr<encryption::DecryptionHandler> _decryptionHandler,
+      StripeInformationWrapper _stripeInfo)
+      : stripeInput{_stripeInput.get()},
+        footer{std::move(_footer)},
+        decryptionHandler{std::move(_decryptionHandler)},
+        stripeInfo{std::move(_stripeInfo)},
+        stripeInputOwned_{std::move(_stripeInput)} {}
+
+  StripeMetadata(
+      dwio::common::BufferedInput* _stripeInput,
+      std::shared_ptr<const StripeFooterWrapper> _footer,
+      std::unique_ptr<encryption::DecryptionHandler> _decryptionHandler,
+      StripeInformationWrapper _stripeInfo)
+      : stripeInput{_stripeInput},
+        footer{std::move(_footer)},
+        decryptionHandler{std::move(_decryptionHandler)},
+        stripeInfo{std::move(_stripeInfo)} {}
+  const std::shared_ptr<dwio::common::BufferedInput> stripeInputOwned_;
+};
+
 class StripeReaderBase {
  public:
   explicit StripeReaderBase(const std::shared_ptr<ReaderBase>& reader)
-      : reader_{reader},
-        handler_{std::make_unique<encryption::DecryptionHandler>(
-            reader_->getDecryptionHandler())} {}
-
-  // for testing purpose
-  StripeReaderBase(
-      const std::shared_ptr<ReaderBase>& reader,
-      const proto::StripeFooter* footer)
-      : reader_{reader},
-        footer_{const_cast<proto::StripeFooter*>(footer)},
-        handler_{std::make_unique<encryption::DecryptionHandler>(
-            reader_->getDecryptionHandler())},
-        canLoad_{false} {
-    // The footer is expected to be arena allocated and to stay
-    // live for the lifetime of 'this'.
-    DWIO_ENSURE(footer->GetArena());
-  }
+      : reader_{reader} {}
 
   virtual ~StripeReaderBase() = default;
-
-  StripeInformationWrapper loadStripe(uint32_t index, bool& preload);
-
-  const proto::StripeFooter& getStripeFooter() const {
-    DWIO_ENSURE_NOT_NULL(footer_, "stripe not loaded");
-    return *footer_;
-  }
-
-  dwio::common::BufferedInput& getStripeInput() const {
-    return stripeInput_ ? *stripeInput_ : reader_->getBufferedInput();
-  }
 
   ReaderBase& getReader() const {
     return *reader_;
   }
 
-  std::shared_ptr<ReaderBase> readerBaseShared() {
+  const std::shared_ptr<ReaderBase>& readerBaseShared() const {
     return reader_;
   }
 
-  const encryption::DecryptionHandler& getDecryptionHandler() const {
-    return *handler_;
-  }
+  std::unique_ptr<const StripeMetadata> fetchStripe(
+      uint32_t index,
+      bool& preload) const;
 
  private:
-  std::shared_ptr<ReaderBase> reader_;
-  std::unique_ptr<dwio::common::BufferedInput> stripeInput_;
-  proto::StripeFooter* footer_ = nullptr;
-  std::unique_ptr<encryption::DecryptionHandler> handler_;
-  std::optional<uint32_t> lastStripeIndex_;
-  bool canLoad_{true};
+  // stripeFooter default null arg should only be used for testing.
+  void loadEncryptionKeys(
+      uint32_t index,
+      const proto::StripeFooter& stripeFooter,
+      const StripeInformationWrapper& stripeInfo,
+      encryption::DecryptionHandler& handler) const;
 
-  void loadEncryptionKeys(uint32_t index);
+  const std::shared_ptr<ReaderBase> reader_;
 
   friend class StripeLoadKeysTest;
 };

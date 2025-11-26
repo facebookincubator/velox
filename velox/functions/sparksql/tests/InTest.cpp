@@ -31,10 +31,6 @@ constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 /// Wraps input in a dictionary that repeats first row.
 class TestingDictionaryFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -63,7 +59,10 @@ class InTest : public SparkFunctionBaseTest {
     exec::registerVectorFunction(
         "testing_dictionary",
         TestingDictionaryFunction::signatures(),
-        std::make_unique<TestingDictionaryFunction>());
+        std::make_unique<TestingDictionaryFunction>(),
+        exec::VectorFunctionMetadataBuilder()
+            .defaultNullBehavior(false)
+            .build());
   }
 
   template <typename T>
@@ -84,8 +83,9 @@ class InTest : public SparkFunctionBaseTest {
         rhsArrayVector = wrapInDictionary(indices, rhs.size(), rhsArrayVector);
       }
 
-      args.push_back(std::make_shared<core::ConstantTypedExpr>(
-          BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
+      args.push_back(
+          std::make_shared<core::ConstantTypedExpr>(
+              BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
       return exec::ExprSet(
           {std::make_shared<core::CallTypedExpr>(BOOLEAN(), args, "in")},
           &execCtx_);
@@ -144,6 +144,7 @@ TEST_F(InTest, Float) {
   EXPECT_EQ(in<float>(-0.0, {-1.0, 0.0, 1.0}), true);
   EXPECT_EQ(in<float>(kNan, {-1.0, 0.0, 1.0}), false);
   EXPECT_EQ(in<float>(kNan, {kNan, -1.0, 0.0, 1.0}), true);
+  EXPECT_EQ(in<float>(std::nanf("1"), {kNan, -1.0, 0.0, 1.0}), true);
 }
 
 TEST_F(InTest, Double) {
@@ -152,6 +153,7 @@ TEST_F(InTest, Double) {
   EXPECT_EQ(in<double>(-0.0, {-1.0, 0.0, 1.0}), true);
   EXPECT_EQ(in<double>(kNan, {-1.0, 0.0, 1.0}), false);
   EXPECT_EQ(in<double>(kNan, {kNan, -1.0, 0.0, 1.0}), true);
+  EXPECT_EQ(in<double>(std::nan("1"), {kNan, -1.0, 0.0, 1.0}), true);
   EXPECT_EQ(in<double>(kInf, {kNan, -1.0, 0.0, 1.0}), false);
   EXPECT_EQ(in<double>(kInf, {kNan, -1.0, 0.0, 1.0, kInf}), true);
   EXPECT_EQ(in<double>(-kInf, {kNan, -1.0, 0.0, 1.0}), false);
@@ -177,6 +179,18 @@ TEST_F(InTest, Timestamp) {
       std::nullopt);
   EXPECT_EQ(
       in<Timestamp>(Timestamp(0, 0), {Timestamp(0, 0), Timestamp()}), true);
+
+  // The precision of Spark 'in' is microseconds.
+  EXPECT_EQ(
+      in<Timestamp>(
+          Timestamp(0, 123'456'000),
+          {Timestamp(0, 123'000'000), Timestamp(0, 123'123'000)}),
+      false);
+  EXPECT_EQ(
+      in<Timestamp>(
+          Timestamp(0, 123'456'789),
+          {Timestamp(0, 123'456'000), Timestamp(0, 123'456'123)}),
+      true);
 }
 
 TEST_F(InTest, Date) {
@@ -191,6 +205,42 @@ TEST_F(InTest, Bool) {
   EXPECT_EQ(in<bool>(false, {true, false, std::nullopt}), true);
   EXPECT_EQ(in<bool>(false, {false, std::nullopt}), true);
   EXPECT_EQ(in<bool>(false, {false}), true);
+}
+
+TEST_F(InTest, shortDecimal) {
+  EXPECT_EQ(in<int64_t>(1, {1, 2}, DECIMAL(2, 1)), true);
+  EXPECT_EQ(in<int64_t>(2, {1, 2}, DECIMAL(10, 5)), true);
+  EXPECT_EQ(in<int64_t>(3, {1, 2}, DECIMAL(17, 11)), false);
+  EXPECT_EQ(
+      in<int64_t>(
+          DecimalUtil::kShortDecimalMin,
+          {DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMax},
+          DECIMAL(18, 9)),
+      true);
+  EXPECT_EQ(
+      in<int64_t>(
+          DecimalUtil::kShortDecimalMax,
+          {DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMax},
+          DECIMAL(18, 9)),
+      true);
+}
+
+TEST_F(InTest, longDecimal) {
+  EXPECT_EQ(in<int128_t>(1, {1, 2}, DECIMAL(21, 2)), true);
+  EXPECT_EQ(in<int128_t>(2, {1, 2}, DECIMAL(29, 10)), true);
+  EXPECT_EQ(in<int128_t>(3, {1, 2}, DECIMAL(35, 20)), false);
+  EXPECT_EQ(
+      in<int128_t>(
+          DecimalUtil::kLongDecimalMin,
+          {DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMax},
+          DECIMAL(38, 19)),
+      true);
+  EXPECT_EQ(
+      in<int128_t>(
+          DecimalUtil::kLongDecimalMax,
+          {DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMax},
+          DECIMAL(38, 19)),
+      true);
 }
 
 TEST_F(InTest, Const) {

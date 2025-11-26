@@ -19,6 +19,11 @@
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
+#include "velox/vector/VectorStream.h"
+
+namespace facebook::velox::exec {
+class EvalErrors;
+}
 
 namespace facebook::velox::functions {
 
@@ -27,16 +32,29 @@ class RemoteFunctionServiceHandler
     : virtual public apache::thrift::ServiceHandler<
           remote::RemoteFunctionService> {
  public:
-  RemoteFunctionServiceHandler(const std::string& functionPrefix = "")
-      : functionPrefix_(functionPrefix) {}
+  RemoteFunctionServiceHandler(
+      const std::string& functionPrefix = "",
+      std::shared_ptr<memory::MemoryPool> pool = nullptr)
+      : functionPrefix_(functionPrefix), pool_(std::move(pool)) {
+    if (pool_ == nullptr) {
+      pool_ = memory::memoryManager()->addLeafPool();
+    }
+  }
 
   void invokeFunction(
       remote::RemoteFunctionResponse& response,
       std::unique_ptr<remote::RemoteFunctionRequest> request) override;
 
  private:
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  /// Add evalErrors to result by serializing them to a vector of strings and
+  /// converting the result to a Velox flat vector.
+  void handleErrors(
+      apache::thrift::field_ref<remote::RemoteFunctionPage&> result,
+      exec::EvalErrors* evalErrors,
+      const std::unique_ptr<VectorSerde>& serde) const;
+
   const std::string functionPrefix_;
+  std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 } // namespace facebook::velox::functions

@@ -24,13 +24,13 @@ namespace facebook::velox::dwrf {
 class ByteRleEncoderImpl : public ByteRleEncoder {
  public:
   explicit ByteRleEncoderImpl(std::unique_ptr<BufferedOutputStream> output)
-      : outputStream{std::move(output)},
-        numLiterals{0},
-        repeat{false},
-        tailRunLength{0},
-        bufferPosition{0},
-        bufferLength{0},
-        buffer{nullptr} {}
+      : outputStream_{std::move(output)},
+        numLiterals_{0},
+        repeat_{false},
+        tailRunLength_{0},
+        bufferPosition_{0},
+        bufferLength_{0},
+        buffer_{nullptr} {}
 
   uint64_t add(
       const char* data,
@@ -59,7 +59,7 @@ class ByteRleEncoderImpl : public ByteRleEncoder {
   }
 
   uint64_t getBufferSize() const override {
-    return outputStream->size();
+    return outputStream_->size();
   }
 
   uint64_t flush() override;
@@ -68,30 +68,30 @@ class ByteRleEncoderImpl : public ByteRleEncoder {
       const override;
 
  protected:
-  std::unique_ptr<BufferedOutputStream> outputStream;
-  std::array<char, RLE_MAX_LITERAL_SIZE> literals;
-  int32_t numLiterals;
-  bool repeat;
-  int32_t tailRunLength;
-  int32_t bufferPosition;
-  int32_t bufferLength;
-  char* buffer;
-
   void writeByte(char c);
   void writeValues();
   void write(char c);
+
+  std::unique_ptr<BufferedOutputStream> outputStream_;
+  std::array<char, RLE_MAX_LITERAL_SIZE> literals_;
+  int32_t numLiterals_;
+  bool repeat_;
+  int32_t tailRunLength_;
+  int32_t bufferPosition_;
+  int32_t bufferLength_;
+  char* buffer_;
 };
 
 void ByteRleEncoderImpl::writeByte(char c) {
-  if (UNLIKELY(bufferPosition == bufferLength)) {
+  if (UNLIKELY(bufferPosition_ == bufferLength_)) {
     int32_t addedSize = 0;
     DWIO_ENSURE(
-        outputStream->Next(reinterpret_cast<void**>(&buffer), &addedSize),
+        outputStream_->Next(reinterpret_cast<void**>(&buffer_), &addedSize),
         "Allocation failure");
-    bufferPosition = 0;
-    bufferLength = addedSize;
+    bufferPosition_ = 0;
+    bufferLength_ = addedSize;
   }
-  buffer[bufferPosition++] = c;
+  buffer_[bufferPosition_++] = c;
 }
 
 uint64_t ByteRleEncoderImpl::add(
@@ -137,61 +137,62 @@ uint64_t ByteRleEncoderImpl::add(
 }
 
 void ByteRleEncoderImpl::writeValues() {
-  if (numLiterals != 0) {
-    if (repeat) {
-      writeByte(static_cast<char>(numLiterals - RLE_MINIMUM_REPEAT));
-      writeByte(literals[0]);
-    } else {
-      writeByte(static_cast<char>(-numLiterals));
-      for (int32_t i = 0; i < numLiterals; ++i) {
-        writeByte(literals[i]);
-      }
-    }
-    repeat = false;
-    tailRunLength = 0;
-    numLiterals = 0;
+  if (numLiterals_ == 0) {
+    return;
   }
+  if (repeat_) {
+    writeByte(static_cast<char>(numLiterals_ - RLE_MINIMUM_REPEAT));
+    writeByte(literals_[0]);
+  } else {
+    writeByte(static_cast<char>(-numLiterals_));
+    for (int32_t i = 0; i < numLiterals_; ++i) {
+      writeByte(literals_[i]);
+    }
+  }
+  repeat_ = false;
+  tailRunLength_ = 0;
+  numLiterals_ = 0;
 }
 
 uint64_t ByteRleEncoderImpl::flush() {
   writeValues();
-  outputStream->BackUp(bufferLength - bufferPosition);
-  uint64_t dataSize = outputStream->flush();
-  bufferLength = bufferPosition = 0;
+  outputStream_->BackUp(bufferLength_ - bufferPosition_);
+  uint64_t dataSize = outputStream_->flush();
+  bufferLength_ = bufferPosition_ = 0;
   return dataSize;
 }
 
 void ByteRleEncoderImpl::write(char value) {
-  if (numLiterals == 0) {
-    literals[numLiterals++] = value;
-    tailRunLength = 1;
-  } else if (repeat) {
-    if (value == literals[0]) {
-      if (++numLiterals == RLE_MAXIMUM_REPEAT) {
+  if (numLiterals_ == 0) {
+    literals_[numLiterals_++] = value;
+    tailRunLength_ = 1;
+  } else if (repeat_) {
+    if (value == literals_[0]) {
+      if (++numLiterals_ == RLE_MAXIMUM_REPEAT) {
         writeValues();
       }
     } else {
       writeValues();
-      literals[numLiterals++] = value;
-      tailRunLength = 1;
+      literals_[numLiterals_++] = value;
+      tailRunLength_ = 1;
     }
   } else {
-    if (value == literals[numLiterals - 1]) {
-      tailRunLength += 1;
+    if (value == literals_[numLiterals_ - 1]) {
+      tailRunLength_ += 1;
     } else {
-      tailRunLength = 1;
+      tailRunLength_ = 1;
     }
-    if (tailRunLength == RLE_MINIMUM_REPEAT) {
-      if (numLiterals + 1 > RLE_MINIMUM_REPEAT) {
-        numLiterals -= (RLE_MINIMUM_REPEAT - 1);
+    if (tailRunLength_ == RLE_MINIMUM_REPEAT) {
+      if (numLiterals_ + 1 > RLE_MINIMUM_REPEAT) {
+        numLiterals_ -= (RLE_MINIMUM_REPEAT - 1);
         writeValues();
-        literals[0] = value;
+        literals_[0] = value;
       }
-      repeat = true;
-      numLiterals = RLE_MINIMUM_REPEAT;
+      repeat_ = true;
+      numLiterals_ = RLE_MINIMUM_REPEAT;
     } else {
-      literals[numLiterals++] = value;
-      if (numLiterals == RLE_MAX_LITERAL_SIZE) {
+      literals_[numLiterals_++] = value;
+      if (numLiterals_ == RLE_MAX_LITERAL_SIZE) {
         writeValues();
       }
     }
@@ -201,9 +202,9 @@ void ByteRleEncoderImpl::write(char value) {
 void ByteRleEncoderImpl::recordPosition(
     PositionRecorder& recorder,
     int32_t strideIndex) const {
-  outputStream->recordPosition(
-      recorder, bufferLength, bufferPosition, strideIndex);
-  recorder.add(static_cast<uint64_t>(numLiterals), strideIndex);
+  outputStream_->recordPosition(
+      recorder, bufferLength_, bufferPosition_, strideIndex);
+  recorder.add(static_cast<uint64_t>(numLiterals_), strideIndex);
 }
 
 std::unique_ptr<ByteRleEncoder> createByteRleEncoder(
@@ -340,57 +341,42 @@ std::unique_ptr<ByteRleEncoder> createBooleanRleEncoder(
 }
 
 void ByteRleDecoder::nextBuffer() {
+  VELOX_DCHECK_EQ(pendingSkip_, 0);
+
   int32_t bufferLength;
   const void* bufferPointer;
-  DWIO_ENSURE(
-      inputStream->Next(&bufferPointer, &bufferLength),
-      "bad read in nextBuffer ",
+  const auto ret = inputStream_->Next(&bufferPointer, &bufferLength);
+  VELOX_CHECK(
+      ret,
+      "bad read in nextBuffer {}, {}",
       encodingKey_.toString(),
-      ", ",
-      inputStream->getName());
-  bufferStart = static_cast<const char*>(bufferPointer);
-  bufferEnd = bufferStart + bufferLength;
+      inputStream_->getName());
+  bufferStart_ = static_cast<const char*>(bufferPointer);
+  bufferEnd_ = bufferStart_ + bufferLength;
 }
 
 void ByteRleDecoder::seekToRowGroup(
     dwio::common::PositionProvider& positionProvider) {
-  // move the input stream
-  inputStream->seekToPosition(positionProvider);
-  // force a re-read from the stream
-  bufferEnd = bufferStart;
-  // force reading a new header
-  remainingValues = 0;
-  // skip ahead the given number of records
-  ByteRleDecoder::skip(positionProvider.next());
+  // Move the input stream
+  inputStream_->seekToPosition(positionProvider);
+  // Force a re-read from the stream
+  bufferEnd_ = bufferStart_;
+  // Force reading a new header
+  remainingValues_ = 0;
+  // Skip ahead the given number of records
+  pendingSkip_ = positionProvider.next();
 }
 
 void ByteRleDecoder::skipBytes(size_t count) {
-  size_t consumedBytes = count;
-  while (consumedBytes > 0) {
-    if (bufferStart == bufferEnd) {
-      nextBuffer();
-    }
-    size_t skipSize = std::min(
-        static_cast<size_t>(consumedBytes),
-        static_cast<size_t>(bufferEnd - bufferStart));
-    bufferStart += skipSize;
-    consumedBytes -= skipSize;
+  if (bufferStart_ < bufferEnd_) {
+    const size_t skipSize = std::min(
+        static_cast<size_t>(count),
+        static_cast<size_t>(bufferEnd_ - bufferStart_));
+    bufferStart_ += skipSize;
+    count -= skipSize;
   }
-}
-
-void ByteRleDecoder::skip(uint64_t numValues) {
-  while (numValues > 0) {
-    if (remainingValues == 0) {
-      readHeader();
-    }
-    size_t count = std::min(static_cast<size_t>(numValues), remainingValues);
-    remainingValues -= count;
-    numValues -= count;
-    // for literals we need to skip over count bytes, which may involve
-    // reading from the underlying stream
-    if (!repeating) {
-      skipBytes(count);
-    }
+  if (count > 0) {
+    inputStream_->SkipInt64(count);
   }
 }
 
@@ -398,30 +384,33 @@ void ByteRleDecoder::next(
     char* data,
     uint64_t numValues,
     const uint64_t* nulls) {
+  skipPending();
+
   uint64_t position = 0;
   // skip over null values
   while (nulls && position < numValues && bits::isBitNull(nulls, position)) {
-    position += 1;
+    ++position;
   }
+
   while (position < numValues) {
-    // if we are out of values, read more
-    if (remainingValues == 0) {
+    // If we are out of values, read more.
+    if (remainingValues_ == 0) {
       readHeader();
     }
-    // how many do we read out of this block?
-    size_t count =
-        std::min(static_cast<size_t>(numValues - position), remainingValues);
-    uint64_t consumed = 0;
-    if (repeating) {
+    // How many do we read out of this block?
+    const size_t count =
+        std::min(static_cast<size_t>(numValues - position), remainingValues_);
+    uint64_t consumed{0};
+    if (repeating_) {
       if (nulls) {
         for (uint64_t i = 0; i < count; ++i) {
           if (!bits::isBitNull(nulls, position + i)) {
-            data[position + i] = value;
-            consumed += 1;
+            data[position + i] = value_;
+            ++consumed;
           }
         }
       } else {
-        memset(data + position, value, count);
+        ::memset(data + position, value_, count);
         consumed = count;
       }
     } else {
@@ -429,30 +418,31 @@ void ByteRleDecoder::next(
         for (uint64_t i = 0; i < count; ++i) {
           if (!bits::isBitNull(nulls, position + i)) {
             data[position + i] = readByte();
-            consumed += 1;
+            ++consumed;
           }
         }
       } else {
         uint64_t i = 0;
         while (i < count) {
-          if (bufferStart == bufferEnd) {
+          if (bufferStart_ == bufferEnd_) {
             nextBuffer();
           }
-          uint64_t copyBytes = std::min(
+          const uint64_t copyBytes = std::min(
               static_cast<uint64_t>(count - i),
-              static_cast<uint64_t>(bufferEnd - bufferStart));
-          std::copy(bufferStart, bufferStart + copyBytes, data + position + i);
-          bufferStart += copyBytes;
+              static_cast<uint64_t>(bufferEnd_ - bufferStart_));
+          std::copy(
+              bufferStart_, bufferStart_ + copyBytes, data + position + i);
+          bufferStart_ += copyBytes;
           i += copyBytes;
         }
         consumed = count;
       }
     }
-    remainingValues -= consumed;
+    remainingValues_ -= consumed;
     position += count;
     // skip over any null values
     while (nulls && position < numValues && bits::isBitNull(nulls, position)) {
-      position += 1;
+      ++position;
     }
   }
 }
@@ -466,38 +456,34 @@ std::unique_ptr<ByteRleDecoder> createByteRleDecoder(
 void BooleanRleDecoder::seekToRowGroup(
     dwio::common::PositionProvider& positionProvider) {
   ByteRleDecoder::seekToRowGroup(positionProvider);
-  uint64_t consumed = positionProvider.next();
-  DWIO_ENSURE_LE(
+  const uint64_t consumed = positionProvider.next();
+  VELOX_CHECK_LE(
       consumed,
       8,
       "bad position ",
       encodingKey_.toString(),
       ", ",
-      inputStream->getName());
-  if (consumed != 0) {
-    remainingBits = 8 - consumed;
-    ByteRleDecoder::next(
-        reinterpret_cast<char*>(&reversedLastByte), 1, nullptr);
-    bits::reverseBits(&reversedLastByte, 1);
-  } else {
-    remainingBits = 0;
-  }
+      inputStream_->getName());
+  pendingSkip_ = 8 * pendingSkip_ + consumed;
+  remainingBits_ = 0;
 }
 
-void BooleanRleDecoder::skip(uint64_t numValues) {
-  if (numValues <= remainingBits) {
-    remainingBits -= numValues;
+void BooleanRleDecoder::skipPending() {
+  auto numValues = pendingSkip_;
+  pendingSkip_ = 0;
+  if (numValues <= remainingBits_) {
+    remainingBits_ -= numValues;
   } else {
-    numValues -= remainingBits;
-    remainingBits = 0;
-    uint64_t bytesSkipped = numValues / 8;
-    ByteRleDecoder::skip(bytesSkipped);
+    numValues -= remainingBits_;
+    remainingBits_ = 0;
+    pendingSkip_ = numValues / 8;
+    ByteRleDecoder::skipPending();
     uint64_t bitsToSkip = numValues % 8;
     if (bitsToSkip) {
       ByteRleDecoder::next(
-          reinterpret_cast<char*>(&reversedLastByte), 1, nullptr);
-      bits::reverseBits(&reversedLastByte, 1);
-      remainingBits = 8 - bitsToSkip;
+          reinterpret_cast<char*>(&reversedLastByte_), 1, nullptr);
+      bits::reverseBits(&reversedLastByte_, 1);
+      remainingBits_ = 8 - bitsToSkip;
     }
   }
 }
@@ -506,6 +492,8 @@ void BooleanRleDecoder::next(
     char* data,
     uint64_t numValues,
     const uint64_t* nulls) {
+  skipPending();
+
   uint64_t nonNulls = numValues;
   if (nulls) {
     nonNulls = bits::countNonNulls(nulls, 0, numValues);
@@ -513,62 +501,63 @@ void BooleanRleDecoder::next(
 
   const uint32_t outputBytes = (numValues + 7) / 8;
   if (nonNulls == 0) {
-    memset(data, 0, outputBytes);
+    ::memset(data, 0, outputBytes);
     return;
   }
 
-  if (remainingBits >= nonNulls) {
+  if (remainingBits_ >= nonNulls) {
     // The remaining bits from last round is enough for this round, and we don't
     // need to read new data. Since remainingBits should be less than or equal
     // to 8, therefore nonNulls must be less than 8.
-    data[0] = reversedLastByte >> (8 - remainingBits) & 0xff >> (8 - nonNulls);
-    remainingBits -= nonNulls;
+    data[0] =
+        reversedLastByte_ >> (8 - remainingBits_) & 0xff >> (8 - nonNulls);
+    remainingBits_ -= nonNulls;
   } else {
-    // Put the remaining bits, if any, into previousByte
-    uint8_t previousByte = 0;
-    if (remainingBits > 0) {
-      previousByte = reversedLastByte >> (8 - remainingBits);
+    // Put the remaining bits, if any, into previousByte.
+    uint8_t previousByte{0};
+    if (remainingBits_ > 0) {
+      previousByte = reversedLastByte_ >> (8 - remainingBits_);
     }
 
     // We need to read in (nonNulls - remainingBits) values and it must be a
     // positive number if nonNulls is positive
-    const uint64_t bytesRead = ((nonNulls - remainingBits) + 7) / 8;
+    const uint64_t bytesRead = bits::divRoundUp(nonNulls - remainingBits_, 8);
     ByteRleDecoder::next(data, bytesRead, nullptr);
 
     bits::reverseBits(reinterpret_cast<uint8_t*>(data), bytesRead);
-    reversedLastByte = data[bytesRead - 1];
+    reversedLastByte_ = data[bytesRead - 1];
 
     // Now shift the data in place
-    if (remainingBits > 0) {
+    if (remainingBits_ > 0) {
       uint64_t nonNullDWords = nonNulls / 64;
       // Shift 64 bits a time when there're enough data. Note that the data
       // buffer was created 64-bits aligned so there won't be performance
       // degradation shifting it in 64-bit unit.
-      for (uint64_t i = 0; i < nonNullDWords; i++) {
+      for (uint64_t i = 0; i < nonNullDWords; ++i) {
         uint64_t tmp = reinterpret_cast<uint64_t*>(data)[i];
         reinterpret_cast<uint64_t*>(data)[i] =
-            previousByte | tmp << remainingBits; // previousByte is LSB
-        previousByte = (tmp >> (64 - remainingBits)) & 0xff;
+            previousByte | tmp << remainingBits_; // previousByte is LSB
+        previousByte = (tmp >> (64 - remainingBits_)) & 0xff;
       }
 
       // Shift 8 bits a time for the remaining bits
       const uint64_t nonNullOutputBytes = (nonNulls + 7) / 8;
-      for (int32_t i = nonNullDWords * 8; i < nonNullOutputBytes; i++) {
+      for (int32_t i = nonNullDWords * 8; i < nonNullOutputBytes; ++i) {
         uint8_t tmp = data[i]; // already reversed
-        data[i] = previousByte | tmp << remainingBits; // previousByte is LSB
-        previousByte = tmp >> (8 - remainingBits);
+        data[i] = previousByte | tmp << remainingBits_; // previousByte is LSB
+        previousByte = tmp >> (8 - remainingBits_);
       }
     }
-    remainingBits = bytesRead * 8 + remainingBits - nonNulls;
+    remainingBits_ = bytesRead * 8 + remainingBits_ - nonNulls;
   }
 
-  // unpack data for nulls
+  // Unpack data for nulls.
   if (numValues > nonNulls) {
     bits::scatterBits(nonNulls, numValues, data, nulls, data);
   }
 
-  // clear the most significant bits in the last byte which will be processed in
-  // the next round
+  // Clear the most significant bits in the last byte which will be processed in
+  // the next round.
   data[outputBytes - 1] &= 0xff >> (outputBytes * 8 - numValues);
 }
 

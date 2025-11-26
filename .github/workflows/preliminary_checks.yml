@@ -1,0 +1,150 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Run Checks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+
+  get-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
+      changed-files: ${{ steps.changes.outputs.files}}
+      diff-range: ${{ steps.changes.outputs.range }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          merge_base_commit=$(gh api -q '.merge_base_commit.sha' \
+            /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+          )
+
+          range="$merge_base_commit..$HEAD_SHA"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+
+          git diff --name-only $range > changed_files.txt
+
+          cpp_files='.+\.(cpp|h|hpp)$'
+
+          {
+            echo 'files<<EOF'
+            cat changed_files.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          if grep -qE $cpp_files changed_files.txt; then
+            echo "run_clang_tidy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  clang-tidy:
+    needs: get-changes
+    if: ${{ needs.get-changes.outputs.run-clang-tidy == 'true' }}
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - run: uv tool install clang-tidy==18.1.8
+
+      - name: Configure Maximal Build
+        env:
+          CUDA_VERSION: "12.8"
+          CUDA_ARCHITECTURES: 70
+          CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
+          # Set compiler to GCC 12
+          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-12/root/usr/bin
+          faiss_SOURCE: BUNDLED
+          EXTRA_CMAKE_FLAGS: >-
+            -DVELOX_ENABLE_BENCHMARKS=ON
+            -DVELOX_ENABLE_EXAMPLES=ON
+            -DVELOX_ENABLE_ARROW=ON
+            -DVELOX_ENABLE_GEO=ON
+            -DVELOX_ENABLE_PARQUET=ON
+            -DVELOX_ENABLE_HDFS=ON
+            -DVELOX_ENABLE_S3=ON
+            -DVELOX_ENABLE_GCS=ON
+            -DVELOX_ENABLE_ABFS=ON
+            -DVELOX_ENABLE_WAVE=ON
+            -DVELOX_MONO_LIBRARY=ON
+            -DVELOX_BUILD_SHARED=ON
+            -DVELOX_ENABLE_CUDF=ON
+            -DVELOX_ENABLE_FAISS=ON
+            -DVELOX_ENABLE_REMOTE_FUNCTIONS=ON
+        run: |
+          make cmake BUILD_DIR=release BUILD_TYPE=Release
+
+      - name: Run clang-tidy
+        env:
+          FILES: ${{ needs.get-changes.outputs.changed-files }}
+          RANGE: ${{ needs.get-changes.outputs.diff-range }}
+        run: |
+          git config --global --add safe.directory /__w/velox/velox
+
+          python ./scripts/checks/run-clang-tidy.py --commit $RANGE $FILES
+
+  title-check:
+    name: PR Title Format
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        env:
+          title: "${{ github.event.pull_request.title }}"
+        run: |
+          import re
+          import os
+          title = os.environ["title"]
+          title_re = r"^(feat|fix|perf|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
+          match = re.search(title_re, title)
+
+          if match is None:
+            print("::error::Please follow conventional commit guidelines in commit titles as described in CONTRIBUTING.md: https://github.com/facebookincubator/velox/blob/main/CONTRIBUTING.md#commit-messages")
+            exit(1)
+          else:
+            exit(0)

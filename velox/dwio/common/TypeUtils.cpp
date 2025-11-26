@@ -27,64 +27,68 @@ void checkChildrenSelected(
     const std::function<bool(size_t)>& selector) {
   for (size_t i = 0; i < type->size(); ++i) {
     VELOX_USER_CHECK(
-        selector(type->childAt(i)->id),
+        selector(type->childAt(i)->id()),
         folly::to<std::string>(
             "invalid type selection: parent ",
-            type->type->toString(),
+            type->type()->toString(),
             " is selected, but child (index: ",
             i,
             ", id: ",
-            std::to_string(type->id),
+            std::to_string(type->id()),
             ") is not"));
   }
 }
 
-std::shared_ptr<const TypeWithId> visit(
+std::unique_ptr<TypeWithId> visit(
     const std::shared_ptr<const TypeWithId>& typeWithId,
     const std::function<bool(size_t)>& selector) {
-  if (typeWithId->type->isPrimitiveType()) {
-    return typeWithId;
+  if (typeWithId->type()->isPrimitiveType()) {
+    return std::make_unique<TypeWithId>(
+        typeWithId->type(),
+        std::vector<std::unique_ptr<TypeWithId>>(),
+        typeWithId->id(),
+        typeWithId->maxId(),
+        typeWithId->column());
   }
-  if (typeWithId->type->isRow()) {
+  if (typeWithId->type()->isRow()) {
     std::vector<std::string> names;
-    std::vector<std::shared_ptr<const TypeWithId>> typesWithId;
+    std::vector<std::unique_ptr<TypeWithId>> selectedChildren;
     std::vector<std::shared_ptr<const Type>> types;
-    auto& row = typeWithId->type->asRow();
+    auto& row = typeWithId->type()->asRow();
     for (auto i = 0; i < typeWithId->size(); ++i) {
       auto& child = typeWithId->childAt(i);
-      if (selector(child->id)) {
+      if (selector(child->id())) {
         names.push_back(row.nameOf(i));
-        std::shared_ptr<const TypeWithId> twid;
-        twid = visit(child, selector);
-        typesWithId.push_back(twid);
-        types.push_back(twid->type);
+        auto newChild = visit(child, selector);
+        types.push_back(newChild->type());
+        selectedChildren.push_back(std::move(newChild));
       }
     }
     VELOX_USER_CHECK(
         !types.empty(), "selected nothing from row: " + row.toString());
-    return std::make_shared<TypeWithId>(
+    return std::make_unique<TypeWithId>(
         ROW(std::move(names), std::move(types)),
-        std::move(typesWithId),
-        typeWithId->id,
-        typeWithId->maxId,
-        typeWithId->column);
+        std::move(selectedChildren),
+        typeWithId->id(),
+        typeWithId->maxId(),
+        typeWithId->column());
   } else {
     checkChildrenSelected(typeWithId, selector);
-    std::vector<std::shared_ptr<const TypeWithId>> typesWithId;
+    std::vector<std::unique_ptr<TypeWithId>> selectedChildren;
     std::vector<std::shared_ptr<const Type>> types;
     for (auto i = 0; i < typeWithId->size(); ++i) {
       auto& child = typeWithId->childAt(i);
-      std::shared_ptr<const TypeWithId> twid = visit(child, selector);
-      typesWithId.push_back(twid);
-      types.push_back(twid->type);
+      auto newChild = visit(child, selector);
+      types.push_back(newChild->type());
+      selectedChildren.push_back(std::move(newChild));
     }
-    auto type = createType(typeWithId->type->kind(), std::move(types));
-    return std::make_shared<TypeWithId>(
+    auto type = createType(typeWithId->type()->kind(), std::move(types));
+    return std::make_unique<TypeWithId>(
         type,
-        std::move(typesWithId),
-        typeWithId->id,
-        typeWithId->maxId,
-        typeWithId->column);
+        std::move(selectedChildren),
+        typeWithId->id(),
+        typeWithId->maxId(),
+        typeWithId->column());
   }
 }
 
@@ -108,6 +112,7 @@ std::unordered_set<uint32_t> makeCompatibilityMap() {
   compat.insert(getKey(TypeKind::SMALLINT, TypeKind::INTEGER));
   compat.insert(getKey(TypeKind::SMALLINT, TypeKind::BIGINT));
   compat.insert(getKey(TypeKind::INTEGER, TypeKind::BIGINT));
+  compat.insert(getKey(TypeKind::BIGINT, TypeKind::HUGEINT));
   compat.insert(getKey(TypeKind::REAL, TypeKind::DOUBLE));
   return compat;
 }
@@ -126,15 +131,17 @@ void checkTypeCompatibility(
     const FShouldRead& shouldRead,
     const std::function<std::string()>& exceptionMessageCreator) {
   if (shouldRead(to) && !isCompatible(from.kind(), kind(to))) {
-    VELOX_SCHEMA_MISMATCH_ERROR(fmt::format(
-        "{}, From Kind: {}, To Kind: {}",
-        exceptionMessageCreator ? exceptionMessageCreator() : "Schema mismatch",
-        mapTypeKindToName(from.kind()),
-        mapTypeKindToName(kind(to))));
+    VELOX_SCHEMA_MISMATCH_ERROR(
+        fmt::format(
+            "{}, From Kind: {}, To Kind: {}",
+            exceptionMessageCreator ? exceptionMessageCreator()
+                                    : "Schema mismatch",
+            TypeKindName::toName(from.kind()),
+            TypeKindName::toName(kind(to))));
   }
 
   if (recurse) {
-    uint64_t childCount = std::min(from.size(), to.size());
+    const uint64_t childCount = std::min(from.size(), to.size());
     for (uint64_t i = 0; i < childCount; ++i) {
       checkTypeCompatibility(
           *from.childAt(i),
@@ -177,9 +184,9 @@ void checkTypeCompatibility(
       from,
       *selector.getSchemaWithId(),
       /*recurse=*/true,
-      [](const auto& t) { return t.type->kind(); },
+      [](const auto& t) { return t.type()->kind(); },
       [&selector](const auto& node) {
-        return selector.shouldReadNode(node.id);
+        return selector.shouldReadNode(node.id());
       },
       exceptionMessageCreator);
 }

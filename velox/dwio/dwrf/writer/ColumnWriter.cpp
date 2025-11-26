@@ -56,11 +56,11 @@ class ByteRleColumnWriter : public BaseColumnWriter {
   ByteRleColumnWriter(
       WriterContext& context,
       const TypeWithId& type,
-      const uint32_t sequence,
-      std::function<std::unique_ptr<ByteRleEncoder>(
-          std::unique_ptr<BufferedOutputStream>)> factory,
+      uint32_t sequence,
+      const std::function<std::unique_ptr<ByteRleEncoder>(
+          std::unique_ptr<BufferedOutputStream>)>& factory,
       std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+      : BaseColumnWriter{context, type, sequence, std::move(onRecordPosition)},
         data_{factory(newStream(StreamKind::StreamKind_DATA))} {
     reset();
   }
@@ -68,8 +68,9 @@ class ByteRleColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_->flush();
   }
@@ -91,8 +92,8 @@ uint64_t ByteRleColumnWriter<int8_t>::write(
   static_assert(NULL_SIZE == 1, "unexpected raw data size");
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
     // Optimized path for flat vectors
-    auto flatVector = slice->as<FlatVector<int8_t>>();
-    DWIO_ENSURE(flatVector, "unexpected vector type");
+    auto* flatVector = slice->as<FlatVector<int8_t>>();
+    VELOX_CHECK_NOT_NULL(flatVector, "unexpected vector type");
     writeNulls(slice, ranges);
     const auto* nulls = slice->rawNulls();
     const auto* vals = flatVector->template rawValues<char>();
@@ -141,8 +142,8 @@ uint64_t ByteRleColumnWriter<bool>::write(
   static_assert(NULL_SIZE == 1, "unexpected raw data size");
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
     // Optimized path for flat vectors
-    auto flatVector = slice->as<FlatVector<bool>>();
-    DWIO_ENSURE(flatVector, "unexpected vector type");
+    auto* flatVector = slice->as<FlatVector<bool>>();
+    VELOX_CHECK_NOT_NULL(flatVector, "unexpected vector type");
     writeNulls(slice, ranges);
     const auto* nulls = slice->rawNulls();
     const auto* vals = flatVector->template rawValues<uint64_t>();
@@ -201,26 +202,28 @@ class IntegerColumnWriter : public BaseColumnWriter {
         inDictionary_{nullptr},
         dictEncoder_{context.getIntDictionaryEncoder<T>(
             EncodingKey{
-                type.id,
-                context.shareFlatMapDictionaries ? 0 : sequence},
+                type.id(),
+                context.shareFlatMapDictionaries() ? 0 : sequence},
             getMemoryPool(MemoryUsageCategory::DICTIONARY),
             getMemoryPool(MemoryUsageCategory::GENERAL))},
-        rows_{getMemoryPool(MemoryUsageCategory::GENERAL)},
+        rows_{
+            getMemoryPool(MemoryUsageCategory::GENERAL),
+            /*initialCapacity=*/16},
         dictionaryKeySizeThreshold_{
             getConfig(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD)},
         sort_{getConfig(Config::DICTIONARY_SORT_KEYS)},
         useDictionaryEncoding_{useDictionaryEncoding()},
         strideOffsets_{getMemoryPool(MemoryUsageCategory::GENERAL)} {
-    DWIO_ENSURE_GE(dictionaryKeySizeThreshold_, 0.0);
-    DWIO_ENSURE_LE(dictionaryKeySizeThreshold_, 1.0);
-    DWIO_ENSURE(firstStripe_);
+    VELOX_CHECK_GE(dictionaryKeySizeThreshold_, 0.0);
+    VELOX_CHECK_LE(dictionaryKeySizeThreshold_, 1.0);
+    VELOX_CHECK(firstStripe_);
     if (!useDictionaryEncoding_) {
       // Suppress the stream used to initialize dictionary encoder.
       // TODO: passing factory method into the dict encoder also works
       // around this problem but has messier code organization.
       suppressStream(
           StreamKind::StreamKind_DICTIONARY_DATA,
-          context_.shareFlatMapDictionaries ? 0 : sequence_);
+          context_.shareFlatMapDictionaries() ? 0 : sequence_);
       initStreamWriters(useDictionaryEncoding_);
     }
     reset();
@@ -246,8 +249,9 @@ class IntegerColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     tryAbandonDictionaries(false);
     initStreamWriters(useDictionaryEncoding_);
 
@@ -256,7 +260,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
       finalDictionarySize_ = dictEncoder_.flush();
       populateDictionaryEncodingStreams();
       dictEncoder_.clear();
-      rows_.clear();
+      rows_.clear(memory::underMemoryArbitration());
     }
 
     // NOTE: Flushes index. All index entries need to have been backfilled.
@@ -285,12 +289,14 @@ class IntegerColumnWriter : public BaseColumnWriter {
 
   // FIXME: call base class set encoding first to deal with sequence and
   // whatnot.
-  void setEncoding(proto::ColumnEncoding& encoding) const override {
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
     if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+      auto columnEncodingKind =
+          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY;
+      encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+
+      encoding.setDictionarySize(finalDictionarySize_);
     }
   }
 
@@ -354,9 +360,9 @@ class IntegerColumnWriter : public BaseColumnWriter {
     // around this problem but has messier code organization.
     suppressStream(
         StreamKind::StreamKind_DICTIONARY_DATA,
-        context_.shareFlatMapDictionaries ? 0 : sequence_);
+        context_.shareFlatMapDictionaries() ? 0 : sequence_);
     dictEncoder_.clear();
-    rows_.clear();
+    rows_.clear(true);
     strideOffsets_.clear();
     return true;
   }
@@ -370,15 +376,14 @@ class IntegerColumnWriter : public BaseColumnWriter {
 
   void ensureValidStreamWriters(bool dictEncoding) {
     // Ensure we have valid streams for exactly one encoding.
-    DWIO_ENSURE(
+    VELOX_CHECK(
         (dictEncoding && data_ && inDictionary_ && !dataDirect_) ||
             (!dictEncoding && !data_ && !inDictionary_ && dataDirect_),
-        fmt::format(
-            "dictEncoding = {}, data_ = {}, inDictionary_ = {}, dataDirect_ = {}",
-            dictEncoding,
-            data_ != nullptr,
-            inDictionary_ != nullptr,
-            dataDirect_ != nullptr));
+        "dictEncoding = {}, data_ = {}, inDictionary_ = {}, dataDirect_ = {}",
+        dictEncoding,
+        data_ != nullptr,
+        inDictionary_ != nullptr,
+        dataDirect_ != nullptr);
   }
 
   void initStreamWriters(bool dictEncoding) {
@@ -425,7 +430,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
     for (size_t i = 1; i <= numStrides; ++i) {
       const auto& start = strideOffsets_[i - 1];
       const auto& end = strideOffsets_[i];
-      DWIO_ENSURE_GE(end, start);
+      VELOX_CHECK_GE(end, start);
       if (end > start) {
         populateData(start, end);
       }
@@ -443,6 +448,11 @@ class IntegerColumnWriter : public BaseColumnWriter {
     if (endOfLastStride < rows_.size()) {
       populateData(endOfLastStride, rows_.size());
     }
+  }
+
+  bool useDictionaryEncoding() const override {
+    return getConfig(Config::INTEGER_DICTIONARY_ENCODING_ENABLED) &&
+        BaseColumnWriter::useDictionaryEncoding();
   }
 
   void populateDictionaryEncodingStreams();
@@ -479,22 +489,22 @@ uint64_t IntegerColumnWriter<T>::write(
     auto localDecoded = decode(slice, ranges);
     auto& decodedVector = localDecoded.get();
     return writeDict(decodedVector, ranges);
-  } else {
-    // If the input is not a flat vector we make a complete copy and convert
-    // it to flat vector
-    if (slice->encoding() != VectorEncoding::Simple::FLAT) {
-      auto newBase = BaseVector::create(
-          slice->type(),
-          slice->size(),
-          &getMemoryPool(MemoryUsageCategory::GENERAL));
-      auto newVector = std::dynamic_pointer_cast<FlatVector<T>>(newBase);
-      newVector->copy(slice.get(), 0, 0, slice->size());
-      return writeDirect(newVector, ranges);
-    } else {
-      // Directly write the flat vector
-      return writeDirect(slice, ranges);
-    }
   }
+
+  // If the input is not a flat vector we make a complete copy and convert
+  // it to flat vector
+  if (slice->encoding() != VectorEncoding::Simple::FLAT) {
+    auto newBase = BaseVector::create(
+        slice->type(),
+        slice->size(),
+        &getMemoryPool(MemoryUsageCategory::GENERAL));
+    auto newVector = std::dynamic_pointer_cast<FlatVector<T>>(newBase);
+    newVector->copy(slice.get(), 0, 0, slice->size());
+    return writeDirect(newVector, ranges);
+  }
+
+  // Directly write the flat vector
+  return writeDirect(slice, ranges);
 }
 
 template <typename T>
@@ -541,8 +551,8 @@ uint64_t IntegerColumnWriter<T>::writeDirect(
     const VectorPtr& slice,
     const common::Ranges& ranges) {
   ensureValidStreamWriters(false);
-  auto flatVector = slice->asFlatVector<T>();
-  DWIO_ENSURE(flatVector, "unexpected vector type");
+  auto* flatVector = slice->asFlatVector<T>();
+  VELOX_CHECK_NOT_NULL(flatVector, "unexpected vector type");
   writeNulls(slice, ranges);
   auto nulls = slice->rawNulls();
   auto vals = flatVector->rawValues();
@@ -614,8 +624,9 @@ void IntegerColumnWriter<T>::populateDictionaryEncodingStreams() {
   };
 
   // The writer always calls createIndexEntry before flush.
-  size_t lastIndexStrideOffset = strideOffsets_[strideOffsets_.size() - 1];
-  DWIO_ENSURE_EQ(lastIndexStrideOffset, rows_.size());
+  const size_t lastIndexStrideOffset =
+      strideOffsets_[strideOffsets_.size() - 1];
+  VELOX_CHECK_EQ(lastIndexStrideOffset, rows_.size());
   populateStrides(
       populateDictionaryStreams,
       std::bind(
@@ -672,8 +683,9 @@ class TimestampColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     seconds_->flush();
     nanos_->flush();
@@ -690,9 +702,122 @@ class TimestampColumnWriter : public BaseColumnWriter {
   std::unique_ptr<IntEncoder<false>> nanos_;
 };
 
+class DecimalColumnWriter : public BaseColumnWriter {
+ public:
+  DecimalColumnWriter(
+      WriterContext& context,
+      const TypeWithId& type,
+      uint32_t sequence,
+      std::function<void(IndexBuilder&)> onRecordPosition)
+      : BaseColumnWriter{context, type, sequence, std::move(onRecordPosition)},
+        type_{type.type()},
+        scale_{getDecimalPrecisionScale(*type_).second},
+        isShortDecimal_{type_->isShortDecimal()},
+        unscaledValues_{createDirectEncoder</*isSigned=*/true>(
+            newStream(StreamKind::StreamKind_DATA),
+            // IntDecoder and IntEncoder only support vInts for huge ints.
+            isShortDecimal_ ? getConfig(Config::USE_VINTS) : /*useVInts=*/true,
+            isShortDecimal_ ? LONG_BYTE_SIZE : 2 * LONG_BYTE_SIZE)},
+        scales_{createRleEncoder</*isSigned=*/true>(
+            RleVersion_1,
+            // DWRF's NANO_DATA has the same enum value as ORC's SECONDARY.
+            newStream(StreamKind::StreamKind_NANO_DATA),
+            getConfig(Config::USE_VINTS),
+            LONG_BYTE_SIZE)} {
+    reset();
+  }
+
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges)
+      override {
+    VELOX_CHECK(
+        slice->type()->equivalent(*type_),
+        "Unexpected vector type: {}.",
+        slice->type()->toString());
+
+    // Always decode to reduce the number of branches. Fast paths for flat and
+    // constant encodings can be added for further optimization.
+    auto localDecoded = decode(slice, ranges);
+    auto& decodedVector = localDecoded.get();
+    writeNulls(decodedVector, ranges);
+
+    size_t count = 0;
+    if (isShortDecimal_) {
+      if (!decodedVector.mayHaveNulls()) {
+        for (auto pos : ranges) {
+          const auto val = decodedVector.valueAt<int64_t>(pos);
+          unscaledValues_->writeValue(val);
+          scales_->writeValue(scale_);
+        }
+        count += ranges.size();
+      } else {
+        for (auto pos : ranges) {
+          if (!decodedVector.isNullAt(pos)) {
+            const auto val = decodedVector.valueAt<int64_t>(pos);
+            unscaledValues_->writeValue(val);
+            scales_->writeValue(scale_);
+            ++count;
+          }
+        }
+      }
+    } else {
+      if (!decodedVector.mayHaveNulls()) {
+        for (auto pos : ranges) {
+          const auto val = decodedVector.valueAt<int128_t>(pos);
+          unscaledValues_->writeHugeInt(val);
+          scales_->writeValue(scale_);
+        }
+        count += ranges.size();
+      } else {
+        for (auto pos : ranges) {
+          if (!decodedVector.isNullAt(pos)) {
+            const auto val = decodedVector.valueAt<int128_t>(pos);
+            unscaledValues_->writeHugeInt(val);
+            scales_->writeValue(scale_);
+            ++count;
+          }
+        }
+      }
+    }
+
+    indexStatsBuilder_->increaseValueCount(count);
+    if (count != ranges.size()) {
+      indexStatsBuilder_->setHasNull();
+    }
+
+    const uint32_t decimalSize =
+        isShortDecimal_ ? 2 * LONG_BYTE_SIZE : 3 * LONG_BYTE_SIZE;
+    const auto rawSize =
+        count * decimalSize + (ranges.size() - count) * NULL_SIZE;
+    indexStatsBuilder_->increaseRawSize(rawSize);
+    return rawSize;
+  }
+
+  void flush(
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
+    BaseColumnWriter::flush(encodingFactory, encodingOverride);
+    unscaledValues_->flush();
+    scales_->flush();
+  }
+
+  void recordPosition() override {
+    BaseColumnWriter::recordPosition();
+    unscaledValues_->recordPosition(*indexBuilder_);
+    scales_->recordPosition(*indexBuilder_);
+  }
+
+ private:
+  const TypePtr type_;
+  const uint8_t scale_;
+  const bool isShortDecimal_;
+  std::unique_ptr<IntEncoder<true>> unscaledValues_;
+  std::unique_ptr<IntEncoder<true>> scales_;
+};
+
 namespace {
 FOLLY_ALWAYS_INLINE int64_t formatTime(int64_t seconds, uint64_t nanos) {
-  DWIO_ENSURE(seconds >= MIN_SECONDS);
+  VELOX_CHECK_GE(seconds, MIN_SECONDS);
 
   if (seconds < 0 && nanos != 0) {
     // Adding 1 for neagive seconds is there to imitate the Java ORC writer.
@@ -715,7 +840,7 @@ FOLLY_ALWAYS_INLINE int64_t formatNanos(uint64_t nanos) {
   if (nanos == 0) {
     return 0;
   }
-  DWIO_ENSURE(nanos <= MAX_NANOS);
+  VELOX_CHECK_LE(nanos, MAX_NANOS);
 
   if (nanos % 100 != 0) {
     return nanos << 3;
@@ -795,7 +920,9 @@ class StringColumnWriter : public BaseColumnWriter {
         dictEncoder_{
             getMemoryPool(MemoryUsageCategory::DICTIONARY),
             getMemoryPool(MemoryUsageCategory::GENERAL)},
-        rows_{getMemoryPool(MemoryUsageCategory::GENERAL)},
+        rows_{
+            getMemoryPool(MemoryUsageCategory::GENERAL),
+            /*initialCapacity=*/16},
         encodingSelector_{
             getMemoryPool(MemoryUsageCategory::GENERAL),
             getConfig(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD),
@@ -806,7 +933,7 @@ class StringColumnWriter : public BaseColumnWriter {
         sort_{getConfig(Config::DICTIONARY_SORT_KEYS)},
         useDictionaryEncoding_{useDictionaryEncoding()},
         strideOffsets_{getMemoryPool(MemoryUsageCategory::GENERAL)} {
-    DWIO_ENSURE(firstStripe_);
+    VELOX_CHECK(firstStripe_);
     if (!useDictionaryEncoding_) {
       initStreamWriters(useDictionaryEncoding_);
     }
@@ -833,8 +960,9 @@ class StringColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     tryAbandonDictionaries(false);
     initStreamWriters(useDictionaryEncoding_);
 
@@ -842,7 +970,7 @@ class StringColumnWriter : public BaseColumnWriter {
     if (useDictionaryEncoding_) {
       populateDictionaryEncodingStreams();
       dictEncoder_.clear();
-      rows_.clear();
+      rows_.clear(memory::underMemoryArbitration());
     }
 
     // NOTE: Flushes index. All index entries need to have been backfilled.
@@ -879,12 +1007,13 @@ class StringColumnWriter : public BaseColumnWriter {
 
   // FIXME: call base class set encoding first to deal with sequence and
   // whatnot.
-  void setEncoding(proto::ColumnEncoding& encoding) const override {
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
     if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+      auto columnEncodingKind =
+          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY;
+      encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+      encoding.setDictionarySize(finalDictionarySize_);
     }
   }
 
@@ -946,17 +1075,9 @@ class StringColumnWriter : public BaseColumnWriter {
     recordDirectEncodingStreamPositions(0);
     convertToDirectEncoding();
     dictEncoder_.clear();
-    rows_.clear();
+    rows_.clear(true);
     strideOffsets_.clear();
     return true;
-  }
-
- protected:
-  bool useDictionaryEncoding() const override {
-    return (sequence_ == 0 ||
-            !context_.getConfig(
-                Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
-        !context_.isLowMemoryMode();
   }
 
  private:
@@ -970,7 +1091,7 @@ class StringColumnWriter : public BaseColumnWriter {
 
   void ensureValidStreamWriters(bool dictEncoding) {
     // Ensure we have exactly one valid data stream.
-    DWIO_ENSURE(
+    VELOX_CHECK(
         (dictEncoding && data_ && dictionaryData_ && dictionaryDataLength_ &&
          strideDictionaryData_ && strideDictionaryDataLength_ &&
          inDictionary_ && !dataDirect_ && !dataDirectLength_) ||
@@ -1033,7 +1154,7 @@ class StringColumnWriter : public BaseColumnWriter {
     for (size_t i = 1; i <= numStrides; ++i) {
       const auto& start = strideOffsets_[i - 1];
       const auto& end = strideOffsets_[i];
-      DWIO_ENSURE_GE(end, start);
+      VELOX_CHECK_GE(end, start);
       if (end > start) {
         populateData(start, end, i - 1);
       }
@@ -1052,6 +1173,13 @@ class StringColumnWriter : public BaseColumnWriter {
     if (endOfLastStride < rows_.size()) {
       populateData(endOfLastStride, rows_.size(), numStrides);
     }
+  }
+
+  bool useDictionaryEncoding() const override {
+    return getConfig(Config::STRING_DICTIONARY_ENCODING_ENABLED) &&
+        (sequence_ == 0 ||
+         !getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
+        !context_.isLowMemoryMode();
   }
 
   void populateDictionaryEncodingStreams();
@@ -1110,10 +1238,12 @@ uint64_t StringColumnWriter::writeDict(
   size_t strideIndex = strideOffsets_.size() - 1;
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    rows_.unsafeAppend(dictEncoder_.addKey(sp, strideIndex));
-    statsBuilder.addValues(sp);
-    rawSize += sp.size();
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    // TODO: Remove explicit std::string_view cast.
+    rows_.unsafeAppend(dictEncoder_.addKey(std::string_view(sv), strideIndex));
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
+    rawSize += sv.size();
   };
 
   uint64_t nullCount = 0;
@@ -1154,10 +1284,11 @@ uint64_t StringColumnWriter::writeDirect(
 
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    auto size = sp.size();
-    dataDirect_->write(sp.data(), size);
-    statsBuilder.addValues(sp);
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    auto size = sv.size();
+    dataDirect_->write(sv.data(), size);
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
     rawSize += size;
     lengths.unsafeAppend(size);
   };
@@ -1245,21 +1376,24 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
                 [&](auto buf, auto size) {
                   inDictionary_->add(buf, common::Ranges::of(0, size), nullptr);
                 });
-
+            auto errorGuard =
+                folly::makeGuard([&inDictWriter]() { inDictWriter.abort(); });
             uint32_t strideDictSize = 0;
             for (size_t i = start; i != end; ++i) {
               auto origIndex = rows_[i];
               bool valInDict = inDict[origIndex];
               inDictWriter.add(valInDict ? 1 : 0);
-              // TODO: optimize this branching either through restoring visitor
-              // pattern, or through separating the index backfill.
+              // TODO: optimize this branching either through restoring
+              // visitor pattern, or through separating the index backfill.
               if (!valInDict) {
                 auto strideDictIndex = lookupTable[origIndex];
                 sortedStrideDictKeyIndexBuffer[strideDictIndex] = origIndex;
                 ++strideDictSize;
               }
             }
-            DWIO_ENSURE_EQ(strideDictSize, strideDictKeyCount);
+            errorGuard.dismiss();
+            inDictWriter.close();
+            VELOX_CHECK_EQ(strideDictSize, strideDictKeyCount);
           }
 
           // StrideDictKey can be empty, when all keys for stride are in
@@ -1272,11 +1406,17 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
                   strideDictionaryDataLength_->add(
                       buf, common::Ranges::of(0, size), nullptr);
                 });
+            auto errorGuard = folly::makeGuard(
+                [&strideLengthWriter]() { strideLengthWriter.abort(); });
+
             for (size_t i = 0; i < strideDictKeyCount; ++i) {
               auto val = dictEncoder_.getKey(sortedStrideDictKeyIndexBuffer[i]);
               strideDictionaryData_->write(val.data(), val.size());
               strideLengthWriter.add(val.size());
             }
+
+            errorGuard.dismiss();
+            strideLengthWriter.close();
           }
         }
 
@@ -1293,7 +1433,7 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
 
   // The writer always calls createIndexEntry before flush.
   size_t lastIndexStrideOffset = strideOffsets_[strideOffsets_.size() - 1];
-  DWIO_ENSURE_EQ(lastIndexStrideOffset, rows_.size());
+  VELOX_CHECK_EQ(lastIndexStrideOffset, rows_.size());
   populateStrides(
       populateDictionaryStreams,
       std::bind(
@@ -1315,11 +1455,17 @@ void StringColumnWriter::convertToDirectEncoding() {
             [&](auto buf, auto size) {
               dataDirectLength_->add(buf, common::Ranges::of(0, size), nullptr);
             });
+        auto errorGuard =
+            folly::makeGuard([&lengthWriter]() { lengthWriter.abort(); });
+
         for (size_t i = start; i != end; ++i) {
           auto key = dictEncoder_.getKey(rows_[i]);
           dataDirect_->write(key.data(), key.size());
           lengthWriter.add(key.size());
         }
+
+        errorGuard.dismiss();
+        lengthWriter.close();
       };
 
   populateStrides(
@@ -1346,8 +1492,9 @@ class FloatColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_.flush();
   }
@@ -1372,7 +1519,7 @@ uint64_t FloatColumnWriter<T>::write(
   uint64_t nullCount = 0;
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
     auto flatVector = slice->asFlatVector<T>();
-    DWIO_ENSURE(flatVector, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(flatVector, "unexpected vector type");
     writeNulls(slice, ranges);
     auto nulls = slice->rawNulls();
     auto data = flatVector->rawValues();
@@ -1384,13 +1531,13 @@ uint64_t FloatColumnWriter<T>::write(
           [&](auto buf, auto size) {
             data_.write(reinterpret_cast<const char*>(buf), size * sizeof(T));
           });
+      auto errorGuard = folly::makeGuard([&writer]() { writer.abort(); });
 
       auto processRow = [&](size_t pos) {
         auto val = data[pos];
         writer.add(val);
         statsBuilder.addValues(val);
       };
-
       for (auto& pos : ranges) {
         if (bits::isBitNull(nulls, pos)) {
           ++nullCount;
@@ -1398,6 +1545,9 @@ uint64_t FloatColumnWriter<T>::write(
           processRow(pos);
         }
       }
+
+      errorGuard.dismiss();
+      writer.close();
     } else {
       for (auto& pos : ranges) {
         statsBuilder.addValues(data[pos]);
@@ -1420,13 +1570,13 @@ uint64_t FloatColumnWriter<T>::write(
         [&](auto buf, auto size) {
           data_.write(reinterpret_cast<const char*>(buf), size * sizeof(T));
         });
+    auto errorGuard = folly::makeGuard([&writer]() { writer.abort(); });
 
     auto processRow = [&](size_t pos) {
       auto val = decodedVector.template valueAt<T>(pos);
       writer.add(val);
       statsBuilder.addValues(val);
     };
-
     if (decodedVector.mayHaveNulls()) {
       for (auto& pos : ranges) {
         if (decodedVector.isNullAt(pos)) {
@@ -1440,6 +1590,9 @@ uint64_t FloatColumnWriter<T>::write(
         processRow(pos);
       }
     }
+
+    errorGuard.dismiss();
+    writer.close();
   }
 
   uint64_t rawSize = (ranges.size() - nullCount) * sizeof(T);
@@ -1471,8 +1624,9 @@ class BinaryColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_.flush();
     lengths_->flush();
@@ -1502,8 +1656,8 @@ uint64_t BinaryColumnWriter::write(
   lengths.reserve(ranges.size());
 
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
-    auto binarySlice = slice->asFlatVector<StringView>();
-    DWIO_ENSURE(binarySlice, "unexpected vector type");
+    auto* binarySlice = slice->asFlatVector<StringView>();
+    VELOX_CHECK_NOT_NULL(binarySlice, "unexpected vector type");
     writeNulls(slice, ranges);
     auto nulls = slice->rawNulls();
     auto data = binarySlice->rawValues();
@@ -1585,8 +1739,9 @@ class StructColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     for (auto& c : children_) {
       c->flush(encodingFactory);
@@ -1632,7 +1787,7 @@ uint64_t StructColumnWriter::write(
       auto localDecoded = decode(slice, ranges);
       auto& decodedVector = localDecoded.get();
       rowSlice = decodedVector.base()->as<RowVector>();
-      DWIO_ENSURE(rowSlice, "unexpected vector type");
+      VELOX_CHECK_NOT_NULL(rowSlice, "unexpected vector type");
       childRangesPtr = &childRanges;
 
       // For every index in wrapped indices we will add a 1-entry size range.
@@ -1641,7 +1796,7 @@ uint64_t StructColumnWriter::write(
       }
     } else {
       rowSlice = slice->as<RowVector>();
-      DWIO_ENSURE(rowSlice, "unexpected vector type");
+      VELOX_CHECK_NOT_NULL(rowSlice, "unexpected vector type");
       childRangesPtr = &ranges;
     }
     auto rawSize = writeChildrenAndStats(rowSlice, *childRangesPtr, 0);
@@ -1658,7 +1813,7 @@ uint64_t StructColumnWriter::write(
     auto localDecoded = decode(slice, ranges);
     auto& decodedVector = localDecoded.get();
     rowSlice = decodedVector.base()->as<RowVector>();
-    DWIO_ENSURE(rowSlice, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(rowSlice, "unexpected vector type");
     childRangesPtr = &childRanges;
     writeNulls(decodedVector, ranges);
 
@@ -1680,7 +1835,7 @@ uint64_t StructColumnWriter::write(
     }
   } else {
     rowSlice = slice->as<RowVector>();
-    DWIO_ENSURE(rowSlice, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(rowSlice, "unexpected vector type");
     childRangesPtr = &ranges;
     writeNulls(slice, ranges);
     auto nulls = slice->rawNulls();
@@ -1714,8 +1869,9 @@ class ListColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     lengths_->flush();
     children_.at(0)->flush(encodingFactory);
@@ -1756,7 +1912,7 @@ uint64_t ListColumnWriter::write(
     auto localDecoded = decode(slice, ranges);
     auto& decodedVector = localDecoded.get();
     arraySlice = decodedVector.base()->as<ArrayVector>();
-    DWIO_ENSURE(arraySlice, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(arraySlice, "unexpected vector type");
 
     writeNulls(decodedVector, ranges);
     offsets = arraySlice->rawOffsets();
@@ -1777,7 +1933,7 @@ uint64_t ListColumnWriter::write(
     }
   } else {
     arraySlice = slice->as<ArrayVector>();
-    DWIO_ENSURE(arraySlice, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(arraySlice, "unexpected vector type");
 
     writeNulls(slice, ranges);
     auto nulls = slice->rawNulls();
@@ -1841,8 +1997,9 @@ class MapColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     lengths_->flush();
     children_.at(0)->flush(encodingFactory);
@@ -1875,8 +2032,8 @@ uint64_t MapColumnWriter::write(
     auto begin = offsets[pos];
     auto end = begin + lengths[pos];
     if (end > begin) {
-      DWIO_ENSURE_LE(end, mapSlice->mapKeys()->size());
-      DWIO_ENSURE_LE(end, mapSlice->mapValues()->size());
+      VELOX_CHECK_LE(end, mapSlice->mapKeys()->size());
+      VELOX_CHECK_LE(end, mapSlice->mapValues()->size());
       childRanges.add(begin, end);
     }
     nonNullLengths.unsafeAppend(end - begin);
@@ -1886,7 +2043,7 @@ uint64_t MapColumnWriter::write(
     auto localDecoded = decode(slice, ranges);
     auto& decodedVector = localDecoded.get();
     mapSlice = decodedVector.base()->as<MapVector>();
-    DWIO_ENSURE(mapSlice, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(mapSlice, "unexpected vector type");
 
     writeNulls(decodedVector, ranges);
     offsets = mapSlice->rawOffsets();
@@ -1907,7 +2064,7 @@ uint64_t MapColumnWriter::write(
     }
   } else {
     mapSlice = slice->as<MapVector>();
-    DWIO_ENSURE(mapSlice, "unexpected vector type");
+    VELOX_CHECK_NOT_NULL(mapSlice, "unexpected vector type");
 
     writeNulls(slice, ranges);
     auto nulls = slice->rawNulls();
@@ -1956,40 +2113,46 @@ uint64_t MapColumnWriter::write(
 std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     WriterContext& context,
     const TypeWithId& type,
-    const uint32_t sequence,
-    std::function<void(IndexBuilder&)> onRecordPosition) {
-  const auto flatMapEnabled = context.getConfig(Config::FLATTEN_MAP);
-  const auto& flatMapCols = context.getConfig(Config::MAP_FLAT_COLS);
+    uint32_t sequence,
+    std::function<void(IndexBuilder&)> onRecordPosition,
+    DwrfFormat format) {
+  const auto flatMapEnabled = context.getConfig(Config::FLATTEN_MAP) &&
+      type.parent() != nullptr && (type.parent()->id() == 0);
+  bool isFlatMapColumn{false};
+  if (flatMapEnabled) {
+    const auto& flatMapCols = context.getConfig(Config::MAP_FLAT_COLS);
+    isFlatMapColumn =
+        std::find(flatMapCols.begin(), flatMapCols.end(), type.column()) !=
+        flatMapCols.end();
+  }
 
   // When flat map is enabled, all columns provided in the MAP_FLAT_COLS config,
   // must be of MAP type. We only check top level columns (columns which are
   // direct children of the root node).
-  if (flatMapEnabled && type.parent != nullptr && type.parent->id == 0) {
-    if (type.type->kind() != TypeKind::MAP &&
-        std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
-            flatMapCols.end()) {
-      DWIO_RAISE(fmt::format(
+  if (flatMapEnabled) {
+    if (isFlatMapColumn && type.type()->kind() != TypeKind::MAP) {
+      VELOX_FAIL(
           "MAP_FLAT_COLS contains column {}, but the root type of this column is {}."
           " Column root types must be of type MAP",
-          type.column,
-          mapTypeKindToName(type.type->kind())));
+          type.column(),
+          TypeKindName::toName(type.type()->kind()));
     }
     const auto structColumnKeys =
         context.getConfig(Config::MAP_FLAT_COLS_STRUCT_KEYS);
     if (!structColumnKeys.empty()) {
-      DWIO_ENSURE(
-          type.parent->size() == structColumnKeys.size(),
+      VELOX_CHECK_EQ(
+          type.parent()->size(),
+          structColumnKeys.size(),
           "MAP_FLAT_COLS_STRUCT_KEYS size must match number of columns.");
-      if (!structColumnKeys[type.column].empty()) {
-        DWIO_ENSURE(
-            std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
-                flatMapCols.end(),
+      if (!structColumnKeys[type.column()].empty()) {
+        VELOX_CHECK(
+            isFlatMapColumn,
             "Struct input found in MAP_FLAT_COLS_STRUCT_KEYS. Column must also be in MAP_FLAT_COLS.");
       }
     }
   }
 
-  switch (type.type->kind()) {
+  switch (type.type()->kind()) {
     case TypeKind::BOOLEAN:
       return std::make_unique<ByteRleColumnWriter<bool>>(
           context, type, sequence, &createBooleanRleEncoder, onRecordPosition);
@@ -2002,9 +2165,20 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     case TypeKind::INTEGER:
       return std::make_unique<IntegerColumnWriter<int32_t>>(
           context, type, sequence, onRecordPosition);
-    case TypeKind::BIGINT:
+    case TypeKind::BIGINT: {
+      if (format == DwrfFormat::kOrc && type.type()->isDecimal()) {
+        return std::make_unique<DecimalColumnWriter>(
+            context, type, sequence, onRecordPosition);
+      }
       return std::make_unique<IntegerColumnWriter<int64_t>>(
           context, type, sequence, onRecordPosition);
+    }
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK_EQ(
+          format, DwrfFormat::kOrc, "Decimal is not supported for DWRF.");
+      return std::make_unique<DecimalColumnWriter>(
+          context, type, sequence, onRecordPosition);
+    }
     case TypeKind::REAL:
       return std::make_unique<FloatColumnWriter<float>>(
           context, type, sequence, onRecordPosition);
@@ -2030,15 +2204,12 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
       return ret;
     }
     case TypeKind::MAP: {
-      DWIO_ENSURE_EQ(type.size(), 2, "Map should have exactly two children");
+      VELOX_CHECK_EQ(type.size(), 2, "Map should have exactly two children");
 
       // We only flatten maps which are direct children of the root node.
       // All other (nested) maps are treated as regular maps.
-      if (type.parent != nullptr && type.parent->id == 0 &&
-          context.getConfig(Config::FLATTEN_MAP) &&
-          std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
-              flatMapCols.end()) {
-        DWIO_ENSURE(!onRecordPosition, "unexpected flat map nesting");
+      if (isFlatMapColumn) {
+        VELOX_CHECK_NULL(onRecordPosition, "unexpected flat map nesting");
         return FlatMapColumnWriter<TypeKind::INVALID>::create(
             context, type, sequence);
       }
@@ -2049,15 +2220,15 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
       return ret;
     }
     case TypeKind::ARRAY: {
-      DWIO_ENSURE_EQ(type.size(), 1, "Array should have exactly one child");
+      VELOX_CHECK_EQ(type.size(), 1, "Array should have exactly one child");
       auto ret = std::make_unique<ListColumnWriter>(
           context, type, sequence, onRecordPosition);
       ret->children_.push_back(create(context, *type.childAt(0), sequence));
       return ret;
     }
     default:
-      DWIO_RAISE("not supported yet ", mapTypeKindToName(type.type->kind()));
+      VELOX_FAIL(
+          "not supported yet: {}", TypeKindName::toName(type.type()->kind()));
   }
 }
-
 } // namespace facebook::velox::dwrf

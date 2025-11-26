@@ -19,23 +19,16 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/dwio/common/DecoderUtil.h"
-#include "velox/type/Filter.h"
-#include "velox/vector/LazyVector.h"
-
-#include <folly/Varint.h>
 
 namespace facebook::velox::parquet {
 
 class RleBpDecoder {
  public:
-  RleBpDecoder(
-      const char* FOLLY_NONNULL start,
-      const char* FOLLY_NONNULL end,
-      uint8_t bitWidth)
+  RleBpDecoder(const char* start, const char* end, uint8_t bitWidth)
       : bufferStart_(start),
         bufferEnd_(end),
         bitWidth_(bitWidth),
-        byteWidth_(bits::roundUp(bitWidth, 8) / 8),
+        byteWidth_(bits::divRoundUp(bitWidth, 8)),
         bitMask_(bits::lowMask(bitWidth)),
         lastSafeWord_(end - sizeof(uint64_t)) {}
 
@@ -44,7 +37,7 @@ class RleBpDecoder {
   /// Decode @param numValues number of values and copy the decoded values into
   /// @param outputBuffer
   template <typename T>
-  void next(T* FOLLY_NONNULL& outputBuffer, uint64_t numValues) {
+  void next(T * FOLLY_NONNULL & outputBuffer, uint64_t numValues) {
     while (numValues > 0) {
       if (numRemainingUnpackedValues_ > 0) {
         auto numValuesToRead =
@@ -102,17 +95,15 @@ class RleBpDecoder {
   /// not copy them into 'buffer' but instead may set '*allOnes' to
   /// true. If allOnes is non-nullptr and not all bits are ones, then
   /// '*allOnes' is set to false and the bits are copied to 'buffer'.
-  void readBits(
-      int32_t numValues,
-      uint64_t* FOLLY_NONNULL outputBuffer,
-      bool* FOLLY_NULLABLE allOnes = nullptr);
+  void
+  readBits(int32_t numValues, uint64_t* outputBuffer, bool* allOnes = nullptr);
 
  protected:
   void readHeader();
 
   template <typename T>
   inline void copyRemainingUnpackedValues(
-      T* FOLLY_NONNULL& outputBuffer,
+      T * FOLLY_NONNULL & outputBuffer,
       int8_t numValues) {
     VELOX_CHECK_LE(numValues, numRemainingUnpackedValues_);
 
@@ -127,12 +118,12 @@ class RleBpDecoder {
     remainingUnpackedValuesOffset_ += numValues;
   }
 
-  const char* FOLLY_NULLABLE bufferStart_;
-  const char* FOLLY_NULLABLE bufferEnd_;
+  const char* bufferStart_;
+  const char* bufferEnd_;
   const int8_t bitWidth_;
   const int8_t byteWidth_;
   const uint64_t bitMask_;
-  const char* FOLLY_NONNULL const lastSafeWord_;
+  const char* const lastSafeWord_;
   uint64_t remainingValues_{0};
   int64_t value_;
   int8_t bitOffset_{0};

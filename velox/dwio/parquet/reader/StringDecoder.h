@@ -16,31 +16,21 @@
 
 #pragma once
 
-#include "velox/common/base/GTestMacros.h"
-#include "velox/common/base/Nulls.h"
-#include "velox/dwio/common/DecoderUtil.h"
-#include "velox/dwio/common/IntDecoder.h"
-#include "velox/dwio/common/TypeUtil.h"
-
 namespace facebook::velox::parquet {
 
 class StringDecoder {
  public:
-  StringDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
+  StringDecoder(const char* start, const char* end, int fixedLength = -1)
       : bufferStart_(start),
-        bufferEnd_(end),
-
-        lastSafeWord_(end - simd::kPadding) {}
+        lastSafeWord_(end - simd::kPadding),
+        fixedLength_(fixedLength) {}
 
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
   }
 
   template <bool hasNulls>
-  inline void skip(
-      int32_t numValues,
-      int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -50,8 +40,9 @@ class StringDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
     int32_t current = visitor.start();
+    int32_t numValues = 0;
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip;
     bool atEnd = false;
@@ -66,37 +57,53 @@ class StringDecoder {
             skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            if constexpr (Visitor::kHasHook) {
+              visitor.setNumValues(
+                  Visitor::kHasFilter ? numValues : visitor.numRows());
+            }
             return;
           }
         }
 
         // We are at a non-null value on a row to visit.
-        toSkip = visitor.process(readString(), atEnd);
+        toSkip = visitor.process(
+            fixedLength_ > 0 ? readFixedString() : readString(), atEnd);
       }
       ++current;
+      ++numValues;
       if (toSkip) {
         skip<hasNulls>(toSkip, current, nulls);
         current += toSkip;
       }
       if (atEnd) {
+        if constexpr (Visitor::kHasHook) {
+          visitor.setNumValues(
+              Visitor::kHasFilter ? numValues : visitor.numRows());
+        }
         return;
       }
     }
   }
 
  private:
-  int32_t lengthAt(const char* FOLLY_NONNULL buffer) {
+  int32_t lengthAt(const char* buffer) {
     return *reinterpret_cast<const int32_t*>(buffer);
   }
 
-  folly::StringPiece readString() {
+  std::string_view readString() {
     auto length = lengthAt(bufferStart_);
     bufferStart_ += length + sizeof(int32_t);
-    return folly::StringPiece(bufferStart_ - length, length);
+    return std::string_view(bufferStart_ - length, length);
   }
-  const char* FOLLY_NONNULL bufferStart_;
-  const char* FOLLY_NONNULL bufferEnd_;
-  const char* FOLLY_NONNULL const lastSafeWord_;
+
+  std::string_view readFixedString() {
+    bufferStart_ += fixedLength_;
+    return std::string_view(bufferStart_ - fixedLength_, fixedLength_);
+  }
+
+  const char* bufferStart_;
+  const char* const lastSafeWord_;
+  const int fixedLength_;
 };
 
 } // namespace facebook::velox::parquet

@@ -20,21 +20,22 @@ namespace facebook::velox::dwrf {
 
 uint64_t SelectiveIntegerDirectColumnReader::skip(uint64_t numValues) {
   numValues = SelectiveColumnReader::skip(numValues);
-  ints->skip(numValues);
+  intDecoder_->skip(numValues);
   return numValues;
 }
 
 void SelectiveIntegerDirectColumnReader::read(
-    vector_size_t offset,
-    RowSet rows,
+    int64_t offset,
+    const RowSet& rows,
     const uint64_t* incomingNulls) {
   VELOX_WIDTH_DISPATCH(
-      dwio::common::sizeOfIntKind(type_->kind()),
+      dwio::common::sizeOfIntKind(fileType_->type()->kind()),
       prepareRead,
       offset,
       rows,
       incomingNulls);
-  readCommon<SelectiveIntegerDirectColumnReader>(rows);
+  readCommon<SelectiveIntegerDirectColumnReader, true>(rows);
+  readOffset_ += rows.back() + 1;
 }
 
 } // namespace facebook::velox::dwrf

@@ -15,7 +15,8 @@
  */
 
 #include "velox/common/base/Portability.h"
-#include "velox/dwio/common/tests/E2EFilterTestBase.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -73,22 +74,27 @@ class E2EFilterTest : public E2EFilterTestBase {
                                : (++flushCounter % flushEveryNBatches_ == 0);
       });
     };
-    auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
-    sinkPtr_ = sink.get();
+
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024,
+        dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    ASSERT_TRUE(sink->isBuffered());
+    auto* sinkPtr = sink.get();
     options.memoryPool = rootPool_.get();
     writer_ = std::make_unique<dwrf::Writer>(std::move(sink), options);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
     writer_->close();
+    sinkData_ = std::string_view(sinkPtr->data(), sinkPtr->size());
   }
 
   void setUpRowReaderOptions(
       dwio::common::RowReaderOptions& opts,
       const std::shared_ptr<ScanSpec>& spec) override {
     E2EFilterTestBase::setUpRowReaderOptions(opts, spec);
-    if (!flatmapNodeIdsAsStruct_.empty()) {
-      opts.setFlatmapNodeIdsAsStruct(flatmapNodeIdsAsStruct_);
+    for (auto& field : flatMapAsStructFields_) {
+      spec->childByName(field)->setFlatMapAsStruct(true);
     }
   }
 
@@ -121,6 +127,7 @@ class E2EFilterTest : public E2EFilterTestBase {
           mapFlatColsStructKeys.back().push_back(name);
         }
         columnTypes[i] = MAP(VARCHAR(), columnTypes[i]->childAt(0));
+        flatMapAsStructFields_.push_back(rowType.nameOf(i));
       }
       writerSchema = ROW(
           std::vector<std::string>(rowType.names()), std::move(columnTypes));
@@ -130,13 +137,12 @@ class E2EFilterTest : public E2EFilterTestBase {
           continue;
         }
         auto& child = schemaWithId->childAt(i);
-        mapFlatCols.push_back(child->column);
-        if (!rowType.childAt(i)->isRow()) {
-          continue;
-        }
-        flatmapNodeIdsAsStruct_[child->id] = mapFlatColsStructKeys[i];
+        mapFlatCols.push_back(child->column());
       }
       config->set(dwrf::Config::FLATTEN_MAP, true);
+      config->set(dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING, false);
+      config->set(dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING, false);
+
       config->set<const std::vector<uint32_t>>(
           dwrf::Config::MAP_FLAT_COLS, mapFlatCols);
       config->set<const std::vector<std::vector<std::string>>>(
@@ -149,8 +155,7 @@ class E2EFilterTest : public E2EFilterTestBase {
   }
 
   std::unique_ptr<dwrf::Writer> writer_;
-  std::unordered_map<uint32_t, std::vector<std::string>>
-      flatmapNodeIdsAsStruct_;
+  std::vector<std::string> flatMapAsStructFields_;
 };
 
 TEST_F(E2EFilterTest, integerDirect) {
@@ -236,7 +241,71 @@ TEST_F(E2EFilterTest, floatAndDouble) {
       false);
 }
 
+TEST_F(E2EFilterTest, DISABLED_shortDecimal) {
+  // ORC write functionality is not yet supported. Enable this test once it
+  // becomes available and set the file format to ORC at that time.
+  // options.format = DwrfFormat::kOrc;
+  const std::unordered_map<std::string, TypePtr> types = {
+      {"shortdecimal_val:decimal(8, 5)", DECIMAL(8, 5)},
+      {"shortdecimal_val:decimal(10, 5)", DECIMAL(10, 5)},
+      {"shortdecimal_val:decimal(17, 5)", DECIMAL(17, 5)}};
+
+  for (const auto& pair : types) {
+    testWithTypes(
+        pair.first,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+  }
+}
+
+TEST_F(E2EFilterTest, DISABLED_longDecimal) {
+  // ORC write functionality is not yet supported. Enable this test once it
+  // becomes available and set the file format to ORC at that time.
+  // options.format = DwrfFormat::kOrc;
+  const std::unordered_map<std::string, TypePtr> types = {
+      {"longdecimal_val:decimal(30, 10)", DECIMAL(30, 10)},
+      {"longdecimal_val:decimal(37, 15)", DECIMAL(37, 15)}};
+  for (const auto& pair : types) {
+    testWithTypes(
+        pair.first,
+        [&]() {
+          makeIntDistribution<int128_t>(
+              "longdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"longdecimal_val"},
+        20);
+  }
+}
+
 TEST_F(E2EFilterTest, stringDirect) {
+  testutil::TestValue::enable();
+  bool coverage[2][2]{};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::SelectiveStringDirectColumnReader::try8ConsecutiveSmall",
+      std::function<void(bool*)>([&](bool* params) {
+        coverage[0][params[0]] = true;
+        coverage[1][params[1]] = true;
+      }));
   flushEveryNBatches_ = 1;
   testWithTypes(
       "string_val:string,"
@@ -245,11 +314,16 @@ TEST_F(E2EFilterTest, stringDirect) {
         makeStringUnique("string_val");
         makeStringUnique("string_val_2");
       },
-
       true,
       {"string_val", "string_val_2"},
       20,
       true);
+#ifndef NDEBUG
+  ASSERT_TRUE(coverage[0][0]);
+  ASSERT_TRUE(coverage[0][1]);
+  ASSERT_TRUE(coverage[1][0]);
+  ASSERT_TRUE(coverage[1][1]);
+#endif
 }
 
 TEST_F(E2EFilterTest, stringDictionary) {
@@ -272,8 +346,8 @@ TEST_F(E2EFilterTest, timestamp) {
       "timestamp_val:timestamp,"
       "long_val:bigint",
       [&]() {},
-      false,
-      {"long_val"},
+      true,
+      {"long_val", "timestamp_val"},
       20,
       true,
       true);
@@ -366,23 +440,22 @@ TEST_F(E2EFilterTest, flatMapAsStruct) {
       "long_vals:struct<v1:bigint,v2:bigint,v3:bigint>,"
       "struct_vals:struct<nested1:struct<v1:bigint, v2:float>,nested2:struct<v1:bigint, v2:float>>";
   flatMapColumns_ = {"long_vals", "struct_vals"};
-  testWithTypes(
-      kColumns, [] {}, false, {"long_val"}, 10, true);
+  testWithTypes(kColumns, [] {}, false, {"long_val"}, 10, true);
 }
 
-TEST_F(E2EFilterTest, flatMap) {
+TEST_F(E2EFilterTest, flatMapScalar) {
   constexpr auto kColumns =
       "long_val:bigint,"
       "long_vals:map<tinyint,bigint>,"
-      "struct_vals:map<varchar,struct<v1:bigint, v2:float>>,"
-      "array_vals:map<tinyint,array<int>>";
-  flatMapColumns_ = {"long_vals", "struct_vals", "array_vals"};
+      "string_vals:map<string,string>";
+  flatMapColumns_ = {"long_vals", "string_vals"};
   auto customize = [this] {
-    dataSetBuilder_->makeUniformMapKeys(Subfield("struct_vals"));
+    dataSetBuilder_->makeUniformMapKeys(Subfield("string_vals"));
+    dataSetBuilder_->makeMapStringValues(Subfield("string_vals"));
   };
   int numCombinations = 5;
 #if defined(__has_feature)
-#if __has_feature(thread_sanitizer)
+#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
   numCombinations = 1;
 #endif
 #endif
@@ -393,6 +466,28 @@ TEST_F(E2EFilterTest, flatMap) {
       {"long_val", "long_vals"},
       numCombinations,
       true);
+}
+
+TEST_F(E2EFilterTest, flatMapComplex) {
+  constexpr auto kColumns =
+      "long_val:bigint,"
+      "struct_vals:map<varchar,struct<v1:bigint, v2:float>>,"
+      "array_vals:map<tinyint,array<int>>";
+  flatMapColumns_ = {"struct_vals", "array_vals"};
+  auto customize = [this] {
+    dataSetBuilder_->makeUniformMapKeys(Subfield("struct_vals"));
+  };
+  int numCombinations = 5;
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
+  numCombinations = 1;
+#endif
+#endif
+#if !defined(NDEBUG)
+  numCombinations = 1;
+#endif
+  testWithTypes(
+      kColumns, customize, false, {"long_val"}, numCombinations, true);
 }
 
 TEST_F(E2EFilterTest, metadataFilter) {
@@ -410,6 +505,6 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }

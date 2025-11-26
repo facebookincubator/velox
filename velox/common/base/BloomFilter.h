@@ -61,6 +61,20 @@ class BloomFilter {
     return test(bits_.data(), bits_.size(), value);
   }
 
+  /// Tests an input value directly on a serialized bloom filter.
+  /// For the implementation V1, this API involves no copy of the bloom
+  /// filter data.
+  static bool mayContain(const char* serializedBloom, uint64_t value) {
+    common::InputByteStream stream(serializedBloom);
+    const auto version = stream.read<int8_t>();
+    VELOX_USER_CHECK_EQ(kBloomFilterV1, version);
+    const auto size = stream.read<int32_t>();
+    VELOX_USER_CHECK_GT(size, 0);
+    const uint64_t* bloomBits =
+        reinterpret_cast<const uint64_t*>(serializedBloom + stream.offset());
+    return test(bloomBits, size, value);
+  }
+
   void merge(const char* serialized) {
     common::InputByteStream stream(serialized);
     auto version = stream.read<int8_t>();
@@ -114,22 +128,20 @@ class BloomFilter {
   }
 
   inline static void
-  set(uint64_t* FOLLY_NONNULL bloom, int32_t bloomSize, uint64_t hashCode) {
+  set(uint64_t* bloom, int32_t bloomSize, uint64_t hashCode) {
     auto mask = bloomMask(hashCode);
     auto index = bloomIndex(bloomSize, hashCode);
     bloom[index] |= mask;
   }
 
-  inline static bool test(
-      const uint64_t* FOLLY_NONNULL bloom,
-      int32_t bloomSize,
-      uint64_t hashCode) {
+  inline static bool
+  test(const uint64_t* bloom, int32_t bloomSize, uint64_t hashCode) {
     auto mask = bloomMask(hashCode);
     auto index = bloomIndex(bloomSize, hashCode);
     return mask == (bloom[index] & mask);
   }
 
-  const int8_t kBloomFilterV1 = 1;
+  static constexpr int8_t kBloomFilterV1 = 1;
   std::vector<uint64_t, Allocator> bits_;
 };
 

@@ -186,11 +186,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
   for (auto type :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .returnType(type)
-                             .argumentType(type)
-                             .argumentType(type)
-                             .build());
+    signatures.push_back(
+        exec::FunctionSignatureBuilder()
+            .returnType(type)
+            .argumentType(type)
+            .argumentType(type)
+            .build());
   }
   return signatures;
 }
@@ -444,8 +445,8 @@ BENCHMARK(allFusedWithNulls) {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
-
+  folly::Init init{&argc, &argv};
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   benchmark = std::make_unique<PreprocBenchmark>();
   // Verify that benchmark calculations are correct.
   benchmark->test();

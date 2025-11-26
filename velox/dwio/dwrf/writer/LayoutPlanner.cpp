@@ -22,8 +22,9 @@ StreamList getStreamList(WriterContext& context) {
   StreamList streams;
   streams.reserve(context.getStreamCount());
   context.iterateUnSuppressedStreams([&](auto& pair) {
-    streams.push_back(std::make_pair(
-        std::addressof(pair.first), std::addressof(pair.second)));
+    streams.push_back(
+        std::make_pair(
+            std::addressof(pair.first), std::addressof(pair.second)));
   });
   return streams;
 }
@@ -114,10 +115,6 @@ bool EncodingIter::operator==(const EncodingIter& other) const {
   return current_ == other.current_;
 }
 
-bool EncodingIter::operator!=(const EncodingIter& other) const {
-  return current_ != other.current_;
-}
-
 EncodingIter::reference EncodingIter::operator*() const {
   return *current_;
 }
@@ -128,49 +125,55 @@ EncodingIter::pointer EncodingIter::operator->() const {
 
 EncodingManager::EncodingManager(
     const encryption::EncryptionHandler& encryptionHandler)
-    : encryptionHandler_{encryptionHandler} {
+    : encryptionHandler_{encryptionHandler},
+      arena_{std::make_unique<google::protobuf::Arena>()} {
   initEncryptionGroups();
+  auto dwrfStripeFooter =
+      google::protobuf::Arena::CreateMessage<proto::StripeFooter>(arena_.get());
+  footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
 }
 
-proto::ColumnEncoding& EncodingManager::addEncodingToFooter(uint32_t nodeId) {
+ColumnEncodingWriteWrapper EncodingManager::addEncodingToFooter(
+    uint32_t nodeId) {
   if (encryptionHandler_.isEncrypted(nodeId)) {
     auto index = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return *encryptionGroups_.at(index).add_encoding();
+    return ColumnEncodingWriteWrapper(
+        encryptionGroups_.at(index).add_encoding());
   } else {
-    return *footer_.add_encoding();
+    return footer_->addEncoding();
   }
 }
 
-proto::Stream* EncodingManager::addStreamToFooter(
+StreamWriteWrapper EncodingManager::addStreamToFooter(
     uint32_t nodeId,
     uint32_t& currentIndex) {
   if (encryptionHandler_.isEncrypted(nodeId)) {
     currentIndex = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return encryptionGroups_.at(currentIndex).add_streams();
+    return StreamWriteWrapper(encryptionGroups_.at(currentIndex).add_streams());
   } else {
     currentIndex = std::numeric_limits<uint32_t>::max();
-    return footer_.add_streams();
+    return footer_->addStreams();
   }
 }
 
 std::string* EncodingManager::addEncryptionGroupToFooter() {
-  return footer_.add_encryptiongroups();
+  return footer_->addEncryptionGroups();
 }
 
 proto::StripeEncryptionGroup EncodingManager::getEncryptionGroup(uint32_t i) {
   return encryptionGroups_.at(i);
 }
 
-const proto::StripeFooter& EncodingManager::getFooter() const {
-  return footer_;
+const StripeFooterWriteWrapper& EncodingManager::getFooter() const {
+  return *footer_;
 }
 
 EncodingIter EncodingManager::begin() const {
-  return EncodingIter::begin(footer_, encryptionGroups_);
+  return EncodingIter::begin(*footer_->dwrfPtr(), encryptionGroups_);
 }
 
 EncodingIter EncodingManager::end() const {
-  return EncodingIter::end(footer_, encryptionGroups_);
+  return EncodingIter::end(*footer_->dwrfPtr(), encryptionGroups_);
 }
 
 void EncodingManager::initEncryptionGroups() {
@@ -208,7 +211,7 @@ namespace {
 void fillNodeToColumnMap(
     const dwio::common::TypeWithId& schema,
     folly::F14FastMap<uint32_t, uint32_t>& nodeToColumnMap) {
-  nodeToColumnMap.emplace(schema.id, schema.column);
+  nodeToColumnMap.emplace(schema.id(), schema.column());
   for (size_t i = 0; i < schema.size(); ++i) {
     fillNodeToColumnMap(*schema.childAt(i), nodeToColumnMap);
   }
@@ -244,7 +247,7 @@ LayoutResult LayoutPlanner::plan(
   auto iter = std::partition(streams.begin(), streams.end(), [](auto& stream) {
     return isIndexStream(stream.first->kind());
   });
-  size_t indexCount = iter - streams.begin();
+  const size_t indexCount = iter - streams.begin();
   auto flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
 
   // sort streams
@@ -270,10 +273,10 @@ void LayoutPlanner::sortBySize(
     if (flatMapCols.count(stream.column()) > 0) {
       flatMapNodeSize[{
           .column = stream.column(),
-          .sequence = stream.encodingKey().sequence,
+          .sequence = stream.encodingKey().sequence(),
       }] += size;
     } else {
-      nodeSize[stream.encodingKey().node] += size;
+      nodeSize[stream.encodingKey().node()] += size;
     }
   }
 
@@ -281,12 +284,10 @@ void LayoutPlanner::sortBySize(
     // 1. Sort based on flatmap or not. Place streams of non-flatmaps before
     // those of flatmaps. Within flatmap, sort by column and sequence. Lowest
     // first.
-    auto& streamA = *a.first;
-    auto& streamB = *b.first;
-    auto nodeA = streamA.encodingKey().node;
-    auto nodeB = streamB.encodingKey().node;
-    auto isFlatMapA = flatMapCols.count(streamA.column()) > 0;
-    auto isFlatMapB = flatMapCols.count(streamB.column()) > 0;
+    const auto& streamA = *a.first;
+    const auto& streamB = *b.first;
+    const auto isFlatMapA = flatMapCols.count(streamA.column()) > 0;
+    const auto isFlatMapB = flatMapCols.count(streamB.column()) > 0;
 
     // 1. Sort based on flatmap or not. Place streams of non-flatmaps before
     // those of flatmaps.
@@ -294,20 +295,23 @@ void LayoutPlanner::sortBySize(
       return !isFlatMapA;
     }
 
+    const auto nodeA = streamA.encodingKey().node();
+    const auto nodeB = streamB.encodingKey().node();
+
     // 2. For flatmaps, sort based on column id, smaller column id first. Then
     // sequence 0 (ie. streams shared by all sequences) always before others.
-    uint64_t sizeA = 0;
-    uint64_t sizeB = 0;
+    uint64_t sizeA{0};
+    uint64_t sizeB{0};
     if (isFlatMapA) {
-      auto colA = streamA.column();
-      auto colB = streamB.column();
+      const auto colA = streamA.column();
+      const auto colB = streamB.column();
       // Smaller column id first
       if (colA != colB) {
         return colA < colB;
       }
 
-      auto seqA = streamA.encodingKey().sequence;
-      auto seqB = streamB.encodingKey().sequence;
+      const auto seqA = streamA.encodingKey().sequence();
+      const auto seqB = streamB.encodingKey().sequence();
       // Sequence 0 always before others
       if (seqA != seqB) {
         if (seqA == 0) {
@@ -339,8 +343,8 @@ void LayoutPlanner::sortBySize(
 
     // 4. Flatmap, when sequences have the same size, small sequence goes first.
     if (isFlatMapA) {
-      auto seqA = streamA.encodingKey().sequence;
-      auto seqB = streamB.encodingKey().sequence;
+      auto seqA = streamA.encodingKey().sequence();
+      auto seqB = streamB.encodingKey().sequence();
       if (seqA != seqB) {
         return seqA < seqB;
       }

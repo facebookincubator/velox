@@ -1,4 +1,17 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 # - Try to find lz4
 # Once done, this will define
 #
@@ -30,9 +43,9 @@ endif()
 
 if(NOT TARGET lz4::lz4)
   add_library(lz4::lz4 ${liblz4_type} IMPORTED)
-  set_target_properties(lz4::lz4 PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-                                            "${LZ4_INCLUDE_DIR}")
+  set_target_properties(lz4::lz4 PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${LZ4_INCLUDE_DIR}")
   set_target_properties(
-    lz4::lz4 PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C"
-                        IMPORTED_LOCATION "${LZ4_LIBRARIES}")
+    lz4::lz4
+    PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C" IMPORTED_LOCATION "${LZ4_LIBRARIES}"
+  )
 endif()

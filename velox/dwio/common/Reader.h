@@ -24,6 +24,7 @@
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/type/Type.h"
@@ -105,13 +106,55 @@ class RowReader {
     return false;
   }
 
+  enum class FetchResult {
+    kFetched, // This function did the fetch
+    kInProgress, // Another thread already started the IO
+    kAlreadyFetched // Another thread already finished the IO
+  };
+
+  // Struct describing 1 prefetch unit. A prefetch unit is defined by
+  // a rowCount and a function, that when called, will trigger the prefetch
+  // or report that it was already triggered.
+  struct PrefetchUnit {
+    // Number of rows in the prefetch unit
+    uint64_t rowCount;
+    // Task to trigger the prefetch for this unit
+    std::function<FetchResult()> prefetch;
+  };
+
+  /**
+   * Returns a vector of PrefetchUnit objects describing all the prefetch units
+   * owned by this RowReader. For example, a returned vector {{50, func1}, {50,
+   * func2}} would represent a RowReader which has 2 prefetch units (for
+   * example, a stripe for dwrf and alpha file formats). Each prefetch unit has
+   * 50 rows, and func1 and func2 represent callables which will run the
+   * prefetch and report a FetchResult. The FetchResult reports if the prefetch
+   * was completed by the caller, if the prefetch was in progress when the
+   * function was called or if the prefetch was already completed, as a result
+   * of i.e. calling next and having the main thread load the stripe.
+   * @return std::nullopt if the reader implementation does not support
+   * prefetching.
+   */
+  virtual std::optional<std::vector<PrefetchUnit>> prefetchUnits() {
+    return std::nullopt;
+  }
+
   /**
    * Helper function used by non-selective reader to project top level columns
-   * according to the scan spec.
+   * according to the scan spec and mutations.
    */
   static VectorPtr projectColumns(
       const VectorPtr& input,
-      const velox::common::ScanSpec&);
+      const velox::common::ScanSpec& spec,
+      const Mutation* mutation);
+
+  static void readWithRowNumber(
+      std::unique_ptr<dwio::common::SelectiveColumnReader>& columnReader,
+      const dwio::common::RowReaderOptions& options,
+      uint64_t previousRow,
+      uint64_t rowsToRead,
+      const dwio::common::Mutation*,
+      VectorPtr& result);
 };
 
 /**
@@ -163,6 +206,10 @@ class Reader {
    */
   virtual std::unique_ptr<RowReader> createRowReader(
       const RowReaderOptions& options = {}) const = 0;
+
+  static TypePtr updateColumnNames(
+      const TypePtr& fileType,
+      const TypePtr& tableType);
 };
 
 } // namespace facebook::velox::dwio::common

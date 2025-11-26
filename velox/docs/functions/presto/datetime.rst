@@ -1,6 +1,88 @@
 =====================================
-Date and Time Functions
+Date and Time Functions and Operators
 =====================================
+
+Date and Time Operators
+-----------------------
+
+.. list-table::
+   :widths: 15 60 25
+   :header-rows: 1
+
+   * - Operator
+     - Example
+     - Result
+   * - ``+``
+     - ``interval '1' second + interval '1' hour``
+     - ``0 01:00:01.000``
+   * - ``+``
+     - ``timestamp '1970-01-01 00:00:00.000' + interval '1' second``
+     - ``1970-01-01 00:00:01.000``
+   * - ``-``
+     - ``interval '1' hour - interval '1' second``
+     - ``0 00:59:59.000``
+   * - ``-``
+     - ``timestamp '1970-01-01 00:00:00.000' - interval '1' second``
+     - ``1969-12-31 23:59:59.000``
+   * - ``*``
+     - ``interval '1' second * 2``
+     - ``0 00:00:02.000``
+   * - ``*``
+     - ``2 * interval '1' second``
+     - ``0 00:00:02.000``
+   * - ``*``
+     - ``interval '1' second * 0.001``
+     - ``0 00:00:00.001``
+   * - ``*``
+     - ``0.001 * interval '1' second``
+     - ``0 00:00:00.001``
+   * - ``/``
+     - ``interval '15' second / 1.5``
+     - ``0 00:00:10.000``
+
+.. function:: plus(x, y) -> [same as x]
+
+    Returns the sum of ``x`` and ``y``. Both ``x`` and ``y`` are intervals day
+    to second or one of them can be timestamp. For addition of two intervals day to
+    second, returns ``-106751991167 07:12:55.808`` when the addition overflows
+    in positive and returns ``106751991167 07:12:55.807`` when the addition
+    overflows in negative. When addition of a timestamp with an interval day to
+    second, overflowed results are wrapped around.
+
+.. function:: minus(x, y) -> [same as x]
+
+    Returns the result of subtracting ``y`` from ``x``. Both ``x`` and ``y``
+    are intervals day to second or ``x`` can be timestamp. For subtraction of
+    two intervals day to second, returns ``-106751991167 07:12:55.808`` when
+    the subtraction overflows in positive and returns ``106751991167 07:12:55.807``
+    when the subtraction overflows in negative. For subtraction of an interval
+    day to second from a timestamp, overflowed results are wrapped around.
+
+.. function:: multiply(interval day to second, x) -> interval day to second
+
+    Returns the result of multiplying ``interval day to second`` by ``x``.
+    ``x`` can be a bigint or double. Returns ``0`` when ``x`` is NaN. Returns
+    ``106751991167 07:12:55.807`` when ``x`` is infinity or when the
+    multiplication overflow in positive. Returns ``-106751991167 07:12:55.808``
+    when ``x`` is -infinity or when the multiplication overflow in negiative.
+
+.. function:: multiply(x, interval day to second) -> interval day to second
+
+    Returns the result of multiplying ``x`` by ``interval day to second``.
+    Same as ``multiply(interval day to second, x)``.
+
+.. function:: divide(interval day to second, x) -> interval day to second
+
+    Returns the result of ``interval day to second`` divided by ``x``. ``x`` is
+    a double. Returns ``0`` when ``x`` is NaN or is infinity. Returns
+    ``106751991167 07:12:55.807`` when ``x`` is ``0.0`` and
+    ``interval day to second`` is not ``0``, or when the division overflows in
+    positive. Returns ``-106751991167 07:12:55.808`` when ``x`` is ``-0.0`` and
+    ``interval day to second`` is not ``0``, or when the division overflows in
+    negiative.
+
+Date and Time Functions
+-----------------------
 
 .. function:: current_date() -> date
 
@@ -10,9 +92,62 @@ Date and Time Functions
 
     This is an alias for ``CAST(x AS date)``.
 
+.. function:: from_iso8601_date(string) -> date
+
+    Parses the ISO 8601 formatted ``string`` into a ``date``.
+
+    Accepts formats described by the following syntax::
+
+       date = yyyy ['-' MM ['-' dd]]
+
+    Examples of valid input strings:
+
+    * '2012'
+    * '2012-4'
+    * '2012-04'
+    * '2012-4-7'
+    * '2012-04-07'
+    * '2012-04-07   '
+
+.. function:: from_iso8601_timestamp(string) -> timestamp with time zone
+
+    Parses the ISO 8601 formatted string into a timestamp with time zone.
+
+    Accepts formats described by the following syntax::
+
+        datetime          = time | date-opt-time
+        time              = 'T' time-element [offset]
+        date-opt-time     = date-element ['T' [time-element] [offset]]
+        date-element      = yyyy ['-' MM ['-' dd]]
+        time-element      = HH [minute-element] | [fraction]
+        minute-element    = ':' mm [second-element] | [fraction]
+        second-element    = ':' ss [fraction]
+        fraction          = ('.' | ',') digit+
+        offset            = 'Z' | (('+' | '-') HH [':' mm [':' ss [('.' | ',') SSS]]])
+
+    Examples of valid input strings:
+
+    * '2012'
+    * '2012-4'
+    * '2012-04'
+    * '2012-4-7'
+    * '2012-04-07'
+    * '2012-04-07   '
+    * '2012-04T01:02'
+    * 'T01:02:34'
+    * 'T01:02:34,123'
+    * '2012-04-07T01:02:34'
+    * '2012-04-07T01:02:34.123'
+    * '2012-04-07T01:02:34,123'
+    * '2012-04-07T01:02:34.123Z'
+    * '2012-04-07T01:02:34.123-05:00'
+
 .. function:: from_unixtime(unixtime) -> timestamp
 
-    Returns the UNIX timestamp ``unixtime`` as a timestamp.
+    Returns the UNIX timestamp ``unixtime`` as a timestamp.  If the
+    :doc:`adjust_timestamp_to_session_timezone <../../configs>` property is set
+    to true, then the timestamp is adjusted to the time zone specified in
+    :doc:`session_timezone <../../configs>`.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
     :noindex:
@@ -20,9 +155,38 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``string`` for the time zone.
 
+.. function:: from_unixtime(unixtime, hours, minutes) -> timestamp with time zone
+
+    Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
+    using ``hours`` and ``minutes`` for the time zone offset.
+    The offset must be in [-14:00, 14:00] range.
+
+.. function:: to_iso8601(x) -> varchar
+
+    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.
+
+    Example results::
+
+        SELECT to_iso8601(current_date); -- 2024-06-06
+        SELECT to_iso8601(now()); -- 2024-06-06T20:25:46.726-07:00
+        SELECT to_iso8601(now() + interval '6' month); -- 2024-12-06T20:27:11.992-08:00
+
+.. function:: to_milliseconds(interval) -> bigint
+
+    Returns the day-to-second ``interval`` as milliseconds.
+
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
+
+.. function:: current_timezone() -> varchar
+
+    Returns the current session time zone as a varchar.
+
+    Example::
+
+        SELECT current_timezone;   -- Asia/Kolkata
 
 Truncation Function
 -------------------
@@ -36,6 +200,7 @@ Unit        Example Truncated Value
 ``minute``  ``2001-08-22 03:04:00.000``
 ``hour``    ``2001-08-22 03:00:00.000``
 ``day``     ``2001-08-22 00:00:00.000``
+``week``    ``2001-08-20 00:00:00.000``
 ``month``   ``2001-08-01 00:00:00.000``
 ``quarter`` ``2001-07-01 00:00:00.000``
 ``year``    ``2001-01-01 00:00:00.000``
@@ -60,6 +225,7 @@ Unit            Description
 ``minute``      ``Minutes``
 ``hour``        ``Hours``
 ``day``         ``Days``
+``week``        ``Weeks``
 ``month``       ``Months``
 ``quarter``     ``Quarters of a year``
 ``year``        ``Years``
@@ -73,6 +239,32 @@ Unit            Description
 .. function:: date_diff(unit, x1, x2) -> bigint
 
     Returns ``x2 - x1`` in terms of ``unit``. The supported types for ``x`` are TIMESTAMP and DATE.
+
+Duration Function
+-----------------
+
+The ``parse_duration`` function supports the following units:
+
+======= =============
+Unit    Description
+======= =============
+``ns``  Nanoseconds
+``us``  Microseconds
+``ms``  Milliseconds
+``s``   Seconds
+``m``   Minutes
+``h``   Hours
+``d``   Days
+======= =============
+
+.. function:: parse_duration(string) -> interval
+
+    Parses ``string`` of format ``value unit`` into an interval, where
+    ``value`` is fractional number of ``unit`` values::
+
+        SELECT parse_duration('42.8ms'); -- 0 00:00:00.043
+        SELECT parse_duration('3.81 d'); -- 3 19:26:24.000
+        SELECT parse_duration('5m');     -- 0 00:05:00.000
 
 MySQL Date Functions
 --------------------
@@ -140,7 +332,16 @@ The functions in this section leverage a native cpp implementation that follows
 a format string compatible with JodaTime’s `DateTimeFormat
 <http://joda-time.sourceforge.net/apidocs/org/joda/time/format/DateTimeFormat.html>`_
 pattern format. The symbols currently supported are ``y``, ``Y``, ``M`` , ``d``,
-``H``, ``m``, ``s``, ``S``, and ``Z``.
+``H``, ``m``, ``s``, ``S``, ``z`` and ``Z``.
+
+``z`` represents a timezone name (3-letter format), and ``Z`` a timezone offset
+specified using the format ``+00``, ``+00:00`` or ``+0000`` (or ``-``). ``Z``
+also accepts ``UTC``,  ``UCT``, ``GMT``, and ``GMT0`` as valid representations
+of GMT.
+
+.. function:: format_datetime(timestamp, format) -> varchar
+
+    Formats ``timestamp`` as a string using ``format``.
 
 .. function:: parse_datetime(string, format) -> timestamp with time zone
 
@@ -159,6 +360,8 @@ arbitrary large timestamps.
 .. function:: day(x) -> bigint
 
     Returns the day of the month from ``x``.
+
+    The supported types for ``x`` are DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND.
 
 .. function:: day_of_month(x) -> bigint
 
@@ -185,18 +388,27 @@ arbitrary large timestamps.
 .. function:: hour(x) -> bigint
 
     Returns the hour of the day from ``x``. The value ranges from 0 to 23.
+    Supported types for ``x`` are: DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE,
+    INTERVAL DAY TO SECOND¶.
+
+.. function:: last_day_of_month(x) -> date
+
+    Returns the last day of the month.
 
 .. function:: millisecond(x) -> int64
 
-    Returns the millisecond of the second from ``x``.
+    Returns the millisecond of the second from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: minute(x) -> bigint
 
-    Returns the minute of the hour from ``x``.
+    Returns the minute of the hour from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: month(x) -> bigint
 
-    Returns the month of the year from ``x``.
+    Returns the month of the year from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL YEAR TO MONTH.
 
 .. function:: quarter(x) -> bigint
 
@@ -204,7 +416,8 @@ arbitrary large timestamps.
 
 .. function:: second(x) -> bigint
 
-    Returns the second of the minute from ``x``.
+    Returns the second of the minute from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: timezone_hour(timestamp) -> bigint
 
@@ -226,7 +439,8 @@ arbitrary large timestamps.
 
 .. function:: year(x) -> bigint
 
-    Returns the year from ``x``.
+    Returns the year from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL YEAR TO MONTH.
 
 .. function:: year_of_week(x) -> bigint
 
@@ -235,3 +449,60 @@ arbitrary large timestamps.
 .. function:: yow(x) -> bigint
 
     This is an alias for :func:`year_of_week`.
+
+.. _presto-time-zones:
+
+Time Zones
+----------
+
+Velox has full support for time zone rules, which are needed to perform date/time
+calculations correctly. Typically, the session time zone is used for temporal
+calculations. This is the time zone of the client computer that submits the query, if
+available. Otherwise, it is the time zone of the server running the Presto coordinator.
+
+Queries that operate with time zones that follow daylight saving can produce unexpected
+results. For example, if we run the following query in the `America/Los Angeles` time
+zone: ::
+
+        SELECT date_add('hour', 24, cast('2014-03-08 09:00:00' as timestamp));
+        -- 2014-03-09 10:00:00.000
+
+The timestamp appears to only advance 23 hours. This is because on March 9th clocks in
+`America/Los Angeles` are turned forward 1 hour, so March 9th only has 23 hours. To
+advance the day part of the timestamp, use the `day` unit instead: ::
+
+        SELECT date_add('day', 1, cast('2014-03-08 09:00:00' as timestamp));
+        -- 2014-03-09 09:00:00.000
+
+This works because the :func:`date_add` function treats the timestamp as list of fields, adds
+the value to the specified field and then rolls any overflow into the next higher field.
+
+Time zones are also necessary for parsing and printing timestamps. Queries that use this
+functionality can also produce unexpected results. For example, on the same machine: ::
+
+        SELECT cast('2014-03-09 02:30:00' as timestamp);
+
+The above query causes an error because there was no 2:30 AM on March 9th in
+`America/Los_Angeles` due to a daylight saving time transition.
+
+Similarly, the following query has two possible outcomes due to a daylight saving time
+transition: ::
+
+        SELECT cast('2014-11-02 01:30:00' as timestamp);
+        -- 2014-11-02 08:30:00.000
+
+It can be interpreted as `2014-11-02 01:30:00 PDT`, or `2014-11-02 01:30:00 PST`, which are
+`2014-11-02 08:30:00 UTC` or `2014-11-02 09:30:00 UTC` respectively. The former one is
+picked to be consistent with Presto.
+
+**Timezone Name Parsing**: When parsing strings that contain timezone names, the
+list of supported timezones follow the definition `here
+<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>`_.
+
+**Timezone Conversion**: The ``AT TIME ZONE`` operator sets the time zone of a timestamp: ::
+
+        SELECT timestamp '2012-10-31 01:00 UTC';
+        -- 2012-10-31 01:00:00.000 UTC
+
+        SELECT timestamp '2012-10-31 01:00 UTC' AT TIME ZONE 'America/Los_Angeles';
+        -- 2012-10-30 18:00:00.000 America/Los_Angeles

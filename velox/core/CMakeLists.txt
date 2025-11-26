@@ -15,18 +15,32 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-add_library(velox_config Config.cpp)
-target_link_libraries(velox_config velox_exception Folly::folly)
-
-add_library(velox_core Expressions.cpp PlanFragment.cpp PlanNode.cpp
-                       QueryConfig.cpp QueryCtx.cpp SimpleFunctionMetadata.cpp)
-
-target_link_libraries(
+velox_add_library(
   velox_core
-  velox_config
-  velox_expression_functions
-  velox_type
-  velox_connector
-  velox_serialization
-  velox_vector
-  Folly::folly)
+  Expressions.cpp
+  ITypedExpr.cpp
+  PlanConsistencyChecker.cpp
+  PlanFragment.cpp
+  PlanNode.cpp
+  QueryConfig.cpp
+  QueryCtx.cpp
+  SimpleFunctionMetadata.cpp
+)
+
+velox_link_libraries(
+  velox_core
+  PUBLIC
+    velox_arrow_bridge
+    velox_caching
+    velox_common_config
+    velox_connector
+    velox_exception
+    velox_expression_functions
+    velox_memory
+    velox_type
+    velox_vector
+    Boost::headers
+    Folly::folly
+    fmt::fmt
+  PRIVATE velox_encode
+)

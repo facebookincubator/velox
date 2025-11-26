@@ -15,9 +15,6 @@
  */
 #pragma once
 
-#include <set>
-#include "velox/core/PlanNode.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/parse/IExpr.h"
 
 namespace facebook::velox::parse {
@@ -27,21 +24,27 @@ struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
   bool parseIntegerAsBigint = true;
+  // Controls whether to parse the values in an IN list as separate arguments or
+  // as a single array argument.
+  bool parseInListAsArray = true;
 
   /// SQL functions could be registered with different prefixes by the user.
   /// This parameter is the registered prefix of presto or spark functions,
   /// which helps generate the correct Velox expression.
-  std::string functionPrefix = "";
+  std::string functionPrefix;
 };
 
-std::shared_ptr<const core::IExpr> parseExpr(
-    const std::string& expr,
-    const ParseOptions& options);
+core::ExprPtr parseExpr(const std::string& expr, const ParseOptions& options);
 
-std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
-    const std::string& expr);
+struct OrderByClause {
+  core::ExprPtr expr;
+  bool ascending;
+  bool nullsFirst;
+};
 
-std::vector<std::shared_ptr<const core::IExpr>> parseMultipleExpressions(
+OrderByClause parseOrderByExpr(const std::string& expr);
+
+std::vector<core::ExprPtr> parseMultipleExpressions(
     const std::string& expr,
     const ParseOptions& options);
 

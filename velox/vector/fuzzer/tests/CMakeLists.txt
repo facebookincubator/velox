@@ -15,5 +15,30 @@ add_executable(velox_vector_fuzzer_test VectorFuzzerTest.cpp)
 
 add_test(velox_vector_fuzzer_test velox_vector_fuzzer_test)
 
-target_link_libraries(velox_vector_fuzzer_test velox_vector_fuzzer velox_memory
-                      gtest gtest_main gmock)
+target_link_libraries(
+  velox_vector_fuzzer_test
+  velox_vector_fuzzer
+  velox_presto_types
+  velox_constrained_input_generators
+  velox_memory
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
+add_executable(velox_constrained_vector_generator_test ConstrainedVectorGeneratorTest.cpp)
+
+add_test(
+  NAME velox_constrained_vector_generator_test
+  COMMAND velox_constrained_vector_generator_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  velox_constrained_vector_generator_test
+  velox_constrained_vector_generator
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)

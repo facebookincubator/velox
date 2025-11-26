@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -79,7 +80,7 @@ class ScalarGeneratorSpec : public GeneratorSpec {
       : GeneratorSpec(type, nullProbability),
         distribution_(std::forward<Distribution>(distribution)) {
     using TCpp = typename TypeTraits<KIND>::NativeType;
-    using Ret = std::result_of_t<Distribution(FuzzerGenerator&)>;
+    using Ret = std::invoke_result_t<Distribution, FuzzerGenerator&>;
     static_assert(std::is_convertible_v<Ret, TCpp>);
   }
 
@@ -143,7 +144,7 @@ class ArrayGeneratorSpec : public GeneratorSpec {
       : GeneratorSpec(type, nullProbability),
         elements_(elements),
         lengthDistribution_(std::forward<Distribution>(lengthDistribution)) {
-    using Ret = std::result_of_t<Distribution(FuzzerGenerator&)>;
+    using Ret = std::invoke_result_t<Distribution, FuzzerGenerator&>;
     static_assert(std::is_convertible_v<Ret, vector_size_t>);
   }
 
@@ -190,7 +191,7 @@ class MapGeneratorSpec : public GeneratorSpec {
         keys_(keys),
         values_(values),
         lengthDistribution_(std::forward<Distribution>(lengthDistribution)) {
-    using Ret = std::result_of_t<Distribution(FuzzerGenerator&)>;
+    using Ret = std::invoke_result_t<Distribution, FuzzerGenerator&>;
     static_assert(std::is_convertible_v<Ret, vector_size_t>);
   }
 
@@ -240,7 +241,7 @@ class EncoderSpec : public GeneratorSpec {
         base_(base),
         encoding_(std::forward<Distribution>(encodingDistribution)),
         nesting_(minNesting, maxNesting) {
-    using Ret = std::result_of_t<Distribution(FuzzerGenerator&)>;
+    using Ret = std::invoke_result_t<Distribution, FuzzerGenerator&>;
     static_assert(std::is_convertible_v<Ret, EncoderSpecCodes>);
   }
 
@@ -258,7 +259,7 @@ class EncoderSpec : public GeneratorSpec {
     switch (encodingCode) {
       case EncoderSpecCodes::CONSTANT: {
         auto index = getRandomIndex(rng, curSize - 1);
-        if (coinToss(rng, nullProbability_)) {
+        if (fuzzer::coinToss(rng, nullProbability_)) {
           ret = BaseVector::createNullConstant(type_, nextSize, pool);
         } else {
           ret = BaseVector::wrapInConstant(nextSize, index, vec);
@@ -286,7 +287,7 @@ class EncoderSpec : public GeneratorSpec {
         break;
       }
       default: {
-        VELOX_UNREACHABLE()
+        VELOX_UNREACHABLE();
         break;
       }
     }

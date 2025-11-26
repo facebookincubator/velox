@@ -15,172 +15,85 @@
  */
 
 #include "velox/exec/AggregateFunctionRegistry.h"
+
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregateUtil.h"
 #include "velox/exec/WindowFunction.h"
-#include "velox/functions/Registerer.h"
+#include "velox/exec/tests/AggregateRegistryTestUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
 
-namespace {
-
-class AggregateFunc : public Aggregate {
- public:
-  explicit AggregateFunc(TypePtr resultType) : Aggregate(resultType) {}
-
-  int32_t accumulatorFixedWidthSize() const override {
-    return 0;
-  }
-
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
-
-  void addRawInput(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addIntermediateResults(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupRawInput(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupIntermediateResults(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void extractValues(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-
-  void extractAccumulators(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-  static std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures() {
-    std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures{
-        AggregateFunctionSignatureBuilder()
-            .returnType("bigint")
-            .intermediateType("array(bigint)")
-            .argumentType("bigint")
-            .argumentType("double")
-            .build(),
-        AggregateFunctionSignatureBuilder()
-            .typeVariable("T")
-            .returnType("T")
-            .intermediateType("array(T)")
-            .argumentType("T")
-            .argumentType("T")
-            .build(),
-        AggregateFunctionSignatureBuilder()
-            .returnType("date")
-            .intermediateType("date")
-            .build(),
-    };
-    return signatures;
-  }
-};
-
-bool registerAggregateFunc(const std::string& name, bool overwrite = false) {
-  auto signatures = AggregateFunc::signatures();
-
-  return registerAggregateFunction(
-             name,
-             std::move(signatures),
-             [&](core::AggregationNode::Step step,
-                 const std::vector<TypePtr>& argTypes,
-                 const TypePtr& resultType,
-                 const core::QueryConfig& /*config*/)
-                 -> std::unique_ptr<exec::Aggregate> {
-               if (isPartialOutput(step)) {
-                 if (argTypes.empty()) {
-                   return std::make_unique<AggregateFunc>(resultType);
-                 }
-                 return std::make_unique<AggregateFunc>(ARRAY(resultType));
-               }
-               return std::make_unique<AggregateFunc>(resultType);
-             },
-             /*registerCompanionFunctions*/ false,
-             overwrite)
-      .mainFunction;
-}
-
-} // namespace
-
-class FunctionRegistryTest : public testing::Test {
- public:
-  FunctionRegistryTest() {
+class AggregateFunctionRegistryTest : public testing::Test {
+ protected:
+  AggregateFunctionRegistryTest() {
     registerAggregateFunc("aggregate_func");
     registerAggregateFunc("Aggregate_Func_Alias");
   }
 
-  void checkEqual(const TypePtr& actual, const TypePtr& expected) {
-    if (expected) {
-      EXPECT_EQ(*actual, *expected);
-    } else {
-      EXPECT_EQ(actual, nullptr);
-    }
+  void testResolve(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedFinalType,
+      const TypePtr& expectedIntermediateType) {
+    auto finalType = resolveResultType(name, argTypes);
+    auto intermediateType = resolveIntermediateType(name, argTypes);
+    EXPECT_EQ(*finalType, *expectedFinalType);
+    EXPECT_EQ(*intermediateType, *expectedIntermediateType);
   }
 
-  void testResolveAggregateFunction(
-      const std::string& functionName,
-      const std::vector<TypePtr>& argTypes,
-      const TypePtr& expectedReturn,
-      const TypePtr& expectedIntermediate) {
-    auto result = resolveAggregateFunction(functionName, argTypes);
-    checkEqual(result.first, expectedReturn);
-    checkEqual(result.second, expectedIntermediate);
+  void clearRegistry() {
+    aggregateFunctions().withWLock(
+        [](auto& aggregationFunctionMap) { aggregationFunctionMap.clear(); });
   }
 };
 
-TEST_F(FunctionRegistryTest, hasAggregateFunctionSignature) {
-  testResolveAggregateFunction(
+TEST_F(AggregateFunctionRegistryTest, basic) {
+  testResolve(
       "aggregate_func", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
-  testResolveAggregateFunction(
+  testResolve(
       "aggregate_func", {DOUBLE(), DOUBLE()}, DOUBLE(), ARRAY(DOUBLE()));
-  testResolveAggregateFunction(
+  testResolve(
       "aggregate_func",
       {ARRAY(BOOLEAN()), ARRAY(BOOLEAN())},
       ARRAY(BOOLEAN()),
       ARRAY(ARRAY(BOOLEAN())));
-  testResolveAggregateFunction("aggregate_func", {}, DATE(), DATE());
+  testResolve("aggregate_func", {}, DATE(), DATE());
 }
 
-TEST_F(FunctionRegistryTest, hasAggregateFunctionSignatureWrongFunctionName) {
-  testResolveAggregateFunction(
-      "aggregate_func_nonexist", {BIGINT(), BIGINT()}, nullptr, nullptr);
-  testResolveAggregateFunction("aggregate_func_nonexist", {}, nullptr, nullptr);
+TEST_F(AggregateFunctionRegistryTest, wrongFunctionName) {
+  VELOX_ASSERT_THROW(
+      resolveIntermediateType("aggregate_func_nonexist", {BIGINT(), BIGINT()}),
+      "Aggregate function not registered: aggregate_func_nonexist");
+  VELOX_ASSERT_THROW(
+      resolveIntermediateType("aggregate_func_nonexist", {}),
+      "Aggregate function not registered: aggregate_func_nonexist");
 }
 
-TEST_F(FunctionRegistryTest, hasAggregateFunctionSignatureWrongArgType) {
-  testResolveAggregateFunction(
-      "aggregate_func", {DOUBLE(), BIGINT()}, nullptr, nullptr);
-  testResolveAggregateFunction("aggregate_func", {BIGINT()}, nullptr, nullptr);
-  testResolveAggregateFunction(
-      "aggregate_func", {BIGINT(), BIGINT(), BIGINT()}, nullptr, nullptr);
+TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
+  VELOX_ASSERT_THROW(
+      resolveIntermediateType("aggregate_func", {DOUBLE(), BIGINT()}),
+      "Aggregate function signature is not supported");
+  VELOX_ASSERT_THROW(
+      resolveResultType("aggregate_func", {BIGINT()}),
+      "Aggregate function signature is not supported");
+  VELOX_ASSERT_THROW(
+      resolveResultType("aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
+      "Aggregate function signature is not supported");
 }
 
-TEST_F(FunctionRegistryTest, functionNameInMixedCase) {
-  testResolveAggregateFunction(
+TEST_F(AggregateFunctionRegistryTest, functionNameInMixedCase) {
+  testResolve(
       "aggregatE_funC", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
-  testResolveAggregateFunction(
+  testResolve(
       "aggregatE_funC_aliaS", {DOUBLE(), DOUBLE()}, DOUBLE(), ARRAY(DOUBLE()));
 }
 
-TEST_F(FunctionRegistryTest, getAggregateFunctionSignatures) {
+TEST_F(AggregateFunctionRegistryTest, getSignatures) {
   auto functionSignatures = getAggregateFunctionSignatures();
   auto aggregateFuncSignatures = functionSignatures["aggregate_func"];
   std::vector<std::string> aggregateFuncSignaturesStr;
@@ -201,7 +114,7 @@ TEST_F(FunctionRegistryTest, getAggregateFunctionSignatures) {
   ASSERT_EQ(aggregateFuncSignaturesStr, expectedSignaturesStr);
 }
 
-TEST_F(FunctionRegistryTest, aggregateWindowFunctionSignature) {
+TEST_F(AggregateFunctionRegistryTest, windowFunction) {
   auto windowFunctionSignatures = getWindowFunctionSignatures("aggregate_func");
   ASSERT_EQ(windowFunctionSignatures->size(), 3);
 
@@ -216,9 +129,90 @@ TEST_F(FunctionRegistryTest, aggregateWindowFunctionSignature) {
   ASSERT_EQ(functionSignatures.count("(T,T) -> array(T) -> T"), 1);
 }
 
-TEST_F(FunctionRegistryTest, duplicateRegistration) {
+TEST_F(AggregateFunctionRegistryTest, duplicateRegistration) {
   EXPECT_FALSE(registerAggregateFunc("aggregate_func"));
   EXPECT_TRUE(registerAggregateFunc("aggregate_func", true));
+}
+
+TEST_F(AggregateFunctionRegistryTest, multipleNames) {
+  auto signatures = AggregateFunc::signatures();
+  auto factory = [&](core::AggregationNode::Step step,
+                     const std::vector<TypePtr>& argTypes,
+                     const TypePtr& resultType,
+                     const core::QueryConfig& /*config*/) {
+    if (isPartialOutput(step)) {
+      if (argTypes.empty()) {
+        return std::make_unique<AggregateFunc>(resultType);
+      }
+      return std::make_unique<AggregateFunc>(ARRAY(resultType));
+    }
+    return std::make_unique<AggregateFunc>(resultType);
+  };
+
+  auto registrationResult = registerAggregateFunction(
+      "aggregate_func1",
+      signatures,
+      factory,
+      /*registerCompanionFunctions*/ true,
+      /*overwrite*/ false);
+  exec::AggregateRegistrationResult allSuccess{true, true, true, true, true};
+  EXPECT_EQ(registrationResult, allSuccess);
+  testResolve(
+      "aggregate_func1", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
+  testResolve(
+      "aggregate_func1_partial",
+      {BIGINT(), DOUBLE()},
+      ARRAY(BIGINT()),
+      ARRAY(BIGINT()));
+
+  registrationResult = registerAggregateFunction(
+      {std::string("aggregate_func2")},
+      signatures,
+      factory,
+      /*registerCompanionFunctions*/ false,
+      /*overwrite*/ false);
+  exec::AggregateRegistrationResult onlyMainSuccess{
+      true, false, false, false, false};
+  EXPECT_EQ(registrationResult, onlyMainSuccess);
+  testResolve(
+      "aggregate_func2", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
+
+  auto registrationResults = registerAggregateFunction(
+      std::vector<std::string>{"aggregate_func2", "aggregate_func3"},
+      signatures,
+      factory,
+      /*registerCompanionFunctions*/ true,
+      /*overwrite*/ false);
+  exec::AggregateRegistrationResult allSuccessExceptMain{
+      false, true, true, true, true};
+  EXPECT_EQ(registrationResults[0], allSuccessExceptMain);
+  EXPECT_EQ(registrationResults[1], allSuccess);
+  testResolve(
+      "aggregate_func2", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
+  testResolve(
+      "aggregate_func2_partial",
+      {BIGINT(), DOUBLE()},
+      ARRAY(BIGINT()),
+      ARRAY(BIGINT()));
+  testResolve(
+      "aggregate_func3", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
+  testResolve(
+      "aggregate_func3_partial",
+      {BIGINT(), DOUBLE()},
+      ARRAY(BIGINT()),
+      ARRAY(BIGINT()));
+}
+
+TEST_F(AggregateFunctionRegistryTest, getAggregateFunctionNames) {
+  clearRegistry();
+  registerAggregateFunc("aggregate_func");
+  registerAggregateFunc("Aggregate_Func_Alias");
+
+  auto functions = getAggregateFunctionNames();
+  EXPECT_EQ(functions.size(), 2);
+  EXPECT_THAT(
+      functions,
+      testing::UnorderedElementsAre("aggregate_func", "aggregate_func_alias"));
 }
 
 } // namespace facebook::velox::exec::test

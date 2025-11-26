@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/common/compression/Compression.h"
 
 #include <folly/Conv.h>
 
@@ -60,6 +61,32 @@ std::string streamKindToString(StreamKind kind) {
       return "stride dictionary length";
     case StreamKind_BLOOM_FILTER_UTF8:
       return "bloom";
+    case StreamKindOrc_PRESENT:
+      return "orc present";
+    case StreamKindOrc_DATA:
+      return "orc data";
+    case StreamKindOrc_LENGTH:
+      return "orc length";
+    case StreamKindOrc_DICTIONARY_DATA:
+      return "orc dictionary";
+    case StreamKindOrc_DICTIONARY_COUNT:
+      return "orc dictionary count";
+    case StreamKindOrc_SECONDARY:
+      return "orc secondary";
+    case StreamKindOrc_ROW_INDEX:
+      return "orc index";
+    case StreamKindOrc_BLOOM_FILTER:
+      return "orc bloom";
+    case StreamKindOrc_BLOOM_FILTER_UTF8:
+      return "orc bloom utf8";
+    case StreamKindOrc_ENCRYPTED_INDEX:
+      return "orc encrypted index";
+    case StreamKindOrc_ENCRYPTED_DATA:
+      return "orc encrypted data";
+    case StreamKindOrc_STRIPE_STATISTICS:
+      return "orc stripe statistics";
+    case StreamKindOrc_FILE_STATISTICS:
+      return "orc file statistics";
   }
   return folly::to<std::string>("unknown - ", kind);
 }
@@ -79,29 +106,12 @@ std::string columnEncodingKindToString(ColumnEncodingKind kind) {
 }
 
 DwrfStreamIdentifier EncodingKey::forKind(const proto::Stream_Kind kind) const {
-  return DwrfStreamIdentifier(node, sequence, 0, kind);
+  return DwrfStreamIdentifier(node_, sequence_, 0, kind);
 }
 
-namespace {
-using dwio::common::CompressionKind;
-
-CompressionKind orcCompressionToCompressionKind(
-    proto::orc::CompressionKind compression) {
-  switch (compression) {
-    case proto::orc::CompressionKind::NONE:
-      return CompressionKind::CompressionKind_NONE;
-    case proto::orc::CompressionKind::ZLIB:
-      return CompressionKind::CompressionKind_ZLIB;
-    case proto::orc::CompressionKind::SNAPPY:
-      return CompressionKind::CompressionKind_SNAPPY;
-    case proto::orc::CompressionKind::LZO:
-      return CompressionKind::CompressionKind_LZO;
-    case proto::orc::CompressionKind::LZ4:
-      return CompressionKind::CompressionKind_ZSTD;
-    case proto::orc::CompressionKind::ZSTD:
-      return CompressionKind::CompressionKind_LZ4;
-  }
-  return CompressionKind::CompressionKind_NONE;
+DwrfStreamIdentifier EncodingKey::forKind(
+    const proto::orc::Stream_Kind kind) const {
+  return DwrfStreamIdentifier(node_, sequence_, 0, kind);
 }
-} // namespace
+
 } // namespace facebook::velox::dwrf

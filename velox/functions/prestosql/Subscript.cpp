@@ -25,16 +25,40 @@ namespace {
 /// - does not allow negative indices for arrays
 /// - does not allow out of bounds accesses for arrays (throws)
 /// - index starts at 1 for arrays.
-using SubscriptFunction = SubscriptImpl<
-    /* allowNegativeIndices */ false,
-    /* nullOnNegativeIndices */ false,
-    /* allowOutOfBound */ false,
-    /* indexStartsAtOne */ true>;
+class SubscriptFunction : public SubscriptImpl<
+                              /* allowNegativeIndices */ false,
+                              /* nullOnNegativeIndices */ false,
+                              /* allowOutOfBound */ false,
+                              /* indexStartsAtOne */ true> {
+ public:
+  explicit SubscriptFunction(bool allowcaching) : SubscriptImpl(allowcaching) {}
+
+  bool canPushdown() const override {
+    return true;
+  }
+};
+
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_subscript,
-    SubscriptFunction::signatures(),
-    std::make_unique<SubscriptFunction>());
+void registerSubscriptFunction(
+    const std::string& name,
+    bool enableCaching = true) {
+  exec::registerStatefulVectorFunction(
+      name,
+      SubscriptFunction::signatures(),
+      [enableCaching](
+          const std::string&,
+          const std::vector<exec::VectorFunctionArg>& inputArgs,
+          const velox::core::QueryConfig& config) {
+        static const auto kSubscriptStateLess =
+            std::make_shared<SubscriptFunction>(false);
+        if (inputArgs[0].type->isArray()) {
+          return kSubscriptStateLess;
+        } else {
+          return std::make_shared<SubscriptFunction>(
+              enableCaching && config.isExpressionEvaluationCacheEnabled());
+        }
+      });
+}
 
 } // namespace facebook::velox::functions

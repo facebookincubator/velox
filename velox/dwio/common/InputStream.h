@@ -16,10 +16,6 @@
 
 #pragma once
 
-#include <array>
-#include <atomic>
-#include <condition_variable>
-#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -30,15 +26,14 @@
 #include <utility>
 #include <vector>
 
+#include <folly/container/F14Map.h>
 #include "velox/common/file/File.h"
 #include "velox/common/file/Region.h"
-#include "velox/dwio/common/IoStatistics.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/MetricsLog.h"
 
 namespace facebook::velox::dwio::common {
-
-constexpr uint64_t DEFAULT_AUTO_PRELOAD_SIZE =
-    (static_cast<const uint64_t>((1ul << 20) * 72));
+using namespace facebook::velox::io;
 
 /**
  * An abstract interface for providing readers a stream of bytes.
@@ -48,15 +43,19 @@ class InputStream {
   explicit InputStream(
       const std::string& path,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr)
-      : path_{path}, metricsLog_{metricsLog}, stats_(stats) {}
+      IoStatistics* stats = nullptr,
+      filesystems::File::IoStats* fsStats = nullptr)
+      : path_{path},
+        metricsLog_{metricsLog},
+        stats_(stats),
+        fsStats_(fsStats) {}
 
   virtual ~InputStream() = default;
 
   /**
    * Get the stats object
    */
-  IoStatistics* FOLLY_NULLABLE getStats() const {
+  IoStatistics* getStats() const {
     return stats_;
   }
 
@@ -78,7 +77,7 @@ class InputStream {
    * @param length the number of bytes to read.
    * @param offset the position in the stream to read from.
    */
-  virtual void read(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType) = 0;
+  virtual void read(void*, uint64_t, uint64_t, LogType) = 0;
 
   /**
    * Read starting at offset into buffers, filling the buffers left to right. A
@@ -126,9 +125,6 @@ class InputStream {
       folly::Range<folly::IOBuf*> iobufs,
       const LogType purpose) = 0;
 
-  // case insensitive find
-  static uint32_t ifind(const std::string& src, const std::string& target);
-
   const std::string& getName() const;
 
   virtual void logRead(uint64_t offset, uint64_t length, LogType purpose);
@@ -136,19 +132,22 @@ class InputStream {
  protected:
   std::string path_;
   MetricsLogPtr metricsLog_;
-  IoStatistics* FOLLY_NULLABLE stats_;
+  IoStatistics* stats_;
+  filesystems::File::IoStats* fsStats_;
 };
 
-// An input stream that reads from an already opened ReadFile.
+/// An input stream that reads from an already opened ReadFile.
 class ReadFileInputStream final : public InputStream {
  public:
-  // Take shared ownership of |readFile|.
+  /// Takes shared ownership of |readFile|.
   explicit ReadFileInputStream(
       std::shared_ptr<velox::ReadFile>,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr);
+      IoStatistics* stats = nullptr,
+      filesystems::File::IoStats* fsStats = nullptr,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {});
 
-  virtual ~ReadFileInputStream() {}
+  ~ReadFileInputStream() override = default;
 
   uint64_t getLength() const final override {
     return readFile_->size();
@@ -158,7 +157,7 @@ class ReadFileInputStream final : public InputStream {
     return readFile_->getNaturalReadSize();
   }
 
-  void read(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType) override;
+  void read(void*, uint64_t, uint64_t, LogType) override;
 
   void read(
       const std::vector<folly::Range<char*>>& buffers,
@@ -182,6 +181,7 @@ class ReadFileInputStream final : public InputStream {
   }
 
  private:
+  FileStorageContext fileStorageContext_;
   std::shared_ptr<velox::ReadFile> readFile_;
 };
 

@@ -22,6 +22,7 @@ class ConstantExpr : public SpecialForm {
  public:
   explicit ConstantExpr(VectorPtr value)
       : SpecialForm(
+            SpecialFormKind::kConstant,
             value->type(),
             std::vector<ExprPtr>(),
             "literal",
@@ -29,10 +30,7 @@ class ConstantExpr : public SpecialForm {
             false /* trackCpuUsage */),
         needToSetIsAscii_{value->type()->isVarchar()} {
     VELOX_CHECK_EQ(value->encoding(), VectorEncoding::Simple::CONSTANT);
-    // sharedConstantValue_ may be modified so we should take our own copy to
-    // prevent sharing across threads.
-    sharedConstantValue_ =
-        BaseVector::wrapInConstant(1, 0, std::move(value), true);
+    sharedConstantValue_ = std::move(value);
   }
 
   void evalSpecialForm(
@@ -51,6 +49,10 @@ class ConstantExpr : public SpecialForm {
 
   VectorPtr& mutableValue() {
     return sharedConstantValue_;
+  }
+
+  void setDefaultNullRowsSkipped(bool defaultNullRowsSkipped) {
+    stats_.defaultNullRowsSkipped = defaultNullRowsSkipped;
   }
 
   std::string toString(bool recursive = true) const override;

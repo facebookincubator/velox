@@ -15,6 +15,7 @@
  */
 
 #include <string>
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/parse/Expressions.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -30,8 +31,11 @@ namespace facebook::velox::test {
 ///                supported)
 class ExpressionRunner {
  public:
-  /// @param inputPath The path to the on-disk vector that will be used as input
-  ///        to feed to the expression.
+  /// @param inputPaths A comma separated list of paths to the on-disk vectors
+  ///         that will be used as inputs to be fed to the expression.
+  /// @param inputSelectivityVectorPath A comma separated list of paths to the
+  ///        on-disk selectivity vectors that correspond 1-to-1 with the inputs
+  ///        to be fed to the expression.
   /// @param sql Comma-separated SQL expressions.
   /// @param complexConstantsPath The path to on-disk vector that stores complex
   ///        subexpressions that aren't expressable in SQL (if any), used with
@@ -46,22 +50,34 @@ class ExpressionRunner {
   /// @param storeResultPath The path to a directory on disk where the results
   /// of expression or query evaluation will be stored. If empty, the results
   /// will not be stored.
-  /// @param lazyColumnListPath The path to on-disk vector of column indices
-  /// that specify which columns of the input row vector should be wrapped in
-  /// lazy.
+  /// @param inputRowMetadataPath The path to on-disk serialized struct that
+  ///        contains metadata about the input row vector like the columns
+  ///        to wrap in lazy or dictionary encoding and the dictionary wrap.
+  /// @param findMinimalSubExpression Whether to find minimum failing
+  ///        subexpression on result mismatch.
+  /// @param useSeperatePoolForInput Whether to use separate memory pools for
+  ///        input vector and expression evaluation. This helps trigger
+  ///        code-paths that can depend on vectors having different pools. For
+  ///        eg, when copying a flat string vector copies of the strings stored
+  ///        in the string buffers need to be created. If however, the pools
+  ///        were the same between the vectors then the buffers can simply be
+  ///        shared between them instead.
   ///
   /// User can refer to 'VectorSaver' class to see how to serialize/preserve
   /// vectors to disk.
   static void run(
-      const std::string& inputPath,
+      const std::string& inputPaths,
+      const std::string& inputSelectivityVectorPath,
       const std::string& sql,
       const std::string& complexConstantsPath,
       const std::string& resultPath,
       const std::string& mode,
       vector_size_t numRows,
       const std::string& storeResultPath,
-      const std::string& lazyColumnListPath,
-      bool findMinimalSubExpression = false);
+      const std::string& inputRowMetadataPath,
+      std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
+      bool findMinimalSubExpression = false,
+      bool useSeperatePoolForInput = true);
 
   /// Parse comma-separated SQL expressions. This should be treated as private
   /// except for tests.

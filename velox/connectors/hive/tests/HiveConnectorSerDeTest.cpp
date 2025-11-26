@@ -15,14 +15,15 @@
  */
 
 #include <gtest/gtest.h>
-#include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/tests/SubfieldFiltersBuilder.h"
 
-using namespace facebook::velox;
+namespace facebook::velox::connector::hive::test {
+namespace {
+
 using namespace facebook::velox::exec;
-using namespace facebook::velox::connector::hive;
 
 class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
  protected:
@@ -30,10 +31,7 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
     Type::registerSerDe();
     common::Filter::registerSerDe();
     core::ITypedExpr::registerSerDe();
-    HiveTableHandle::registerSerDe();
-    HiveColumnHandle::registerSerDe();
-    LocationHandle::registerSerDe();
-    HiveInsertTableHandle::registerSerDe();
+    HiveConnector::registerSerDe();
   }
 
   template <typename T>
@@ -60,6 +58,57 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
       ASSERT_TRUE(filter->testingEquals(*cloneFilters.at(subfield)));
     }
   }
+
+  static void testSerde(const HiveConnectorSplit& split) {
+    const auto str = split.toString();
+    const auto obj = split.serialize();
+    const auto clone = ISerializable::deserialize<HiveConnectorSplit>(obj);
+    ASSERT_EQ(clone->toString(), str);
+    ASSERT_EQ(split.partitionKeys.size(), clone->partitionKeys.size());
+    for (const auto& [key, value] : split.partitionKeys) {
+      ASSERT_EQ(value, clone->partitionKeys.at(key));
+    }
+
+    ASSERT_EQ(split.tableBucketNumber, clone->tableBucketNumber);
+    if (split.bucketConversion.has_value()) {
+      ASSERT_TRUE(clone->bucketConversion.has_value());
+      ASSERT_EQ(
+          clone->bucketConversion.value().tableBucketCount,
+          split.bucketConversion.value().tableBucketCount);
+      ASSERT_EQ(
+          clone->bucketConversion.value().partitionBucketCount,
+          split.bucketConversion.value().partitionBucketCount);
+    }
+    ASSERT_EQ(split.customSplitInfo.size(), clone->customSplitInfo.size());
+    for (const auto& [key, value] : split.customSplitInfo) {
+      ASSERT_EQ(value, clone->customSplitInfo.at(key));
+    }
+
+    if (split.extraFileInfo != nullptr) {
+      ASSERT_EQ(*split.extraFileInfo, *clone->extraFileInfo);
+    } else {
+      ASSERT_EQ(clone->extraFileInfo, nullptr);
+    }
+    ASSERT_EQ(split.serdeParameters.size(), clone->serdeParameters.size());
+    for (const auto& [key, value] : split.serdeParameters) {
+      ASSERT_EQ(value, clone->serdeParameters.at(key));
+    }
+
+    ASSERT_EQ(split.infoColumns.size(), clone->infoColumns.size());
+    for (const auto& [key, value] : split.infoColumns) {
+      ASSERT_EQ(value, clone->infoColumns.at(key));
+    }
+
+    if (split.properties.has_value()) {
+      ASSERT_TRUE(clone->properties.has_value());
+      ASSERT_EQ(split.properties->fileSize, clone->properties->fileSize);
+      ASSERT_EQ(
+          split.properties->modificationTime,
+          clone->properties->modificationTime);
+    } else {
+      ASSERT_FALSE(clone->properties.has_value());
+    }
+  }
 };
 
 TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
@@ -82,20 +131,42 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
           .build(),
       parseExpr("c1 > c4 and c3 = true", rowType),
       "hive_table",
-      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
+      true,
+      {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
   testSerde(*tableHandle);
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
-  auto columnType = ROW(
-      {{"c0c0", BIGINT()},
-       {"c0c1",
-        ARRAY(MAP(
-            VARCHAR(), ROW({{"c0c1c0", BIGINT()}, {"c0c1c1", BIGINT()}})))}});
-  auto columnHandle = exec::test::HiveConnectorTestBase::makeColumnHandle(
-      "columnHandle", columnType, {"c0.c0c1[3][\"foo\"].c0c1c0"});
+  auto columnType = ROW({
+      {"c0c0", BIGINT()},
+      {"c0c1",
+       ARRAY(
+           MAP(VARCHAR(),
+               ROW({
+                   {"c0c1c0", BIGINT()},
+                   {"c0c1c1", BIGINT()},
+               })))},
+  });
 
-  testSerde(*columnHandle);
+  auto columnHandleTypes = {
+      HiveColumnHandle::ColumnType::kPartitionKey,
+      HiveColumnHandle::ColumnType::kRegular,
+      HiveColumnHandle::ColumnType::kSynthesized,
+      HiveColumnHandle::ColumnType::kRowIndex,
+      HiveColumnHandle::ColumnType::kRowId,
+  };
+
+  for (auto columnHandleType : columnHandleTypes) {
+    auto columnHandle = exec::test::HiveConnectorTestBase::makeColumnHandle(
+        "columnHandle",
+        columnType,
+        columnType,
+        {"c0.c0c1[3][\"foo\"].c0c1c0"},
+        columnHandleType);
+
+    testSerde(*columnHandle);
+  }
 }
 
 TEST_F(HiveConnectorSerDeTest, locationHandle) {
@@ -121,12 +192,106 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
   tableColumnTypes.emplace_back(rowType);
   tableColumnTypes.emplace_back(arrType);
   tableColumnTypes.emplace_back(varcharType);
+
   auto locationHandle = exec::test::HiveConnectorTestBase::makeLocationHandle(
       "targetDirectory",
       std::optional("writeDirectory"),
       LocationHandle::TableType::kNew);
+
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kPrestoNative,
+      1024,
+      std::vector<std::string>{"id", "row"},
+      std::vector<TypePtr>{VARCHAR(), BOOLEAN()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{
+          std::make_shared<HiveSortingColumn>(
+              "id", core::SortOrder{true, true})});
+
+  std::unordered_map<std::string, std::string> serdeParameters = {
+      {"key1", "value1"},
+      {"key2", "value2"},
+  };
+
   auto hiveInsertTableHandle =
       exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
-          tableColumnNames, tableColumnTypes, {"loc"}, locationHandle);
+          tableColumnNames,
+          tableColumnTypes,
+          {"loc"},
+          bucketProperty,
+          locationHandle,
+          dwio::common::FileFormat::NIMBLE,
+          common::CompressionKind::CompressionKind_SNAPPY,
+          serdeParameters);
   testSerde(*hiveInsertTableHandle);
 }
+
+TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
+  const auto connectorId = "testSerde";
+  constexpr auto splitWeight = 1;
+  constexpr bool cacheable = false;
+  constexpr auto filePath = "/testSerde/p";
+  constexpr auto fileFormat = dwio::common::FileFormat::DWRF;
+  constexpr auto start = 0;
+  constexpr auto length = 1024;
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionKeys{{"p0", "0"}, {"p1", "1"}};
+  constexpr auto tableBucketNumber = std::optional<int32_t>(4);
+  const std::unordered_map<std::string, std::string> customSplitInfo{
+      {"s0", "0"}, {"s1", "1"}};
+  const auto extraFileInfo = std::make_shared<std::string>("testSerdeFileInfo");
+  const std::unordered_map<std::string, std::string> serdeParameters{
+      {"k1", "1"}, {"k2", "v2"}};
+  const std::unordered_map<std::string, std::string> infoColumns{
+      {"c0", "0"}, {"c1", "1"}};
+  FileProperties fileProperties{
+      .fileSize = 2048, .modificationTime = std::nullopt};
+  const auto properties = std::optional<FileProperties>(fileProperties);
+  RowIdProperties rowIdProperties{
+      .metadataVersion = 2, .partitionId = 3, .tableGuid = "test"};
+  const auto split1 = HiveConnectorSplit(
+      connectorId,
+      filePath,
+      fileFormat,
+      start,
+      length,
+      partitionKeys,
+      tableBucketNumber,
+      customSplitInfo,
+      extraFileInfo,
+      serdeParameters,
+      splitWeight,
+      cacheable,
+      infoColumns,
+      properties,
+      rowIdProperties);
+  ASSERT_EQ(split1.cacheable, cacheable);
+  testSerde(split1);
+
+  const auto split2 = HiveConnectorSplit(
+      connectorId,
+      filePath,
+      fileFormat,
+      start,
+      length,
+      {},
+      tableBucketNumber,
+      customSplitInfo,
+      nullptr,
+      {},
+      splitWeight,
+      !cacheable,
+      {},
+      std::nullopt,
+      std::nullopt);
+  ASSERT_EQ(split2.cacheable, !cacheable);
+  testSerde(split2);
+
+  auto split3 = HiveConnectorSplit(connectorId, filePath, fileFormat);
+  std::vector<std::shared_ptr<HiveColumnHandle>> handles;
+  handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
+  split3.bucketConversion = {16, 2, std::move(handles)};
+  testSerde(split3);
+}
+
+} // namespace
+} // namespace facebook::velox::connector::hive::test

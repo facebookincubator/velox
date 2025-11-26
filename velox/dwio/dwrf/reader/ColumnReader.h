@@ -16,11 +16,12 @@
 
 #pragma once
 
+#include "folly/Executor.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/dwrf/common/ByteRLE.h"
-#include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/EncodingContext.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
@@ -29,16 +30,34 @@
 
 namespace facebook::velox::dwrf {
 
+// Foward declaration
+class ColumnReader;
+
+class ColumnReaderFactory {
+ public:
+  virtual ~ColumnReaderFactory() = default;
+  virtual std::unique_ptr<ColumnReader> build(
+      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+      StripeStreams& stripe,
+      const StreamLabels& streamLabels,
+      folly::Executor* executor,
+      size_t decodingParallelismFactor,
+      FlatMapContext flatMapContext = {});
+
+  static ColumnReaderFactory& defaultFactory();
+};
+
 /**
  * The interface for reading ORC data types.
  */
 class ColumnReader {
  protected:
-  explicit ColumnReader(
+  ColumnReader(
       memory::MemoryPool& memoryPool,
       const std::shared_ptr<const dwio::common::TypeWithId>& type)
       : notNullDecoder_{},
-        nodeType_{type},
+        fileType_{type},
         memoryPool_{memoryPool},
         flatMapContext_{} {}
 
@@ -60,7 +79,7 @@ class ColumnReader {
       const uint64_t* incomingNulls);
 
   std::unique_ptr<ByteRleDecoder> notNullDecoder_;
-  const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
+  const std::shared_ptr<const dwio::common::TypeWithId> fileType_;
   memory::MemoryPool& memoryPool_;
   FlatMapContext flatMapContext_;
 
@@ -106,35 +125,22 @@ class ColumnReader {
     VELOX_NYI();
   }
 
+  virtual bool isFlatMap() const {
+    return false;
+  }
+
   /**
    * Create a reader for the given stripe.
    */
   static std::unique_ptr<ColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      FlatMapContext flatMapContext = {});
-};
-
-class ColumnReaderFactory {
- public:
-  virtual ~ColumnReaderFactory() = default;
-  virtual std::unique_ptr<ColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      const StreamLabels& streamLabels,
-      FlatMapContext flatMapContext = {}) {
-    return ColumnReader::build(
-        requestedType,
-        dataType,
-        stripe,
-        streamLabels,
-        std::move(flatMapContext));
-  }
-
-  static ColumnReaderFactory* baseFactory();
+      folly::Executor* executor,
+      size_t decodingParallelismFactor,
+      FlatMapContext flatMapContext = {},
+      ColumnReaderFactory& factory = ColumnReaderFactory::defaultFactory());
 };
 
 namespace detail {

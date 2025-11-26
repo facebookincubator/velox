@@ -56,6 +56,13 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendWeekOfWeekYear(
   return *this;
 }
 
+DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendWeekOfMonth(
+    size_t minDigits) {
+  tokens_.emplace_back(
+      FormatPattern{DateTimeFormatSpecifier::WEEK_OF_MONTH, minDigits});
+  return *this;
+}
+
 DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendDayOfWeek0Based(
     size_t minDigits) {
   tokens_.emplace_back(
@@ -197,8 +204,9 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendLiteral(
     tokens_.back().literal =
         std::string_view(prev.data(), prev.size() + literalSize);
   } else {
-    tokens_.emplace_back(std::string_view(
-        literalBuf_.get() + bufEnd_ - literalSize, literalSize));
+    tokens_.emplace_back(
+        std::string_view(
+            literalBuf_.get() + bufEnd_ - literalSize, literalSize));
   }
   return *this;
 }

@@ -14,31 +14,27 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
-#include "velox/functions/lib/window/NthValue.h"
+#include "velox/functions/lib/window/RegistrationFunctions.h"
 
 namespace facebook::velox::window {
 
 namespace prestosql {
 
-extern void registerRowNumber(const std::string& name);
-extern void registerRank(const std::string& name);
-extern void registerDenseRank(const std::string& name);
-extern void registerPercentRank(const std::string& name);
 extern void registerCumeDist(const std::string& name);
-extern void registerNtile(const std::string& name);
+extern void registerNtileBigint(const std::string& name);
 extern void registerFirstValue(const std::string& name);
 extern void registerLastValue(const std::string& name);
 extern void registerLag(const std::string& name);
 extern void registerLead(const std::string& name);
 
 void registerAllWindowFunctions(const std::string& prefix) {
-  registerRowNumber(prefix + "row_number");
-  registerRank(prefix + "rank");
-  registerDenseRank(prefix + "dense_rank");
-  registerPercentRank(prefix + "percent_rank");
+  functions::window::registerRowNumberBigint(prefix + "row_number");
+  functions::window::registerRankBigint(prefix + "rank");
+  functions::window::registerDenseRankBigint(prefix + "dense_rank");
+  functions::window::registerPercentRank(prefix + "percent_rank");
   registerCumeDist(prefix + "cume_dist");
-  registerNtile(prefix + "ntile");
-  functions::window::registerBigintNthValue(prefix + "nth_value");
+  functions::window::registerNtileBigint(prefix + "ntile");
+  functions::window::registerNthValueBigint(prefix + "nth_value");
   registerFirstValue(prefix + "first_value");
   registerLastValue(prefix + "last_value");
   registerLag(prefix + "lag");

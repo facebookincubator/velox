@@ -24,69 +24,125 @@ add_executable(
   ArrayConcatTest.cpp
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
+  ArrayCumSumTest.cpp
   ArrayDistinctTest.cpp
   ArrayDuplicatesTest.cpp
   ArrayExceptTest.cpp
   ArrayFilterTest.cpp
+  ArrayFrequencyTest.cpp
   ArrayFlattenTest.cpp
-  ArrayJoinTest.cpp
   ArrayHasDuplicatesTest.cpp
   ArrayIntersectTest.cpp
+  ArrayJoinTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayMinMaxByTest.cpp
+  ArrayNGramsTest.cpp
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArraySortTest.cpp
+  ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
+  ArraySortTest.cpp
+  ArraySubsetTest.cpp
+  ArrayTopNTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
   ArrayTrimTest.cpp
   ArrayUnionTest.cpp
+  ArgTypesGeneratorTest.cpp
   BinaryFunctionsTest.cpp
+  BingTileCastTest.cpp
+  BingTileFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
+  DistanceFunctionsTest.cpp
   ElementAtTest.cpp
+  EnumFunctionsTest.cpp
+  FailTest.cpp
+  FindFirstTest.cpp
+  FloatingPointFunctionsTest.cpp
   FromUtf8Test.cpp
+  GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
+  KHyperLogLogCastTest.cpp
+  P4HyperLogLogCastTest.cpp
+  SetDigestCastTest.cpp
   InPredicateTest.cpp
+  InRewriteTest.cpp
+  IntegerFunctionsTest.cpp
+  IPAddressCastTest.cpp
+  IPPrefixCastTest.cpp
   JsonCastTest.cpp
   JsonExtractScalarTest.cpp
   JsonFunctionsTest.cpp
   MapEntriesTest.cpp
   MapFilterTest.cpp
   MapFromEntriesTest.cpp
+  MapIntersectTest.cpp
+  MapNormalizeTest.cpp
+  RemapKeysTest.cpp
+  MapTopNTest.cpp
+  MapTopNKeysTest.cpp
+  MapTopNValuesTest.cpp
   MapKeysAndValuesTest.cpp
+  MapKeysByTopNValuesTest.cpp
+  MapMatchTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
+  MapExceptTest.cpp
+  MultimapFromEntriesTest.cpp
   NotTest.cpp
+  ParsePrestoDataSizeTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
+  RegexpSplitTest.cpp
   RegexpReplaceTest.cpp
-  RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
+  SequenceTest.cpp
+  SfmSketchFunctionsTest.cpp
   SimpleComparisonMatcherTest.cpp
   SliceTest.cpp
-  SequenceTest.cpp
   SplitTest.cpp
+  SplitToMapTest.cpp
+  SplitToMultiMapTest.cpp
   StringFunctionsTest.cpp
-  TransformTest.cpp
+  TimestampWithTimeZoneCastTest.cpp
+  TimeWithTimezoneCastTest.cpp
   TransformKeysTest.cpp
+  TransformTest.cpp
   TransformValuesTest.cpp
+  TrimFunctionsTest.cpp
+  TypeOfTest.cpp
+  TDigestCastTest.cpp
+  QDigestCastTest.cpp
+  QDigestFunctionsTest.cpp
   URLFunctionsTest.cpp
-  Utf8Test.cpp
+  UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
-  GreatestLeastTest.cpp
+  WordStemTest.cpp
   ZipTest.cpp
-  ZipWithTest.cpp)
+  ZipWithTest.cpp
+)
+
+if(VELOX_ENABLE_GEO)
+  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp)
+endif()
+
+if(VELOX_ENABLE_FAISS)
+  set_source_files_properties(
+    DistanceFunctionsTest.cpp
+    PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS
+  )
+endif()
 
 add_test(velox_functions_test velox_functions_test)
 
@@ -100,8 +156,10 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_common_test_utils
   velox_vector_fuzzer
-  gtest
-  gtest_main
-  gflags::gflags
-  gmock
-  gmock_main)
+  velox_expression_fuzzer_test_utility
+  velox_expression_fuzzer
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+  GTest::gmock_main
+)

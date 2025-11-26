@@ -18,11 +18,8 @@
 
 #include "velox/common/base/VeloxException.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace exception {
+namespace facebook::velox::dwio {
+namespace common::exception {
 
 class ExceptionLogger {
  public:
@@ -52,7 +49,7 @@ class LoggedException : public velox::VeloxException {
   explicit LoggedException(
       const std::string& errorMessage,
       const std::string& errorSource =
-          ::facebook::velox::error_source::kErrorSourceRuntime,
+          ::facebook::velox::error_source::kErrorSourceExternal,
       const std::string& errorCode = ::facebook::velox::error_code::kUnknown,
       const bool isRetriable = false)
       : VeloxException(
@@ -101,8 +98,7 @@ class LoggedException : public velox::VeloxException {
   }
 };
 
-} // namespace exception
-} // namespace common
+} // namespace common::exception
 
 #define DWIO_WARN_IF(e, ...)                                                \
   ({                                                                        \
@@ -181,7 +177,7 @@ containing information about the file, line, and function where it happened.
 #define DWIO_RAISE(...)                                          \
   DWIO_EXCEPTION_CUSTOM(                                         \
       facebook::velox::dwio::common::exception::LoggedException, \
-      ::facebook::velox::error_source::kErrorSourceRuntime,      \
+      ::facebook::velox::error_source::kErrorSourceExternal,     \
       ::facebook::velox::error_code::kUnknown,                   \
       ##__VA_ARGS__)
 
@@ -189,73 +185,71 @@ containing information about the file, line, and function where it happened.
   DWIO_ENFORCE_CUSTOM(                                           \
       facebook::velox::dwio::common::exception::LoggedException, \
       expr,                                                      \
-      ::facebook::velox::error_source::kErrorSourceRuntime,      \
+      ::facebook::velox::error_source::kErrorSourceExternal,     \
       ::facebook::velox::error_code::kUnknown,                   \
       ##__VA_ARGS__)
 
 #define DWIO_ENSURE_NOT_NULL(p, ...) \
-  DWIO_ENSURE(p != nullptr, "[Null pointer] : ", ##__VA_ARGS__);
+  DWIO_ENSURE(p != nullptr, "[Null pointer]: ", ##__VA_ARGS__);
 
-#define DWIO_ENSURE_NE(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l != r,                           \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      "!=",                             \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_NE(l, r, ...)         \
+  DWIO_ENSURE(                            \
+      l != r,                             \
+      "[Equality Constraint Violation: ", \
+      l,                                  \
+      "!=",                               \
+      r,                                  \
+      "]: ",                              \
       ##__VA_ARGS__);
 
-#define DWIO_ENSURE_EQ(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l == r,                           \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      "==",                             \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_EQ(l, r, ...)         \
+  DWIO_ENSURE(                            \
+      l == r,                             \
+      "[Equality Constraint Violation: ", \
+      l,                                  \
+      "==",                               \
+      r,                                  \
+      "]: ",                              \
       ##__VA_ARGS__);
 
-#define DWIO_ENSURE_LT(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l < r,                            \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      "<",                              \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_LT(l, r, ...)      \
+  DWIO_ENSURE(                         \
+      l < r,                           \
+      "[Range Constraint Violation: ", \
+      l,                               \
+      "<",                             \
+      r,                               \
+      "]: ",                           \
       ##__VA_ARGS__);
 
-#define DWIO_ENSURE_LE(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l <= r,                           \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      "<=",                             \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_LE(l, r, ...)      \
+  DWIO_ENSURE(                         \
+      l <= r,                          \
+      "[Range Constraint Violation: ", \
+      l,                               \
+      "<=",                            \
+      r,                               \
+      "]: ",                           \
       ##__VA_ARGS__);
 
-#define DWIO_ENSURE_GT(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l > r,                            \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      ">",                              \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_GT(l, r, ...)      \
+  DWIO_ENSURE(                         \
+      l > r,                           \
+      "[Range Constraint Violation: ", \
+      l,                               \
+      ">",                             \
+      r,                               \
+      "]: ",                           \
       ##__VA_ARGS__);
 
-#define DWIO_ENSURE_GE(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l >= r,                           \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      ">=",                             \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_GE(l, r, ...)      \
+  DWIO_ENSURE(                         \
+      l >= r,                          \
+      "[Range Constraint Violation: ", \
+      l,                               \
+      ">=",                            \
+      r,                               \
+      "]: ",                           \
       ##__VA_ARGS__);
 
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio

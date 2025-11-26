@@ -107,26 +107,22 @@ class DecodedVector {
   DecodedVector(
       const BaseVector& vector,
       const SelectivityVector& rows,
-      bool loadLazy = true) {
-    decode(vector, &rows, loadLazy);
-  }
+      bool loadLazy = true);
 
-  DecodedVector(const BaseVector& vector, bool loadLazy = true) {
-    decode(vector, nullptr, loadLazy);
-  }
+  explicit DecodedVector(const BaseVector& vector, bool loadLazy = true);
 
   /// Resets the internal state and decodes 'vector' for 'rows'. See
   /// constructor.
   void decode(
       const BaseVector& vector,
       const SelectivityVector& rows,
-      bool loadLazy = true) {
-    decode(vector, &rows, loadLazy);
-  }
+      bool loadLazy = true);
 
-  void decode(const BaseVector& vector, bool loadLazy = true) {
-    decode(vector, nullptr, loadLazy);
-  }
+  void decode(const BaseVector& vector, bool loadLazy = true);
+
+  /// Same as other `decode`, but allow us to get shared ownership of the base
+  /// vector via the return value.
+  VectorPtr decodeAndGetBase(const VectorPtr& vector, bool loadLazy = true);
 
   /// Returns the values buffer for the base vector. Assumes the vector is of
   /// scalar type and has been already decoded. Use indices() to access
@@ -144,9 +140,10 @@ class DecodedVector {
   ///
   ///  nulls() ? bits::isBitNull(nulls(), i) : false
   ///
-  /// returns the null flag for top-level row 'i' given that 'i' is one of the
-  /// rows specified for decoding.
-  const uint64_t* nulls();
+  /// Only bit positions for decoded rows are valid. If 'rows' were
+  /// specified with decode(), the same rows have to be specified
+  /// here.
+  const uint64_t* nulls(const SelectivityVector* rows = nullptr);
 
   /// Returns true if wrappings may have added nulls.
   bool hasExtraNulls() const {
@@ -155,7 +152,7 @@ class DecodedVector {
 
   /// Returns the mapping from top-level rows to rows in the base vector or
   /// data() buffer.
-  const vector_size_t* indices() {
+  const vector_size_t* indices() const {
     if (!indices_) {
       fillInIndices();
     }
@@ -229,6 +226,9 @@ class DecodedVector {
     return isConstantMapping_;
   }
 
+  /// Returns string representation of the value in the specified row.
+  std::string toString(vector_size_t idx) const;
+
   /////////////////////////////////////////////////////////////////
   /// BEGIN: Members that must only be used by PeeledEncoding class.
   /// See class comment for more details.
@@ -255,13 +255,25 @@ class DecodedVector {
   /// have been previously decoded by 'this'. This is used when 'data'
   /// is a component of the base vector of 'wrapper' and must be used
   /// in the same context, thus with the same indirections.
-  VectorPtr wrap(VectorPtr data, const BaseVector& wrapper, vector_size_t size);
+  VectorPtr wrap(VectorPtr data, memory::MemoryPool& pool, vector_size_t size);
+
+  VectorPtr wrap(
+      VectorPtr data,
+      memory::MemoryPool& pool,
+      const SelectivityVector& rows) {
+    return wrap(std::move(data), pool, rows.end());
+  }
+
+  VectorPtr
+  wrap(VectorPtr data, const BaseVector& wrapper, vector_size_t size) {
+    return wrap(std::move(data), *wrapper.pool(), size);
+  }
 
   VectorPtr wrap(
       VectorPtr data,
       const BaseVector& wrapper,
       const SelectivityVector& rows) {
-    return wrap(std::move(data), wrapper, rows.end());
+    return wrap(std::move(data), *wrapper.pool(), rows.end());
   }
 
   struct DictionaryWrapping {
@@ -270,20 +282,20 @@ class DecodedVector {
   };
 
   /// Returns 'indices' and 'nulls' buffers that represent the combined
-  /// dictionary wrapping of the decoded vector. Requires
-  /// isIdentityMapping() == false and isConstantMapping() == false.
+  /// dictionary wrapping of the decoded vector.
+  ///
   /// NOTE: The nulls buffer returned will also have nulls from the base()
   /// combined into it. To control which levels are combined, please make sure
   /// to use makeIndices() instead of decoded() when initializing the
   /// DecodedVector.
   DictionaryWrapping dictionaryWrapping(
-      const BaseVector& wrapper,
+      memory::MemoryPool& pool,
       vector_size_t size) const;
 
   DictionaryWrapping dictionaryWrapping(
-      const BaseVector& wrapper,
+      memory::MemoryPool& pool,
       const SelectivityVector& rows) const {
-    return dictionaryWrapping(wrapper, rows.end());
+    return dictionaryWrapping(pool, rows.end());
   }
 
   /// END: Members that must only be used by PeeledEncoding
@@ -296,14 +308,13 @@ class DecodedVector {
   DecodedVector(
       const BaseVector& vector,
       const SelectivityVector* rows,
-      bool loadLazy = true) {
-    decode(vector, rows, loadLazy);
+      bool loadLazy) {
+    decodeImpl(&vector, rows, loadLazy);
   }
 
-  void decode(
-      const BaseVector& vector,
-      const SelectivityVector* rows,
-      bool loadLazy = true);
+  template <typename T>
+  VectorPtr
+  decodeImpl(const T& vector, const SelectivityVector* rows, bool loadLazy);
 
   void makeIndices(
       const BaseVector& vector,
@@ -326,9 +337,11 @@ class DecodedVector {
 
   void makeIndicesMutable();
 
+  template <typename T>
   void combineWrappers(
-      const BaseVector* vector,
+      const T& vector,
       const SelectivityVector* rows,
+      VectorPtr& sharedBase,
       int numLevels = -1);
 
   void applyDictionaryWrapper(
@@ -337,13 +350,19 @@ class DecodedVector {
 
   void copyNulls(vector_size_t size);
 
-  void fillInIndices();
+  void fillInIndices() const;
 
-  void setBaseData(const BaseVector& vector, const SelectivityVector* rows);
+  template <typename T>
+  void setBaseData(
+      const T& vector,
+      const SelectivityVector* rows,
+      VectorPtr& sharedBase);
 
+  template <typename T>
   void setBaseDataForConstant(
-      const BaseVector& vector,
-      const SelectivityVector* rows);
+      const T& vector,
+      const SelectivityVector* rows,
+      VectorPtr& sharedBase);
 
   void reset(vector_size_t size);
 
@@ -369,7 +388,7 @@ class DecodedVector {
   // The indices into 'data_' or 'baseVector_' for the rows in
   // 'rows' given to decode(). Only positions that are in
   // 'selection' are guaranteed to have valid values.
-  const vector_size_t* indices_ = nullptr;
+  mutable const vector_size_t* indices_ = nullptr;
 
   // The base array of 'vector' given to decode(), nullptr if vector is of
   // complex type.
@@ -404,6 +423,10 @@ class DecodedVector {
 
   bool loadLazy_ = false;
 
+  // True if decode() was called with rows != nullptr. If so, nulls() must also
+  // be called with the same 'rows'.
+  bool partialRowsDecoded_{true};
+
   // Index of an element of the baseVector_ that points to a constant value of
   // complex type. Applies only when isConstantMapping_ is true and baseVector_
   // is of complex type (array, map, row).
@@ -411,7 +434,7 @@ class DecodedVector {
 
   // Holds indices if an array of indices needs to be materialized,
   // e.g. when combining nested dictionaries.
-  std::vector<vector_size_t> copiedIndices_;
+  mutable std::vector<vector_size_t> copiedIndices_;
 
   // Used as backing for 'nulls_' when null-ness is combined from
   // dictionary and base values.

@@ -83,7 +83,7 @@ class VectorGeneratedData {
 
   // In case T is StringView, the buffer below holds their actual data.
   std::shared_ptr<memory::MemoryPool> scopedPool =
-      memory::addDefaultLeafMemoryPool();
+      memory::memoryManager()->addLeafPool();
   StringViewBufferHolder stringViewBufferHolder_ =
       StringViewBufferHolder(scopedPool.get());
 };
@@ -136,12 +136,13 @@ VectorGeneratedData<T> genTestData(
   testData.reserve(cardinality);
 
   for (int64_t m = 0; m < cardinality; m++) {
-    testData.push_back(VectorValueGenerator::cardValueOf<T>(
-        useFullTypeRange,
-        rng,
-        testData.stringViewBufferHolder(),
-        fixedWidthStringSize,
-        type));
+    testData.push_back(
+        VectorValueGenerator::cardValueOf<T>(
+            useFullTypeRange,
+            rng,
+            testData.stringViewBufferHolder(),
+            fixedWidthStringSize,
+            type));
   }
 
   if (includeNulls) {
@@ -212,8 +213,7 @@ void assertVector(
 
     if (isNull) {
       if (dbgPrintVec) {
-        LOG(INFO) << "[" << i << "]:"
-                  << "NULL";
+        LOG(INFO) << "[" << i << "]:" << "NULL";
       }
       EXPECT_EQ(isNull, actualIsNull);
     } else {
@@ -271,7 +271,7 @@ template <typename T>
 SimpleVectorPtr<T> createAndAssert(
     const ExpectedData<T>& expected,
     VectorEncoding::Simple encoding) {
-  auto pool = memory::addDefaultLeafMemoryPool();
+  auto pool = memory::memoryManager()->addLeafPool();
   VectorMaker maker(pool.get());
 
   auto vector = maker.encodedVector(encoding, expected);
@@ -342,7 +342,7 @@ VectorPtr makeDictionaryVectorWithFlags(
     vector_size_t size,
     memory::MemoryPool* pool) {
   using T = typename TypeTraits<kind>::NativeType;
-  using TVariant = typename detail::VariantTypeTraits<kind>::native_type;
+  using TVariant = typename velox::detail::VariantTypeTraits<kind>::native_type;
   T value;
   TVariant variant{value};
 

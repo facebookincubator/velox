@@ -17,13 +17,13 @@
 
 namespace facebook::velox::common {
 
-Tokenizer::Tokenizer(const std::string& path) : path_(path) {
-  state = State::kNotReady;
-  index_ = 0;
-}
+Tokenizer::Tokenizer(
+    const std::string& path,
+    std::shared_ptr<const Separators> separators)
+    : path_{path}, separators_{std::move(separators)} {}
 
 bool Tokenizer::hasNext() {
-  switch (state) {
+  switch (state_) {
     case State::kDone:
       return false;
     case State::kReady:
@@ -40,7 +40,7 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::next() {
   if (!hasNext()) {
     VELOX_FAIL("No more tokens");
   }
-  state = State::kNotReady;
+  state_ = State::kNotReady;
   return std::move(next_);
 }
 
@@ -50,34 +50,41 @@ bool Tokenizer::hasNextCharacter() {
 
 std::unique_ptr<Subfield::PathElement> Tokenizer::computeNext() {
   if (!hasNextCharacter()) {
-    state = State::kDone;
+    state_ = State::kDone;
     return nullptr;
   }
 
-  if (tryMatch(DOT)) {
-    std::unique_ptr<Subfield::PathElement> token = matchPathSegment();
-    firstSegment = false;
+  if (tryMatchSeparator(separators_->dot)) {
+    auto token = matchPathSegment();
+    firstSegment_ = false;
     return token;
   }
 
-  if (tryMatch(OPEN_BRACKET)) {
-    std::unique_ptr<Subfield::PathElement> token = tryMatch(QUOTE)
+  if (tryMatchSeparator(separators_->openBracket)) {
+    // These empty comments only needs to make clang-format happy.
+    auto token = //
+        tryMatchSeparator(separators_->quote) //
         ? matchQuotedSubscript()
-        : tryMatch(WILDCARD) ? matchWildcardSubscript()
-                             : matchUnquotedSubscript();
+        : tryMatchSeparator(separators_->wildCard) //
+            ? matchWildcardSubscript()
+            : matchUnquotedSubscript();
 
-    match(CLOSE_BRACKET);
-    firstSegment = false;
+    match(separators_->closeBracket);
+    firstSegment_ = false;
     return token;
   }
 
-  if (firstSegment) {
-    std::unique_ptr<Subfield::PathElement> token = matchPathSegment();
-    firstSegment = false;
+  if (firstSegment_) {
+    auto token = matchPathSegment();
+    firstSegment_ = false;
     return token;
   }
 
   VELOX_UNREACHABLE();
+}
+
+bool Tokenizer::tryMatchSeparator(char expected) {
+  return separators_->isSeparator(expected) && tryMatch(expected);
 }
 
 void Tokenizer::match(char expected) {
@@ -105,7 +112,8 @@ char Tokenizer::peekCharacter() {
 std::unique_ptr<Subfield::PathElement> Tokenizer::matchPathSegment() {
   // seek until we see a special character or whitespace
   int start = index_;
-  while (hasNextCharacter() && isUnquotedPathCharacter(peekCharacter())) {
+  while (hasNextCharacter() && !separators_->isSeparator(peekCharacter()) &&
+         isUnquotedPathCharacter(peekCharacter())) {
     nextCharacter();
   }
   int end = index_;
@@ -145,11 +153,11 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchUnquotedSubscript() {
 
 bool Tokenizer::isUnquotedPathCharacter(char c) {
   return c == ':' || c == '$' || c == '-' || c == '/' || c == '@' || c == '|' ||
-      c == '#' || isUnquotedSubscriptCharacter(c);
+      c == '#' || c == '.' || isUnquotedSubscriptCharacter(c);
 }
 
 bool Tokenizer::isUnquotedSubscriptCharacter(char c) {
-  return c == '-' || c == '_' || isalnum(c);
+  return c == '-' || c == '_' || c == ' ' || isalnum(c);
 }
 
 std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
@@ -159,7 +167,8 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
   std::string token;
   bool escaped = false;
 
-  while (hasNextCharacter() && (escaped || peekCharacter() != QUOTE)) {
+  while (hasNextCharacter() &&
+         (escaped || peekCharacter() != separators_->quote)) {
     if (escaped) {
       switch (peekCharacter()) {
         case '\"':
@@ -171,7 +180,7 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
       }
       escaped = false;
     } else {
-      if (peekCharacter() == BACKSLASH) {
+      if (peekCharacter() == separators_->backSlash) {
         escaped = true;
       } else {
         token += peekCharacter();
@@ -183,7 +192,7 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
     invalidSubfieldPath();
   }
 
-  match(QUOTE);
+  match(separators_->quote);
 
   if (token == "*") {
     return std::make_unique<Subfield::AllSubscripts>();
@@ -200,14 +209,15 @@ void Tokenizer::invalidSubfieldPath() {
 }
 
 std::string Tokenizer::toString() {
-  return path_.substr(0, index_) + UNICODE_CARET + path_.substr(index_);
+  return path_.substr(0, index_) + separators_->unicodeCaret +
+      path_.substr(index_);
 }
 
 bool Tokenizer::tryToComputeNext() {
-  state = State::kFailed; // temporary pessimism
+  state_ = State::kFailed; // temporary pessimism
   next_ = computeNext();
-  if (state != State::kDone) {
-    state = State::kReady;
+  if (state_ != State::kDone) {
+    state_ = State::kReady;
     return true;
   }
   return false;

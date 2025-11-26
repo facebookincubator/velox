@@ -15,53 +15,250 @@
  */
 #include "velox/serializers/UnsafeRowSerializer.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 
+struct TestParam {
+  common::CompressionKind compressionKind;
+  bool appendRow;
+  bool microBatchDeserialize;
+
+  TestParam(
+      common::CompressionKind _compressionKind,
+      bool _appendRow,
+      bool _microBatchDeserialize)
+      : compressionKind(_compressionKind),
+        appendRow(_appendRow),
+        microBatchDeserialize(_microBatchDeserialize) {}
+};
+
 class UnsafeRowSerializerTest : public ::testing::Test,
-                                public test::VectorTestBase {
+                                public velox::test::VectorTestBase,
+                                public testing::WithParamInterface<TestParam> {
+ public:
+  static std::vector<TestParam> getTestParams() {
+    static std::vector<TestParam> testParams = {
+        {common::CompressionKind::CompressionKind_NONE, false, false},
+        {common::CompressionKind::CompressionKind_NONE, false, true},
+        {common::CompressionKind::CompressionKind_ZLIB, true, false},
+        {common::CompressionKind::CompressionKind_ZLIB, true, true},
+        {common::CompressionKind::CompressionKind_SNAPPY, false, false},
+        {common::CompressionKind::CompressionKind_SNAPPY, false, true},
+        {common::CompressionKind::CompressionKind_ZSTD, true, false},
+        {common::CompressionKind::CompressionKind_ZSTD, true, true},
+        {common::CompressionKind::CompressionKind_LZ4, false, false},
+        {common::CompressionKind::CompressionKind_LZ4, false, true},
+        {common::CompressionKind::CompressionKind_GZIP, true, false},
+        {common::CompressionKind::CompressionKind_GZIP, true, true}};
+    return testParams;
+  }
+
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   void SetUp() override {
-    pool_ = memory::addDefaultLeafMemoryPool();
-    serde_ = std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
+    pool_ = memory::memoryManager()->addLeafPool();
+    deregisterVectorSerde();
+    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+    serializer::spark::UnsafeRowVectorSerde::registerVectorSerde();
+    serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
+    ASSERT_EQ(getVectorSerde()->kind(), VectorSerde::Kind::kUnsafeRow);
+    ASSERT_EQ(
+        getNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)->kind(),
+        VectorSerde::Kind::kUnsafeRow);
+    appendRow_ = GetParam().appendRow;
+    compressionKind_ = GetParam().compressionKind;
+    microBatchDeserialize_ = GetParam().microBatchDeserialize;
+    options_ = std::make_unique<VectorSerde::Options>(compressionKind_, 0.8);
+  }
+
+  void TearDown() override {
+    deregisterVectorSerde();
+    deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
   }
 
   void serialize(RowVectorPtr rowVector, std::ostream* output) {
-    auto numRows = rowVector->size();
+    const auto streamInitialSize = output->tellp();
+    const auto numRows = rowVector->size();
 
-    std::vector<IndexRange> rows(numRows);
+    std::vector<IndexRange> ranges(numRows);
     for (int i = 0; i < numRows; i++) {
-      rows[i] = IndexRange{i, 1};
+      ranges[i] = IndexRange{i, 1};
+    }
+
+    std::unique_ptr<row::UnsafeRowFast> unsafeRow;
+    std::vector<vector_size_t> serializedRowSizes(numRows);
+    std::vector<vector_size_t*> serializedRowSizesPtr(numRows);
+    std::vector<vector_size_t> rows(numRows);
+    std::iota(rows.begin(), rows.end(), 0);
+    for (auto i = 0; i < numRows; ++i) {
+      serializedRowSizesPtr[i] = &serializedRowSizes[i];
+    }
+    if (appendRow_) {
+      unsafeRow = std::make_unique<row::UnsafeRowFast>(rowVector);
+      getVectorSerde()->estimateSerializedSize(
+          unsafeRow.get(), rows, serializedRowSizesPtr.data());
     }
 
     auto arena = std::make_unique<StreamArena>(pool_.get());
     auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-    auto serializer = serde_->createSerializer(rowType, numRows, arena.get());
+    auto serializer = getVectorSerde()->createIterativeSerializer(
+        rowType, numRows, arena.get(), options_.get());
 
-    serializer->append(rowVector, folly::Range(rows.data(), numRows));
+    if (appendRow_) {
+      serializer->append(*unsafeRow, rows, serializedRowSizes);
+    } else {
+      Scratch scratch;
+      serializer->append(
+          rowVector, folly::Range(ranges.data(), numRows), scratch);
+    }
+
+    auto size = serializer->maxSerializedSize();
     OStreamOutputStream out(output);
     serializer->flush(&out);
+    if (!needCompression()) {
+      ASSERT_EQ(size, output->tellp() - streamInitialSize);
+    } else {
+      ASSERT_GT(size, output->tellp() - streamInitialSize);
+    }
   }
 
-  std::unique_ptr<ByteStream> toByteStream(const std::string_view& input) {
-    auto byteStream = std::make_unique<ByteStream>();
-    ByteRange byteRange{
-        reinterpret_cast<uint8_t*>(const_cast<char*>(input.data())),
-        (int32_t)input.length(),
-        0};
-    byteStream->resetInput({byteRange});
-    return byteStream;
+  std::unique_ptr<ByteInputStream> toByteStream(
+      const std::vector<std::string_view>& inputs) {
+    std::vector<ByteRange> ranges;
+    ranges.reserve(inputs.size());
+
+    for (const auto& input : inputs) {
+      ranges.push_back(
+          {reinterpret_cast<uint8_t*>(const_cast<char*>(input.data())),
+           (int32_t)input.length(),
+           0});
+    }
+    return std::make_unique<BufferInputStream>(std::move(ranges));
+  }
+
+  std::unique_ptr<ByteInputStream> toByteStream(
+      const std::string_view& input,
+      size_t pageSize = 32) {
+    auto rawBytes = reinterpret_cast<uint8_t*>(const_cast<char*>(input.data()));
+    size_t offset = 0;
+    std::vector<ByteRange> ranges;
+
+    // Split the input buffer into many different pages.
+    while (offset < input.length()) {
+      ranges.push_back({
+          rawBytes + offset,
+          std::min<int32_t>(pageSize, input.length() - offset),
+          0,
+      });
+      offset += pageSize;
+    }
+
+    return std::make_unique<BufferInputStream>(std::move(ranges));
+  }
+
+  RowVectorPtr concatenateRowVectors(
+      const std::vector<RowVectorPtr>& rowVectors,
+      velox::memory::MemoryPool* pool) {
+    if (rowVectors.empty()) {
+      return nullptr;
+    }
+
+    // Ensure all RowVectors have the same schema.
+    auto rowType = rowVectors.front()->type();
+    for (const auto& rowVector : rowVectors) {
+      VELOX_CHECK(
+          rowVector->type()->equivalent(*rowType),
+          "RowVectors must have the same schema");
+    }
+
+    // Calculate total size.
+    vector_size_t totalSize = 0;
+    for (const auto& rowVector : rowVectors) {
+      totalSize += rowVector->size();
+    }
+
+    // Create nulls buffer if any input has nulls
+    BufferPtr nulls = nullptr;
+    for (const auto& rowVector : rowVectors) {
+      if (rowVector->nulls()) {
+        nulls = AlignedBuffer::allocate<bool>(totalSize, pool, bits::kNotNull);
+        break;
+      }
+    }
+
+    // Concatenate child vectors.
+    std::vector<VectorPtr> concatenatedChildren;
+    for (size_t i = 0; i < rowType->size(); ++i) {
+      std::vector<VectorPtr> childVectors;
+      for (const auto& rowVector : rowVectors) {
+        childVectors.push_back(rowVector->childAt(i));
+      }
+      concatenatedChildren.push_back(
+          BaseVector::create(rowType->childAt(i), totalSize, pool));
+      vector_size_t offset = 0;
+      for (const auto& childVector : childVectors) {
+        concatenatedChildren.back()->copy(
+            childVector.get(), offset, 0, childVector->size());
+        offset += childVector->size();
+      }
+    }
+
+    // Copy nulls if needed
+    if (nulls != nullptr) {
+      auto rawNulls = nulls->asMutable<uint64_t>();
+      vector_size_t offset = 0;
+      for (const auto& rowVector : rowVectors) {
+        if (rowVector->nulls()) {
+          bits::copyBits(
+              rowVector->nulls()->as<uint64_t>(),
+              0,
+              rawNulls,
+              offset,
+              rowVector->size());
+        }
+        offset += rowVector->size();
+      }
+    }
+
+    return std::make_shared<RowVector>(
+        pool, rowType, nulls, totalSize, std::move(concatenatedChildren));
   }
 
   RowVectorPtr deserialize(
       std::shared_ptr<const RowType> rowType,
-      const std::string_view& input) {
+      const std::vector<std::string_view>& input) {
     auto byteStream = toByteStream(input);
-
     RowVectorPtr result;
-    serde_->deserialize(byteStream.get(), pool_.get(), rowType, &result);
+    if (microBatchDeserialize_) {
+      static constexpr int32_t kBatchSize = 3;
+      std::unique_ptr<RowIterator> rowIterator;
+      std::vector<RowVectorPtr> results;
+      while (!byteStream->atEnd() ||
+             (rowIterator != nullptr && rowIterator->hasNext())) {
+        results.emplace_back();
+        dynamic_cast<serializer::spark::UnsafeRowVectorSerde*>(getVectorSerde())
+            ->deserialize(
+                byteStream.get(),
+                rowIterator,
+                kBatchSize,
+                rowType,
+                &results.back(),
+                pool_.get(),
+                options_.get());
+      }
+      result = concatenateRowVectors(results, pool_.get());
+    } else {
+      getVectorSerde()->deserialize(
+          byteStream.get(), pool_.get(), rowType, &result, options_.get());
+    }
     return result;
   }
 
@@ -70,7 +267,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
     serialize(rowVector, &out);
 
     auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-    auto deserialized = deserialize(rowType, out.str());
+    auto deserialized = deserialize(rowType, {out.str()});
     test::assertEqualVectors(deserialized, rowVector);
   }
 
@@ -78,23 +275,62 @@ class UnsafeRowSerializerTest : public ::testing::Test,
   testSerialize(RowVectorPtr rowVector, int8_t* expectedData, size_t dataSize) {
     std::ostringstream out;
     serialize(rowVector, &out);
-    EXPECT_EQ(std::memcmp(expectedData, out.str().data(), dataSize), 0);
+    if (!needCompression()) {
+      // Check the data after header.
+      EXPECT_EQ(
+          std::memcmp(expectedData, out.str().data() + kHeaderSize, dataSize),
+          0);
+    }
+  }
+
+  void testDeserialize(
+      const std::vector<std::string_view>& input,
+      RowVectorPtr expectedVector) {
+    if (needCompression()) {
+      return;
+    }
+    // Construct the header to make deserialization work.
+    std::vector<std::string_view> uncompressedInput = input;
+    char header[kHeaderSize] = {0};
+    int32_t uncompressedSize = 0;
+    for (const auto& in : input) {
+      uncompressedSize += in.size();
+    }
+    auto* headerPtr = reinterpret_cast<int32_t*>(&header);
+    headerPtr[0] = uncompressedSize;
+    headerPtr[1] = uncompressedSize;
+    header[kHeaderSize - 1] = 0;
+
+    uncompressedInput.insert(
+        uncompressedInput.begin(), std::string_view(header, kHeaderSize));
+    auto results =
+        deserialize(asRowType(expectedVector->type()), uncompressedInput);
+    test::assertEqualVectors(expectedVector, results);
   }
 
   void
   testDeserialize(int8_t* data, size_t dataSize, RowVectorPtr expectedVector) {
-    auto results = deserialize(
-        asRowType(expectedVector->type()),
-        std::string_view(reinterpret_cast<const char*>(data), dataSize));
-    test::assertEqualVectors(expectedVector, results);
+    testDeserialize(
+        {std::string_view(reinterpret_cast<const char*>(data), dataSize)},
+        expectedVector);
+  }
+
+  bool needCompression() {
+    return compressionKind_ != common::CompressionKind::CompressionKind_NONE;
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
-  std::unique_ptr<VectorSerde> serde_;
+
+ private:
+  static constexpr int32_t kHeaderSize = sizeof(int32_t) * 2 + sizeof(char);
+  common::CompressionKind compressionKind_;
+  std::unique_ptr<VectorSerde::Options> options_;
+  bool appendRow_;
+  bool microBatchDeserialize_;
 };
 
 // These expected binary buffers were samples taken using Spark's java code.
-TEST_F(UnsafeRowSerializerTest, tinyint) {
+TEST_P(UnsafeRowSerializerTest, tinyint) {
   int8_t data[20] = {0, 0, 0,   16, 0, 0, 0, 0, 0, 0,
                      0, 0, 123, 0,  0, 0, 0, 0, 0, 0};
   auto expected = makeRowVector({makeFlatVector(std::vector<int8_t>{123})});
@@ -103,7 +339,7 @@ TEST_F(UnsafeRowSerializerTest, tinyint) {
   testDeserialize(data, 20, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, bigint) {
+TEST_P(UnsafeRowSerializerTest, bigint) {
   int8_t data[20] = {0, 0, 0,  16, 0,   0,   0, 0, 0, 0,
                      0, 0, 62, 28, -36, -33, 2, 0, 0, 0};
   auto expected =
@@ -113,7 +349,7 @@ TEST_F(UnsafeRowSerializerTest, bigint) {
   testDeserialize(data, 20, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, double) {
+TEST_P(UnsafeRowSerializerTest, double) {
   int8_t data[20] = {0, 0, 0,   16, 0,  0,  0,   0,  0,    0,
                      0, 0, 125, 63, 53, 94, -70, 73, -109, 64};
   auto expected =
@@ -123,7 +359,7 @@ TEST_F(UnsafeRowSerializerTest, double) {
   testDeserialize(data, 20, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, boolean) {
+TEST_P(UnsafeRowSerializerTest, boolean) {
   int8_t data[20] = {0, 0, 0, 16, 0, 0, 0, 0, 0, 0,
                      0, 0, 1, 0,  0, 0, 0, 0, 0, 0};
   auto expected = makeRowVector({makeFlatVector(std::vector<bool>{true})});
@@ -132,7 +368,7 @@ TEST_F(UnsafeRowSerializerTest, boolean) {
   testDeserialize(data, 20, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, string) {
+TEST_P(UnsafeRowSerializerTest, string) {
   int8_t data[28] = {0, 0, 0,  24, 0, 0, 0,  0,  0,  0,  0,  0, 5, 0,
                      0, 0, 16, 0,  0, 0, 72, 69, 76, 76, 79, 0, 0, 0};
   auto expected =
@@ -142,7 +378,7 @@ TEST_F(UnsafeRowSerializerTest, string) {
   testDeserialize(data, 28, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, null) {
+TEST_P(UnsafeRowSerializerTest, null) {
   int8_t data[20] = {0, 0, 0, 16, 1, 0, 0, 0, 0, 0,
                      0, 0, 0, 0,  0, 0, 0, 0, 0, 0};
   auto expected = makeRowVector({makeNullableFlatVector(
@@ -152,7 +388,42 @@ TEST_F(UnsafeRowSerializerTest, null) {
   testDeserialize(data, 20, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, manyRows) {
+// The data result can be obtained by
+// test("decimal serialize") {
+//   val d1 = new
+//   Decimal().set(BigDecimal("123456789012345678901234.57")).toPrecision(38, 2)
+//   val row = InternalRow.apply(d1)
+//   val unsafeRow = UnsafeProjection.create(Array[DataType](DecimalType(38,
+//   2))).apply(row)
+//   assert(unsafeRow.getDecimal(0, 38, 2) === d1)
+//   unsafeRow.getBaseObject().asInstanceOf[Array[Byte]].foreach(b => print(b +
+//   ", ")) print("\n")
+// }
+TEST_P(UnsafeRowSerializerTest, decimal) {
+  // short decimal
+  int8_t data[20] = {0, 0, 0,  16, 0,   0,   0, 0, 0, 0,
+                     0, 0, 62, 28, -36, -33, 2, 0, 0, 0};
+  auto expected =
+      makeRowVector({makeConstant<int64_t>(12345678910, 1, DECIMAL(12, 2))});
+
+  testSerialize(expected, data, 20);
+  testDeserialize(data, 20, expected);
+
+  // long decimal
+  int8_t longData[36] = {0,  0,   0,   32,  0,   0,   0,   0, 0,  0,  0,  0,
+                         11, 0,   0,   0,   16,  0,   0,   0, 10, 54, 76, -104,
+                         34, 126, -86, 106, -36, -70, -63, 0, 0,  0,  0,  0};
+  auto longExpected = makeRowVector({{makeConstant<int128_t>(
+      HugeInt::build(
+          669260, 10962463713375599297U), // 12345678901234567890123457
+      1,
+      DECIMAL(38, 2))}});
+
+  testSerialize(longExpected, longData, 36);
+  testDeserialize(longData, 36, longExpected);
+}
+
+TEST_P(UnsafeRowSerializerTest, manyRows) {
   int8_t data[140] = {0, 0, 0,  24, 0, 0, 0,   0,   0,   0,   0,   0,  4,   0,
                       0, 0, 16, 0,  0, 0, 109, 97,  110, 121, 0,   0,  0,   0,
                       0, 0, 0,  24, 0, 0, 0,   0,   0,   0,   0,   0,  4,   0,
@@ -170,7 +441,73 @@ TEST_F(UnsafeRowSerializerTest, manyRows) {
   testDeserialize(data, 140, expected);
 }
 
-TEST_F(UnsafeRowSerializerTest, types) {
+TEST_P(UnsafeRowSerializerTest, splitRow) {
+  int8_t data[20] = {0, 0, 0,  16, 0,   0,   0, 0, 0, 0,
+                     0, 0, 62, 28, -36, -33, 2, 0, 0, 0};
+  auto expected =
+      makeRowVector({makeFlatVector(std::vector<int64_t>{12345678910})});
+
+  std::vector<std::string_view> buffers;
+  const char* rawData = reinterpret_cast<const char*>(data);
+
+  // Split input row into two buffers.
+  buffers = {{rawData, 10}, {rawData + 10, 10}};
+  testDeserialize(buffers, expected);
+
+  // Split input row into many buffers.
+  buffers = {
+      {rawData, 4},
+      {rawData + 4, 4},
+      {rawData + 8, 4},
+      {rawData + 12, 8},
+  };
+  testDeserialize(buffers, expected);
+
+  // One byte at a time.
+  buffers.clear();
+  for (size_t i = 0; i < 20; i++) {
+    buffers.push_back({rawData + i, 1});
+  }
+  testDeserialize(buffers, expected);
+}
+
+TEST_P(UnsafeRowSerializerTest, incompleteRow) {
+  // The test data is for non-compression, and we don't know the compressed size
+  // to construct header. If the row is incomplete, readBytes will fail.
+  if (needCompression()) {
+    return;
+  }
+  int8_t data[20] = {0, 0, 0,  16, 0,   0,   0, 0, 0, 0,
+                     0, 0, 62, 28, -36, -33, 2, 0, 0, 0};
+  auto expected =
+      makeRowVector({makeFlatVector(std::vector<int64_t>{12345678910})});
+  const char* rawData = reinterpret_cast<const char*>(data);
+
+  std::vector<std::string_view> buffers;
+
+  // Cut in the middle of the row.
+  buffers = {{rawData, 10}};
+  VELOX_ASSERT_RUNTIME_THROW(
+      testDeserialize(buffers, expected), "Unable to read full serialized row");
+
+  // Still incomplete row.
+  buffers = {{rawData, 10}, {rawData, 5}};
+  VELOX_ASSERT_RUNTIME_THROW(
+      testDeserialize(buffers, expected), "Unable to read full serialized row");
+
+  // Cut right after the row size.
+  buffers = {{rawData, 4}};
+  VELOX_ASSERT_RUNTIME_THROW(
+      testDeserialize(buffers, expected), "Unable to read full serialized row");
+
+  // Cut in the middle of the `size` integer.
+  buffers = {{rawData, 2}};
+  VELOX_ASSERT_RUNTIME_THROW(
+      testDeserialize(buffers, expected),
+      "(2 vs. 2) Reading past end of BufferInputStream");
+}
+
+TEST_P(UnsafeRowSerializerTest, types) {
   auto rowType = ROW(
       {BOOLEAN(),
        TINYINT(),
@@ -181,15 +518,17 @@ TEST_F(UnsafeRowSerializerTest, types) {
        DOUBLE(),
        VARCHAR(),
        TIMESTAMP(),
-       ROW({VARCHAR(), INTEGER()}),
+       DECIMAL(20, 2),
+       ROW({VARCHAR(), INTEGER(), DECIMAL(20, 3)}),
        ARRAY(INTEGER()),
+       ARRAY(DECIMAL(20, 2)),
        ARRAY(INTEGER()),
+       MAP(DECIMAL(20, 3), DECIMAL(20, 3)),
        MAP(VARCHAR(), ARRAY(INTEGER()))});
 
   VectorFuzzer::Options opts;
   opts.vectorSize = 5;
   opts.nullRatio = 0.1;
-  opts.containerHasNulls = false;
   opts.dictionaryHasNulls = false;
   opts.stringVariableLength = true;
   opts.stringLength = 20;
@@ -206,11 +545,11 @@ TEST_F(UnsafeRowSerializerTest, types) {
   SCOPED_TRACE(fmt::format("seed: {}", seed));
   VectorFuzzer fuzzer(opts, pool_.get(), seed);
 
-  auto data = fuzzer.fuzzRow(rowType);
+  auto data = fuzzer.fuzzInputRow(rowType);
   testRoundTrip(data);
 }
 
-TEST_F(UnsafeRowSerializerTest, date) {
+TEST_P(UnsafeRowSerializerTest, date) {
   auto rowVector = makeRowVector({
       makeFlatVector<int32_t>({0, 1}, DATE()),
   });
@@ -218,7 +557,7 @@ TEST_F(UnsafeRowSerializerTest, date) {
   testRoundTrip(rowVector);
 }
 
-TEST_F(UnsafeRowSerializerTest, unknown) {
+TEST_P(UnsafeRowSerializerTest, unknown) {
   // UNKNOWN type.
   auto rowVector = makeRowVector({
       BaseVector::createNullConstant(UNKNOWN(), 10, pool()),
@@ -252,6 +591,54 @@ TEST_F(UnsafeRowSerializerTest, unknown) {
       makeNullableFlatVector<double>(
           {1.1, 2.2, std::nullopt, 4.4, std::nullopt}),
   });
-
-  testRoundTrip(rowVector);
 }
+
+TEST_P(UnsafeRowSerializerTest, decimalVector) {
+  auto rowVectorDecimal = makeRowVector({makeFlatVector<int128_t>(
+      {
+          0,
+          123,
+          DecimalUtil::kLongDecimalMin,
+          DecimalUtil::kLongDecimalMax,
+          HugeInt::build(
+              669260, 10962463713375599297U), // 12345678901234567890123457
+      },
+      DECIMAL(20, 2))});
+  testRoundTrip(rowVectorDecimal);
+
+  auto rowVectorArray = makeRowVector({makeArrayVector(
+      {0},
+      makeConstant<int128_t>(
+          HugeInt::build(
+              669260, 10962463713375599297U), // 12345678901234567890123457
+          1,
+          DECIMAL(20, 2)))});
+
+  testRoundTrip(rowVectorArray);
+}
+
+TEST_P(UnsafeRowSerializerTest, multiPage) {
+  auto input =
+      makeRowVector({makeFlatVector(std::vector<int64_t>{12345678910, 123})});
+  std::ostringstream out;
+  serialize(input, &out);
+  serialize(input, &out);
+  auto expected = makeRowVector({makeFlatVector(
+      std::vector<int64_t>{12345678910, 123, 12345678910, 123})});
+  auto rowType = std::dynamic_pointer_cast<const RowType>(input->type());
+  auto deserialized = deserialize(rowType, {out.str()});
+  test::assertEqualVectors(deserialized, expected);
+}
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    UnsafeRowSerializerTest,
+    UnsafeRowSerializerTest,
+    testing::ValuesIn(UnsafeRowSerializerTest::getTestParams()),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}_{}_{}",
+          compressionKindToString(info.param.compressionKind),
+          info.param.appendRow ? "append" : "batch",
+          info.param.microBatchDeserialize ? "rowDeserialize"
+                                           : "batchDeserialize");
+    });

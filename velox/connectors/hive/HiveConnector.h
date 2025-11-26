@@ -15,20 +15,24 @@
  */
 #pragma once
 
-#include "velox/common/caching/SsdFile.h" // Needed by presto_cpp
+#include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveDataSink.h"
-#include "velox/connectors/hive/HiveDataSource.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/core/PlanNode.h"
+
+namespace facebook::velox::dwio::common {
+class DataSink;
+class DataSource;
+} // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::connector::hive {
 
 class HiveConnector : public Connector {
  public:
-  explicit HiveConnector(
+  HiveConnector(
       const std::string& id,
-      std::shared_ptr<const Config> properties,
-      folly::Executor* FOLLY_NULLABLE executor);
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* executor);
 
   bool canAddDynamicFilter() const override {
     return true;
@@ -36,49 +40,22 @@ class HiveConnector : public Connector {
 
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) override {
-    dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-    options.setMaxCoalesceBytes(
-        HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
-    options.setMaxCoalesceDistance(
-        HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
-    return std::make_unique<HiveDataSource>(
-        outputType,
-        tableHandle,
-        columnHandles,
-        &fileHandleFactory_,
-        connectorQueryCtx->expressionEvaluator(),
-        connectorQueryCtx->allocator(),
-        connectorQueryCtx->scanId(),
-        HiveConfig::isFileColumnNamesReadAsLowerCase(
-            connectorQueryCtx->config()),
-        executor_,
-        options);
-  }
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
 
-  bool supportsSplitPreload() override {
+  bool supportsSplitPreload() const override {
     return true;
   }
 
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy) override final {
-    auto hiveInsertHandle = std::dynamic_pointer_cast<HiveInsertTableHandle>(
-        connectorInsertTableHandle);
-    VELOX_CHECK_NOT_NULL(
-        hiveInsertHandle, "Hive connector expecting hive write handle!");
-    return std::make_unique<HiveDataSink>(
-        inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
-  }
+      CommitStrategy commitStrategy) override;
 
-  folly::Executor* FOLLY_NULLABLE executor() const override {
-    return executor_;
+  folly::Executor* ioExecutor() const override {
+    return ioExecutor_;
   }
 
   FileHandleCacheStats fileHandleCacheStats() {
@@ -91,38 +68,30 @@ class HiveConnector : public Connector {
     return fileHandleFactory_.clearCache();
   }
 
+  static void registerSerDe();
+
  protected:
+  const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* FOLLY_NULLABLE executor_;
+  folly::Executor* ioExecutor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {
  public:
-  static constexpr const char* FOLLY_NONNULL kHiveConnectorName = "hive";
-  static constexpr const char* FOLLY_NONNULL kHiveHadoop2ConnectorName =
-      "hive-hadoop2";
+  static constexpr const char* kHiveConnectorName = "hive";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {}
 
-  explicit HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
+  explicit HiveConnectorFactory(const char* connectorName)
       : ConnectorFactory(connectorName) {}
-
-  /// Register HiveConnector components such as Dwrf, Parquet readers and
-  /// writers and FileSystems.
-  void initialize() override;
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> properties,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr) override {
-    return std::make_shared<HiveConnector>(id, properties, executor);
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* ioExecutor = nullptr,
+      [[maybe_unused]] folly::Executor* cpuExecutor = nullptr) override {
+    return std::make_shared<HiveConnector>(id, config, ioExecutor);
   }
-};
-
-class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
- public:
-  HiveHadoop2ConnectorFactory()
-      : HiveConnectorFactory(kHiveHadoop2ConnectorName) {}
 };
 
 class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
@@ -156,7 +125,8 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
             std::move(constValues)) {}
 
   std::unique_ptr<core::PartitionFunction> create(
-      int numPartitions) const override;
+      int numPartitions,
+      bool localExchange) const override;
 
   std::string toString() const override;
 
@@ -166,13 +136,13 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
       const folly::dynamic& obj,
       void* context);
 
+  static void registerSerDe();
+
  private:
   const int numBuckets_;
   const std::vector<int> bucketToPartition_;
   const std::vector<column_index_t> channels_;
   const std::vector<VectorPtr> constValues_;
 };
-
-void registerHivePartitionFunctionSerDe();
 
 } // namespace facebook::velox::connector::hive

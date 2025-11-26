@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::exec {
 
@@ -100,7 +103,11 @@ void gatherCopy(
     const std::vector<const RowVector*>& sources,
     const std::vector<vector_size_t>& sourceIndices,
     column_index_t sourceChannel) {
-  if (target->isScalar()) {
+  const bool flattenSources =
+      std::all_of(sources.begin(), sources.end(), [](const auto& source) {
+        return source->isFlatEncoding();
+      });
+  if (target->isScalar() && flattenSources) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         scalarGatherCopy,
         target->type()->kind(),
@@ -120,10 +127,12 @@ void gatherCopy(
 // per event. This function returns true for such metrics.
 bool shouldAggregateRuntimeMetric(const std::string& name) {
   static const folly::F14FastSet<std::string> metricNames{
-      "dataSourceWallNanos",
+      "dataSourceAddSplitWallNanos",
       "dataSourceLazyWallNanos",
       "queuedWallNanos",
-      "flushTimes"};
+      "flushTimes",
+      "driverCpuTimeNanos",
+      "ioWaitWallNanos"};
   if (metricNames.contains(name)) {
     return true;
   }
@@ -146,7 +155,7 @@ void deselectRowsWithNulls(
     auto& decoded = hashers[i]->decodedVector();
     if (decoded.mayHaveNulls()) {
       anyChange = true;
-      const auto* nulls = hashers[i]->decodedVector().nulls();
+      const auto* nulls = hashers[i]->decodedVector().nulls(&rows);
       bits::andBits(rows.asMutableRange().bits(), nulls, 0, rows.end());
     }
   }
@@ -176,12 +185,24 @@ vector_size_t* FilterEvalCtx::getRawSelectedIndices(
 namespace {
 vector_size_t processConstantFilterResults(
     const VectorPtr& filterResult,
-    const SelectivityVector& rows) {
-  auto constant = filterResult->as<ConstantVector<bool>>();
+    const SelectivityVector& rows,
+    FilterEvalCtx& filterEvalCtx,
+    memory::MemoryPool* pool) {
+  const auto constant = filterResult->as<ConstantVector<bool>>();
   if (constant->isNullAt(0) || constant->valueAt(0) == false) {
     return 0;
   }
-  return rows.size();
+
+  const auto numSelected = rows.countSelected();
+  // If not all rows are selected we need to update the selected indices.
+  // If we don't do this, the caller will use the indices from the previous
+  // batch.
+  if (!rows.isAllSelected()) {
+    auto* rawSelected = filterEvalCtx.getRawSelectedIndices(numSelected, pool);
+    vector_size_t passed = 0;
+    rows.applyToSelected([&](auto row) { rawSelected[passed++] = row; });
+  }
+  return numSelected;
 }
 
 vector_size_t processFlatFilterResults(
@@ -189,15 +210,18 @@ vector_size_t processFlatFilterResults(
     const SelectivityVector& rows,
     FilterEvalCtx& filterEvalCtx,
     memory::MemoryPool* pool) {
-  auto size = rows.size();
+  const auto size = rows.size();
 
-  auto selectedBits = filterEvalCtx.getRawSelectedBits(size, pool);
-  auto nonNullBits =
+  auto* selectedBits = filterEvalCtx.getRawSelectedBits(size, pool);
+  auto* nonNullBits =
       filterResult->as<FlatVector<bool>>()->rawValues<uint64_t>();
   if (filterResult->mayHaveNulls()) {
     bits::andBits(selectedBits, nonNullBits, filterResult->rawNulls(), 0, size);
   } else {
-    memcpy(selectedBits, nonNullBits, bits::nbytes(size));
+    ::memcpy(selectedBits, nonNullBits, bits::nbytes(size));
+  }
+  if (!rows.isAllSelected()) {
+    bits::andBits(selectedBits, rows.allBits(), 0, size);
   }
 
   vector_size_t passed = 0;
@@ -214,12 +238,12 @@ vector_size_t processEncodedFilterResults(
     const SelectivityVector& rows,
     FilterEvalCtx& filterEvalCtx,
     memory::MemoryPool* pool) {
-  auto size = rows.size();
+  const auto size = rows.size();
 
   DecodedVector& decoded = filterEvalCtx.decodedResult;
   decoded.decode(*filterResult.get(), rows);
   auto values = decoded.data<uint64_t>();
-  auto nulls = decoded.nulls();
+  auto nulls = decoded.nulls(&rows);
   auto indices = decoded.indices();
 
   vector_size_t passed = 0;
@@ -227,6 +251,9 @@ vector_size_t processEncodedFilterResults(
   auto* rawSelectedBits = filterEvalCtx.getRawSelectedBits(size, pool);
   memset(rawSelectedBits, 0, bits::nbytes(size));
   for (int32_t i = 0; i < size; ++i) {
+    if (!rows.isValid(i)) {
+      continue;
+    }
     auto index = indices[i];
     if ((!nulls || !bits::isBitNull(nulls, i)) &&
         bits::isBitSet(values, index)) {
@@ -245,13 +272,86 @@ vector_size_t processFilterResults(
     memory::MemoryPool* pool) {
   switch (filterResult->encoding()) {
     case VectorEncoding::Simple::CONSTANT:
-      return processConstantFilterResults(filterResult, rows);
+      return processConstantFilterResults(
+          filterResult, rows, filterEvalCtx, pool);
     case VectorEncoding::Simple::FLAT:
       return processFlatFilterResults(filterResult, rows, filterEvalCtx, pool);
     default:
       return processEncodedFilterResults(
           filterResult, rows, filterEvalCtx, pool);
   }
+}
+
+VectorPtr wrapOne(
+    vector_size_t wrapSize,
+    BufferPtr wrapIndices,
+    const VectorPtr& inputVector,
+    BufferPtr wrapNulls,
+    WrapState& wrapState) {
+  if (!wrapIndices) {
+    VELOX_CHECK_NULL(wrapNulls);
+    return inputVector;
+  }
+
+  if (inputVector->encoding() != VectorEncoding::Simple::DICTIONARY) {
+    return BaseVector::wrapInDictionary(
+        wrapNulls, wrapIndices, wrapSize, inputVector);
+  }
+
+  if (wrapState.transposeResults.empty()) {
+    wrapState.nulls = wrapNulls.get();
+  } else {
+    VELOX_CHECK(
+        wrapState.nulls == wrapNulls.get(),
+        "Must have identical wrapNulls for all wrapped columns");
+  }
+  auto baseIndices = inputVector->wrapInfo();
+  auto baseValues = inputVector->valueVector();
+  // The base will be wrapped again without loading any lazy. The
+  // rewrapping is permitted in this case.
+  baseValues->clearContainingLazyAndWrapped();
+  auto* rawBaseNulls = inputVector->rawNulls();
+  if (rawBaseNulls) {
+    // Dictionary adds nulls.
+    BufferPtr newIndices =
+        AlignedBuffer::allocate<vector_size_t>(wrapSize, inputVector->pool());
+    BufferPtr newNulls =
+        AlignedBuffer::allocate<bool>(wrapSize, inputVector->pool());
+    const uint64_t* rawWrapNulls =
+        wrapNulls ? wrapNulls->as<uint64_t>() : nullptr;
+    BaseVector::transposeIndicesWithNulls(
+        baseIndices->as<vector_size_t>(),
+        rawBaseNulls,
+        wrapSize,
+        wrapIndices->as<vector_size_t>(),
+        rawWrapNulls,
+        newIndices->asMutable<vector_size_t>(),
+        newNulls->asMutable<uint64_t>());
+
+    return BaseVector::wrapInDictionary(
+        newNulls, newIndices, wrapSize, baseValues);
+  }
+
+  // if another column had the same indices as this one and this one does not
+  // add nulls, we use the same transposed wrapping.
+  auto it = wrapState.transposeResults.find(baseIndices.get());
+  if (it != wrapState.transposeResults.end()) {
+    return BaseVector::wrapInDictionary(
+        wrapNulls, it->second, wrapSize, baseValues);
+  }
+
+  auto newIndices =
+      AlignedBuffer::allocate<vector_size_t>(wrapSize, inputVector->pool());
+  BaseVector::transposeIndices(
+      baseIndices->as<vector_size_t>(),
+      wrapSize,
+      wrapIndices->as<vector_size_t>(),
+      newIndices->asMutable<vector_size_t>());
+  // If another column has the same wrapping and does not add nulls, we can use
+  // the same transposed indices.
+  wrapState.transposeResults[baseIndices.get()] = newIndices;
+  return BaseVector::wrapInDictionary(
+      wrapNulls, newIndices, wrapSize, baseValues);
 }
 
 VectorPtr wrapChild(
@@ -364,16 +464,25 @@ std::string makeOperatorSpillPath(
   return fmt::format("{}/{}_{}_{}", spillDir, pipelineId, driverId, operatorId);
 }
 
+void setOperatorRuntimeStats(
+    const std::string& name,
+    const RuntimeCounter& value,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats[name] = RuntimeMetric(value.unit);
+  stats[name].addValue(value.value);
+}
+
 void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  if (UNLIKELY(stats.count(name) == 0)) {
-    stats.insert(std::pair(name, RuntimeMetric(value.unit)));
+  auto statIt = stats.find(name);
+  if (UNLIKELY(statIt == stats.end())) {
+    statIt = stats.insert(std::pair(name, RuntimeMetric(value.unit))).first;
   } else {
-    VELOX_CHECK_EQ(stats.at(name).unit, value.unit);
+    VELOX_CHECK_EQ(statIt->second.unit, value.unit);
   }
-  stats.at(name).addValue(value.value);
+  statIt->second.addValue(value.value);
 }
 
 void aggregateOperatorRuntimeStats(
@@ -397,23 +506,91 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
 }
 
 void projectChildren(
-    const RowVectorPtr& dest,
+    std::vector<VectorPtr>& projectedChildren,
     const RowVectorPtr& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
     const BufferPtr& mapping) {
-  projectChildren(dest, src->children(), projections, size, mapping);
+  projectChildren(
+      projectedChildren, src->children(), projections, size, mapping);
 }
 
 void projectChildren(
-    const RowVectorPtr& dest,
+    std::vector<VectorPtr>& projectedChildren,
     const std::vector<VectorPtr>& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
     const BufferPtr& mapping) {
-  for (const auto& projection : projections) {
-    dest->childAt(projection.outputChannel) =
-        wrapChild(size, mapping, src[projection.inputChannel]);
+  int maxInputChannel = -1;
+  int maxOutputChannel = -1;
+  for (auto [inputChannel, outputChannel] : projections) {
+    maxInputChannel = std::max<int>(maxInputChannel, inputChannel);
+    maxOutputChannel = std::max<int>(maxOutputChannel, outputChannel);
+  }
+  // Cache for already wrapped children to avoid wrapping the same child
+  // multiple times.
+  std::vector<VectorPtr> wrappedChildren(1 + maxInputChannel);
+  if (1 + maxOutputChannel > projectedChildren.size()) {
+    projectedChildren.resize(1 + maxOutputChannel);
+  }
+  for (auto [inputChannel, outputChannel] : projections) {
+    auto& wrapped = wrappedChildren[inputChannel];
+    if (!wrapped) {
+      wrapped = wrapChild(size, mapping, src[inputChannel]);
+    }
+    projectedChildren[outputChannel] = wrapped;
   }
 }
+
+void projectChildren(
+    std::vector<VectorPtr>& projectedChildren,
+    const RowVectorPtr& src,
+    const std::vector<IdentityProjection>& projections,
+    int32_t size,
+    const BufferPtr& mapping,
+    WrapState* state) {
+  projectChildren(
+      projectedChildren, src->children(), projections, size, mapping, state);
+}
+
+void projectChildren(
+    std::vector<VectorPtr>& projectedChildren,
+    const std::vector<VectorPtr>& src,
+    const std::vector<IdentityProjection>& projections,
+    int32_t size,
+    const BufferPtr& mapping,
+    WrapState* state) {
+  for (const auto& projection : projections) {
+    projectedChildren[projection.outputChannel] = state
+        ? wrapOne(size, mapping, src[projection.inputChannel], nullptr, *state)
+        : wrapChild(size, mapping, src[projection.inputChannel]);
+  }
+}
+
+std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
+    DriverCtx* ctx,
+    int32_t id,
+    const core::PlanNodePtr& node) {
+  if (std::dynamic_pointer_cast<const BlockedNode>(node)) {
+    return std::make_unique<BlockedOperator>(
+        ctx, id, node, std::move(blockedCb_));
+  }
+  return nullptr;
+}
+
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    common::CompressionKind compressionKind,
+    VectorSerde::Kind kind,
+    std::optional<float> minCompressionRatio) {
+  std::unique_ptr<VectorSerde::Options> options =
+      kind == VectorSerde::Kind::kPresto
+      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
+      : std::make_unique<VectorSerde::Options>();
+  options->compressionKind = compressionKind;
+  if (minCompressionRatio.has_value()) {
+    options->minCompressionRatio = minCompressionRatio.value();
+  }
+  return options;
+}
+
 } // namespace facebook::velox::exec

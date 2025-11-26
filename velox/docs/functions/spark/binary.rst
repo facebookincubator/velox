@@ -2,9 +2,19 @@
 Binary Functions
 ================
 
-.. spark:function:: hash(x) -> integer
+.. spark:function:: crc32(binary) -> bigint
 
-    Computes the hash of x.
+    Computes the crc32 checksum of ``binary``.
+
+.. spark:function:: hash(x, ...) -> integer
+
+    Computes the hash of one or more input values using seed value of 42. For
+    multiple arguments, their types can be different.
+
+.. spark:function:: hash_with_seed(seed, x, ...) -> integer
+
+    Computes the hash of one or more input values using specified seed. For
+    multiple arguments, their types can be different.
 
 .. spark:function:: md5(x) -> varbinary
 
@@ -12,9 +22,9 @@ Binary Functions
 
 .. spark:function:: might_contain(bloomFilter, value) -> boolean
 
-   Returns TRUE if ``bloomFilter`` might contain ``value``. 
+   Returns TRUE if ``bloomFilter`` might contain ``value``.
 
-   ``bloomFilter`` is a VARBINARY computed using ::spark::function::`bloom_filter_agg` aggregate function. 
+   ``bloomFilter`` is a VARBINARY computed using ::spark:function::`bloom_filter_agg` aggregate function.
    ``value`` is a BIGINT.
 
 .. spark:function:: sha1(x) -> varchar
@@ -31,6 +41,12 @@ Binary Functions
     for an unsupported bitLength, the return value is NULL.
     Note: x can only be varbinary type.
 
-.. spark:function:: xxhash64(x) -> integer
+.. spark:function:: xxhash64(x, ...) -> bigint
 
-    Computes the xxhash64 of x.
+    Computes the xxhash64 of one or more input values using seed value of 42.
+    For multiple arguments, their types can be different.
+
+.. spark:function:: xxhash64_with_seed(seed, x, ...) -> bigint
+
+    Computes the xxhash64 of one or more input values using specified seed. For
+    multiple arguments, their types can be different.

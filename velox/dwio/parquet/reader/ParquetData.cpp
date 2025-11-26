@@ -15,24 +15,33 @@
  */
 
 #include "velox/dwio/parquet/reader/ParquetData.h"
-#include "velox/dwio/parquet/reader/Statistics.h"
+
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::parquet {
-
-using thrift::RowGroup;
 
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
-  return std::make_unique<ParquetData>(type, metaData_.row_groups, pool());
+  return std::make_unique<ParquetData>(
+      type, metaData_, pool(), runtimeStatistics(), sessionTimezone_);
 }
 
 void ParquetData::filterRowGroups(
     const common::ScanSpec& scanSpec,
     uint64_t /*rowsPerRowGroup*/,
-    const dwio::common::StatsContext& /*writerContext*/,
+    const dwio::common::StatsContext& writerContext,
     FilterRowGroupsResult& result) {
-  result.totalCount = std::max<int>(result.totalCount, rowGroups_.size());
+  auto parquetStatsContext =
+      reinterpret_cast<const ParquetStatsContext*>(&writerContext);
+  if (type_->parquetType_.has_value() &&
+      parquetStatsContext->shouldIgnoreStatistics(
+          type_->parquetType_.value())) {
+    return;
+  }
+  result.totalCount =
+      std::max<int>(result.totalCount, fileMetaDataPtr_.numRowGroups());
   auto nwords = bits::nwords(result.totalCount);
   if (result.filterResult.size() < nwords) {
     result.filterResult.resize(nwords);
@@ -42,18 +51,20 @@ void ParquetData::filterRowGroups(
     result.metadataFilterResults.emplace_back(
         scanSpec.metadataFilterNodeAt(i), std::vector<uint64_t>(nwords));
   }
-  for (auto i = 0; i < rowGroups_.size(); ++i) {
-    if (scanSpec.filter() && !rowGroupMatches(i, scanSpec.filter())) {
-      bits::setBit(result.filterResult.data(), i);
-      continue;
-    }
-    for (int j = 0; j < scanSpec.numMetadataFilters(); ++j) {
-      auto* metadataFilter = scanSpec.metadataFilterAt(j);
-      if (!rowGroupMatches(i, metadataFilter)) {
-        bits::setBit(
-            result.metadataFilterResults[metadataFiltersStartIndex + j]
-                .second.data(),
-            i);
+  if (scanSpec.filter() || scanSpec.numMetadataFilters() > 0) {
+    for (auto i = 0; i < fileMetaDataPtr_.numRowGroups(); ++i) {
+      if (scanSpec.filter() && !rowGroupMatches(i, scanSpec.filter())) {
+        bits::setBit(result.filterResult.data(), i);
+        continue;
+      }
+      for (int j = 0; j < scanSpec.numMetadataFilters(); ++j) {
+        auto* metadataFilter = scanSpec.metadataFilterAt(j);
+        if (!rowGroupMatches(i, metadataFilter)) {
+          bits::setBit(
+              result.metadataFilterResults[metadataFiltersStartIndex + j]
+                  .second.data(),
+              i);
+        }
       }
     }
   }
@@ -61,23 +72,21 @@ void ParquetData::filterRowGroups(
 
 bool ParquetData::rowGroupMatches(
     uint32_t rowGroupId,
-    common::Filter* FOLLY_NULLABLE filter) {
-  auto column = type_->column;
-  auto type = type_->type;
-  auto rowGroup = rowGroups_[rowGroupId];
-  assert(!rowGroup.columns.empty());
+    const common::Filter* filter) {
+  auto column = type_->column();
+  auto type = type_->type();
+  auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
+  assert(rowGroup.numColumns() != 0);
 
   if (!filter) {
     return true;
   }
 
-  if (rowGroup.columns[column].__isset.meta_data &&
-      rowGroup.columns[column].meta_data.__isset.statistics) {
-    auto columnStats = buildColumnStatisticsFromThrift(
-        rowGroup.columns[column].meta_data.statistics,
-        *type,
-        rowGroup.num_rows);
-    return testFilter(filter, columnStats.get(), rowGroup.num_rows, type);
+  auto columnChunk = rowGroup.columnChunk(column);
+  if (columnChunk.hasStatistics()) {
+    auto columnStats =
+        columnChunk.getColumnStatistics(type, rowGroup.numRows());
+    return testFilter(filter, columnStats.get(), rowGroup.numRows(), type);
   }
   return true;
 }
@@ -85,42 +94,61 @@ bool ParquetData::rowGroupMatches(
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
-  auto& chunk = rowGroups_[index].columns[type_->column];
-  streams_.resize(rowGroups_.size());
+  auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  streams_.resize(fileMetaDataPtr_.numRowGroups());
   VELOX_CHECK(
-      chunk.__isset.meta_data,
+      chunk.hasMetadata(),
       "ColumnMetaData does not exist for schema Id ",
-      type_->column);
-  auto& metaData = chunk.meta_data;
+      type_->column());
+  ;
 
-  uint64_t chunkReadOffset = metaData.data_page_offset;
-  if (metaData.__isset.dictionary_page_offset &&
-      metaData.dictionary_page_offset >= 4) {
+  uint64_t chunkReadOffset = chunk.dataPageOffset();
+  if (chunk.hasDictionaryPageOffset() && chunk.dictionaryPageOffset() >= 4) {
     // this assumes the data pages follow the dict pages directly.
-    chunkReadOffset = metaData.dictionary_page_offset;
+    chunkReadOffset = chunk.dictionaryPageOffset();
   }
-  VELOX_CHECK_GE(chunkReadOffset, 0);
 
-  uint64_t readSize = (metaData.codec == thrift::CompressionCodec::UNCOMPRESSED)
-      ? metaData.total_uncompressed_size
-      : metaData.total_compressed_size;
+  uint64_t readSize =
+      (chunk.compression() == common::CompressionKind::CompressionKind_NONE)
+      ? chunk.totalUncompressedSize()
+      : chunk.totalCompressedSize();
 
-  auto id = dwio::common::StreamIdentifier(type_->column);
+  auto id = dwio::common::StreamIdentifier(type_->column());
   streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
 }
 
-dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
+dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
-  auto& metadata = rowGroups_[index].columns[type_->column].meta_data;
+  auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   reader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,
       type_,
-      metadata.codec,
-      metadata.total_compressed_size);
+      metadata.compression(),
+      metadata.totalCompressedSize(),
+      stats_,
+      sessionTimezone_);
   return dwio::common::PositionProvider(empty);
+}
+
+std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
+    uint32_t index) const {
+  auto rowGroup = fileMetaDataPtr_.rowGroup(index);
+
+  VELOX_CHECK_GT(rowGroup.numColumns(), 0);
+  auto fileOffset = rowGroup.hasFileOffset() ? rowGroup.fileOffset()
+      : rowGroup.columnChunk(0).hasDictionaryPageOffset()
+      ? rowGroup.columnChunk(0).dictionaryPageOffset()
+      : rowGroup.columnChunk(0).dataPageOffset();
+  VELOX_CHECK_GT(fileOffset, 0);
+
+  auto length = rowGroup.hasTotalCompressedSize()
+      ? rowGroup.totalCompressedSize()
+      : rowGroup.totalByteSize();
+
+  return {fileOffset, length};
 }
 
 } // namespace facebook::velox::parquet

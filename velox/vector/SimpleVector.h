@@ -22,18 +22,19 @@
 
 #include <folly/FixedString.h>
 #include <folly/String.h>
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
 
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 namespace exec {
 class EvalCtx;
@@ -46,44 +47,61 @@ struct SimpleVectorStats {
 };
 
 struct AsciiInfo {
-  bool& isAllAscii() {
-    return *isAllAscii_;
+  /// Returns true if ascii was processed for all rows and false otherwise.
+  bool isAllAscii() const {
+    return isAllAscii_;
   }
 
-  SelectivityVector& asciiSetRows() {
-    return *asciiSetRows_;
+  /// Sets isAllAscii boolean flag.
+  void setIsAllAscii(bool f) {
+    isAllAscii_ = f;
   }
 
-  const bool& isAllAscii() const {
-    return *isAllAscii_;
+  bool asciiComputedRowsEmpty() const {
+    return asciiComputedRowsEmpty_;
   }
 
-  const SelectivityVector& asciiSetRows() const {
-    return *asciiSetRows_;
+  void setAsciiComputedRowsEmpty(bool value) {
+    asciiComputedRowsEmpty_ = value;
   }
 
-  // isAllAscii_ and asciiSetRows_ are thread local because input vectors can be
-  // shared across threads, hence this make their mutation thread safe.
-  // Those are the only two fields that are allowed to mutated in the expression
-  // eval inputs vectors.
+  /// Returns locked for read bit vector with bits set for rows where ascii was
+  /// processed.
+  auto readLockedAsciiComputedRows() const {
+    return asciiComputedRows_.rlock();
+  }
 
-  // True is all strings in asciiSetRows_ are ASCII.
-  folly::ThreadLocal<bool> isAllAscii_{[] { return new bool(false); }};
+  /// Returns locked for write bit vector with bits set for rows where ascii was
+  /// processed.
+  auto writeLockedAsciiComputedRows() {
+    return asciiComputedRows_.wlock();
+  }
 
-  // If T is StringView, store set of rows
-  // where we have computed asciiness. A set bit means the row was processed.
-  folly::ThreadLocal<SelectivityVector> asciiSetRows_;
+ private:
+  // isAllAscii_ and asciiComputedRows_ are thread-safe because input vectors
+  // can be shared across threads, hence this make their mutation thread safe.
+  // Those are the only two fields that are allowed to be mutated in the
+  // expression eval inputs vectors.
+
+  // True is all strings in asciiComputedRows_ are ASCII.
+  std::atomic_bool isAllAscii_{false};
+
+  std::atomic_bool asciiComputedRowsEmpty_{true};
+
+  // If T is StringView, store set of rows where we have computed asciiness.
+  // A set bit means the row was processed.
+  folly::Synchronized<SelectivityVector> asciiComputedRows_;
 };
 
-// This class abstracts over various Columnar Storage Formats such that Velox
-// can select the most appropriate one on a per field / per block basis.
-// The goal is to use the most appropriate type to optimize for:
-//   - Lazy deserialization if desired.
-//   - serialization / rehydration cost, ideally we use a smart view into the
-//     data without fully rehydrating.
-//   - serialized bytes
-//   - cpu cost of filtering
-//   - optimize aggregation of sequential values
+/// This class abstracts over various Columnar Storage Formats such that Velox
+/// can select the most appropriate one on a per field / per block basis.
+/// The goal is to use the most appropriate type to optimize for:
+///   - Lazy deserialization if desired.
+///   - serialization / rehydration cost, ideally we use a smart view into the
+///     data without fully rehydrating.
+///   - serialized bytes
+///   - cpu cost of filtering
+///   - optimize aggregation of sequential values
 template <typename T>
 class SimpleVector : public BaseVector {
  public:
@@ -95,7 +113,7 @@ class SimpleVector : public BaseVector {
       TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       const SimpleVectorStats<T>& stats,
       std::optional<vector_size_t> distinctValueCount,
       std::optional<vector_size_t> nullCount,
@@ -116,10 +134,14 @@ class SimpleVector : public BaseVector {
         elementSize_(sizeof(T)),
         stats_(stats) {}
 
-  virtual ~SimpleVector() override {}
+  ~SimpleVector() override = default;
 
   SimpleVectorStats<T> getStats() const {
     return stats_;
+  }
+
+  void testingSetStats(SimpleVectorStats<T>&& stats) {
+    stats_ = std::move(stats);
   }
 
   // Concrete Vector types need to implement this themselves.
@@ -132,6 +154,10 @@ class SimpleVector : public BaseVector {
       vector_size_t index,
       vector_size_t otherIndex,
       CompareFlags flags) const override {
+    // By design `this` is not a lazy vector (or it would not be a
+    // SimpleVector), but it may be a dictionary wrapped around a lazy, so we
+    // need to ensure it is loaded.
+    loadedVector();
     other = other->loadedVector();
     DCHECK(dynamic_cast<const SimpleVector<T>*>(other) != nullptr)
         << "Attempting to compare vectors not of the same type";
@@ -145,16 +171,55 @@ class SimpleVector : public BaseVector {
     auto simpleVector = reinterpret_cast<const SimpleVector<T>*>(other);
     auto thisValue = valueAt(index);
     auto otherValue = simpleVector->valueAt(otherIndex);
-    auto result = comparePrimitiveAsc(thisValue, otherValue);
+    auto result = this->typeUsesCustomComparison_
+        ? comparePrimitiveAscWithCustomComparison(
+              this->type_.get(), thisValue, otherValue)
+        : comparePrimitiveAsc(thisValue, otherValue);
     return {flags.ascending ? result : result * -1};
+  }
+
+  void validate(const VectorValidateOptions& options) const override {
+    BaseVector::validate(options);
+  }
+
+  template <TypeKind Kind>
+  static uint64_t hashValueAtWithCustomType(
+      const TypePtr& type,
+      const T& value) {
+    if constexpr (!std::is_same<T, typename TypeTraits<Kind>::NativeType>()) {
+      VELOX_UNSUPPORTED(
+          "Cannot apply custom comparisons when the value type of the Vector {} does not match the NativeType associated with the Type of the Vector {}",
+          typeid(typename TypeTraits<Kind>::NativeType).name(),
+          typeid(T).name());
+    } else {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(
+                 type.get())
+          ->hash(value);
+    }
+  }
+
+  static uint64_t hashValueAtWithCustomType(const TypePtr& type, T value) {
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        hashValueAtWithCustomType, type->kind(), type, value);
   }
 
   /**
    * @return the hash of the value at the given index in this vector
    */
   uint64_t hashValueAt(vector_size_t index) const override {
-    return isNullAt(index) ? BaseVector::kNullHash
-                           : folly::hasher<T>{}(valueAt(index));
+    if (isNullAt(index)) {
+      return BaseVector::kNullHash;
+    }
+
+    if (type_->providesCustomComparison()) {
+      return hashValueAtWithCustomType(type_, valueAt(index));
+    }
+
+    if constexpr (std::is_floating_point_v<T>) {
+      return util::floating_point::NaNAwareHash<T>{}(valueAt(index));
+    } else {
+      return folly::hasher<T>{}(valueAt(index));
+    }
   }
 
   std::optional<bool> isSorted() const {
@@ -179,30 +244,13 @@ class SimpleVector : public BaseVector {
 
   using BaseVector::toString;
 
-  std::string valueToString(T value) const {
-    if constexpr (std::is_same_v<T, bool>) {
-      return value ? "true" : "false";
-    } else if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
-      return "<opaque>";
-    } else if constexpr (
-        std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-      if (type()->isDecimal()) {
-        return DecimalUtil::toString(value, type());
-      } else {
-        return velox::to<std::string>(value);
-      }
-    } else {
-      return velox::to<std::string>(value);
-    }
-  }
-
   std::string toString(vector_size_t index) const override {
     VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
     std::stringstream out;
     if (isNullAt(index)) {
-      out << "null";
+      out << kNullValueString;
     } else {
-      out << valueToString(valueAt(index));
+      out << type()->valueToString(valueAt(index));
     }
     return out.str();
   }
@@ -221,15 +269,16 @@ class SimpleVector : public BaseVector {
   isAscii(
       const SelectivityVector& rows,
       const vector_size_t* rowMappings = nullptr) const {
-    VELOX_CHECK(rows.hasSelections())
-    if (asciiInfo.asciiSetRows().hasSelections()) {
+    VELOX_CHECK(rows.hasSelections());
+    auto rlockedAsciiComputedRows{asciiInfo.readLockedAsciiComputedRows()};
+    if (rlockedAsciiComputedRows->hasSelections()) {
       if (rowMappings) {
-        bool isSubset = rows.template testSelected([&](auto row) {
-          return asciiInfo.asciiSetRows().isValid(rowMappings[row]);
+        bool isSubset = rows.testSelected([&](auto row) {
+          return rlockedAsciiComputedRows->isValid(rowMappings[row]);
         });
         return isSubset ? std::optional(asciiInfo.isAllAscii()) : std::nullopt;
       }
-      if (rows.isSubset(asciiInfo.asciiSetRows())) {
+      if (rows.isSubset(*rlockedAsciiComputedRows)) {
         return asciiInfo.isAllAscii();
       }
     }
@@ -243,9 +292,10 @@ class SimpleVector : public BaseVector {
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, std::optional<bool>>
   isAscii(vector_size_t index) const {
-    VELOX_CHECK_GE(index, 0)
-    if (asciiInfo.asciiSetRows().size() > index &&
-        asciiInfo.asciiSetRows().isValid(index)) {
+    VELOX_CHECK_GE(index, 0);
+    auto rlockedAsciiComputedRows{asciiInfo.readLockedAsciiComputedRows()};
+    if (index < rlockedAsciiComputedRows->size() &&
+        rlockedAsciiComputedRows->isValid(index)) {
       return asciiInfo.isAllAscii();
     }
     return std::nullopt;
@@ -256,12 +306,12 @@ class SimpleVector : public BaseVector {
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, bool>
   computeAndSetIsAscii(const SelectivityVector& rows) {
-    if (rows.isSubset(asciiInfo.asciiSetRows())) {
+    if (rows.isSubset(*asciiInfo.readLockedAsciiComputedRows())) {
       return asciiInfo.isAllAscii();
     }
-    ensureIsAsciiCapacity(rows.end());
+    ensureIsAsciiCapacity();
     bool isAllAscii = true;
-    rows.template applyToSelected([&](auto row) {
+    rows.applyToSelected([&](auto row) {
       if (!isNullAt(row)) {
         auto string = valueAt(row);
         isAllAscii &=
@@ -270,13 +320,16 @@ class SimpleVector : public BaseVector {
     });
 
     // Set isAllAscii flag, it will unset if we encounter any utf.
-    if (!asciiInfo.asciiSetRows().hasSelections()) {
-      asciiInfo.isAllAscii() = isAllAscii;
+    auto wlockedAsciiComputedRows = asciiInfo.writeLockedAsciiComputedRows();
+    if (!wlockedAsciiComputedRows->hasSelections()) {
+      asciiInfo.setIsAllAscii(isAllAscii);
     } else {
-      asciiInfo.isAllAscii() &= isAllAscii;
+      asciiInfo.setIsAllAscii(asciiInfo.isAllAscii() & isAllAscii);
     }
 
-    asciiInfo.asciiSetRows().select(rows);
+    wlockedAsciiComputedRows->select(rows);
+    asciiInfo.setAsciiComputedRowsEmpty(
+        !wlockedAsciiComputedRows->hasSelections());
     return asciiInfo.isAllAscii();
   }
 
@@ -284,8 +337,13 @@ class SimpleVector : public BaseVector {
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void>
   invalidateIsAscii() {
-    asciiInfo.asciiSetRows().clearAll();
-    asciiInfo.isAllAscii() = false;
+    if (asciiInfo.asciiComputedRowsEmpty()) {
+      return;
+    }
+    auto wlock = asciiInfo.writeLockedAsciiComputedRows();
+    wlock->clearAll();
+    asciiInfo.setAsciiComputedRowsEmpty(true);
+    asciiInfo.setIsAllAscii(false);
   }
 
   /// Explicitly set asciness.
@@ -293,32 +351,125 @@ class SimpleVector : public BaseVector {
   typename std::enable_if_t<std::is_same_v<U, StringView>, void> setIsAscii(
       bool ascii,
       const SelectivityVector& rows) {
-    ensureIsAsciiCapacity(rows.end());
-    if (asciiInfo.asciiSetRows().hasSelections() &&
-        !asciiInfo.asciiSetRows().isSubset(rows)) {
-      asciiInfo.isAllAscii() &= ascii;
+    ensureIsAsciiCapacity();
+    auto wlockedAsciiComputedRows = asciiInfo.writeLockedAsciiComputedRows();
+    if (wlockedAsciiComputedRows->hasSelections() &&
+        !wlockedAsciiComputedRows->isSubset(rows)) {
+      asciiInfo.setIsAllAscii(asciiInfo.isAllAscii() & ascii);
     } else {
-      asciiInfo.isAllAscii() = ascii;
+      asciiInfo.setIsAllAscii(ascii);
     }
 
-    asciiInfo.asciiSetRows().select(rows);
+    wlockedAsciiComputedRows->select(rows);
+    asciiInfo.setAsciiComputedRowsEmpty(
+        !wlockedAsciiComputedRows->hasSelections());
   }
 
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void> setAllIsAscii(
       bool ascii) {
-    ensureIsAsciiCapacity(length_);
-    asciiInfo.isAllAscii() = ascii;
-    asciiInfo.asciiSetRows().setAll();
+    ensureIsAsciiCapacity();
+    auto wlock = asciiInfo.writeLockedAsciiComputedRows();
+    wlock->setAll();
+    asciiInfo.setIsAllAscii(ascii);
+    asciiInfo.setAsciiComputedRowsEmpty(!wlock->hasSelections());
+  }
+
+  template <typename U = T>
+  typename std::enable_if_t<std::is_same_v<U, StringView>, bool> getAllIsAscii()
+      const {
+    return asciiInfo.isAllAscii();
+  }
+
+  /// Provides const access to asciiInfo. Used for tests only.
+  template <typename U = T>
+  typename std::enable_if_t<std::is_same_v<U, StringView>, const AsciiInfo&>
+  testGetAsciiInfo() const {
+    return asciiInfo;
+  }
+
+  template <TypeKind Kind>
+  FOLLY_ALWAYS_INLINE static int comparePrimitiveAscWithCustomComparison(
+      const Type* type,
+      const T& left,
+      const T& right) {
+    if constexpr (!std::is_same<T, typename TypeTraits<Kind>::NativeType>()) {
+      VELOX_UNSUPPORTED(
+          "Cannot apply custom comparisons when the value type of the Vector {} does not match the NativeType associated with the Type of the Vector {}",
+          typeid(typename TypeTraits<Kind>::NativeType).name(),
+          typeid(T).name());
+    } else {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(type)
+          ->compare(left, right);
+    }
+  }
+
+  static int comparePrimitiveAscWithCustomComparison(
+      const Type* type,
+      const T& left,
+      const T& right) {
+    return VELOX_DYNAMIC_TYPE_DISPATCH(
+        comparePrimitiveAscWithCustomComparison,
+        type->kind(),
+        type,
+        left,
+        right);
+  }
+
+  FOLLY_ALWAYS_INLINE static int comparePrimitiveAsc(
+      const T& left,
+      const T& right) {
+    if constexpr (std::is_floating_point<T>::value) {
+      bool isLeftNan = std::isnan(left);
+      bool isRightNan = std::isnan(right);
+      if (isLeftNan) {
+        return isRightNan ? 0 : 1;
+      }
+      if (isRightNan) {
+        return -1;
+      }
+    }
+    return left < right ? -1 : left == right ? 0 : 1;
   }
 
  protected:
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void>
-  ensureIsAsciiCapacity(vector_size_t size) {
-    if (asciiInfo.asciiSetRows().size() < size) {
-      asciiInfo.asciiSetRows().resize(size, false);
+  ensureIsAsciiCapacity() {
+    {
+      auto rlock = asciiInfo.readLockedAsciiComputedRows();
+      if (rlock->size() >= length_) {
+        return;
+      }
     }
+    auto wlock = asciiInfo.writeLockedAsciiComputedRows();
+    if (wlock->size() >= length_) {
+      return;
+    }
+    wlock->resize(length_, false);
+    asciiInfo.setAsciiComputedRowsEmpty(!wlock->hasSelections());
+  }
+
+  /// Ensure asciiInfo is of the correct size. But only if it is not empty.
+  template <typename U = T>
+  typename std::enable_if_t<std::is_same_v<U, StringView>, void>
+  resizeIsAsciiIfNotEmpty(vector_size_t size, bool newAscii) {
+    if (asciiInfo.asciiComputedRowsEmpty()) {
+      return;
+    }
+    {
+      auto rlock = asciiInfo.readLockedAsciiComputedRows();
+      if (!rlock->hasSelections() || rlock->size() >= size) {
+        return;
+      }
+    }
+    auto wlock = asciiInfo.writeLockedAsciiComputedRows();
+    if (!wlock->hasSelections() || wlock->size() >= size) {
+      return;
+    }
+    wlock->resize(size, newAscii);
+    asciiInfo.setIsAllAscii(asciiInfo.isAllAscii() & newAscii);
+    asciiInfo.setAsciiComputedRowsEmpty(!wlock->hasSelections());
   }
 
   /**
@@ -347,21 +498,6 @@ class SimpleVector : public BaseVector {
         sizeof(T));
   }
 
- protected:
-  int comparePrimitiveAsc(const T& left, const T& right) const {
-    if constexpr (std::is_floating_point<T>::value) {
-      bool isLeftNan = std::isnan(left);
-      bool isRightNan = std::isnan(right);
-      if (isLeftNan) {
-        return isRightNan ? 0 : 1;
-      }
-      if (isRightNan) {
-        return -1;
-      }
-    }
-    return left < right ? -1 : left == right ? 0 : 1;
-  }
-
   virtual void resetDataDependentFlags(const SelectivityVector* rows) override {
     BaseVector::resetDataDependentFlags(rows);
     isSorted_ = std::nullopt;
@@ -369,11 +505,11 @@ class SimpleVector : public BaseVector {
 
     if constexpr (std::is_same_v<T, StringView>) {
       if (rows) {
-        asciiInfo.asciiSetRows().deselect(*rows);
-
+        auto wlock = asciiInfo.writeLockedAsciiComputedRows();
+        wlock->deselect(*rows);
+        asciiInfo.setAsciiComputedRowsEmpty(!wlock->hasSelections());
       } else {
-        asciiInfo.asciiSetRows().clearAll();
-        asciiInfo.isAllAscii() = false;
+        invalidateIsAscii();
       }
     }
   }
@@ -387,7 +523,11 @@ class SimpleVector : public BaseVector {
 
   std::conditional_t<std::is_same_v<T, StringView>, AsciiInfo, int> asciiInfo;
   SimpleVectorStats<T> stats_;
-}; // namespace velox
+};
+
+template <>
+void SimpleVector<StringView>::validate(
+    const VectorValidateOptions& options) const;
 
 template <>
 inline std::optional<int32_t> SimpleVector<ComplexType>::compare(
@@ -398,18 +538,15 @@ inline std::optional<int32_t> SimpleVector<ComplexType>::compare(
   other = other->loadedVector();
   auto wrapped = wrappedVector();
   auto otherWrapped = other->wrappedVector();
-  DCHECK(wrapped->encoding() == otherWrapped->encoding())
-      << "Attempting to compare vectors not of the same type";
+  VELOX_DCHECK_EQ(
+      wrapped->typeKind(),
+      otherWrapped->typeKind(),
+      "Attempting to compare vectors not of the same type");
 
   bool otherNull = other->isNullAt(otherIndex);
-  if (isNullAt(index)) {
-    if (otherNull) {
-      return 0;
-    }
-    return flags.nullsFirst ? -1 : 1;
-  }
-  if (otherNull) {
-    return flags.nullsFirst ? 1 : -1;
+  bool isNull = isNullAt(index);
+  if (isNull || otherNull) {
+    return BaseVector::compareNulls(isNull, otherNull, flags);
   }
 
   auto otherWrappedIndex = other->wrappedIndex(otherIndex);
@@ -430,5 +567,4 @@ inline uint64_t SimpleVector<ComplexType>::hashValueAt(
 template <typename T>
 using SimpleVectorPtr = std::shared_ptr<SimpleVector<T>>;
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

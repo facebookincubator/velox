@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/AggregationHook.h"
+#include "velox/vector/AggregationHook.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
@@ -35,6 +35,10 @@ class SimpleNumericAggregate : public exec::Aggregate {
   }
 
  protected:
+  template <typename T>
+  static constexpr bool kMayPushdown = !std::is_same_v<T, int128_t> &&
+      !std::is_same_v<T, Timestamp> && !std::is_same_v<T, UnknownValue>;
+
   // TData is either TAccumulator or TResult, which in most cases are the same,
   // but for sum(real) can differ.
   template <typename TData = TResult, typename ExtractOneValue>
@@ -94,21 +98,25 @@ class SimpleNumericAggregate : public exec::Aggregate {
       UpdateSingleValue updateSingleValue,
       bool mayPushdown) {
     DecodedVector decoded(*arg, rows, !mayPushdown);
-    auto encoding = decoded.base()->encoding();
-    if (encoding == VectorEncoding::Simple::LAZY) {
-      velox::aggregate::SimpleCallableHook<TValue, TData, UpdateSingleValue>
-          hook(
+    if constexpr (kMayPushdown<TData>) {
+      if (mayPushdown &&
+          decoded.base()->encoding() == VectorEncoding::Simple::LAZY &&
+          !arg->type()->isDecimal()) {
+        auto* lazy = decoded.base()->asChecked<const LazyVector>();
+        if (lazy->supportsHook()) {
+          velox::aggregate::SimpleCallableHook<TData, UpdateSingleValue> hook(
               exec::Aggregate::offset_,
               exec::Aggregate::nullByte_,
               exec::Aggregate::nullMask_,
               groups,
               &this->exec::Aggregate::numNulls_,
               updateSingleValue);
-
-      auto indices = decoded.indices();
-      decoded.base()->as<const LazyVector>()->load(
-          RowSet(indices, arg->size()), &hook);
-      return;
+          auto indices = decoded.indices();
+          lazy->load(RowSet(indices, arg->size()), &hook);
+          return;
+        }
+        decoded.decode(*arg, rows);
+      }
     }
 
     if (decoded.isConstantMapping()) {
@@ -213,16 +221,16 @@ class SimpleNumericAggregate : public exec::Aggregate {
       if (numSelected != arg->size()) {
         pushdownCustomIndices_.resize(numSelected);
         vector_size_t tgtIndex{0};
-        rows.template applyToSelected([&](vector_size_t i) {
+        rows.applyToSelected([&](vector_size_t i) {
           pushdownCustomIndices_[tgtIndex++] = indices[i];
         });
         indices = pushdownCustomIndices_.data();
         numIndices = numSelected;
       }
     }
-
-    decoded.base()->as<const LazyVector>()->load(
-        RowSet(indices, numIndices), &hook);
+    auto* lazy = decoded.base()->asChecked<const LazyVector>();
+    VELOX_CHECK(lazy->supportsHook());
+    lazy->load(RowSet(indices, numIndices), &hook);
   }
 
  private:

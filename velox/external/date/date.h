@@ -1,5 +1,5 @@
-#ifndef DATE_H
-#define DATE_H
+#ifndef VELOX_DATE_H
+#define VELOX_DATE_H
 
 // The MIT License (MIT)
 //
@@ -86,6 +86,10 @@
 #   pragma warning(disable : 4127)
 #endif
 
+namespace facebook
+{
+namespace velox
+{
 namespace date
 {
 
@@ -176,16 +180,16 @@ using ratio_divide = decltype(std::ratio_divide<R1, R2>{});
 // durations
 
 using days = std::chrono::duration
-    <int, detail::ratio_multiply<std::ratio<24>, std::chrono::hours::period>>;
+    <int64_t, detail::ratio_multiply<std::ratio<24>, std::chrono::hours::period>>;
 
 using weeks = std::chrono::duration
-    <int, detail::ratio_multiply<std::ratio<7>, days::period>>;
+    <int64_t, detail::ratio_multiply<std::ratio<7>, days::period>>;
 
 using years = std::chrono::duration
-    <int, detail::ratio_multiply<std::ratio<146097, 400>, days::period>>;
+    <int64_t, detail::ratio_multiply<std::ratio<146097, 400>, days::period>>;
 
 using months = std::chrono::duration
-    <int, detail::ratio_divide<years::period, std::ratio<12>>>;
+    <int64_t, detail::ratio_divide<years::period, std::ratio<12>>>;
 
 // time_point
 
@@ -259,20 +263,20 @@ CONSTCD11 month_weekday_last operator/(const weekday_last& wdl, int          m) 
 CONSTCD11 year_month_day operator/(const year_month& ym, const day& d) NOEXCEPT;
 CONSTCD11 year_month_day operator/(const year_month& ym, int        d) NOEXCEPT;
 CONSTCD11 year_month_day operator/(const year& y, const month_day& md) NOEXCEPT;
-CONSTCD11 year_month_day operator/(int         y, const month_day& md) NOEXCEPT;
+CONSTCD11 year_month_day operator/(int64_t         y, const month_day& md) NOEXCEPT;
 CONSTCD11 year_month_day operator/(const month_day& md, const year& y) NOEXCEPT;
-CONSTCD11 year_month_day operator/(const month_day& md, int         y) NOEXCEPT;
+CONSTCD11 year_month_day operator/(const month_day& md, int64_t         y) NOEXCEPT;
 
 CONSTCD11
     year_month_day_last operator/(const year_month& ym,   last_spec) NOEXCEPT;
 CONSTCD11
     year_month_day_last operator/(const year& y, const month_day_last& mdl) NOEXCEPT;
 CONSTCD11
-    year_month_day_last operator/(int         y, const month_day_last& mdl) NOEXCEPT;
+    year_month_day_last operator/(int64_t         y, const month_day_last& mdl) NOEXCEPT;
 CONSTCD11
     year_month_day_last operator/(const month_day_last& mdl, const year& y) NOEXCEPT;
 CONSTCD11
-    year_month_day_last operator/(const month_day_last& mdl, int         y) NOEXCEPT;
+    year_month_day_last operator/(const month_day_last& mdl,int64_t         y) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday
@@ -284,7 +288,7 @@ operator/(const year&        y, const month_weekday&   mwd) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday
-operator/(int                y, const month_weekday&   mwd) NOEXCEPT;
+operator/(int64_t                y, const month_weekday&   mwd) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday
@@ -292,7 +296,7 @@ operator/(const month_weekday& mwd, const year&          y) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday
-operator/(const month_weekday& mwd, int                  y) NOEXCEPT;
+operator/(const month_weekday& mwd, int64_t                  y) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday_last
@@ -304,7 +308,7 @@ operator/(const year& y, const month_weekday_last& mwdl) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday_last
-operator/(int         y, const month_weekday_last& mwdl) NOEXCEPT;
+operator/(int64_t         y, const month_weekday_last& mwdl) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday_last
@@ -312,7 +316,7 @@ operator/(const month_weekday_last& mwdl, const year& y) NOEXCEPT;
 
 CONSTCD11
 year_month_weekday_last
-operator/(const month_weekday_last& mwdl, int         y) NOEXCEPT;
+operator/(const month_weekday_last& mwdl, int64_t         y) NOEXCEPT;
 
 // Detailed interface
 
@@ -396,11 +400,11 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const month& m);
 
 class year
 {
-    short y_;
+    int64_t y_;
 
 public:
     year() = default;
-    explicit CONSTCD11 year(int y) NOEXCEPT;
+    explicit CONSTCD11 year(int64_t y) NOEXCEPT;
 
     CONSTCD14 year& operator++()    NOEXCEPT;
     CONSTCD14 year  operator++(int) NOEXCEPT;
@@ -415,11 +419,13 @@ public:
 
     CONSTCD11 bool is_leap() const NOEXCEPT;
 
-    CONSTCD11 explicit operator int() const NOEXCEPT;
+    CONSTCD11 explicit operator int64_t() const NOEXCEPT;
     CONSTCD11 bool ok() const NOEXCEPT;
 
-    static CONSTCD11 year min() NOEXCEPT { return year{-32767}; }
-    static CONSTCD11 year max() NOEXCEPT { return year{32767}; }
+    // Years outside this range will see overflows when converting to
+    // millis since epoch.
+    static CONSTCD11 year min() NOEXCEPT { return year{-292275054}; }
+    static CONSTCD11 year max() NOEXCEPT { return year{292278993}; }
 };
 
 CONSTCD11 bool operator==(const year& x, const year& y) NOEXCEPT;
@@ -457,6 +463,8 @@ public:
     CONSTCD14 weekday& operator+=(const days& d) NOEXCEPT;
     CONSTCD14 weekday& operator-=(const days& d) NOEXCEPT;
 
+    CONSTCD11 explicit operator unsigned() const NOEXCEPT;
+
     CONSTCD11 bool ok() const NOEXCEPT;
 
     CONSTCD11 unsigned c_encoding() const NOEXCEPT;
@@ -466,7 +474,7 @@ public:
     CONSTCD11 weekday_last    operator[](last_spec)      const NOEXCEPT;
 
 private:
-    static CONSTCD14 unsigned char weekday_from_days(int z) NOEXCEPT;
+    static CONSTCD14 unsigned char weekday_from_days(int64_t z) NOEXCEPT;
 
     friend CONSTCD11 bool operator==(const weekday& x, const weekday& y) NOEXCEPT;
     friend CONSTCD14 days operator-(const weekday& x, const weekday& y) NOEXCEPT;
@@ -965,8 +973,8 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const year_month_weekday_last&
 inline namespace literals
 {
 
-CONSTCD11 date::day  operator "" _d(unsigned long long d) NOEXCEPT;
-CONSTCD11 date::year operator "" _y(unsigned long long y) NOEXCEPT;
+CONSTCD11 date::day  operator ""_d(unsigned long long d) NOEXCEPT;
+CONSTCD11 date::year operator ""_y(unsigned long long y) NOEXCEPT;
 
 }  // inline namespace literals
 #endif // !defined(_MSC_VER) || (_MSC_VER >= 1900)
@@ -1602,7 +1610,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const month& m)
 
 // year
 
-CONSTCD11 inline year::year(int y) NOEXCEPT : y_(static_cast<decltype(y_)>(y)) {}
+CONSTCD11 inline year::year(int64_t y) NOEXCEPT : y_(static_cast<decltype(y_)>(y)) {}
 CONSTCD14 inline year& year::operator++() NOEXCEPT {++y_; return *this;}
 CONSTCD14 inline year year::operator++(int) NOEXCEPT {auto tmp(*this); ++(*this); return tmp;}
 CONSTCD14 inline year& year::operator--() NOEXCEPT {--y_; return *this;}
@@ -1620,14 +1628,14 @@ year::is_leap() const NOEXCEPT
     return y_ % 4 == 0 && (y_ % 100 != 0 || y_ % 400 == 0);
 }
 
-CONSTCD11 inline year::operator int() const NOEXCEPT {return y_;}
+CONSTCD11 inline year::operator int64_t() const NOEXCEPT {return y_;}
 
 CONSTCD11
 inline
 bool
 year::ok() const NOEXCEPT
 {
-    return y_ != std::numeric_limits<short>::min();
+    return y_ >= year::min().y_ && y_ <= year::max().y_;
 }
 
 CONSTCD11
@@ -1635,7 +1643,7 @@ inline
 bool
 operator==(const year& x, const year& y) NOEXCEPT
 {
-    return static_cast<int>(x) == static_cast<int>(y);
+    return static_cast<int64_t>(x) == static_cast<int64_t>(y);
 }
 
 CONSTCD11
@@ -1651,7 +1659,7 @@ inline
 bool
 operator<(const year& x, const year& y) NOEXCEPT
 {
-    return static_cast<int>(x) < static_cast<int>(y);
+    return static_cast<int64_t>(x) < static_cast<int64_t>(y);
 }
 
 CONSTCD11
@@ -1683,7 +1691,7 @@ inline
 years
 operator-(const year& x, const year& y) NOEXCEPT
 {
-    return years{static_cast<int>(x) - static_cast<int>(y)};
+    return years{static_cast<int64_t>(x) - static_cast<int64_t>(y)};
 }
 
 CONSTCD11
@@ -1691,7 +1699,7 @@ inline
 year
 operator+(const year& x, const years& y) NOEXCEPT
 {
-    return year{static_cast<int>(x) + y.count()};
+    return year{static_cast<int64_t>(x) + y.count()};
 }
 
 CONSTCD11
@@ -1707,7 +1715,7 @@ inline
 year
 operator-(const year& x, const years& y) NOEXCEPT
 {
-    return year{static_cast<int>(x) - y.count()};
+    return year{static_cast<int64_t>(x) - y.count()};
 }
 
 template<class CharT, class Traits>
@@ -1720,7 +1728,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const year& y)
     os.flags(std::ios::dec | std::ios::internal);
     os.width(4 + (y < year{0}));
     os.imbue(std::locale::classic());
-    os << static_cast<int>(y);
+    os << static_cast<int64_t>(y);
     if (!y.ok())
         os << " is not a valid year";
     return os;
@@ -1731,7 +1739,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const year& y)
 CONSTCD14
 inline
 unsigned char
-weekday::weekday_from_days(int z) NOEXCEPT
+weekday::weekday_from_days(int64_t z) NOEXCEPT
 {
     auto u = static_cast<unsigned>(z);
     return static_cast<unsigned char>(z >= -4 ? (u+4) % 7 : u % 7);
@@ -1776,6 +1784,13 @@ weekday::operator-=(const days& d) NOEXCEPT
 {
     *this = *this - d;
     return *this;
+}
+
+CONSTCD11
+inline
+weekday::operator unsigned() const NOEXCEPT
+{
+    return wd_;
 }
 
 CONSTCD11 inline bool weekday::ok() const NOEXCEPT {return wd_ <= 6;}
@@ -1868,7 +1883,7 @@ inline namespace literals
 CONSTCD11
 inline
 date::day
-operator "" _d(unsigned long long d) NOEXCEPT
+operator ""_d(unsigned long long d) NOEXCEPT
 {
     return date::day{static_cast<unsigned>(d)};
 }
@@ -1876,7 +1891,7 @@ operator "" _d(unsigned long long d) NOEXCEPT
 CONSTCD11
 inline
 date::year
-operator "" _y(unsigned long long y) NOEXCEPT
+operator ""_y(unsigned long long y) NOEXCEPT
 {
     return date::year(static_cast<int>(y));
 }
@@ -2751,7 +2766,7 @@ year_month_day::to_days() const NOEXCEPT
              "This algorithm has not been ported to a 16 bit unsigned integer");
     static_assert(std::numeric_limits<int>::digits >= 20,
              "This algorithm has not been ported to a 16 bit signed integer");
-    auto const y = static_cast<int>(y_) - (m_ <= February);
+    auto const y = static_cast<int64_t>(y_) - (m_ <= February);
     auto const m = static_cast<unsigned>(m_);
     auto const d = static_cast<unsigned>(d_);
     auto const era = (y >= 0 ? y : y-399) / 400;
@@ -2864,11 +2879,11 @@ year_month_day::from_days(days dp) NOEXCEPT
              "This algorithm has not been ported to a 16 bit unsigned integer");
     static_assert(std::numeric_limits<int>::digits >= 20,
              "This algorithm has not been ported to a 16 bit signed integer");
-    auto const z = dp.count() + 719468;
+    auto const z =  dp.count() + 719468L; // For velox, use long to avoid overflow.
     auto const era = (z >= 0 ? z : z - 146096) / 146097;
     auto const doe = static_cast<unsigned>(z - era * 146097);          // [0, 146096]
     auto const yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;  // [0, 399]
-    auto const y = static_cast<days::rep>(yoe) + era * 400;
+    auto const y = static_cast<int>(yoe + era * 400);
     auto const doy = doe - (365*yoe + yoe/4 - yoe/100);                // [0, 365]
     auto const mp = (5*doy + 2)/153;                                   // [0, 11]
     auto const d = doy - (153*mp+2)/5 + 1;                             // [1, 31]
@@ -3993,7 +4008,7 @@ inline
 std::basic_ostream<CharT, Traits>&
 operator<<(std::basic_ostream<CharT, Traits>& os, const local_time<Duration>& ut)
 {
-    return (os << sys_time<Duration>{ut.time_since_epoch()});
+    return ::facebook::velox::date::operator<<(os, sys_time<Duration>{ut.time_since_epoch()});
 }
 
 namespace detail
@@ -4909,7 +4924,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     }
                     tm.tm_mday = static_cast<int>(static_cast<unsigned>(ymd.day()));
                     tm.tm_mon = static_cast<int>(extract_month(os, fds) - 1);
-                    tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                    tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                     tm.tm_wday = static_cast<int>(extract_weekday(os, fds));
                     if (os.fail())
                         return os;
@@ -4965,7 +4980,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                 {
                     if (!fds.ymd.year().ok())
                         os.setstate(std::ios::failbit);
-                    auto y = static_cast<int>(fds.ymd.year());
+                    auto y = static_cast<int64_t>(fds.ymd.year());
 #if !ONLY_C_LOCALE
                     if (modified == CharT{})
 #endif
@@ -5055,7 +5070,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     os.width(2);
                     os << static_cast<unsigned>(ymd.day()) << CharT{'/'};
                     os.width(2);
-                    os << static_cast<int>(ymd.year()) % 100;
+                    os << static_cast<int64_t>(ymd.year()) % 100;
                 }
                 else
                 {
@@ -5080,7 +5095,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     os.fill('0');
                     os.flags(std::ios::dec | std::ios::right);
                     os.width(4);
-                    os << static_cast<int>(ymd.year()) << CharT{'-'};
+                    os << static_cast<int64_t>(ymd.year()) << CharT{'-'};
                     os.width(2);
                     os << static_cast<unsigned>(ymd.month()) << CharT{'-'};
                     os.width(2);
@@ -5118,7 +5133,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                         os.fill('0');
                         os.flags(std::ios::dec | std::ios::right);
                         os.width(2);
-                        os << std::abs(static_cast<int>(y)) % 100;
+                        os << std::abs(static_cast<int64_t>(y)) % 100;
                     }
                 }
                 else
@@ -5538,7 +5553,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     else if (modified == CharT{'O'})
                     {
                         const CharT f[] = {'%', modified, *fmt};
-                        tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                        tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                         tm.tm_wday = static_cast<int>(extract_weekday(os, fds));
                         if (os.fail())
                             return os;
@@ -5586,7 +5601,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     {
                         const CharT f[] = {'%', modified, *fmt};
                         auto const& ymd = fds.ymd;
-                        tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                        tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                         tm.tm_wday = static_cast<int>(extract_weekday(os, fds));
                         if (os.fail())
                             return os;
@@ -5663,7 +5678,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     else if (modified == CharT{'O'})
                     {
                         const CharT f[] = {'%', modified, *fmt};
-                        tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                        tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                         tm.tm_wday = static_cast<int>(extract_weekday(os, fds));
                         if (os.fail())
                             return os;
@@ -5713,7 +5728,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
             {
                 if (!fds.ymd.year().ok())
                     os.setstate(std::ios::failbit);
-                auto y = static_cast<int>(fds.ymd.year());
+                auto y = static_cast<int64_t>(fds.ymd.year());
 #if !ONLY_C_LOCALE
                 if (modified == CharT{})
                 {
@@ -5759,7 +5774,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     else if (modified == CharT{'E'})
                     {
                         const CharT f[] = {'%', modified, *fmt};
-                        tm.tm_year = static_cast<int>(y) - 1900;
+                        tm.tm_year = static_cast<int64_t>(y) - 1900;
                         facet.put(os, os, os.fill(), &tm, std::begin(f), std::end(f));
                     }
 #endif
@@ -7442,7 +7457,7 @@ from_stream(std::basic_istream<CharT, Traits>& is, const CharT* fmt,
                     goto broken;
                 G = tG;
             }
-            if (Y < static_cast<int>(year::min()) || Y > static_cast<int>(year::max()))
+            if (Y < static_cast<int64_t>(year::min()) || Y > static_cast<int64_t>(year::max()))
                 Y = not_a_year;
             bool computed = false;
             if (G != not_a_year && V != not_a_week_num && wd != not_a_weekday)
@@ -7451,7 +7466,7 @@ from_stream(std::basic_istream<CharT, Traits>& is, const CharT* fmt,
                                            (Monday-Thursday) + weeks{V-1} +
                                            (weekday{static_cast<unsigned>(wd)}-Monday);
                 if (Y == not_a_year)
-                    Y = static_cast<int>(ymd_trial.year());
+                    Y = static_cast<int64_t>(ymd_trial.year());
                 else if (year{Y} != ymd_trial.year())
                     goto broken;
                 if (m == not_a_month)
@@ -7470,7 +7485,7 @@ from_stream(std::basic_istream<CharT, Traits>& is, const CharT* fmt,
                                            weeks{U-1} +
                                            (weekday{static_cast<unsigned>(wd)} - Sunday);
                 if (Y == not_a_year)
-                    Y = static_cast<int>(ymd_trial.year());
+                    Y = static_cast<int64_t>(ymd_trial.year());
                 else if (year{Y} != ymd_trial.year())
                     goto broken;
                 if (m == not_a_month)
@@ -7489,7 +7504,7 @@ from_stream(std::basic_istream<CharT, Traits>& is, const CharT* fmt,
                                            weeks{W-1} +
                                            (weekday{static_cast<unsigned>(wd)} - Monday);
                 if (Y == not_a_year)
-                    Y = static_cast<int>(ymd_trial.year());
+                    Y = static_cast<int64_t>(ymd_trial.year());
                 else if (year{Y} != ymd_trial.year())
                     goto broken;
                 if (m == not_a_month)
@@ -7537,7 +7552,7 @@ from_stream(std::basic_istream<CharT, Traits>& is, const CharT* fmt,
                                 start = sys_days((G_trial - years{1})/December/Thursday[last])
                                         + (Monday - Thursday);
                         }
-                        if (G != not_a_year && G != static_cast<int>(G_trial))
+                        if (G != not_a_year && G != static_cast<int64_t>(G_trial))
                             goto broken;
                         if (V != not_a_week_num)
                         {
@@ -7933,7 +7948,9 @@ operator<<(std::basic_ostream<CharT, Traits>& os,
                  detail::get_units<CharT>(typename Period::type{});
 }
 
-}  // namespace date
+} // namespace date
+} // namespace velox
+} // namespace facebook
 
 #ifdef _MSC_VER
 #   pragma warning(pop)
@@ -7943,4 +7960,4 @@ operator<<(std::basic_ostream<CharT, Traits>& os,
 # pragma GCC diagnostic pop
 #endif
 
-#endif  // DATE_H
+#endif  // VELOX_DATE_H

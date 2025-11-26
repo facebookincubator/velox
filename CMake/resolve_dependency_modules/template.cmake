@@ -16,15 +16,16 @@ include_guard(GLOBAL)
 set(VELOX_<PACKAGE>_VERSION x.y.z)
 # release artifacts are tough (except the auto generated ones)
 set(VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM 123)
-set(VELOX_<PACKAGE>_SOURCE_URL "") # ideally don't use github archive links as
-                                   # they are not guranteed to be hash stable
+# ideally don't use github archive links as they are not guaranteed to be hash stable
+set(VELOX_<PACKAGE>_SOURCE_URL "")
 
-resolve_dependency_url(<PACKAGE>)
+velox_resolve_dependency_url(<PACKAGE>)
 
 message(STATUS "Building <PACKAGE> from source")
 FetchContent_Declare(
   <package>
   URL ${VELOX_<PACKAGE>_SOURCE_URL}
-  URL_HASH ${VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM}
+)
 
 FetchContent_MakeAvailable(<package>)

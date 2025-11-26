@@ -21,13 +21,19 @@ namespace facebook::velox::exec::test {
 
 class SqlTest : public OperatorTestBase {
  protected:
+  void TearDown() override {
+    planner_.reset();
+    OperatorTestBase::TearDown();
+  }
+
   void assertSql(const std::string& sql, const std::string& duckSql = "") {
-    auto plan = planner_.plan(sql);
+    auto plan = planner_->plan(sql);
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .assertResults(duckSql.empty() ? sql : duckSql);
   }
 
-  core::DuckDbQueryPlanner planner_{pool()};
+  std::unique_ptr<core::DuckDbQueryPlanner> planner_{
+      std::make_unique<core::DuckDbQueryPlanner>(pool())};
 };
 
 TEST_F(SqlTest, values) {
@@ -40,20 +46,23 @@ TEST_F(SqlTest, values) {
 }
 
 TEST_F(SqlTest, customScalarFunctions) {
-  planner_.registerScalarFunction(
+  planner_->registerScalarFunction(
       "array_join", {ARRAY(BIGINT()), VARCHAR()}, VARCHAR());
 
   assertSql("SELECT array_join([1, 2, 3], '-')", "SELECT '1-2-3'");
 }
 
 TEST_F(SqlTest, customAggregateFunctions) {
-  planner_.registerAggregateFunction("count_if", {BOOLEAN()}, BIGINT());
+  // We need an aggregate that DuckDB does not support. 'every' fits the need.
+  // 'every' is an alias for bool_and().
+  planner_->registerAggregateFunction("every", {BOOLEAN()}, BOOLEAN());
 
   assertSql(
-      "SELECT count_if(x > 2) FROM UNNEST([1, 2, 3]) as t(x)", "SELECT 1");
+      "SELECT every(x) FROM UNNEST([true, false, true]) as t(x)",
+      "SELECT false");
   assertSql(
-      "SELECT x % 2, count_if(x > 0) FROM UNNEST([1, 2, 3]) as t(x) GROUP BY 1",
-      "VALUES (0, 1), (1, 2)");
+      "SELECT x, every(x) FROM UNNEST([true, false, true, false]) as t(x) GROUP BY 1",
+      "VALUES (true, true), (false, false)");
 }
 
 TEST_F(SqlTest, tableScan) {
@@ -78,11 +87,16 @@ TEST_F(SqlTest, tableScan) {
   createDuckDbTable("t", data.at("t"));
   createDuckDbTable("u", data.at("u"));
 
-  planner_.registerTable("t", data.at("t"));
-  planner_.registerTable("u", data.at("u"));
+  planner_->registerTable("t", data.at("t"));
+  planner_->registerTable("u", data.at("u"));
 
   assertSql("SELECT a, avg(b) FROM t WHERE c > 5 GROUP BY 1");
   assertSql("SELECT * FROM t, u WHERE t.a = u.a");
   assertSql("SELECT t.a, t.b, t.c, u.b FROM t, u WHERE t.a = u.a");
+  assertSql("SELECT t.a, t.b, t.c, u.b FROM t left join u on t.a = u.a");
+  assertSql(
+      "SELECT t.a, t.b, t.c FROM t WHERE EXISTS (SELECT 1 FROM u WHERE t.a = u.a)");
+  assertSql("SELECT t.a, t.b, t.c FROM t WHERE a < (SELECT max(u.a) FROM u)");
 }
+
 } // namespace facebook::velox::exec::test

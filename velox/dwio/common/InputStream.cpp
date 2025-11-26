@@ -16,15 +16,10 @@
 
 #include "velox/dwio/common/InputStream.h"
 
-#include <fcntl.h>
 #include <folly/container/F14Map.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <cerrno>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <istream>
 #include <numeric>
@@ -38,6 +33,16 @@
 using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
+
+namespace {
+int64_t totalBufferSize(const std::vector<folly::Range<char*>>& buffers) {
+  int64_t bufferSize = 0;
+  for (auto& buffer : buffers) {
+    bufferSize += buffer.size();
+  }
+  return bufferSize;
+}
+} // namespace
 
 folly::SemiFuture<uint64_t> InputStream::readAsync(
     const std::vector<folly::Range<char*>>& buffers,
@@ -58,8 +63,11 @@ folly::SemiFuture<uint64_t> InputStream::readAsync(
 ReadFileInputStream::ReadFileInputStream(
     std::shared_ptr<velox::ReadFile> readFile,
     const MetricsLogPtr& metricsLog,
-    IoStatistics* stats)
-    : InputStream(readFile->getName(), metricsLog, stats),
+    IoStatistics* stats,
+    filesystems::File::IoStats* fsStats,
+    folly::F14FastMap<std::string, std::string> fileReadOps)
+    : InputStream(readFile->getName(), metricsLog, stats, fsStats),
+      fileStorageContext_(fsStats, std::move(fileReadOps)),
       readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(
@@ -67,50 +75,43 @@ void ReadFileInputStream::read(
     uint64_t length,
     uint64_t offset,
     MetricsLog::MetricsType purpose) {
-  if (!buf) {
-    throw std::invalid_argument("Buffer is null");
-  }
+  VELOX_CHECK_NOT_NULL(buf);
   logRead(offset, length, purpose);
-  auto readStartMicros = getCurrentTimeMicro();
-  std::string_view data_read = readFile_->pread(offset, length, buf);
+  uint64_t readTimeUs{0};
+  std::string_view readData;
+  {
+    MicrosecondTimer timer(&readTimeUs);
+    readData = readFile_->pread(offset, length, buf, fileStorageContext_);
+  }
   if (stats_) {
     stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+    stats_->incTotalScanTime(readTimeUs * 1'000);
   }
 
-  DWIO_ENSURE_EQ(
-      data_read.size(),
+  VELOX_CHECK_EQ(
+      readData.size(),
       length,
-      "Should read exactly as requested. File name: ",
+      "Should read exactly as requested. File name: {}, offset: {}, length: {}, read: {}",
       getName(),
-      ", offset: ",
       offset,
-      ", length: ",
       length,
-      ", read: ",
-      data_read.size());
+      readData.size());
 }
 
 void ReadFileInputStream::read(
     const std::vector<folly::Range<char*>>& buffers,
     uint64_t offset,
     LogType logType) {
-  int64_t bufferSize = 0;
-  for (auto& buffer : buffers) {
-    bufferSize += buffer.size();
-  }
+  const int64_t bufferSize = totalBufferSize(buffers);
   logRead(offset, bufferSize, logType);
-  auto size = readFile_->preadv(offset, buffers);
-  DWIO_ENSURE_EQ(
+  const auto size = readFile_->preadv(offset, buffers, fileStorageContext_);
+  VELOX_CHECK_EQ(
       size,
       bufferSize,
-      "Should read exactly as requested. File name: ",
+      "Should read exactly as requested. File name: {}, offset: {}, length: {}, read: {}",
       getName(),
-      ", offset: ",
       offset,
-      ", length: ",
       bufferSize,
-      ", read: ",
       size);
 }
 
@@ -118,12 +119,9 @@ folly::SemiFuture<uint64_t> ReadFileInputStream::readAsync(
     const std::vector<folly::Range<char*>>& buffers,
     uint64_t offset,
     LogType logType) {
-  int64_t bufferSize = 0;
-  for (auto& buffer : buffers) {
-    bufferSize += buffer.size();
-  }
+  const int64_t bufferSize = totalBufferSize(buffers);
   logRead(offset, bufferSize, logType);
-  return readFile_->preadvAsync(offset, buffers);
+  return readFile_->preadvAsync(offset, buffers, fileStorageContext_);
 }
 
 bool ReadFileInputStream::hasReadAsync() const {
@@ -134,18 +132,18 @@ void ReadFileInputStream::vread(
     folly::Range<const velox::common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs,
     const LogType purpose) {
-  DWIO_ENSURE_GT(regions.size(), 0, "regions to read can't be empty");
+  VELOX_CHECK_GT(regions.size(), 0, "regions to read can't be empty");
   const size_t length = std::accumulate(
       regions.cbegin(),
       regions.cend(),
       size_t(0),
       [&](size_t acc, const auto& r) { return acc + r.length; });
   logRead(regions[0].offset, length, purpose);
-  auto readStartMs = getCurrentTimeMs();
-  readFile_->preadv(regions, iobufs);
+  auto readStartMicros = getCurrentTimeMicro();
+  readFile_->preadv(regions, iobufs, fileStorageContext_);
   if (stats_) {
     stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime(getCurrentTimeMs() - readStartMs);
+    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
   }
 }
 

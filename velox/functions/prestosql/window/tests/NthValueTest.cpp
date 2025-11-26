@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <boost/random/uniform_int_distribution.hpp>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -29,7 +31,7 @@ namespace {
 // the function over all possible frame clauses.
 class NthValueTest : public WindowTestBase {
  protected:
-  NthValueTest() : overClause_("") {}
+  NthValueTest() {}
 
   explicit NthValueTest(const std::string& overClause)
       : overClause_(overClause) {}
@@ -37,6 +39,7 @@ class NthValueTest : public WindowTestBase {
   void SetUp() override {
     WindowTestBase::SetUp();
     window::prestosql::registerAllWindowFunctions();
+    rng_.seed(std::time(nullptr));
   }
 
   // These tests have all important variations of the (nth|first|last)_value
@@ -55,22 +58,17 @@ class NthValueTest : public WindowTestBase {
     // This function invocation gets the column value of the 10th
     // frame row. Many tests have < 10 rows per partition. so the function
     // is expected to return null for such offsets.
-    testWindowFunction(input, "nth_value(c0, 10)", false);
+    testWindowFunction(input, "nth_value(c2, 10)", false);
 
     // This test gets the nth_value offset from a column c2. The offsets could
     // be outside the partition also. The error cases for -ve offset values
     // are tested separately.
     testWindowFunction(input, "nth_value(c3, c2)", false);
 
-    // The first_value, last_value functions are tested for columns c0, c1, and
-    // c2, which contain data with different distributions.
-    testWindowFunction(input, "first_value(c0)", false);
+    // The first_value, last_value functions are tested for columns c1 which
+    // contains null values.
     testWindowFunction(input, "first_value(c1)", false);
-    testWindowFunction(input, "first_value(c2)", false);
-
-    testWindowFunction(input, "last_value(c0)", false);
     testWindowFunction(input, "last_value(c1)", false);
-    testWindowFunction(input, "last_value(c2)", false);
   }
 
   // This is for testing different output column types in the
@@ -93,6 +91,8 @@ class NthValueTest : public WindowTestBase {
         makeRandomInputVector(VARBINARY(), size, 0.7),
         makeRandomInputVector(TIMESTAMP(), size, 0.8),
         makeRandomInputVector(DATE(), size, 0.9),
+        makeRandomInputVector(DECIMAL(10, 2), size, 0.1),
+        makeRandomInputVector(DECIMAL(20, 5), size, 0.2),
     });
 
     const std::string overClause =
@@ -142,6 +142,8 @@ class NthValueTest : public WindowTestBase {
           createTable);
     }
   }
+
+  FuzzerGenerator rng_;
 
  private:
   void testWindowFunction(
@@ -225,25 +227,29 @@ TEST_F(NthValueTest, invalidOffsets) {
 TEST_F(NthValueTest, invalidFrames) {
   vector_size_t size = 20;
 
+  auto offset =
+      boost::random::uniform_int_distribution<int32_t>(INT32_MIN, -1)(rng_);
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
-      makeFlatVector<int64_t>(size, [](auto /* row */) { return -9; }),
+      makeFlatVector<int64_t>(
+          size, [offset](auto /* row */) { return offset; }),
   });
 
   std::string overClause = "partition by c0 order by c1";
+
   assertWindowFunctionError(
       {vectors},
       "nth_value(c0, 5)",
       overClause,
-      "rows between -1 preceding and current row",
-      "Window frame -1 offset must not be negative");
+      fmt::format("rows between {} preceding and current row", offset),
+      fmt::format("Window frame {} offset must not be negative", offset));
   assertWindowFunctionError(
       {vectors},
       "nth_value(c0, 5)",
       overClause,
       "rows between c2 preceding and current row",
-      "Window frame -9 offset must not be negative");
+      fmt::format("Window frame {} offset must not be negative", offset));
 }
 
 TEST_F(NthValueTest, int32FrameOffset) {
@@ -289,5 +295,213 @@ TEST_F(NthValueTest, emptyFrames) {
   }
 }
 
-}; // namespace
-}; // namespace facebook::velox::window::test
+// DuckDB has errors in IGNORE NULLS logic when the start or end
+// bound is CURRENT ROW and also when both frame ends are
+// preceding or following. So the testing is limited to this
+// subset of frame clauses.
+// The limitations are fixed in the latest version of DuckDB, so
+// these tests will be updated then.
+inline const std::vector<std::string> kIgnoreNullsFrames = {
+    "range between unbounded preceding and unbounded following",
+    "rows between unbounded preceding and unbounded following",
+
+    "rows between 5 preceding and unbounded following",
+    "rows between unbounded preceding and 5 following",
+
+    "rows between 1 preceding and 5 following",
+    "rows between c2 preceding and unbounded following",
+    "rows between unbounded preceding and c2 following",
+    "rows between c2 preceding and c2 following",
+
+    // Frame clauses with invalid frames.
+    "rows between 1 preceding and 4 preceding",
+    "rows between 4 following and 1 following",
+};
+
+inline const std::vector<std::string> kIgnoreNullsPartitionClauses = {
+    "partition by c0 order by c1 desc, c2, c3",
+    "partition by c0 order by c1 desc nulls first, c2, c3",
+    "partition by c0 order by c1 asc, c2, c3",
+    "partition by c0 order by c1 asc nulls first, c2, c3",
+};
+
+TEST_F(NthValueTest, ignoreNulls) {
+  auto input = makeSimpleVector(40);
+  const std::vector<std::string> kFunctionsList = {
+      "first_value(c1 IGNORE NULLS)",
+      "last_value(c1 IGNORE NULLS)",
+      "nth_value(c1, 3 IGNORE NULLS)",
+      "nth_value(c3, c2 IGNORE NULLS)",
+  };
+
+  bool createTable = true;
+  for (auto fn : kFunctionsList) {
+    WindowTestBase::testWindowFunction(
+        {input},
+        fn,
+        kIgnoreNullsPartitionClauses,
+        kIgnoreNullsFrames,
+        createTable);
+    createTable = false;
+  }
+}
+
+TEST_F(NthValueTest, frameStartsFromFollowing) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 2}),
+      makeFlatVector<bool>({false, false, false}),
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, 2}),
+       makeFlatVector<bool>({false, false, false}),
+       makeFlatVector<int64_t>({1, 2, 3}),
+       makeNullableFlatVector<int64_t>({2, 2, std::nullopt})});
+
+  WindowTestBase::testWindowFunction(
+      {input},
+      "first_value(c0 IGNORE NULLS)",
+      "partition by c1 order by c2",
+      "rows between 1 following and unbounded following",
+      expected);
+  WindowTestBase::testWindowFunction(
+      {input},
+      "last_value(c0 IGNORE NULLS)",
+      "partition by c1 order by c2",
+      "rows between 1 following and unbounded following",
+      expected);
+}
+
+// These tests are added since DuckDB has issues with
+// CURRENT ROW frames. These tests will be replaced by DuckDB based
+// tests after it is upgraded to v0.8.
+TEST_F(NthValueTest, ignoreNullsCurrentRow) {
+  auto size = 15;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 5; }),
+      makeFlatVector<int64_t>(
+          size, [](auto row) { return row % 5; }, nullEvery(3)),
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+  });
+  createDuckDbTable({input});
+
+  std::vector<std::optional<int64_t>> expectedWindow;
+  auto assertResults = [&](const std::string& functionSql,
+                           const std::string& frame) {
+    auto queryInfo = buildWindowQuery(
+        {input}, functionSql, "partition by c0 order by c2", frame);
+    auto expected = makeRowVector({
+        input->childAt(0),
+        input->childAt(1),
+        input->childAt(2),
+        makeNullableFlatVector<int64_t>(expectedWindow),
+    });
+    assertQuery(queryInfo.planNode, expected);
+  };
+
+  expectedWindow = {
+      std::nullopt,
+      1,
+      2,
+      std::nullopt,
+      4,
+      0,
+      std::nullopt,
+      2,
+      3,
+      std::nullopt,
+      0,
+      1,
+      std::nullopt,
+      3,
+      4};
+  assertResults("first_value(c1 IGNORE NULLS)", "rows current row");
+  assertResults("nth_value(c1, 1 IGNORE NULLS)", "rows current row");
+  assertResults("last_value(c1 IGNORE NULLS)", "rows current row");
+
+  expectedWindow = {
+      std::nullopt, 1, 2, std::nullopt, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4};
+  assertResults(
+      "first_value(c1 IGNORE NULLS)",
+      "rows between unbounded preceding and current row");
+  assertResults(
+      "nth_value(c1, 1 IGNORE NULLS)",
+      "rows between unbounded preceding and current row");
+  assertResults(
+      "last_value(c1 IGNORE NULLS)",
+      "rows between unbounded preceding and current row");
+
+  expectedWindow = {
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      1,
+      2,
+      std::nullopt,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4};
+  assertResults(
+      "first_value(c1 IGNORE NULLS)",
+      "rows between unbounded preceding and 1 preceding");
+  assertResults(
+      "nth_value(c1, 1 IGNORE NULLS)",
+      "rows between unbounded preceding and 1 preceding");
+  assertResults(
+      "last_value(c1 IGNORE NULLS)",
+      "rows between unbounded preceding and 1 preceding");
+
+  expectedWindow = {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, std::nullopt, 3, 4};
+  assertResults(
+      "first_value(c1 IGNORE NULLS)",
+      "rows between current row and 1 following");
+  assertResults(
+      "nth_value(c1, 1 IGNORE NULLS)",
+      "rows between current row and 1 following");
+  assertResults(
+      "last_value(c1 IGNORE NULLS)",
+      "rows between current row and 1 following");
+
+  expectedWindow = {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, std::nullopt, 3, 4};
+  assertResults(
+      "first_value(c1 IGNORE NULLS)",
+      "rows between current row and unbounded following");
+  assertResults(
+      "nth_value(c1, 1 IGNORE NULLS)",
+      "rows between current row and unbounded following");
+  assertResults(
+      "last_value(c1 IGNORE NULLS)",
+      "rows between current row and unbounded following");
+
+  expectedWindow = {
+      std::nullopt, 1, 2, std::nullopt, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4};
+  assertResults(
+      "first_value(c1 IGNORE NULLS)",
+      "range between unbounded preceding and current row");
+  assertResults(
+      "nth_value(c1, 1 IGNORE NULLS)",
+      "range between unbounded preceding and current row");
+  assertResults(
+      "last_value(c1 IGNORE NULLS)",
+      "range between unbounded preceding and current row");
+
+  expectedWindow = {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, std::nullopt, 3, 4};
+  assertResults(
+      "first_value(c1 IGNORE NULLS)",
+      "range between current row and unbounded following");
+  assertResults(
+      "nth_value(c1, 1 IGNORE NULLS)",
+      "range between current row and unbounded following");
+  assertResults(
+      "last_value(c1 IGNORE NULLS)",
+      "range between current row and unbounded following");
+}
+
+} // namespace
+} // namespace facebook::velox::window::test

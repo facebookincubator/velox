@@ -26,7 +26,7 @@ mbasmanova:
 
 majetideepak:
   name: Deepak Majeti
-  title: Principal Engineer @ Ahana
+  title: Software Engineer @ IBM
   url: https://github.com/majetideepak
   image_url: https://github.com/majetideepak.png
 
@@ -40,7 +40,7 @@ kgpai:
   name: Krishna Pai
   title: Software Engineer @ Meta
   url: https://github.com/kgpai
-  image_url:  https://github.com/kgpai.png
+  image_url: https://github.com/kgpai.png
 
 jwujciak:
   name: Jacob Wujciak-Jens
@@ -54,3 +54,44 @@ raulcd:
   url: https://github.com/raulcd
   image_url: https://github.com/raulcd.png
 
+xumingming:
+  name: James Xu
+  title: Software Engineer @ Alibaba
+  url: https://github.com/xumingming
+  image_url: https://github.com/xumingming.png
+
+duanmeng:
+  name: Meng Duan (macduan)
+  title: Software Engineer @ ByteDance
+  url: https://github.com/duanmeng
+  image_url: https://github.com/duanmeng.png
+
+xiaoxmeng:
+  name: Xiaoxuan Meng
+  title: Software Engineer @ Meta
+  url: https://github.com/xiaoxmeng
+  image_url: https://github.com/xiaoxmeng.png
+
+tanjialiang:
+  name: Jialiang Tan
+  title: Software Engineer @ Meta
+  url: https://github.com/tanjialiang
+  image_url: https://github.com/tanjialiang.png
+
+oerling:
+  name: Orri Erling
+  title: Software Engineer @ Meta
+  url: https://github.com/oerling
+  image_url: https://github.com/oerling.png
+
+czentgr:
+  name: Christian Zentgraf
+  title: Software Engineer @ IBM
+  url: https://github.com/czentgr
+  image_url: https://github.com/czentgr.png
+
+GregoryKimball:
+  name: Gregory Kimball
+  title: Software Engineer @ NVIDIA
+  url: https://github.com/GregoryKimball
+  image_url: https://github.com/GregoryKimball.png

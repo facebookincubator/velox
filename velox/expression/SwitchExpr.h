@@ -52,6 +52,11 @@ class SwitchExpr : public SpecialForm {
     return true;
   }
 
+  void clearCache() override {
+    Expr::clearCache();
+    tempValues_.reset();
+  }
+
  private:
   static TypePtr resolveType(const std::vector<TypePtr>& argTypes);
 
@@ -71,7 +76,8 @@ class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
-      bool trackCpuUsage) override;
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
 };
 
 class IfCallToSpecialForm : public SwitchCallToSpecialForm {

@@ -26,10 +26,8 @@ class FuzzerConnectorTestBase : public exec::test::OperatorTestBase {
 
   void SetUp() override {
     OperatorTestBase::SetUp();
-    auto fuzzerConnector =
-        connector::getConnectorFactory(
-            connector::fuzzer::FuzzerConnectorFactory::kFuzzerConnectorName)
-            ->newConnector(kFuzzerConnectorId, nullptr);
+    connector::fuzzer::FuzzerConnectorFactory factory;
+    auto fuzzerConnector = factory.newConnector(kFuzzerConnectorId, nullptr);
     connector::registerConnector(fuzzerConnector);
   }
 

@@ -16,26 +16,22 @@
 
 #include "velox/type/Variant.h"
 #include <cfloat>
-#include "common/encode/Base64.h"
 #include "folly/json.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
-#include "velox/type/HugeInt.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox {
-
 namespace {
-const folly::json::serialization_opts& getOpts() {
-  static const folly::json::serialization_opts opts_ = []() {
-    folly::json::serialization_opts opts;
-    opts.sort_keys = true;
-    return opts;
-  }();
-  return opts_;
-}
-} // namespace
+
+bool dispatchDynamicVariantEquality(
+    const Variant& a,
+    const Variant& b,
+    const bool& enableNullEqualsNull);
 
 template <bool nullEqualsNull>
-bool evaluateNullEquality(const variant& a, const variant& b) {
+bool evaluateNullEquality(const Variant& a, const Variant& b) {
   if constexpr (nullEqualsNull) {
     if (a.isNull() && b.isNull()) {
       return true;
@@ -44,11 +40,14 @@ bool evaluateNullEquality(const variant& a, const variant& b) {
   return false;
 }
 
+template <TypeKind KIND>
+struct VariantEquality;
+
 // scalars
 template <TypeKind KIND>
 struct VariantEquality {
   template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
+  static bool equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     }
@@ -60,7 +59,7 @@ struct VariantEquality {
 template <>
 struct VariantEquality<TypeKind::TIMESTAMP> {
   template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
+  static bool equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     } else {
@@ -73,7 +72,7 @@ struct VariantEquality<TypeKind::TIMESTAMP> {
 template <>
 struct VariantEquality<TypeKind::ARRAY> {
   template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
+  static bool equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     }
@@ -97,7 +96,7 @@ struct VariantEquality<TypeKind::ARRAY> {
 template <>
 struct VariantEquality<TypeKind::ROW> {
   template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
+  static bool equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     }
@@ -123,7 +122,7 @@ struct VariantEquality<TypeKind::ROW> {
 template <>
 struct VariantEquality<TypeKind::MAP> {
   template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
+  static bool equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     }
@@ -152,8 +151,8 @@ struct VariantEquality<TypeKind::MAP> {
 };
 
 bool dispatchDynamicVariantEquality(
-    const variant& a,
-    const variant& b,
+    const Variant& a,
+    const Variant& b,
     const bool& enableNullEqualsNull) {
   if (enableNullEqualsNull) {
     return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
@@ -163,18 +162,192 @@ bool dispatchDynamicVariantEquality(
       VariantEquality, equals<false>, a.kind(), a, b);
 }
 
-void variant::throwCheckIsKindError(TypeKind kind) const {
+} // namespace
+
+std::string encloseWithQuote(std::string str) {
+  constexpr auto kDoubleQuote = '"';
+
+  std::stringstream ss;
+  ss << std::quoted(str, kDoubleQuote, kDoubleQuote);
+  return ss.str();
+}
+
+template <typename T>
+std::string stringifyFloatingPointerValue(T val) {
+  if (std::isinf(val) || std::isnan(val)) {
+    return encloseWithQuote(folly::to<std::string>(val));
+  } else {
+    return folly::to<std::string>(val);
+  }
+}
+
+void Variant::throwCheckIsKindError(TypeKind kind) const {
   throw std::invalid_argument{fmt::format(
       "wrong kind! {} != {}",
-      mapTypeKindToName(kind_),
-      mapTypeKindToName(kind))};
+      TypeKindName::toName(kind_),
+      TypeKindName::toName(kind))};
 }
 
-void variant::throwCheckPtrError() const {
-  throw std::invalid_argument{"missing variant value"};
+void Variant::throwCheckPtrError() const {
+  throw std::invalid_argument{"missing Variant value"};
 }
 
-std::string variant::toJson(const TypePtr& type) const {
+std::string Variant::toString(const TypePtr& type) const {
+  if (isNull()) {
+    return "null";
+  }
+
+  VELOX_CHECK(type);
+
+  VELOX_CHECK_EQ(this->kind(), type->kind(), "Wrong type in Variant::toString");
+
+  switch (type->kind()) {
+    case TypeKind::VARBINARY: {
+      auto& str = value<TypeKind::VARBINARY>();
+      auto encoded = encoding::Base64::encode(str);
+      return encoded;
+    }
+    case TypeKind::VARCHAR: {
+      auto& str = value<TypeKind::VARCHAR>();
+      return str;
+    }
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK(type->isLongDecimal());
+      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+    }
+    case TypeKind::TINYINT:
+      [[fallthrough]];
+    case TypeKind::SMALLINT:
+      [[fallthrough]];
+    case TypeKind::INTEGER:
+      if (type->isDate()) {
+        return DATE()->toString(value<TypeKind::INTEGER>());
+      }
+      [[fallthrough]];
+    case TypeKind::BIGINT:
+      if (type->isShortDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
+      }
+      [[fallthrough]];
+    case TypeKind::BOOLEAN: {
+      auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
+      if (converted.isNull()) {
+        return "null";
+      } else {
+        return converted.value<TypeKind::VARCHAR>();
+      }
+    }
+    case TypeKind::REAL:
+      return folly::to<std::string>(value<TypeKind::REAL>());
+    case TypeKind::DOUBLE:
+      return folly::to<std::string>(value<TypeKind::DOUBLE>());
+    case TypeKind::TIMESTAMP: {
+      auto& timestamp = value<TypeKind::TIMESTAMP>();
+      return timestamp.toString();
+    }
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW:
+    case TypeKind::OPAQUE:
+    case TypeKind::FUNCTION:
+    case TypeKind::UNKNOWN:
+    case TypeKind::INVALID:
+      return toJson(type);
+  }
+
+  folly::assume_unreachable();
+}
+
+namespace {
+
+std::string toStringAsVectorImpl(const TypePtr& type, const Variant& value);
+
+template <TypeKind Kind>
+std::string toStringAsVectorNoNull(const TypePtr& type, const Variant& value) {
+  using T = typename TypeTraits<Kind>::NativeType;
+
+  return type->template valueToString<T>(T(value.value<Kind>()));
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::OPAQUE>(
+    const TypePtr& type,
+    const Variant& value) {
+  return "<opaque>";
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::ARRAY>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto& arrayValue = value.value<TypeKind::ARRAY>();
+  const auto& elementType = type->childAt(0);
+
+  return stringifyTruncatedElementList(
+      arrayValue.size(), [&](auto& out, auto i) {
+        out << toStringAsVectorImpl(elementType, arrayValue.at(i));
+      });
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::MAP>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto& mapValue = value.value<TypeKind::MAP>();
+  const auto& keyType = type->childAt(0);
+  const auto& valueType = type->childAt(1);
+
+  auto it = mapValue.begin();
+
+  return stringifyTruncatedElementList(mapValue.size(), [&](auto& out, auto i) {
+    out << toStringAsVectorImpl(keyType, it->first) << " => "
+        << toStringAsVectorImpl(valueType, it->second);
+    ++it;
+  });
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::ROW>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto size = type->size();
+
+  const auto& rowValue = value.value<TypeKind::ROW>();
+  VELOX_CHECK_EQ(size, rowValue.size());
+
+  return stringifyTruncatedElementList(size, [&](auto& out, auto i) {
+    out << toStringAsVectorImpl(type->childAt(i), rowValue.at(i));
+  });
+}
+
+std::string toStringAsVectorImpl(const TypePtr& type, const Variant& value) {
+  if (value.isNull()) {
+    return "null";
+  }
+
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      toStringAsVectorNoNull, type->kind(), type, value);
+}
+
+} // namespace
+
+std::string Variant::toStringAsVector(const TypePtr& type) const {
+  return toStringAsVectorImpl(type, *this);
+}
+
+namespace {
+const folly::json::serialization_opts& getOpts() {
+  static const folly::json::serialization_opts kOpts;
+  return kOpts;
+}
+} // namespace
+
+std::string Variant::toJson(const TypePtr& type) const {
+  VELOX_CHECK(type);
+  return toJson(*type);
+}
+
+std::string Variant::toJson(const Type& type) const {
   // todo(youknowjack): consistent story around std::stringifying, converting,
   // and other basic operations. Stringification logic should not be specific
   // to variants; it should be consistent for all map representations
@@ -183,9 +356,7 @@ std::string variant::toJson(const TypePtr& type) const {
     return "null";
   }
 
-  if (type->isDate()) {
-    return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
-  }
+  VELOX_CHECK_EQ(this->kind(), type.kind(), "Wrong type in Variant::toJson");
 
   switch (kind_) {
     case TypeKind::MAP: {
@@ -198,9 +369,9 @@ std::string variant::toJson(const TypePtr& type) const {
           b += ",";
         }
         b += "{\"key\":";
-        b += pair.first.toJson();
+        b += pair.first.toJson(type.childAt(0));
         b += ",\"value\":";
-        b += pair.second.toJson();
+        b += pair.second.toJson(type.childAt(1));
         b += "}";
         first = false;
       }
@@ -212,11 +383,16 @@ std::string variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
+      uint32_t idx = 0;
+      VELOX_CHECK_EQ(
+          row.size(),
+          type.size(),
+          "Wrong number of fields in a struct in Variant::toJson");
       for (auto& v : row) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(type.childAt(idx++));
         first = false;
       }
       b += "]";
@@ -227,11 +403,12 @@ std::string variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
+      auto arrayElementType = type.childAt(0);
       for (auto& v : array) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(arrayElementType);
         first = false;
       }
       b += "]";
@@ -248,20 +425,24 @@ std::string variant::toJson(const TypePtr& type) const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
-    case TypeKind::HUGEINT:
-      VELOX_CHECK(type && type->isLongDecimal());
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK(type.isLongDecimal());
       return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+    }
     case TypeKind::TINYINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::SMALLINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::INTEGER:
-      FOLLY_FALLTHROUGH;
+      if (type.isDate()) {
+        return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
+      }
+      [[fallthrough]];
     case TypeKind::BIGINT:
-      if (type && type->isShortDecimal()) {
+      if (type.isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::BOOLEAN: {
       auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
       if (converted.isNull()) {
@@ -271,20 +452,10 @@ std::string variant::toJson(const TypePtr& type) const {
       }
     }
     case TypeKind::REAL: {
-      auto val = value<TypeKind::REAL>();
-      if (std::isnormal(val)) {
-        return folly::to<std::string>(val);
-      } else {
-        return '"' + folly::to<std::string>(val) + '"';
-      }
+      return stringifyFloatingPointerValue<float>(value<TypeKind::REAL>());
     }
     case TypeKind::DOUBLE: {
-      auto val = value<TypeKind::DOUBLE>();
-      if (std::isnormal(val)) {
-        return folly::to<std::string>(val);
-      } else {
-        return '"' + folly::to<std::string>(val) + '"';
-      }
+      return stringifyFloatingPointerValue<double>(value<TypeKind::DOUBLE>());
     }
     case TypeKind::TIMESTAMP: {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
@@ -308,7 +479,135 @@ std::string variant::toJson(const TypePtr& type) const {
   }
 
   VELOX_UNSUPPORTED(
-      "Unsupported: given type {} is not json-ready", mapTypeKindToName(kind_));
+      "Unsupported: given type {} is not json-ready",
+      TypeKindName::toName(kind_));
+}
+
+// This is the unsafe older implementation of toJson. It is kept here for
+// backward compatibility with Meta's internal python bindings.
+std::string Variant::toJsonUnsafe(const TypePtr& type) const {
+  if (isNull()) {
+    return "null";
+  }
+
+  switch (kind_) {
+    case TypeKind::MAP: {
+      auto& map = value<TypeKind::MAP>();
+      std::string b{};
+      b += "[";
+      bool first = true;
+      for (auto& pair : map) {
+        if (!first) {
+          b += ",";
+        }
+        b += "{\"key\":";
+        b += pair.first.toJsonUnsafe();
+        b += ",\"value\":";
+        b += pair.second.toJsonUnsafe();
+        b += "}";
+        first = false;
+      }
+      b += "]";
+      return b;
+    }
+    case TypeKind::ROW: {
+      auto& row = value<TypeKind::ROW>();
+      std::string b{};
+      b += "[";
+      bool first = true;
+      for (auto& v : row) {
+        if (!first) {
+          b += ",";
+        }
+        b += v.toJsonUnsafe();
+
+        first = false;
+      }
+      b += "]";
+      return b;
+    }
+    case TypeKind::ARRAY: {
+      auto& array = value<TypeKind::ARRAY>();
+      std::string b{};
+      b += "[";
+      bool first = true;
+      for (auto& v : array) {
+        if (!first) {
+          b += ",";
+        }
+        b += v.toJsonUnsafe();
+        first = false;
+      }
+      b += "]";
+      return b;
+    }
+    case TypeKind::VARBINARY: {
+      auto& str = value<TypeKind::VARBINARY>();
+      auto encoded = encoding::Base64::encode(str);
+      return '"' + encoded + '"';
+    }
+    case TypeKind::VARCHAR: {
+      auto& str = value<TypeKind::VARCHAR>();
+      std::string target;
+      folly::json::escapeString(str, target, getOpts());
+      return target;
+    }
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK(type && type->isLongDecimal());
+      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+    }
+    case TypeKind::TINYINT:
+      [[fallthrough]];
+    case TypeKind::SMALLINT:
+      [[fallthrough]];
+    case TypeKind::INTEGER:
+      if (type->isDate()) {
+        return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
+      }
+      [[fallthrough]];
+    case TypeKind::BIGINT:
+      if (type && type->isShortDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
+      }
+      [[fallthrough]];
+    case TypeKind::BOOLEAN: {
+      auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
+      if (converted.isNull()) {
+        return "null";
+      } else {
+        return converted.value<TypeKind::VARCHAR>();
+      }
+    }
+    case TypeKind::REAL: {
+      return stringifyFloatingPointerValue<float>(value<TypeKind::REAL>());
+    }
+    case TypeKind::DOUBLE: {
+      return stringifyFloatingPointerValue<double>(value<TypeKind::DOUBLE>());
+    }
+    case TypeKind::TIMESTAMP: {
+      auto& timestamp = value<TypeKind::TIMESTAMP>();
+      return '"' + timestamp.toString() + '"';
+    }
+    case TypeKind::OPAQUE: {
+      // Although this is not used for deserialization, we need to include the
+      // real data because commonExpressionEliminationRules uses
+      // CallTypedExpr.toString as key, which ends up using this string.
+      // Opaque types that want to use common expression elimination need to
+      // make their serialization deterministic.
+      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE>();
+      auto serializeFunction = capsule.type->getSerializeFunc();
+      return "Opaque<type:" + capsule.type->toString() + ",value:\"" +
+          serializeFunction(capsule.obj) + "\">";
+    }
+    case TypeKind::FUNCTION:
+    case TypeKind::UNKNOWN:
+    case TypeKind::INVALID:
+      VELOX_NYI();
+  }
+
+  VELOX_UNSUPPORTED(
+      "Unsupported: given type {} is not json-ready",
+      TypeKindName::toName(kind_));
 }
 
 void serializeOpaque(
@@ -327,11 +626,10 @@ void serializeOpaque(
   }
 }
 
-folly::dynamic variant::serialize() const {
+folly::dynamic Variant::serialize() const {
   folly::dynamic variantObj = folly::dynamic::object;
 
-  variantObj["type"] = std::string(
-      VELOX_STATIC_FIELD_DYNAMIC_DISPATCH_ALL(TypeTraits, name, kind_));
+  variantObj["type"] = std::string(TypeKindName::toName(kind_));
   auto& objValue = variantObj["value"];
   if (isNull()) {
     objValue = nullptr;
@@ -353,9 +651,9 @@ folly::dynamic variant::serialize() const {
       break;
     }
     case TypeKind::ARRAY: {
-      auto& row = value<TypeKind::ARRAY>();
+      auto& array = value<TypeKind::ARRAY>();
       folly::dynamic arr = folly::dynamic::array;
-      for (auto& v : row) {
+      for (auto& v : array) {
         arr.push_back(v.serialize());
       }
       objValue = std::move(arr);
@@ -409,7 +707,7 @@ folly::dynamic variant::serialize() const {
     }
     case TypeKind::TIMESTAMP: {
       auto ts = value<TypeKind::TIMESTAMP>();
-      variantObj["value"] = -1; // Not used, but cannot be null.
+      objValue = -1; // Not used, but cannot be null.
       variantObj["seconds"] = ts.getSeconds();
       variantObj["nanos"] = ts.getNanos();
       break;
@@ -424,7 +722,7 @@ folly::dynamic variant::serialize() const {
   return variantObj;
 }
 
-variant deserializeOpaque(const folly::dynamic& variantobj) {
+Variant deserializeOpaque(const folly::dynamic& variantobj) {
   auto typ = folly::parseJson(variantobj["opaque_type"].asString());
   auto opaqueType =
       std::dynamic_pointer_cast<const OpaqueType>(Type::create(typ));
@@ -432,7 +730,7 @@ variant deserializeOpaque(const folly::dynamic& variantobj) {
   try {
     auto deserializeFunc = opaqueType->getDeserializeFunc();
     auto value = variantobj["value"].asString();
-    return variant::opaque(deserializeFunc(value), opaqueType);
+    return Variant::opaque(deserializeFunc(value), opaqueType);
   } catch (VeloxRuntimeError& ex) {
     // Re-throw error for backwards compatibility.
     // Want to return error_code::kNotImplemented rather
@@ -440,58 +738,59 @@ variant deserializeOpaque(const folly::dynamic& variantobj) {
     VELOX_NYI(ex.message());
   }
 }
-variant variant::create(const folly::dynamic& variantobj) {
-  TypeKind kind = mapNameToTypeKind(variantobj["type"].asString());
+
+Variant Variant::create(const folly::dynamic& variantobj) {
+  TypeKind kind = TypeKindName::toTypeKind(variantobj["type"].asString());
   const folly::dynamic& obj = variantobj["value"];
 
   if (obj.isNull()) {
-    return variant::null(kind);
+    return Variant::null(kind);
   }
   switch (kind) {
     case TypeKind::MAP: {
-      std::map<variant, variant> map;
+      std::map<Variant, Variant> map;
       const folly::dynamic& keys = obj["keys"];
       const folly::dynamic& values = obj["values"];
       VELOX_USER_CHECK(keys.isArray() && values.isArray());
       VELOX_USER_CHECK_EQ(keys.size(), values.size());
       for (size_t idx = 0; idx < keys.size(); ++idx) {
-        auto first = variant::create(keys[idx]);
-        auto second = variant::create(values[idx]);
-        map.insert(std::pair<variant, variant>(first, second));
+        auto first = Variant::create(keys[idx]);
+        auto second = Variant::create(values[idx]);
+        map.insert(std::pair<Variant, Variant>(first, second));
       }
-      return variant::map(map);
+      return Variant::map(map);
     }
     case TypeKind::ROW:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::ARRAY: {
       VELOX_USER_CHECK(kind == TypeKind::ARRAY || kind == TypeKind::ROW);
-      std::vector<variant> values;
+      std::vector<Variant> values;
       for (auto& val : obj) {
-        values.push_back(variant::create(val));
+        values.push_back(Variant::create(val));
       }
-      return kind == TypeKind::ARRAY ? variant::array(values)
-                                     : variant::row(values);
+      return kind == TypeKind::ARRAY ? Variant::array(values)
+                                     : Variant::row(values);
     }
 
     case TypeKind::VARBINARY: {
       auto str = obj.asString();
       auto result = encoding::Base64::decode(str);
-      return variant::binary(std::move(result));
+      return Variant::binary(std::move(result));
     }
     case TypeKind::VARCHAR:
-      return variant::create<TypeKind::VARCHAR>(obj.asString());
+      return Variant::create<TypeKind::VARCHAR>(obj.asString());
     case TypeKind::TINYINT:
-      return variant::create<TypeKind::TINYINT>(obj.asInt());
+      return Variant::create<TypeKind::TINYINT>(obj.asInt());
     case TypeKind::SMALLINT:
-      return variant::create<TypeKind::SMALLINT>(obj.asInt());
+      return Variant::create<TypeKind::SMALLINT>(obj.asInt());
     case TypeKind::INTEGER:
-      return variant::create<TypeKind::INTEGER>(obj.asInt());
+      return Variant::create<TypeKind::INTEGER>(obj.asInt());
     case TypeKind::BIGINT:
-      return variant::create<TypeKind::BIGINT>(obj.asInt());
+      return Variant::create<TypeKind::BIGINT>(obj.asInt());
     case TypeKind::HUGEINT:
-      return variant::create<TypeKind::HUGEINT>(obj.asInt());
+      return Variant::create<TypeKind::HUGEINT>(obj.asInt());
     case TypeKind::BOOLEAN: {
-      return variant(obj.asBool());
+      return Variant(obj.asBool());
     }
     case TypeKind::REAL:
       if (obj.isInt()) {
@@ -499,20 +798,20 @@ variant variant::create(const folly::dynamic& variantobj) {
         // to int64 instead of double, and asDouble() will throw
         // "folly::ConversionError: Loss of precision", so we do
         // the check here to make it more robust.
-        return variant::create<TypeKind::REAL>(obj.asInt());
+        return Variant::create<TypeKind::REAL>(obj.asInt());
       }
-      return variant::create<TypeKind::REAL>(obj.asDouble());
+      return Variant::create<TypeKind::REAL>(obj.asDouble());
     case TypeKind::DOUBLE: {
       if (obj.isInt()) {
-        return variant::create<TypeKind::DOUBLE>(obj.asInt());
+        return Variant::create<TypeKind::DOUBLE>(obj.asInt());
       }
-      return variant::create<TypeKind::DOUBLE>(obj.asDouble());
+      return Variant::create<TypeKind::DOUBLE>(obj.asDouble());
     }
     case TypeKind::OPAQUE: {
       return deserializeOpaque(variantobj);
     }
     case TypeKind::TIMESTAMP: {
-      return variant::create<TypeKind::TIMESTAMP>(Timestamp(
+      return Variant::create<TypeKind::TIMESTAMP>(Timestamp(
           variantobj["seconds"].asInt(), variantobj["nanos"].asInt()));
     }
     case TypeKind::INVALID:
@@ -520,81 +819,135 @@ variant variant::create(const folly::dynamic& variantobj) {
 
     default:
       VELOX_UNSUPPORTED(
-          "specified object can not be converted to variant ",
+          "specified object can not be converted to Variant: {}",
           variantobj["type"].asString());
   }
 }
 
-uint64_t variant::hash() const {
-  uint64_t hash = 0;
+template <TypeKind KIND>
+bool Variant::lessThan(const Variant& other) const {
+  using namespace facebook::velox::util::floating_point;
+  if (isNull() && !other.isNull()) {
+    return true;
+  }
+  if (isNull() || other.isNull()) {
+    return false;
+  }
+  using T = typename TypeTraits<KIND>::NativeType;
+
+  if constexpr (kindCanProvideCustomComparison<KIND>::value) {
+    if (usesCustomComparison_) {
+      return customComparisonType<KIND>()->compare(
+                 value<KIND>(), other.value<KIND>()) < 0;
+    }
+  }
+
+  if constexpr (std::is_floating_point_v<T>) {
+    return NaNAwareLessThan<T>{}(value<KIND>(), other.value<KIND>());
+  }
+  return value<KIND>() < other.value<KIND>();
+}
+
+bool Variant::operator<(const Variant& other) const {
+  if (other.kind_ != this->kind_) {
+    return other.kind_ < this->kind_;
+  }
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(lessThan, kind_, other);
+}
+
+template <TypeKind KIND>
+bool Variant::equals(const Variant& other) const {
+  using namespace facebook::velox::util::floating_point;
+  if (isNull() || other.isNull()) {
+    return false;
+  }
+  using T = typename TypeTraits<KIND>::NativeType;
+
+  if constexpr (kindCanProvideCustomComparison<KIND>::value) {
+    if (usesCustomComparison_) {
+      return customComparisonType<KIND>()->compare(
+                 value<KIND>(), other.value<KIND>()) == 0;
+    }
+  }
+
+  if constexpr (std::is_floating_point_v<T>) {
+    return NaNAwareEquals<T>{}(value<KIND>(), other.value<KIND>());
+  }
+  return value<KIND>() == other.value<KIND>();
+}
+
+bool Variant::equals(const Variant& other) const {
+  if (other.kind_ != this->kind_) {
+    return false;
+  }
+  if (other.isNull()) {
+    return this->isNull();
+  }
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, other);
+}
+
+template <TypeKind KIND>
+uint64_t Variant::hash() const {
+  using namespace facebook::velox::util::floating_point;
+  using T = typename TypeTraits<KIND>::NativeType;
+
+  if constexpr (kindCanProvideCustomComparison<KIND>::value) {
+    if (usesCustomComparison_) {
+      return customComparisonType<KIND>()->hash(value<KIND>());
+    }
+  }
+
+  if constexpr (std::is_floating_point_v<T>) {
+    return NaNAwareHash<T>{}(value<KIND>());
+  }
+
+  return folly::Hash{}(value<KIND>());
+}
+
+template <>
+uint64_t Variant::hash<TypeKind::ARRAY>() const {
+  const auto& arrayVariant = value<TypeKind::ARRAY>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < arrayVariant.size(); ++i) {
+    hash = bits::hashMix(hash, arrayVariant[i].hash());
+  }
+  return hash;
+}
+
+template <>
+uint64_t Variant::hash<TypeKind::ROW>() const {
+  const auto& rowVariant = value<TypeKind::ROW>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < rowVariant.size(); ++i) {
+    const auto childHash = rowVariant[i].hash();
+    hash = (i == 0 ? childHash : bits::hashMix(hash, childHash));
+  }
+  return hash;
+}
+
+template <>
+uint64_t Variant::hash<TypeKind::TIMESTAMP>() const {
+  auto timestampValue = value<TypeKind::TIMESTAMP>();
+  return folly::Hash{}(timestampValue.getSeconds(), timestampValue.getNanos());
+}
+
+template <>
+uint64_t Variant::hash<TypeKind::MAP>() const {
+  const auto& mapVariant = value<TypeKind::MAP>();
+  uint64_t hash = bits::kNullHash;
+  for (const auto& [key, value] : mapVariant) {
+    const auto elementHash = bits::hashMix(key.hash(), value.hash());
+    hash = bits::commutativeHashMix(hash, elementHash);
+  }
+  return hash;
+}
+
+uint64_t Variant::hash() const {
   if (isNull()) {
-    return folly::Hash{}(static_cast<int32_t>(kind_));
+    return bits::kNullHash;
   }
 
-  switch (kind_) {
-    case TypeKind::BIGINT:
-      return folly::Hash{}(value<TypeKind::BIGINT>());
-    case TypeKind::HUGEINT:
-      return folly::Hash{}(value<TypeKind::HUGEINT>());
-    case TypeKind::INTEGER:
-      return folly::Hash{}(value<TypeKind::INTEGER>());
-    case TypeKind::SMALLINT:
-      return folly::Hash{}(value<TypeKind::SMALLINT>());
-    case TypeKind::TINYINT:
-      return folly::Hash{}(value<TypeKind::TINYINT>());
-    case TypeKind::BOOLEAN:
-      return folly::Hash{}(value<TypeKind::BOOLEAN>());
-    case TypeKind::REAL:
-      return folly::Hash{}(value<TypeKind::REAL>());
-    case TypeKind::DOUBLE:
-      return folly::Hash{}(value<TypeKind::DOUBLE>());
-    case TypeKind::VARBINARY:
-      return folly::Hash{}(value<TypeKind::VARBINARY>());
-    case TypeKind::VARCHAR:
-      return folly::Hash{}(value<TypeKind::VARCHAR>());
-    case TypeKind::ARRAY: {
-      auto& arrayVariant = value<TypeKind::ARRAY>();
-      auto hasher = folly::Hash{};
-      for (int32_t i = 0; i < arrayVariant.size(); i++) {
-        hash = folly::hash::hash_combine_generic(
-            hasher, hash, arrayVariant[i].hash());
-      }
-      return hash;
-    }
-    case TypeKind::ROW: {
-      auto hasher = folly::Hash{};
-      auto& rowVariant = value<TypeKind::ROW>();
-      for (int32_t i = 0; i < rowVariant.size(); i++) {
-        hash = folly::hash::hash_combine_generic(
-            hasher, hash, rowVariant[i].hash());
-      }
-      return hash;
-    }
-    case TypeKind::TIMESTAMP: {
-      auto timestampValue = value<TypeKind::TIMESTAMP>();
-      return folly::Hash{}(
-          timestampValue.getSeconds(), timestampValue.getNanos());
-    }
-    case TypeKind::MAP: {
-      auto hasher = folly::Hash{};
-      auto& mapVariant = value<TypeKind::MAP>();
-      uint64_t combinedKeyHash = 0, combinedValueHash = 0;
-      uint64_t singleKeyHash = 0, singleValueHash = 0;
-      for (auto it = mapVariant.begin(); it != mapVariant.end(); ++it) {
-        singleKeyHash = it->first.hash();
-        singleValueHash = it->second.hash();
-        combinedKeyHash = folly::hash::commutative_hash_combine_value_generic(
-            combinedKeyHash, hasher, singleKeyHash);
-        combinedValueHash = folly::hash::commutative_hash_combine_value_generic(
-            combinedValueHash, hasher, singleValueHash);
-      }
-
-      return folly::hash::hash_combine_generic(
-          folly::Hash{}, combinedKeyHash, combinedValueHash);
-    }
-    default:
-      VELOX_NYI();
-  }
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
 }
 
 namespace {
@@ -604,7 +957,7 @@ namespace {
 // https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
 // for details.
 template <TypeKind KIND, typename TFloat>
-bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
+bool equalsFloatingPointWithEpsilonTyped(const Variant& a, const Variant& b) {
   TFloat f1 = a.value<KIND>();
   TFloat f2 = b.value<KIND>();
 
@@ -612,6 +965,10 @@ bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
   // be equal as well.
   if (std::isnan(f1) && std::isnan(f2)) {
     return true;
+  }
+  if (std::isinf(f1)) {
+    // fabs(inf - inf) is indeterminate.
+    return f1 == f2;
   }
 
   // Check if the numbers are really close -- needed
@@ -625,7 +982,7 @@ bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
   return fabs(f1 - f2) <= largest * 2 * FLT_EPSILON;
 }
 
-bool equalsFloatingPointWithEpsilon(const variant& a, const variant& b) {
+bool equalsFloatingPointWithEpsilon(const Variant& a, const Variant& b) {
   if (a.isNull() or b.isNull()) {
     return false;
   }
@@ -639,7 +996,7 @@ bool equalsFloatingPointWithEpsilon(const variant& a, const variant& b) {
 }
 } // namespace
 
-bool variant::lessThanWithEpsilon(const variant& other) const {
+bool Variant::lessThanWithEpsilon(const Variant& other) const {
   if (other.kind_ != this->kind_) {
     return other.kind_ < this->kind_;
   }
@@ -658,23 +1015,244 @@ bool variant::lessThanWithEpsilon(const variant& other) const {
     return *this < other;
   }
 
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(lessThan, kind_, *this, other);
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(lessThan, kind_, other);
 }
+
+namespace {
+
+// Compare variants of Array or Row type.
+template <TypeKind KIND>
+bool compareComplexTypeWithEpsilon(const Variant& left, const Variant& right) {
+  auto& leftContainer = left.value<KIND>();
+  auto& rightContainer = right.value<KIND>();
+  if (leftContainer.size() != rightContainer.size()) {
+    return false;
+  }
+  for (int32_t i = 0; i < leftContainer.size(); i++) {
+    if (!leftContainer[i].equalsWithEpsilon(rightContainer[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Compare variants of Map type.
+template <>
+bool compareComplexTypeWithEpsilon<TypeKind::MAP>(
+    const Variant& left,
+    const Variant& right) {
+  auto& leftMap = left.value<TypeKind::MAP>();
+  auto& rightMap = right.value<TypeKind::MAP>();
+  if (leftMap.size() != rightMap.size()) {
+    return false;
+  }
+  for (auto it = leftMap.begin(); it != leftMap.end(); ++it) {
+    auto otherIt = rightMap.find(it->first);
+    if (otherIt == rightMap.end()) {
+      return false;
+    }
+    if (!it->second.equalsWithEpsilon(otherIt->second)) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
 
 // Uses kEpsilon to compare floating point types (REAL and DOUBLE).
 // For testing purposes.
-bool variant::equalsWithEpsilon(const variant& other) const {
+bool Variant::equalsWithEpsilon(const Variant& other) const {
   if (other.kind_ != this->kind_) {
     return false;
   }
-  if (other.isNull()) {
-    return this->isNull();
+  if (other.isNull() || this->isNull()) {
+    return other.isNull() && this->isNull();
   }
   if ((kind_ == TypeKind::REAL) or (kind_ == TypeKind::DOUBLE)) {
     return equalsFloatingPointWithEpsilon(*this, other);
   }
 
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, *this, other);
+  switch (kind_) {
+    case TypeKind::ARRAY:
+      return compareComplexTypeWithEpsilon<TypeKind::ARRAY>(*this, other);
+    case TypeKind::MAP:
+      return compareComplexTypeWithEpsilon<TypeKind::MAP>(*this, other);
+    case TypeKind::ROW:
+      return compareComplexTypeWithEpsilon<TypeKind::ROW>(*this, other);
+    default:
+      return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, other);
+  }
+}
+
+void Variant::verifyArrayElements(const std::vector<Variant>& inputs) {
+  if (!inputs.empty()) {
+    auto elementTypeKind = TypeKind::UNKNOWN;
+    // Find the typeKind from the first non-null element.
+    int i = 0;
+    for (; i < inputs.size(); ++i) {
+      if (!inputs[i].isNull()) {
+        elementTypeKind = inputs[i].kind();
+        break;
+      }
+    }
+    // Verify that the remaining non-null elements match.
+    for (; i < inputs.size(); ++i) {
+      if (!inputs[i].isNull()) {
+        VELOX_CHECK_EQ(
+            elementTypeKind,
+            inputs[i].kind(),
+            "All array elements must be of the same kind");
+      }
+    }
+  }
+}
+
+bool Variant::equalsWithNullEqualsNull(const Variant& other) const {
+  if (other.kind_ != this->kind_) {
+    return false;
+  }
+  return dispatchDynamicVariantEquality(*this, other, true);
+}
+
+TypePtr Variant::inferType() const {
+  switch (kind_) {
+    case TypeKind::MAP: {
+      TypePtr keyType;
+      TypePtr valueType;
+      if (!isNull()) {
+        const auto& m = map();
+        for (const auto& [key, value] : m) {
+          if (keyType == nullptr && !key.isNull()) {
+            keyType = key.inferType();
+          }
+          if (valueType == nullptr && !value.isNull()) {
+            valueType = value.inferType();
+          }
+          if (keyType && valueType) {
+            break;
+          }
+        }
+      }
+      return MAP(
+          keyType ? keyType : UNKNOWN(), valueType ? valueType : UNKNOWN());
+    }
+    case TypeKind::ROW: {
+      std::vector<TypePtr> children;
+      if (!isNull()) {
+        const auto& r = row();
+        children.reserve(r.size());
+        for (auto& v : r) {
+          children.push_back(v.inferType());
+        }
+      }
+      return ROW(std::move(children));
+    }
+    case TypeKind::ARRAY: {
+      TypePtr elementType = UNKNOWN();
+      if (!isNull()) {
+        const auto& a = array();
+        if (!a.empty()) {
+          elementType = a.at(0).inferType();
+        }
+      }
+      return ARRAY(std::move(elementType));
+    }
+    case TypeKind::OPAQUE: {
+      if (isNull()) {
+        return UNKNOWN();
+      }
+      return value<TypeKind::OPAQUE>().type;
+    }
+    case TypeKind::UNKNOWN: {
+      return UNKNOWN();
+    }
+    default:
+      return createScalarType(kind_);
+  }
+}
+
+bool Variant::isTypeCompatible(const TypePtr& type) const {
+  if (kind_ == TypeKind::UNKNOWN) {
+    return true;
+  }
+
+  if (kind_ != type->kind()) {
+    return false;
+  }
+
+  switch (kind_) {
+    case TypeKind::ARRAY: {
+      if (!isNull()) {
+        const auto& a = array();
+        if (!a.empty()) {
+          if (!a[0].isTypeCompatible(type->childAt(0))) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+    case TypeKind::MAP: {
+      if (!isNull()) {
+        bool keyTypeChecked = false;
+        bool valueTypeChecked = false;
+
+        const auto& m = map();
+        for (auto& [key, value] : m) {
+          if (!keyTypeChecked && !key.isNull()) {
+            if (!key.isTypeCompatible(type->childAt(0))) {
+              return false;
+            }
+            keyTypeChecked = true;
+          }
+          if (!valueTypeChecked && !value.isNull()) {
+            if (!value.isTypeCompatible(type->childAt(1))) {
+              return false;
+            }
+            valueTypeChecked = true;
+          }
+
+          if (keyTypeChecked && valueTypeChecked) {
+            break;
+          }
+        }
+      }
+
+      return true;
+    }
+    case TypeKind::ROW: {
+      if (!isNull()) {
+        const auto& r = row();
+        if (r.size() != type->size()) {
+          return false;
+        }
+
+        for (auto i = 0; i < r.size(); ++i) {
+          if (!r[i].isTypeCompatible(type->childAt(i))) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+    default:
+      return true;
+  }
 }
 
 } // namespace facebook::velox
+
+namespace folly {
+
+// For opaque values, we hash the shared_ptr<void> which will hash the
+// underlying pointer.
+template <>
+struct hasher<facebook::velox::detail::OpaqueCapsule> {
+  size_t operator()(const facebook::velox::detail::OpaqueCapsule& key) const {
+    return Hash()(key.obj);
+  }
+};
+
+} // namespace folly

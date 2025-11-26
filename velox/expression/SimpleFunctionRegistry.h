@@ -24,8 +24,11 @@
 namespace facebook::velox::exec {
 
 template <typename T>
-const std::shared_ptr<const T>& singletonUdfMetadata() {
-  static auto instance = std::make_shared<const T>();
+const std::shared_ptr<const T>& singletonUdfMetadata(
+    bool defaultNullBehavior,
+    const std::vector<exec::SignatureVariable>& constraints = {}) {
+  static auto instance =
+      std::make_shared<const T>(defaultNullBehavior, constraints);
   return instance;
 }
 
@@ -52,25 +55,43 @@ struct FunctionEntry {
   const FunctionFactory factory_;
 };
 
-using SignatureMap =
-    std::unordered_map<FunctionSignature, std::unique_ptr<const FunctionEntry>>;
+using SignatureMap = std::unordered_map<
+    FunctionSignature,
+    std::vector<std::unique_ptr<const FunctionEntry>>>;
 using FunctionMap = std::unordered_map<std::string, SignatureMap>;
 
 class SimpleFunctionRegistry {
  public:
+  /// Register a UDF with the given aliases and constraints. If an alias already
+  /// exists and 'overwrite' is true, the existing entry in the function
+  /// registry is overwritten by the current UDF. If an alias already exists and
+  /// 'overwrite' is false, the current UDF is not registered with this alias.
+  /// This method returns true if all 'aliases' are registered successfully. It
+  /// returns false if any alias in 'aliases' already exists in the registry and
+  /// is not overwritten.
   template <typename UDF>
-  void registerFunction(const std::vector<std::string>& aliases = {}) {
-    const auto& metadata = singletonUdfMetadata<typename UDF::Metadata>();
-    const auto factory = [metadata]() { return CreateUdf<UDF>(); };
+  bool registerFunction(
+      const std::vector<std::string>& aliases,
+      const std::vector<exec::SignatureVariable>& constraints,
+      bool overwrite) {
+    const auto& metadata = singletonUdfMetadata<typename UDF::Metadata>(
+        UDF::is_default_null_behavior, constraints);
+    const auto factory = []() { return std::make_unique<UDF>(); };
 
     if (aliases.empty()) {
-      registerFunctionInternal(metadata->getName(), metadata, factory);
+      return registerFunctionInternal(
+          metadata->getName(), metadata, factory, overwrite);
     } else {
+      bool registered = true;
       for (const auto& name : aliases) {
-        registerFunctionInternal(name, metadata, factory);
+        registered &=
+            registerFunctionInternal(name, metadata, factory, overwrite);
       }
+      return registered;
     }
   }
+
+  void removeFunction(const std::string& name);
 
   std::vector<std::string> getFunctionNames() const {
     std::vector<std::string> result;
@@ -88,8 +109,14 @@ class SimpleFunctionRegistry {
     registeredFunctions_.withWLock([&](auto& map) { map.clear(); });
   }
 
+  std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+  getFunctionSignatureMap() const;
+
   std::vector<const FunctionSignature*> getFunctionSignatures(
       const std::string& name) const;
+
+  std::vector<std::pair<VectorFunctionMetadata, const FunctionSignature*>>
+  getFunctionSignaturesAndMetadata(const std::string& name) const;
 
   class ResolvedSimpleFunction {
    public:
@@ -102,33 +129,62 @@ class SimpleFunctionRegistry {
       return functionEntry_.createFunction();
     }
 
-    TypePtr& type() {
+    const TypePtr& type() const {
       return type_;
     }
 
-    const Metadata& getMetadata() const {
-      return functionEntry_.getMetadata();
+    std::string helpMessage(const std::string& name) const {
+      return functionEntry_.getMetadata().helpMessage(name);
+    }
+
+    std::string toDebugString() const {
+      return functionEntry_.getMetadata().toDebugString();
+    }
+
+    VectorFunctionMetadata metadata() const {
+      return VectorFunctionMetadata{
+          false,
+          functionEntry_.getMetadata().isDeterministic(),
+          functionEntry_.getMetadata().defaultNullBehavior()};
     }
 
    private:
     const FunctionEntry& functionEntry_;
-    TypePtr type_;
+    const TypePtr type_;
   };
 
   std::optional<ResolvedSimpleFunction> resolveFunction(
       const std::string& name,
-      const std::vector<TypePtr>& argTypes) const;
-
- private:
-  template <typename T>
-  static std::unique_ptr<T> CreateUdf() {
-    return std::make_unique<T>();
+      const std::vector<TypePtr>& argTypes) const {
+    std::vector<TypePtr> coercions;
+    return resolveFunction(name, argTypes, false, coercions);
   }
 
-  void registerFunctionInternal(
+  std::optional<ResolvedSimpleFunction> resolveFunctionWithCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      std::vector<TypePtr>& coercions) const {
+    return resolveFunction(name, argTypes, true, coercions);
+  }
+
+ private:
+  std::optional<ResolvedSimpleFunction> resolveFunction(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      bool allowCoercion,
+      std::vector<TypePtr>& coercions) const;
+
+  /// Registers a function with the given name and metadata. If an entry with
+  /// the name already exists and 'overwrite' is true, the existing entry is
+  /// overwritten. If an entry with the name already exists and 'overwrite' is
+  /// false, the function reigstry remain unchanged. This method returns true if
+  /// the function is successfully registered. It returns false if the function
+  /// registry remains unchanged.
+  bool registerFunctionInternal(
       const std::string& name,
       const std::shared_ptr<const Metadata>& metadata,
-      const FunctionFactory& factory);
+      const FunctionFactory& factory,
+      bool overwrite);
 
   folly::Synchronized<FunctionMap> registeredFunctions_;
 };
@@ -137,11 +193,21 @@ const SimpleFunctionRegistry& simpleFunctions();
 
 SimpleFunctionRegistry& mutableSimpleFunctions();
 
-// This function should be called once and alone.
+/// This function should be called once and alone.
+/// @param names Aliases for the function.
+/// @param constraints Additional constraints for variables used in function
+/// signature. Primarily used to specify rules for calculating precision and
+/// scale for decimal result types.
+/// @param overwrite If true, overwrites existing entries in the function
+/// registry with the same names.
 template <typename UDFHolder>
-void registerSimpleFunction(const std::vector<std::string>& names) {
-  mutableSimpleFunctions()
-      .registerFunction<SimpleFunctionAdapterFactoryImpl<UDFHolder>>(names);
+bool registerSimpleFunction(
+    const std::vector<std::string>& names,
+    const std::vector<exec::SignatureVariable>& constraints,
+    bool overwrite) {
+  return mutableSimpleFunctions()
+      .registerFunction<SimpleFunctionAdapterFactoryImpl<UDFHolder>>(
+          names, constraints, overwrite);
 }
 
 } // namespace facebook::velox::exec

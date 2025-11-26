@@ -26,11 +26,11 @@ class SelectiveStringDirectColumnReader
  public:
   using ValueType = StringView;
   SelectiveStringDirectColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     SelectiveColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
     blobStream_->seekToPosition(positionsProvider);
@@ -44,21 +44,21 @@ class SelectiveStringDirectColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void getValues(RowSet rows, VectorPtr* result) override {
+  void getValues(const RowSet& rows, VectorPtr* result) override {
     rawStringBuffer_ = nullptr;
     rawStringSize_ = 0;
     rawStringUsed_ = 0;
-    getFlatValues<StringView, StringView>(rows, result, type_);
+    getFlatValues<StringView, StringView>(rows, result, requestedType());
   }
 
  private:
   template <bool hasNulls>
   void skipInDecode(int32_t numValues, int32_t current, const uint64_t* nulls);
 
-  folly::StringPiece readValue(int32_t length);
+  std::string_view readValue(int32_t length);
 
   template <bool hasNulls, typename Visitor>
   void decode(const uint64_t* nulls, Visitor visitor);
@@ -66,18 +66,9 @@ class SelectiveStringDirectColumnReader
   template <typename TVisitor>
   void readWithVisitor(RowSet rows, TVisitor visitor);
 
-  template <typename TFilter, bool isDense, typename ExtractValues>
-  void readHelper(common::Filter* filter, RowSet rows, ExtractValues values);
-
-  template <bool isDense, typename ExtractValues>
-  void processFilter(
-      common::Filter* filter,
-      RowSet rows,
-      ExtractValues extractValues);
-
   void extractCrossBuffers(
       const int32_t* lengths,
-      const int32_t* starts,
+      const int64_t* starts,
       int32_t rowIndex,
       int32_t numValues);
 
@@ -85,14 +76,18 @@ class SelectiveStringDirectColumnReader
       int32_t startRow,
       const int32_t* rows,
       int32_t numRows,
-      int32_t* starts);
+      int64_t* starts);
 
   inline void extractNSparse(const int32_t* rows, int32_t row, int numRows);
 
   void extractSparse(const int32_t* rows, int32_t numRows);
 
   template <bool scatter, bool skip>
-  bool try8Consecutive(int32_t start, const int32_t* rows, int32_t row);
+  bool try8Consecutive(int64_t start, const int32_t* rows, int32_t row);
+
+  template <bool kScatter, bool kGreaterThan4>
+  bool
+  try8ConsecutiveSmall(const char* data, const uint16_t* offsets, int startRow);
 
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;

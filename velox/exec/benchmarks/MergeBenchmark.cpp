@@ -19,7 +19,7 @@
 
 #include <gflags/gflags.h>
 
-#include "velox/exec/TreeOfLosers.h"
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
 
 using namespace facebook::velox;
@@ -54,8 +54,8 @@ BENCHMARK_RELATIVE(wideArray) {
 }
 
 int main(int argc, char* argv[]) {
-  folly::init(&argc, &argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  folly::Init init{&argc, &argv};
+  ::gflags::ParseCommandLineFlags(&argc, &argv, true);
   MergeTestBase test;
   test.seed(1);
   narrow = test.makeTestData(100'000'000, 7);

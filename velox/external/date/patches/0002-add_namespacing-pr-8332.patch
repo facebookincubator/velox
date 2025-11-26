@@ -1,0 +1,50 @@
+diff --git a/fbcode/velox/external/date/date.h b/fbcode/velox/external/date/date.h
+--- a/fbcode/velox/external/date/date.h
++++ b/fbcode/velox/external/date/date.h
+@@ -86,6 +86,10 @@
+ #   pragma warning(disable : 4127)
+ #endif
+ 
++namespace facebook
++{
++namespace velox
++{
+ namespace date
+ {
+ 
+@@ -7933,7 +7937,9 @@
+                  detail::get_units<CharT>(typename Period::type{});
+ }
+ 
+-}  // namespace date
++} // namespace date
++} // namespace velox
++} // namespace facebook
+ 
+ #ifdef _MSC_VER
+ #   pragma warning(pop)
+diff --git a/fbcode/velox/external/date/iso_week.h b/fbcode/velox/external/date/iso_week.h
+--- a/fbcode/velox/external/date/iso_week.h
++++ b/fbcode/velox/external/date/iso_week.h
+@@ -27,12 +27,6 @@
+ 
+ #include <climits>
+ 
+-namespace facebook
+-{
+-namespace velox
+-{
+-namespace date
+-{
+ namespace iso_week
+ {
+ 
+@@ -1763,8 +1757,5 @@
+ }
+ 
+ } // namespace iso_week
+-} // namespace date
+-} // namespace velox
+-} // namespace facebook
+ 
+ #endif  // ISO_WEEK_H

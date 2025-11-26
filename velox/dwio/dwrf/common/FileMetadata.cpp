@@ -17,7 +17,7 @@
 
 namespace facebook::velox::dwrf {
 namespace detail {
-using dwio::common::CompressionKind;
+using common::CompressionKind;
 
 CompressionKind orcCompressionToCompressionKind(
     proto::orc::CompressionKind compression) {
@@ -36,6 +36,29 @@ CompressionKind orcCompressionToCompressionKind(
       return CompressionKind::CompressionKind_ZSTD;
   }
   VELOX_FAIL("Unknown compression kind: {}", CompressionKind_Name(compression));
+}
+
+static proto::orc::CompressionKind compressionKindToOrcCompression(
+    CompressionKind compressionKind) {
+  switch (compressionKind) {
+    case CompressionKind::CompressionKind_NONE:
+      return proto::orc::CompressionKind::NONE;
+    case CompressionKind::CompressionKind_ZLIB:
+      return proto::orc::CompressionKind::ZLIB;
+    case CompressionKind::CompressionKind_SNAPPY:
+      return proto::orc::CompressionKind::SNAPPY;
+    case CompressionKind::CompressionKind_LZO:
+      return proto::orc::CompressionKind::LZO;
+    case CompressionKind::CompressionKind_ZSTD:
+      return proto::orc::CompressionKind::ZSTD;
+    case CompressionKind::CompressionKind_LZ4:
+      return proto::orc::CompressionKind::LZ4;
+    case CompressionKind::CompressionKind_GZIP:
+    default:
+      VELOX_FAIL(
+          "Unknown compression kind: {}",
+          compressionKindToString(compressionKind));
+  }
 }
 } // namespace detail
 
@@ -93,21 +116,37 @@ TypeKind TypeWrapper::kind() const {
     // Date is a logical type of INTEGER (for the number of days since EPOCH).
     case proto::orc::Type_Kind_DATE:
       return TypeKind::INTEGER;
-    case proto::orc::Type_Kind_DECIMAL:
+    case proto::orc::Type_Kind_DECIMAL: {
+      if (orcPtr()->precision() <= velox::ShortDecimalType::kMaxPrecision) {
+        return TypeKind::BIGINT;
+      } else {
+        return TypeKind::HUGEINT;
+      }
+    }
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
-      DWIO_RAISE(
-          "{} not supported yet.",
-          proto::orc::Type_Kind_Name(orcPtr()->kind()));
+      VELOX_FAIL(
+          fmt::format(
+              "{} not supported yet.",
+              proto::orc::Type_Kind_Name(orcPtr()->kind())));
     default:
       VELOX_FAIL("Unknown type kind: {}", Type_Kind_Name(orcPtr()->kind()));
   }
 }
 
-dwio::common::CompressionKind PostScript::compression() const {
+common::CompressionKind PostScript::compression() const {
   return format_ == DwrfFormat::kDwrf
-      ? static_cast<dwio::common::CompressionKind>(dwrfPtr()->compression())
+      ? static_cast<common::CompressionKind>(dwrfPtr()->compression())
       : detail::orcCompressionToCompressionKind(orcPtr()->compression());
+}
+
+void PostScriptWriteWrapper::setCompression(
+    common::CompressionKind compressionKind) {
+  format_ == DwrfFormat::kDwrf
+      ? dwrfPtr()->set_compression(
+            static_cast<proto::CompressionKind>(compressionKind))
+      : orcPtr()->set_compression(
+            detail::compressionKindToOrcCompression(compressionKind));
 }
 
 } // namespace facebook::velox::dwrf

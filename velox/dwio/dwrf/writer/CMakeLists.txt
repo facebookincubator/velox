@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_dwio_dwrf_writer
   ColumnWriter.cpp
   FlatMapColumnWriter.cpp
@@ -24,18 +24,21 @@ add_library(
   Writer.cpp
   WriterBase.cpp
   WriterContext.cpp
-  WriterSink.cpp)
+  WriterSink.cpp
+)
 
-target_link_libraries(
+velox_link_libraries(
   velox_dwio_dwrf_writer
+  velox_common_hyperloglog
   velox_dwio_common
   velox_dwio_dwrf_common
   velox_dwio_dwrf_utils
+  velox_exec
   velox_process
   velox_time
   velox_vector
   Boost::headers
   lz4::lz4
-  lzo2::lzo2
   zstd::zstd
-  ZLIB::ZLIB)
+  ZLIB::ZLIB
+)

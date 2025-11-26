@@ -28,10 +28,7 @@
 #include "velox/dwio/common/RandGen.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class retriable_error : public std::runtime_error {
  public:
@@ -57,27 +54,28 @@ using RetryDuration =
     std::chrono::duration<float, std::chrono::milliseconds::period>;
 
 namespace retrypolicy {
+
 class IRetryPolicy {
  public:
   virtual ~IRetryPolicy() = default;
-  virtual folly::Optional<RetryDuration> nextWaitTime() = 0;
+  virtual std::optional<RetryDuration> nextWaitTime() = 0;
+  virtual void start() {}
 };
 
 class KAttempts : public IRetryPolicy {
  public:
   explicit KAttempts(std::vector<RetryDuration> durations)
-      : index_(0), durations_(std::move(durations)) {}
+      : durations_{std::move(durations)} {}
 
-  folly::Optional<RetryDuration> nextWaitTime() {
+  std::optional<RetryDuration> nextWaitTime() override {
     if (index_ < durations_.size()) {
-      return folly::Optional<RetryDuration>(durations_[index_++]);
-    } else {
-      return folly::Optional<RetryDuration>();
+      return durations_[index_++];
     }
+    return std::nullopt;
   }
 
  private:
-  size_t index_;
+  size_t index_{0};
   const std::vector<RetryDuration> durations_;
 };
 
@@ -86,27 +84,33 @@ class ExponentialBackoff : public IRetryPolicy {
   ExponentialBackoff(
       RetryDuration start,
       RetryDuration max,
-      uint64_t maxRetries = std::numeric_limits<uint64_t>::max(),
-      RetryDuration maxTotal = RetryDuration::zero())
+      uint64_t maxRetries,
+      RetryDuration maxTotal,
+      bool countExecutionTime)
       : maxWait_(max),
         maxTotal_(maxTotal),
+        countExecutionTime_(countExecutionTime),
         nextWait_(start),
-        total_(0),
+        totalWait_(0),
         retriesLeft_(maxRetries) {
     DWIO_ENSURE_LE(start.count(), max.count());
     DWIO_ENSURE(maxTotal_.count() == 0 || maxTotal_.count() > start.count());
   }
 
-  folly::Optional<RetryDuration> nextWaitTime() {
-    if (retriesLeft_ == 0 || (maxTotal_.count() > 0 && total_ >= maxTotal_)) {
-      return folly::Optional<RetryDuration>();
+  void start() override {
+    startTime_ = std::chrono::system_clock::now();
+  }
+
+  std::optional<RetryDuration> nextWaitTime() override {
+    if (retriesLeft_ == 0 || (maxTotal_.count() > 0 && total() >= maxTotal_)) {
+      return std::nullopt;
     }
 
     RetryDuration waitTime = nextWait_ + jitter();
     nextWait_ = std::min(nextWait_ + nextWait_, maxWait_);
     --retriesLeft_;
-    total_ += waitTime;
-    return folly::Optional<RetryDuration>(waitTime);
+    totalWait_ += waitTime;
+    return waitTime;
   }
 
  private:
@@ -114,10 +118,17 @@ class ExponentialBackoff : public IRetryPolicy {
     return RetryDuration(rand_.gen(folly::to<int64_t>(nextWait_.count()) / 2));
   }
 
+  RetryDuration total() const {
+    return countExecutionTime_ ? std::chrono::system_clock::now() - startTime_
+                               : totalWait_;
+  }
+
   const RetryDuration maxWait_;
   const RetryDuration maxTotal_;
+  const bool countExecutionTime_;
+  std::chrono::system_clock::time_point startTime_;
   RetryDuration nextWait_;
-  RetryDuration total_;
+  RetryDuration totalWait_;
   uint64_t retriesLeft_;
   RandGen rand_;
 };
@@ -142,27 +153,30 @@ class KAttemptsPolicyFactory : public IRetryPolicyFactory {
 };
 
 class ExponentialBackoffPolicyFactory : public IRetryPolicyFactory {
- private:
-  const RetryDuration start_;
-  const RetryDuration maxWait_;
-  const uint64_t maxRetries_;
-  const RetryDuration maxTotal_;
-
  public:
   ExponentialBackoffPolicyFactory(
       RetryDuration start,
       RetryDuration maxWait,
       uint64_t maxRetries = std::numeric_limits<uint64_t>::max(),
-      RetryDuration maxTotal = RetryDuration::zero())
+      RetryDuration maxTotal = RetryDuration::zero(),
+      bool countExecutionTime = false)
       : start_(start),
         maxWait_(maxWait),
         maxRetries_(maxRetries),
-        maxTotal_(maxTotal) {}
+        maxTotal_(maxTotal),
+        countExecutionTime_(countExecutionTime) {}
 
   std::unique_ptr<IRetryPolicy> getRetryPolicy() const {
     return std::make_unique<ExponentialBackoff>(
-        start_, maxWait_, maxRetries_, maxTotal_);
+        start_, maxWait_, maxRetries_, maxTotal_, countExecutionTime_);
   }
+
+ private:
+  const RetryDuration start_;
+  const RetryDuration maxWait_;
+  const uint64_t maxRetries_;
+  const RetryDuration maxTotal_;
+  const bool countExecutionTime_;
 };
 
 } // namespace retrypolicy
@@ -174,6 +188,7 @@ class RetryModule {
       F func,
       std::unique_ptr<retrypolicy::IRetryPolicy> policy,
       std::function<bool()> abortFunc = nullptr) {
+    policy->start();
     do {
       try {
         // If abort signal is triggered before func, no ops.
@@ -185,7 +200,7 @@ class RetryModule {
         return func();
       } catch (const retriable_error& error) {
         LOG(INFO) << "RetryModule caught retriable exception. " << error.what();
-        folly::Optional<RetryDuration> wait = policy->nextWaitTime();
+        auto wait = policy->nextWaitTime();
         if (wait.has_value()) {
           auto ms = wait.value().count();
           LOG(INFO) << "RetryModule : Waiting for " << ms
@@ -211,7 +226,4 @@ class RetryModule {
   }
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

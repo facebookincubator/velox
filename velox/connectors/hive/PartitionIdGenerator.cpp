@@ -16,11 +16,6 @@
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
-#include "velox/connectors/hive/HivePartitionUtil.h"
-#include "velox/dwio/catalog/fbhive/FileUtils.h"
-
-using namespace facebook::velox::dwio::catalog::fbhive;
-
 namespace facebook::velox::connector::hive {
 
 PartitionIdGenerator::PartitionIdGenerator(
@@ -28,20 +23,25 @@ PartitionIdGenerator::PartitionIdGenerator(
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
     memory::MemoryPool* pool)
-    : partitionChannels_(std::move(partitionChannels)),
+    : pool_(pool),
+      partitionChannels_(std::move(partitionChannels)),
       maxPartitions_(maxPartitions) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
     hashers_.emplace_back(
         exec::VectorHasher::create(inputType->childAt(channel), channel));
+    VELOX_USER_CHECK(
+        hashers_.back()->typeSupportsValueIds(),
+        "Unsupported partition type: {}.",
+        inputType->childAt(channel)->toString());
   }
 
-  std::vector<std::string> partitionKeyNames;
   std::vector<TypePtr> partitionKeyTypes;
+  std::vector<std::string> partitionKeyNames;
   for (auto channel : partitionChannels_) {
-    partitionKeyNames.push_back(inputType->nameOf(channel));
     partitionKeyTypes.push_back(inputType->childAt(channel));
+    partitionKeyNames.push_back(inputType->nameOf(channel));
   }
 
   partitionValues_ = BaseVector::create<RowVector>(
@@ -58,8 +58,6 @@ void PartitionIdGenerator::run(
     raw_vector<uint64_t>& result) {
   const auto numRows = input->size();
   result.resize(numRows);
-
-  // TODO Check that there are no nulls in the partition keys.
 
   // Compute value IDs using VectorHashers and store these in 'result'.
   computeValueIds(input, result);
@@ -91,11 +89,6 @@ void PartitionIdGenerator::run(
   }
 }
 
-std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
-  return FileUtils::makePartName(
-      extractPartitionKeyValues(partitionValues_, partitionId));
-}
-
 void PartitionIdGenerator::computeValueIds(
     const RowVectorPtr& input,
     raw_vector<uint64_t>& valueIds) {
@@ -104,6 +97,9 @@ void PartitionIdGenerator::computeValueIds(
 
   bool rehash = false;
   for (auto& hasher : hashers_) {
+    // NOTE: for boolean column type, computeValueIds() always returns true and
+    // this might cause problem in case of multiple boolean partition columns as
+    // we might not set the multiplier properly.
     auto partitionVector = input->childAt(hasher->channel())->loadedVector();
     hasher->decode(*partitionVector, allRows_);
     if (!hasher->computeValueIds(allRows_, valueIds)) {
@@ -111,13 +107,16 @@ void PartitionIdGenerator::computeValueIds(
     }
   }
 
-  if (!rehash) {
+  if (!rehash && hasMultiplierSet_) {
     return;
   }
 
   uint64_t multiplier = 1;
   for (auto& hasher : hashers_) {
-    multiplier = hasher->enableValueIds(multiplier, 50);
+    hasMultiplierSet_ = true;
+    multiplier = hasher->typeKind() == TypeKind::BOOLEAN
+        ? hasher->enableValueRange(multiplier, 50)
+        : hasher->enableValueIds(multiplier, 50);
 
     VELOX_CHECK_NE(
         multiplier,
@@ -142,7 +141,7 @@ void PartitionIdGenerator::updateValueToPartitionIdMapping() {
 
   partitionIds_.clear();
 
-  raw_vector<uint64_t> newValueIds(numPartitions);
+  raw_vector<uint64_t> newValueIds(numPartitions, pool_);
   SelectivityVector rows(numPartitions);
   for (auto i = 0; i < hashers_.size(); ++i) {
     auto& hasher = hashers_[i];

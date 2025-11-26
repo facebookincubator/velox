@@ -15,29 +15,89 @@
  */
 #include "velox/expression/SignatureBinder.h"
 #include <gtest/gtest.h>
+#include <velox/type/HugeInt.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/BigintEnumRegistration.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/OpaqueCustomTypes.h"
 
-using namespace facebook::velox;
+namespace facebook::velox::exec::test {
+namespace {
+
+std::string toString(const std::vector<TypePtr>& types) {
+  std::stringstream out;
+
+  for (auto i = 0; i < types.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << types.at(i)->toString();
+  }
+
+  return out.str();
+}
 
 void testSignatureBinder(
     const std::shared_ptr<exec::FunctionSignature>& signature,
     const std::vector<TypePtr>& actualTypes,
     const TypePtr& expectedReturnType) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
   exec::SignatureBinder binder(*signature, actualTypes);
   ASSERT_TRUE(binder.tryBind());
 
+  std::vector<Coercion> coercions;
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+  ASSERT_EQ(coercions.size(), actualTypes.size());
+  for (const auto& coercion : coercions) {
+    ASSERT_TRUE(coercion.type == nullptr);
+  }
+
   auto returnType = binder.tryResolveReturnType();
   ASSERT_TRUE(returnType != nullptr);
-  ASSERT_TRUE(expectedReturnType->equivalent(*returnType));
+  ASSERT_EQ(*expectedReturnType, *returnType);
+}
+
+void assertCannotBind(
+    const std::shared_ptr<exec::FunctionSignature>& signature,
+    const std::vector<TypePtr>& actualTypes,
+    bool allowCoercion = false) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
+  exec::SignatureBinder binder(*signature, actualTypes);
+  ASSERT_FALSE(binder.tryBind());
+
+  if (allowCoercion) {
+    std::vector<Coercion> coercions;
+    ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+  }
 }
 
 void assertCannotResolve(
     const std::shared_ptr<exec::FunctionSignature>& signature,
     const std::vector<TypePtr>& actualTypes) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
   exec::SignatureBinder binder(*signature, actualTypes);
-  ASSERT_FALSE(binder.tryBind());
+  ASSERT_TRUE(binder.tryBind());
+
+  std::vector<Coercion> coercions;
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+  ASSERT_EQ(coercions.size(), actualTypes.size());
+  for (const auto& coercion : coercions) {
+    ASSERT_TRUE(coercion.type == nullptr);
+  }
+
+  auto returnType = binder.tryResolveReturnType();
+  ASSERT_TRUE(returnType == nullptr);
 }
 
 TEST(SignatureBinderTest, decimals) {
@@ -227,7 +287,7 @@ TEST(SignatureBinderTest, decimals) {
       std::unordered_map<std::string, int> integerVariables;
       ASSERT_EQ(
           exec::SignatureBinder::tryResolveType(
-              typeSignature, {}, {}, integerVariables),
+              typeSignature, {}, {}, integerVariables, {}, {}),
           nullptr);
     }
     // Type parameter + constraint = error.
@@ -237,6 +297,160 @@ TEST(SignatureBinderTest, decimals) {
               "TypeName", "a = b", exec::ParameterType::kTypeParameter),
           "Type variables cannot have constraints");
     }
+  }
+  // Scalar function signature with fixed scale.
+  {
+    {
+      auto signature = exec::FunctionSignatureBuilder()
+                           .integerVariable("precision")
+                           .returnType("boolean")
+                           .argumentType("DECIMAL(precision, 6)")
+                           .build();
+      testSignatureBinder(signature, {DECIMAL(11, 6)}, BOOLEAN());
+      assertCannotBind(signature, {DECIMAL(11, 8)});
+    }
+    {
+      auto signature = exec::FunctionSignatureBuilder()
+                           .integerVariable("precision")
+                           .integerVariable("scale")
+                           .returnType("DECIMAL(precision, scale)")
+                           .argumentType("DECIMAL(precision, 6)")
+                           .argumentType("DECIMAL(18, scale)")
+                           .build();
+      testSignatureBinder(
+          signature, {DECIMAL(11, 6), DECIMAL(18, 4)}, DECIMAL(11, 4));
+      assertCannotBind(signature, {DECIMAL(11, 6), DECIMAL(20, 4)});
+      assertCannotBind(signature, {DECIMAL(11, 8), DECIMAL(18, 4)});
+    }
+  }
+
+  // The precision and scale are fixed to the constraints.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("a_precision", "38")
+                         .integerVariable("a_scale", "0")
+                         .returnType("varchar")
+                         .argumentType("decimal(a_precision, a_scale)")
+                         .build();
+
+    testSignatureBinder(signature, {DECIMAL(38, 0)}, VARCHAR());
+    assertCannotBind(signature, {DECIMAL(18, 6)});
+  }
+}
+
+TEST(SignatureBinderTest, computation) {
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("b_precision")
+            .integerVariable("b_scale")
+            .integerVariable(
+                "r_precision", "min(38, a_precision + b_precision + 1)")
+            .integerVariable(
+                "r_scale",
+                "(a_precision + b_precision + 1) <= 38 ? (a_scale + b_scale) : max((a_scale + b_scale) - (a_precision + b_precision + 1) + 38, min(a_scale + b_scale, 6))")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .argumentType("DECIMAL(b_precision, b_scale)")
+            .build();
+    testSignatureBinder(
+        signature, {DECIMAL(17, 3), DECIMAL(20, 3)}, DECIMAL(38, 6));
+    testSignatureBinder(
+        signature, {DECIMAL(6, 3), DECIMAL(6, 3)}, DECIMAL(13, 6));
+    testSignatureBinder(
+        signature, {DECIMAL(38, 20), DECIMAL(38, 20)}, DECIMAL(38, 6));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision > 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(18, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision >= 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(18, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision != 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(18, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision == 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(3, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision < 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(3, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision <= 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(3, 3));
   }
 }
 
@@ -261,6 +475,119 @@ TEST(SignatureBinderTest, knownOnly) {
   }
 }
 
+TEST(SignatureBinderTest, orderableComparable) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .orderableTypeVariable("T")
+                       .returnType("array(T)")
+                       .argumentType("array(T)")
+                       .build();
+  {
+    auto actualTypes = std::vector<TypePtr>{ARRAY(BIGINT())};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes = std::vector<TypePtr>{ARRAY(MAP(BIGINT(), BIGINT()))};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+
+  signature = exec::FunctionSignatureBuilder()
+                  .typeVariable("V")
+                  .orderableTypeVariable("T")
+                  .returnType("row(V)")
+                  .argumentType("row(V, T)")
+                  .build();
+  {
+    auto actualTypes = std::vector<TypePtr>{ROW({BIGINT(), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({BIGINT(), MAP(VARCHAR(), BIGINT())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+}
+
+TEST(SignatureBinderTest, orderableComparableAggregate) {
+  auto signature = exec::AggregateFunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("T")
+                       .intermediateType("T")
+                       .argumentType("T")
+                       .build();
+  {
+    auto actualTypes = std::vector<TypePtr>{ARRAY(MAP(BIGINT(), BIGINT()))};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .comparableTypeVariable("T")
+                  .returnType("T")
+                  .intermediateType("T")
+                  .argumentType("T")
+                  .build();
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .orderableTypeVariable("T")
+                  .returnType("T")
+                  .intermediateType("T")
+                  .argumentType("T")
+                  .build();
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes = std::vector<TypePtr>{ROW({BIGINT(), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .typeVariable("T")
+                  .orderableTypeVariable("M")
+                  .returnType("T")
+                  .intermediateType("M")
+                  .argumentType("T")
+                  .argumentType("M")
+                  .build();
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ARRAY(DOUBLE()), MAP(VARCHAR(), BIGINT())};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+}
+
 TEST(SignatureBinderTest, generics) {
   // array(T), T -> boolean
   {
@@ -274,7 +601,7 @@ TEST(SignatureBinderTest, generics) {
     testSignatureBinder(signature, {ARRAY(BIGINT()), BIGINT()}, BOOLEAN());
     testSignatureBinder(
         signature, {ARRAY(DECIMAL(20, 3)), DECIMAL(20, 3)}, BOOLEAN());
-    assertCannotResolve(signature, {ARRAY(DECIMAL(20, 3)), DECIMAL(20, 4)});
+    assertCannotBind(signature, {ARRAY(DECIMAL(20, 3)), DECIMAL(20, 4)});
   }
 
   // array(array(T)), array(T) -> boolean
@@ -313,6 +640,16 @@ TEST(SignatureBinderTest, generics) {
 
     testSignatureBinder(signature, {MAP(BIGINT(), DOUBLE())}, ARRAY(DOUBLE()));
   }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("T")
+                         .build();
+
+    testSignatureBinder(signature, {HUGEINT()}, HUGEINT());
+  }
 }
 
 TEST(SignatureBinderTest, variableArity) {
@@ -320,8 +657,7 @@ TEST(SignatureBinderTest, variableArity) {
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("varchar")
-                         .argumentType("varchar")
-                         .variableArity()
+                         .variableArity("varchar")
                          .build();
 
     testSignatureBinder(signature, {}, VARCHAR());
@@ -336,8 +672,7 @@ TEST(SignatureBinderTest, variableArity) {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("varchar")
                          .argumentType("integer")
-                         .argumentType("double")
-                         .variableArity()
+                         .variableArity("double")
                          .build();
 
     testSignatureBinder(signature, {INTEGER()}, VARCHAR());
@@ -351,8 +686,7 @@ TEST(SignatureBinderTest, variableArity) {
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("varchar")
-                         .argumentType("any")
-                         .variableArity()
+                         .variableArity("any")
                          .build();
 
     testSignatureBinder(signature, {}, VARCHAR());
@@ -367,8 +701,7 @@ TEST(SignatureBinderTest, variableArity) {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("timestamp")
                          .argumentType("integer")
-                         .argumentType("any")
-                         .variableArity()
+                         .variableArity("any")
                          .build();
 
     testSignatureBinder(signature, {INTEGER()}, TIMESTAMP());
@@ -389,11 +722,11 @@ TEST(SignatureBinderTest, unresolvable) {
                          .build();
 
     // wrong type
-    assertCannotResolve(signature, {BIGINT()});
+    assertCannotBind(signature, {BIGINT()});
 
     // wrong number of arguments
-    assertCannotResolve(signature, {});
-    assertCannotResolve(signature, {INTEGER(), DOUBLE()});
+    assertCannotBind(signature, {});
+    assertCannotBind(signature, {INTEGER(), DOUBLE()});
   }
 
   // integer, double -> varchar
@@ -405,25 +738,24 @@ TEST(SignatureBinderTest, unresolvable) {
                          .build();
 
     // wrong type
-    assertCannotResolve(signature, {BIGINT()});
-    assertCannotResolve(signature, {INTEGER(), INTEGER()});
-    assertCannotResolve(signature, {INTEGER(), DOUBLE(), INTEGER()});
+    assertCannotBind(signature, {BIGINT()});
+    assertCannotBind(signature, {INTEGER(), INTEGER()});
+    assertCannotBind(signature, {INTEGER(), DOUBLE(), INTEGER()});
 
     // wrong number of arguments
-    assertCannotResolve(signature, {});
+    assertCannotBind(signature, {});
   }
 
   // integer... -> varchar
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("varchar")
-                         .argumentType("integer")
-                         .variableArity()
+                         .variableArity("integer")
                          .build();
 
     // wrong type
-    assertCannotResolve(signature, {BIGINT()});
-    assertCannotResolve(signature, {INTEGER(), BIGINT()});
+    assertCannotBind(signature, {BIGINT()});
+    assertCannotBind(signature, {INTEGER(), BIGINT()});
   }
 
   // row(bigint, varchar) -> bigint
@@ -436,8 +768,8 @@ TEST(SignatureBinderTest, unresolvable) {
     testSignatureBinder(signature, {ROW({BIGINT(), VARCHAR()})}, BIGINT());
 
     // wrong type
-    assertCannotResolve(signature, {ROW({BIGINT()})});
-    assertCannotResolve(signature, {ROW({BIGINT(), VARCHAR(), BOOLEAN()})});
+    assertCannotBind(signature, {ROW({BIGINT()})});
+    assertCannotBind(signature, {ROW({BIGINT(), VARCHAR(), BOOLEAN()})});
   }
 
   // array(row(boolean)) -> bigint
@@ -450,8 +782,8 @@ TEST(SignatureBinderTest, unresolvable) {
     testSignatureBinder(signature, {ARRAY(ROW({BOOLEAN()}))}, BIGINT());
 
     // wrong type
-    assertCannotResolve(signature, {ARRAY(ROW({BOOLEAN(), BIGINT()}))});
-    assertCannotResolve(signature, {ARRAY(ROW({BIGINT()}))});
+    assertCannotBind(signature, {ARRAY(ROW({BOOLEAN(), BIGINT()}))});
+    assertCannotBind(signature, {ARRAY(ROW({BIGINT()}))});
   }
 }
 
@@ -514,7 +846,7 @@ TEST(SignatureBinderTest, logicalType) {
     testSignatureBinder(signature, {INTERVAL_DAY_TIME()}, BIGINT());
   }
 
-  // Logical type as an return type.
+  // Logical type as a return type.
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("interval day to second")
@@ -526,9 +858,8 @@ TEST(SignatureBinderTest, logicalType) {
 }
 
 TEST(SignatureBinderTest, customType) {
-  registerCustomType(
-      "timestamp with time zone",
-      std::make_unique<const TimestampWithTimeZoneTypeFactories>());
+  registerTimestampWithTimeZoneType();
+  registerBigintEnumType();
 
   // Custom type as an argument type.
   {
@@ -542,7 +873,7 @@ TEST(SignatureBinderTest, customType) {
   }
 
   {
-    // timestamp with time zone -> bigint
+    // timestamp with time zone, varchar -> array(integer)
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("array(integer)")
                          .argumentType("timestamp with time zone")
@@ -555,7 +886,7 @@ TEST(SignatureBinderTest, customType) {
 
   // Custom type as a return type.
   {
-    // timestamp with time zone -> bigint
+    // integer -> timestamp with time zone
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("timestamp with time zone")
                          .argumentType("integer")
@@ -564,11 +895,379 @@ TEST(SignatureBinderTest, customType) {
     testSignatureBinder(signature, {INTEGER()}, TIMESTAMP_WITH_TIME_ZONE());
   }
 
+  {
+    // bigint_enum(enumParameters) -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .enumVariable("E")
+                         .returnType("bigint")
+                         .argumentType("bigint_enum(E)")
+                         .build();
+    LongEnumParameter moodInfo(
+        "test.enum.mood", {{"CURIOUS", -2}, {"HAPPY", 0}});
+    testSignatureBinder(signature, {BIGINT_ENUM(moodInfo)}, BIGINT());
+  }
+
   // Unknown custom type.
   VELOX_ASSERT_THROW(
       exec::FunctionSignatureBuilder()
           .returnType("bigint")
           .argumentType("fancy_type")
           .build(),
-      "Type doesn't exist: FANCY_TYPE");
+      "Type doesn't exist: 'FANCY_TYPE'");
 }
+
+// Define a test custom opaque type and ensure signature binder can correctly
+// bind types.
+TEST(SignatureBinderTest, opaqueCustomType) {
+  // This is the C++ type registered within the opaque capsule. This could be
+  // anything.
+  struct Tuple {
+    int64_t x;
+    int64_t y;
+  };
+
+  // Custom type name.
+  static constexpr char kName[] = "my_custom_opaque";
+  using MyOpaqueRegister = OpaqueCustomTypeRegister<Tuple, kName>;
+
+  // Register type and build a TypePtr.
+  MyOpaqueRegister::registerType();
+  auto opaqueType = MyOpaqueRegister::get();
+
+  // Custom opaque type as an argument type.
+  {
+    // my_custom_opaque -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("my_custom_opaque")
+                         .build();
+    testSignatureBinder(signature, {opaqueType}, BIGINT());
+  }
+  {
+    // varchar, my_custom_opaque, double -> real
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("real")
+                         .argumentType("varchar")
+                         .argumentType("my_custom_opaque")
+                         .argumentType("double")
+                         .build();
+    testSignatureBinder(signature, {VARCHAR(), opaqueType, DOUBLE()}, REAL());
+  }
+
+  // To make it more idiomatic for Velox's coding standards, one could also
+  // define this helper function somewhere:
+  auto MY_CUSTOM_OPAQUE = []() -> TypePtr { return MyOpaqueRegister::get(); };
+
+  // Custom opaque type as a return type.
+  {
+    // integer -> my_custom_opaque
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("my_custom_opaque")
+                         .argumentType("integer")
+                         .build();
+    testSignatureBinder(signature, {INTEGER()}, MY_CUSTOM_OPAQUE());
+  }
+}
+
+TEST(SignatureBinderTest, hugeIntType) {
+  // Logical type as an argument type.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("hugeint")
+                         .argumentType("hugeint")
+                         .build();
+    testSignatureBinder(signature, {HUGEINT()}, HUGEINT());
+  }
+}
+
+TEST(SignatureBinderTest, namedRows) {
+  registerTimestampWithTimeZoneType();
+
+  // Simple named row field.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(bla varchar)")
+                         .build();
+    testSignatureBinder(signature, {ROW({{"bla", VARCHAR()}})}, VARCHAR());
+
+    // Cannot bind if field doesn't have the same name set.
+    assertCannotBind(signature, {ROW({{VARCHAR()}})});
+  }
+
+  // Multiple named row field.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(foo varchar, bigint, bar double)")
+                         .build();
+    testSignatureBinder(
+        signature,
+        {ROW({{"foo", VARCHAR()}, {"", BIGINT()}, {"bar", DOUBLE()}})},
+        VARCHAR());
+
+    // Binds even if the middle (unnamed) field has a name.
+    testSignatureBinder(
+        signature,
+        {ROW({{"foo", VARCHAR()}, {"fighters", BIGINT()}, {"bar", DOUBLE()}})},
+        VARCHAR());
+
+    // But not if one of the named fields is not.
+    assertCannotBind(
+        signature,
+        {ROW({{"foo", VARCHAR()}, {"fighters", BIGINT()}, {"bla", DOUBLE()}})});
+  }
+
+  // Type with a space in the name.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(timestamp with time zone)")
+                         .build();
+    testSignatureBinder(
+        signature, {ROW({TIMESTAMP_WITH_TIME_ZONE()})}, VARCHAR());
+
+    // Ok to bind if even if the type has a field name set.
+    testSignatureBinder(
+        signature, {ROW({{"name", TIMESTAMP_WITH_TIME_ZONE()}})}, VARCHAR());
+  }
+
+  // Named type with a space.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(named timestamp with time zone)")
+                         .build();
+    testSignatureBinder(
+        signature, {ROW({{"named", TIMESTAMP_WITH_TIME_ZONE()}})}, VARCHAR());
+  }
+
+  // Nested named.
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("row(my_map map(bigint, row(bla varchar)))")
+            .build();
+    testSignatureBinder(
+        signature,
+        {ROW({{"my_map", MAP(BIGINT(), ROW({{"bla", VARCHAR()}}))}})},
+        VARCHAR());
+  }
+
+  // Return named row.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("row(foo bigint)")
+                         .argumentType("varchar")
+                         .build();
+    testSignatureBinder(signature, {VARCHAR()}, ROW({{"foo", BIGINT()}}));
+  }
+}
+
+void testCoercions(
+    const exec::FunctionSignaturePtr& signature,
+    const std::vector<TypePtr>& actualTypes,
+    const std::vector<TypePtr>& expectedCoercions,
+    const TypePtr& expectedReturnType) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
+  exec::SignatureBinder binder(*signature, actualTypes);
+
+  ASSERT_FALSE(binder.tryBind());
+
+  std::vector<Coercion> coercions;
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+  ASSERT_EQ(expectedCoercions.size(), coercions.size());
+  for (auto i = 0; i < expectedCoercions.size(); ++i) {
+    if (expectedCoercions[i] == nullptr) {
+      ASSERT_TRUE(coercions[i].type == nullptr);
+    } else {
+      ASSERT_EQ(*coercions[i].type, *expectedCoercions[i]);
+    }
+  }
+
+  auto returnType = binder.tryResolveReturnType();
+  ASSERT_TRUE(returnType != nullptr);
+  ASSERT_EQ(*expectedReturnType, *returnType);
+}
+
+void testNoCoercions(
+    const exec::FunctionSignaturePtr& signature,
+    const std::vector<TypePtr>& actualTypes,
+    const TypePtr& expectedReturnType) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+
+    auto returnType = binder.tryResolveReturnType();
+    ASSERT_TRUE(returnType != nullptr);
+    ASSERT_EQ(*expectedReturnType, *returnType);
+  }
+
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+
+    std::vector<Coercion> coercions;
+    ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+    auto returnType = binder.tryResolveReturnType();
+    ASSERT_TRUE(returnType != nullptr);
+    ASSERT_EQ(*expectedReturnType, *returnType);
+
+    ASSERT_EQ(actualTypes.size(), coercions.size());
+    for (auto i = 0; i < actualTypes.size(); ++i) {
+      ASSERT_TRUE(coercions[i].type == nullptr);
+    }
+  }
+}
+
+TEST(SignatureBinderTest, coercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("boolean")
+                       .argumentType("smallint")
+                       .argumentType("integer")
+                       .argumentType("bigint")
+                       .argumentType("real")
+                       .argumentType("double")
+                       .build();
+
+  testCoercions(
+      signature,
+      {TINYINT(), TINYINT(), TINYINT(), TINYINT(), TINYINT()},
+      {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
+      BOOLEAN());
+
+  testCoercions(
+      signature,
+      {SMALLINT(), SMALLINT(), SMALLINT(), REAL(), REAL()},
+      {nullptr, INTEGER(), BIGINT(), nullptr, DOUBLE()},
+      BOOLEAN());
+
+  testNoCoercions(
+      signature,
+      {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
+      BOOLEAN());
+
+  assertCannotBind(
+      signature,
+      {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER()},
+      /*allowCoercion*/ true);
+
+  assertCannotBind(
+      signature,
+      {SMALLINT(), INTEGER(), VARCHAR(), INTEGER(), INTEGER()},
+      /*allowCoercion*/ true);
+}
+
+TEST(SignatureBinderTest, homogeneousRow) {
+  // row(T, ...) -> boolean
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("boolean")
+                         .argumentType("row(T, ...)")
+                         .build();
+
+    testSignatureBinder(signature, {ROW({BIGINT()})}, BOOLEAN());
+
+    testSignatureBinder(
+        signature, {ROW({BIGINT(), BIGINT(), BIGINT()})}, BOOLEAN());
+
+    testSignatureBinder(signature, {ROW({VARCHAR(), VARCHAR()})}, BOOLEAN());
+
+    // Named row fields should also bind when types are homogeneous.
+    testSignatureBinder(
+        signature,
+        {ROW({{"first", VARCHAR()}, {"second", VARCHAR()}})},
+        BOOLEAN());
+
+    // Mixed named-row element types should fail to bind.
+    assertCannotBind(signature, {ROW({{"x", BIGINT()}, {"y", VARCHAR()}})});
+
+    testSignatureBinder(signature, {ROW({})}, BOOLEAN());
+
+    assertCannotBind(signature, {ROW({BIGINT(), VARCHAR()})});
+
+    assertCannotBind(signature, {BIGINT()});
+    assertCannotBind(signature, {ARRAY(BIGINT())});
+  }
+
+  // (row(T, ...), row(T, ...)) -> T
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("row(T, ...)")
+                         .argumentType("row(T, ...)")
+                         .build();
+
+    testSignatureBinder(
+        signature,
+        {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), BIGINT(), BIGINT()})},
+        BIGINT());
+
+    testSignatureBinder(
+        signature, {ROW({}), ROW({BIGINT(), BIGINT(), BIGINT()})}, BIGINT());
+
+    assertCannotResolve(signature, {ROW({}), ROW({})});
+    assertCannotBind(
+        signature, {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR()})});
+  }
+
+  // (row(T,...), row(U,...)) -> map(T,U)
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .typeVariable("U")
+                         .returnType("map(T,U)")
+                         .argumentType("row(T, ...)")
+                         .argumentType("row(U, ...)")
+                         .build();
+
+    testSignatureBinder(
+        signature,
+        {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR(), VARCHAR()})},
+        MAP(BIGINT(), VARCHAR()));
+
+    assertCannotResolve(signature, {ROW({BIGINT(), BIGINT()}), ROW({})});
+    assertCannotBind(
+        signature, {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), VARCHAR()})});
+  }
+
+  // row(array(bigint), ...) -> bigint
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("row(array(bigint), ...)")
+                         .build();
+
+    testSignatureBinder(signature, {ROW({})}, BIGINT());
+    testSignatureBinder(signature, {ROW({ARRAY(BIGINT())})}, BIGINT());
+    testSignatureBinder(
+        signature, {ROW({ARRAY(BIGINT()), ARRAY(BIGINT())})}, BIGINT());
+  }
+
+  // array(row(T, ...)) -> array(T)
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("array(T)")
+                         .argumentType("array(row(T, ...))")
+                         .build();
+
+    testSignatureBinder(signature, {ARRAY(ROW({INTEGER()}))}, ARRAY(INTEGER()));
+    testSignatureBinder(
+        signature, {ARRAY(ROW({"a", "b"}, REAL()))}, ARRAY(REAL()));
+
+    assertCannotResolve(signature, {ARRAY(ROW({}))});
+  }
+}
+
+} // namespace
+} // namespace facebook::velox::exec::test

@@ -16,33 +16,38 @@
 
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"
 
+#include "velox/dwio/common/Arena.h"
+
 namespace facebook::velox::dwrf {
 
+using dwio::common::ArenaCreate;
 using dwio::common::LogType;
 
-StripeInformationWrapper StripeReaderBase::loadStripe(
+// preload is not considered or mutated if stripe has already been fetched. e.g.
+// if fetchStripe(0, false) is called, result will be cached and fetchStripe(0,
+// true) will reuse the result without considering the new preload directive
+std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
     uint32_t index,
-    bool& preload) {
-  DWIO_ENSURE(canLoad_);
-  auto& footer = reader_->getFooter();
-  DWIO_ENSURE_LT(index, footer.stripesSize(), "invalid stripe index");
-  auto stripe = footer.stripes(index);
-  auto& cache = reader_->getMetadataCache();
+    bool& preload) const {
+  auto& fileFooter = reader_->footer();
+  VELOX_CHECK_LT(index, fileFooter.stripesSize(), "invalid stripe index");
+  auto stripe = fileFooter.stripes(index);
+  auto& cache = reader_->metadataCache();
 
-  stripeInput_.reset();
   uint64_t offset = stripe.offset();
   uint64_t length =
       stripe.indexLength() + stripe.dataLength() + stripe.footerLength();
-  if (reader_->getBufferedInput().isBuffered(offset, length)) {
-    // if file is preloaded, return stripe is preloaded
-    preload = true;
-  } else {
-    stripeInput_ = reader_->getBufferedInput().clone();
 
+  std::unique_ptr<dwio::common::BufferedInput> stripeInput;
+  if (reader_->bufferedInput().isBuffered(offset, length)) {
+    preload = true;
+    stripeInput = nullptr;
+  } else {
+    stripeInput = reader_->bufferedInput().clone();
     if (preload) {
       // If metadata cache exists, adjust read position to avoid re-reading
       // metadata sections
-      if (cache) {
+      if (cache != nullptr) {
         if (cache->has(StripeCacheMode::INDEX, index)) {
           offset += stripe.indexLength();
           length -= stripe.indexLength();
@@ -52,56 +57,92 @@ StripeInformationWrapper StripeReaderBase::loadStripe(
         }
       }
 
-      stripeInput_->enqueue({offset, length, "stripe"});
-      stripeInput_->load(LogType::STRIPE);
+      stripeInput->enqueue({offset, length, "stripe"});
+      stripeInput->load(LogType::STRIPE);
     }
   }
 
   // load stripe footer
-  std::unique_ptr<dwio::common::SeekableInputStream> stream;
+  std::unique_ptr<dwio::common::SeekableInputStream> footerStream;
   if (cache) {
-    stream = cache->get(StripeCacheMode::FOOTER, index);
+    footerStream = cache->get(StripeCacheMode::FOOTER, index);
   }
 
-  if (!stream) {
-    stream = getStripeInput().read(
+  if (!footerStream) {
+    dwio::common::BufferedInput& bufferInput =
+        (stripeInput != nullptr) ? *stripeInput : reader_->bufferedInput();
+    footerStream = bufferInput.read(
         stripe.offset() + stripe.indexLength() + stripe.dataLength(),
         stripe.footerLength(),
         LogType::STRIPE_FOOTER);
   }
 
-  // Reuse footer_'s memory to avoid expensive destruction
-  if (!footer_) {
-    footer_ = google::protobuf::Arena::CreateMessage<proto::StripeFooter>(
-        reader_->arena());
+  const auto streamDebugInfo = fmt::format("Stripe {} Footer ", index);
+
+  auto arena = std::make_shared<google::protobuf::Arena>();
+
+  auto decryptionHandler = std::make_unique<encryption::DecryptionHandler>(
+      reader_->decryptionHandler());
+
+  auto createStripeMetadata = [&](auto&& stripeFooter) {
+    return stripeInput == nullptr ? std::make_unique<const StripeMetadata>(
+                                        &reader_->bufferedInput(),
+                                        std::move(stripeFooter),
+                                        std::move(decryptionHandler),
+                                        stripe)
+                                  : std::make_unique<const StripeMetadata>(
+                                        std::move(stripeInput),
+                                        std::move(stripeFooter),
+                                        std::move(decryptionHandler),
+                                        stripe);
+  };
+
+  if (fileFooter.format() == DwrfFormat::kDwrf) {
+    auto* rawFooter = ArenaCreate<proto::StripeFooter>(arena.get());
+    ProtoUtils::readProtoInto(
+        reader_->createDecompressedStream(
+            std::move(footerStream), streamDebugInfo),
+        rawFooter);
+    std::shared_ptr<proto::StripeFooter> stripeFooter(
+        rawFooter, [arena = std::move(arena)](auto*) { arena->Reset(); });
+
+    // refresh stripe encryption key if necessary
+    loadEncryptionKeys(index, *stripeFooter, stripe, *decryptionHandler);
+
+    return createStripeMetadata(std::move(stripeFooter));
+  } else {
+    auto* rawFooter = ArenaCreate<proto::orc::StripeFooter>(arena.get());
+    ProtoUtils::readProtoInto(
+        reader_->createDecompressedStream(
+            std::move(footerStream), streamDebugInfo),
+        rawFooter);
+    std::shared_ptr<proto::orc::StripeFooter> stripeFooter(
+        rawFooter, [arena = std::move(arena)](auto*) { arena->Reset(); });
+
+    // ORC is not expected to have encrypted columns
+    VELOX_CHECK_EQ(decryptionHandler->isEncrypted(), false);
+
+    return createStripeMetadata(std::move(stripeFooter));
   }
-
-  auto streamDebugInfo = fmt::format("Stripe {} Footer ", index);
-  ProtoUtils::readProtoInto<proto::StripeFooter>(
-      reader_->createDecompressedStream(std::move(stream), streamDebugInfo),
-      footer_);
-
-  // refresh stripe encryption key if necessary
-  loadEncryptionKeys(index);
-  lastStripeIndex_ = index;
-
-  return stripe;
 }
 
-void StripeReaderBase::loadEncryptionKeys(uint32_t index) {
-  if (!handler_->isEncrypted()) {
+void StripeReaderBase::loadEncryptionKeys(
+    uint32_t index,
+    const proto::StripeFooter& stripeFooter,
+    const StripeInformationWrapper& stripeInfo,
+    encryption::DecryptionHandler& handler) const {
+  if (!handler.isEncrypted()) {
     return;
   }
 
-  DWIO_ENSURE_EQ(
-      footer_->encryptiongroups_size(), handler_->getEncryptionGroupCount());
-  auto& footer = reader_->getFooter();
-  DWIO_ENSURE_LT(index, footer.stripesSize(), "invalid stripe index");
+  VELOX_CHECK_EQ(
+      stripeFooter.encryptiongroups_size(), handler.getEncryptionGroupCount());
+  const auto& fileFooter = reader_->footer();
+  VELOX_CHECK_LT(index, fileFooter.stripesSize(), "invalid stripe index");
 
-  auto stripe = footer.stripes(index);
   // If current stripe has keys, load these keys.
-  if (stripe.keyMetadataSize() > 0) {
-    handler_->setKeys(stripe.keyMetadata());
+  if (stripeInfo.keyMetadataSize() > 0) {
+    handler.setKeys(stripeInfo.keyMetadata());
   } else {
     // If current stripe doesn't have keys, then:
     //  1. If it's sequential read (ie. we've just finished reading one stripe
@@ -110,20 +151,19 @@ void StripeReaderBase::loadEncryptionKeys(uint32_t index) {
     //  2. If it's not sequential read (which means we performed a skip/seek
     //  into a random stripe in the file), we need to sequentially lookup
     //  previous stripes, until we find a stripe with keys.
-    DWIO_ENSURE_GT(index, 0, "first stripe must have key");
-    bool isSequentialRead =
-        (lastStripeIndex_ && lastStripeIndex_.value() == index - 1);
-    if (!isSequentialRead) {
-      uint32_t prevIndex = index - 1;
-      while (true) {
-        auto prev = footer.stripes(prevIndex);
-        if (prev.keyMetadataSize() > 0) {
-          handler_->setKeys(prev.keyMetadata());
-          break;
-        }
-        DWIO_ENSURE_GE(prevIndex, 0, "key not found");
-        --prevIndex;
+    //
+    // But, since we are enabling parallel loads now, let's not rely on
+    // sequential order. Let's apply (2).
+    VELOX_CHECK_GT(index, 0, "first stripe must have key");
+
+    uint32_t prevIndex = index - 1;
+    while (true) {
+      const auto prevStripeInfo = fileFooter.stripes(prevIndex);
+      if (prevStripeInfo.keyMetadataSize() > 0) {
+        handler.setKeys(prevStripeInfo.keyMetadata());
+        break;
       }
+      --prevIndex;
     }
   }
 }

@@ -18,13 +18,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'pyvelox version'
+        description: pyvelox version
         required: false
       ref:
-        description: 'git ref to build'
+        description: git ref to build
         required: false
       publish:
-        description: 'publish to PyPI'
+        description: publish to PyPI
         required: false
         type: boolean
         default: false
@@ -32,11 +32,7 @@ on:
   #   - cron: '15 0 * * *'
   pull_request:
     paths:
-      - 'velox/**'
-      - '!velox/docs/**'
-      - 'third_party/**'
-      - 'pyvelox/**'
-      - '.github/workflows/build_pyvelox.yml'
+      - .github/workflows/build_pyvelox.yml
 
 permissions:
   contents: read
@@ -52,112 +48,102 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-11]
+        os: [8-core-ubuntu, macos-13, macos-14]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
-          submodules: recursive
 
-      - uses: actions/setup-python@v4
+          persist-credentials: false
+
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: '3.10'
 
-      - name: "Determine Version"
-        if: ${{ !inputs.version && github.event_name != 'pull_request' }}
-        id: version
-        run: |
-          # count number of commits since last tag matching a regex
-          # and use that to determine the version number
-          # e.g. if the last tag is 0.0.1, and there have been 5 commits since then
-          # the version will be 0.0.1a5
-          git fetch --tags
-          INITIAL_COMMIT=5d4db2569b7c249644bf36a543ba1bd8f12bf77c
-          # Can't use PCRE for portability
-          BASE_VERSION=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' version.txt)
-
-          LAST_TAG=$(git describe --tags --match "pyvelox-v[0-9]*" --abbrev=0 || echo $INITIAL_COMMIT)
-          COMMITS_SINCE_TAG=$(git rev-list --count ${LAST_TAG}..HEAD)
-
-          if [ "$LAST_TAG" = "$INITIAL_COMMIT" ]; then
-            VERSION=$BASE_VERSION
-          else
-            VERSION=$(echo $LAST_TAG | sed '/pyvelox-v//')
-          fi
-          # NEXT_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++ ; print}')
-          echo "build_version=${VERSION}a${COMMITS_SINCE_TAG}" >> $GITHUB_OUTPUT
-
-      - run: mkdir -p .ccache
-      - name: "Restore ccache"
-        uses: actions/cache/restore@v3
+      - name: Restore ccache
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
-          path: ".ccache"
-          key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
-          restore-keys: |
-            ccache-wheels-${{ matrix.os }}-
+          path: ccache
+          key: ccache-wheels-${{ matrix.os }}
+
+      - name: Restore macOS Dependencies
+        if: startsWith(matrix.os, 'macos')
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        id: restore-deps
+        with:
+          path: dependencies
+          key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
+
+      - name: Install macOS dependencies from brew
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
+          echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
+          echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+
+          source scripts/setup-macos.sh
+          install_build_prerequisites
+          install_velox_deps_from_brew
+          # CMake 4.0 causes issues with arrows bundled dependencies
+          brew uninstall cmake
+          pipx install --force cmake==3.31
 
       - name: Install macOS dependencies
-        if: matrix.os == 'macos-11'
-        run: |
-          echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
-          bash scripts/setup-macos.sh &&
-          bash scripts/setup-macos.sh install_folly
-
-      - name: "Create sdist"
-        if: matrix.os == 'ubuntu-22.04'
+        if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
         env:
-          BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
-          python setup.py sdist --dist-dir wheelhouse
+          bash scripts/setup-macos.sh
+
+      - name: Save macOS Dependencies
+        if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: dependencies
+          key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
+          retention-days: 90
+
+      - name: Create sdist
+        if: matrix.os == '8-core-ubuntu'
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          pipx install uv
+          uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.12.1
+        uses: pypa/cibuildwheel@5f22145df44122af0f5a201f93cf0207171beca7 # v3.0.0
         env:
-          # required for preadv/pwritev
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-          CIBW_ARCHS: "x86_64"
-          # On PRs only build for Python 3.7
-          CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp37-*' || 'cp3*' }}
-          CIBW_SKIP: "*musllinux* cp36-*"
-          CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:torcharrow-avx"
-          CIBW_BEFORE_ALL_LINUX: >
-            mkdir -p /output &&
-            cp -R /host${{ github.workspace }}/.ccache /output/.ccache &&
-            ccache -s
-          CIBW_ENVIRONMENT_PASS_LINUX: CCACHE_DIR BUILD_VERSION
-          CIBW_TEST_EXTRAS: "tests"
-          CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
-          CIBW_TEST_SKIP: "*macos*"
-          CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/output' || github.workspace }}/.ccache"
-          BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
+          BUILD_VERSION: ${{ inputs.version }}
+          CIBW_BUILD: cp310-* cp311-* cp312-* cp313-*
+          CIBW_ENVIRONMENT_PASS_LINUX: BUILD_VERSION
+          CIBW_ENVIRONMENT_LINUX: CCACHE_DIR=/host${{ github.workspace }}/ccache
+          # for macos
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-14' && '14' || '13' }}
+          CCACHE_DIR: ${{ github.workspace }}/ccache
         with:
           output-dir: wheelhouse
 
-      - name: "Move .ccache to workspace"
-        if: matrix.os != 'macos-11'
-        run: |
-          mkdir -p .ccache
-          cp -R ./wheelhouse/.ccache/* .ccache
-
-      - name: "Save ccache"
-        uses: actions/cache/save@v3
-        id: cache
+      - name: Save ccache
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
-          path: ".ccache"
-          key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
+          path: ccache
+          key: ccache-wheels-${{ matrix.os }}
 
-      - name: "Rename wheel compatibility tag"
-        if: matrix.os == 'macos-11'
+      - name: Rename wheel compatibility tag
+        if: false #startsWith(matrix.os, 'macos')
         run: |
           brew install rename
           cd wheelhouse
           rename 's/11_0/10_15/g' *.whl
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: wheels
+          name: wheels-${{ matrix.os }}
+          retention-days: 5
           path: |
             ./wheelhouse/*.whl
             ./wheelhouse/*.tar.gz
@@ -168,19 +154,20 @@ jobs:
     needs: build_wheels
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
-          name: wheels
+          pattern: wheels-*
+          merge-multiple: true
           path: ./wheelhouse
 
       - run: ls wheelhouse
 
-      - uses: actions/setup-python@v3
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
       - name: Publish a Python distribution to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.6.4
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages_dir: wheelhouse

@@ -1,0 +1,58 @@
+---
+slug: cpp20-standard
+title: "Velox switches to C++20 standard"
+authors: [czentgr]
+tags: [build]
+---
+
+## Background
+The C++ standard used in a project determines what built-in functionality developers can use to ease development and extended capabilities.
+
+Since its inception in August of 2021 Velox used the C++17 standard.
+
+## Benefits
+
+Switching to C++20 contributes to having a modern ecosystem that is attractive in use, to develop in, and to maintain.
+Going forward Velox is looking to enhance the codebase by making use of newer compiler functionalities, such as sanitization checks, by also moving to support newer compiler versions for both GCC and Clang.
+
+## Changes
+
+### New minimum compiler versions
+This change also changes the minimum required compiler versions for GCC and CLang.
+The following minimum versions are now required:
+
+- GCC11 and later
+- CLang 15 and later
+
+### C++20 major new features relevant to Velox
+- coroutines language feature
+- modules language feature
+- Calendar and Timezone library `<chrono>`
+- constraints and concepts language feature
+- 3-way operator language feature
+- Ranges library feature
+
+Please refer to the C++20 standard for a complete list of new features.
+
+The minimum targeted compiler versions support
+- coroutines
+- Calendar and Timezone library `<chrono>`
+
+Newer versions of compilers implement more and more and C++20 features and library support.
+Supporting Velox on newer compiler versions is a continuous effort.
+
+## Lessons
+
+There was some interesting behavior by the compilers. Changing the C++20 standard caused some compile errors in the existing code.
+One of these errors was caused by a compiler issue itself.
+
+In GCC 12.2.1, which is used in the CI, the std::string `+` operator implementation ran into a known issue causing a warning.
+Because all warnings are errors we had to explictly add an exemption for this particlar compiler version.
+
+In general, however, the found compile errors were reasonably easy to fix.
+Most of the changes were compatible with C++17 as well which means the code is bit more clean.
+However, one change caused slight trouble because it emitted warnings in C++17 causing build failures due to turning all warnigns into errors.
+This was the change to require `this` in the lambda capture where applicable.
+On the other hand, not addressing the changes to the lamda capture caused errors in C++20.
+
+Overall, the switch to C++20 took some time but was not overly complicated. No changes to the CI pipelines used in the project were needed. It was limited to CMake and code changes.

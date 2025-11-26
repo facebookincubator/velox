@@ -77,7 +77,11 @@ class VectorCompareBenchmark : public functions::test::FunctionBenchmarkBase {
   VectorPtr rowVector_;
 
  private:
-  static constexpr CompareFlags kFlags{true, true, false, false};
+  static constexpr CompareFlags kFlags{
+      true,
+      true,
+      false,
+      CompareFlags::NullHandlingMode::kNullAsValue};
 
   const size_t vectorSize_;
   SelectivityVector rows_;
@@ -110,9 +114,9 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char* argv[]) {
-  folly::init(&argc, &argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
+  folly::Init init{&argc, &argv};
+  ::gflags::ParseCommandLineFlags(&argc, &argv, true);
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   benchmark = std::make_unique<VectorCompareBenchmark>(1000);
   folly::runBenchmarks();
   benchmark.reset();

@@ -33,7 +33,7 @@ class StringViewBufferHolder {
 
   /// Return a copy of the StringView where the StringView is copied to this
   /// StringViewBufferHolder if the StringView is not inlined. std::string and
-  /// folly::StringPiece are also copied to the internal buffers (see the
+  /// std::string_view are also copied to the internal buffers (see the
   /// specializations below).
   ///
   /// NOTE: Out of convenience, we allow different types to be passed in, but
@@ -52,8 +52,8 @@ class StringViewBufferHolder {
     return getOwnedStringView(value.data(), value.size());
   }
 
-  /// Specialization for folly::StringPiece type.
-  StringView getOwnedValue(folly::StringPiece value) {
+  /// Specialization for std::string_view type.
+  StringView getOwnedValue(std::string_view value) {
     return getOwnedStringView(value.data(), value.size());
   }
 
@@ -70,6 +70,17 @@ class StringViewBufferHolder {
   /// pointers remain shared between this holder and the resulting collection.
   std::vector<BufferPtr> buffers() const {
     return stringBuffers_;
+  }
+
+  /// Add a buffer to the list of buffers. This is used to allow bulk addition
+  /// of values with fewer overall buffers vs adding a value at a time via
+  /// getOwnedValue. The buffer must be allocated on the same underlying memory
+  /// pool.
+  void addOwnedBuffer(BufferPtr&& inBuffer) {
+    VELOX_CHECK(
+        inBuffer->pool() == pool_,
+        "Buffer must be allocated on same memory pool");
+    stringBuffers_.push_back(std::move(inBuffer));
   }
 
  private:

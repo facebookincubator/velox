@@ -16,6 +16,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Crc.h"
+#include "velox/type/HugeInt.h"
 
 #include <unordered_set>
 
@@ -460,12 +461,29 @@ TEST_F(BitUtilTest, forEachBit) {
 }
 
 TEST_F(BitUtilTest, hash) {
-  std::unordered_set<size_t> hashes;
-  const char* text = "Forget the night, come live with us in forests of azure";
-  for (int32_t i = 0; i < strlen(text); ++i) {
-    hashes.insert(hashBytes(1, text, i));
+  std::unordered_map<uint64_t, int32_t> hashes;
+  std::string text =
+      "Forget the night, come live with us in forests of azure, "
+      "for we have constructed pyramids in honor of our escaping...";
+  for (int32_t i = 0; i < text.size(); ++i) {
+    // starts hashing at unaligned addresses.
+    int32_t offset = i > 3 && i < text.size() - 3 ? i % 3 : 0;
+    auto hash = hashBytes(1, text.data() + offset, i);
+    if (i + offset < text.size() - 1) {
+      ++text[i + offset];
+      // Change the first byte after the hashed range and check that the hash
+      // function does not overread its range.
+      EXPECT_EQ(hash, hashBytes(1, text.data() + offset, i));
+      --text[i + offset];
+    }
+    auto it = hashes.find(hash);
+    if (it == hashes.end()) {
+      hashes[hash] = i;
+    } else {
+      EXPECT_TRUE(false) << "Duplicate hash at " << i;
+    }
   }
-  EXPECT_EQ(hashes.size(), strlen(text));
+  EXPECT_EQ(hashes.size(), text.size());
 }
 
 TEST_F(BitUtilTest, nextPowerOfTwo) {
@@ -481,6 +499,9 @@ TEST_F(BitUtilTest, nextPowerOfTwo) {
   EXPECT_EQ(nextPowerOfTwo(31), 32);
   EXPECT_EQ(nextPowerOfTwo(32), 32);
   EXPECT_EQ(nextPowerOfTwo(33), 64);
+  EXPECT_EQ(nextPowerOfTwo(1ULL << 32), 1ULL << 32);
+  EXPECT_EQ(nextPowerOfTwo((1ULL << 32) + 1), 1ULL << 33);
+  EXPECT_EQ(nextPowerOfTwo((1ULL << 62) + 1), 1ULL << 63);
 }
 
 TEST_F(BitUtilTest, isPowerOfTwo) {
@@ -520,13 +541,28 @@ TEST_F(BitUtilTest, getAndClearLastSetBit) {
   EXPECT_EQ(bits, 0);
 }
 
+TEST_F(BitUtilTest, negateBit) {
+  char data[35];
+  for (int32_t i = 0; i < 100; i++) {
+    setBit(data, i, true);
+  }
+  std::vector<uint64_t> indices = {0, 1, 2, 3, 4, 5, 6, 7};
+  for (auto i : indices) {
+    negateBit(data, i);
+    EXPECT_EQ(isBitSet(data, i), false);
+  }
+  for (int32_t i = 8; i < 100; i++) {
+    EXPECT_EQ(isBitSet(data, i), true);
+  }
+}
+
 TEST_F(BitUtilTest, negate) {
   char data[35];
   for (int32_t i = 0; i < 100; i++) {
     setBit(data, i, i % 2 == 0);
   }
 
-  negate(data, 64);
+  negate(reinterpret_cast<uint64_t*>(data), 64);
   for (int32_t i = 0; i < 64; i++) {
     EXPECT_EQ(isBitSet(data, i), i % 2 != 0) << "at " << i;
   }
@@ -534,12 +570,12 @@ TEST_F(BitUtilTest, negate) {
     EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
   }
 
-  negate(data, 64);
+  negate(reinterpret_cast<uint64_t*>(data), 64);
   for (int32_t i = 0; i < 64; i++) {
     EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
   }
 
-  negate(data, 72);
+  negate(reinterpret_cast<uint64_t*>(data), 72);
   for (int32_t i = 0; i < 72; i++) {
     EXPECT_EQ(isBitSet(data, i), i % 2 != 0) << "at " << i;
   }
@@ -547,17 +583,17 @@ TEST_F(BitUtilTest, negate) {
     EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
   }
 
-  negate(data, 72);
+  negate(reinterpret_cast<uint64_t*>(data), 72);
   for (int32_t i = 0; i < 72; i++) {
     EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
   }
 
-  negate(data, 100);
+  negate(reinterpret_cast<uint64_t*>(data), 100);
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(isBitSet(data, i), i % 2 != 0) << "at " << i;
   }
 
-  negate(data, 100);
+  negate(reinterpret_cast<uint64_t*>(data), 100);
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
   }
@@ -809,6 +845,105 @@ TEST_F(BitUtilTest, rotateLeft64) {
   for (int32_t i = 0; i < 5; i++) {
     EXPECT_EQ(rotateLeft64(data[i], 2), expectedShift2[i]);
     EXPECT_EQ(rotateLeft64(data[i], 33), expectedShift33[i]);
+  }
+}
+
+TEST_F(BitUtilTest, bswap128) {
+  EXPECT_EQ(builtin_bswap128(10), HugeInt::build(720575940379279360, 0));
+  EXPECT_EQ(
+      builtin_bswap128(HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
+      -248);
+}
+
+TEST_F(BitUtilTest, countLeadingZeros) {
+  EXPECT_EQ(countLeadingZeros<uint64_t>(0), 64);
+  EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
+  EXPECT_EQ(
+      countLeadingZeros<__uint128_t>(
+          HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
+      4);
+  EXPECT_EQ(
+      countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
+}
+
+TEST_F(BitUtilTest, storeBitsToByte) {
+  uint8_t bytes[3]{};
+  storeBitsToByte<8>(0xAA, bytes, 0);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0);
+  ASSERT_EQ(bytes[2], 0);
+  storeBitsToByte<4>(0x5, bytes, 8);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0x5);
+  ASSERT_EQ(bytes[2], 0);
+  storeBitsToByte<4>(0xA, bytes, 12);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0xA5);
+  ASSERT_EQ(bytes[2], 0);
+}
+
+TEST_F(BitUtilTest, roundUp) {
+  struct {
+    uint64_t value;
+    uint64_t factor;
+    uint64_t expected;
+
+    std::string debugString() const {
+      return fmt::format(
+          "value: {}, factor: {}, expected: {}", value, factor, expected);
+    }
+  } testSettings[] = {
+      {10, 1, 10},
+      {10, 3, 12},
+      {10, 4, 12},
+      {10, 10, 10},
+      {10, 11, 11},
+      {10, 20, 20},
+      {11, 1, 11},
+      {11, 3, 12},
+      {11, 4, 12},
+      {11, 11, 11},
+      {11, 12, 12},
+      {11, 23, 23}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    ASSERT_EQ(
+        bits::roundUp(testData.value, testData.factor), testData.expected);
+  }
+}
+
+TEST_F(BitUtilTest, divRoundUp) {
+  struct {
+    uint64_t value;
+    uint64_t factor;
+    uint64_t expected;
+
+    std::string debugString() const {
+      return fmt::format(
+          "value: {}, factor: {}, expected: {}", value, factor, expected);
+    }
+  } testSettings[] = {
+      {10, 1, 10},
+      {10, 3, 4},
+      {10, 4, 3},
+      {10, 10, 1},
+      {10, 11, 1},
+      {10, 20, 1},
+      {11, 1, 11},
+      {11, 3, 4},
+      {11, 4, 3},
+      {11, 11, 1},
+      {11, 12, 1},
+      {11, 23, 1}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    ASSERT_EQ(
+        bits::divRoundUp(testData.value, testData.factor), testData.expected);
   }
 }
 } // namespace bits

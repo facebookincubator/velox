@@ -53,6 +53,51 @@ TEST_F(TransformValuesTest, basic) {
   assertEqualVectors(expectedResult, result);
 }
 
+TEST_F(TransformValuesTest, evaluateSubsetOfRows) {
+  // Test to verify that output complex vector of valid internal state is
+  // generated when only a subset of the rows are evaluated. To simulate this,
+  // the trailing rows are unselected to generate a values vector of smaller
+  // size so that indices for those rows would point to out of bounds location
+  // in values vector.
+  vector_size_t size = 100;
+  auto input = makeRowVector({
+      makeMapVector<int32_t, int64_t>(
+          size,
+          [](auto row) { return row % 5; },
+          [](auto row) { return row % 7; },
+          [](auto row) { return row % 11; },
+          nullEvery(13)),
+  });
+
+  // Test using 2 selectivity vectors. One of size 100 with 33 first rows
+  // selected. Another of size 33 with all rows selected. Both should produce
+  // the same result.
+  auto expectedResult = makeMapVector<int32_t, int64_t>(
+      size / 3,
+      [](auto row) { return row % 5; },
+      [](auto row) { return row % 7; },
+      [](auto row) { return row % 11 + 5; },
+      nullEvery(13));
+
+  {
+    SelectivityVector inputRows(size, false);
+    inputRows.setValidRange(0, size / 3, true);
+    inputRows.updateBounds();
+
+    auto result = evaluate<MapVector>(
+        "transform_values(c0, (k, v) -> v + 5)", input, inputRows);
+    assertEqualVectors(expectedResult, result, inputRows);
+  }
+
+  {
+    SelectivityVector inputRows(size / 3);
+
+    auto result = evaluate<MapVector>(
+        "transform_values(c0, (k, v) -> v + 5)", input, inputRows);
+    assertEqualVectors(expectedResult, result, inputRows);
+  }
+}
+
 TEST_F(TransformValuesTest, differentResultType) {
   vector_size_t size = 1'000;
   auto input = makeRowVector({

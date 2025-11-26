@@ -22,51 +22,38 @@
 
 namespace facebook::velox::dwrf {
 
-// Wrapper for static functions for making DWRF readers
+/// Wrapper for static functions for making DWRF readers
 class SelectiveDwrfReader {
  public:
   static std::unique_ptr<dwio::common::SelectiveColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
       bool isRoot = false);
 
-  // Compatibility wrapper for tests. Takes the components of DwrfParams as
-  // separate.
+  /// Compatibility wrapper for tests. Takes the components of DwrfParams as
+  /// separate.
   static std::unique_ptr<dwio::common::SelectiveColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      common::ScanSpec* FOLLY_NONNULL scanSpec,
+      dwio::common::ColumnReaderStatistics& stats,
+      common::ScanSpec* scanSpec,
       FlatMapContext flatMapContext = {},
       bool isRoot = false) {
-    auto params = DwrfParams(stripe, streamLabels, flatMapContext);
-    return build(requestedType, dataType, params, *scanSpec, isRoot);
+    auto params = DwrfParams(stripe, streamLabels, stats, flatMapContext);
+    return build(
+        columnReaderOptions,
+        requestedType,
+        fileType,
+        params,
+        *scanSpec,
+        isRoot);
   }
 };
 
-class SelectiveColumnReaderFactory : public ColumnReaderFactory {
- public:
-  explicit SelectiveColumnReaderFactory(
-      std::shared_ptr<common::ScanSpec> scanSpec)
-      : scanSpec_(scanSpec) {}
-
-  std::unique_ptr<dwio::common::SelectiveColumnReader> buildSelective(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      const StreamLabels& streamLabels,
-      FlatMapContext flatMapContext = {}) {
-    auto params = DwrfParams(stripe, streamLabels, std::move(flatMapContext));
-    auto reader =
-        SelectiveDwrfReader::build(requestedType, dataType, params, *scanSpec_);
-    reader->setIsTopLevel();
-    return reader;
-  }
-
- private:
-  std::shared_ptr<common::ScanSpec> const scanSpec_;
-};
 } // namespace facebook::velox::dwrf

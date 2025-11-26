@@ -15,14 +15,12 @@
  */
 #pragma once
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
-#pragma GCC diagnostic pop
 
+#include <string>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
-#include "velox/functions/UDFOutputString.h"
+#include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -75,24 +73,55 @@ template <typename T>
 struct AsciiFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int32_t& result, const arg_type<Varchar>& s) {
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Varchar>& s) {
+    if (s.empty()) {
+      result = 0;
+      return;
+    }
+    int size;
+    result = utf8proc_codepoint(s.data(), s.data() + s.size(), size);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      int32_t& result,
+      const arg_type<Varchar>& s) {
     result = s.empty() ? 0 : s.data()[0];
-    return true;
   }
 };
 
 template <typename T>
+struct BitLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, TInput& input) {
+    result = input.size() * 8;
+  }
+};
+
+/// chr function
+/// chr(n) -> string
+/// Returns the Unicode code point ``n`` as a single character string.
+/// If ``n < 0``, the result is an empty string.
+/// If ``n >= 256``, the result is equivalent to chr(``n % 256``).
+template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(out_type<Varchar>& result, int64_t ord) {
-    if (ord < 0) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result, int64_t n) {
+    if (n < 0) {
       result.resize(0);
     } else {
-      result.resize(1);
-      *result.data() = ord;
+      n = n & 0xFF;
+      if (n < 0x80) {
+        result.resize(1);
+        result.data()[0] = n;
+      } else {
+        result.resize(2);
+        result.data()[0] = 0xC0 + (n >> 6);
+        result.data()[1] = 0x80 + (n & 0x3F);
+      }
     }
-    return true;
   }
 };
 
@@ -231,7 +260,6 @@ struct StartsWithFunction {
       result = false;
     } else {
       result = str1.substr(0, str2.length()) == str2;
-      ;
     }
     return true;
   }
@@ -259,6 +287,156 @@ struct EndsWithFunction {
           str1.substr(str1.length() - str2.length(), str2.length()) == str2;
     }
     return true;
+  }
+};
+
+/// locate function
+/// locate(substring, string, start) -> integer
+///
+/// Returns the 1-based position of the first occurrence of 'substring' in
+/// 'string' after the give 'start' position. The search is from the beginning
+/// of 'string' to the end. 'start' is the starting character position in
+/// 'string' to search for the 'substring'. 'start' is 1-based and must be at
+/// least 1 and at most the characters number of 'string'.
+///
+/// The following rules on special values are applied to follow Spark's
+/// implementation. They are listed in order of priority:
+/// Returns 0 if 'start' is NULL. Returns NULL if 'substring' or 'string' is
+/// NULL. Returns 0 if 'start' is less than 1. Returns 1 if 'substring' is
+/// empty. Returns 0 if 'start' is greater than the characters number of
+/// 'string'. Returns 0 if 'substring' is not found in 'string'.
+template <typename T>
+struct LocateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& subString,
+      const arg_type<Varchar>& string,
+      const arg_type<int32_t>& start) {
+    if (start < 1) {
+      result = 0;
+    } else if (subString.empty()) {
+      result = 1;
+    } else if (start > string.size()) {
+      result = 0;
+    } else {
+      const auto position = stringImpl::stringPosition<true /*isAscii*/>(
+          std::string_view(
+              string.data() + start - 1, string.size() - start + 1),
+          std::string_view(subString.data(), subString.size()),
+          1 /*instance*/);
+      if (position) {
+        result = position + start - 1;
+      } else {
+        result = 0;
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool callNullable(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>* subString,
+      const arg_type<Varchar>* string,
+      const arg_type<int32_t>* start) {
+    if (start == nullptr) {
+      result = 0;
+      return true;
+    }
+    if (subString == nullptr || string == nullptr) {
+      return false;
+    }
+    if (*start < 1) {
+      result = 0;
+      return true;
+    }
+    if (subString->empty()) {
+      result = 1;
+      return true;
+    }
+    if (*start > stringImpl::length<false /*isAscii*/>(*string)) {
+      result = 0;
+      return true;
+    }
+
+    // Find the start byte index of the start character. For example, in the
+    // Unicode string "😋😋😋", each character occupies 4 bytes. When 'start' is
+    // 2, the 'startByteIndex' is 4 which specifies the start of the second
+    // character.
+    const auto startByteIndex = stringCore::cappedByteLengthUnicode(
+        string->data(), string->size(), *start - 1);
+
+    const auto position = stringImpl::stringPosition<false /*isAscii*/>(
+        std::string_view(
+            string->data() + startByteIndex, string->size() - startByteIndex),
+        std::string_view(subString->data(), subString->size()),
+        1 /*instance*/);
+    if (position) {
+      result = position + *start - 1;
+    } else {
+      result = 0;
+    }
+    return true;
+  }
+};
+
+/// Returns the substring from str before count occurrences of the delimiter
+/// delim. If count is positive, everything to the left of the final delimiter
+/// (counting from the left) is returned. If count is negative, everything to
+/// the right of the final delimiter (counting from the right) is returned. The
+/// function substring_index performs a case-sensitive match when searching for
+/// delim.
+template <typename T>
+struct SubstringIndexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& str,
+      const arg_type<Varchar>& delim,
+      const int32_t& count) {
+    if (count == 0) {
+      result.setEmpty();
+      return;
+    }
+
+    int64_t index;
+    if (count > 0) {
+      index = stringImpl::stringPosition<true, true>(
+          std::string_view(str.data(), str.size()),
+          std::string_view(delim.data(), delim.size()),
+          count);
+    } else {
+      index = stringImpl::stringPosition<true, false>(
+          std::string_view(str.data(), str.size()),
+          std::string_view(delim.data(), delim.size()),
+          -count);
+    }
+
+    // If 'delim' is not found or found fewer than 'count' times,
+    // return the input string directly.
+    if (index == 0) {
+      result.setNoCopy(str);
+      return;
+    }
+
+    auto start = 0;
+    auto length = str.size();
+    const auto delimLength = delim.size();
+    if (count > 0) {
+      length = index - 1;
+    } else {
+      start = index + delimLength - 1;
+      length -= start;
+    }
+
+    result.setNoCopy(StringView(str.data() + start, length));
   }
 };
 
@@ -386,9 +564,8 @@ struct TrimSpaceFunctionBase {
       const arg_type<Varchar>& srcStr) {
     // Because utf-8 and Ascii have the same space character code, both are
     // char=32. So trimAsciiSpace can be reused here.
-    stringImpl::
-        trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
-            result, srcStr);
+    stringImpl::trimAscii<leftTrim, rightTrim>(
+        result, srcStr, stringImpl::isAsciiSpace);
   }
 };
 
@@ -492,8 +669,8 @@ struct SubstrFunction {
       return;
     }
 
-    auto byteRange =
-        stringCore::getByteRange<isAscii>(input.data(), start, length);
+    auto byteRange = stringCore::getByteRange<isAscii>(
+        input.data(), input.size(), start, length);
 
     // Generating output string
     result.setNoCopy(StringView(
@@ -504,7 +681,7 @@ struct SubstrFunction {
 struct OverlayFunctionBase {
   template <bool isAscii, bool isVarchar>
   FOLLY_ALWAYS_INLINE void doCall(
-      exec::StringWriter<false>& result,
+      exec::StringWriter& result,
       StringView input,
       StringView replace,
       int32_t pos,
@@ -534,12 +711,12 @@ struct OverlayFunctionBase {
 
   template <bool isAscii, bool isVarchar>
   FOLLY_ALWAYS_INLINE void append(
-      exec::StringWriter<false>& result,
+      exec::StringWriter& result,
       StringView input,
       std::pair<int32_t, int32_t> pair) {
     if constexpr (isVarchar && !isAscii) {
       auto byteRange = stringCore::getByteRange<false>(
-          input.data(), pair.first + 1, pair.second);
+          input.data(), input.size(), pair.first + 1, pair.second);
       result.append(StringView(
           input.data() + byteRange.first, byteRange.second - byteRange.first));
     } else {
@@ -675,8 +852,8 @@ struct LeftFunction {
 
     int32_t start = 1;
 
-    auto byteRange =
-        stringCore::getByteRange<isAscii>(input.data(), start, length);
+    auto byteRange = stringCore::getByteRange<isAscii>(
+        input.data(), input.size(), start, length);
 
     // Generating output string
     result.setNoCopy(StringView(
@@ -698,54 +875,8 @@ struct TranslateFunction {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
-  std::optional<folly::F14FastMap<std::string, std::string>> unicodeDictionary_;
-  std::optional<folly::F14FastMap<char, char>> asciiDictionary_;
-
-  bool isConstantDictionary_ = false;
-
-  folly::F14FastMap<std::string, std::string> buildUnicodeDictionary(
-      const arg_type<Varchar>& match,
-      const arg_type<Varchar>& replace) {
-    folly::F14FastMap<std::string, std::string> dictionary;
-    int i = 0;
-    int j = 0;
-    while (i < match.size()) {
-      std::string replaceChar;
-      // If match's character size is larger than replace's, the extra
-      // characters in match will be removed from input string.
-      if (j < replace.size()) {
-        int replaceCharLength = utf8proc_char_length(replace.data() + j);
-        replaceChar = std::string(replace.data() + j, replaceCharLength);
-        j += replaceCharLength;
-      }
-      int matchCharLength = utf8proc_char_length(match.data() + i);
-      std::string matchChar = std::string(match.data() + i, matchCharLength);
-      // Only considers the first occurrence of a character in match.
-      dictionary.emplace(matchChar, replaceChar);
-      i += matchCharLength;
-    }
-    return dictionary;
-  }
-
-  folly::F14FastMap<char, char> buildAsciiDictionary(
-      const arg_type<Varchar>& match,
-      const arg_type<Varchar>& replace) {
-    folly::F14FastMap<char, char> dictionary;
-    int i = 0;
-    for (; i < std::min(match.size(), replace.size()); i++) {
-      char matchChar = *(match.data() + i);
-      char replaceChar = *(replace.data() + i);
-      // Only consider the first occurrence of a character in match.
-      dictionary.emplace(matchChar, replaceChar);
-    }
-    for (; i < match.size(); i++) {
-      char matchChar = *(match.data() + i);
-      dictionary.emplace(matchChar, '\0');
-    }
-    return dictionary;
-  }
-
   FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*string*/,
       const arg_type<Varchar>* match,
@@ -773,7 +904,7 @@ struct TranslateFunction {
     int i = 0;
     int k = 0;
     while (k < input.size()) {
-      int inputCharLength = utf8proc_char_length(input.data() + k);
+      int inputCharLength = getUtf8CharLength(input, k);
       auto inputChar = std::string(input.data() + k, inputCharLength);
       auto it = unicodeDictionary_->find(inputChar);
       if (it == unicodeDictionary_->end()) {
@@ -823,6 +954,605 @@ struct TranslateFunction {
     }
     result.resize(i);
   }
+
+ private:
+  // Returns the length of a UTF-8 character starting at 'offset'. Returns 1
+  // for invalid UTF-8 character.
+  FOLLY_ALWAYS_INLINE int32_t
+  getUtf8CharLength(const arg_type<Varchar>& input, int32_t offset) {
+    return std::min<int32_t>(
+        std::abs(utf8proc_char_length(input.data() + offset)),
+        input.size() - offset);
+  }
+
+  folly::F14FastMap<std::string, std::string> buildUnicodeDictionary(
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    folly::F14FastMap<std::string, std::string> dictionary;
+    int i = 0;
+    int j = 0;
+    while (i < match.size()) {
+      std::string replaceChar;
+      // If match's character size is larger than replace's, the extra
+      // characters in match will be removed from input string.
+      if (j < replace.size()) {
+        int replaceCharLength = getUtf8CharLength(replace, j);
+        replaceChar = std::string(replace.data() + j, replaceCharLength);
+        j += replaceCharLength;
+      }
+      int matchCharLength = getUtf8CharLength(match, i);
+      std::string matchChar = std::string(match.data() + i, matchCharLength);
+      // Only considers the first occurrence of a character in match.
+      dictionary.emplace(matchChar, replaceChar);
+      i += matchCharLength;
+    }
+    return dictionary;
+  }
+
+  folly::F14FastMap<char, char> buildAsciiDictionary(
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    folly::F14FastMap<char, char> dictionary;
+    int i = 0;
+    for (; i < std::min(match.size(), replace.size()); i++) {
+      char matchChar = *(match.data() + i);
+      char replaceChar = *(replace.data() + i);
+      // Only consider the first occurrence of a character in match.
+      dictionary.emplace(matchChar, replaceChar);
+    }
+    for (; i < match.size(); i++) {
+      char matchChar = *(match.data() + i);
+      dictionary.emplace(matchChar, '\0');
+    }
+    return dictionary;
+  }
+
+  std::optional<folly::F14FastMap<std::string, std::string>> unicodeDictionary_;
+  std::optional<folly::F14FastMap<char, char>> asciiDictionary_;
+
+  bool isConstantDictionary_ = false;
 };
 
+template <typename T>
+struct ConvFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  static const uint64_t kMaxUnsignedInt64_ = 0xFFFFFFFFFFFFFFFF;
+  static const int kMinBase = 2;
+  static const int kMaxBase = 36;
+
+  static bool checkInput(StringView input, int32_t fromBase, int32_t toBase) {
+    if (input.empty()) {
+      return false;
+    }
+    // Consistent with spark, only supports fromBase belonging to [2, 36]
+    // and toBase belonging to [2, 36] or [-36, -2].
+    if (fromBase < kMinBase || fromBase > kMaxBase ||
+        std::abs(toBase) < kMinBase || std::abs(toBase) > kMaxBase) {
+      return false;
+    }
+    return true;
+  }
+
+  static int32_t skipLeadingSpaces(StringView input) {
+    // Ignore leading spaces.
+    int i = 0;
+    for (; i < input.size(); i++) {
+      if (input.data()[i] != ' ') {
+        break;
+      }
+    }
+    return i;
+  }
+
+  static uint64_t
+  toUnsigned(StringView input, int32_t start, int32_t fromBase) {
+    uint64_t unsignedValue;
+    auto fromStatus = std::from_chars(
+        input.data() + start,
+        input.data() + input.size(),
+        unsignedValue,
+        fromBase);
+    if (fromStatus.ec == std::errc::invalid_argument) {
+      return 0;
+    }
+    if (fromStatus.ec == std::errc::result_out_of_range) {
+      return kMaxUnsignedInt64_;
+    }
+    return unsignedValue;
+  }
+
+  static void toUpper(char* buffer, const int32_t size) {
+    for (int i = 0; i < size; i++) {
+      buffer[i] = std::toupper(buffer[i]);
+    }
+  }
+
+  static std::pair<int64_t, int32_t> getSignedValueAndResultSize(
+      uint64_t unsignedValue,
+      bool isNegativeInput,
+      int32_t toBase) {
+    // This flag is used to make sure when we calculate the resultSize in
+    // `toChars` we always get a positive number. It is due to the
+    // `std::abs(min_int64)` would return a negative number.
+    auto isMinInt64Num =
+        unsignedValue == (uint64_t)std::numeric_limits<int64_t>::min();
+    int64_t signedValue;
+    int64_t absValue;
+    if (isMinInt64Num) {
+      signedValue = (int64_t)unsignedValue;
+      // `std::abs(min_int64)` return a negative number, so here we set
+      // absValue to max_int64 manually.
+      absValue = std::numeric_limits<int64_t>::max();
+    } else if (!isNegativeInput) {
+      signedValue = (int64_t)unsignedValue;
+      absValue = std::abs(signedValue);
+    } else {
+      signedValue = -std::abs((int64_t)unsignedValue);
+      absValue = std::abs(signedValue);
+    }
+    int32_t resultSize =
+        (int32_t)std::floor(std::log(absValue) / std::log(-toBase)) + 1;
+    // Negative symbol is considered.
+    if (signedValue < 0) {
+      ++resultSize;
+    }
+    return std::make_pair(signedValue, resultSize);
+  }
+
+  static std::pair<uint64_t, int32_t> getUnsignedValueAndResultSize(
+      uint64_t unsignedInput,
+      bool isNegativeInput,
+      int32_t toBase) {
+    uint64_t unsignedValue = unsignedInput;
+    if (isNegativeInput) {
+      int64_t negativeInput = -std::abs((int64_t)unsignedValue);
+      unsignedValue = (uint64_t)negativeInput;
+    } // Here directly use unsignedValue if isNegativeInput = false.
+    int32_t resultSize =
+        (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
+    return std::make_pair(unsignedValue, resultSize);
+  }
+
+  // For signed value, toBase is negative.
+  static void toChars(
+      out_type<Varchar>& result,
+      int64_t signedValue,
+      int32_t toBase,
+      int32_t resultSize) {
+    result.resize(resultSize);
+    auto toStatus = std::to_chars(
+        result.data(), result.data() + result.size(), signedValue, -toBase);
+    result.resize(toStatus.ptr - result.data());
+  }
+
+  // For unsigned value, toBase is positive.
+  static void toChars(
+      out_type<Varchar>& result,
+      uint64_t unsignedValue,
+      int32_t toBase,
+      int32_t resultSize) {
+    result.resize(resultSize);
+    auto toStatus = std::to_chars(
+        result.data(),
+        result.data() + result.size(),
+        unsignedValue,
+        std::abs(toBase));
+    result.resize(toStatus.ptr - result.data());
+  }
+
+  bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t fromBase,
+      int32_t toBase) {
+    if (!checkInput(input, fromBase, toBase)) {
+      return false;
+    }
+
+    auto i = skipLeadingSpaces(input);
+    // All are spaces.
+    if (i == input.size()) {
+      return false;
+    }
+    const bool isNegativeInput = (input.data()[i] == '-');
+    // Skips negative symbol.
+    if (isNegativeInput) {
+      ++i;
+    }
+
+    uint64_t unsignedInput = toUnsigned(input, i, fromBase);
+    if (unsignedInput == 0) {
+      result.append("0");
+      return true;
+    }
+
+    // When toBase is negative, converts to signed value. Otherwise, converts to
+    // unsigned value. Overflow is allowed, consistent with Spark.
+    if (toBase < 0) {
+      auto [signedValue, resultSize] =
+          getSignedValueAndResultSize(unsignedInput, isNegativeInput, toBase);
+      toChars(result, signedValue, toBase, resultSize);
+    } else {
+      auto [unsignedValue, resultSize] =
+          getUnsignedValueAndResultSize(unsignedInput, isNegativeInput, toBase);
+      toChars(result, unsignedValue, toBase, resultSize);
+    }
+
+    // Converts to uppper case, consistent with Spark.
+    if (std::abs(toBase) > 10) {
+      toUpper(result.data(), result.size());
+    }
+    return true;
+  }
+};
+
+/// replace(input, replaced) -> varchar
+///
+///     Removes all instances of ``replaced`` from ``input``.
+///     If ``replaced`` is an empty string, returns the original ``input``
+///     string.
+
+///
+/// replace(input, replaced, replacement) -> varchar
+///
+///     Replaces all instances of ``replaced`` with ``replacement`` in
+///     ``input``. If ``replaced`` is an empty string, returns the original
+///     ``input`` string.
+template <typename T>
+struct ReplaceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& replaced) {
+    result.reserve(input.size());
+    auto resultSize = stringCore::replace<true /*ignoreEmptyReplaced*/>(
+        result.data(),
+        std::string_view(input.data(), input.size()),
+        std::string_view(replaced.data(), replaced.size()),
+        std::string_view(),
+        false);
+    result.resize(resultSize);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& replaced,
+      const arg_type<Varchar>& replacement) {
+    size_t reserveSize = input.size();
+    if (replaced.size() != 0 && replacement.size() > replaced.size()) {
+      reserveSize = (input.size() / replaced.size()) * replacement.size() +
+          input.size() % replaced.size();
+    }
+    result.reserve(reserveSize);
+    auto resultSize = stringCore::replace<true /*ignoreEmptyReplaced*/>(
+        result.data(),
+        std::string_view(input.data(), input.size()),
+        std::string_view(replaced.data(), replaced.size()),
+        std::string_view(replacement.data(), replacement.size()),
+        false);
+    result.resize(resultSize);
+  }
+};
+
+template <typename T>
+struct FindInSetFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& str,
+      const arg_type<Varchar>& strArray) {
+    if (std::string_view(str).find(',') != std::string::npos) {
+      result = 0;
+      return;
+    }
+
+    int32_t index = 1;
+    int32_t lastComma = -1;
+    auto arrayData = strArray.data();
+    auto matchData = str.data();
+    size_t arraySize = strArray.size();
+    size_t matchSize = str.size();
+
+    for (int i = 0; i < arraySize; i++) {
+      if (arrayData[i] == ',') {
+        if (i - (lastComma + 1) == matchSize &&
+            std::memcmp(arrayData + (lastComma + 1), matchData, matchSize) ==
+                0) {
+          result = index;
+          return;
+        }
+        lastComma = i;
+        index++;
+      }
+    }
+
+    if (arraySize - (lastComma + 1) == matchSize &&
+        std::memcmp(arrayData + (lastComma + 1), matchData, matchSize) == 0) {
+      result = index;
+      return;
+    }
+
+    result = 0;
+    return;
+  }
+};
+
+/// repeat(input, n) -> varchar
+///
+///    Returns the string which repeats input n times.
+///    Result size must be less than or equal to 1MB.
+///    If n is less than or equal to 0, empty string is returned.
+template <typename T>
+struct RepeatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void
+  call(out_type<Varchar>& result, const arg_type<Varchar>& input, int32_t n) {
+    static constexpr size_t resultMaxSize = 1024 * 1024; // 1MB
+    auto inputSize = input.size();
+    if (inputSize == 0 || n <= 0) {
+      result.resize(0);
+      return;
+    }
+    int32_t newSize = velox::checkedMultiply<int32_t>(inputSize, n);
+    VELOX_USER_CHECK_LE(
+        newSize,
+        resultMaxSize,
+        "Result size must be less than or equal to {}",
+        resultMaxSize);
+    result.resize(newSize);
+    for (auto i = 0; i < n; ++i) {
+      std::memcpy(result.data() + i * inputSize, input.data(), inputSize);
+    }
+  }
+};
+
+template <typename T>
+struct SoundexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  /// Soundex is a phonetic algorithm for indexing names by sound, for details,
+  /// please see https://en.wikipedia.org/wiki/Soundex.
+  void call(out_type<Varchar>& result, const arg_type<Varchar>& input) {
+    size_t inputSize = input.size();
+    if (inputSize == 0) {
+      result.resize(0);
+      return;
+    }
+    if (!std::isalpha(input.data()[0])) {
+      // First character must be a letter, otherwise input is returned.
+      result = input;
+      return;
+    }
+    result.resize(4);
+    result.data()[0] = std::toupper(input.data()[0]);
+    int32_t soundexIndex = 1;
+    int32_t dataIndex = result.data()[0] - 'A';
+    char lastCode = kUSEnglishMapping[dataIndex];
+    for (auto i = 1; i < inputSize; ++i) {
+      if (!std::isalpha(input.data()[i])) {
+        lastCode = '0';
+        continue;
+      }
+      dataIndex = std::toupper(input.data()[i]) - 'A';
+      char code = kUSEnglishMapping[dataIndex];
+      if (code != '7') {
+        if (code != '0' && code != lastCode) {
+          result.data()[soundexIndex++] = code;
+          if (soundexIndex > 3) {
+            break;
+          }
+        }
+        lastCode = code;
+      }
+    }
+    for (; soundexIndex < 4; soundexIndex++) {
+      result.data()[soundexIndex] = '0';
+    }
+  }
+
+ private:
+  // Soundex mapping table.
+  static constexpr char kUSEnglishMapping[] = {
+      '0', '1', '2', '3', '0', '1', '2', '7', '0', '2', '2', '4', '5',
+      '5', '0', '1', '2', '6', '2', '3', '0', '1', '7', '2', '0', '2'};
+};
+
+/// Implementation adopted from
+/// org.apache.commons.text.similarity.LevenshteinDistance.limitedCompare and
+/// Velox Presto LevenshteinDistanceFunction.
+template <typename T>
+struct LevenshteinDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right,
+      int32_t threshold) {
+    auto leftCodePoints = stringImpl::stringToCodePoints(left);
+    auto rightCodePoints = stringImpl::stringToCodePoints(right);
+    doCall<int32_t>(
+        result,
+        leftCodePoints.data(),
+        rightCodePoints.data(),
+        leftCodePoints.size(),
+        rightCodePoints.size(),
+        threshold);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right,
+      int32_t threshold) {
+    auto leftCodePoints = reinterpret_cast<const uint8_t*>(left.data());
+    auto rightCodePoints = reinterpret_cast<const uint8_t*>(right.data());
+    doCall<uint8_t>(
+        result,
+        leftCodePoints,
+        rightCodePoints,
+        left.size(),
+        right.size(),
+        threshold);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    call(result, left, right, INT32_MAX);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    callAscii(result, left, right, INT32_MAX);
+  }
+
+ private:
+  // This implementation only computes the distance if it's less than or equal
+  // to the threshold value, setting result as -1 if it's greater. Threshold k
+  // allows us to reduce the time complexity from
+  // O(leftCodePointsSize * rightCodePointsSize) to
+  // O(k * rightCodePointsSize) by only computing a diagonal stripe of at most
+  // width 2k + 1 of the cost table.
+  // One example: suppose the two gives strings are of length 5 and 7, and
+  // threshold is 1. In this case we're going to walk through a stripe of
+  // length 3. The matrix would look like so:
+  //
+  // <pre>
+  //    0 1 2 3 4
+  // 0 |#|#| | | | --> lower boundary:0, upper:2;
+  // 1 |#|#|#| | | --> lower boundary:0, upper:3;
+  // 2 | |#|#|#| | --> lower boundary:1, upper:4;
+  // 3 | | |#|#|#| --> lower boundary:2, upper:5;
+  // 4 | | | |#|#| --> lower boundary:3, upper:5;
+  // 5 | | | | |#| --> lower boundary:4, upper:5;
+  // 6 | | | | | |
+  // </pre>
+  template <typename TCodePoint>
+  void doCall(
+      out_type<int32_t>& result,
+      const TCodePoint* leftCodePoints,
+      const TCodePoint* rightCodePoints,
+      size_t leftCodePointsSize,
+      size_t rightCodePointsSize,
+      int32_t threshold) {
+    if (leftCodePointsSize < rightCodePointsSize) {
+      doCall(
+          result,
+          rightCodePoints,
+          leftCodePoints,
+          rightCodePointsSize,
+          leftCodePointsSize,
+          threshold);
+      return;
+    }
+    VELOX_USER_CHECK_LE(
+        leftCodePointsSize,
+        INT32_MAX,
+        "The inputs size exceeded max Levenshtein distance input size,"
+        " the code points size of left is {}, code points size of right is {}",
+        leftCodePointsSize,
+        rightCodePointsSize);
+    if (leftCodePointsSize - rightCodePointsSize > threshold) {
+      result = -1;
+      return;
+    }
+    if (rightCodePointsSize == 0) {
+      result = leftCodePointsSize;
+      return;
+    }
+    std::vector<int32_t> distances;
+    distances.reserve(rightCodePointsSize);
+    // These fills ensure that the value above the rightmost entry of our
+    // stripe will be ignored in following loop iterations.
+    int32_t boundary = std::min<int32_t>(rightCodePointsSize, threshold);
+    auto i = 0;
+    for (; i < boundary; i++) {
+      distances.push_back(i + 1);
+    }
+    for (; i < rightCodePointsSize; i++) {
+      distances.push_back(INT32_MAX);
+    }
+
+    for (auto i = 0; i < leftCodePointsSize; i++) {
+      auto lower = std::max<int32_t>(0, i - threshold);
+      int32_t maxValueWithThreshold;
+      int32_t upper = rightCodePointsSize;
+      if (!__builtin_add_overflow(i + 1, threshold, &maxValueWithThreshold)) {
+        upper = std::min<int32_t>(rightCodePointsSize, maxValueWithThreshold);
+      }
+      if (lower > upper) {
+        result = -1;
+        return;
+      }
+      int32_t leftUpDistance;
+      if (lower == 0) {
+        leftUpDistance = distances[lower];
+        if (leftCodePoints[i] == rightCodePoints[0]) {
+          distances[0] = i;
+        } else {
+          distances[0] = std::min(i, distances[0]) + 1;
+        }
+        lower = 1;
+      } else {
+        leftUpDistance = distances[lower - 1];
+        // Set this as Max value to ignore entry left of leftmost.
+        distances[lower - 1] = INT32_MAX;
+      }
+      for (int j = lower; j < upper; j++) {
+        auto leftUpDistanceNext = distances[j];
+        if (leftCodePoints[i] == rightCodePoints[j]) {
+          distances[j] = leftUpDistance;
+        } else {
+          distances[j] =
+              std::min(
+                  distances[j - 1], std::min(leftUpDistance, distances[j])) +
+              1;
+        }
+        leftUpDistance = leftUpDistanceNext;
+      }
+    }
+    result = distances[rightCodePointsSize - 1];
+    if (result > threshold) {
+      result = -1;
+    }
+  }
+};
+
+/// empty2null(input) -> varchar
+///
+///    Returns NULL when the input is empty,
+///    otherwise, it returns the input itself.
+template <typename T>
+struct Empty2NullFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    if (input.empty()) {
+      return false;
+    }
+    result.setNoCopy(input);
+    return true;
+  }
+};
 } // namespace facebook::velox::functions::sparksql

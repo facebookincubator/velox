@@ -28,6 +28,8 @@ class Limit : public Operator {
 
   void addInput(RowVectorPtr input) override;
 
+  bool startDrain() override;
+
   RowVectorPtr getOutput() override;
 
   BlockingReason isBlocked(ContinueFuture* /*future*/) override {
@@ -39,8 +41,8 @@ class Limit : public Operator {
   }
 
  private:
-  int32_t remainingOffset_;
-  int32_t remainingLimit_;
+  int64_t remainingOffset_;
+  int64_t remainingLimit_;
   bool finished_{false};
 };
 } // namespace facebook::velox::exec

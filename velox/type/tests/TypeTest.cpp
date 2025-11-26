@@ -16,6 +16,10 @@
 #include "velox/type/Type.h"
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/CppToType.h"
+#include "velox/type/SimpleFunctionApi.h"
+#include "velox/type/TypeEncodingUtil.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 
 using namespace facebook;
 using namespace facebook::velox;
@@ -32,47 +36,77 @@ void testTypeSerde(const TypePtr& type) {
 }
 } // namespace
 
+TEST(TypeTest, constructorThrow) {
+  EXPECT_NO_THROW(RowType({"a", "b"}, {VARCHAR(), INTEGER()}));
+
+  EXPECT_THROW(RowType({"a"}, {VARCHAR(), INTEGER()}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      RowType({"a"}, {VARCHAR(), INTEGER()}),
+      "Mismatch names/types sizes: "
+      "[names: {'a'}, types: {VARCHAR, INTEGER}]");
+
+  EXPECT_THROW(RowType({"a", "b"}, {}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      RowType({"a", "b"}, {}),
+      "Mismatch names/types sizes: "
+      "[names: {'a', 'b'}, types: { }]");
+
+  EXPECT_THROW(RowType({"a", "b"}, {VARCHAR(), nullptr}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      RowType({"a", "b"}, {VARCHAR(), nullptr}),
+      "Child types cannot be null: "
+      "[names: {'a', 'b'}, types: {VARCHAR, NULL}]");
+}
+
 TEST(TypeTest, array) {
-  auto arrayType = ARRAY(ARRAY(ARRAY(INTEGER())));
-  EXPECT_EQ("ARRAY<ARRAY<ARRAY<INTEGER>>>", arrayType->toString());
-  EXPECT_EQ(arrayType->size(), 1);
+  const auto arrayType = ARRAY(ARRAY(ARRAY(INTEGER())));
+  ASSERT_EQ("ARRAY<ARRAY<ARRAY<INTEGER>>>", arrayType->toString());
+  ASSERT_EQ(arrayType->size(), 1);
   EXPECT_STREQ(arrayType->kindName(), "ARRAY");
-  EXPECT_EQ(arrayType->isPrimitiveType(), false);
+  ASSERT_EQ(arrayType->isPrimitiveType(), false);
   EXPECT_STREQ(arrayType->elementType()->kindName(), "ARRAY");
-  EXPECT_EQ(arrayType->childAt(0)->toString(), "ARRAY<ARRAY<INTEGER>>");
-  EXPECT_THROW(arrayType->childAt(1), VeloxUserError);
+  ASSERT_EQ(arrayType->childAt(0)->toString(), "ARRAY<ARRAY<INTEGER>>");
+  VELOX_ASSERT_USER_THROW(
+      arrayType->childAt(1), "Array type should have only one child");
 
   EXPECT_STREQ(arrayType->name(), "ARRAY");
-  EXPECT_EQ(arrayType->parameters().size(), 1);
-  EXPECT_TRUE(arrayType->parameters()[0].kind == TypeParameterKind::kType);
-  EXPECT_EQ(*arrayType->parameters()[0].type, *arrayType->childAt(0));
+  ASSERT_EQ(arrayType->parameters().size(), 1);
+  ASSERT_TRUE(arrayType->parameters()[0].kind == TypeParameterKind::kType);
+  ASSERT_EQ(*arrayType->parameters()[0].type, *arrayType->childAt(0));
+  ASSERT_EQ(approximateTypeEncodingwidth(arrayType), 4);
 
-  EXPECT_EQ(
+  ASSERT_EQ(
       *arrayType, *getType("ARRAY", {TypeParameter(ARRAY(ARRAY(INTEGER())))}));
 
   testTypeSerde(arrayType);
 }
 
 TEST(TypeTest, integer) {
-  auto int0 = INTEGER();
-  EXPECT_EQ(int0->toString(), "INTEGER");
-  EXPECT_EQ(int0->size(), 0);
-  EXPECT_THROW(int0->childAt(0), std::invalid_argument);
-  EXPECT_EQ(int0->kind(), TypeKind::INTEGER);
+  const auto int0 = INTEGER();
+  ASSERT_EQ(int0->toString(), "INTEGER");
+  ASSERT_EQ(int0->size(), 0);
+  VELOX_ASSERT_THROW(int0->childAt(0), "scalar type has no children");
+  ASSERT_EQ(int0->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(int0->kindName(), "INTEGER");
-  EXPECT_EQ(int0->begin(), int0->end());
+  ASSERT_EQ(int0->begin(), int0->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(int0), 1);
 
   testTypeSerde(int0);
 }
 
+TEST(TypeTest, hugeint) {
+  ASSERT_EQ(getType("HUGEINT", {}), HUGEINT());
+}
+
 TEST(TypeTest, timestamp) {
-  auto t0 = TIMESTAMP();
-  EXPECT_EQ(t0->toString(), "TIMESTAMP");
-  EXPECT_EQ(t0->size(), 0);
-  EXPECT_THROW(t0->childAt(0), std::invalid_argument);
-  EXPECT_EQ(t0->kind(), TypeKind::TIMESTAMP);
+  const auto t0 = TIMESTAMP();
+  ASSERT_EQ(t0->toString(), "TIMESTAMP");
+  ASSERT_EQ(t0->size(), 0);
+  VELOX_ASSERT_THROW(t0->childAt(0), "scalar type has no children");
+  ASSERT_EQ(t0->kind(), TypeKind::TIMESTAMP);
   EXPECT_STREQ(t0->kindName(), "TIMESTAMP");
-  EXPECT_EQ(t0->begin(), t0->end());
+  ASSERT_EQ(t0->begin(), t0->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(t0), 1);
 
   testTypeSerde(t0);
 }
@@ -123,88 +157,115 @@ TEST(TypeTest, timestampComparison) {
 }
 
 TEST(TypeTest, date) {
-  auto date = DATE();
-  EXPECT_EQ(date->toString(), "DATE");
-  EXPECT_EQ(date->size(), 0);
-  EXPECT_THROW(date->childAt(0), std::invalid_argument);
-  EXPECT_EQ(date->kind(), TypeKind::INTEGER);
+  const auto date = DATE();
+  ASSERT_EQ(date->toString(), "DATE");
+  ASSERT_EQ(date->size(), 0);
+  VELOX_ASSERT_THROW(date->childAt(0), "scalar type has no children");
+  ASSERT_EQ(date->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(date->kindName(), "INTEGER");
-  EXPECT_EQ(date->begin(), date->end());
+  ASSERT_EQ(date->begin(), date->end());
 
-  EXPECT_TRUE(date->kindEquals(INTEGER()));
-  EXPECT_NE(*date, *INTEGER());
-  EXPECT_FALSE(date->equivalent(*INTEGER()));
-  EXPECT_FALSE(INTEGER()->equivalent(*date));
+  ASSERT_TRUE(date->kindEquals(INTEGER()));
+  ASSERT_NE(*date, *INTEGER());
+  ASSERT_FALSE(date->equivalent(*INTEGER()));
+  ASSERT_FALSE(INTEGER()->equivalent(*date));
+  ASSERT_EQ(approximateTypeEncodingwidth(date), 1);
 
   testTypeSerde(date);
 }
 
 TEST(TypeTest, intervalDayTime) {
-  auto interval = INTERVAL_DAY_TIME();
-  EXPECT_EQ(interval->toString(), "INTERVAL DAY TO SECOND");
-  EXPECT_EQ(interval->size(), 0);
-  EXPECT_THROW(interval->childAt(0), std::invalid_argument);
-  EXPECT_EQ(interval->kind(), TypeKind::BIGINT);
+  const auto interval = INTERVAL_DAY_TIME();
+  ASSERT_EQ(interval->toString(), "INTERVAL DAY TO SECOND");
+  ASSERT_EQ(interval->size(), 0);
+  VELOX_ASSERT_THROW(interval->childAt(0), "scalar type has no children");
+  ASSERT_EQ(interval->kind(), TypeKind::BIGINT);
   EXPECT_STREQ(interval->kindName(), "BIGINT");
-  EXPECT_EQ(interval->begin(), interval->end());
+  ASSERT_EQ(interval->begin(), interval->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(interval), 1);
 
   EXPECT_TRUE(interval->kindEquals(BIGINT()));
-  EXPECT_NE(*interval, *BIGINT());
-  EXPECT_FALSE(interval->equivalent(*BIGINT()));
-  EXPECT_FALSE(BIGINT()->equivalent(*interval));
+  ASSERT_NE(*interval, *BIGINT());
+  ASSERT_FALSE(interval->equivalent(*BIGINT()));
+  ASSERT_FALSE(BIGINT()->equivalent(*interval));
 
-  int64_t millis = kMillisInDay * 5 + kMillisInHour * 4 + kMillisInMinute * 6 +
-      kMillisInSecond * 7 + 98;
-  EXPECT_EQ("5 04:06:07.098", INTERVAL_DAY_TIME()->valueToString(millis));
+  const int64_t millis = kMillisInDay * 5 + kMillisInHour * 4 +
+      kMillisInMinute * 6 + kMillisInSecond * 7 + 98;
+  ASSERT_EQ("5 04:06:07.098", INTERVAL_DAY_TIME()->valueToString(millis));
 
   testTypeSerde(interval);
 }
 
 TEST(TypeTest, intervalYearMonth) {
-  auto interval = INTERVAL_YEAR_MONTH();
-  EXPECT_EQ(interval->toString(), "INTERVAL YEAR TO MONTH");
-  EXPECT_EQ(interval->size(), 0);
-  EXPECT_THROW(interval->childAt(0), std::invalid_argument);
-  EXPECT_EQ(interval->kind(), TypeKind::INTEGER);
+  const auto interval = INTERVAL_YEAR_MONTH();
+  ASSERT_EQ(interval->toString(), "INTERVAL YEAR TO MONTH");
+  ASSERT_EQ(interval->size(), 0);
+  VELOX_ASSERT_THROW(interval->childAt(0), "scalar type has no children");
+  ASSERT_EQ(interval->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(interval->kindName(), "INTEGER");
-  EXPECT_EQ(interval->begin(), interval->end());
+  ASSERT_EQ(interval->begin(), interval->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(interval), 1);
 
   EXPECT_TRUE(interval->kindEquals(INTEGER()));
-  EXPECT_NE(*interval, *INTEGER());
-  EXPECT_FALSE(interval->equivalent(*INTEGER()));
+  ASSERT_NE(*interval, *INTEGER());
+  ASSERT_FALSE(interval->equivalent(*INTEGER()));
   EXPECT_FALSE(INTEGER()->equivalent(*interval));
 
   int32_t month = kMonthInYear * 2 + 1;
-  EXPECT_EQ("2-1", INTERVAL_YEAR_MONTH()->valueToString(month));
+  ASSERT_EQ("2-1", INTERVAL_YEAR_MONTH()->valueToString(month));
 
   month = kMonthInYear * -2 + -1;
-  EXPECT_EQ("-2-1", INTERVAL_YEAR_MONTH()->valueToString(month));
+  ASSERT_EQ("-2-1", INTERVAL_YEAR_MONTH()->valueToString(month));
+
+  ASSERT_EQ(
+      "-178956970-8",
+      INTERVAL_YEAR_MONTH()->valueToString(
+          std::numeric_limits<int32_t>::min()));
 
   testTypeSerde(interval);
 }
 
-TEST(TypeTest, shortDecimal) {
-  auto shortDecimal = DECIMAL(10, 5);
-  EXPECT_EQ(shortDecimal->toString(), "DECIMAL(10,5)");
-  EXPECT_EQ(shortDecimal->size(), 0);
-  EXPECT_THROW(shortDecimal->childAt(0), std::invalid_argument);
-  EXPECT_EQ(shortDecimal->kind(), TypeKind::BIGINT);
-  EXPECT_EQ(shortDecimal->begin(), shortDecimal->end());
+TEST(TypeTest, unknown) {
+  const auto type = UNKNOWN();
+  ASSERT_EQ(type->toString(), "UNKNOWN");
+  ASSERT_EQ(type->size(), 0);
+  EXPECT_THROW(type->childAt(0), std::invalid_argument);
+  ASSERT_EQ(type->kind(), TypeKind::UNKNOWN);
+  EXPECT_STREQ(type->kindName(), "UNKNOWN");
+  ASSERT_EQ(type->begin(), type->end());
+  ASSERT_TRUE(type->isComparable());
+  ASSERT_TRUE(type->isOrderable());
+  ASSERT_EQ(approximateTypeEncodingwidth(type), 1);
 
-  EXPECT_EQ(*DECIMAL(10, 5), *shortDecimal);
-  EXPECT_NE(*DECIMAL(9, 5), *shortDecimal);
-  EXPECT_NE(*DECIMAL(10, 4), *shortDecimal);
+  testTypeSerde(type);
+}
+
+TEST(TypeTest, shortDecimal) {
+  const auto shortDecimal = DECIMAL(10, 5);
+  ASSERT_EQ(shortDecimal->toString(), "DECIMAL(10, 5)");
+  ASSERT_EQ(shortDecimal->size(), 0);
+  VELOX_ASSERT_THROW(shortDecimal->childAt(0), "scalar type has no children");
+  ASSERT_EQ(shortDecimal->kind(), TypeKind::BIGINT);
+  ASSERT_EQ(shortDecimal->begin(), shortDecimal->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(shortDecimal), 1);
+
+  ASSERT_EQ(*DECIMAL(10, 5), *shortDecimal);
+  ASSERT_NE(*DECIMAL(9, 5), *shortDecimal);
+  ASSERT_NE(*DECIMAL(10, 4), *shortDecimal);
+
+  VELOX_ASSERT_THROW(
+      DECIMAL(0, 0), "Precision of decimal type must be at least 1");
 
   EXPECT_STREQ(shortDecimal->name(), "DECIMAL");
-  EXPECT_EQ(shortDecimal->parameters().size(), 2);
-  EXPECT_TRUE(
+  ASSERT_EQ(shortDecimal->parameters().size(), 2);
+  ASSERT_TRUE(
       shortDecimal->parameters()[0].kind == TypeParameterKind::kLongLiteral);
-  EXPECT_EQ(shortDecimal->parameters()[0].longLiteral.value(), 10);
-  EXPECT_TRUE(
+  ASSERT_EQ(shortDecimal->parameters()[0].longLiteral.value(), 10);
+  ASSERT_TRUE(
       shortDecimal->parameters()[1].kind == TypeParameterKind::kLongLiteral);
-  EXPECT_EQ(shortDecimal->parameters()[1].longLiteral.value(), 5);
+  ASSERT_EQ(shortDecimal->parameters()[1].longLiteral.value(), 5);
 
-  EXPECT_EQ(
+  ASSERT_EQ(
       *shortDecimal,
       *getType(
           "DECIMAL",
@@ -217,30 +278,31 @@ TEST(TypeTest, shortDecimal) {
 }
 
 TEST(TypeTest, longDecimal) {
-  auto longDecimal = DECIMAL(30, 5);
-  EXPECT_EQ(longDecimal->toString(), "DECIMAL(30,5)");
-  EXPECT_EQ(longDecimal->size(), 0);
-  EXPECT_THROW(longDecimal->childAt(0), std::invalid_argument);
-  EXPECT_EQ(longDecimal->kind(), TypeKind::HUGEINT);
-  EXPECT_EQ(longDecimal->begin(), longDecimal->end());
-  EXPECT_EQ(*DECIMAL(30, 5), *longDecimal);
-  EXPECT_NE(*DECIMAL(9, 5), *longDecimal);
-  EXPECT_NE(*DECIMAL(30, 3), *longDecimal);
+  const auto longDecimal = DECIMAL(30, 5);
+  ASSERT_EQ(longDecimal->toString(), "DECIMAL(30, 5)");
+  ASSERT_EQ(longDecimal->size(), 0);
+  VELOX_ASSERT_THROW(longDecimal->childAt(0), "scalar type has no children");
+  ASSERT_EQ(longDecimal->kind(), TypeKind::HUGEINT);
+  ASSERT_EQ(longDecimal->begin(), longDecimal->end());
+  ASSERT_EQ(*DECIMAL(30, 5), *longDecimal);
+  ASSERT_NE(*DECIMAL(9, 5), *longDecimal);
+  ASSERT_NE(*DECIMAL(30, 3), *longDecimal);
   VELOX_ASSERT_THROW(
       DECIMAL(39, 5), "Precision of decimal type must not exceed 38");
   VELOX_ASSERT_THROW(
       DECIMAL(25, 26), "Scale of decimal type must not exceed its precision");
 
+  ASSERT_EQ(approximateTypeEncodingwidth(longDecimal), 1);
   EXPECT_STREQ(longDecimal->name(), "DECIMAL");
-  EXPECT_EQ(longDecimal->parameters().size(), 2);
+  ASSERT_EQ(longDecimal->parameters().size(), 2);
   EXPECT_TRUE(
       longDecimal->parameters()[0].kind == TypeParameterKind::kLongLiteral);
-  EXPECT_EQ(longDecimal->parameters()[0].longLiteral.value(), 30);
-  EXPECT_TRUE(
+  ASSERT_EQ(longDecimal->parameters()[0].longLiteral.value(), 30);
+  ASSERT_TRUE(
       longDecimal->parameters()[1].kind == TypeParameterKind::kLongLiteral);
-  EXPECT_EQ(longDecimal->parameters()[1].longLiteral.value(), 5);
+  ASSERT_EQ(longDecimal->parameters()[1].longLiteral.value(), 5);
 
-  EXPECT_EQ(
+  ASSERT_EQ(
       *longDecimal,
       *getType(
           "DECIMAL",
@@ -311,35 +373,36 @@ TEST(TypeTest, dateFormat) {
 }
 
 TEST(TypeTest, map) {
-  auto mapType = MAP(INTEGER(), ARRAY(BIGINT()));
-  EXPECT_EQ(mapType->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");
-  EXPECT_EQ(mapType->size(), 2);
-  EXPECT_EQ(mapType->childAt(0)->toString(), "INTEGER");
-  EXPECT_EQ(mapType->childAt(1)->toString(), "ARRAY<BIGINT>");
-  EXPECT_THROW(mapType->childAt(2), VeloxUserError);
-  EXPECT_EQ(mapType->kind(), TypeKind::MAP);
+  const auto mapType = MAP(INTEGER(), ARRAY(BIGINT()));
+  ASSERT_EQ(mapType->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");
+  ASSERT_EQ(mapType->size(), 2);
+  ASSERT_EQ(mapType->childAt(0)->toString(), "INTEGER");
+  ASSERT_EQ(mapType->childAt(1)->toString(), "ARRAY<BIGINT>");
+  VELOX_ASSERT_USER_THROW(
+      mapType->childAt(2), "Map type should have only two children");
+  ASSERT_EQ(mapType->kind(), TypeKind::MAP);
   EXPECT_STREQ(mapType->kindName(), "MAP");
   int32_t num = 0;
   for (auto& i : *mapType) {
     if (num == 0) {
-      EXPECT_EQ(i->toString(), "INTEGER");
+      ASSERT_EQ(i->toString(), "INTEGER");
     } else if (num == 1) {
-      EXPECT_EQ(i->toString(), "ARRAY<BIGINT>");
+      ASSERT_EQ(i->toString(), "ARRAY<BIGINT>");
     } else {
       FAIL();
     }
     ++num;
   }
-  CHECK_EQ(num, 2);
+  ASSERT_EQ(num, 2);
 
   EXPECT_STREQ(mapType->name(), "MAP");
-  EXPECT_EQ(mapType->parameters().size(), 2);
+  ASSERT_EQ(mapType->parameters().size(), 2);
   for (auto i = 0; i < 2; ++i) {
-    EXPECT_TRUE(mapType->parameters()[i].kind == TypeParameterKind::kType);
-    EXPECT_EQ(*mapType->parameters()[i].type, *mapType->childAt(i));
+    ASSERT_TRUE(mapType->parameters()[i].kind == TypeParameterKind::kType);
+    ASSERT_EQ(*mapType->parameters()[i].type, *mapType->childAt(i));
   }
 
-  EXPECT_EQ(
+  ASSERT_EQ(
       *mapType,
       *getType(
           "MAP",
@@ -348,30 +411,33 @@ TEST(TypeTest, map) {
               TypeParameter(ARRAY(BIGINT())),
           }));
 
+  ASSERT_EQ(approximateTypeEncodingwidth(mapType), 4);
+
   testTypeSerde(mapType);
 }
 
 TEST(TypeTest, row) {
+  VELOX_ASSERT_THROW(ROW({{"a", nullptr}}), "Child types cannot be null");
   auto row0 = ROW({{"a", INTEGER()}, {"b", ROW({{"a", BIGINT()}})}});
   auto rowInner = row0->childAt(1);
-  EXPECT_EQ(row0->toString(), "ROW<a:INTEGER,b:ROW<a:BIGINT>>");
-  EXPECT_EQ(row0->size(), 2);
-  EXPECT_EQ(rowInner->size(), 1);
+  ASSERT_EQ(row0->toString(), "ROW<a:INTEGER,b:ROW<a:BIGINT>>");
+  ASSERT_EQ(row0->size(), 2);
+  ASSERT_EQ(rowInner->size(), 1);
   EXPECT_STREQ(row0->childAt(0)->kindName(), "INTEGER");
   EXPECT_STREQ(row0->findChild("a")->kindName(), "INTEGER");
-  EXPECT_EQ(row0->nameOf(0), "a");
-  EXPECT_EQ(row0->nameOf(1), "b");
-  EXPECT_THROW(row0->nameOf(4), std::out_of_range);
-  EXPECT_THROW(row0->findChild("not_exist"), VeloxUserError);
-  // todo: expected case behavior?:
+  ASSERT_EQ(row0->nameOf(0), "a");
+  ASSERT_EQ(row0->nameOf(1), "b");
+  VELOX_ASSERT_THROW(row0->nameOf(4), "");
+  VELOX_ASSERT_USER_THROW(row0->findChild("not_exist"), "Field not found");
+  // TODO: expected case behavior?:
   VELOX_ASSERT_THROW(
       row0->findChild("A"), "Field not found: A. Available fields are: a, b.");
-  EXPECT_EQ(row0->childAt(1)->toString(), "ROW<a:BIGINT>");
-  EXPECT_EQ(row0->findChild("b")->toString(), "ROW<a:BIGINT>");
-  EXPECT_EQ(row0->findChild("b")->asRow().findChild("a")->toString(), "BIGINT");
-  EXPECT_TRUE(row0->containsChild("a"));
-  EXPECT_TRUE(row0->containsChild("b"));
-  EXPECT_FALSE(row0->containsChild("c"));
+  ASSERT_EQ(row0->childAt(1)->toString(), "ROW<a:BIGINT>");
+  ASSERT_EQ(row0->findChild("b")->toString(), "ROW<a:BIGINT>");
+  ASSERT_EQ(row0->findChild("b")->asRow().findChild("a")->toString(), "BIGINT");
+  ASSERT_TRUE(row0->containsChild("a"));
+  ASSERT_TRUE(row0->containsChild("b"));
+  ASSERT_FALSE(row0->containsChild("c"));
   int32_t seen = 0;
   for (auto& i : *row0) {
     if (seen == 0) {
@@ -380,34 +446,37 @@ TEST(TypeTest, row) {
       EXPECT_EQ("ROW<a:BIGINT>", i->toString());
       int32_t seen2 = 0;
       for (auto& j : *i) {
-        EXPECT_EQ(j->toString(), "BIGINT");
+        ASSERT_EQ(j->toString(), "BIGINT");
         seen2++;
       }
-      EXPECT_EQ(seen2, 1);
+      ASSERT_EQ(seen2, 1);
     }
     seen++;
   }
-  CHECK_EQ(seen, 2);
+  ASSERT_EQ(seen, 2);
+  ASSERT_EQ(approximateTypeEncodingwidth(row0), 2);
 
   EXPECT_STREQ(row0->name(), "ROW");
-  EXPECT_EQ(row0->parameters().size(), 2);
+  ASSERT_EQ(row0->parameters().size(), 2);
   for (auto i = 0; i < 2; ++i) {
-    EXPECT_TRUE(row0->parameters()[i].kind == TypeParameterKind::kType);
-    EXPECT_EQ(*row0->parameters()[i].type, *row0->childAt(i));
+    ASSERT_TRUE(row0->parameters()[i].kind == TypeParameterKind::kType);
+    ASSERT_EQ(*row0->parameters()[i].type, *row0->childAt(i));
   }
 
-  auto row1 =
-      ROW({{"a,b", INTEGER()}, {"my \"column\"", ROW({{"#1", BIGINT()}})}});
-  EXPECT_EQ(
+  const auto row1 =
+      ROW({{"a,b", INTEGER()}, {R"(my "column")", ROW({{"#1", BIGINT()}})}});
+  ASSERT_EQ(
       row1->toString(),
-      "ROW<\"a,b\":INTEGER,\"my \"\"column\"\"\":ROW<\"#1\":BIGINT>>");
-  EXPECT_EQ(row1->nameOf(0), "a,b");
-  EXPECT_EQ(row1->nameOf(1), "my \"column\"");
-  EXPECT_EQ(row1->childAt(1)->toString(), "ROW<\"#1\":BIGINT>");
+      R"(ROW<"a,b":INTEGER,"my ""column""":ROW<"#1":BIGINT>>)");
+  ASSERT_EQ(row1->nameOf(0), "a,b");
+  ASSERT_EQ(row1->nameOf(1), R"(my "column")");
+  ASSERT_EQ(row1->childAt(1)->toString(), R"(ROW<"#1":BIGINT>)");
+  ASSERT_EQ(approximateTypeEncodingwidth(row1), 2);
 
-  auto row2 = ROW({{"", INTEGER()}});
-  EXPECT_EQ(row2->toString(), "ROW<\"\":INTEGER>");
-  EXPECT_EQ(row2->nameOf(0), "");
+  const auto row2 = ROW({{"", INTEGER()}});
+  ASSERT_EQ(row2->toString(), R"(ROW<"":INTEGER>)");
+  ASSERT_EQ(row2->nameOf(0), "");
+  ASSERT_EQ(approximateTypeEncodingwidth(row2), 1);
 
   VELOX_ASSERT_THROW(createScalarType(TypeKind::ROW), "not a scalar type");
   VELOX_ASSERT_THROW(
@@ -419,41 +488,178 @@ TEST(TypeTest, row) {
   testTypeSerde(rowInner);
 }
 
+TEST(TypeTest, wideRow) {
+  std::vector<std::string> names;
+  names.reserve(1'000);
+  for (auto i = 0; i < 1'000; ++i) {
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto rowType = ROW(std::move(names), BIGINT());
+
+  ASSERT_EQ(rowType->findChild("c17")->toString(), "BIGINT");
+  VELOX_ASSERT_THROW(
+      rowType->findChild("blah"),
+      "Field not found: blah. Available fields are: c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, ...950 more");
+}
+
+TEST(TypeTest, serdeCache) {
+  std::vector<std::string> names;
+  names.reserve(100);
+  for (auto i = 0; i < 100; ++i) {
+    names.push_back(fmt::format("c{}", i));
+  }
+  std::vector<TypePtr> types(100, REAL());
+  auto rowType = ROW(std::move(names), std::move(types));
+
+  auto& cache = serializedTypeCache();
+  ASSERT_FALSE(cache.isEnabled());
+
+  testTypeSerde(rowType);
+  ASSERT_EQ(0, cache.size());
+
+  cache.enable();
+  SCOPE_EXIT {
+    cache.disable();
+    cache.clear();
+    deserializedTypeCache().clear();
+  };
+
+  folly::dynamic serializedType;
+  for (auto i = 0; i < 10; ++i) {
+    serializedType = rowType->serialize();
+    ASSERT_EQ(1, cache.size());
+  }
+
+  auto serializedCache = cache.serialize();
+
+  ASSERT_EQ(0, deserializedTypeCache().size());
+  deserializedTypeCache().deserialize(serializedCache);
+  ASSERT_EQ(1, deserializedTypeCache().size());
+
+  auto copy = velox::ISerializable::deserialize<Type>(serializedType);
+  ASSERT_EQ(rowType->toString(), copy->toString());
+  ASSERT_EQ(*rowType, *copy);
+}
+
 TEST(TypeTest, emptyRow) {
   auto row = ROW({});
   testTypeSerde(row);
+}
+
+TEST(TypeTest, singleFieldRow) {
+  auto rowType = ROW("a", REAL());
+  testTypeSerde(rowType);
+
+  auto equivalentRowType = ROW({{"a", REAL()}});
+  ASSERT_EQ(*rowType, *equivalentRowType);
+  testTypeSerde(equivalentRowType);
+
+  equivalentRowType = ROW({"a"}, {REAL()});
+  ASSERT_EQ(*rowType, *equivalentRowType);
+  testTypeSerde(equivalentRowType);
+}
+
+TEST(TypeTest, homogenousRow) {
+  auto rowType = ROW({"a", "b", "c"}, REAL());
+  auto equivalentRowType = ROW({"a", "b", "c"}, {REAL(), REAL(), REAL()});
+  ASSERT_EQ(*rowType, *equivalentRowType);
+  testTypeSerde(rowType);
+}
+
+TEST(TypeTest, rowParametersMultiThreaded) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (int i = 0; i < 20'000; ++i) {
+    auto name = fmt::format("c{}", i);
+    names.push_back(name);
+    types.push_back(ROW({name}, {BIGINT()}));
+  }
+  auto type = ROW(std::move(names), std::move(types));
+  constexpr int kNumThreads = 72;
+  std::span<const TypeParameter> parameters[kNumThreads];
+  std::vector<std::thread> threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i] { parameters[i] = type->parameters(); });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (int i = 1; i < kNumThreads; ++i) {
+    ASSERT_TRUE(parameters[i].data() == parameters[0].data());
+    ASSERT_TRUE(parameters[i].size() == parameters[0].size());
+  }
+  ASSERT_EQ(parameters[0].size(), type->size());
+  for (int i = 0; i < parameters[0].size(); ++i) {
+    ASSERT_TRUE(parameters[0][i].type.get() == type->childAt(i).get());
+  }
+}
+
+TEST(TypeTest, rowHashKindMultiThreaded) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (int i = 0; i < 20'000; ++i) {
+    auto name = fmt::format("c{}", i);
+    names.push_back(name);
+    types.push_back(ROW({name}, {BIGINT()}));
+  }
+  auto type = ROW(std::move(names), std::move(types));
+  constexpr int kNumThreads = 72;
+  size_t hashes[kNumThreads];
+  std::vector<std::thread> threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i] { hashes[i] = type->hashKind(); });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (int i = 1; i < kNumThreads; ++i) {
+    ASSERT_TRUE(hashes[i] == hashes[0]);
+  }
 }
 
 class Foo {};
 class Bar {};
 
 TEST(TypeTest, opaque) {
-  auto foo = OpaqueType::create<Foo>();
-  auto bar = OpaqueType::create<Bar>();
-  // Names currently use typeid which is not stable across platforms. We'd need
-  // to change it later if we start serializing opaque types, e.g. we can ask
-  // user to "register" the name for the type explicitly.
-  EXPECT_NE(std::string::npos, foo->toString().find("OPAQUE<"));
-  EXPECT_NE(std::string::npos, foo->toString().find("Foo"));
-  EXPECT_EQ(foo->size(), 0);
-  EXPECT_THROW(foo->childAt(0), std::invalid_argument);
+  const auto foo = OpaqueType::create<Foo>();
+  VELOX_ASSERT_THROW(
+      approximateTypeEncodingwidth(foo), "Unsupported type: OPAQUE<Foo>");
+  const auto bar = OpaqueType::create<Bar>();
+  // Names currently use typeid which is not stable across platforms. We'd
+  // need to change it later if we start serializing opaque types, e.g. we can
+  // ask user to "register" the name for the type explicitly.
+  ASSERT_NE(std::string::npos, foo->toString().find("OPAQUE<"));
+  ASSERT_NE(std::string::npos, foo->toString().find("Foo"));
+  ASSERT_EQ(foo->size(), 0);
+  VELOX_ASSERT_THROW(foo->childAt(0), "OpaqueType type has no children");
   EXPECT_STREQ(foo->kindName(), "OPAQUE");
-  EXPECT_EQ(foo->isPrimitiveType(), false);
+  ASSERT_EQ(foo->isPrimitiveType(), false);
 
   auto foo2 = OpaqueType::create<Foo>();
-  EXPECT_NE(*foo, *bar);
-  EXPECT_EQ(*foo, *foo2);
+  ASSERT_NE(*foo, *bar);
+  ASSERT_EQ(*foo, *foo2);
 
   OpaqueType::registerSerialization<Foo>("id_of_foo");
-  EXPECT_EQ(foo->serialize()["opaque"], "id_of_foo");
-  EXPECT_THROW(foo->getSerializeFunc(), VeloxException);
-  EXPECT_THROW(foo->getDeserializeFunc(), VeloxException);
-  EXPECT_THROW(bar->serialize(), VeloxException);
-  EXPECT_THROW(bar->getSerializeFunc(), VeloxException);
-  EXPECT_THROW(bar->getDeserializeFunc(), VeloxException);
+  ASSERT_EQ(foo->serialize()["opaque"], "id_of_foo");
+  VELOX_ASSERT_THROW(
+      foo->getSerializeFunc(),
+      "No serialization function registered for OPAQUE<Foo>");
+  VELOX_ASSERT_THROW(
+      foo->getDeserializeFunc(),
+      "No deserialization function registered for OPAQUE<Foo>");
+  VELOX_ASSERT_THROW(
+      bar->serialize(),
+      "No serialization persistent name registered for OPAQUE<Bar>");
+  VELOX_ASSERT_THROW(
+      bar->getSerializeFunc(),
+      "No serialization function registered for OPAQUE<Bar>");
+  VELOX_ASSERT_THROW(
+      bar->getDeserializeFunc(),
+      "No deserialization function registered for OPAQUE<Bar>");
 
   auto foo3 = Type::create(foo->serialize());
-  EXPECT_EQ(*foo, *foo3);
+  ASSERT_EQ(*foo, *foo3);
 
   OpaqueType::registerSerialization<Bar>(
       "id_of_bar",
@@ -504,7 +710,7 @@ TEST(TypeTest, opaqueWithMetadata) {
   auto type = std::make_shared<OpaqueWithMetadataType>(123);
   auto type2 = std::make_shared<OpaqueWithMetadataType>(123);
   auto other = std::make_shared<OpaqueWithMetadataType>(234);
-  EXPECT_TRUE(def->operator!=(*type));
+  EXPECT_TRUE(*def != *type);
   EXPECT_EQ(*type, *type2);
   EXPECT_NE(*type, *other);
 
@@ -581,11 +787,16 @@ TEST(TypeTest, equality) {
   EXPECT_FALSE(
       *ROW({{"a", INTEGER()}, {"b", REAL()}}) ==
       *ROW({{"a", INTEGER()}, {"d", REAL()}}));
+  EXPECT_FALSE(
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"y", INTEGER()}})}}) ==
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"z", INTEGER()}})}}));
+  EXPECT_FALSE(
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"y", INTEGER()}})}}) ==
+      *ARRAY(INTEGER()));
 
   // mix
   EXPECT_FALSE(MAP(REAL(), INTEGER())
-                   ->
-                   operator==(*ROW({{"a", REAL()}, {"b", INTEGER()}})));
+                   ->operator==(*ROW({{"a", REAL()}, {"b", INTEGER()}})));
   EXPECT_FALSE(ARRAY(REAL())->operator==(*ROW({{"a", REAL()}})));
 }
 
@@ -596,7 +807,6 @@ TEST(TypeTest, cpp2Type) {
   EXPECT_EQ(*CppToType<int8_t>::create(), *TINYINT());
   EXPECT_EQ(*CppToType<velox::StringView>::create(), *VARCHAR());
   EXPECT_EQ(*CppToType<std::string>::create(), *VARCHAR());
-  EXPECT_EQ(*CppToType<folly::ByteRange>::create(), *VARBINARY());
   EXPECT_EQ(*CppToType<float>::create(), *REAL());
   EXPECT_EQ(*CppToType<double>::create(), *DOUBLE());
   EXPECT_EQ(*CppToType<bool>::create(), *BOOLEAN());
@@ -610,6 +820,7 @@ TEST(TypeTest, cpp2Type) {
 TEST(TypeTest, equivalent) {
   EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
   EXPECT_FALSE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"a", INTEGER()}})));
+  EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
   EXPECT_TRUE(MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), BIGINT())));
   EXPECT_FALSE(
       MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), ARRAY(BIGINT()))));
@@ -750,11 +961,14 @@ TEST(TypeTest, follySformat) {
           "{}", ROW({{"a", BOOLEAN()}, {"b", VARCHAR()}, {"c", BIGINT()}})));
 }
 
-TEST(TypeTest, unknown) {
-  auto unknownArray = ARRAY(UNKNOWN());
-  EXPECT_TRUE(unknownArray->containsUnknown());
+TEST(TypeTest, unknownArray) {
+  const auto unknownArray = ARRAY(UNKNOWN());
+  ASSERT_EQ(approximateTypeEncodingwidth(unknownArray), 2);
+  ASSERT_TRUE(unknownArray->containsUnknown());
 
   testTypeSerde(unknownArray);
+
+  ASSERT_EQ(0, unknownArray->elementType()->cppSizeInBytes());
 }
 
 TEST(TypeTest, isVariadicType) {
@@ -763,36 +977,6 @@ TEST(TypeTest, isVariadicType) {
   EXPECT_FALSE(isVariadicType<velox::StringView>::value);
   EXPECT_FALSE(isVariadicType<bool>::value);
   EXPECT_FALSE((isVariadicType<Map<int8_t, Date>>::value));
-}
-
-TEST(TypeTest, fromKindToScalerType) {
-  for (const TypeKind& kind :
-       {TypeKind::BOOLEAN,
-        TypeKind::TINYINT,
-        TypeKind::SMALLINT,
-        TypeKind::INTEGER,
-        TypeKind::BIGINT,
-        TypeKind::REAL,
-        TypeKind::DOUBLE,
-        TypeKind::VARCHAR,
-        TypeKind::VARBINARY,
-        TypeKind::TIMESTAMP,
-        TypeKind::UNKNOWN}) {
-    SCOPED_TRACE(mapTypeKindToName(kind));
-    auto type = fromKindToScalerType(kind);
-    ASSERT_EQ(type->kind(), kind);
-  }
-
-  for (const TypeKind& kind :
-       {TypeKind::ARRAY,
-        TypeKind::MAP,
-        TypeKind::ROW,
-        TypeKind::OPAQUE,
-        TypeKind::FUNCTION,
-        TypeKind::INVALID}) {
-    SCOPED_TRACE(mapTypeKindToName(kind));
-    EXPECT_ANY_THROW(fromKindToScalerType(kind));
-  }
 }
 
 TEST(TypeTest, rowEquvialentCheckWithChildRowsWithDifferentNames) {
@@ -818,4 +1002,227 @@ TEST(TypeTest, rowEquvialentCheckWithChildRowsWithDifferentNames) {
            childRowType2WithDifferentNames,
            childRowType3WithDifferentNames});
   ASSERT_TRUE(rowTypeWithDifferentName->equivalent(*rowType));
+}
+
+TEST(TypeTest, unionWith) {
+  std::vector<TypePtr> types;
+  std::vector<TypePtr> typesWithDifferentNames;
+  RowTypePtr emptyRowType = ROW({}, {});
+  RowTypePtr childRowType1 =
+      ROW({"a", "b", "c"}, {TINYINT(), VARBINARY(), BIGINT()});
+  RowTypePtr childRowType2 =
+      ROW({"d", "e", "f"}, {TINYINT(), VARBINARY(), BIGINT()});
+  RowTypePtr resultRowType =
+      ROW({"a", "b", "c", "d", "e", "f"},
+          {TINYINT(), VARBINARY(), BIGINT(), TINYINT(), VARBINARY(), BIGINT()});
+  RowTypePtr resultRowType2 =
+      ROW({"a", "b", "c", "a", "b", "c"},
+          {TINYINT(), VARBINARY(), BIGINT(), TINYINT(), VARBINARY(), BIGINT()});
+
+  ASSERT_TRUE(
+      emptyRowType->unionWith(childRowType1)->equivalent(*childRowType1));
+  ASSERT_TRUE(
+      childRowType1->unionWith(childRowType2)->equivalent(*resultRowType));
+  ASSERT_TRUE(
+      childRowType1->unionWith(childRowType1)->equivalent(*resultRowType2));
+}
+
+TEST(TypeTest, orderableComparable) {
+  // Scalar type.
+  EXPECT_TRUE(INTEGER()->isOrderable());
+  EXPECT_TRUE(INTEGER()->isComparable());
+  EXPECT_TRUE(REAL()->isOrderable());
+  EXPECT_TRUE(REAL()->isComparable());
+  EXPECT_TRUE(VARCHAR()->isOrderable());
+  EXPECT_TRUE(VARCHAR()->isComparable());
+  EXPECT_TRUE(BIGINT()->isOrderable());
+  EXPECT_TRUE(BIGINT()->isComparable());
+  EXPECT_TRUE(DOUBLE()->isOrderable());
+  EXPECT_TRUE(DOUBLE()->isComparable());
+
+  // Map type.
+  auto mapType = MAP(INTEGER(), REAL());
+  EXPECT_FALSE(mapType->isOrderable());
+  EXPECT_TRUE(mapType->isComparable());
+
+  // Array type.
+  auto arrayType = ARRAY(INTEGER());
+  EXPECT_TRUE(arrayType->isOrderable());
+  EXPECT_TRUE(arrayType->isComparable());
+
+  arrayType = ARRAY(mapType);
+  EXPECT_FALSE(arrayType->isOrderable());
+  EXPECT_TRUE(arrayType->isComparable());
+
+  // Row type.
+  auto rowType = ROW({INTEGER(), REAL()});
+  EXPECT_TRUE(rowType->isOrderable());
+  EXPECT_TRUE(rowType->isComparable());
+
+  rowType = ROW({INTEGER(), mapType});
+  EXPECT_FALSE(rowType->isOrderable());
+  EXPECT_TRUE(rowType->isComparable());
+
+  // Decimal types.
+  auto shortDecimal = DECIMAL(10, 5);
+  EXPECT_TRUE(shortDecimal->isOrderable());
+  EXPECT_TRUE(shortDecimal->isComparable());
+
+  auto longDecimal = DECIMAL(30, 5);
+  EXPECT_TRUE(longDecimal->isOrderable());
+  EXPECT_TRUE(longDecimal->isComparable());
+
+  // Function type.
+  auto functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
+  EXPECT_FALSE(functionType->isOrderable());
+  EXPECT_FALSE(functionType->isComparable());
+
+  // Mixed.
+  mapType = MAP(INTEGER(), functionType);
+  EXPECT_FALSE(mapType->isOrderable());
+  EXPECT_FALSE(mapType->isComparable());
+
+  arrayType = ARRAY(mapType);
+  EXPECT_FALSE(arrayType->isOrderable());
+  EXPECT_FALSE(arrayType->isComparable());
+
+  rowType = ROW({INTEGER(), mapType});
+  EXPECT_FALSE(rowType->isOrderable());
+  EXPECT_FALSE(rowType->isComparable());
+}
+
+TEST(TypeTest, functionTypeEquivalent) {
+  auto functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
+  auto otherFunctionType =
+      std::make_shared<FunctionType>(std::vector<TypePtr>{BIGINT()}, BOOLEAN());
+  EXPECT_FALSE(functionType->equivalent(*otherFunctionType));
+
+  otherFunctionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
+  EXPECT_TRUE(functionType->equivalent(*otherFunctionType));
+
+  functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{ARRAY(BIGINT())}, BOOLEAN());
+  otherFunctionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{ARRAY(BIGINT())}, BOOLEAN());
+  EXPECT_TRUE(functionType->equivalent(*otherFunctionType));
+
+  functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{MAP(BIGINT(), VARCHAR())}, BOOLEAN());
+  EXPECT_FALSE(functionType->equivalent(*otherFunctionType));
+
+  otherFunctionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{MAP(BIGINT(), VARCHAR())}, BOOLEAN());
+
+  EXPECT_TRUE(functionType->equivalent(*otherFunctionType));
+}
+
+TEST(TypeTest, providesCustomComparison) {
+  // None of the builtin types provide custom comparison.
+  EXPECT_FALSE(BOOLEAN()->providesCustomComparison());
+  EXPECT_FALSE(TINYINT()->providesCustomComparison());
+  EXPECT_FALSE(SMALLINT()->providesCustomComparison());
+  EXPECT_FALSE(INTEGER()->providesCustomComparison());
+  EXPECT_FALSE(BIGINT()->providesCustomComparison());
+  EXPECT_FALSE(HUGEINT()->providesCustomComparison());
+  EXPECT_FALSE(REAL()->providesCustomComparison());
+  EXPECT_FALSE(DOUBLE()->providesCustomComparison());
+  EXPECT_FALSE(VARCHAR()->providesCustomComparison());
+  EXPECT_FALSE(VARBINARY()->providesCustomComparison());
+  EXPECT_FALSE(TIMESTAMP()->providesCustomComparison());
+  EXPECT_FALSE(DATE()->providesCustomComparison());
+  EXPECT_FALSE(ARRAY(INTEGER())->providesCustomComparison());
+  EXPECT_FALSE(MAP(INTEGER(), INTEGER())->providesCustomComparison());
+  EXPECT_FALSE(ROW({INTEGER()})->providesCustomComparison());
+  EXPECT_FALSE(DECIMAL(10, 5)->providesCustomComparison());
+  EXPECT_FALSE(UNKNOWN()->providesCustomComparison());
+  EXPECT_FALSE(INTERVAL_YEAR_MONTH()->providesCustomComparison());
+  EXPECT_FALSE(INTERVAL_DAY_TIME()->providesCustomComparison());
+  EXPECT_FALSE(FUNCTION({INTEGER()}, INTEGER())->providesCustomComparison());
+
+  // This custom type does provide custom comparison.
+  EXPECT_TRUE(
+      test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->providesCustomComparison());
+  EXPECT_EQ(0, test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->compare(0, 0));
+  EXPECT_EQ(
+      8633297058295171728, test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->hash(0));
+
+  // BIGINT does not provide custom comparison so calling compare or hash on
+  // it should fail.
+  EXPECT_THROW(BIGINT()->compare(0, 0), VeloxRuntimeError);
+  EXPECT_THROW(BIGINT()->hash(0), VeloxRuntimeError);
+
+  // This type claims it providesCustomComparison but does not implement the
+  // compare and hash functions so invoking them should still fail.
+  EXPECT_TRUE(
+      test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()
+          ->providesCustomComparison());
+  EXPECT_THROW(
+      test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()->compare(0, 0),
+      VeloxRuntimeError);
+  EXPECT_THROW(
+      test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()->hash(0),
+      VeloxRuntimeError);
+}
+
+TEST(TypeTest, toSummaryString) {
+  EXPECT_EQ("BOOLEAN", BOOLEAN()->toSummaryString());
+  EXPECT_EQ("BIGINT", BIGINT()->toSummaryString());
+  EXPECT_EQ("VARCHAR", VARCHAR()->toSummaryString());
+  EXPECT_EQ("OPAQUE", OPAQUE<int>()->toSummaryString());
+
+  const auto arrayType = ARRAY(INTEGER());
+  EXPECT_EQ("ARRAY", arrayType->toSummaryString());
+  EXPECT_EQ("ARRAY(INTEGER)", arrayType->toSummaryString({.maxChildren = 2}));
+  EXPECT_EQ(
+      "ARRAY(ARRAY)", ARRAY(arrayType)->toSummaryString({.maxChildren = 2}));
+
+  const auto mapType = MAP(INTEGER(), VARCHAR());
+  EXPECT_EQ("MAP", mapType->toSummaryString());
+  EXPECT_EQ(
+      "MAP(INTEGER, VARCHAR)", mapType->toSummaryString({.maxChildren = 2}));
+  EXPECT_EQ(
+      "MAP(INTEGER, MAP)",
+      MAP(INTEGER(), mapType)->toSummaryString({.maxChildren = 2}));
+
+  const auto rowType = ROW({
+      BOOLEAN(),
+      INTEGER(),
+      VARCHAR(),
+      arrayType,
+      mapType,
+      ROW({INTEGER(), VARCHAR()}),
+  });
+  EXPECT_EQ("ROW(6)", rowType->toSummaryString());
+  EXPECT_EQ(
+      "ROW(BOOLEAN, INTEGER, ...4 more)",
+      rowType->toSummaryString({.maxChildren = 2}));
+  EXPECT_EQ(
+      "ROW(BOOLEAN, INTEGER, VARCHAR, ARRAY, MAP, ROW)",
+      rowType->toSummaryString({.maxChildren = 10}));
+}
+
+TEST(TypeTest, time) {
+  const auto timeType = TIME();
+  ASSERT_EQ(timeType->toString(), "TIME");
+  ASSERT_EQ(timeType->size(), 0);
+  VELOX_ASSERT_THROW(timeType->childAt(0), "scalar type has no children");
+  ASSERT_EQ(timeType->kind(), TypeKind::BIGINT); // Physical type
+  EXPECT_STREQ(timeType->kindName(), "BIGINT"); // Physical kind name
+  ASSERT_EQ(timeType->begin(), timeType->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(timeType), 1);
+
+  // Test logical vs physical type behavior (similar to DATE test)
+  ASSERT_TRUE(timeType->kindEquals(BIGINT())); // Same physical kind
+  ASSERT_NE(*timeType, *BIGINT()); // Different logical types
+  ASSERT_FALSE(timeType->equivalent(*BIGINT())); // Not equivalent
+  ASSERT_FALSE(BIGINT()->equivalent(*timeType)); // Not equivalent reverse
+
+  // Test orderability and comparability
+  ASSERT_TRUE(timeType->isOrderable());
+  ASSERT_TRUE(timeType->isComparable());
+
+  testTypeSerde(timeType);
 }

@@ -23,10 +23,10 @@ StripeDictionaryCache::DictionaryEntry::DictionaryEntry(
 
 BufferPtr StripeDictionaryCache::DictionaryEntry::getDictionaryBuffer(
     velox::memory::MemoryPool* pool) {
-  if (!dictionaryBuffer_) {
+  folly::call_once(onceFlag_, [&]() {
     dictionaryBuffer_ = dictGen_(pool);
     dictGen_ = nullptr;
-  }
+  });
   return dictionaryBuffer_;
 }
 
@@ -35,14 +35,15 @@ StripeDictionaryCache::StripeDictionaryCache(velox::memory::MemoryPool* pool)
 
 // It might be more elegant to pass in a StripeStream here instead.
 void StripeDictionaryCache::registerIntDictionary(
-    const EncodingKey& ek,
+    const EncodingKey& encodingKey,
     folly::Function<BufferPtr(velox::memory::MemoryPool*)>&& dictGen) {
   intDictionaryFactories_.emplace(
-      ek, std::make_unique<DictionaryEntry>(std::move(dictGen)));
+      encodingKey, std::make_unique<DictionaryEntry>(std::move(dictGen)));
 }
 
-BufferPtr StripeDictionaryCache::getIntDictionary(const EncodingKey& ek) {
-  return intDictionaryFactories_.at(ek)->getDictionaryBuffer(pool_);
+BufferPtr StripeDictionaryCache::getIntDictionary(
+    const EncodingKey& encodingKey) {
+  return intDictionaryFactories_.at(encodingKey)->getDictionaryBuffer(pool_);
 }
 
 } // namespace facebook::velox::dwrf

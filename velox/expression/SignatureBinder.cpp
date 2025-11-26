@@ -19,10 +19,11 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeUtil.h"
 
 namespace facebook::velox::exec {
-
 namespace {
+
 bool isAny(const TypeSignature& typeSignature) {
   return typeSignature.baseName() == "any";
 }
@@ -35,17 +36,11 @@ bool isPositiveInteger(const std::string& str) {
       }) == str.end();
 }
 
-std::string buildCalculation(
-    const std::string& variable,
-    const std::string& calculation) {
-  return fmt::format("{}={}", variable, calculation);
-}
-
-std::optional<int64_t> tryResolveLongLiteral(
+std::optional<int> tryResolveLongLiteral(
     const TypeSignature& parameter,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     std::unordered_map<std::string, int>& integerVariablesBindings) {
-  auto variable = parameter.baseName();
+  const auto& variable = parameter.baseName();
 
   if (isPositiveInteger(variable)) {
     // Handle constant.
@@ -61,28 +56,82 @@ std::optional<int64_t> tryResolveLongLiteral(
     return std::nullopt;
   }
 
-  auto& constraints = it->second.constraint();
+  const auto& constraints = it->second.constraint();
 
-  if (constraints == "") {
+  if (constraints.empty()) {
     return std::nullopt;
   }
 
   // Try to assign value based on constraints.
   // Check constraints and evaluate.
-  auto calculation = buildCalculation(variable, constraints);
+  const auto calculation = fmt::format("{}={}", variable, constraints);
   expression::calculation::evaluate(calculation, integerVariablesBindings);
   VELOX_CHECK(
       integerVariablesBindings.count(variable),
       "Variable {} calculation failed.",
-      variable)
+      variable);
   return integerVariablesBindings.at(variable);
+}
+
+std::optional<LongEnumParameter> tryResolveLongEnumLiteral(
+    const TypeSignature& parameter,
+    const std::unordered_map<std::string, LongEnumParameter>&
+        longEnumParameterVariableBindings) {
+  auto it = longEnumParameterVariableBindings.find(parameter.baseName());
+  if (it != longEnumParameterVariableBindings.end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
+std::optional<VarcharEnumParameter> tryResolveVarcharEnumLiteral(
+    const TypeSignature& parameter,
+    const std::unordered_map<std::string, VarcharEnumParameter>&
+        varcharEnumParameterVariableBindings) {
+  auto it = varcharEnumParameterVariableBindings.find(parameter.baseName());
+  if (it != varcharEnumParameterVariableBindings.end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
+// If the parameter is a named field from a row, ensure the names are
+// compatible. For example:
+//
+// > row(bigint) - binds any row with bigint as field.
+// > row(foo bigint) - only binds rows where bigint field is named foo.
+bool checkNamedRowField(
+    const TypeSignature& signature,
+    const TypePtr& actualType,
+    size_t idx) {
+  if (signature.rowFieldName().has_value() &&
+      (*signature.rowFieldName() != asRowType(actualType)->nameOf(idx))) {
+    return false;
+  }
+  return true;
 }
 
 } // namespace
 
+bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
+  return tryBind(true, coercions);
+}
+
 bool SignatureBinder::tryBind() {
+  std::vector<Coercion> coercions;
+  return tryBind(false, coercions);
+}
+
+bool SignatureBinder::tryBind(
+    bool allowCoercions,
+    std::vector<Coercion>& coercions) {
+  if (allowCoercions) {
+    coercions.clear();
+    coercions.resize(actualTypes_.size());
+  }
+
   const auto& formalArgs = signature_.argumentTypes();
-  auto formalArgsCnt = formalArgs.size();
+  const auto formalArgsCnt = formalArgs.size();
 
   if (signature_.variableArity()) {
     if (actualTypes_.size() < formalArgsCnt - 1) {
@@ -106,24 +155,66 @@ bool SignatureBinder::tryBind() {
     }
   }
 
-  bool allBound = true;
   for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
     if (actualTypes_[i]) {
-      if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
-        allBound = false;
+      if (allowCoercions) {
+        if (!SignatureBinderBase::tryBindWithCoercion(
+                formalArgs[i], actualTypes_[i], coercions[i])) {
+          return false;
+        }
+      } else {
+        if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
+          return false;
+        }
       }
     } else {
-      allBound = false;
+      return false;
     }
   }
-  return allBound;
+
+  return true;
+}
+
+bool SignatureBinderBase::checkOrSetLongEnumParameter(
+    const std::string& parameterName,
+    const LongEnumParameter& params) {
+  auto it = longEnumVariablesBindings_.find(parameterName);
+  if (it != longEnumVariablesBindings_.end()) {
+    if (longEnumVariablesBindings_[parameterName] != params) {
+      return false;
+    }
+  }
+  longEnumVariablesBindings_[parameterName] = params;
+  return true;
+}
+
+bool SignatureBinderBase::checkOrSetVarcharEnumParameter(
+    const std::string& parameterName,
+    const VarcharEnumParameter& params) {
+  auto it = varcharEnumVariablesBindings_.find(parameterName);
+  if (it != varcharEnumVariablesBindings_.end()) {
+    if (varcharEnumVariablesBindings_[parameterName] != params) {
+      return false;
+    }
+  }
+  varcharEnumVariablesBindings_[parameterName] = params;
+  return true;
 }
 
 bool SignatureBinderBase::checkOrSetIntegerParameter(
     const std::string& parameterName,
     int value) {
+  if (isPositiveInteger(parameterName)) {
+    return atoi(parameterName.c_str()) == value;
+  }
   if (!variables().count(parameterName)) {
     // Return false if the parameter is not found in the signature.
+    return false;
+  }
+
+  const auto& constraint = variables().at(parameterName).constraint();
+  if (isPositiveInteger(constraint) && atoi(constraint.c_str()) != value) {
+    // Return false if the actual value does not match the constraint.
     return false;
   }
 
@@ -138,14 +229,31 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   return true;
 }
 
+bool SignatureBinderBase::tryBindWithCoercion(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    Coercion& coercion) {
+  return tryBind(typeSignature, actualType, true, coercion);
+}
+
 bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType) {
+  Coercion coercion;
+  return tryBind(typeSignature, actualType, false, coercion);
+}
+
+bool SignatureBinderBase::tryBind(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    bool allowCoercion,
+    Coercion& coercion) {
+  coercion.reset();
   if (isAny(typeSignature)) {
     return true;
   }
 
-  const auto baseName = typeSignature.baseName();
+  const auto& baseName = typeSignature.baseName();
 
   if (variables().count(baseName)) {
     // Variables cannot have further parameters.
@@ -165,6 +273,14 @@ bool SignatureBinderBase::tryBind(
       return false;
     }
 
+    if (variable.orderableTypesOnly() && !actualType->isOrderable()) {
+      return false;
+    }
+
+    if (variable.comparableTypesOnly() && !actualType->isComparable()) {
+      return false;
+    }
+
     typeVariablesBindings_[baseName] = actualType;
     return true;
   }
@@ -175,14 +291,61 @@ bool SignatureBinderBase::tryBind(
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
   if (typeName != actualTypeName) {
+    if (allowCoercion) {
+      if (auto availableCoercion =
+              TypeCoercer::coerceTypeBase(actualType, typeName)) {
+        coercion = availableCoercion.value();
+        return true;
+      }
+    }
     return false;
   }
 
   const auto& params = typeSignature.parameters();
+
+  // Handle homogeneous row case: row(T, ...)
+  if (typeSignature.isHomogeneousRow()) {
+    VELOX_CHECK_EQ(
+        params.size(), 1, "Homogeneous row must have exactly one parameter");
+
+    if (actualType->kind() != TypeKind::ROW) {
+      return false;
+    }
+
+    if (actualType->size() == 0) {
+      // Empty row is always compatible with homogeneous row.
+      return true;
+    }
+
+    // All children must unify to the same type variable T
+    const auto& typeParam = params[0];
+    const auto& paramBaseName = typeParam.baseName();
+
+    // First, check and extract the common child type if homogeneous.
+    const auto actualChildType =
+        velox::type::tryGetHomogeneousRowChild(actualType);
+    if (!actualChildType) {
+      return false;
+    }
+
+    if (variables().count(paramBaseName)) {
+      auto it = typeVariablesBindings_.find(paramBaseName);
+      if (it != typeVariablesBindings_.end()) {
+        return it->second->equivalent(*actualChildType);
+      } else {
+        typeVariablesBindings_[paramBaseName] = actualChildType;
+        return true;
+      }
+    } else {
+      return tryBind(typeParam, actualChildType);
+    }
+  }
+
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;
   }
+
   for (auto i = 0; i < params.size(); i++) {
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
@@ -192,8 +355,27 @@ bool SignatureBinderBase::tryBind(
           return false;
         }
         break;
+      case TypeParameterKind::kLongEnumLiteral:
+        if (!checkOrSetLongEnumParameter(
+                params[i].baseName(),
+                actualParameter.longEnumLiteral.value())) {
+          return false;
+        }
+        break;
+      case TypeParameterKind::kVarcharEnumLiteral:
+        if (!checkOrSetVarcharEnumParameter(
+                params[i].baseName(),
+                actualParameter.varcharEnumLiteral.value())) {
+          return false;
+        }
+        break;
       case TypeParameterKind::kType:
+        if (!checkNamedRowField(params[i], actualType, i)) {
+          return false;
+        }
+
         if (!tryBind(params[i], actualParameter.type)) {
+          // TODO Allow coercions for complex types.
           return false;
         }
         break;
@@ -206,8 +388,12 @@ TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
-    std::unordered_map<std::string, int>& integerVariablesBindings) {
-  const auto baseName = typeSignature.baseName();
+    std::unordered_map<std::string, int>& integerVariablesBindings,
+    const std::unordered_map<std::string, LongEnumParameter>&
+        longEnumParameterVariableBindings,
+    const std::unordered_map<std::string, VarcharEnumParameter>&
+        varcharEnumParameterVariableBindings) {
+  const auto& baseName = typeSignature.baseName();
 
   if (variables.count(baseName)) {
     auto it = typeVariablesBindings.find(baseName);
@@ -222,20 +408,38 @@ TypePtr SignatureBinder::tryResolveType(
 
   const auto& params = typeSignature.parameters();
   std::vector<TypeParameter> typeParameters;
+
   for (auto& param : params) {
     auto literal =
         tryResolveLongLiteral(param, variables, integerVariablesBindings);
     if (literal.has_value()) {
-      typeParameters.push_back(TypeParameter(literal.value()));
+      typeParameters.emplace_back(literal.value());
+      continue;
+    }
+    auto longEnumParameterliteral =
+        tryResolveLongEnumLiteral(param, longEnumParameterVariableBindings);
+    if (longEnumParameterliteral.has_value()) {
+      typeParameters.emplace_back(longEnumParameterliteral.value());
+      continue;
+    }
+    auto varcharEnumParameterliteral = tryResolveVarcharEnumLiteral(
+        param, varcharEnumParameterVariableBindings);
+    if (varcharEnumParameterliteral.has_value()) {
+      typeParameters.emplace_back(varcharEnumParameterliteral.value());
       continue;
     }
 
     auto type = tryResolveType(
-        param, variables, typeVariablesBindings, integerVariablesBindings);
+        param,
+        variables,
+        typeVariablesBindings,
+        integerVariablesBindings,
+        longEnumParameterVariableBindings,
+        varcharEnumParameterVariableBindings);
     if (!type) {
       return nullptr;
     }
-    typeParameters.push_back(TypeParameter(type));
+    typeParameters.emplace_back(type, param.rowFieldName());
   }
 
   try {
@@ -247,7 +451,7 @@ TypePtr SignatureBinder::tryResolveType(
     return nullptr;
   }
 
-  auto typeKind = tryMapNameToTypeKind(typeName);
+  auto typeKind = TypeKindName::tryToTypeKind(typeName);
   if (!typeKind.has_value()) {
     return nullptr;
   }

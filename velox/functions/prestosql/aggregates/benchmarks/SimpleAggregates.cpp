@@ -18,7 +18,7 @@
 #include <folly/init/Init.h>
 #include <string>
 
-#include "velox/exec/tests/utils/Cursor.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -36,8 +36,7 @@ namespace {
 
 class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
  public:
-  explicit SimpleAggregatesBenchmark() {
-    OperatorTestBase::SetUpTestCase();
+  SimpleAggregatesBenchmark() {
     HiveConnectorTestBase::SetUp();
 
     inputType_ = ROW({
@@ -65,8 +64,9 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
 
       // Generate key with a small number of unique values from a small range
       // (0-16).
-      children.emplace_back(makeFlatVector<int32_t>(
-          kRowsPerVector, [](auto row) { return row % 17; }));
+      children.emplace_back(
+          makeFlatVector<int32_t>(
+              kRowsPerVector, [](auto row) { return row % 17; }));
 
       // Generate key with a small number of unique values from a large range
       // (300 total values).
@@ -107,7 +107,7 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     }
 
     filePath_ = TempFilePath::create();
-    writeToFile(filePath_->path, vectors);
+    writeToFile(filePath_->getPath(), vectors);
   }
 
   ~SimpleAggregatesBenchmark() override {
@@ -147,7 +147,8 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     vector_size_t numResultRows = 0;
     auto task = makeTask(plan);
 
-    task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    task->addSplit(
+        "0", exec::Split(makeHiveConnectorSplit(filePath_->getPath())));
     task->noMoreSplits("0");
 
     suspender.dismiss();
@@ -164,7 +165,9 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()));
+        core::QueryCtx::create(executor_.get()),
+        exec::Task::ExecutionMode::kSerial,
+        exec::Consumer{});
   }
 
  private:
@@ -268,10 +271,11 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
-
+  folly::Init init{&argc, &argv};
+  OperatorTestBase::SetUpTestCase();
   benchmark = std::make_unique<SimpleAggregatesBenchmark>();
   folly::runBenchmarks();
   benchmark.reset();
+  OperatorTestBase::TearDownTestCase();
   return 0;
 }

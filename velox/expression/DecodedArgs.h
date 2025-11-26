@@ -36,12 +36,13 @@ class DecodedArgs {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       exec::EvalCtx& context) {
+    holders_.reserve(args.size());
     for (auto& arg : args) {
       holders_.emplace_back(context, *arg, rows);
     }
   }
 
-  DecodedVector* FOLLY_NONNULL at(int i) const {
+  DecodedVector* at(int i) const {
     return const_cast<exec::LocalDecodedVector*>(&holders_[i])->get();
   }
 

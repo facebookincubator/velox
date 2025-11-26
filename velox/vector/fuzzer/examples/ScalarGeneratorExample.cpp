@@ -37,7 +37,8 @@ int main() {
   auto uniform = std::uniform_int_distribution<int32_t>(lo, hi);
   auto normal = std::normal_distribution<double>(mu, sigma);
   auto coinToss = std::uniform_real_distribution<double>();
-  auto userDefined = [userLo, userHi, &coinToss](Rng& rng) -> double {
+  auto userDefined =
+      [userLo, userHi, &coinToss](FuzzerGenerator& rng) -> double {
     auto val = coinToss(rng);
     if (val <= userLo) {
       return val;
@@ -49,7 +50,8 @@ int main() {
   };
 
   FuzzerGenerator rng;
-  auto pool = memory::addDefaultLeafMemoryPool();
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  auto pool = memory::memoryManager()->addLeafPool();
 
   GeneratorSpecPtr uniformIntGenerator =
       RANDOM_INTEGER(uniform, nullProbability);

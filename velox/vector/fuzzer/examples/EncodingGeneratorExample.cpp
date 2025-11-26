@@ -47,7 +47,8 @@ int main() {
   };
 
   FuzzerGenerator rng;
-  auto pool = memory::addDefaultLeafMemoryPool();
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  auto pool = memory::memoryManager()->addLeafPool();
   GeneratorSpecPtr encodedNormalDoubleGenerator =
       ENCODE(RANDOM_DOUBLE(normal, nullProbability), encoding, 1, 5, 0.3);
 
@@ -66,7 +67,9 @@ int main() {
   }
 
   std::cout << "Probability of constant encoding = "
-            << (double)numConst / ((double)numConst + (double)numDict) << "\n";
+            << static_cast<double>(numConst) /
+          (static_cast<double>(numConst) + static_cast<double>(numDict))
+            << "\n";
 
   return 0;
 }

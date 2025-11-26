@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
+using namespace facebook::velox::window::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -43,11 +47,13 @@ TEST_F(ArbitraryTest, noNulls) {
   std::vector<std::string> aggregates = {
       "arbitrary(c1)",
       "arbitrary(c2)",
-      "arbitrary(c3)",
+      "any_value(c3)",
       "arbitrary(c4)",
       "arbitrary(c5)",
-      "arbitrary(c6)"};
+      "any_value(c6)"};
 
+  // We do not test with TableScan because having two input splits makes the
+  // result non-deterministic.
   // Global aggregation.
   testAggregations(
       vectors,
@@ -87,34 +93,36 @@ TEST_F(ArbitraryTest, noNulls) {
 
 TEST_F(ArbitraryTest, nulls) {
   auto vectors = {
-      makeRowVector({
-          makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
-          makeNullableFlatVector<int64_t>(
-              {std::nullopt, std::nullopt, std::nullopt, 4, std::nullopt, 5}),
-          makeNullableFlatVector<double>({
-              std::nullopt,
-              0.50,
-              std::nullopt,
-              std::nullopt,
-              0.25,
-              std::nullopt,
-          }),
-      }),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
+           makeNullableFlatVector<int64_t>(
+               {std::nullopt, std::nullopt, std::nullopt, 4, std::nullopt, 5}),
+           makeNullableFlatVector<double>({
+               std::nullopt,
+               0.50,
+               std::nullopt,
+               std::nullopt,
+               0.25,
+               std::nullopt,
+           }),
+           makeNullConstant(TypeKind::UNKNOWN, 6)}),
   };
 
-  // Global aggregation.
+  // We do not test with TableScan because having two input splits makes the
+  // result non-deterministic. Also, unknown type is not supported in Writer
+  // yet. Global aggregation.
   testAggregations(
       vectors,
       {},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT * FROM( VALUES (4, 0.50)) AS t");
+      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
+      "SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
 
   // Group by aggregation.
   testAggregations(
       vectors,
       {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT * FROM(VALUES (1, NULL, 0.50), (2, 4, NULL), (3, 5, 0.25)) AS t");
+      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
+      "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
 }
 
 TEST_F(ArbitraryTest, varchar) {
@@ -122,6 +130,8 @@ TEST_F(ArbitraryTest, varchar) {
   auto vectors = makeVectors(rowType, 1000, 10);
   createDuckDbTable(vectors);
 
+  // We do not test with TableScan because having two input splits makes the
+  // result non-deterministic.
   testAggregations(
       [&](PlanBuilder& builder) {
         builder.values(vectors).project({"c0 % 11", "c1"});
@@ -339,6 +349,165 @@ TEST_F(ArbitraryTest, interval) {
   ASSERT_EQ(interval.value<int64_t>(), 125);
 
   testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+}
+
+TEST_F(ArbitraryTest, longDecimal) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       makeNullableFlatVector<int128_t>(
+           {HugeInt::build(10, 100),
+            HugeInt::build(10, 100),
+            HugeInt::build(10, 200),
+            HugeInt::build(10, 200),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            HugeInt::build(10, 400)},
+           DECIMAL(38, 8))});
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<int128_t>(
+          {HugeInt::build(10, 100),
+           HugeInt::build(10, 200),
+           std::nullopt,
+           HugeInt::build(10, 400)},
+          DECIMAL(38, 8)),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
+TEST_F(ArbitraryTest, shortDecimal) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       makeNullableFlatVector<int64_t>(
+           {10000000000000000,
+            10000000000000000,
+            20000000000000000,
+            20000000000000000,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            40000000000000000},
+           DECIMAL(15, 2))});
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<int64_t>(
+          {10000000000000000,
+           20000000000000000,
+           std::nullopt,
+           40000000000000000},
+          DECIMAL(15, 2)),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
+class ArbitraryWindowTest : public WindowTestBase {};
+
+TEST_F(ArbitraryWindowTest, basic) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeArrayVector<double>({{1.0}, {2.0}, {3.0}, {4.0}, {5.0}}),
+       makeFlatVector<bool>({false, false, false, false, false})});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeArrayVector<double>({{1.0}, {2.0}, {3.0}, {4.0}, {5.0}}),
+       makeFlatVector<bool>({false, false, false, false, false}),
+       makeFlatVector<int64_t>({1, 1, 1, 1, 1})});
+  window::test::WindowTestBase::testWindowFunction(
+      {data},
+      "arbitrary(c0)",
+      "partition by c2 order by c0",
+      "range between unbounded preceding and current row",
+      expected);
+
+  expected = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeArrayVector<double>({{1.0}, {2.0}, {3.0}, {4.0}, {5.0}}),
+       makeFlatVector<bool>({false, false, false, false, false}),
+       makeArrayVector<double>({{1.0}, {1.0}, {1.0}, {1.0}, {1.0}})});
+  window::test::WindowTestBase::testWindowFunction(
+      {data},
+      "arbitrary(c1)",
+      "partition by c2 order by c0",
+      "range between unbounded preceding and current row",
+      expected);
+}
+
+TEST_F(ArbitraryTest, spilling) {
+  auto data = makeRowVector(
+      {makeFlatVector<float>({0.1, 0.2, 0.3, 0.4, 0.5, 0.6}),
+       makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<float>({0.1, 0.2, 0.3, 0.4, 0.5, 0.6})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c1"}, {"arbitrary(c0)"})
+                  .planNode();
+
+  std::shared_ptr<TempDirectoryPath> spillDirectory;
+  AssertQueryBuilder builder(plan);
+
+  exec::TestScopedSpillInjection scopedSpillInjection(100);
+  spillDirectory = exec::test::TempDirectoryPath::create();
+  builder.spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillNumPartitionBits, "0");
+
+  auto result = builder.maxDrivers(2).copyResults(pool_.get());
+  ::facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(ArbitraryTest, clusteredInput) {
+  constexpr int kSize = 1000;
+  for (int batchRows : {kSize, 13}) {
+    std::vector<RowVectorPtr> data;
+    for (int i = 0; i < kSize; i += batchRows) {
+      auto size = std::min(batchRows, kSize - i);
+      data.push_back(makeRowVector({
+          makeFlatVector<int64_t>(size, [&](auto j) { return (i + j) / 17; }),
+          makeFlatVector<std::string>(
+              size, [&](auto j) { return std::to_string(i + j); }),
+          makeFlatVector<bool>(size, [&](auto j) { return (i + j) % 11 == 0; }),
+      }));
+    }
+    createDuckDbTable(data);
+    for (bool mask : {false, true}) {
+      auto builder = PlanBuilder().values(data);
+      std::string expected;
+      if (mask) {
+        builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"}, {"c2"});
+        expected = "select c0, first(c1) filter (where c2) from tmp group by 1";
+      } else {
+        builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"});
+        expected = "select c0, first(c1) from tmp group by 1";
+      }
+      auto plan = builder.finalAggregation().planNode();
+      for (int32_t flushRows : {0, 1}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "mask={} batchRows={} flushRows={}",
+                mask,
+                batchRows,
+                flushRows));
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
+            .config(
+                core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+                flushRows)
+            .assertResults(expected);
+      }
+    }
+  }
 }
 
 } // namespace

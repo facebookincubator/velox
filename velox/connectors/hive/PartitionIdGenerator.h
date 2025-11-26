@@ -20,8 +20,7 @@
 
 namespace facebook::velox::connector::hive {
 /// Generate sequential integer IDs for distinct partition values, which could
-/// be used as vector index. Only single partition key is supported at the
-/// moment.
+/// be used as vector index.
 class PartitionIdGenerator {
  public:
   /// @param inputType RowType of the input.
@@ -46,11 +45,16 @@ class PartitionIdGenerator {
     return partitionIds_.size();
   }
 
-  /// Return partition name for the given partition id in the typical Hive
-  /// style. It is derived from the partitionValues_ at index partitionId.
-  /// Partition keys appear in the order of partition columns in the table
-  /// schema.
-  std::string partitionName(uint64_t partitionId) const;
+  /// Returns the RowVector containing transformed partition keys.
+  /// Each row in this vector corresponds to a partition ID (row index =
+  /// partition ID).
+  /// Should be called after calling run() method.
+  ///
+  /// @return RowVector with one column per partition column, columns in same
+  /// order as partitionChannels_.
+  const RowVectorPtr& partitionValues() const {
+    return partitionValues_;
+  }
 
  private:
   static constexpr const int32_t kHasherReservePct = 20;
@@ -73,11 +77,14 @@ class PartitionIdGenerator {
       const RowVectorPtr& input,
       vector_size_t row);
 
+  memory::MemoryPool* const pool_;
+
   const std::vector<column_index_t> partitionChannels_;
 
   const uint32_t maxPartitions_;
 
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
+  bool hasMultiplierSet_ = false;
 
   // A mapping from value ID produced by VectorHashers to a partition ID.
   std::unordered_map<uint64_t, uint64_t> partitionIds_;

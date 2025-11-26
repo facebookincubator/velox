@@ -367,18 +367,46 @@ TEST(ColumnSelectorTests, testMapKeyFilterSyntax) {
   EXPECT_TRUE(tags2->valid());
 }
 
-TEST(ColumnSelectorTests, testPartitionKeysMark) {
-  const auto schema = std::dynamic_pointer_cast<const RowType>(
-      HiveTypeParser().parse("struct<"
-                             "id:bigint"
-                             "memo:string"
-                             "ds:string"
-                             "key:string>"));
+TEST(ColumnSelectorTests, testFlatMapKeyFilterAllowed) {
+  const auto schema =
+      "struct<"
+      "id:bigint"
+      "values:array<float>"
+      "tags:struct<1:string, 2:string, 3:string>"
+      "notes:struct<f1:int, f2:double, f3:string>"
+      "memo:string>";
 
-  const auto physicalSchema = std::dynamic_pointer_cast<const RowType>(
-      HiveTypeParser().parse("struct<"
-                             "id:bigint"
-                             "memo:string>"));
+  auto type =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(schema));
+
+  // check a specialized filter is supported
+  // real data reading support test please refer flat map column reader testing
+
+  ColumnSelector specialSelector(
+      type, std::vector<std::string>{"tags#[1,2,3]"});
+
+  auto filter = specialSelector.getProjection();
+  EXPECT_EQ(filter.size(), 1);
+
+  EXPECT_EQ(filter[0].name, "tags");
+  EXPECT_EQ(filter[0].column, 2);
+  EXPECT_EQ(filter[0].node, 4);
+}
+
+TEST(ColumnSelectorTests, testPartitionKeysMark) {
+  const auto schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<"
+          "id:bigint"
+          "memo:string"
+          "ds:string"
+          "key:string>"));
+
+  const auto physicalSchema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<"
+          "id:bigint"
+          "memo:string>"));
 
   // use schema and physical schema to initialize a column selector
   // without filtering
@@ -430,14 +458,16 @@ TEST(ColumnSelectorTests, testPartitionKeysMark) {
     EXPECT_EQ(root->childAt(3)->getNode().expression, "gold");
 
     // test apply to real data file disk schema
-    const auto schemaMore = std::dynamic_pointer_cast<const RowType>(
-        HiveTypeParser().parse("struct<"
-                               "id:bigint"
-                               "memo:string"
-                               "extra:array<float>>"));
-    const auto schemaLess = std::dynamic_pointer_cast<const RowType>(
-        HiveTypeParser().parse("struct<"
-                               "id:bigint>"));
+    const auto schemaMore =
+        std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+            "struct<"
+            "id:bigint"
+            "memo:string"
+            "extra:array<float>>"));
+    const auto schemaLess =
+        std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+            "struct<"
+            "id:bigint>"));
 
     auto csMore = ColumnSelector::apply(cs, schemaMore);
     LOG(INFO) << "CS filter size: " << cs->getProjection().size();
@@ -484,14 +514,15 @@ TEST(ColumnSelectorTests, testPartitionKeysMark) {
 }
 
 TEST(ColumnSelectorTests, testProjectionUnchangedWhenReadSetChanged) {
-  const auto schema = std::dynamic_pointer_cast<const RowType>(
-      HiveTypeParser().parse("struct<"
-                             "id:bigint"
-                             "values:array<float>"
-                             "tags:map<int, string>"
-                             "notes:struct<f1:int, f2:double, f3:string>"
-                             "memo:string"
-                             "extra:string>"));
+  const auto schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<"
+          "id:bigint"
+          "values:array<float>"
+          "tags:map<int, string>"
+          "notes:struct<f1:int, f2:double, f3:string>"
+          "memo:string"
+          "extra:string>"));
   ColumnSelector cs(schema, std::vector<std::string>{"id", "values"});
   cs.setRead(cs.findColumn("notes"));
 
@@ -533,13 +564,14 @@ TEST(ColumnSelectorTests, testProjectionUnchangedWhenReadSetChanged) {
 }
 
 TEST(ColumnSelectorTests, testProjectOrder) {
-  const auto schema = std::dynamic_pointer_cast<const RowType>(
-      HiveTypeParser().parse("struct<"
-                             "id:bigint"
-                             "values:array<float>"
-                             "tags:map<int, string>"
-                             "notes:struct<f1:int, f2:double, f3:string>"
-                             "memo:string>"));
+  const auto schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<"
+          "id:bigint"
+          "values:array<float>"
+          "tags:map<int, string>"
+          "notes:struct<f1:int, f2:double, f3:string>"
+          "memo:string>"));
 
   // test filter with names with order of tags, memo and id
   {
@@ -616,14 +648,15 @@ TEST(ColumnSelectorTests, testProjectOrder) {
 }
 
 TEST(ColumnSelectorTests, testNonexistingColFilters) {
-  const auto schema = std::dynamic_pointer_cast<const RowType>(
-      HiveTypeParser().parse("struct<"
-                             "id:bigint"
-                             "values:array<float>"
-                             "tags:map<int, string>"
-                             "notes:struct<f1:int, f2:double, f3:string>"
-                             "memo:string"
-                             "extra:string>"));
+  const auto schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<"
+          "id:bigint"
+          "values:array<float>"
+          "tags:map<int, string>"
+          "notes:struct<f1:int, f2:double, f3:string>"
+          "memo:string"
+          "extra:string>"));
 
   EXPECT_THROW(
       ColumnSelector cs(
@@ -633,15 +666,16 @@ TEST(ColumnSelectorTests, testNonexistingColFilters) {
 }
 
 TEST(TestColumnSelector, fileColumnNamesReadAsLowerCaseDuplicateColFilters) {
-  const auto schema = std::dynamic_pointer_cast<const RowType>(
-      HiveTypeParser().parse("struct<"
-                             "id:bigint"
-                             "id:bigint"
-                             "values:array<float>"
-                             "tags:map<int, string>"
-                             "notes:struct<f1:int, f2:double, f3:string>"
-                             "memo:string"
-                             "extra:string>"));
+  const auto schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<"
+          "id:bigint"
+          "id:bigint"
+          "values:array<float>"
+          "tags:map<int, string>"
+          "notes:struct<f1:int, f2:double, f3:string>"
+          "memo:string"
+          "extra:string>"));
 
   EXPECT_THROW(
       ColumnSelector cs(schema, std::vector<std::string>{"id"}, nullptr, true),

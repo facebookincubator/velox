@@ -20,8 +20,6 @@
 
 namespace facebook::velox::exec {
 
-const char* const kCoalesce = "coalesce";
-
 class CoalesceExpr : public SpecialForm {
  public:
   CoalesceExpr(
@@ -51,7 +49,8 @@ class CoalesceCallToSpecialForm : public FunctionCallToSpecialForm {
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
-      bool trackCpuUsage) override;
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
 };
 
 } // namespace facebook::velox::exec

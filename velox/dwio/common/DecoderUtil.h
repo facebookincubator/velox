@@ -17,7 +17,7 @@
 #pragma once
 
 #include <algorithm>
-#include "velox/common/base/RawVector.h"
+#include "velox/common/memory/RawVector.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/StreamUtil.h"
 
@@ -105,7 +105,7 @@ inline void processFixedFilter(
     ; /* no values passed, no action*/
   } else if (word == simd::allSetBitMask<T>()) {
     loadIndices(0).store_unaligned(filterHits + numValues);
-    if (is16) {
+    if (is16 && width > kIndexLaneCount) {
       // If 16 values in 'values', copy the next 8x 32 bit indices.
       loadIndices(1).store_unaligned(filterHits + numValues + kIndexLaneCount);
     }
@@ -162,7 +162,7 @@ void fixedWidthScan(
     dwio::common::SeekableInputStream& input,
     const char*& bufferStart,
     const char*& bufferEnd,
-    TFilter& filter,
+    const TFilter& filter,
     THook& hook) {
   constexpr int32_t kWidth = xsimd::batch<T>::size;
   constexpr bool is16 = sizeof(T) == 2;
@@ -180,7 +180,7 @@ void fixedWidthScan(
       [&](T value, int32_t rowIndex) {
         if (!hasFilter) {
           if (hasHook) {
-            hook.addValue(scatterRows[rowIndex], &value);
+            hook.addValueTyped(scatterRows[rowIndex], value);
           } else {
             auto targetRow = scatter ? scatterRows[rowIndex] : rowIndex;
             rawValues[targetRow] = value;
@@ -214,8 +214,7 @@ void fixedWidthScan(
                   hook.addValues(
                       scatterRows + rowIndex,
                       buffer + firstRow - rowOffset,
-                      kStep,
-                      sizeof(T));
+                      kStep);
                 } else {
                   if (scatter) {
                     scatterDense(
@@ -265,8 +264,16 @@ void fixedWidthScan(
                 }
                 if (!hasFilter) {
                   if (hasHook) {
+#if defined(__GNUC__) && !defined(__clang__)
+                    T values2[values.size];
+                    values.store_unaligned(values2);
+                    hook.addValues(scatterRows + rowIndex, values2, kWidth);
+#else
                     hook.addValues(
-                        scatterRows + rowIndex, &values, kWidth, sizeof(T));
+                        scatterRows + rowIndex,
+                        reinterpret_cast<T*>(&values),
+                        kWidth);
+#endif
                   } else {
                     if (scatter) {
                       scatterDense<T>(
@@ -321,8 +328,9 @@ void fixedWidthScan(
                 }
                 if (!hasFilter) {
                   if (hasHook) {
-                    hook.addValues(
-                        scatterRows + rowIndex, &values, width, sizeof(T));
+                    T values2[values.size];
+                    values.store_unaligned(values2);
+                    hook.addValues(scatterRows + rowIndex, values2, width);
                   } else {
                     if (scatter) {
                       scatterDense<T>(
@@ -385,20 +393,39 @@ bool nonNullRowsFromSparse(
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
-    uint64_t* resultNulls,
+    uint8_t* resultNulls,
     int32_t& tailSkip);
+
+template <bool isFilter, bool outputNulls>
+bool nonNullRowsFromSparse(
+    const uint64_t* nulls,
+    RowSet rows,
+    raw_vector<int32_t>& innerRows,
+    raw_vector<int32_t>& outerRows,
+    uint64_t* resultNulls,
+    int32_t& tailSkip) {
+  auto* resultNullBytes = reinterpret_cast<uint8_t*>(resultNulls);
+  return nonNullRowsFromSparse<isFilter, outputNulls>(
+      nulls, rows, innerRows, outerRows, resultNullBytes, tailSkip);
+}
 
 // See SelectiveColumnReader::useBulkPath.
 template <typename Visitor, bool hasNulls>
 bool useFastPath(Visitor& visitor) {
-  return (!std::is_same_v<typename Visitor::DataType, int128_t>)&&process::
-             hasAvx2() &&
-      Visitor::FilterType::deterministic && Visitor::kHasBulkPath &&
+  return (!std::is_same_v<typename Visitor::DataType, int128_t>) &&
+      process::hasAvx2() && Visitor::FilterType::deterministic &&
+      Visitor::kHasBulkPath &&
       (std::
            is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue> ||
        !hasNulls || !visitor.allowNulls()) &&
       (std::is_same_v<typename Visitor::HookType, NoHook> || !hasNulls ||
        Visitor::HookType::kSkipNulls);
+}
+
+template <typename Visitor>
+bool useFastPath(Visitor& visitor, bool hasNulls) {
+  return hasNulls ? useFastPath<Visitor, true>(visitor)
+                  : useFastPath<Visitor, false>(visitor);
 }
 
 // Scatters 'numValues' elements of 'data' starting at data[sourceBegin] to
@@ -446,7 +473,7 @@ void processFixedWidthRun(
     T* values,
     int32_t* filterHits,
     int32_t& numValues,
-    TFilter& filter,
+    const TFilter& filter,
     THook& hook) {
   constexpr int32_t kWidth = xsimd::batch<T>::size;
   constexpr bool hasFilter =
@@ -454,7 +481,7 @@ void processFixedWidthRun(
   constexpr bool hasHook = !std::is_same_v<THook, NoHook>;
   if (!hasFilter) {
     if (hasHook) {
-      hook.addValues(scatterRows + rowIndex, values, rows.size(), sizeof(T));
+      hook.addValues(scatterRows + rowIndex, values, rows.size());
     } else if (scatter) {
       scatterNonNulls(rowIndex, numInput, numValues, scatterRows, values);
       numValues = scatterRows[rowIndex + numInput - 1] + 1;

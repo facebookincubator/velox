@@ -35,7 +35,7 @@ auto as4x64(__m256i x) {
 }
 
 template <typename T>
-void store8Ints(__m256i eightInts, int32_t i, T* FOLLY_NONNULL result) {
+void store8Ints(__m256i eightInts, int32_t i, T* result) {
   if (sizeof(T) == 4) {
     _mm256_storeu_si256(reinterpret_cast<__m256i*>(result + i), eightInts);
   } else {
@@ -70,9 +70,13 @@ FOLLY_ALWAYS_INLINE __m256i gather8Sparse(
     __m256si masks,
     T* result) {
   constexpr __m256si kMultipliers = {256, 128, 64, 32, 16, 8, 4, 2};
+  // workaround for:
+  // https://github.com/llvm/llvm-project/issues/64819#issuecomment-1684943890
+  constexpr __m256si kWidthSplat = {
+      width, width, width, width, width, width, width, width};
 
   auto indices =
-      *reinterpret_cast<const __m256si_u*>(rows + i) * width + bitOffset;
+      *reinterpret_cast<const __m256si_u*>(rows + i) * kWidthSplat + bitOffset;
   __m256si multipliers;
   if (width % 8 != 0) {
     multipliers = (__m256si)_mm256_permutevar8x32_epi32(
@@ -196,7 +200,7 @@ void unpack(
   bitOffset -= rowBias * bitWidth;
   if (bitOffset < 0) {
     // Decrement the pointer by enough bytes to have a non-negative bitOffset.
-    auto bytes = bits::roundUp(-bitOffset, 8) / 8;
+    auto bytes = bits::divRoundUp(-bitOffset, 8);
     bitOffset += bytes * 8;
     bits = reinterpret_cast<const uint64_t*>(
         reinterpret_cast<const char*>(bits) - bytes);
@@ -209,12 +213,11 @@ void unpack(
     }
     return;
   }
-  auto FOLLY_NONNULL lastSafe = bufferEnd - sizeof(uint64_t);
   int32_t numSafeRows = numRows;
   bool anyUnsafe = false;
   if (bufferEnd) {
     const char* endByte = reinterpret_cast<const char*>(bits) +
-        bits::roundUp(bitOffset + (rows.back() + 1) * bitWidth, 8) / 8;
+        bits::divRoundUp(bitOffset + (rows.back() + 1) * bitWidth, 8);
     // redzone is the number of bytes at the end of the accessed range that
     // could overflow the buffer if accessed 64 its wide.
     int64_t redZone =
@@ -277,15 +280,15 @@ void unpack(
   if (anyUnsafe) {
     auto lastSafeWord = bufferEnd - sizeof(uint64_t);
     VELOX_DCHECK(lastSafeWord);
-    for (auto i = numSafeRows; i < numRows; ++i) {
-      auto bit = bitOffset + (rows[i]) * bitWidth;
+    for (auto i_2 = numSafeRows; i_2 < numRows; ++i_2) {
+      auto bit = bitOffset + (rows[i_2]) * bitWidth;
       auto byte = bit / 8;
       auto shift = bit & 7;
-      result[i] = safeLoadBits(
-                      reinterpret_cast<const char*>(bits) + byte,
-                      shift,
-                      bitWidth,
-                      lastSafeWord) &
+      result[i_2] = safeLoadBits(
+                        reinterpret_cast<const char*>(bits) + byte,
+                        shift,
+                        bitWidth,
+                        lastSafeWord) &
           mask;
     }
   }

@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -46,27 +48,56 @@ class MapUnionTest : public AggregationTestBase {};
  * map is NULL for every 7th entry (num % 7 == 0).
  */
 TEST_F(MapUnionTest, groupByWithoutDuplicates) {
-  auto inputVectors = {makeRowVector(
-      {makeFlatVector<int32_t>(10, [](vector_size_t row) { return row / 5; }),
-       makeMapVector<int32_t, double>(
-           10,
-           [&](vector_size_t /*row*/) { return 1; },
-           [&](vector_size_t row) { return row; },
-           [&](vector_size_t row) { return row + 0.05; },
-           nullEvery(4),
-           nullEvery(7))})};
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({0, 0, 0, 0, 0, 1, 1, 1, 1, 1}),
+      makeNullableMapVector<int32_t, double>({
+          // Group 0.
+          std::nullopt,
+          {{{1, std::nullopt}}},
+          {{{2, 2.05}}},
+          {{{3, 3.05}}},
+          std::nullopt,
+          // Group 1.
+          {{{5, 5.05}}},
+          {{{6, std::nullopt}}},
+          {{{7, 7.05}}},
+          std::nullopt,
+          {{{9, 9.05}}},
+      }),
+      makeFlatVector<bool>(10, [](auto row) { return row % 2 == 0; }),
+  });
 
-  auto expectedResult = {makeRowVector(
-      {makeFlatVector<int32_t>({0, 1}),
-       makeMapVector<int32_t, double>(
-           2,
-           [&](vector_size_t row) { return row == 0 ? 3 : 4; },
-           [&](vector_size_t row) { return row; },
-           [&](vector_size_t row) { return row + 0.05; },
-           nullptr,
-           nullEvery(7))})};
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeNullableMapVector<int32_t, double>({
+          // Group 0.
+          {{{1, std::nullopt}, {2, 2.05}, {3, 3.05}}},
+          // Group 1.
+          {{{5, 5.05}, {6, std::nullopt}, {7, 7.05}, {9, 9.05}}},
+      }),
+  });
 
-  testAggregations(inputVectors, {"c0"}, {"map_union(c1)"}, expectedResult);
+  testAggregations({data}, {"c0"}, {"map_union(c1)"}, {expectedResult});
+  testAggregations(split(data), {"c0"}, {"map_union(c1)"}, {expectedResult});
+
+  expectedResult = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeNullableMapVector<int32_t, double>({
+          // Group 0.
+          {{{2, 2.05}}},
+          // Group 1.
+          {{{6, std::nullopt}}},
+      }),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"map_union(c1) filter (where c2)"}, {expectedResult});
+
+  testAggregations(
+      split(data),
+      {"c0"},
+      {"map_union(c1) filter (where c2)"},
+      {expectedResult});
 }
 
 /**
@@ -84,13 +115,16 @@ TEST_F(MapUnionTest, groupByWithoutDuplicates) {
  * contains (Key, Value) as (1, 1.05).
  */
 TEST_F(MapUnionTest, groupByWithDuplicates) {
-  auto inputVectors = {makeRowVector(
-      {makeFlatVector<int32_t>(10, [](vector_size_t row) { return row / 5; }),
-       makeMapVector<int32_t, double>(
-           10,
-           [&](vector_size_t /*row*/) { return 1; },
-           [&](vector_size_t /*row*/) { return 1; },
-           [&](vector_size_t /*row*/) { return 1.05; })})};
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(10, [](vector_size_t row) { return row / 5; }),
+      makeMapVector<int32_t, double>(
+          10,
+          [&](vector_size_t /*row*/) { return 1; },
+          [&](vector_size_t /*row*/) { return 1; },
+          [&](vector_size_t /*row*/) { return 1.05; }),
+      makeFlatVector<bool>(10, [](auto row) { return row % 2 == 0; }),
+  });
+
   auto expectedResult = {makeRowVector(
       {makeFlatVector<int32_t>({0, 1}),
        makeMapVector<int32_t, double>(
@@ -99,7 +133,14 @@ TEST_F(MapUnionTest, groupByWithDuplicates) {
            [&](vector_size_t /*row*/) { return 1; },
            [&](vector_size_t /*row*/) { return 1.05; })})};
 
-  testAggregations(inputVectors, {"c0"}, {"map_union(c1)"}, expectedResult);
+  testAggregations(
+      {data, data, data}, {"c0"}, {"map_union(c1)"}, expectedResult);
+
+  testAggregations(
+      {data, data, data},
+      {"c0"},
+      {"map_union(c1) filter (where c2)"},
+      expectedResult);
 }
 
 /**
@@ -215,7 +256,7 @@ TEST_F(MapUnionTest, nulls) {
       makeNullableMapVector<int64_t, int64_t>({
           {{{1, 10}, {2, 20}, {3, 33}, {4, 44}, {5, 55}}},
           std::nullopt,
-          {{}},
+          common::testutil::optionalEmpty,
       }),
   });
 
@@ -223,7 +264,8 @@ TEST_F(MapUnionTest, nulls) {
 }
 
 TEST_F(MapUnionTest, unknownKeysAndValues) {
-  // map_union over empty map(unknown, unknown) is allowed.
+  // map_union over empty map(unknown, unknown) is allowed. Skip testing with
+  // TableScan because unknown type is not supported in writers.
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 1}),
       makeMapVector<UnknownValue, UnknownValue>({{}, {}, {}}),
@@ -303,6 +345,158 @@ TEST_F(MapUnionTest, unknownKeysAndValues) {
              .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()), "map key cannot be null");
+}
+
+TEST_F(MapUnionTest, nans) {
+  // Verify that NaNs with different binary representations are considered equal
+  // and deduplicated when used as keys in the output map.
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+
+  // Global Aggregation, Primitive type
+  auto data = makeRowVector(
+      {makeMapVectorFromJson<double, int32_t>(
+           {"{1: 1}", "{2: 2}", "{NaN: 4}", "{3: 3}", "{NaN: 5}", "{NaN: 6}"}),
+       makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2})});
+
+  auto expectedResult = makeRowVector({
+      makeMapVectorFromJson<double, int32_t>({
+          "{ 1: 1, 2: 2, 3: 3, NaN: 4}",
+      }),
+  });
+
+  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+
+  // Group by Aggregation, Primitive type
+  expectedResult = makeRowVector(
+      {makeMapVectorFromJson<double, int32_t>(
+           {"{ 1: 1, 2: 2, NaN: 4}", "{ 3: 3, NaN: 5}"}),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+
+  // Global Aggregation, Complex type(Row)
+  // The complex input values are:
+  // [{"key":[1,1],"value":1},{"key":["NaN",2],"value":2},{"key":[2,4],"value":3},{"key":[3,5],"value":4},
+  // {"key":["NaN",2],"value":5}, {"key":["NaN",2],"value":5}]
+  data = makeRowVector(
+      {makeMapVector(
+           {0, 1, 2, 3, 4, 5},
+           makeRowVector(
+               {makeFlatVector<double>({1, kSNaN, 2, 3, kNaN, kSNaN}),
+                makeFlatVector<int32_t>({1, 2, 4, 5, 2, 2})}),
+           makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})),
+       makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2})});
+
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":3},{"key":[3,5],"value":4},
+  // {"key":["NaN",2],"value":2}]
+  expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector(
+          {makeFlatVector<double>({1, 2, 3, kNaN}),
+           makeFlatVector<int32_t>({1, 4, 5, 2})}),
+      makeFlatVector<int32_t>({1, 3, 4, 2}))});
+
+  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+
+  // Group by Aggregation, Complex type(Row)
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":3},
+  //  {"key":["NaN",2],"value":2}] | 1
+  // [{"key":[3,5],"value":4},{"key":["NaN",2],"value":5}] | 2
+  expectedResult = makeRowVector(
+      {makeMapVector(
+           {0, 3},
+           makeRowVector(
+               {makeFlatVector<double>({1, 2, kNaN, 3, kNaN}),
+                makeFlatVector<int32_t>({1, 4, 2, 5, 2})}),
+           makeFlatVector<int32_t>({1, 3, 2, 4, 5})),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+}
+
+TEST_F(MapUnionTest, timestampWithTimeZone) {
+  // Global Aggregation, Primitive type
+  auto data = makeRowVector(
+      {makeMapVector<int64_t, int32_t>(
+           {{{pack(0, 0), 1}},
+            {{pack(1, 0), 2}},
+            {{pack(2, 0), 3}},
+            {{pack(0, 1), 4}},
+            {{pack(1, 1), 5}},
+            {{pack(1, 2), 6}},
+            {{pack(2, 2), 7}},
+            {{pack(3, 3), 8}},
+            {{pack(1, 1), 9}},
+            {{pack(3, 0), 10}}},
+           MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER())),
+       makeFlatVector<int32_t>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2})});
+
+  auto expectedResult = makeRowVector({makeMapVector<int64_t, int32_t>(
+      {{{pack(0, 0), 1}, {pack(1, 0), 2}, {pack(2, 0), 3}, {pack(3, 3), 8}}},
+      MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER()))});
+
+  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+
+  // Group by Aggregation, Primitive type
+  expectedResult = makeRowVector(
+      {makeMapVector<int64_t, int32_t>(
+           {{{pack(0, 0), 1}, {pack(1, 0), 2}, {pack(2, 0), 3}},
+            {{pack(1, 2), 6}, {pack(2, 2), 7}, {pack(3, 3), 8}}},
+           MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER())),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+
+  // Global Aggregation, Complex type(Row)
+  data = makeRowVector(
+      {makeMapVector(
+           {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+           makeRowVector({makeFlatVector<int64_t>(
+               {pack(0, 0),
+                pack(1, 0),
+                pack(2, 0),
+                pack(0, 1),
+                pack(1, 1),
+                pack(1, 2),
+                pack(2, 2),
+                pack(3, 3),
+                pack(1, 1),
+                pack(3, 0)},
+               TIMESTAMP_WITH_TIME_ZONE())}),
+           makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})),
+       makeFlatVector<int32_t>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2})});
+
+  expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector({makeFlatVector<int64_t>(
+          {pack(0, 0), pack(1, 0), pack(2, 0), pack(3, 3)},
+          TIMESTAMP_WITH_TIME_ZONE())}),
+      makeFlatVector<int32_t>({1, 2, 3, 8}))});
+
+  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+
+  expectedResult = makeRowVector(
+      {makeMapVector(
+           {0, 3},
+           makeRowVector({makeFlatVector<int64_t>(
+               {pack(0, 0),
+                pack(1, 0),
+                pack(2, 0),
+                pack(1, 2),
+                pack(2, 2),
+                pack(3, 3)},
+               TIMESTAMP_WITH_TIME_ZONE())}),
+           makeFlatVector<int32_t>({1, 2, 3, 6, 7, 8})),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
 }
 
 } // namespace

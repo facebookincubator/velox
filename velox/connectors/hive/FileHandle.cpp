@@ -24,6 +24,12 @@
 
 namespace facebook::velox {
 
+uint64_t FileHandleSizer::operator()(const FileHandle& fileHandle) {
+  // TODO: add to support variable file cache size support when the file system
+  // underneath supports.
+  return 1;
+}
+
 namespace {
 // The group tracking is at the level of the directory, i.e. Hive partition.
 std::string groupName(const std::string& filename) {
@@ -33,25 +39,37 @@ std::string groupName(const std::string& filename) {
 }
 } // namespace
 
-std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
-    const std::string& filename) {
+std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
+    const FileHandleKey& key,
+    const FileProperties* properties,
+    filesystems::File::IoStats* stats) {
   // We have seen cases where drivers are stuck when creating file handles.
   // Adding a trace here to spot this more easily in future.
   process::TraceContext trace("FileHandleGenerator::operator()");
   uint64_t elapsedTimeUs{0};
-  std::shared_ptr<FileHandle> fileHandle;
+  std::unique_ptr<FileHandle> fileHandle;
   {
     MicrosecondTimer timer(&elapsedTimeUs);
-    fileHandle = std::make_shared<FileHandle>();
+    fileHandle = std::make_unique<FileHandle>();
+    filesystems::FileOptions options;
+    options.stats = stats;
+    options.tokenProvider = key.tokenProvider;
+    if (properties) {
+      options.fileSize = properties->fileSize;
+      options.readRangeHint = properties->readRangeHint;
+      options.extraFileInfo = properties->extraFileInfo;
+      options.fileReadOps = properties->fileReadOps;
+    }
+    const auto& filename = key.filename;
     fileHandle->file = filesystems::getFileSystem(filename, properties_)
-                           ->openFileForRead(filename);
+                           ->openFileForRead(filename, options);
     fileHandle->uuid = StringIdLease(fileIds(), filename);
     fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
     VLOG(1) << "Generating file handle for: " << filename
             << " uuid: " << fileHandle->uuid.id();
   }
-  REPORT_ADD_HISTOGRAM_VALUE(
-      kCounterHiveFileHandleGenerateLatencyMs, elapsedTimeUs / 1000);
+  RECORD_HISTOGRAM_METRIC_VALUE(
+      kMetricHiveFileHandleGenerateLatencyMs, elapsedTimeUs / 1000);
   // TODO: build the hash map/etc per file type -- presumably after reading
   // the appropriate magic number from the file, or perhaps we include the file
   // type in the file handle key.

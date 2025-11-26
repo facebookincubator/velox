@@ -19,6 +19,8 @@
 
 namespace facebook::velox::window::test {
 
+enum class WindowStyle { kSort, kStreaming, kRandom };
+
 /// Exhaustive set of window function over clauses using a combination of four
 /// columns. Columns c0 and c1 have input data meant to test partitioning
 /// and sorting behavior of the operator. Columns c2 and c3 are used with
@@ -132,7 +134,15 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& overClause,
       const std::string& frameClause);
 
-  /// This function tests SQL queries for the window function and
+  // This function is used to test the StreamingWindow. It will add the order by
+  // action to ensure the data is ordered.
+  QueryInfo buildStreamingWindowQuery(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& function,
+      const std::string& overClause,
+      const std::string& frameClause);
+
+  /// Tests SQL queries for the window function and
   /// the specified overClauses and frameClauses with the input RowVectors.
   /// Note : 'function' should be a full window function invocation string
   /// including input parameters and open/close braces. e.g. rank(), ntile(5).
@@ -144,9 +154,19 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& function,
       const std::vector<std::string>& overClauses,
       const std::vector<std::string>& frameClauses = {""},
-      bool createTable = true);
+      bool createTable = true,
+      WindowStyle windowStyle = WindowStyle::kRandom);
 
-  /// This function tests the SQL query for the window function and overClause
+  /// Tests the window function with the {overClause, frameClause} pair and
+  /// asserts that the result is equal to expectedResult.
+  void testWindowFunction(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& function,
+      const std::string& overClause,
+      const std::string& frameClause,
+      const RowVectorPtr& expectedResult);
+
+  /// Tests the SQL query for the window function and overClause
   /// combination with the input RowVectors. It is expected that query execution
   /// will throw an exception with the errorMessage specified.
   void assertWindowFunctionError(
@@ -155,7 +175,7 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& overClause,
       const std::string& errorMessage);
 
-  /// This function tests the SQL query for the window function, overClause,
+  /// Tests the SQL query for the window function, overClause,
   /// and frameClause combination with the input RowVectors. It is expected that
   /// query execution will throw an exception with the errorMessage specified.
   void assertWindowFunctionError(
@@ -165,9 +185,38 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& frameClause,
       const std::string& errorMessage);
 
+  /// Tests different combinations of k range frame columns.
+  /// These are special as they require generating frame bound value columns.
+  void testKRangeFrames(const std::string& function);
+
   /// ParseOptions for the DuckDB Parser. nth_value in Spark expects to parse
-  /// integer as bigint vs bigint in Presto. The default is to parse integer
+  /// integer as int vs bigint in Presto. The default is to parse integer
   /// as bigint (Presto behavior).
   parse::ParseOptions options_;
+
+ private:
+  enum class BoundType {
+    kPreceding,
+    kFollowing,
+    kCurrentRow,
+  };
+
+  struct RangeFrameBound {
+    std::optional<int64_t> value;
+    BoundType bound;
+  };
+
+  void rangeFrameTest(
+      bool ascending,
+      const std::string& function,
+      const RangeFrameBound& startBound,
+      const RangeFrameBound& endBound);
+
+  void rangeFrameTestImpl(
+      bool ascending,
+      const std::string& function,
+      const RangeFrameBound& startBound,
+      const RangeFrameBound& endBound,
+      bool unorderedColumns);
 };
-}; // namespace facebook::velox::window::test
+} // namespace facebook::velox::window::test

@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -71,12 +72,31 @@ TEST_F(PmodTest, int64) {
   EXPECT_EQ(0, pmod<int64_t>(INT64_MIN, -1));
 }
 
+TEST_F(PmodTest, float) {
+  EXPECT_FLOAT_EQ(0.2, pmod<float>(0.5, 0.3).value());
+  EXPECT_FLOAT_EQ(0.9, pmod<float>(-1.1, 2).value());
+  EXPECT_EQ(std::nullopt, pmod<float>(2.14159, 0.0));
+  EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
+}
+
+TEST_F(PmodTest, double) {
+  EXPECT_DOUBLE_EQ(0.2, pmod<double>(0.5, 0.3).value());
+  EXPECT_DOUBLE_EQ(0.9, pmod<double>(-1.1, 2).value());
+  EXPECT_EQ(std::nullopt, pmod<double>(2.14159, 0.0));
+  EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
+}
+
 class RemainderTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<T> remainder(std::optional<T> a, std::optional<T> n) {
     return evaluateOnce<T>("remainder(c0, c1)", a, n);
   };
+
+  template <typename T>
+  T remainderValue(std::optional<T> a, std::optional<T> n) {
+    return remainder<T>(a, n).value();
+  }
 };
 
 TEST_F(RemainderTest, int8) {
@@ -119,6 +139,44 @@ TEST_F(RemainderTest, int64) {
   EXPECT_EQ(-1, remainder<int64_t>(INT64_MIN, INT64_MAX));
 }
 
+TEST_F(RemainderTest, double) {
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+
+  EXPECT_DOUBLE_EQ(0.0, remainderValue<double>(2.0, 1.0));
+  EXPECT_DOUBLE_EQ(1.0, remainderValue<double>(5.0, 2.0));
+  EXPECT_DOUBLE_EQ(-1.0, remainderValue<double>(-5.0, 2.0));
+  EXPECT_DOUBLE_EQ(0.5, remainderValue<double>(1.5, 1.0));
+  EXPECT_DOUBLE_EQ(0.0, remainderValue<double>(0.0, 1.0));
+  EXPECT_DOUBLE_EQ(2.0, remainderValue<double>(2.0, kInf));
+
+  EXPECT_EQ(std::nullopt, remainder<double>(2.0, 0.0));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(kNan, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(1.0, kNan)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(kInf, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(-kInf, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(kInf, kInf)));
+}
+
+TEST_F(RemainderTest, float) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+  EXPECT_FLOAT_EQ(0.0f, remainderValue<float>(2.0f, 1.0f));
+  EXPECT_FLOAT_EQ(1.0f, remainderValue<float>(5.0f, 2.0f));
+  EXPECT_FLOAT_EQ(-1.0f, remainderValue<float>(-5.0f, 2.0f));
+  EXPECT_FLOAT_EQ(0.5f, remainderValue<float>(1.5f, 1.0f));
+  EXPECT_FLOAT_EQ(0.0f, remainderValue<float>(0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(2.0f, remainderValue<float>(2.0f, kInf));
+
+  EXPECT_EQ(std::nullopt, remainder<float>(2.0f, 0.0f));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(kNan, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(1.0f, kNan)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(kInf, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(-kInf, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(kInf, kInf)));
+}
+
 class ArithmeticTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
@@ -132,8 +190,114 @@ class ArithmeticTest : public SparkFunctionBaseTest {
     return evaluateOnce<double>("divide(c0, c1)", numerator, denominator);
   }
 
+  template <typename T>
+  std::optional<int64_t> div(
+      std::optional<T> numerator,
+      std::optional<T> denominator) {
+    return evaluateOnce<int64_t>("div(c0, c1)", numerator, denominator);
+  }
+
+  template <typename T>
+  std::optional<T> checkedAdd(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_add(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedDivide(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_divide(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedMultiply(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_multiply(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedSubtract(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_subtract(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<int64_t> checkedDiv(
+      std::optional<T> numerator,
+      std::optional<T> denominator) {
+    return evaluateOnce<int64_t>("checked_div(c0, c1)", numerator, denominator);
+  }
+
+  template <typename T>
+  std::optional<T> abs(const std::optional<T> input) {
+    return evaluateOnce<T>("abs(c0)", input);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedArithmetic(
+      const std::string& func,
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    auto res = evaluateOnce<T>(fmt::format("try({}(c0, c1))", func), a, b);
+    ASSERT_TRUE(!res.has_value());
+    try {
+      evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
+      FAIL() << "Expected an error";
+    } catch (const std::exception& e) {
+      ASSERT_TRUE(
+          std::string(e.what()).find(errorMessage) != std::string::npos);
+    }
+  }
+
+  template <typename T>
+  void assertErrorForCheckedAdd(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_add", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedDivide(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_divide", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedMultiply(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_multiply", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedSubtract(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_subtract", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedDiv(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_div", a, b, errorMessage);
+  }
+
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
+  static constexpr double kInfDouble = std::numeric_limits<double>::infinity();
 };
 
 TEST_F(ArithmeticTest, UnaryMinus) {
@@ -181,6 +345,23 @@ TEST_F(ArithmeticTest, Divide) {
   EXPECT_TRUE(std::isnan(divide(kInf, kInf).value_or(0)));
   EXPECT_TRUE(std::isnan(divide(-kInf, kInf).value_or(0)));
   EXPECT_TRUE(std::isnan(divide(kInf, -kInf).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, div) {
+  // Division by zero is always null.
+  EXPECT_EQ(div<int64_t>(1, 0), std::nullopt);
+  EXPECT_EQ(div<int64_t>(0, 0), std::nullopt);
+  EXPECT_EQ(div<int64_t>(INT64_MIN, 0), std::nullopt);
+
+  EXPECT_EQ(div<int64_t>(INT64_MIN, -1), INT64_MIN);
+
+  EXPECT_EQ(div<int8_t>(INT8_MAX, INT8_MIN), 0);
+  EXPECT_EQ(div<int16_t>(INT16_MIN, INT16_MAX), -1);
+  EXPECT_EQ(div<int32_t>(INT32_MAX, INT32_MIN), 0);
+  EXPECT_EQ(div<int64_t>(INT64_MIN, INT64_MAX), -1);
+
+  EXPECT_EQ(div<int64_t>(2, 3), 0);
+  EXPECT_EQ(div<int64_t>(3, 2), 1);
 }
 
 TEST_F(ArithmeticTest, acosh) {
@@ -241,15 +422,69 @@ TEST_F(ArithmeticTest, csc) {
   EXPECT_TRUE(std::isnan(csc(kNan).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, cosh) {
+  const auto cosh = [&](std::optional<double> a) {
+    return evaluateOnce<double>("cosh(c0)", a);
+  };
+
+  EXPECT_EQ(cosh(0), 1);
+  EXPECT_EQ(cosh(kInf), kInf);
+  EXPECT_EQ(cosh(-kInf), kInf);
+  EXPECT_EQ(cosh(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(cosh(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, rint) {
+  const auto rint = [&](double a) {
+    return evaluateOnce<double>("rint(c0)", std::optional(a)).value();
+  };
+
+  EXPECT_EQ(rint(2.3), 2.0);
+  EXPECT_EQ(rint(3.8), 4.0);
+  EXPECT_EQ(rint(-2.3), -2.0);
+  EXPECT_EQ(rint(-3.8), -4.0);
+
+  EXPECT_EQ(rint(2.5), 2.0);
+
+  EXPECT_TRUE(std::isnan(rint(kNanDouble)));
+  EXPECT_EQ(rint(kInfDouble), kInfDouble);
+  EXPECT_EQ(rint(-kInfDouble), -kInfDouble);
+  EXPECT_EQ(rint(0.0), 0.0);
+  EXPECT_EQ(rint(-0.0), -0.0);
+
+  EXPECT_EQ(rint(std::nextafter(1.0, 0.0)), 1.0);
+  EXPECT_EQ(rint(std::nextafter(1.0, 2.0)), 1.0);
+  EXPECT_EQ(rint(std::nextafter(1e+16, kInfDouble)), 1e+16 + 2);
+}
+
+TEST_F(ArithmeticTest, unhex) {
+  const auto unhex = [&](std::optional<std::string> a) {
+    return evaluateOnce<std::string>("unhex(c0)", a);
+  };
+
+  EXPECT_EQ(unhex("737472696E67"), "string");
+  EXPECT_EQ(unhex(""), "");
+  EXPECT_EQ(unhex("23"), "#");
+  EXPECT_EQ(unhex("123"), "\x01#");
+  EXPECT_EQ(unhex("b23"), "\x0B#");
+  EXPECT_EQ(unhex("b2323"), "\x0B##");
+  EXPECT_EQ(unhex("F"), "\x0F");
+  EXPECT_EQ(unhex("ff"), "\xFF");
+  EXPECT_EQ(unhex("G"), std::nullopt);
+  EXPECT_EQ(unhex("GG"), std::nullopt);
+  EXPECT_EQ(unhex("G23"), std::nullopt);
+  EXPECT_EQ(unhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
+}
+
 class CeilFloorTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<int64_t> ceil(std::optional<T> a) {
-    return evaluateOnce<int64_t, T>("ceil(c0)", a);
+    return evaluateOnce<int64_t>("ceil(c0)", a);
   }
   template <typename T>
   std::optional<int64_t> floor(std::optional<T> a) {
-    return evaluateOnce<int64_t, T>("floor(c0)", a);
+    return evaluateOnce<int64_t>("floor(c0)", a);
   }
 };
 
@@ -307,10 +542,34 @@ TEST_F(ArithmeticTest, log1p) {
   EXPECT_TRUE(std::isnan(log1p(kNan).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, expm1) {
+  static const auto expm1 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("expm1(c0)", a);
+  };
+
+  const double kE = std::exp(1);
+
+  // If the argument is NaN, the result is NaN.
+  // If the argument is positive infinity, then the result is positive infinity.
+  // If the argument is negative infinity, then the result is -1.0.
+  // If the argument is zero, then the result is a zero with the same sign as
+  // the argument.
+  EXPECT_TRUE(std::isnan(expm1(kNan).value_or(0)));
+  EXPECT_EQ(expm1(kInf), kInf);
+  EXPECT_EQ(expm1(-kInf), -1);
+  EXPECT_EQ(expm1(0), 0);
+  EXPECT_EQ(expm1(1), kE - 1);
+  // As this is only for high accuracy of little number, we use a little number
+  // 1e-12 which can give the difference. If you use std::exp(x) - 1, the value
+  // may be 1.000009e-12, while the true value should be
+  // below 1.000000000000005e-12.
+  EXPECT_LT(expm1(1e-12), 1.00009e-12);
+}
+
 class BinTest : public SparkFunctionBaseTest {
  protected:
   std::optional<std::string> bin(std::optional<std::int64_t> arg) {
-    return evaluateOnce<std::string, int64_t>("bin(c0)", {arg}, {BIGINT()});
+    return evaluateOnce<std::string>("bin(c0)", arg);
   }
 };
 
@@ -324,6 +583,9 @@ TEST_F(BinTest, bin) {
       bin(std::numeric_limits<int64_t>::max()),
       "111111111111111111111111111111111111111111111111111111111111111");
   EXPECT_EQ(bin(0), "0");
+  auto result = evaluateOnce<std::string, int64_t>(
+      "bin(row_constructor(c0).c1)", std::make_optional(13L));
+  EXPECT_EQ(result, "1101");
 }
 
 TEST_F(ArithmeticTest, hypot) {
@@ -336,6 +598,335 @@ TEST_F(ArithmeticTest, hypot) {
   EXPECT_EQ(hypot(3.0, -4.0), 5.0);
   EXPECT_DOUBLE_EQ(5.70087712549569, hypot(3.5, 4.5).value());
   EXPECT_DOUBLE_EQ(5.70087712549569, hypot(3.5, -4.5).value());
+}
+
+TEST_F(ArithmeticTest, cot) {
+  const auto cot = [&](std::optional<double> a) {
+    return evaluateOnce<double>("cot(c0)", a);
+  };
+
+  EXPECT_EQ(cot(0), kInf);
+  EXPECT_TRUE(std::isnan(cot(kNan).value_or(0)));
+  EXPECT_EQ(cot(1), 1 / std::tan(1));
+  EXPECT_EQ(cot(-1), 1 / std::tan(-1));
+  EXPECT_EQ(cot(0), 1 / std::tan(0));
+}
+
+TEST_F(ArithmeticTest, atan2) {
+  const auto atan2 = [&](std::optional<double> y, std::optional<double> x) {
+    return evaluateOnce<double>("atan2(c0, c1)", y, x);
+  };
+
+  EXPECT_EQ(atan2(0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-1.0, 1.0), std::atan2(-1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, 1.0), std::atan2(1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, -1.0), std::atan2(1.0, -1.0));
+  EXPECT_EQ(atan2(-1.0, -1.0), std::atan2(-1.0, -1.0));
+}
+
+TEST_F(ArithmeticTest, isNanFloat) {
+  const auto isNan = [&](std::optional<float> a) {
+    return evaluateOnce<bool>("isnan(c0)", a);
+  };
+
+  EXPECT_EQ(false, isNan(0.0f));
+  EXPECT_EQ(true, isNan(kNan));
+  EXPECT_EQ(true, isNan(0.0f / 0.0f));
+  EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, isNanDouble) {
+  const auto isNan = [&](std::optional<double> a) {
+    return evaluateOnce<bool>("isnan(c0)", a);
+  };
+
+  EXPECT_EQ(false, isNan(0.0));
+  EXPECT_EQ(true, isNan(kNanDouble));
+  EXPECT_EQ(true, isNan(0.0 / 0.0));
+  EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, hexWithBigint) {
+  const auto toHex = [&](std::optional<int64_t> value) {
+    return evaluateOnce<std::string>("hex(c0)", value);
+  };
+  EXPECT_EQ("11", toHex(17));
+  EXPECT_EQ("FFFFFFFFFFFFFFEF", toHex(-17));
+  EXPECT_EQ("0", toHex(0));
+  EXPECT_EQ("FFFFFFFFFFFFFFFF", toHex(-1));
+  EXPECT_EQ("7FFFFFFFFFFFFFFF", toHex(INT64_MAX));
+  EXPECT_EQ("8000000000000000", toHex(INT64_MIN));
+}
+
+TEST_F(ArithmeticTest, hexWithVarbinaryAndVarchar) {
+  const auto toHex = [&](std::optional<std::string> value) {
+    auto varbinaryResult =
+        evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value);
+    auto varcharResult = evaluateOnce<std::string>("hex(c0)", value);
+
+    EXPECT_TRUE(varbinaryResult.has_value());
+    EXPECT_TRUE(varcharResult.has_value());
+    EXPECT_EQ(varbinaryResult.value(), varcharResult.value());
+
+    return varcharResult.value();
+  };
+  ASSERT_EQ(toHex(""), "");
+  ASSERT_EQ(toHex("Spark SQL"), "537061726B2053514C");
+  ASSERT_EQ(toHex("Spark\x65\x21SQL"), "537061726B652153514C");
+  ASSERT_EQ(toHex("Spark\u6570\u636ESQL"), "537061726BE695B0E68DAE53514C");
+}
+
+TEST_F(ArithmeticTest, widthBucket) {
+  constexpr int64_t kMaxInt64 = std::numeric_limits<int64_t>::max();
+
+  const auto widthBucket = [&](std::optional<double> value,
+                               std::optional<double> min,
+                               std::optional<double> max,
+                               std::optional<int64_t> numBucket) {
+    return evaluateOnce<int64_t>(
+        "width_bucket(c0, c1, c2, c3)", value, min, max, numBucket);
+  };
+
+  // min < max
+  EXPECT_EQ(3, widthBucket(3.14, 0, 4, 3));
+  EXPECT_EQ(2, widthBucket(2, 0, 4, 3));
+  EXPECT_EQ(4, widthBucket(kInf, 0, 4, 3));
+  EXPECT_EQ(0, widthBucket(-1, 0, 3.2, 4));
+
+  // min > max
+  EXPECT_EQ(1, widthBucket(3.14, 4, 0, 3));
+  EXPECT_EQ(2, widthBucket(2, 4, 0, 3));
+  EXPECT_EQ(0, widthBucket(kInf, 4, 0, 3));
+  EXPECT_EQ(5, widthBucket(-1, 3.2, 0, 4));
+
+  // max - min + 1 > Long.MaxValue
+  EXPECT_EQ(widthBucket(5.3, 0, 9223372036854775807, 10), 1);
+
+  // Cases to get null result.
+  EXPECT_EQ(widthBucket(3.14, 0, 4, 0), std::nullopt);
+  EXPECT_EQ(widthBucket(kNan, 0, 4, 10), std::nullopt);
+  EXPECT_EQ(widthBucket(3.14, kNan, 0, 10), std::nullopt);
+  EXPECT_EQ(widthBucket(3.14, kInf, 0, 10), std::nullopt);
+  EXPECT_EQ(widthBucket(3.14, 0, kNan, 10), std::nullopt);
+  EXPECT_EQ(widthBucket(3.14, 0, kInf, 10), std::nullopt);
+  EXPECT_EQ(widthBucket(3.14, 0, 0, 10), std::nullopt);
+  EXPECT_EQ(widthBucket(kInf, 0, 4, kMaxInt64), std::nullopt);
+  EXPECT_EQ(widthBucket(kInf, 4, 0, kMaxInt64), std::nullopt);
+  EXPECT_EQ(widthBucket(5.3, 0.2, 10.6, 9223372036854775807), std::nullopt);
+
+  // value is infinite.
+  EXPECT_EQ(widthBucket(kInf, 0, 4, 3), 4);
+  EXPECT_EQ(widthBucket(-kInf, 0, 4, 3), 0);
+}
+
+TEST_F(ArithmeticTest, checkedAdd) {
+  assertErrorForCheckedAdd<int8_t>(INT8_MAX, 1, "Arithmetic overflow: 127 + 1");
+  assertErrorForCheckedAdd<int16_t>(
+      INT16_MAX, 1, "Arithmetic overflow: 32767 + 1");
+  assertErrorForCheckedAdd<int32_t>(
+      INT32_MAX, 1, "Arithmetic overflow: 2147483647 + 1");
+  assertErrorForCheckedAdd<int64_t>(
+      INT64_MAX, 1, "Arithmetic overflow: 9223372036854775807 + 1");
+  EXPECT_EQ(checkedAdd<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedAdd<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedSubtract) {
+  assertErrorForCheckedSubtract<int8_t>(
+      INT8_MIN, 1, "Arithmetic overflow: -128 - 1");
+  assertErrorForCheckedSubtract<int16_t>(
+      INT16_MIN, 1, "Arithmetic overflow: -32768 - 1");
+  assertErrorForCheckedSubtract<int32_t>(
+      INT32_MIN, 1, "Arithmetic overflow: -2147483648 - 1");
+  assertErrorForCheckedSubtract<int64_t>(
+      INT64_MIN, 1, "Arithmetic overflow: -9223372036854775808 - 1");
+  EXPECT_EQ(checkedSubtract<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedSubtract<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedMultiply) {
+  assertErrorForCheckedMultiply<int8_t>(
+      INT8_MAX, 2, "Arithmetic overflow: 127 * 2");
+  assertErrorForCheckedMultiply<int16_t>(
+      INT16_MAX, 2, "Arithmetic overflow: 32767 * 2");
+  assertErrorForCheckedMultiply<int32_t>(
+      INT32_MAX, 2, "Arithmetic overflow: 2147483647 * 2");
+  assertErrorForCheckedMultiply<int64_t>(
+      INT64_MAX, 2, "Arithmetic overflow: 9223372036854775807 * 2");
+  EXPECT_EQ(checkedMultiply<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedMultiply<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedDivide) {
+  assertErrorForCheckedDivide<int32_t>(1, 0, "division by zero");
+  assertErrorForCheckedDivide<int8_t>(
+      INT8_MIN, -1, "Arithmetic overflow: -128 / -1");
+  assertErrorForCheckedDivide<int16_t>(
+      INT16_MIN, -1, "Arithmetic overflow: -32768 / -1");
+  assertErrorForCheckedDivide<int32_t>(
+      INT32_MIN, -1, "Arithmetic overflow: -2147483648 / -1");
+  assertErrorForCheckedDivide<int64_t>(
+      INT64_MIN, -1, "Arithmetic overflow: -9223372036854775808 / -1");
+  EXPECT_EQ(checkedDivide<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedDivide<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedDiv) {
+  EXPECT_EQ(checkedDiv<int8_t>(INT8_MAX, INT8_MIN), 0);
+  EXPECT_EQ(checkedDiv<int16_t>(INT16_MIN, INT16_MAX), -1);
+  EXPECT_EQ(checkedDiv<int32_t>(INT32_MAX, INT32_MIN), 0);
+  EXPECT_EQ(checkedDiv<int64_t>(INT64_MIN, INT64_MAX), -1);
+
+  EXPECT_EQ(checkedDiv<int64_t>(2, 3), 0);
+  EXPECT_EQ(checkedDiv<int64_t>(3, 2), 1);
+  // Division by zero is always null.
+  assertErrorForCheckedDiv<int64_t>(1, 0, "Division by zero");
+  // Division overflow.
+  assertErrorForCheckedDiv<int64_t>(
+      INT64_MIN, -1, "Overflow in integral divide");
+}
+
+TEST_F(ArithmeticTest, abs) {
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    EXPECT_EQ(abs<int8_t>(-127), 127);
+    EXPECT_EQ(abs<int16_t>(-32767), 32767);
+    EXPECT_EQ(abs<int32_t>(-2147483647), 2147483647);
+    EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
+
+    EXPECT_EQ(abs<float>(-99999.9999f), 99999.9999f);
+    EXPECT_EQ(
+        abs<float>(std::numeric_limits<float>::lowest()),
+        std::numeric_limits<float>::max());
+    EXPECT_EQ(abs<double>(-99999.9999), 99999.9999);
+    EXPECT_EQ(
+        abs<double>(std::numeric_limits<double>::lowest()),
+        std::numeric_limits<double>::max());
+  }
+}
+
+TEST_F(ArithmeticTest, absMinValueOverflow) {
+  // Test abs with ANSI off.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      abs<int8_t>(std::numeric_limits<int8_t>::min()),
+      std::numeric_limits<int8_t>::min());
+  EXPECT_EQ(
+      abs<int16_t>(std::numeric_limits<int16_t>::min()),
+      std::numeric_limits<int16_t>::min());
+  EXPECT_EQ(
+      abs<int32_t>(std::numeric_limits<int32_t>::min()),
+      std::numeric_limits<int32_t>::min());
+  EXPECT_EQ(
+      abs<int64_t>(std::numeric_limits<int64_t>::min()),
+      std::numeric_limits<int64_t>::min());
+
+  // Test abs with ANSI on.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(
+      abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int16_t>(std::numeric_limits<int16_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int32_t>(std::numeric_limits<int32_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
+}
+
+class LogNTest : public SparkFunctionBaseTest {
+ protected:
+  static constexpr double kInf = std::numeric_limits<double>::infinity();
+  static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+};
+
+TEST_F(LogNTest, log2) {
+  const auto log2 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("log2(c0)", a);
+  };
+  EXPECT_EQ(log2(8), 3.0);
+  EXPECT_EQ(log2(-1.0), std::nullopt);
+  EXPECT_EQ(log2(0.0), std::nullopt);
+  EXPECT_EQ(log2(kInf), kInf);
+}
+
+TEST_F(LogNTest, log10) {
+  const auto log10 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("log10(c0)", a);
+  };
+  EXPECT_EQ(log10(100), 2.0);
+  EXPECT_EQ(log10(0.0), std::nullopt);
+  EXPECT_EQ(log10(-1.0), std::nullopt);
+  EXPECT_EQ(log10(kInf), kInf);
+}
+
+TEST_F(LogNTest, log) {
+  const auto log = [&](std::optional<double> a, std::optional<double> b) {
+    return evaluateOnce<double>("log(c0, c1)", a, b);
+  };
+  const auto isNan = [&](std::optional<double> res) {
+    return std::isnan(res.value());
+  };
+  EXPECT_EQ(log(10, 100), 2.0);
+
+  EXPECT_EQ(log(0.0, 1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, 0.0), std::nullopt);
+  EXPECT_EQ(log(-1.0, 1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, -1.0), std::nullopt);
+
+  EXPECT_EQ(log(1.0, 3.0), kInf);
+
+  EXPECT_TRUE(isNan(log(kNan, kNan)));
+  EXPECT_TRUE(isNan(log(kInf, kNan)));
+  EXPECT_TRUE(isNan(log(kNan, kInf)));
+  EXPECT_TRUE(isNan(log(kInf, kInf)));
+
+  EXPECT_EQ(log(kInf, -kInf), std::nullopt);
+  EXPECT_EQ(log(-kInf, kInf), std::nullopt);
+}
+
+class SqrtTest : public SparkFunctionBaseTest {
+ protected:
+  std::optional<double> sqrt(std::optional<double> a) {
+    return evaluateOnce<double>("sqrt(c0)", a);
+  }
+};
+
+TEST_F(SqrtTest, sqrt) {
+  const double kInf = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(sqrt(std::nullopt), std::nullopt);
+  EXPECT_EQ(sqrt(4), 2.0);
+  EXPECT_EQ(sqrt(0), 0.0);
+  EXPECT_EQ(sqrt(kInf), kInf);
+  EXPECT_TRUE(std::isnan(sqrt(-1).value()));
+}
+
+class CbrtTest : public SparkFunctionBaseTest {
+ protected:
+  std::optional<double> cbrt(std::optional<double> a) {
+    return evaluateOnce<double>("cbrt(c0)", a);
+  }
+};
+
+TEST_F(CbrtTest, cbrt) {
+  const double kInf = std::numeric_limits<double>::infinity();
+  const double kNan = std::numeric_limits<double>::quiet_NaN();
+
+  EXPECT_EQ(cbrt(std::nullopt), std::nullopt);
+  EXPECT_EQ(cbrt(8), 2.0);
+  EXPECT_EQ(cbrt(-8), -2.0);
+  EXPECT_EQ(cbrt(0), 0.0);
+  EXPECT_EQ(cbrt(kInf), kInf);
+  EXPECT_EQ(cbrt(-kInf), -kInf);
+  EXPECT_TRUE(std::isnan(cbrt(kNan).value()));
 }
 
 } // namespace

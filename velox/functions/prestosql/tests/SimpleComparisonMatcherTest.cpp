@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/SimpleComparisonMatcher.h"
+#include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -27,8 +27,12 @@ namespace facebook::velox::functions::prestosql {
 namespace {
 
 class SimpleComparisonMatcherTest : public testing::Test,
-                                    public test::VectorTestBase {
+                                    public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions(prefix_);
     parse::registerTypeResolver();
@@ -43,7 +47,7 @@ class SimpleComparisonMatcherTest : public testing::Test,
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   const std::string prefix_ = "tp.";
@@ -79,6 +83,8 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
   const auto inputType =
       ROW({"a"}, {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()}))});
 
+  auto checker = std::make_unique<SimpleComparisonChecker>();
+
   auto testMatcher = [&](const std::string& expr,
                          std::optional<bool> lessThan) {
     SCOPED_TRACE(expr);
@@ -88,17 +94,16 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
     auto lambdaExpr = std::dynamic_pointer_cast<const core::LambdaTypedExpr>(
         parsedExpr->inputs()[1]);
 
-    auto comparison =
-        functions::prestosql::isSimpleComparison(prefix_, *lambdaExpr);
+    auto comparison = checker->isSimpleComparison(prefix_, *lambdaExpr);
 
     ASSERT_EQ(lessThan.has_value(), comparison.has_value());
     if (lessThan.has_value()) {
       ASSERT_EQ(lessThan.value(), comparison->isLessThen);
 
-      auto field = dynamic_cast<const core::FieldAccessTypedExpr*>(
+      auto field = dynamic_cast<const core::DereferenceTypedExpr*>(
           comparison->expr.get());
       ASSERT_TRUE(field != nullptr);
-      ASSERT_EQ("f", field->name());
+      ASSERT_EQ(0, field->index());
     }
   };
 

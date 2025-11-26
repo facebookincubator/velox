@@ -16,26 +16,44 @@
 
 #pragma once
 
-#include <thrift/protocol/TCompactProtocol.h> //@manual
-#include "velox/common/base/RawVector.h"
 #include "velox/dwio/common/BufferUtil.h"
-#include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
-#include "velox/dwio/parquet/thrift/ThriftTransport.h"
+
+namespace facebook::velox::common {
+class ScanSpec;
+} // namespace facebook::velox::common
+
+namespace facebook::velox::dwio::common {
+class BufferedInput;
+} // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::parquet {
+
 class ParquetParams : public dwio::common::FormatParams {
  public:
-  ParquetParams(memory::MemoryPool& pool, const thrift::FileMetaData& metaData)
-      : FormatParams(pool), metaData_(metaData) {}
+  ParquetParams(
+      memory::MemoryPool& pool,
+      dwio::common::ColumnReaderStatistics& stats,
+      const FileMetaDataPtr metaData,
+      const tz::TimeZone* sessionTimezone,
+      TimestampPrecision timestampPrecision)
+      : FormatParams(pool, stats),
+        metaData_(metaData),
+        sessionTimezone_(sessionTimezone),
+        timestampPrecision_(timestampPrecision) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
 
+  TimestampPrecision timestampPrecision() const {
+    return timestampPrecision_;
+  }
+
  private:
-  const thrift::FileMetaData& metaData_;
+  const FileMetaDataPtr metaData_;
+  const tz::TimeZone* sessionTimezone_;
+  const TimestampPrecision timestampPrecision_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -43,22 +61,26 @@ class ParquetData : public dwio::common::FormatData {
  public:
   ParquetData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
-      const std::vector<thrift::RowGroup>& rowGroups,
-      memory::MemoryPool& pool)
+      const FileMetaDataPtr fileMetadataPtr,
+      memory::MemoryPool& pool,
+      dwio::common::ColumnReaderStatistics& stats,
+      const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
-        rowGroups_(rowGroups),
+        fileMetaDataPtr_(fileMetadataPtr),
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
-        rowsInRowGroup_(-1) {}
+        rowsInRowGroup_(-1),
+        stats_(stats),
+        sessionTimezone_(sessionTimezone) {}
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
-  /// Positions 'this' at 'index'th row group. enqueueRowGroup must be called
+  /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
-  dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
+  dwio::common::PositionProvider seekToRowGroup(int64_t index) override;
 
   void filterRowGroups(
       const common::ScanSpec& scanSpec,
@@ -66,12 +88,13 @@ class ParquetData : public dwio::common::FormatData {
       const dwio::common::StatsContext& writerContext,
       FilterRowGroupsResult&) override;
 
-  PageReader* FOLLY_NONNULL reader() const {
+  PageReader* reader() const {
     return reader_.get();
   }
 
-  // Reads null flags for 'numValues' next top level rows. The first 'numValues'
-  // bits of 'nulls' are set and the reader is advanced by numValues'.
+  // Reads null flags for 'numValues' next top level rows. The first
+  // 'numValues' bits of 'nulls' are set and the reader is advanced by
+  // numValues'.
   void readNullsOnly(int32_t numValues, BufferPtr& nulls) {
     reader_->readNullsOnly(numValues, nulls);
   }
@@ -80,8 +103,9 @@ class ParquetData : public dwio::common::FormatData {
     return maxDefine_ > 0;
   }
 
-  /// Sets nulls to be returned by readNulls(). Nulls for non-leaf readers come
-  /// from leaf repdefs which are gathered before descending the reader tree.
+  /// Sets nulls to be returned by readNulls(). Nulls for non-leaf readers
+  /// come from leaf repdefs which are gathered before descending the reader
+  /// tree.
   void setNulls(BufferPtr& nulls, int32_t numValues) {
     if (nulls || numValues) {
       VELOX_CHECK_EQ(presetNullsConsumed_, presetNullsSize_);
@@ -97,11 +121,11 @@ class ParquetData : public dwio::common::FormatData {
 
   void readNulls(
       vector_size_t numValues,
-      const uint64_t* FOLLY_NULLABLE incomingNulls,
+      const uint64_t* incomingNulls,
       BufferPtr& nulls,
       bool nullsOnly = false) override {
-    // If the query accesses only nulls, read the nulls from the pages in range.
-    // If nulls are preread, return those minus any skipped.
+    // If the query accesses only nulls, read the nulls from the pages in
+    // range. If nulls are preread, return those minus any skipped.
     if (presetNulls_) {
       VELOX_CHECK_LE(numValues, presetNullsSize_ - presetNullsConsumed_);
       if (!presetNullsConsumed_ && numValues == presetNullsSize_) {
@@ -124,8 +148,8 @@ class ParquetData : public dwio::common::FormatData {
       readNullsOnly(numValues, nulls);
       return;
     }
-    // There are no column-level nulls in Parquet, only page-level ones, so this
-    // is always non-null.
+    // There are no column-level nulls in Parquet, only page-level ones, so
+    // this is always non-null.
     nulls = nullptr;
   }
 
@@ -168,19 +192,30 @@ class ParquetData : public dwio::common::FormatData {
     return reader_->isDictionary();
   }
 
+  bool isDeltaBinaryPacked() const {
+    return reader_->isDeltaBinaryPacked();
+  }
+
+  bool isDeltaByteArray() const {
+    return reader_->isDeltaByteArray();
+  }
+
   bool parentNullsInLeaves() const override {
     return true;
   }
 
+  // Returns the <offset, length> of the row group.
+  std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
+
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.
-  bool rowGroupMatches(uint32_t rowGroupId, common::Filter* filter);
+  bool rowGroupMatches(uint32_t rowGroupId, const common::Filter* filter);
 
  protected:
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;
-  const std::vector<thrift::RowGroup>& rowGroups_;
+  const FileMetaDataPtr fileMetaDataPtr_;
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
@@ -188,6 +223,8 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
+  dwio::common::ColumnReaderStatistics& stats_;
+  const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.

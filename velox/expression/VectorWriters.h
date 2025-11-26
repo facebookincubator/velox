@@ -47,7 +47,8 @@ struct VectorWriter : public VectorWriterBase {
     }
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
       data_ = vector_->mutableRawValues();
@@ -103,7 +104,7 @@ struct VectorWriter<Array<V>> : public VectorWriterBase {
 
   // This should be called once all rows are processed.
   void finish() override {
-    writer_.elementsVector_->resize(writer_.valuesOffset_);
+    writer_.elementsVector()->resize(writer_.valuesOffset_);
     arrayVector_ = nullptr;
     childWriter_.finish();
   }
@@ -118,7 +119,8 @@ struct VectorWriter<Array<V>> : public VectorWriterBase {
     return *arrayVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > arrayVector_->size()) {
       arrayVector_->resize(size);
     }
@@ -198,7 +200,8 @@ struct VectorWriter<Map<K, V>> : public VectorWriterBase {
     return *mapVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > mapVector_->size()) {
       mapVector_->resize(size);
     }
@@ -275,10 +278,13 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     return *rowVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > rowVector_->size()) {
+      // Note order is important here, we resize children first to ensure
+      // data_ is cached and are not reset when rowVector resizes them.
+      resizeVectorWriters<0>(size);
       rowVector_->resize(size, /*setNotNull*/ false);
-      resizeVectorWriters<0>(rowVector_->size());
     }
   }
 
@@ -334,8 +340,9 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     } else {
       using type = std::tuple_element_t<I, children_types>;
       std::get<I>(writer_.childrenWriters_)
-          .init(static_cast<typename TypeToFlatVector<type>::type&>(
-              *rowVector_->childAt(I).get()));
+          .init(
+              static_cast<typename TypeToFlatVector<type>::type&>(
+                  *rowVector_->childAt(I).get()));
 
       initVectorWriters<I + 1>();
     }
@@ -351,15 +358,16 @@ struct VectorWriter<
     std::enable_if_t<std::is_same_v<T, Varchar> | std::is_same_v<T, Varbinary>>>
     : public VectorWriterBase {
   using vector_t = typename TypeToFlatVector<T>::type;
-  using exec_out_t = StringWriter<>;
+  using exec_out_t = StringWriter;
 
   void init(vector_t& vector, bool uniqueAndMutable = false) {
     proxy_.vector_ = &vector;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > proxy_.vector_->size()) {
-      proxy_.vector_->resize(size, /*setNotNull*/ false);
+      proxy_.vector_->resize(size, /*setNotNull=*/false);
     }
   }
 
@@ -371,16 +379,21 @@ struct VectorWriter<
 
   void commitNull() {
     proxy_.vector_->setNull(proxy_.offset_, true);
+    finalizeNull();
+  }
+
+  void finalizeNull() override {
+    proxy_.prepareForReuse(false);
   }
 
   void commit(bool isSet) override {
     // this code path is called when the slice is top-level
     if (isSet) {
       proxy_.finalize();
+      proxy_.prepareForReuse(true);
     } else {
       commitNull();
     }
-    proxy_.prepareForReuse(isSet);
   }
 
   void setOffset(vector_size_t offset) override {
@@ -403,7 +416,8 @@ struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>>
     vector_ = &vector;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
     }
@@ -450,7 +464,8 @@ struct VectorWriter<std::shared_ptr<T>> : public VectorWriterBase {
     vector_ = &vector;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
     }
@@ -487,12 +502,13 @@ struct VectorWriter<std::shared_ptr<T>> : public VectorWriterBase {
   vector_t* vector_;
 };
 
-template <typename T>
-struct VectorWriter<Generic<T>> : public VectorWriterBase {
+template <typename T, bool comparable, bool orderable>
+struct VectorWriter<Generic<T, comparable, orderable>>
+    : public VectorWriterBase {
   using exec_out_t = GenericWriter;
   using vector_t = BaseVector;
 
-  VectorWriter<Generic<T>>() : writer_{castWriter_, castType_, offset_} {}
+  VectorWriter() : writer_{castWriter_, castType_, offset_} {}
 
   void setOffset(vector_size_t offset) override {
     offset_ = offset;
@@ -522,12 +538,24 @@ struct VectorWriter<Generic<T>> : public VectorWriterBase {
     }
   }
 
+  template <TypeKind kind>
+  void ensureCastedWriter() {
+    if constexpr (TypeTraits<kind>::isPrimitiveType) {
+      writer_.ensureWriter<typename KindToSimpleType<kind>::type>();
+    }
+  }
+
   void init(vector_t& vector) {
     vector_ = &vector;
     writer_.initialize(vector_);
+    if (vector.type()->isPrimitiveType()) {
+      TypeKind kind = vector.typeKind();
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(ensureCastedWriter, kind);
+    }
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (castType_) {
       castWriter_->ensureSize(size);
     } else {
@@ -559,10 +587,22 @@ struct VectorWriter<Generic<T>> : public VectorWriterBase {
     if (!isSet) {
       commitNull();
     } else {
-      VELOX_DCHECK(
-          castWriter_,
-          "Impossible to commit a non-null value if generic writer was never casted");
-      castWriter_->commit(isSet);
+      // It is possible that the writer hasn't been casted when commit(true) is
+      // called. This can happen when this generic writer is a child writer of a
+      // complex-type writer, i.e., array, map, or row writers, and the previous
+      // writing threw right after the parent's add_item was called. In this
+      // case, when the next writing calls the parent's add_item(), add_item()
+      // calls commitMostRecentChildItem() with the needsCommit_ (or
+      // keyNeedsCommit_ and valueNeedsCommit_) flag being true. So it will call
+      // commit(true) on the child writer even if the child writer is generic
+      // and hasn't been casted yet. In this situation, commitNull() should have
+      // been called on the parent writer at the row of the exception before
+      // add_item() is called for the next row. commitNull() of the parent
+      // writer resets length_ to 0, so we don't need to commit anything here
+      // from the last writing.
+      if (castType_) {
+        castWriter_->commit(isSet);
+      }
     }
   }
 
@@ -692,12 +732,13 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
     return *rowVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > rowVector_->size()) {
-      rowVector_->resize(size, /*setNotNull*/ false);
       for (int i = 0; i < writer_.childrenCount_; ++i) {
         writer_.childrenWriters_[i]->ensureSize(size);
       }
+      rowVector_->resize(size, /*setNotNull*/ false);
     }
   }
 
@@ -734,7 +775,8 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
   vector_t* rowVector_ = nullptr;
 };
 
-template <typename T>
-struct VectorWriter<CustomType<T>> : public VectorWriter<typename T::type> {};
+template <typename T, bool providesCustomComparison>
+struct VectorWriter<CustomType<T, providesCustomComparison>>
+    : public VectorWriter<typename T::type> {};
 
 } // namespace facebook::velox::exec

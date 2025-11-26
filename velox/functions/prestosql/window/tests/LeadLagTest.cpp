@@ -51,6 +51,9 @@ class LeadLagTest : public WindowTestBase,
 };
 
 TEST_P(LeadLagTest, offset) {
+  // largeOffset is larger than std::numeric_limits<int32_t>::max()
+  // and is a negative number when cast to int32.
+  int64_t largeOffset = (int64_t)std::numeric_limits<int32_t>::max() * 2;
   auto data = makeRowVector({
       // Values.
       makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
@@ -58,6 +61,11 @@ TEST_P(LeadLagTest, offset) {
       makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
       // Offsets with nulls.
       makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 2}),
+      // Large offsets.
+      makeFlatVector<int64_t>(
+          {largeOffset, largeOffset, largeOffset, largeOffset, largeOffset}),
+      // Default values.
+      makeNullableFlatVector<int64_t>({std::nullopt, 99, 99, 99, std::nullopt}),
   });
 
   createDuckDbTable({data});
@@ -74,6 +82,12 @@ TEST_P(LeadLagTest, offset) {
 
   // Constant offset.
   assertResults(fn("c0, 2"));
+
+  // Large offset.
+  assertResults(fn("c0, c3"));
+
+  // Large && CONSTANT offset.
+  assertResults(fn(fmt::format("c0, {}", largeOffset)));
 
   // Constant null offset. DuckDB returns incorrect results for this case. It
   // treats null offset as 0.
@@ -102,6 +116,101 @@ TEST_P(LeadLagTest, offset) {
       appendColumn(data, makeNullableFlatVector<int64_t>(expectedWindow));
 
   assertQuery(queryInfo.planNode, expected);
+
+  // Out of range offsets return default value(99 here, constant case), whereas
+  // null offsets return null.
+  queryInfo = buildWindowQuery({data}, fn("c0, c2, 99"), "order by c0", "");
+  if (isLag()) {
+    expectedWindow = {99, 99, 99, std::nullopt, 3};
+  } else {
+    expectedWindow = {2, 4, 99, std::nullopt, 99};
+  }
+  expected =
+      appendColumn(data, makeNullableFlatVector<int64_t>(expectedWindow));
+  assertQuery(queryInfo.planNode, expected);
+
+  // Out of range offsets return default value(null here, constant null case),
+  // whereas null offsets return null.
+  queryInfo =
+      buildWindowQuery({data}, fn("c0, c2, null::bigint"), "order by c0", "");
+  if (isLag()) {
+    expectedWindow = {
+        std::nullopt, std::nullopt, std::nullopt, std::nullopt, 3};
+  } else {
+    expectedWindow = {2, 4, std::nullopt, std::nullopt, std::nullopt};
+  }
+  expected =
+      appendColumn(data, makeNullableFlatVector<int64_t>(expectedWindow));
+  assertQuery(queryInfo.planNode, expected);
+
+  // Out of range offsets return default value(c4 here, nullable offset
+  // variable case), whereas null offsets return null.
+  queryInfo = buildWindowQuery({data}, fn("c0, c2, c4"), "order by c0", "");
+  if (isLag()) {
+    expectedWindow = {std::nullopt, 99, 99, std::nullopt, 3};
+  } else {
+    expectedWindow = {2, 4, 99, std::nullopt, std::nullopt};
+  }
+  expected =
+      appendColumn(data, makeNullableFlatVector<int64_t>(expectedWindow));
+  assertQuery(queryInfo.planNode, expected);
+}
+
+TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
+  // The offset is bigger than int32:max() and it is also a positive number
+  // if cast to int32. With only such a special number we can trigger
+  // some tricky bug.
+  int64_t largeOffset = (int64_t)std::numeric_limits<uint32_t>::max() + 2;
+  auto data = makeRowVector(
+      {// Values.
+       makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5}),
+       // Offsets.
+       makeFlatVector<int64_t>(
+           {largeOffset, largeOffset, largeOffset, largeOffset, largeOffset})});
+
+  createDuckDbTable({data});
+
+  auto assertResults = [&](const std::string& functionSql) {
+    auto queryInfo = buildWindowQuery({data}, functionSql, "order by c0", "");
+
+    SCOPED_TRACE(queryInfo.functionSql);
+    assertQuery(queryInfo.planNode, queryInfo.querySql);
+  };
+
+  // Test the large offset which is a column reference.
+  assertResults(fn("c0, c1 IGNORE NULLS"));
+
+  // Test the large offset which is a CONSTANT.
+  assertResults(fn(fmt::format("c0, {} IGNORE NULLS", largeOffset)));
+}
+
+TEST_P(LeadLagTest, zeroOffset) {
+  auto data = makeRowVector({
+      // Values with null.
+      makeNullableFlatVector<int32_t>(
+          {1, std::nullopt, 2, std::nullopt, std::nullopt}),
+      // Values without null.
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      // Offsets.
+      makeFlatVector<int64_t>({0, 0, 0, 0, 0}),
+  });
+  createDuckDbTable({data});
+
+  auto assertResults = [&](const std::string& functionSql) {
+    auto queryInfo = buildWindowQuery({data}, functionSql, "order by c0", "");
+    SCOPED_TRACE(queryInfo.functionSql);
+    assertQuery(queryInfo.planNode, queryInfo.querySql);
+  };
+
+  assertResults(fn("c0, 0"));
+  assertResults(fn("c0, c2"));
+  assertResults(fn("c0, 0 IGNORE NULLS"));
+  assertResults(fn("c0, c2 IGNORE NULLS"));
+
+  assertResults(fn("c1, 0"));
+  assertResults(fn("c1, c2"));
+  assertResults(fn("c1, 0 IGNORE NULLS"));
+  assertResults(fn("c1, c2 IGNORE NULLS"));
 }
 
 TEST_P(LeadLagTest, defaultValue) {
@@ -232,15 +341,23 @@ TEST_P(LeadLagTest, largePartitions) {
   queryInfo = buildWindowQuery({data}, fn("c0, c1, c2"), "order by c0", "");
 
   if (isLag()) {
-    expectedWindow = makeFlatVector<int64_t>(data->size(), [](auto row) {
-      auto defaultValue = row < 5 || row % 7 == 0;
-      return defaultValue ? row * 10 : row - (1 + row % 5);
-    });
+    expectedWindow = makeFlatVector<int64_t>(
+        data->size(),
+        // Default values.
+        [](auto row) {
+          auto defaultValue = row < 5;
+          return defaultValue ? row * 10 : row - (1 + row % 5);
+        },
+        nullEvery(7));
   } else {
-    expectedWindow = makeFlatVector<int64_t>(data->size(), [](auto row) {
-      auto defaultValue = row >= 9'997 || row % 7 == 0;
-      return defaultValue ? row * 10 : row + (1 + row % 5);
-    });
+    expectedWindow = makeFlatVector<int64_t>(
+        data->size(),
+        // Default values.
+        [](auto row) {
+          auto defaultValue = row >= 9'997;
+          return defaultValue ? row * 10 : row + (1 + row % 5);
+        },
+        nullEvery(7));
   }
 
   {
@@ -322,6 +439,68 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     LeadTest,
     LeadLagTest,
     ::testing::Values("lead"));
+
+// DuckDB has errors in IGNORE NULLS logic for empty
+// frames (tested above). So using non-empty frames.
+inline const std::vector<std::string> kIgnoreNullsFrames = {
+    "range current row",
+    "range between unbounded preceding and current row",
+
+    "range between unbounded preceding and unbounded following",
+
+    "rows between 5 preceding and unbounded following",
+    "rows between unbounded preceding and 5 following",
+
+    "rows between 1 preceding and 5 following",
+
+    "rows between c2 preceding and unbounded following",
+    "rows between unbounded preceding and c2 following",
+    "rows between c2 preceding and c2 following",
+};
+
+inline const std::vector<std::string> kIgnoreNullsPartitionClauses = {
+    "partition by c0 order by c1 desc, c2",
+    "partition by c0 order by c1 desc nulls first, c2",
+    "partition by c0 order by c1 asc, c2",
+    "partition by c0 order by c1 asc nulls first, c2",
+};
+
+TEST_F(LeadLagTest, ignoreNulls) {
+  auto size = 40;
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+       makeFlatVector<int64_t>(
+           size, [](auto row) { return row % 7; }, nullEvery(8)),
+       makeFlatVector<int64_t>(size, [](auto row) { return row % 6 + 1; }),
+       // All null values.
+       makeAllNullFlatVector<int64_t>(size)});
+  // c1 has null values, so used for the values argument.
+  const std::vector<std::string> kFunctionsList = {
+      "lead(c1, 2 IGNORE NULLS)",
+      "lag(c1, 2 IGNORE NULLS)",
+      "lead(c1, c2 IGNORE NULLS)",
+      "lag(c1, c2 IGNORE NULLS)",
+      "lead(c1, 2, 5 IGNORE NULLS)",
+      "lag(c1, 2, 5 IGNORE NULLS)",
+      "lead(c1, 2, c2 IGNORE NULLS)",
+      "lag(c1, 2, c2 IGNORE NULLS)",
+      // All null values with IGNORE NULLS specified return default
+      // value.
+      "lead(c3, 2, 99 IGNORE NULLS)",
+      "lag(c3, 2, 99 IGNORE NULLS)",
+  };
+
+  bool createTable = true;
+  for (auto fn : kFunctionsList) {
+    WindowTestBase::testWindowFunction(
+        {input},
+        fn,
+        kIgnoreNullsPartitionClauses,
+        kIgnoreNullsFrames,
+        createTable);
+    createTable = false;
+  }
+}
 
 } // namespace
 } // namespace facebook::velox::window::test

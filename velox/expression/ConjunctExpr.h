@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/SelectivityInfo.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
@@ -29,9 +30,10 @@ class ConjunctExpr : public SpecialForm {
       bool isAnd,
       bool inputsSupportFlatNoNullsFastPath)
       : SpecialForm(
+            isAnd ? SpecialFormKind::kAnd : SpecialFormKind::kOr,
             std::move(type),
             std::move(inputs),
-            isAnd ? "and" : "or",
+            isAnd ? expression::kAnd : expression::kOr,
             inputsSupportFlatNoNullsFastPath,
             false /* trackCpuUsage */),
         isAnd_(isAnd) {
@@ -67,6 +69,12 @@ class ConjunctExpr : public SpecialForm {
   std::string toSql(
       std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
+  void clearCache() override {
+    Expr::clearCache();
+    tempValues_.reset();
+    tempNulls_.reset();
+  }
+
  private:
   static TypePtr resolveType(const std::vector<TypePtr>& argTypes);
 
@@ -82,11 +90,13 @@ class ConjunctExpr : public SpecialForm {
       FlatVector<bool>* result,
       SelectivityVector* activeRows);
 
+  bool evaluatesArgumentsOnNonIncreasingSelection() const override {
+    return isAnd_;
+  }
+
   // true if conjunction (and), false if disjunction (or).
   const bool isAnd_;
 
-  // Errors encountered before processing the current input.
-  FlatVectorPtr<StringView> errors_;
   // temp space for nulls and values of inputs
   BufferPtr tempValues_;
   BufferPtr tempNulls_;
@@ -108,10 +118,11 @@ class ConjunctCallToSpecialForm : public FunctionCallToSpecialForm {
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
-      bool trackCpuUsage) override;
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
 
  private:
-  bool isAnd_;
+  const bool isAnd_;
 };
 
 } // namespace facebook::velox::exec

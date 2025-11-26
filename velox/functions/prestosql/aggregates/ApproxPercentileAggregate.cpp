@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/base/Macros.h"
 #include "velox/common/base/RandomUtil.h"
@@ -28,31 +29,78 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
+template <typename T, typename Allocator>
+struct KllSketchTypeTraits {
+  using KllSketchType = functions::kll::KllSketch<T, Allocator, std::less<T>>;
+};
+
+template <>
+struct KllSketchTypeTraits<float, StlAllocator<float>> {
+  using KllSketchType = functions::kll::KllSketch<
+      float,
+      StlAllocator<float>,
+      util::floating_point::NaNAwareLessThan<float>>;
+};
+
+template <>
+struct KllSketchTypeTraits<double, StlAllocator<double>> {
+  using KllSketchType = functions::kll::KllSketch<
+      double,
+      StlAllocator<double>,
+      util::floating_point::NaNAwareLessThan<double>>;
+};
+
+template <>
+struct KllSketchTypeTraits<float, std::allocator<float>> {
+  using KllSketchType = functions::kll::KllSketch<
+      float,
+      std::allocator<float>,
+      util::floating_point::NaNAwareLessThan<float>>;
+};
+
+template <>
+struct KllSketchTypeTraits<double, std::allocator<double>> {
+  using KllSketchType = functions::kll::KllSketch<
+      double,
+      std::allocator<double>,
+      util::floating_point::NaNAwareLessThan<double>>;
+};
+
+template <typename T, typename Allocator = StlAllocator<T>>
+using KllSketch = typename KllSketchTypeTraits<T, Allocator>::KllSketchType;
 template <typename T>
-using KllSketch = functions::kll::KllSketch<T, StlAllocator<T>>;
+using KllView = functions::kll::detail::View<T>;
+
+unsigned getRandomSeed(std::optional<uint32_t> fixedRandomSeed) {
+  return fixedRandomSeed.has_value() ? *fixedRandomSeed : random::getSeed();
+}
 
 // Accumulator to buffer large count values in addition to the KLL
 // sketch itself.
 template <typename T>
 struct KllSketchAccumulator {
-  explicit KllSketchAccumulator(HashStringAllocator* allocator)
-      : allocator_(allocator),
-        sketch_(
+  explicit KllSketchAccumulator(
+      HashStringAllocator* allocator,
+      std::optional<uint32_t> fixedRandomSeed)
+      : sketch_(
             functions::kll::kDefaultK,
             StlAllocator<T>(allocator),
-            random::getSeed()),
+            getRandomSeed(fixedRandomSeed)),
         largeCountValues_(StlAllocator<std::pair<T, int64_t>>(allocator)) {}
 
   void setAccuracy(double value) {
-    k_ = functions::kll::kFromEpsilon(value);
-    sketch_.setK(k_);
+    sketch_.setK(functions::kll::kFromEpsilon(value));
   }
 
   void append(T value) {
     sketch_.insert(value);
   }
 
-  void append(T value, int64_t count) {
+  void append(
+      T value,
+      int64_t count,
+      HashStringAllocator* allocator,
+      std::optional<uint32_t> fixedRandomSeed) {
     constexpr size_t kMaxBufferSize = 4096;
     constexpr int64_t kMinCountToBuffer = 512;
     if (count < kMinCountToBuffer) {
@@ -62,59 +110,78 @@ struct KllSketchAccumulator {
     } else {
       largeCountValues_.emplace_back(value, count);
       if (largeCountValues_.size() >= kMaxBufferSize) {
-        flush();
+        flush(allocator, fixedRandomSeed);
       }
     }
   }
 
-  void append(const typename KllSketch<T>::View& view) {
+  void append(const KllView<T>& view) {
     sketch_.mergeViews(folly::Range(&view, 1));
   }
 
-  void append(const std::vector<typename KllSketch<T>::View>& views) {
+  void append(const std::vector<KllView<T>>& views) {
     sketch_.mergeViews(views);
   }
 
-  void finalize() {
-    if (!largeCountValues_.empty()) {
-      flush();
-    }
-    sketch_.compact();
+  // Creates a copy of the KllSketch, merges the largeCountValues_ into it,
+  // compacts it, and returns it.
+  // Makes a copy so that uses std::allocator so that this is safe to call
+  // during spilling which may run in parallel.  HashStringAllocator is not
+  // thread safe, so merging into/compacting the original KllSketch which
+  // depends on it can lead to concurrency bugs.
+  KllSketch<T, std::allocator<T>> compact(
+      std::optional<uint32_t> fixedRandomSeed) const {
+    KllSketch<T, std::allocator<T>> newSketch =
+        KllSketch<T, std::allocator<T>>::fromView(
+            sketch_.toView(),
+            std::allocator<T>(),
+            getRandomSeed(fixedRandomSeed));
+
+    mergeLargeCountValuesIntoSketch(
+        std::allocator<T>(), newSketch, fixedRandomSeed);
+
+    newSketch.compact();
+
+    return newSketch;
   }
 
   const KllSketch<T>& getSketch() const {
     return sketch_;
   }
 
+  // This must be called before the KllSketch can be used for estimateQuantile()
+  // or estimateQuantiles().
+  void flush(
+      HashStringAllocator* allocator,
+      std::optional<uint32_t> fixedRandomSeed) {
+    mergeLargeCountValuesIntoSketch(
+        StlAllocator<T>(allocator), sketch_, fixedRandomSeed);
+    largeCountValues_.clear();
+
+    sketch_.finish();
+  }
+
  private:
-  uint16_t k_;
-  HashStringAllocator* allocator_;
+  template <typename Allocator, typename Compare>
+  void mergeLargeCountValuesIntoSketch(
+      const Allocator& allocator,
+      functions::kll::KllSketch<T, Allocator, Compare>& sketch,
+      std::optional<uint32_t> fixedRandomSeed) const {
+    if (!largeCountValues_.empty()) {
+      std::vector<functions::kll::KllSketch<T, Allocator, Compare>> sketches;
+      sketches.reserve(largeCountValues_.size());
+      for (auto [x, n] : largeCountValues_) {
+        sketches.push_back(
+            functions::kll::KllSketch<T, Allocator, Compare>::fromRepeatedValue(
+                x, n, sketch_.k(), allocator, getRandomSeed(fixedRandomSeed)));
+      }
+      sketch.merge(folly::Range(sketches.begin(), sketches.end()));
+    }
+  }
+
   KllSketch<T> sketch_;
   std::vector<std::pair<T, int64_t>, StlAllocator<std::pair<T, int64_t>>>
       largeCountValues_;
-
-  void flush() {
-    std::vector<KllSketch<T>> sketches;
-    sketches.reserve(largeCountValues_.size());
-    for (auto [x, n] : largeCountValues_) {
-      sketches.push_back(KllSketch<T>::fromRepeatedValue(
-          x, n, k_, StlAllocator<T>(allocator_), random::getSeed()));
-    }
-    sketch_.merge(folly::Range(sketches.begin(), sketches.end()));
-    largeCountValues_.clear();
-  }
-};
-
-enum IntermediateTypeChildIndex {
-  kPercentiles = 0,
-  kPercentilesIsArray = 1,
-  kAccuracy = 2,
-  kK = 3,
-  kN = 4,
-  kMinValue = 5,
-  kMaxValue = 6,
-  kItems = 7,
-  kLevels = 8,
 };
 
 void checkWeight(int64_t weight) {
@@ -133,10 +200,12 @@ class ApproxPercentileAggregate : public exec::Aggregate {
   ApproxPercentileAggregate(
       bool hasWeight,
       bool hasAccuracy,
-      const TypePtr& resultType)
+      const TypePtr& resultType,
+      std::optional<uint32_t> fixedRandomSeed)
       : exec::Aggregate(resultType),
         hasWeight_{hasWeight},
-        hasAccuracy_(hasAccuracy) {}
+        hasAccuracy_(hasAccuracy),
+        fixedRandomSeed_(fixedRandomSeed) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(KllSketchAccumulator<T>);
@@ -146,27 +215,22 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      auto group = groups[i];
-      new (group + offset_) KllSketchAccumulator<T>(allocator_);
-    }
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    finalize(groups, numGroups);
+    for (auto i = 0; i < numGroups; ++i) {
+      value<KllSketchAccumulator<T>>(groups[i])->flush(
+          allocator_, fixedRandomSeed_);
+    }
 
     VELOX_CHECK(result);
+    // When all inputs are nulls or masked out, percentiles_ can be
+    // uninitialized. The result should be nulls in this case.
+    if (!percentiles_.has_value()) {
+      *result = BaseVector::createNullConstant(
+          (*result)->type(), numGroups, (*result)->pool());
+      return;
+    }
+
     if (percentiles_ && percentiles_->isArray) {
       folly::Range percentiles(
           percentiles_->values.begin(), percentiles_->values.end());
@@ -192,6 +256,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
               vector_size_t index) {
             digest.estimateQuantiles(percentiles, rawValues + elementsCount);
             result->setOffsetAndSize(index, elementsCount, percentiles.size());
+            result->setNull(index, false);
             elementsCount += percentiles.size();
           });
     } else {
@@ -211,45 +276,65 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    finalize(groups, numGroups);
+    std::vector<KllSketch<T, std::allocator<T>>> sketches;
+    sketches.reserve(numGroups);
+    for (auto i = 0; i < numGroups; ++i) {
+      sketches.push_back(
+          value<KllSketchAccumulator<T>>(groups[i])->compact(fixedRandomSeed_));
+    }
 
     VELOX_CHECK(result);
     auto rowResult = (*result)->as<RowVector>();
     VELOX_CHECK(rowResult);
     auto pool = rowResult->pool();
 
-    if (percentiles_) {
-      auto& values = percentiles_->values;
-      auto size = values.size();
-      auto elements =
-          BaseVector::create<FlatVector<double>>(DOUBLE(), size, pool);
-      std::copy(values.begin(), values.end(), elements->mutableRawValues());
-      auto array = std::make_shared<ArrayVector>(
-          pool,
-          ARRAY(DOUBLE()),
-          nullptr,
-          1,
-          AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
-          AlignedBuffer::allocate<vector_size_t>(1, pool, size),
-          std::move(elements));
-      rowResult->childAt(kPercentiles) =
-          BaseVector::wrapInConstant(numGroups, 0, std::move(array));
-      rowResult->childAt(kPercentilesIsArray) =
-          std::make_shared<ConstantVector<bool>>(
-              pool, numGroups, false, BOOLEAN(), bool(percentiles_->isArray));
-    } else {
+    // percentiles_ can be uninitialized during an intermediate aggregation step
+    // when all input intermediate states are nulls. Result should be nulls in
+    // this case.
+    if (!percentiles_) {
+      rowResult->ensureWritable(SelectivityVector{numGroups});
+      // rowResult->childAt(i) for i = kPercentiles, kPercentilesIsArray, and
+      // kAccuracy are expected to be constant in addIntermediateResults.
       rowResult->childAt(kPercentiles) =
           BaseVector::createNullConstant(ARRAY(DOUBLE()), numGroups, pool);
       rowResult->childAt(kPercentilesIsArray) =
-          std::make_shared<ConstantVector<bool>>(
-              pool, numGroups, true, BOOLEAN(), false);
+          BaseVector::createNullConstant(BOOLEAN(), numGroups, pool);
+      rowResult->childAt(kAccuracy) =
+          BaseVector::createNullConstant(DOUBLE(), numGroups, pool);
+
+      // Set nulls for all rows.
+      auto rawNulls = rowResult->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, rowResult->size(), bits::kNull);
+      return;
     }
+    auto& values = percentiles_->values;
+    auto size = values.size();
+    auto elements =
+        BaseVector::create<FlatVector<double>>(DOUBLE(), size, pool);
+    std::copy(values.begin(), values.end(), elements->mutableRawValues());
+    auto array = std::make_shared<ArrayVector>(
+        pool,
+        ARRAY(DOUBLE()),
+        nullptr,
+        1,
+        AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
+        AlignedBuffer::allocate<vector_size_t>(1, pool, size),
+        std::move(elements));
+    rowResult->childAt(kPercentiles) =
+        BaseVector::wrapInConstant(numGroups, 0, std::move(array));
+    rowResult->childAt(kPercentilesIsArray) =
+        std::make_shared<ConstantVector<bool>>(
+            pool,
+            numGroups,
+            false,
+            BOOLEAN(),
+            static_cast<bool&&>(percentiles_->isArray));
     rowResult->childAt(kAccuracy) = std::make_shared<ConstantVector<double>>(
         pool,
         numGroups,
         accuracy_ == kMissingNormalizedValue,
         DOUBLE(),
-        double(accuracy_));
+        static_cast<double&&>(accuracy_));
     auto k = rowResult->childAt(kK)->asFlatVector<int32_t>();
     auto n = rowResult->childAt(kN)->asFlatVector<int64_t>();
     auto minValue = rowResult->childAt(kMinValue)->asFlatVector<T>();
@@ -269,9 +354,8 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto levelsElements = levels->elements()->asFlatVector<int32_t>();
     size_t itemsCount = 0;
     vector_size_t levelsCount = 0;
-    for (int i = 0; i < numGroups; ++i) {
-      auto accumulator = value<const KllSketchAccumulator<T>>(groups[i]);
-      auto v = accumulator->getSketch().toView();
+    for (auto& sketch : sketches) {
+      auto v = sketch.toView();
       itemsCount += v.items.size();
       levelsCount += v.levels.size();
     }
@@ -285,9 +369,8 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto rawLevels = levelsElements->mutableRawValues();
     itemsCount = 0;
     levelsCount = 0;
-    for (int i = 0; i < numGroups; ++i) {
-      auto accumulator = value<const KllSketchAccumulator<T>>(groups[i]);
-      auto v = accumulator->getSketch().toView();
+    for (int i = 0; i < sketches.size(); ++i) {
+      auto v = sketches[i].toView();
       if (v.n == 0) {
         rowResult->setNull(i, true);
       } else {
@@ -324,7 +407,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
         checkWeight(weight);
-        accumulator->append(value, weight);
+        accumulator->append(value, weight, allocator_, fixedRandomSeed_);
       });
     } else {
       if (decodedValue_.mayHaveNulls()) {
@@ -372,7 +455,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
         checkWeight(weight);
-        accumulator->append(value, weight);
+        accumulator->append(value, weight, allocator_, fixedRandomSeed_);
       });
     } else {
       if (decodedValue_.mayHaveNulls()) {
@@ -399,13 +482,27 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     addIntermediate<true>(group, rows, args);
   }
 
- private:
-  void finalize(char** groups, int32_t numGroups) {
-    for (auto i = 0; i < numGroups; ++i) {
-      value<KllSketchAccumulator<T>>(groups[i])->finalize();
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      auto group = groups[i];
+      new (group + offset_)
+          KllSketchAccumulator<T>(allocator_, fixedRandomSeed_);
     }
   }
 
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();
+      }
+    }
+  }
+
+ private:
   template <typename VectorType, typename ExtractFunc>
   void extract(
       char** groups,
@@ -417,7 +514,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
     uint64_t* rawNulls = nullptr;
     if (result->mayHaveNulls()) {
-      BufferPtr nulls = result->mutableNulls(result->size());
+      BufferPtr& nulls = result->mutableNulls(result->size());
       rawNulls = nulls->asMutable<uint64_t>();
     }
 
@@ -446,7 +543,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     checkSetPercentile(rows, *args[argIndex++]);
     if (hasAccuracy_) {
       decodedAccuracy_.decode(*args[argIndex++], rows, true);
-      checkSetAccuracy();
+      checkSetAccuracy(rows);
     }
     VELOX_CHECK_EQ(argIndex, args.size());
   }
@@ -455,36 +552,46 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const BaseVector& vec) {
     DecodedVector decoded(vec, rows);
-    VELOX_USER_CHECK(
-        decoded.isConstantMapping(),
-        "Percentile argument must be constant for all input rows");
+
+    auto* base = decoded.base();
+    auto baseFirstRow = decoded.index(rows.begin());
+    if (!decoded.isConstantMapping()) {
+      rows.applyToSelected([&](vector_size_t row) {
+        VELOX_USER_CHECK(!decoded.isNullAt(row), "Percentile cannot be null");
+        auto baseRow = decoded.index(row);
+        VELOX_USER_CHECK(
+            base->equalValueAt(base, baseRow, baseFirstRow),
+            "Percentile argument must be constant for all input rows: {} vs. {}",
+            base->toString(baseRow),
+            base->toString(baseFirstRow));
+      });
+    }
+
     bool isArray;
-    const double* data;
+    vector_size_t offset;
     vector_size_t len;
-    auto i = decoded.index(0);
-    if (decoded.base()->typeKind() == TypeKind::DOUBLE) {
+    if (base->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
-      data =
-          decoded.base()->asUnchecked<ConstantVector<double>>()->rawValues() +
-          i;
+      offset = rows.begin();
       len = 1;
-    } else if (decoded.base()->typeKind() == TypeKind::ARRAY) {
+    } else if (base->typeKind() == TypeKind::ARRAY) {
       isArray = true;
-      auto arrays = decoded.base()->asUnchecked<ArrayVector>();
-      VELOX_USER_CHECK(
-          arrays->elements()->isFlatEncoding(),
-          "Only flat encoding is allowed for percentile array elements");
-      auto elements = arrays->elements()->asFlatVector<double>();
-      data = elements->rawValues() + arrays->offsetAt(i);
-      len = arrays->sizeAt(i);
+      auto arrays = base->asUnchecked<ArrayVector>();
+      decoded.decode(*arrays->elements());
+      offset = arrays->offsetAt(baseFirstRow);
+      len = arrays->sizeAt(baseFirstRow);
     } else {
       VELOX_USER_FAIL(
-          "Incorrect type for percentile: {}", decoded.base()->typeKind());
+          "Incorrect type for percentile: {}", base->type()->toString());
     }
-    checkSetPercentile(isArray, data, len);
+    checkSetPercentile(isArray, decoded, offset, len);
   }
 
-  void checkSetPercentile(bool isArray, const double* data, vector_size_t len) {
+  void checkSetPercentile(
+      bool isArray,
+      const DecodedVector& percentiles,
+      vector_size_t offset,
+      vector_size_t len) {
     if (!percentiles_) {
       VELOX_USER_CHECK_GT(len, 0, "Percentile cannot be empty");
       percentiles_ = {
@@ -492,9 +599,11 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           .isArray = isArray,
       };
       for (vector_size_t i = 0; i < len; ++i) {
-        VELOX_USER_CHECK_GE(data[i], 0, "Percentile must be between 0 and 1");
-        VELOX_USER_CHECK_LE(data[i], 1, "Percentile must be between 0 and 1");
-        percentiles_->values[i] = data[i];
+        VELOX_USER_CHECK(!percentiles.isNullAt(i), "Percentile cannot be null");
+        auto value = percentiles.valueAt<double>(offset + i);
+        VELOX_USER_CHECK_GE(value, 0, "Percentile must be between 0 and 1");
+        VELOX_USER_CHECK_LE(value, 1, "Percentile must be between 0 and 1");
+        percentiles_->values[i] = value;
       }
     } else {
       VELOX_USER_CHECK_EQ(
@@ -507,21 +616,36 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           "Percentile argument must be constant for all input rows");
       for (vector_size_t i = 0; i < len; ++i) {
         VELOX_USER_CHECK_EQ(
-            data[i],
+            percentiles.valueAt<double>(offset + i),
             percentiles_->values[i],
             "Percentile argument must be constant for all input rows");
       }
     }
   }
 
-  void checkSetAccuracy() {
+  void checkSetAccuracy(const SelectivityVector& rows) {
     if (!hasAccuracy_) {
       return;
     }
-    VELOX_USER_CHECK(
-        decodedAccuracy_.isConstantMapping(),
-        "Accuracy argument must be constant for all input rows");
-    checkSetAccuracy(decodedAccuracy_.valueAt<double>(0));
+
+    if (decodedAccuracy_.isConstantMapping()) {
+      VELOX_USER_CHECK(
+          !decodedAccuracy_.isNullAt(0), "Accuracy cannot be null");
+      checkSetAccuracy(decodedAccuracy_.valueAt<double>(0));
+    } else {
+      rows.applyToSelected([&](auto row) {
+        VELOX_USER_CHECK(
+            !decodedAccuracy_.isNullAt(row), "Accuracy cannot be null");
+        const auto accuracy = decodedAccuracy_.valueAt<double>(row);
+        if (accuracy_ == kMissingNormalizedValue) {
+          checkSetAccuracy(accuracy);
+        }
+        VELOX_USER_CHECK_EQ(
+            accuracy,
+            accuracy_,
+            "Accuracy argument must be constant for all input rows");
+      });
+    }
   }
 
   void checkSetAccuracy(double accuracy) {
@@ -565,6 +689,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
   static constexpr double kMissingNormalizedValue = -1;
   const bool hasWeight_;
   const bool hasAccuracy_;
+  const std::optional<uint32_t> fixedRandomSeed_;
   std::optional<Percentiles> percentiles_;
   double accuracy_{kMissingNormalizedValue};
   DecodedVector decodedValue_;
@@ -583,10 +708,11 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto rowVec = decoded.base()->as<RowVector>();
     if constexpr (checkIntermediateInputs) {
       VELOX_USER_CHECK(rowVec);
-      for (int i = kPercentiles; i <= kMaxValue; ++i) {
-        VELOX_USER_CHECK(
-            rowVec->childAt(i)->isFlatEncoding() ||
-            rowVec->childAt(i)->isConstantEncoding());
+      for (int i = kPercentiles; i <= kAccuracy; ++i) {
+        VELOX_USER_CHECK(rowVec->childAt(i)->isConstantEncoding());
+      }
+      for (int i = kK; i <= kMaxValue; ++i) {
+        VELOX_USER_CHECK(rowVec->childAt(i)->isFlatEncoding());
       }
       for (int i = kItems; i <= kLevels; ++i) {
         VELOX_USER_CHECK(
@@ -604,7 +730,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         innerRows.updateBounds();
       } else {
         velox::translateToInnerRows(
-            rows, decoded.indices(), decoded.nulls(), innerRows);
+            rows, decoded.indices(), decoded.nulls(&rows), innerRows);
       }
       baseRows = &innerRows;
     }
@@ -634,7 +760,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto rawLevels = levelElements->rawValues<uint32_t>();
 
     KllSketchAccumulator<T>* accumulator = nullptr;
-    std::vector<typename KllSketch<T>::View> views;
+    std::vector<KllView<T>> views;
     if constexpr (kSingleGroup) {
       views.reserve(rows.end());
     }
@@ -647,19 +773,23 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         return;
       }
       if (!accumulator) {
-        int j = percentiles.index(i);
+        int indexInBaseVector = percentiles.index(i);
         auto percentilesBase = percentiles.base()->asUnchecked<ArrayVector>();
         auto percentileBaseElements =
             percentilesBase->elements()->asFlatVector<double>();
         if constexpr (checkIntermediateInputs) {
           VELOX_USER_CHECK(percentileBaseElements);
-          VELOX_USER_CHECK(!percentilesBase->isNullAt(j));
+          VELOX_USER_CHECK(!percentilesBase->isNullAt(indexInBaseVector));
         }
-        auto rawPercentiles = percentileBaseElements->rawValues();
+
+        bool isArray = percentileIsArray->valueAt(i);
+        DecodedVector decodedElements(*percentilesBase->elements());
         checkSetPercentile(
-            percentileIsArray->valueAt(i),
-            rawPercentiles + percentilesBase->offsetAt(j),
-            percentilesBase->sizeAt(j));
+            isArray,
+            decodedElements,
+            percentilesBase->offsetAt(indexInBaseVector),
+            percentilesBase->sizeAt(indexInBaseVector));
+
         if (!accuracy->isNullAt(i)) {
           checkSetAccuracy(accuracy->valueAt(i));
         }
@@ -678,7 +808,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
               maxValue->isNullAt(i) || items->isNullAt(i) ||
               levels->isNullAt(i)));
       }
-      typename KllSketch<T>::View v{
+      KllView<T> v{
           .k = static_cast<uint32_t>(k->valueAt(i)),
           .n = static_cast<size_t>(n->valueAt(i)),
           .minValue = minValue->valueAt(i),
@@ -725,38 +855,46 @@ void addSignatures(
   auto intermediateType = fmt::format(
       "row(array(double), boolean, double, integer, bigint, {0}, {0}, array({0}), array(integer))",
       inputType);
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType(percentileType)
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType("bigint")
-                           .argumentType(percentileType)
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType(percentileType)
-                           .argumentType("double")
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType(returnType)
-                           .intermediateType(intermediateType)
-                           .argumentType(inputType)
-                           .argumentType("bigint")
-                           .argumentType(percentileType)
-                           .argumentType("double")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType(percentileType)
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("bigint")
+          .argumentType(percentileType)
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType(percentileType)
+          .argumentType("double")
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(returnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("bigint")
+          .argumentType(percentileType)
+          .argumentType("double")
+          .build());
 }
 
-exec::AggregateRegistrationResult registerApproxPercentile(
-    const std::string& name) {
+} // namespace
+
+void registerApproxPercentileAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& inputType :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
@@ -767,19 +905,21 @@ exec::AggregateRegistrationResult registerApproxPercentile(
         fmt::format("array({})", inputType),
         signatures);
   }
-  return exec::registerAggregateFunction(
+  auto name = prefix + kApproxPercentile;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         auto isRawInput = exec::isRawInput(step);
         auto hasWeight =
             argTypes.size() >= 2 && argTypes[1]->kind() == TypeKind::BIGINT;
         bool hasAccuracy = argTypes.size() == (hasWeight ? 4 : 3);
+        auto fixedRandomSeed =
+            config.debugAggregationApproxPercentileFixedRandomSeed();
 
         if (isRawInput) {
           VELOX_USER_CHECK_EQ(
@@ -832,22 +972,22 @@ exec::AggregateRegistrationResult registerApproxPercentile(
         switch (type->kind()) {
           case TypeKind::TINYINT:
             return std::make_unique<ApproxPercentileAggregate<int8_t>>(
-                hasWeight, hasAccuracy, resultType);
+                hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::SMALLINT:
             return std::make_unique<ApproxPercentileAggregate<int16_t>>(
-                hasWeight, hasAccuracy, resultType);
+                hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::INTEGER:
             return std::make_unique<ApproxPercentileAggregate<int32_t>>(
-                hasWeight, hasAccuracy, resultType);
+                hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::BIGINT:
             return std::make_unique<ApproxPercentileAggregate<int64_t>>(
-                hasWeight, hasAccuracy, resultType);
+                hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::REAL:
             return std::make_unique<ApproxPercentileAggregate<float>>(
-                hasWeight, hasAccuracy, resultType);
+                hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::DOUBLE:
             return std::make_unique<ApproxPercentileAggregate<double>>(
-                hasWeight, hasAccuracy, resultType);
+                hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           default:
             VELOX_USER_FAIL(
                 "Unsupported input type for {} aggregation {}",
@@ -855,13 +995,8 @@ exec::AggregateRegistrationResult registerApproxPercentile(
                 type->toString());
         }
       },
-      /*registerCompanionFunctions*/ true);
-}
-
-} // namespace
-
-void registerApproxPercentileAggregate(const std::string& prefix) {
-  registerApproxPercentile(prefix + kApproxPercentile);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

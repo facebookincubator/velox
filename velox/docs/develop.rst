@@ -11,18 +11,25 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/vectors
     develop/scalar-functions
     develop/aggregate-functions
+    develop/view-and-writer-types
     develop/lambda-functions
     develop/expression-evaluation
     develop/dictionary-encoding
     develop/arena
+    develop/hash-table
     develop/aggregations
+    develop/connectors
     develop/joins
     develop/anti-join
     develop/operators
     develop/task
     develop/simd
+    develop/memory
     develop/spilling
-    develop/unsaferow
+    develop/serde
+    develop/timestamp
     develop/testing
     develop/debugging
     develop/TpchBenchmark
+    develop/window
+    develop/dynamic-loading

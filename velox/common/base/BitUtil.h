@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include "velox/common/base/Exceptions.h"
+
+#include <folly/CPortability.h>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -26,12 +30,28 @@
 #include <x86intrin.h>
 #endif
 
+// Remove once we upgrade folly.
+#ifndef FOLLY_BUILTIN_MEMCPY
+#if FOLLY_HAS_BUILTIN(__builtin_memcpy_inline)
+#define FOLLY_BUILTIN_MEMCPY(dest, src, size) \
+  void(__builtin_memcpy_inline((dest), (src), (size)))
+#elif FOLLY_HAS_BUILTIN(__builtin_memcpy)
+#define FOLLY_BUILTIN_MEMCPY(dest, src, size) \
+  void(__builtin_memcpy((dest), (src), (size)))
+#else
+#define FOLLY_BUILTIN_MEMCPY(dest, src, size) \
+  void(::std::memcpy((dest), (src), (size)))
+#endif
+#endif
+
 namespace facebook {
 namespace velox {
 namespace bits {
 
+inline constexpr uint64_t kNullHash = 1;
+
 template <typename T>
-inline bool isBitSet(const T* bits, int32_t idx) {
+inline bool isBitSet(const T* bits, uint64_t idx) {
   return bits[idx / (sizeof(bits[0]) * 8)] &
       (static_cast<T>(1) << (idx & ((sizeof(bits[0]) * 8) - 1)));
 }
@@ -58,39 +78,50 @@ static constexpr uint8_t kZeroBitmasks[] = {
 };
 
 template <typename T>
-inline void setBit(T* bits, uint32_t idx) {
+inline void setBit(T* bits, uint64_t idx) {
   auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] |= (1 << (idx % 8));
 }
 
 template <typename T>
-inline void clearBit(T* bits, uint32_t idx) {
+inline void clearBit(T* bits, uint64_t idx) {
   auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] &= kZeroBitmasks[idx % 8];
 }
 
 template <typename T>
-inline void setBit(T* bits, uint32_t idx, bool value) {
+inline void setBit(T* bits, uint64_t idx, bool value) {
   value ? setBit(bits, idx) : clearBit(bits, idx);
 }
 
-inline void negate(char* bits, int32_t size) {
+inline void negateBit(void* bits, uint64_t idx) {
+  auto* bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
+  bitsAs8Bit[idx / 8] ^= (1 << (idx % 8));
+}
+
+inline void negate(uint64_t* bits, int32_t size) {
   int32_t i = 0;
   for (; i + 64 <= size; i += 64) {
-    auto wordPtr = reinterpret_cast<uint64_t*>(bits + (i / 8));
+    auto wordPtr = bits + i / 64;
     *wordPtr = ~*wordPtr;
   }
+  auto* bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   for (; i + 8 <= size; i += 8) {
-    bits[i / 8] = ~bits[i / 8];
+    bitsAs8Bit[i / 8] = ~bitsAs8Bit[i / 8];
   }
   for (; i < size; ++i) {
-    bits::setBit(bits, i, !bits::isBitSet(bits, i));
+    bits::setBit(bitsAs8Bit, i, !bits::isBitSet(bits, i));
   }
 }
 
 template <typename T, typename U>
 constexpr inline T roundUp(T value, U factor) {
   return (value + (factor - 1)) / factor * factor;
+}
+
+template <typename T, typename U>
+constexpr inline T divRoundUp(T value, U factor) {
+  return (value + (factor - 1)) / factor;
 }
 
 constexpr inline uint64_t lowMask(int32_t bits) {
@@ -101,11 +132,11 @@ constexpr inline uint64_t highMask(int32_t bits) {
   return lowMask(bits) << (64 - bits);
 }
 
-constexpr inline uint64_t nbytes(int32_t bits) {
+constexpr inline uint64_t nbytes(uint64_t bits) {
   return roundUp(bits, 8) / 8;
 }
 
-constexpr inline uint64_t nwords(int32_t bits) {
+constexpr inline uint64_t nwords(uint64_t bits) {
   return roundUp(bits, 64) / 64;
 }
 
@@ -691,8 +722,22 @@ bool inline hasIntersection(
       });
 }
 
-inline int32_t countLeadingZeros(uint64_t word) {
-  return __builtin_clzll(word);
+template <typename T = uint64_t>
+inline int32_t countLeadingZeros(T word) {
+  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
+  /// Built-in Function: int __builtin_clz (unsigned int x) returns the number
+  /// of leading 0-bits in x, starting at the most significant bit position. If
+  /// x is 0, the result is undefined.
+  if (word == 0) {
+    return sizeof(T) * 8;
+  }
+  if constexpr (std::is_same_v<T, uint64_t>) {
+    return __builtin_clzll(word);
+  } else {
+    uint64_t hi = word >> 64;
+    uint64_t lo = static_cast<uint64_t>(word);
+    return (hi == 0) ? 64 + __builtin_clzll(lo) : __builtin_clzll(hi);
+  }
 }
 
 inline uint64_t nextPowerOfTwo(uint64_t size) {
@@ -700,7 +745,7 @@ inline uint64_t nextPowerOfTwo(uint64_t size) {
     return 0;
   }
   uint32_t bits = 63 - countLeadingZeros(size);
-  uint64_t lower = 1U << bits;
+  uint64_t lower = 1ULL << bits;
   // Size is a power of 2.
   if (lower == size) {
     return size;
@@ -709,7 +754,7 @@ inline uint64_t nextPowerOfTwo(uint64_t size) {
 }
 
 inline bool isPowerOfTwo(uint64_t size) {
-  return bits::countBits(&size, 0, sizeof(uint64_t) * 8) <= 1;
+  return (size & (size - 1)) == 0;
 }
 
 // This is the Hash128to64 function from Google's cityhash (available
@@ -770,24 +815,7 @@ inline uint64_t loadPartialWord(const uint8_t* data, int32_t size) {
   return result;
 }
 
-inline size_t hashBytes(size_t seed, const char* data, size_t size) {
-  auto begin = reinterpret_cast<const uint8_t*>(data);
-  if (size < 8) {
-    return hashMix(seed, loadPartialWord(begin, size));
-  }
-  auto result = seed;
-  auto end = begin + size;
-  while (begin + 8 <= end) {
-    result = hashMix(result, *reinterpret_cast<const uint64_t*>(begin));
-    begin += 8;
-  }
-  if (end != begin) {
-    // Accesses the last 64 bits. Some bytes may get processed twice but the
-    // access is safe.
-    result = hashMix(result, *reinterpret_cast<const uint64_t*>(end - 8));
-  }
-  return result;
-}
+uint64_t hashBytes(uint64_t seed, const char* data, size_t size);
 
 namespace detail {
 // Returns at least 'numBits' bits of data starting at bit 'bitOffset'
@@ -876,13 +904,17 @@ void copyBitsBackward(
     uint64_t targetOffset,
     uint64_t numBits);
 
-// Copies consecutive bits from 'source' to positions in 'target'
-// where 'targetMask' has a 1. 'source' may be a prefix of 'target',
-// so that contiguous bits of source are scattered in place. The
-// positions of 'target' where 'targetMask' is 0 are 0. A sample use
-// case is reading a column of boolean with nulls. The booleans
-// from the column get inserted into the places given by ones in the
-// present bitmap.
+/// Copies consecutive bits from 'source' to positions in 'target' where
+/// 'targetMask' has a 1. 'source' may be a prefix of 'target', so that
+/// contiguous bits of source are scattered in place. The positions of 'target'
+/// where 'targetMask' is 0 are 0. A sample use case is reading a column of
+/// boolean with nulls. The booleans from the column get inserted into the
+/// places given by ones in the present bitmap. All source, target and mask bit
+/// arrays are accessed at 64 bit width and must have a minimum of 64 bits plus
+/// one addressable byte after the last bit. Using std::vector as a
+/// bit array without explicit padding, for example, can crash with
+/// access to unmapped address if the vector happens to border on
+/// unmapped memory.
 void scatterBits(
     int32_t numSource,
     int32_t numTarget,
@@ -890,9 +922,9 @@ void scatterBits(
     const uint64_t* targetMask,
     char* target);
 
-// Extract bits from integer 'a' at the corresponding bit locations
-// specified by 'mask' to contiguous low bits in return value; the
-// remaining upper bits in return value are set to zero.
+/// Extract bits from integer 'a' at the corresponding bit locations specified
+/// by 'mask' to contiguous low bits in return value; the remaining upper bits
+/// in return value are set to zero.
 template <typename T>
 inline T extractBits(T a, T mask);
 
@@ -955,6 +987,43 @@ inline void padToAlignment(
   if (roundEnd > padIndex) {
     std::memset(
         reinterpret_cast<char*>(pointer) + padIndex, 0, roundEnd - padIndex);
+  }
+}
+
+/// Returns value with the order of the bytes reversed; for example, 0xaabb
+/// becomes 0xbbaa. Byte here always means exactly 8 bits.
+inline __int128_t builtin_bswap128(__int128_t value) {
+#if defined __has_builtin
+#if __has_builtin(__builtin_bswap128)
+#define VELOX_HAS_BUILTIN_BSWAP_INT128 1
+  return __builtin_bswap128(value);
+#endif
+#endif
+#if not VELOX_HAS_BUILTIN_BSWAP_INT128
+  return (static_cast<__uint128_t>(__builtin_bswap64(value)) << 64) |
+      __builtin_bswap64(value >> 64);
+#else
+#undef VELOX_HAS_BUILTIN_BSWAP_INT128
+#endif
+}
+
+/// Store `bits' into the memory region pointed by `byte', at `index' (bit
+/// index).  If `kSize' is 8, we store the whole byte directly; otherwise it
+/// must be 4 and we store either the whole byte or the upper 4 bits only,
+/// depending on the `index'.
+template <int kSize>
+void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
+  VELOX_DCHECK_EQ(index % kSize, 0);
+  VELOX_DCHECK_EQ(bits >> kSize, 0);
+  if constexpr (kSize == 8) {
+    bytes[index / 8] = bits;
+  } else {
+    VELOX_DCHECK_EQ(kSize, 4);
+    if (index % 8 == 0) {
+      bytes[index / 8] = bits;
+    } else {
+      bytes[index / 8] |= bits << 4;
+    }
   }
 }
 

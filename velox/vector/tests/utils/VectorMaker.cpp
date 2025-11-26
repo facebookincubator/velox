@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::test {
@@ -225,7 +226,6 @@ ArrayVectorPtr VectorMaker::arrayVector(
     auto rawNulls = nullsBuffer->asMutable<uint64_t>();
 
     for (int i = 0; i < nulls.size(); i++) {
-      VELOX_CHECK_EQ(rawSizes[nulls[i]], 0)
       bits::setNull(rawNulls, nulls[i]);
     }
   }
@@ -266,7 +266,6 @@ MapVectorPtr VectorMaker::mapVector(
     auto rawNulls = nullsBuffer->asMutable<uint64_t>();
 
     for (int i = 0; i < nulls.size(); i++) {
-      VELOX_CHECK_EQ(rawSizes[nulls[i]], 0)
       bits::setNull(rawNulls, nulls[i]);
     }
   }

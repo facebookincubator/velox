@@ -16,6 +16,9 @@
 
 #include <gtest/gtest.h>
 #include <cstring>
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/common/exception/Exception.h"
@@ -48,8 +51,12 @@ void addStats(
 
 class EncryptedStatsTest : public Test {
  protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance(MemoryManager::Options{});
+  }
+
   void SetUp() override {
-    pool_ = defaultMemoryManager().addRootPool("EncryptedStatsTest");
+    pool_ = memoryManager()->addRootPool("EncryptedStatsTest");
     sinkPool_ = pool_->addLeafChild("sink");
     ProtoWriter writer{pool_, *sinkPool_};
     auto& context = const_cast<const ProtoWriter&>(writer).getContext();
@@ -57,23 +64,24 @@ class EncryptedStatsTest : public Test {
     // fake post script
     proto::PostScript ps;
     ps.set_compression(
-        static_cast<proto::CompressionKind>(context.compression));
-    if (context.compression != CompressionKind::CompressionKind_NONE) {
-      ps.set_compressionblocksize(context.compressionBlockSize);
+        static_cast<proto::CompressionKind>(context.compression()));
+    if (context.compression() !=
+        facebook::velox::common::CompressionKind::CompressionKind_NONE) {
+      ps.set_compressionblocksize(context.compressionBlockSize());
     }
 
     // fake footer
     TestEncrypter encrypter;
     HiveTypeParser parser;
     auto type = parser.parse("struct<a:int,b:struct<a:int,b:int>,c:int,d:int>");
-    auto footer =
-        google::protobuf::Arena::CreateMessage<proto::Footer>(&arena_);
+    auto footer = ArenaCreate<proto::Footer>(&arena_);
+    auto footerWrapper = FooterWriteWrapper(footer);
     // add empty stats to the file
     for (size_t i = 0; i < 7; ++i) {
-      footer->add_statistics()->set_numberofvalues(i);
+      footerWrapper.addStatistics().setNumberOfValues(i);
     }
-    ProtoUtils::writeType(*type, *footer);
-    auto enc = footer->mutable_encryption();
+    ProtoUtils::writeType(*type, footerWrapper);
+    auto enc = footerWrapper.mutableEncryption();
     enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
     auto group = enc->add_encryptiongroups();
     group->add_nodes(1);
@@ -101,7 +109,7 @@ class EncryptedStatsTest : public Test {
         *readerPool_,
         std::make_unique<BufferedInput>(readFile, *readerPool_),
         std::make_unique<PostScript>(std::move(ps)),
-        footer,
+        footerWrapper.getDwrfPtr(),
         nullptr,
         std::move(handler));
   }
@@ -121,8 +129,8 @@ class EncryptedStatsTest : public Test {
   std::shared_ptr<MemoryPool> readerPool_;
 };
 
-TEST_F(EncryptedStatsTest, getStatistics) {
-  auto stats = reader_->getStatistics();
+TEST_F(EncryptedStatsTest, statistics) {
+  auto stats = reader_->statistics();
   for (size_t i = 1; i < 7; ++i) {
     auto& stat = stats->getColumnStatistics(i);
     if (i != 5) {
@@ -135,7 +143,7 @@ TEST_F(EncryptedStatsTest, getStatistics) {
 
 TEST_F(EncryptedStatsTest, getStatisticsKeyNotLoaded) {
   clearKey(0);
-  auto stats = reader_->getStatistics();
+  auto stats = reader_->statistics();
   for (size_t i = 2; i < 7; ++i) {
     auto& stat = stats->getColumnStatistics(i);
     if (i != 5) {
@@ -148,7 +156,7 @@ TEST_F(EncryptedStatsTest, getStatisticsKeyNotLoaded) {
 
 TEST_F(EncryptedStatsTest, getColumnStatistics) {
   for (size_t i = 1; i < 7; ++i) {
-    auto stats = reader_->getColumnStatistics(i);
+    auto stats = reader_->columnStatistics(i);
     if (i != 5) {
       ASSERT_EQ(stats->getNumberOfValues(), i * 100);
     } else {
@@ -160,7 +168,7 @@ TEST_F(EncryptedStatsTest, getColumnStatistics) {
 TEST_F(EncryptedStatsTest, getColumnStatisticsKeyNotLoaded) {
   clearKey(0);
   for (size_t i = 2; i < 7; ++i) {
-    auto stats = reader_->getColumnStatistics(i);
+    auto stats = reader_->columnStatistics(i);
     if (i != 5) {
       ASSERT_EQ(stats->getNumberOfValues(), i * 100);
     } else {
@@ -172,8 +180,8 @@ TEST_F(EncryptedStatsTest, getColumnStatisticsKeyNotLoaded) {
 std::unique_ptr<ReaderBase> createCorruptedFileReader(
     uint64_t footerLen,
     uint32_t cacheLen) {
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-  MemorySink sink{*pool, 1024};
+  auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
+  MemorySink sink{1024, {.pool = pool.get()}};
   DataBufferHolder holder{*pool, 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
   BufferedOutputStream output{holder};
 
@@ -205,14 +213,24 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
 
   sink.write(std::move(buf));
   auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(
-      std::string_view(sink.getData(), sink.size()));
+      std::string(sink.data(), sink.size()));
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool.get()};
   return std::make_unique<ReaderBase>(
-      *pool, std::make_unique<BufferedInput>(readFile, *pool));
+      readerOpts, std::make_unique<BufferedInput>(readFile, *pool));
 }
 
-TEST(ReaderBaseTest, InvalidPostScriptThrows) {
-  EXPECT_THROW(
-      { createCorruptedFileReader(1'000'000, 0); }, exception::LoggedException);
-  EXPECT_THROW(
-      { createCorruptedFileReader(0, 1'000'000); }, exception::LoggedException);
+class ReaderBaseTest : public Test {
+ protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance(MemoryManager::Options{});
+  }
+};
+
+TEST_F(ReaderBaseTest, InvalidPostScriptThrows) {
+  VELOX_ASSERT_THROW(
+      createCorruptedFileReader(1'000'000, 0),
+      "Corrupted file, footer size is invalid");
+  VELOX_ASSERT_THROW(
+      createCorruptedFileReader(0, 1'000'000),
+      "Corrupted file, cache size is invalid");
 }

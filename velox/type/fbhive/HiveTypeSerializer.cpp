@@ -17,15 +17,10 @@
 #include "velox/type/fbhive/HiveTypeSerializer.h"
 
 #include <cstddef>
-#include <stdexcept>
-
-using facebook::velox::Type;
-using facebook::velox::TypeKind;
 
 namespace facebook::velox::type::fbhive {
 
-std::string HiveTypeSerializer::serialize(
-    const std::shared_ptr<const Type>& type) {
+std::string HiveTypeSerializer::serialize(const TypePtr& type) {
   HiveTypeSerializer serializer;
   return serializer.visit(*type);
 }
@@ -58,12 +53,16 @@ std::string HiveTypeSerializer::visit(const Type& type) const {
       return "map<" + visitChildren(type.asMap()) + ">";
     case TypeKind::ROW:
       return "struct<" + visitChildren(type.asRow()) + ">";
+    case TypeKind::OPAQUE: {
+      auto typeAlias = getOpaqueAliasForTypeId(type.asOpaque().typeIndex());
+      return "opaque<" + typeAlias + ">";
+    }
     default:
-      throw std::logic_error("unknown batch type");
+      VELOX_UNSUPPORTED("unsupported type: " + type.toString());
   }
 }
 
-std::string HiveTypeSerializer::visitChildren(const velox::RowType& t) const {
+std::string HiveTypeSerializer::visitChildren(const RowType& t) const {
   std::string result;
   for (size_t i = 0; i < t.size(); ++i) {
     if (i != 0) {
@@ -77,7 +76,7 @@ std::string HiveTypeSerializer::visitChildren(const velox::RowType& t) const {
   return result;
 }
 
-std::string HiveTypeSerializer::visitChildren(const velox::Type& t) const {
+std::string HiveTypeSerializer::visitChildren(const Type& t) const {
   std::string result;
   for (size_t i = 0; i < t.size(); ++i) {
     if (i != 0) {

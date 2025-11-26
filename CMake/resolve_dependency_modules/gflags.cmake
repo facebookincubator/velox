@@ -14,37 +14,63 @@
 include_guard(GLOBAL)
 
 set(VELOX_GFLAGS_VERSION 2.2.2)
-set(VELOX_GFLAGS_BUILD_SHA256_CHECKSUM
-    34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf)
-string(CONCAT VELOX_GFLAGS_SOURCE_URL
-              "https://github.com/gflags/gflags/archive/refs/tags/"
-              "v${VELOX_GFLAGS_VERSION}.tar.gz")
+set(
+  VELOX_GFLAGS_BUILD_SHA256_CHECKSUM
+  34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf
+)
+string(
+  CONCAT
+  VELOX_GFLAGS_SOURCE_URL
+  "https://github.com/gflags/gflags/archive/refs/tags/"
+  "v${VELOX_GFLAGS_VERSION}.tar.gz"
+)
 
-resolve_dependency_url(GFLAGS)
+velox_resolve_dependency_url(GFLAGS)
 
 message(STATUS "Building gflags from source")
 FetchContent_Declare(
   gflags
   URL ${VELOX_GFLAGS_SOURCE_URL}
   URL_HASH ${VELOX_GFLAGS_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/gflags/gflags-config.patch)
+  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/gflags/gflags-config.patch
+  OVERRIDE_FIND_PACKAGE
+  EXCLUDE_FROM_ALL
+  SYSTEM
+)
 
-set(GFLAGS_BUILD_STATIC_LIBS ON)
-set(GFLAGS_BUILD_gflags_LIB ON)
-set(GFLAGS_BUILD_gflags_nothreads_LIB ON)
-set(GFLAGS_IS_SUBPROJECT ON)
 # glog relies on the old `google` namespace
 set(GFLAGS_NAMESPACE "google;gflags")
 
+set(GFLAGS_BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
+set(GFLAGS_BUILD_STATIC_LIBS ${VELOX_BUILD_STATIC})
+
+set(GFLAGS_BUILD_gflags_LIB ON)
+set(GFLAGS_BUILD_gflags_nothreads_LIB ON)
+set(GFLAGS_IS_SUBPROJECT ON)
+
+# Workaround for https://github.com/gflags/gflags/issues/277
+unset(BUILD_SHARED_LIBS)
+if(DEFINED CACHE{BUILD_SHARED_LIBS})
+  set(CACHED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+  unset(BUILD_SHARED_LIBS CACHE)
+endif()
+
 FetchContent_MakeAvailable(gflags)
 
-# the flag has to be added to each target we build so adjust to settings choosen
-# above
-target_compile_options(gflags_static PRIVATE -Wno-cast-function-type)
-target_compile_options(gflags_nothreads_static PRIVATE -Wno-cast-function-type)
+# Workaround for https://github.com/gflags/gflags/issues/277
+if(DEFINED CACHED_BUILD_SHARED_LIBS)
+  set(
+    BUILD_SHARED_LIBS
+    ${CACHED_BUILD_SHARED_LIBS}
+    CACHE BOOL
+    "Restored after setting up gflags"
+    FORCE
+  )
+endif()
 
-# this causes find_package(gflags) to search in the build directory and prevents
-# the system gflags from being found
-set(gflags_DIR ${gflags_BINARY_DIR})
-set(gflags_LIBRARY gflags_static)
-set(gflags_INCLUDE_DIR ${gflags_BINARY_DIR}/include)
+# This causes find_package(gflags) in other dependencies to search in the build
+# directory and prevents the system gflags from being found when they don't use
+# the target directly (like folly).
+set(gflags_FOUND TRUE)
+set(gflags_LIBRARY gflags::gflags)
+set(gflags_INCLUDE_DIR)

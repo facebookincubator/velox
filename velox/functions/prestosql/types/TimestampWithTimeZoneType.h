@@ -15,24 +15,55 @@
  */
 #pragma once
 
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox {
 
+using TimeZoneKey = int16_t;
+
+constexpr int32_t kMillisShift = 12;
+constexpr int32_t kTimezoneMask = (1 << kMillisShift) - 1;
+// The maximum and minimum millis UTC we can represent in a
+// TimestampWithTimeZone value given the bits we have to store it.
+// We have 64 bits minus the bits for the time zone minus 1 for the sign bit.
+constexpr int64_t kMaxMillisUtc = (1L << (64 - (int64_t)kMillisShift - 1)) - 1L;
+constexpr int64_t kMinMillisUtc = (kMaxMillisUtc + 1) * -1;
+
+inline int64_t unpackMillisUtc(int64_t dateTimeWithTimeZone) {
+  return dateTimeWithTimeZone >> kMillisShift;
+}
+
+inline TimeZoneKey unpackZoneKeyId(int64_t dateTimeWithTimeZone) {
+  return dateTimeWithTimeZone & kTimezoneMask;
+}
+
+inline int64_t pack(int64_t millisUtc, TimeZoneKey timeZoneKey) {
+  VELOX_USER_CHECK(
+      millisUtc <= kMaxMillisUtc && millisUtc >= kMinMillisUtc,
+      "TimestampWithTimeZone overflow: {} ms",
+      millisUtc);
+  return (millisUtc << kMillisShift) | (timeZoneKey & kTimezoneMask);
+}
+
+inline int64_t pack(const Timestamp& timestamp, TimeZoneKey timeZoneKey) {
+  return pack(timestamp.toMillis(), timeZoneKey);
+}
+
+inline Timestamp unpackTimestampUtc(int64_t dateTimeWithTimeZone) {
+  return Timestamp::fromMillis(unpackMillisUtc(dateTimeWithTimeZone));
+}
+
 /// Represents timestamp with time zone as a number of milliseconds since epoch
 /// and time zone ID.
-class TimestampWithTimeZoneType : public RowType {
-  TimestampWithTimeZoneType()
-      : RowType({"timestamp", "timezone"}, {BIGINT(), SMALLINT()}) {}
+class TimestampWithTimeZoneType final : public BigintType {
+  constexpr TimestampWithTimeZoneType()
+      : BigintType{ProvideCustomComparison{}} {}
 
  public:
-  static const std::shared_ptr<const TimestampWithTimeZoneType>& get() {
-    static const std::shared_ptr<const TimestampWithTimeZoneType> instance =
-        std::shared_ptr<TimestampWithTimeZoneType>(
-            new TimestampWithTimeZoneType());
-
-    return instance;
+  static std::shared_ptr<const TimestampWithTimeZoneType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimestampWithTimeZoneType kInstance;
+    return {std::shared_ptr<const TimestampWithTimeZoneType>{}, &kInstance};
   }
 
   bool equivalent(const Type& other) const override {
@@ -40,13 +71,21 @@ class TimestampWithTimeZoneType : public RowType {
     return this == &other;
   }
 
-  const char* name() const override {
-    return "TIMESTAMP WITH TIME ZONE";
+  int32_t compare(const int64_t& left, const int64_t& right) const override {
+    const int64_t leftUnpacked = unpackMillisUtc(left);
+    const int64_t rightUnpacked = unpackMillisUtc(right);
+
+    return leftUnpacked < rightUnpacked ? -1
+        : leftUnpacked == rightUnpacked ? 0
+                                        : 1;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
+  uint64_t hash(const int64_t& value) const override {
+    return folly::hasher<int64_t>()(unpackMillisUtc(value));
+  }
+
+  const char* name() const override {
+    return "TIMESTAMP WITH TIME ZONE";
   }
 
   std::string toString() const override {
@@ -73,26 +112,10 @@ TIMESTAMP_WITH_TIME_ZONE() {
 
 // Type used for function registration.
 struct TimestampWithTimezoneT {
-  using type = Row<int64_t, int16_t>;
+  using type = int64_t;
   static constexpr const char* typeName = "timestamp with time zone";
 };
 
-using TimestampWithTimezone = CustomType<TimestampWithTimezoneT>;
-
-class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
- public:
-  TypePtr getType() const override {
-    return TIMESTAMP_WITH_TIME_ZONE();
-  }
-
-  // Type casting from and to TimestampWithTimezone is not supported yet.
-  exec::CastOperatorPtr getCastOperator() const override {
-    VELOX_NYI(
-        "Casting of {} is not implemented yet.",
-        TIMESTAMP_WITH_TIME_ZONE()->toString());
-  }
-};
-
-void registerTimestampWithTimeZoneType();
+using TimestampWithTimezone = CustomType<TimestampWithTimezoneT, true>;
 
 } // namespace facebook::velox

@@ -22,14 +22,23 @@
 using namespace testing;
 using namespace facebook::velox::memory;
 
-namespace facebook::velox::dwrf {
-TEST(TestDictionaryEncodingUtils, StringGetSortedIndexLookupTable) {
+namespace facebook::velox::dwrf::test {
+namespace {
+
+class DictionaryEncodingUtilsTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+};
+
+TEST_F(DictionaryEncodingUtilsTest, StringGetSortedIndexLookupTable) {
   struct TestCase {
     explicit TestCase(
         bool sort,
         std::function<bool(const StringDictionaryEncoder&, size_t, size_t)>
             ordering,
-        const std::vector<folly::StringPiece>& addKeySequence,
+        const std::vector<std::string_view>& addKeySequence,
         const std::vector<uint32_t>& lookupTable)
         : sort{sort},
           ordering{ordering},
@@ -38,7 +47,7 @@ TEST(TestDictionaryEncodingUtils, StringGetSortedIndexLookupTable) {
     bool sort;
     std::function<bool(const StringDictionaryEncoder&, size_t, size_t)>
         ordering;
-    std::vector<folly::StringPiece> addKeySequence;
+    std::vector<std::string_view> addKeySequence;
     std::vector<uint32_t> lookupTable;
   };
 
@@ -91,7 +100,7 @@ TEST(TestDictionaryEncodingUtils, StringGetSortedIndexLookupTable) {
           {0, 1, 2, 3}}};
 
   for (const auto& testCase : testCases) {
-    auto pool = addDefaultLeafMemoryPool();
+    auto pool = memoryManager()->addLeafPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
     for (const auto& key : testCase.addKeySequence) {
       stringDictEncoder.addKey(key, 0);
@@ -137,14 +146,14 @@ TEST(TestDictionaryEncodingUtils, StringGetSortedIndexLookupTable) {
   }
 }
 
-TEST(TestDictionaryEncodingUtils, StringStrideDictOptimization) {
+TEST_F(DictionaryEncodingUtilsTest, StringStrideDictOptimization) {
   constexpr size_t kStrideSize{10};
   struct TestCase {
     explicit TestCase(
         bool sort,
         std::function<bool(const StringDictionaryEncoder&, size_t, size_t)>
             ordering,
-        const std::vector<folly::StringPiece>& addKeySequence,
+        const std::vector<std::string_view>& addKeySequence,
         const std::vector<uint32_t>& lookupTable,
         const std::vector<bool>& inDict,
         size_t finalDictSize,
@@ -159,7 +168,7 @@ TEST(TestDictionaryEncodingUtils, StringStrideDictOptimization) {
     bool sort;
     std::function<bool(const StringDictionaryEncoder&, size_t, size_t)>
         ordering;
-    std::vector<folly::StringPiece> addKeySequence;
+    std::vector<std::string_view> addKeySequence;
     std::vector<uint32_t> lookupTable;
     std::vector<bool> inDict;
     size_t finalDictSize;
@@ -296,7 +305,7 @@ TEST(TestDictionaryEncodingUtils, StringStrideDictOptimization) {
   };
 
   for (const auto& testCase : testCases) {
-    auto pool = addDefaultLeafMemoryPool();
+    auto pool = memoryManager()->addLeafPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
     size_t rowCount = 0;
     for (const auto& key : testCase.addKeySequence) {
@@ -308,7 +317,7 @@ TEST(TestDictionaryEncodingUtils, StringStrideDictOptimization) {
     dwio::common::DataBuffer<uint32_t> strideDictSizes{
         *pool, rowCount / kStrideSize + 1};
 
-    std::vector<folly::StringPiece> expected{testCase.finalDictSize};
+    std::vector<std::string_view> expected{testCase.finalDictSize};
     std::vector<uint32_t> expectedSize(testCase.finalDictSize);
     for (size_t i = 0; i < testCase.lookupTable.size(); ++i) {
       if (testCase.inDict[i]) {
@@ -361,4 +370,5 @@ TEST(TestDictionaryEncodingUtils, StringStrideDictOptimization) {
   }
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace
+} // namespace facebook::velox::dwrf::test

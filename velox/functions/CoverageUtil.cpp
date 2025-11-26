@@ -21,6 +21,7 @@
 #include <iostream>
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::functions {
@@ -49,10 +50,9 @@ class TablePrinter {
         columnSize_ * numScalarColumns_ + 2 * (numScalarColumns_ - 1);
 
     out_ << indent_ << std::left << std::setw(scalarFunctionsColumnWidth)
-         << "Scalar Functions"
-         << "      " << std::setw(columnSize_) << "Aggregate Functions"
-         << "      "
-         << "Window Functions" << std::endl;
+         << "Scalar Functions" << "      " << std::setw(columnSize_)
+         << "Aggregate Functions" << "      " << "Window Functions"
+         << std::endl;
     out_ << indent_ << std::string(scalarFunctionsColumnWidth, '=')
          << "  ==  " << line << "  ==  " << line << std::endl;
   }
@@ -166,16 +166,13 @@ void printTableCss(
   out << "    div.body {max-width: 1300px;}" << std::endl;
   out << "    table.coverage th {background-color: lightblue; text-align: center;}"
       << std::endl;
-  out << "    table.coverage "
-      << "td:nth-child(" << numScalarColumns + 1 << ") "
-      << "{background-color: lightblue;}" << std::endl;
-  out << "    table.coverage "
-      << "td:nth-child(" << numScalarColumns + 3 << ") "
-      << "{background-color: lightblue;}" << std::endl;
+  out << "    table.coverage " << "td:nth-child(" << numScalarColumns + 1
+      << ") " << "{background-color: lightblue;}" << std::endl;
+  out << "    table.coverage " << "td:nth-child(" << numScalarColumns + 3
+      << ") " << "{background-color: lightblue;}" << std::endl;
 
   for (const auto& entry : cellTracker.cells()) {
-    out << "    table.coverage "
-        << "tr:nth-child(" << entry.first + 1 << ") "
+    out << "    table.coverage " << "tr:nth-child(" << entry.first + 1 << ") "
         << "td:nth-child(" << entry.second + 1 << ") "
         << "{background-color: #6BA81E;}" << std::endl;
   }
@@ -208,7 +205,8 @@ void printCoverageMap(
   // Split scalar functions into 'numScalarColumns' columns. Put all aggregate
   // functions into one column.
   auto numRows = std::max(
-      {(size_t)std::ceil((double)scalarCnt / numScalarColumns),
+      {static_cast<size_t>(
+           std::ceil(static_cast<double>(scalarCnt) / numScalarColumns)),
        aggCnt,
        windowCnt});
 
@@ -300,7 +298,9 @@ bool isCompanionFunctionName(
 /// excluding companion functions.
 std::vector<std::string> getSortedScalarNames() {
   // Do not print "internal" functions.
-  static const std::unordered_set<std::string> kBlockList = {"row_constructor"};
+  static const folly::F14FastSet<std::string_view> kBlockList{
+      expression::kRowConstructor,
+  };
 
   auto functions = getFunctionSignatures();
 
@@ -430,8 +430,8 @@ void printVeloxFunctions(
   auto scalarCnt = scalarNames.size();
   auto aggCnt = aggNames.size();
   auto windowCnt = windowNames.size();
-  auto numRows =
-      std::max({(size_t)std::ceil(scalarCnt / 3.0), aggCnt, windowCnt});
+  auto numRows = std::max(
+      {static_cast<size_t>(std::ceil(scalarCnt / 3.0)), aggCnt, windowCnt});
 
   auto printName = [&](const std::string& name) {
     return linkBlockList.count(name) == 0 ? toFuncLink(name, domain) : name;

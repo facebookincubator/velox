@@ -18,6 +18,7 @@
 #include <folly/dynamic.h>
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/exec/Operator.h"
+#include "velox/expression/ExprStats.h"
 
 namespace facebook::velox::exec {
 struct TaskStats;
@@ -44,9 +45,11 @@ struct PlanNodeStats {
   PlanNodeStats(PlanNodeStats&&) = default;
   PlanNodeStats& operator=(PlanNodeStats&&) = default;
 
+  PlanNodeStats& operator+=(const PlanNodeStats&);
+
   /// Sum of input rows for all corresponding operators. Useful primarily for
   /// leaf plan nodes or plan nodes that correspond to a single operator type.
-  vector_size_t inputRows{0};
+  uint64_t inputRows{0};
 
   /// Sum of input batches for all corresponding operators.
   vector_size_t inputVectors{0};
@@ -57,15 +60,18 @@ struct PlanNodeStats {
   /// Sum of raw input rows for all corresponding operators. Applies primarily
   /// to TableScan operator which reports rows before pushed down filter as raw
   /// input.
-  vector_size_t rawInputRows{0};
+  uint64_t rawInputRows{0};
 
   /// Sum of raw input bytes for all corresponding operators.
   uint64_t rawInputBytes{0};
 
+  /// Contains the dynamic filters stats if applied.
+  DynamicFilterStats dynamicFilterStats;
+
   /// Sum of output rows for all corresponding operators. When
   /// plan node corresponds to multiple operator types, operators of only one of
   /// these types report non-zero output rows.
-  vector_size_t outputRows{0};
+  uint64_t outputRows{0};
 
   /// Sum of output batches for all corresponding operators.
   vector_size_t outputVectors{0};
@@ -73,10 +79,31 @@ struct PlanNodeStats {
   /// Sum of output bytes for all corresponding operators.
   uint64_t outputBytes{0};
 
+  // Sum of CPU, scheduled and wall times for isBLocked call for all
+  // corresponding operators.
+  CpuWallTiming isBlockedTiming;
+
+  // Sum of CPU, scheduled and wall times for addInput call for all
+  // corresponding operators.
+  CpuWallTiming addInputTiming;
+
+  // Sum of CPU, scheduled and wall times for noMoreInput call for all
+  // corresponding operators.
+  CpuWallTiming finishTiming;
+
+  // Sum of CPU, scheduled and wall times for getOutput call for all
+  // corresponding operators.
+  CpuWallTiming getOutputTiming;
+
   /// Sum of CPU, scheduled and wall times for all corresponding operators. For
   /// each operator, timing of addInput, getOutput and finish calls are added
   /// up.
   CpuWallTiming cpuWallTiming;
+
+  /// Sum of CPU, scheduled and wall times spent on background activities
+  /// (activities that are not running on driver threads) for all corresponding
+  /// operators.
+  CpuWallTiming backgroundTiming;
 
   /// Sum of blocked wall time for all corresponding operators.
   uint64_t blockedWallNanos{0};
@@ -86,6 +113,8 @@ struct PlanNodeStats {
   uint64_t peakMemoryBytes{0};
 
   uint64_t numMemoryAllocations{0};
+
+  uint64_t physicalWrittenBytes{0};
 
   /// Operator-specific counters.
   std::unordered_map<std::string, RuntimeMetric> customStats;
@@ -99,6 +128,9 @@ struct PlanNodeStats {
   /// Number of total splits.
   int numSplits{0};
 
+  /// Total bytes in memory for spilling
+  uint64_t spilledInputBytes{0};
+
   /// Total bytes written for spilling.
   uint64_t spilledBytes{0};
 
@@ -111,10 +143,15 @@ struct PlanNodeStats {
   /// Total spilled files.
   uint32_t spilledFiles{0};
 
+  /// A map of expression name to its respective stats.
+  std::unordered_map<std::string, ExprStats> expressionStats;
+
   /// Add stats for a single operator instance.
   void add(const OperatorStats& stats);
 
-  std::string toString(bool includeInputStats = false) const;
+  std::string toString(
+      bool includeInputStats = false,
+      bool includeRuntimeStats = false) const;
 
   bool isMultiOperatorTypeNode() const {
     return operatorStats.size() > 1;
@@ -129,6 +166,9 @@ std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(
 
 folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats);
 
+using PlanNodeAnnotation =
+    std::function<std::string(const core::PlanNodeId& id)>;
+
 /// Returns human-friendly representation of the plan augmented with runtime
 /// statistics. The result has the same plan representation as in
 /// PlanNode::toString(true, true), but each plan node includes an additional
@@ -139,8 +179,11 @@ folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats);
 /// Note that input row counts and sizes are printed only for leaf plan nodes.
 ///
 /// @param includeCustomStats If true, prints operator-specific counters.
+/// @param annotation Function to extend plan printing with plugin, for
+/// example optimizer estimates next to execution stats.
 std::string printPlanWithStats(
     const core::PlanNode& plan,
     const TaskStats& taskStats,
-    bool includeCustomStats = false);
+    bool includeCustomStats = false,
+    PlanNodeAnnotation annotation = nullptr);
 } // namespace facebook::velox::exec

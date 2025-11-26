@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/Compression.h"
+#include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
@@ -58,25 +60,19 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 
 class ReaderBase {
  public:
-  // create reader base from buffered input
+  /// Creates reader base from buffered input.
+  ReaderBase(
+      const dwio::common::ReaderOptions& options,
+      std::unique_ptr<dwio::common::BufferedInput> input);
+
+  /// Creates reader base from buffered input.
+  /// It is kept here for backward compatibility with Meta's internal usage.
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
-      std::shared_ptr<dwio::common::encryption::DecrypterFactory>
-          decryptorFactory = nullptr,
-      uint64_t directorySizeGuess =
-          dwio::common::ReaderOptions::kDefaultDirectorySizeGuess,
-      uint64_t filePreloadThreshold =
-          dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
-      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
-      bool fileColumnNamesReadAsLowerCase = false);
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
-  ReaderBase(
-      memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::BufferedInput> input,
-      dwio::common::FileFormat fileFormat);
-
-  // create reader base from metadata
+  /// Creates reader base from metadata.
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
@@ -84,91 +80,113 @@ class ReaderBase {
       const proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
-      : pool_{pool},
+      : options_{dwio::common::ReaderOptions(&pool)},
+        input_{std::move(input)},
+        fileLength_{0},
         postScript_{std::move(ps)},
         footer_{std::make_unique<FooterWrapper>(footer)},
-        cache_{std::move(cache)},
         handler_{std::move(handler)},
-        input_{std::move(input)},
+        cache_{std::move(cache)},
         schema_{
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
-        fileLength_{0},
         psLength_{0} {
-    DWIO_ENSURE(footer_->getDwrfPtr()->GetArena());
-    DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
+    VELOX_CHECK_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
       handler_ = encryption::DecryptionHandler::create(*footer);
     }
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool} {}
+  explicit ReaderBase(const dwio::common::ReaderOptions& options)
+      : options_{options}, fileLength_{0} {}
 
   virtual ~ReaderBase() = default;
 
-  memory::MemoryPool& getMemoryPool() const {
-    return pool_;
+  const dwio::common::ReaderOptions& readerOptions() const {
+    return options_;
   }
 
-  const PostScript& getPostScript() const {
+  memory::MemoryPool& memoryPool() const {
+    return options_.memoryPool();
+  }
+
+  const PostScript& postScript() const {
     return *postScript_;
   }
 
-  const FooterWrapper& getFooter() const {
+  const FooterWrapper& footer() const {
     return *footer_;
   }
 
-  const std::shared_ptr<const RowType>& getSchema() const {
+  const RowTypePtr& schema() const {
     return schema_;
   }
 
-  const std::shared_ptr<const dwio::common::TypeWithId>& getSchemaWithId()
-      const {
+  dwio::common::FileFormat fileFormat() const {
+    if (options_.fileFormat() == dwio::common::FileFormat::ORC) {
+      return dwio::common::FileFormat::ORC;
+    }
+
+    return dwio::common::FileFormat::DWRF;
+  }
+
+  void setSchema(RowTypePtr newSchema) {
+    schema_ = std::move(newSchema);
+  }
+
+  const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() const {
     if (!schemaWithId_) {
-      schemaWithId_ = dwio::common::TypeWithId::create(schema_);
+      if (options_.scanSpec()) {
+        schemaWithId_ =
+            dwio::common::TypeWithId::create(schema_, *options_.scanSpec());
+      } else {
+        schemaWithId_ = dwio::common::TypeWithId::create(schema_);
+      }
     }
     return schemaWithId_;
   }
 
-  dwio::common::BufferedInput& getBufferedInput() const {
+  dwio::common::BufferedInput& bufferedInput() const {
     return *input_;
   }
 
-  const std::unique_ptr<StripeMetadataCache>& getMetadataCache() const {
+  void loadCache();
+
+  const std::unique_ptr<StripeMetadataCache>& metadataCache() const {
     return cache_;
   }
 
-  const encryption::DecryptionHandler& getDecryptionHandler() const {
+  const encryption::DecryptionHandler& decryptionHandler() const {
     return *handler_;
   }
 
-  uint64_t getDirectorySizeGuess() const {
-    return directorySizeGuess_;
+  uint64_t footerEstimatedSize() const {
+    return options_.footerEstimatedSize();
   }
 
-  uint64_t getFileLength() const {
+  uint64_t fileLength() const {
     return fileLength_;
   }
 
-  std::vector<uint64_t> getRowsPerStripe() const;
+  std::vector<uint64_t> rowsPerStripe() const;
 
-  uint64_t getPostScriptLength() const {
+  uint64_t postScriptLength() const {
     return psLength_;
   }
 
-  uint64_t getCompressionBlockSize() const {
+  uint64_t compressionBlockSize() const {
     return postScript_->hasCompressionBlockSize()
         ? postScript_->compressionBlockSize()
-        : dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
+        : common::kDefaultCompressionBlockSize;
   }
 
-  dwio::common::CompressionKind getCompressionKind() const {
+  common::CompressionKind compressionKind() const {
     return postScript_->hasCompressionBlockSize()
         ? postScript_->compression()
-        : dwio::common::CompressionKind::CompressionKind_NONE;
+        : common::CompressionKind::CompressionKind_NONE;
   }
 
-  WriterVersion getWriterVersion() const {
+  WriterVersion writerVersion() const {
     if (!postScript_->hasWriterVersion()) {
       return WriterVersion::ORIGINAL;
     }
@@ -178,10 +196,10 @@ class ReaderBase {
         : WriterVersion::FUTURE;
   }
 
-  const std::string& getWriterName() const {
+  const std::string& writerName() const {
     for (int32_t index = 0; index < footer_->metadataSize(); ++index) {
       auto entry = footer_->metadata(index);
-      if (entry.name() == WRITER_NAME_KEY) {
+      if (entry.name() == kWriterNameKey) {
         return entry.value();
       }
     }
@@ -190,9 +208,9 @@ class ReaderBase {
     return kEmpty;
   }
 
-  std::unique_ptr<dwio::common::Statistics> getStatistics() const;
+  std::unique_ptr<dwio::common::Statistics> statistics() const;
 
-  std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
+  std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
       uint32_t index) const;
 
   std::unique_ptr<dwio::common::SeekableInputStream> createDecompressedStream(
@@ -200,10 +218,10 @@ class ReaderBase {
       const std::string& streamDebugInfo,
       const dwio::common::encryption::Decrypter* decrypter = nullptr) const {
     return createDecompressor(
-        getCompressionKind(),
+        compressionKind(),
         std::move(compressed),
-        getCompressionBlockSize(),
-        pool_,
+        compressionBlockSize(),
+        options_.memoryPool(),
         streamDebugInfo,
         decrypter);
   }
@@ -226,30 +244,44 @@ class ReaderBase {
     return postScript_->format();
   }
 
+  const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
+    return options_.randomSkip();
+  }
+
+  int footerBufferOverread() const {
+    return footerBufferOverread_;
+  }
+
  private:
   static std::shared_ptr<const Type> convertType(
       const FooterWrapper& footer,
       uint32_t index = 0,
       bool fileColumnNamesReadAsLowerCase = false);
 
-  memory::MemoryPool& pool_;
+  static dwio::common::ReaderOptions createReaderOptions(
+      memory::MemoryPool& pool,
+      dwio::common::FileFormat fileFormat) {
+    dwio::common::ReaderOptions options(&pool);
+    options.setFileFormat(fileFormat);
+    return options;
+  }
+
+  const dwio::common::ReaderOptions options_;
+  const std::unique_ptr<dwio::common::BufferedInput> input_;
+  const uint64_t fileLength_;
+
+  BufferPtr stripeMetadataCacheBuffer_;
+  int32_t stripeMetadataCacheBufferSize_;
+  int32_t footerBufferOverread_;
   std::unique_ptr<google::protobuf::Arena> arena_;
   std::unique_ptr<PostScript> postScript_;
-  std::unique_ptr<FooterWrapper> footer_ = nullptr;
-  std::unique_ptr<StripeMetadataCache> cache_;
-  // Keeps factory alive for possibly async prefetch.
-  std::shared_ptr<dwio::common::encryption::DecrypterFactory> decryptorFactory_;
+  std::unique_ptr<FooterWrapper> footer_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  const uint64_t directorySizeGuess_{
-      dwio::common::ReaderOptions::kDefaultDirectorySizeGuess};
-  const uint64_t filePreloadThreshold_{
-      dwio::common::ReaderOptions::kDefaultFilePreloadThreshold};
+  std::unique_ptr<StripeMetadataCache> cache_;
 
-  std::unique_ptr<dwio::common::BufferedInput> input_;
   RowTypePtr schema_;
   // Lazily populated
   mutable std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
-  uint64_t fileLength_;
   uint64_t psLength_;
 };
 

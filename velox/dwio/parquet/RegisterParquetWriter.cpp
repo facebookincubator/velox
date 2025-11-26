@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
-
 #ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/dwio/parquet/writer/Writer.h" // @manual
 #endif
 
 namespace facebook::velox::parquet {

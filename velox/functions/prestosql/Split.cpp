@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/EvalCtx.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/expression/VectorWriters.h"
@@ -42,20 +42,22 @@ class SplitFunction : public exec::VectorFunction {
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
 
     // varchar, varchar -> array(varchar)
-    signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                .returnType("array(varchar)")
-                                .argumentType("varchar")
-                                .argumentType("varchar")
-                                .build());
+    signatures.emplace_back(
+        exec::FunctionSignatureBuilder()
+            .returnType("array(varchar)")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .build());
 
     // varchar, varchar, integer|bigint -> array(varchar)
     for (const auto& limitType : {"integer", "bigint"}) {
-      signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                  .returnType("array(varchar)")
-                                  .argumentType("varchar")
-                                  .argumentType("varchar")
-                                  .argumentType(limitType)
-                                  .build());
+      signatures.emplace_back(
+          exec::FunctionSignatureBuilder()
+              .returnType("array(varchar)")
+              .argumentType("varchar")
+              .argumentType("varchar")
+              .argumentType(limitType)
+              .build());
     }
     return signatures;
   }
@@ -85,7 +87,7 @@ class SplitFunction : public exec::VectorFunction {
       default:
         VELOX_FAIL(
             "Unsupported type for 'limit' argument of 'split' function: {}",
-            mapTypeKindToName(limitType));
+            TypeKindName::toName(limitType));
     }
   }
 

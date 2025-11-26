@@ -25,16 +25,21 @@ class BooleanColumnReader : public dwio::common::SelectiveByteRleColumnReader {
  public:
   using ValueType = bool;
   BooleanColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec)
       : SelectiveByteRleColumnReader(
-            nodeType,
+            requestedType,
+            std::move(fileType),
             params,
-            scanSpec,
-            nodeType->type) {}
+            scanSpec) {}
 
-  void seekToRowGroup(uint32_t index) override {
+  bool hasBulkPath() const override {
+    return false;
+  }
+
+  void seekToRowGroup(int64_t index) override {
     SelectiveByteRleColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
@@ -46,15 +51,15 @@ class BooleanColumnReader : public dwio::common::SelectiveByteRleColumnReader {
     return numValues;
   }
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
-    readCommon<BooleanColumnReader>(offset, rows, incomingNulls);
+    readCommon<BooleanColumnReader, true>(offset, rows, incomingNulls);
+    readOffset_ += rows.back() + 1;
   }
 
   template <typename ColumnVisitor>
-  void readWithVisitor(RowSet rows, ColumnVisitor visitor) {
+  void readWithVisitor(const RowSet& /*rows*/, ColumnVisitor visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
-    readOffset_ += rows.back() + 1;
   }
 };
 

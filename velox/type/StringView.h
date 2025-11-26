@@ -32,17 +32,17 @@
 
 namespace facebook::velox {
 
-// Variable length string or binary type for use in vectors. This has
-// semantics similar to std::string_view or folly::StringPiece and
-// exposes a subset of the interface. If the string is 12 characters
-// or less, it is inlined and no reference is held. If it is longer, a
-// reference to the string is held and the 4 first characters are
-// cached in the StringView. This allows failing comparisons early and
-// reduces the CPU cache working set when dealing with short strings.
-//
-// Adapted from TU Munich Umbra and CWI DuckDB.
-//
-// TODO: Extend the interface to parity with folly::StringPiece as needed.
+/// Variable length string or binary type for use in vectors. This has
+/// semantics similar to std::string_view or folly::StringPiece and
+/// exposes a subset of the interface. If the string is 12 characters
+/// or less, it is inlined and no reference is held. If it is longer, a
+/// reference to the string is held and the 4 first characters are
+/// cached in the StringView. This allows failing comparisons early and
+/// reduces the CPU cache working set when dealing with short strings.
+///
+/// Adapted from TU Munich Umbra and CWI DuckDB.
+///
+/// TODO: Extend the interface to parity with folly::StringPiece as needed.
 struct StringView {
  public:
   using value_type = char;
@@ -77,11 +77,6 @@ struct StringView {
     }
   }
 
-  static StringView makeInline(std::string str) {
-    VELOX_DCHECK(isInline(str.size()));
-    return StringView{str};
-  }
-
   // Making StringView implicitly constructible/convertible from char* and
   // string literals, in order to allow for a more flexible API and optional
   // interoperability. E.g:
@@ -109,6 +104,18 @@ struct StringView {
 
   FOLLY_ALWAYS_INLINE static constexpr bool isInline(uint32_t size) {
     return size <= kInlineSize;
+  }
+
+  /// Convenience method to create an inline StringView. The API client is
+  /// reponsible for providing a string that is small enough to fit inline
+  /// (i.e <= kInlineSize).
+  static StringView makeInline(std::string_view input) {
+    VELOX_DCHECK(
+        isInline(input.size()),
+        "StringView::makeInline() requires an input string that fits "
+        "inline (got string size of {}).",
+        input.size());
+    return StringView{input};
   }
 
   const char* data() && = delete;
@@ -149,17 +156,13 @@ struct StringView {
                size_ - kPrefixSize) == 0;
   }
 
-  bool operator!=(const StringView& other) const {
-    return !(*this == other);
-  }
-
   // Returns 0, if this == other
   //       < 0, if this < other
   //       > 0, if this > other
   int32_t compare(const StringView& other) const {
     if (prefixAsInt() != other.prefixAsInt()) {
-      // The result is decided on prefix. The shorter will be less
-      // because the prefix is padded with zeros.
+      // The result is decided on prefix. The shorter will be less because the
+      // prefix is padded with zeros.
       return memcmp(prefix_, other.prefix_, kPrefixSize);
     }
     int32_t size = std::min(size_, other.size_) - kPrefixSize;
@@ -167,7 +170,7 @@ struct StringView {
       // One ends within the prefix.
       return size_ - other.size_;
     }
-    if (size <= kInlineSize && isInline() && other.isInline()) {
+    if (isInline() && other.isInline()) {
       int32_t result = memcmp(value_.inlined, other.value_.inlined, size);
       return (result != 0) ? result : size_ - other.size_;
     }
@@ -176,20 +179,11 @@ struct StringView {
     return (result != 0) ? result : size_ - other.size_;
   }
 
-  bool operator<(const StringView& other) const {
-    return compare(other) < 0;
-  }
-
-  bool operator<=(const StringView& other) const {
-    return compare(other) <= 0;
-  }
-
-  bool operator>(const StringView& other) const {
-    return compare(other) > 0;
-  }
-
-  bool operator>=(const StringView& other) const {
-    return compare(other) >= 0;
+  auto operator<=>(const StringView& other) const {
+    const auto cmp = compare(other);
+    return cmp < 0 ? std::strong_ordering::less
+        : cmp > 0  ? std::strong_ordering::greater
+                   : std::strong_ordering::equal;
   }
 
   operator folly::StringPiece() && = delete;
@@ -237,6 +231,19 @@ struct StringView {
     return size() == 0;
   }
 
+  /// Searches for 'key == strings[i]'for i >= 0 < numStrings. If
+  /// 'indices' is given. searches for 'key ==
+  /// strings[indices[i]]. Returns the first i for which the strings
+  /// match or -1 if no match is found. Uses SIMD to accelerate the
+  /// search. Accesses StringView bodies in 32 byte vectors, thus
+  /// expects up to 31 bytes of addressable padding after out of
+  /// line strings. This is the case for velox Buffers.
+  static int32_t linearSearch(
+      StringView key,
+      const StringView* strings,
+      const int32_t* indices,
+      int32_t numStrings);
+
  private:
   inline int64_t sizeAndPrefixAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[0];
@@ -264,7 +271,7 @@ struct StringView {
 //
 //   auto myStringView = "my string"_sv;
 //   auto vec = {"str1"_sv, "str2"_sv};
-inline StringView operator"" _sv(const char* str, size_t len) {
+inline StringView operator""_sv(const char* str, size_t len) {
   return StringView(str, len);
 }
 
@@ -283,8 +290,7 @@ namespace folly {
 template <>
 struct hasher<::facebook::velox::StringView> {
   size_t operator()(const ::facebook::velox::StringView view) const {
-    return hash::SpookyHashV2::Hash64(view.data(), view.size(), 0);
-    // return facebook::velox::bits::hashBytes(1, view.data(), view.size());
+    return facebook::velox::bits::hashBytes(1, view.data(), view.size());
   }
 };
 

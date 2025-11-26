@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <velox/common/base/Exceptions.h>
-#include <velox/type/Timestamp.h>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -32,66 +31,60 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-template <TypeKind kind>
-void setKeysResultTyped(
+void setKeysAndValuesResult(
     vector_size_t mapSize,
     std::vector<VectorPtr>& args,
     const VectorPtr& keysResult,
+    const VectorPtr& valuesResult,
+    const int32_t* offsets,
+    const int32_t* sizes,
     exec::EvalCtx& context,
     const SelectivityVector& rows) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  auto flatVector = keysResult->asFlatVector<T>();
-  flatVector->resize(rows.end() * mapSize);
-
   exec::LocalDecodedVector decoded(context);
+  SelectivityVector targetRows(keysResult->size(), false);
+  std::vector<vector_size_t> targetIdx(rows.size(), 0);
+  std::vector<vector_size_t> toSourceRow(keysResult->size());
   for (vector_size_t i = 0; i < mapSize; i++) {
     decoded.get()->decode(*args[i * 2], rows);
-    // For efficiency traverse one arg at the time
-    rows.applyToSelected([&](vector_size_t row) {
-      VELOX_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
-      flatVector->set(row * mapSize + i, decoded->valueAt<T>(row));
-    });
-  }
-}
-
-template <TypeKind kind>
-void setValuesResultTyped(
-    vector_size_t mapSize,
-    std::vector<VectorPtr>& args,
-    const VectorPtr& valuesResult,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  auto flatVector = valuesResult->asFlatVector<T>();
-  flatVector->resize(rows.end() * mapSize);
-
-  exec::LocalDecodedVector decoded(context);
-  for (vector_size_t i = 0; i < mapSize; i++) {
-    decoded.get()->decode(*args[i * 2 + 1], rows);
-
-    rows.applyToSelected([&](vector_size_t row) {
-      if (decoded->isNullAt(row)) {
-        flatVector->setNull(row * mapSize + i, true);
-      } else {
-        flatVector->set(row * mapSize + i, decoded->valueAt<T>(row));
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      VELOX_USER_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
+      const auto offset = offsets[row];
+      const auto size = sizes[row];
+      bool duplicate = false;
+      if (size < mapSize) {
+        // Check if the current key at position i is duplicated in any later
+        // position. When a duplicate is found, mark this occurrence as
+        // duplicate and skip further checks. This implements the LAST_WIN
+        // policy where only the last occurrence of any key is kept.
+        for (vector_size_t j = i + 1; j < mapSize; j++) {
+          if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
+            duplicate = true;
+            break;
+          }
+        }
+      }
+      if (size == mapSize || !duplicate) {
+        targetRows.setValid(offset + targetIdx[row], true);
+        toSourceRow[offset + targetIdx[row]] = row;
+        targetIdx[row]++;
       }
     });
+    targetRows.updateBounds();
+    keysResult->copy(args[i * 2].get(), targetRows, toSourceRow.data());
+    valuesResult->copy(args[i * 2 + 1].get(), targetRows, toSourceRow.data());
+    targetRows.clearAll();
   }
 }
 
 class MapFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /*outputType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         args.size() >= 2 && args.size() % 2 == 0,
         "Map function must take an even number of arguments");
     auto mapSize = args.size() / 2;
@@ -101,14 +94,12 @@ class MapFunction : public exec::VectorFunction {
 
     // Check key and value types
     for (auto i = 0; i < mapSize; i++) {
-      VELOX_CHECK_EQ(
-          args[i * 2]->type(),
-          keyType,
+      VELOX_USER_CHECK(
+          args[i * 2]->type()->equivalent(*keyType),
           "All the key arguments in Map function must be the same!");
-      VELOX_CHECK_EQ(
-          args[i * 2 + 1]->type(),
-          valueType,
-          "All the key arguments in Map function must be the same!");
+      VELOX_USER_CHECK(
+          args[i * 2 + 1]->type()->equivalent(*valueType),
+          "All the value arguments in Map function must be the same!");
     }
 
     // Initializing input
@@ -121,33 +112,48 @@ class MapFunction : public exec::VectorFunction {
     auto offsets = mapResult->mutableOffsets(rows.end());
     auto rawOffsets = offsets->asMutable<int32_t>();
 
-    // Setting size and offsets
+    // Setting keys and value elements
+    auto& keysResult = mapResult->mapKeys();
+    auto& valuesResult = mapResult->mapValues();
+    const auto baseOffset =
+        std::max<vector_size_t>(keysResult->size(), valuesResult->size());
+    vector_size_t offset = baseOffset;
+
+    bool throwExceptionOnDuplicateMapKeys = false;
+    if (auto* ctx = context.execCtx()->queryCtx()) {
+      throwExceptionOnDuplicateMapKeys =
+          ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
+    }
+
+    // Check for duplicate keys and set size & offsets.
     rows.applyToSelected([&](vector_size_t row) {
-      rawSizes[row] = mapSize;
-      rawOffsets[row] = row * mapSize;
+      vector_size_t duplicateCnt = 0;
+      for (vector_size_t i = 0; i < mapSize; i++) {
+        for (vector_size_t j = i + 1; j < mapSize; j++) {
+          if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
+            if (throwExceptionOnDuplicateMapKeys) {
+              auto duplicateKey = args[i * 2]->toString(row);
+              VELOX_USER_FAIL(
+                  "Duplicate map key ({}) was found.", duplicateKey);
+            }
+            duplicateCnt++;
+          }
+        }
+      }
+      rawSizes[row] = mapSize - duplicateCnt;
+      rawOffsets[row] = offset;
+      offset += mapSize - duplicateCnt;
     });
 
-    // Setting keys and value elements
-    auto keysResult = mapResult->mapKeys();
-    auto valuesResult = mapResult->mapValues();
-    keysResult->resize(rows.end() * mapSize);
-    valuesResult->resize(rows.end() * mapSize);
-
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        setKeysResultTyped,
-        keyType->kind(),
+    keysResult->resize(offset);
+    valuesResult->resize(offset);
+    setKeysAndValuesResult(
         mapSize,
         args,
         keysResult,
-        context,
-        rows);
-
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        setValuesResultTyped,
-        valueType->kind(),
-        mapSize,
-        args,
         valuesResult,
+        rawOffsets,
+        rawSizes,
         context,
         rows);
   }
@@ -173,8 +179,9 @@ class MapFunction : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_map,
     MapFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<MapFunction>());
 } // namespace facebook::velox::functions::sparksql

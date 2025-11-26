@@ -20,7 +20,8 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/Fs.h"
-#include "velox/exec/tests/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -38,6 +39,19 @@ DEFINE_string(
     "",
     "Path for plan nodes to be restored from disk. This will enable single run "
     "of the fuzzer with the on-disk persisted plan information.");
+
+DEFINE_string(
+    presto_url,
+    "",
+    "Presto coordinator URI along with port. If set, we use Presto "
+    "source of truth. Otherwise, use DuckDB. Example: "
+    "--presto_url=http://127.0.0.1:8080");
+
+DEFINE_uint32(
+    req_timeout_ms,
+    3000,
+    "Timeout in milliseconds for HTTP requests made to reference DB, "
+    "such as Presto. Example: --req_timeout_ms=2000");
 
 static std::string checkAndReturnFilePath(
     const std::string_view& fileName,
@@ -65,7 +79,9 @@ static void checkDirForExpectedFiles() {
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
-  folly::init(&argc, &argv);
+  folly::Init init(&argc, &argv);
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
 
   if (!FLAGS_aggregation_fuzzer_repro_path.empty()) {
     checkDirForExpectedFiles();
@@ -74,5 +90,13 @@ int main(int argc, char** argv) {
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
 
-  return exec::test::AggregationFuzzerRunner::run(FLAGS_plan_nodes_path);
+  std::shared_ptr<memory::MemoryPool> rootPool{
+      memory::memoryManager()->addRootPool()};
+  auto queryRunner = facebook::velox::exec::test::setupReferenceQueryRunner(
+      rootPool.get(),
+      FLAGS_presto_url,
+      "aggregation_fuzzer",
+      FLAGS_req_timeout_ms);
+  return exec::test::AggregationFuzzerRunner::runRepro(
+      FLAGS_plan_nodes_path, std::move(queryRunner));
 }

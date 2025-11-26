@@ -13,12 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sstream>
+
+#include "velox/common/base/SimdUtil.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/RawVector.h"
+#include "velox/common/time/Timer.h"
 #include "velox/type/Type.h"
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
 
 TEST(StringView, basic) {
   std::string text = "We are stardust, we are golden...";
@@ -156,3 +163,153 @@ TEST(StringView, negativeSizes) {
   EXPECT_THROW(StringView("abc", -10), VeloxException);
   EXPECT_NO_THROW(StringView(nullptr, 0));
 }
+
+int32_t linearSearchSimple(
+    StringView key,
+    const StringView* strings,
+    const int32_t* indices,
+    int32_t numStrings) {
+  if (indices) {
+    for (auto i = 0; i < numStrings; ++i) {
+      if (strings[indices[i]] == key) {
+        return i;
+      }
+    }
+  } else {
+    for (auto i = 0; i < numStrings; ++i) {
+      if (strings[i] == key) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+TEST(StringView, makeInline) {
+  const std::string_view shortString = "hola";
+
+  // Test makeInline using std::string and std::string_view.
+  auto sv1 = StringView::makeInline(shortString);
+  EXPECT_TRUE(sv1.isInline());
+  EXPECT_EQ(sv1, StringView{shortString});
+
+  auto sv2 = StringView::makeInline(std::string(shortString));
+  EXPECT_TRUE(sv2.isInline());
+  EXPECT_EQ(sv2, StringView{shortString});
+
+// Only checks and throws in debug mode.
+#ifndef NDEBUG
+  VELOX_ASSERT_THROW(
+      StringView::makeInline(
+          std::string_view("slightly longer non-inlinable string")),
+      "StringView::makeInline() requires an input string that fits inline");
+#endif
+}
+
+TEST(StringView, linearSearch) {
+  constexpr int32_t kSize = 1003;
+  std::vector<raw_vector<char>> data(kSize);
+  std::vector<StringView> stringViews(kSize);
+  // Distinct values with sizes from 0 to 50.
+  for (auto i = 0; i < 1000; ++i) {
+    std::string string = fmt::format("{}-", i);
+    int32_t numRepeats = 1 + i % 10;
+    auto item = string;
+    for (auto repeat = 0; repeat < numRepeats; ++repeat) {
+      string += item;
+    }
+    string.resize(std::min<int32_t>((i >= 50 ? 2 : 0) + string.size(), i % 50));
+    data[i].resize(string.size());
+    if (!string.empty()) {
+      memcpy(data[i].data(), string.data(), string.size());
+    }
+    stringViews[i] = StringView(data[i].data(), data[i].size());
+  }
+  raw_vector<int32_t> indices(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    indices[i] = 999 - i;
+  }
+
+  uint64_t simdUsec = 0;
+  uint64_t loopUsec = 0;
+  uint64_t simdIndicesUsec = 0;
+  uint64_t loopIndicesUsec = 0;
+  for (auto counter = 0; counter < 10; ++counter) {
+    {
+      MicrosecondTimer t(&simdUsec);
+      EXPECT_EQ(
+          -1,
+          StringView::linearSearch(
+              stringViews[11], stringViews.data(), nullptr, 10));
+      for (auto i = 0; i < kSize; ++i) {
+        auto testIndex = (i * 1) % kSize;
+        auto index = StringView::linearSearch(
+            stringViews[testIndex],
+            stringViews.data(),
+            nullptr,
+            stringViews.size());
+        EXPECT_TRUE(stringViews[testIndex] == stringViews[index]);
+      }
+    }
+    {
+      MicrosecondTimer t(&loopUsec);
+      EXPECT_EQ(
+          -1,
+          linearSearchSimple(stringViews[11], stringViews.data(), nullptr, 10));
+      for (auto i = 0; i < kSize; ++i) {
+        auto testIndex = (i * 1) % kSize;
+        auto index = linearSearchSimple(
+            stringViews[testIndex],
+            stringViews.data(),
+            nullptr,
+            stringViews.size());
+        EXPECT_TRUE(stringViews[testIndex] == stringViews[index]);
+      }
+    }
+
+    {
+      MicrosecondTimer t(&simdIndicesUsec);
+      EXPECT_EQ(
+          -1,
+          StringView::linearSearch(
+              stringViews[indices[11]],
+              stringViews.data(),
+              indices.data(),
+              10));
+      for (auto i = 0; i < kSize; ++i) {
+        auto testIndex = (i * 1) % kSize;
+        auto index = StringView::linearSearch(
+            stringViews[testIndex],
+            stringViews.data(),
+            indices.data(),
+            stringViews.size());
+        EXPECT_TRUE(stringViews[testIndex] == stringViews[indices[index]]);
+      }
+    }
+    {
+      MicrosecondTimer t(&loopIndicesUsec);
+      EXPECT_EQ(
+          -1,
+          linearSearchSimple(
+              stringViews[indices[11]],
+              stringViews.data(),
+              indices.data(),
+              10));
+      for (auto i = 0; i < kSize; ++i) {
+        auto testIndex = (i * 1) % kSize;
+        auto index = linearSearchSimple(
+            stringViews[testIndex],
+            stringViews.data(),
+            indices.data(),
+            stringViews.size());
+        EXPECT_TRUE(stringViews[testIndex] == stringViews[indices[index]]);
+      }
+    }
+  }
+  LOG(INFO) << "StringView search: SIMD: " << simdUsec << " / "
+            << simdIndicesUsec << " scalar: " << loopUsec << " / "
+            << loopIndicesUsec;
+}
+
+} // namespace
+} // namespace facebook::velox

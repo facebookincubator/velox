@@ -19,11 +19,15 @@
 #include <charconv>
 #include <climits>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <system_error>
+#include <type_traits>
 
 #include "folly/CPortability.h"
+#include "velox/common/base/Doubles.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
@@ -32,6 +36,10 @@ namespace facebook::velox::functions {
 
 inline constexpr int kMinRadix = 2;
 inline constexpr int kMaxRadix = 36;
+inline constexpr long kLongMax = std::numeric_limits<int64_t>::max();
+inline constexpr long kLongMin = std::numeric_limits<int64_t>::min();
+inline constexpr long kIntegerMax = std::numeric_limits<int32_t>::max();
+inline constexpr long kIntegerMin = std::numeric_limits<int32_t>::min();
 
 inline constexpr char digits[36] = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
@@ -67,6 +75,55 @@ struct MultiplyFunction {
   }
 };
 
+// Multiply function for IntervalDayTime * Double, Double * IntervalDayTime,
+// IntervalYearMonth * Double and Double * IntervalYearMonth.
+template <typename T>
+struct IntervalMultiplyFunction {
+  FOLLY_ALWAYS_INLINE double sanitizeInput(double d) {
+    if UNLIKELY (std::isnan(d)) {
+      return 0;
+    }
+    return d;
+  }
+
+  template <
+      typename TResult,
+      typename T1,
+      typename T2,
+      typename = std::enable_if_t<
+          (std::is_same_v<T1, int64_t> && std::is_same_v<T2, double>) ||
+          (std::is_same_v<T1, double> && std::is_same_v<T2, int64_t>) ||
+          (std::is_same_v<T1, int32_t> && std::is_same_v<T2, double>) ||
+          (std::is_same_v<T1, double> && std::is_same_v<T2, int32_t>)>>
+  FOLLY_ALWAYS_INLINE void call(TResult& result, T1 a, T2 b) {
+    double resultDouble;
+    if constexpr (std::is_same_v<T1, double>) {
+      resultDouble = sanitizeInput(a) * b;
+    } else {
+      resultDouble = sanitizeInput(b) * a;
+    }
+
+    TResult min, max, maxResult;
+    if constexpr (std::is_same_v<TResult, int64_t>) {
+      min = kLongMin;
+      max = kLongMax;
+      maxResult = kMaxDoubleBelowInt64Max;
+    } else {
+      min = kIntegerMin;
+      max = kIntegerMax;
+      maxResult = kIntegerMax;
+    }
+
+    if LIKELY (
+        std::isfinite(resultDouble) && resultDouble >= min &&
+        resultDouble <= maxResult) {
+      result = static_cast<TResult>(resultDouble);
+    } else {
+      result = resultDouble > 0 ? max : min;
+    }
+  }
+};
+
 template <typename T>
 struct DivideFunction {
   template <typename TInput>
@@ -80,6 +137,48 @@ struct DivideFunction {
 #endif
   {
     result = a / b;
+  }
+};
+
+// Divide function for IntervalDayTime / Double and IntervalYearMonth / Double.
+template <typename T>
+struct IntervalDivideFunction {
+  template <
+      typename TResult,
+      typename = std::enable_if_t<
+          std::is_same_v<TResult, int64_t> || std::is_same_v<TResult, int32_t>>>
+  FOLLY_ALWAYS_INLINE void call(TResult& result, TResult a, double b)
+// Depend on compiler have correct behaviour for divide by zero
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("float-divide-by-zero")))
+      __attribute__((__no_sanitize__("float-cast-overflow")))
+#endif
+#endif
+  {
+    TResult min, max, maxResult;
+    if constexpr (std::is_same_v<TResult, int64_t>) {
+      min = kLongMin;
+      max = kLongMax;
+      maxResult = kMaxDoubleBelowInt64Max;
+    } else {
+      min = kIntegerMin;
+      max = kIntegerMax;
+      maxResult = kIntegerMax;
+    }
+
+    if UNLIKELY (a == 0 || std::isnan(b) || !std::isfinite(b)) {
+      result = 0;
+      return;
+    }
+    double resultDouble = a / b;
+    if LIKELY (
+        std::isfinite(resultDouble) && resultDouble >= min &&
+        resultDouble <= maxResult) {
+      result = static_cast<TResult>(resultDouble);
+    } else {
+      result = resultDouble > 0 ? max : min;
+    }
   }
 };
 
@@ -116,11 +215,28 @@ struct FloorFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct AbsFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(T& result, const T& a) {
     result = abs(a);
+  }
+};
+
+template <typename TExec>
+struct DecimalAbsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<ShortDecimal<P1, S1>>& result,
+      const arg_type<ShortDecimal<P1, S1>>& a) {
+    result = (a < 0) ? -a : a;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<LongDecimal<P1, S1>>& result,
+      const arg_type<LongDecimal<P1, S1>>& a) {
+    result = (a < 0) ? -a : a;
   }
 };
 
@@ -146,7 +262,8 @@ struct PowerFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(double& result, const TInput& a, const TInput& b) {
-    result = std::pow(a, b);
+    result =
+        std::isnan(b) ? std::numeric_limits<double>::quiet_NaN() : pow(a, b);
   }
 };
 
@@ -318,7 +435,8 @@ struct WidthBucketFunction {
       result = bucketCount + 1;
     } else {
       result =
-          (int64_t)((double)bucketCount * (operand - lower) / (upper - lower) + 1);
+          (int64_t)((double)bucketCount * (operand - lower) / (upper - lower) +
+                    1);
     }
 
     if (bound1 > bound2) {
@@ -367,7 +485,7 @@ struct InfinityFunction {
 template <typename T>
 struct IsFiniteFunction {
   FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
-    result = !std::isinf(a);
+    result = std::isfinite(a);
   }
 };
 
@@ -438,19 +556,18 @@ template <typename T>
 struct ToBaseFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void
-  call(out_type<Varchar>& result, const int64_t& value, const int64_t& radix) {
-    checkRadix(radix);
-
+  template <typename B>
+  void
+  applyToBase(out_type<Varchar>& result, const B& value, const int64_t& radix) {
     if (value == 0) {
       result.resize(1);
       result.data()[0] = '0';
     } else {
-      int64_t runningValue = std::abs(value);
-      int64_t remainder;
+      B runningValue = value < 0 ? -1 * value : value;
+      B remainder;
       char* resultPtr;
-      int64_t resultSize =
-          (int64_t)std::floor(std::log(runningValue) / std::log(radix)) + 1;
+      int128_t resultSize =
+          (int128_t)std::floor(std::log(runningValue) / std::log(radix)) + 1;
       if (value < 0) {
         resultSize += 1;
         result.resize(resultSize);
@@ -466,6 +583,19 @@ struct ToBaseFunction {
         resultPtr[--index] = digits[remainder];
         runningValue /= radix;
       }
+    }
+  }
+
+  void call(
+      out_type<Varchar>& result,
+      const int64_t& inputValue,
+      const int64_t& radix) {
+    checkRadix(radix);
+    if (inputValue == std::numeric_limits<int64_t>::min()) {
+      // Special case for min inputValue to avoid overflow.
+      applyToBase<int128_t>(result, inputValue, radix);
+    } else {
+      applyToBase<int64_t>(result, inputValue, radix);
     }
   }
 };
@@ -484,14 +614,44 @@ struct EulerConstantFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct TruncateFunction {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::trunc(a);
   }
 
+  FOLLY_ALWAYS_INLINE void call(float& result, float a) {
+    result = std::trunc(a);
+  }
+
   FOLLY_ALWAYS_INLINE void call(double& result, double a, int32_t n) {
     result = truncate(a, n);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(float& result, float a, int32_t n) {
+    result = truncate(a, n);
+  }
+};
+
+template <typename T>
+struct WilsonIntervalUpperFunction {
+  FOLLY_ALWAYS_INLINE void call(
+      double& result,
+      const int64_t& successes,
+      const int64_t& trials,
+      const double& z) {
+    result = wilsonInterval<true /*isUpper*/>(successes, trials, z);
+  }
+};
+
+template <typename T>
+struct WilsonIntervalLowerFunction {
+  FOLLY_ALWAYS_INLINE void call(
+      double& result,
+      const int64_t& successes,
+      const int64_t& trials,
+      const double& z) {
+    result = wilsonInterval<false /*isUpper*/>(successes, trials, z);
   }
 };
 

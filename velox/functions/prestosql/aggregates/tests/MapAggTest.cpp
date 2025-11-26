@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -28,13 +29,10 @@ class MapAggTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 };
 
 TEST_F(MapAggTest, groupBy) {
-  vector_size_t num = 10;
-
   auto data = makeRowVector({
       makeFlatVector<int32_t>({0, 0, 0, 1, 1, 1, 2, 2, 2, 3}),
       makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
@@ -60,11 +58,11 @@ TEST_F(MapAggTest, groupBy) {
 
   expectedResult = makeRowVector({
       makeFlatVector<int32_t>({0, 1, 2, 3}),
-      makeNullableMapVector<int32_t, double>({
-          {{{0, 0.05}, {2, 2.05}}},
-          {{{4, 4.05}}},
-          {{{6, 6.05}, {8, 8.05}}},
-          std::nullopt,
+      makeMapVectorFromJson<int32_t, double>({
+          "{0: 0.05, 2: 2.05}",
+          "{4: 4.05}",
+          "{6: 6.05, 8: 8.05}",
+          "null",
       }),
   });
 
@@ -74,8 +72,6 @@ TEST_F(MapAggTest, groupBy) {
 
 // Verify that null keys are skipped.
 TEST_F(MapAggTest, groupByNullKeys) {
-  vector_size_t num = 10;
-
   auto data = makeRowVector({
       makeFlatVector<int32_t>({0, 0, 0, 1, 1, 1, 2, 2, 2, 3}),
       makeNullableFlatVector<int32_t>(
@@ -88,11 +84,11 @@ TEST_F(MapAggTest, groupByNullKeys) {
 
   auto expectedResult = makeRowVector({
       makeFlatVector<int32_t>({0, 1, 2, 3}),
-      makeNullableMapVector<int32_t, double>({
-          {{{1, 1.05}, {2, 2.05}}},
-          {{{3, 3.05}, {5, 5.05}}},
-          {{{6, 6.05}, {7, 7.05}, {8, 8.05}}},
-          std::nullopt,
+      makeMapVectorFromJson<int32_t, double>({
+          "{1: 1.05, 2: 2.05}",
+          "{3: 3.05, 5: 5.05}",
+          "{6: 6.05, 7: 7.05, 8: 8.05}",
+          "null",
       }),
   });
 
@@ -126,8 +122,6 @@ TEST_F(MapAggTest, groupByWithNullValues) {
 }
 
 TEST_F(MapAggTest, groupByWithDuplicates) {
-  disallowInputShuffle();
-
   auto data = makeRowVector({
       makeFlatVector<int32_t>({0, 0, 1, 1, 2, 2, 3, 3, 4, 4}),
       makeFlatVector<int32_t>({0, 0, 1, 1, 2, 2, 3, 3, 4, 4}),
@@ -148,6 +142,8 @@ TEST_F(MapAggTest, groupByWithDuplicates) {
       }),
   });
 
+  // We don't test with TableScan because when there are duplicate keys in
+  // different splits, the result is non-deterministic.
   testAggregations(vectors, {"c0"}, {"map_agg(c1, c2)"}, {expectedResult});
 }
 
@@ -196,14 +192,14 @@ TEST_F(MapAggTest, global) {
   testAggregations(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
 
   expectedResult = makeRowVector({
-      makeNullableMapVector<int32_t, double>({
-          {{
+      makeMapVector<int32_t, double>({
+          {
               {0, 0.05},
               {2, 2.05},
               {4, 4.05},
               {6, 6.05},
               {8, 8.05},
-          }},
+          },
       }),
   });
 
@@ -233,8 +229,8 @@ TEST_F(MapAggTest, globalWithNullKeys) {
   auto vectors = {data, data, data};
 
   auto expectedResult = makeRowVector({
-      makeNullableMapVector<int32_t, double>({
-          {{{0, 0.05}, {1, 1.05}, {3, 3.05}, {5, 5.05}, {6, 6.05}, {7, 7.05}}},
+      makeMapVector<int32_t, double>({
+          {{0, 0.05}, {1, 1.05}, {3, 3.05}, {5, 5.05}, {6, 6.05}, {7, 7.05}},
       }),
   });
 
@@ -260,19 +256,8 @@ TEST_F(MapAggTest, globalWithNullValues) {
   auto vectors = {data, data, data};
 
   auto expectedResult = makeRowVector({
-      makeNullableMapVector<int32_t, double>({
-          {{
-              {0, std::nullopt},
-              {1, 1.05},
-              {2, 2.05},
-              {3, 3.05},
-              {4, 4.05},
-              {5, 5.05},
-              {6, 6.05},
-              {7, std::nullopt},
-              {8, 8.05},
-              {9, 9.05},
-          }},
+      makeMapVectorFromJson<int32_t, double>({
+          "{0: null, 1: 1.05, 2: 2.05, 3: 3.05, 4: 4.05, 5: 5.05, 6: 6.05, 7: null, 8: 8.05, 9: 9.05}",
       }),
   });
 
@@ -306,11 +291,13 @@ TEST_F(MapAggTest, globalDuplicateKeys) {
   auto vectors = {data, data, data};
 
   auto expectedResult = makeRowVector({
-      makeNullableMapVector<int32_t, double>({
-          {{{0, std::nullopt}, {1, 2.05}, {2, 4.05}, {3, 6.05}, {4, 8.05}}},
+      makeMapVectorFromJson<int32_t, double>({
+          "{0: null, 1: 2.05, 2: 4.05, 3: 6.05, 4: 8.05}",
       }),
   });
 
+  // We don't test with TableScan because when there are duplicate keys in
+  // different splits, the result is non-deterministic.
   testAggregations(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
 }
 
@@ -360,6 +347,19 @@ TEST_F(MapAggTest, selectiveMaskWithDuplicates) {
   assertQuery(plan, {expectedResult});
 }
 
+TEST_F(MapAggTest, unknownKey) {
+  auto data = makeRowVector({
+      makeFlatVector<int8_t>({1, 2, 1, 2, 1, 2, 1, 2, 1, 2}),
+      makeAllNullFlatVector<UnknownValue>(10),
+      makeConstant<int32_t>(123, 10),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"map_agg(c1, c2)"}, "VALUES (1, NULL), (2, NULL)");
+
+  testAggregations({data}, {}, {"map_agg(c1, c2)"}, "VALUES (NULL)");
+}
+
 TEST_F(MapAggTest, stringLifeCycle) {
   vector_size_t num = 10;
   std::vector<std::string> s(num);
@@ -381,6 +381,251 @@ TEST_F(MapAggTest, stringLifeCycle) {
       [&](vector_size_t i) { return i + 0.05; })});
 
   testReadFromFiles(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+}
+
+TEST_F(MapAggTest, arrayCheckNulls) {
+  auto batch = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[6, 7]",
+          "[2, 3]",
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+  });
+
+  auto batchWithNull = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[6, 7]",
+          "[3, null]",
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+  });
+
+  testFailingAggregations(
+      {batch, batchWithNull},
+      {},
+      {"map_agg(c0, c1)"},
+      "ARRAY comparison not supported for values that contain nulls");
+  testFailingAggregations(
+      {batch, batchWithNull},
+      {"c2"},
+      {"map_agg(c0, c1)"},
+      "ARRAY comparison not supported for values that contain nulls");
+}
+
+TEST_F(MapAggTest, rowCheckNull) {
+  auto batch = makeRowVector({
+      makeRowVector({
+          makeFlatVector<StringView>({
+              "a"_sv,
+              "b"_sv,
+              "c"_sv,
+          }),
+          makeNullableFlatVector<StringView>({
+              "aa"_sv,
+              "bb"_sv,
+              "cc"_sv,
+          }),
+      }),
+      makeFlatVector<int8_t>({1, 2, 3}),
+      makeFlatVector<int8_t>({1, 2, 3}),
+  });
+
+  auto batchWithNull = makeRowVector({
+      makeRowVector({
+          makeNullableFlatVector<StringView>({
+              "a"_sv,
+              std::nullopt,
+              "c"_sv,
+          }),
+          makeFlatVector<StringView>({
+              "aa"_sv,
+              "bb"_sv,
+              "cc"_sv,
+          }),
+      }),
+      makeFlatVector<int8_t>({1, 2, 3}),
+      makeFlatVector<int8_t>({1, 2, 3}),
+  });
+
+  testFailingAggregations(
+      {batch, batchWithNull},
+      {},
+      {"map_agg(c0, c1)"},
+      "ROW comparison not supported for values that contain nulls");
+  testFailingAggregations(
+      {batch, batchWithNull},
+      {"c2"},
+      {"map_agg(c0, c1)"},
+      "ROW comparison not supported for values that contain nulls");
+}
+
+TEST_F(MapAggTest, nans) {
+  // Verify that NaNs with different binary representations are considered equal
+  // and deduplicated when used as keys in the output map.
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+
+  // Global Aggregation, Primitive type
+  auto data = makeRowVector(
+      {makeFlatVector<double>({1, kNaN, kSNaN, 2, 3, kNaN, kSNaN, 3}),
+       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
+       makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2, 2})});
+
+  auto expectedResult = makeRowVector({
+      makeMapVectorFromJson<double, int32_t>({
+          "{ 1: 1, 2: 4, 3: 5, NaN: 2}",
+      }),
+  });
+
+  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+
+  // Group by Aggregation, Primitive type
+  expectedResult = makeRowVector(
+      {makeMapVectorFromJson<double, int32_t>(
+           {"{ 1: 1, 2: 4, NaN: 2}", "{ 3: 5, NaN: 6}"}),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+
+  // Global Aggregation, Complex type(Row)
+  // The complex input values that are to be used as keys are {1, 1}, {NaN, 2},
+  // {NaN, 2}, {2, 4}, {3, 5}, {NaN, 2}, {NaN, 2}, {3, 5}
+  data = makeRowVector(
+      {makeRowVector(
+           {makeFlatVector<double>({1, kNaN, kSNaN, 2, 3, kNaN, kSNaN, 3}),
+            makeFlatVector<int32_t>({1, 2, 2, 4, 5, 2, 2, 5})}),
+       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
+       makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2, 2})});
+
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":4},{"key":[3,5],"value":5},
+  // {"key":["NaN",2],"value":2}]
+  expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector(
+          {makeFlatVector<double>({1, 2, 3, kNaN}),
+           makeFlatVector<int32_t>({1, 4, 5, 2})}),
+      makeFlatVector<int32_t>({1, 4, 5, 2}))});
+
+  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+
+  // Group by Aggregation, Complex type(Row)
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":4},
+  //  {"key":["NaN",2],"value":2}] | 1
+  // [{"key":[3,5],"value":5},{"key":["NaN",2],"value":6}] | 2
+  expectedResult = makeRowVector(
+      {makeMapVector(
+           {0, 3},
+           makeRowVector(
+               {makeFlatVector<double>({1, 2, kNaN, 3, kNaN}),
+                makeFlatVector<int32_t>({1, 4, 2, 5, 2})}),
+           makeFlatVector<int32_t>({1, 4, 2, 5, 6})),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+}
+
+TEST_F(MapAggTest, timestampWithTimeZone) {
+  // Global Aggregation, Primitive type
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(0, 0),
+            pack(1, 0),
+            pack(2, 0),
+            pack(0, 1),
+            pack(1, 1),
+            pack(1, 2),
+            pack(2, 2),
+            pack(3, 3),
+            pack(1, 1),
+            pack(3, 0)},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+       makeFlatVector<int32_t>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2})});
+
+  auto expectedResult = makeRowVector({makeMapVector<int64_t, int32_t>(
+      {{{pack(0, 0), 1}, {pack(1, 0), 2}, {pack(2, 0), 3}, {pack(3, 3), 8}}},
+      MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER()))});
+
+  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+
+  // Group by Aggregation, Primitive type
+  expectedResult = makeRowVector(
+      {makeMapVector<int64_t, int32_t>(
+           {{{pack(0, 0), 1}, {pack(1, 0), 2}, {pack(2, 0), 3}},
+            {{pack(3, 3), 8}, {pack(1, 2), 6}, {pack(2, 2), 7}}},
+           MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER())),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+
+  // Global Aggregation, Complex type(Row)
+  data = makeRowVector(
+      {makeRowVector({makeFlatVector<int64_t>(
+           {pack(0, 0),
+            pack(1, 0),
+            pack(2, 0),
+            pack(0, 1),
+            pack(1, 1),
+            pack(1, 2),
+            pack(2, 2),
+            pack(3, 3),
+            pack(1, 1),
+            pack(3, 0)},
+           TIMESTAMP_WITH_TIME_ZONE())}),
+       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+       makeFlatVector<int32_t>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2})});
+
+  expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector({makeFlatVector<int64_t>(
+          {pack(0, 0), pack(1, 0), pack(2, 0), pack(3, 3)},
+          TIMESTAMP_WITH_TIME_ZONE())}),
+      makeFlatVector<int32_t>({1, 2, 3, 8}))});
+
+  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+
+  // Group by Aggregation, Complex type(Row)
+  expectedResult = makeRowVector(
+      {makeMapVector(
+           {0, 3},
+           makeRowVector({makeFlatVector<int64_t>(
+               {pack(0, 0),
+                pack(1, 0),
+                pack(2, 0),
+                pack(3, 3),
+                pack(1, 2),
+                pack(2, 2)},
+               TIMESTAMP_WITH_TIME_ZONE())}),
+           makeFlatVector<int32_t>({1, 2, 3, 8, 6, 7})),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
 }
 
 } // namespace

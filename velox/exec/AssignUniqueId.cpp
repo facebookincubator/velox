@@ -33,8 +33,11 @@ AssignUniqueId::AssignUniqueId(
           planNode->id(),
           "AssignUniqueId"),
       rowIdPool_(std::move(rowIdPool)) {
-  VELOX_CHECK_LT(uniqueTaskId, kTaskUniqueIdLimit)
-  uniqueValueMask_ = ((int64_t)uniqueTaskId) << 40;
+  VELOX_USER_CHECK_LT(
+      uniqueTaskId,
+      kTaskUniqueIdLimit,
+      "Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
+  uniqueValueMask_ = static_cast<int64_t>(uniqueTaskId) << 40;
 
   const auto numColumns = planNode->outputType()->size();
   identityProjections_.reserve(numColumns - 1);
@@ -52,7 +55,7 @@ AssignUniqueId::AssignUniqueId(
 void AssignUniqueId::addInput(RowVectorPtr input) {
   auto numInput = input->size();
   VELOX_CHECK_NE(
-      numInput, 0, "AssignUniqueId::addInput received empty set of rows")
+      numInput, 0, "AssignUniqueId::addInput received empty set of rows");
   input_ = std::move(input);
 }
 
@@ -73,7 +76,7 @@ bool AssignUniqueId::isFinished() {
 void AssignUniqueId::generateIdColumn(vector_size_t size) {
   // Re-use memory for the ID vector if possible.
   VectorPtr& result = results_[0];
-  if (result && result.unique()) {
+  if (result && result.use_count() == 1) {
     BaseVector::prepareForReuse(result, size);
   } else {
     result = BaseVector::create(BIGINT(), size, pool());
@@ -88,13 +91,20 @@ void AssignUniqueId::generateIdColumn(vector_size_t size) {
       requestRowIds();
     }
 
-    auto batchSize =
-        std::min(maxRowIdCounterValue_ - rowIdCounter_ + 1, kRowIdsPerRequest);
-    auto end = (int32_t)std::min((int64_t)size, start + batchSize);
-    VELOX_CHECK_EQ((rowIdCounter_ + end - 1) & uniqueValueMask_, 0);
+    const auto numAvailableIds =
+        std::min(maxRowIdCounterValue_ - rowIdCounter_, kRowIdsPerRequest);
+    const vector_size_t end =
+        std::min(static_cast<int64_t>(size), start + numAvailableIds);
+    VELOX_CHECK_EQ(
+        (rowIdCounter_ + (end - start)) & uniqueValueMask_,
+        0,
+        "Ran out of unique IDs at {}. Need {} more.",
+        rowIdCounter_,
+        (end - start));
     std::iota(
         rawResults + start, rawResults + end, uniqueValueMask_ | rowIdCounter_);
-    rowIdCounter_ += end;
+
+    rowIdCounter_ += (end - start);
     start = end;
   }
 }

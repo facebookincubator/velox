@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "MapConcat.h"
-#include "velox/expression/Expr.h"
+#include "velox/functions/lib/MapConcat.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -22,34 +22,34 @@ namespace facebook::velox::functions {
 namespace {
 
 // See documentation at https://prestodb.io/docs/current/functions/map.html
-template <bool EmptyForNull>
+template <bool EmptyForNull, bool AllowSingleArg>
 class MapConcatFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return !EmptyForNull;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_GE(args.size(), 2);
-    auto mapType = args[0]->type();
+    // Ensure all input types and output type are of the same map type.
+    const TypePtr& mapType = args[0]->type();
     VELOX_CHECK_EQ(mapType->kind(), TypeKind::MAP);
-    for (auto& arg : args) {
+    for (const VectorPtr& arg : args) {
       VELOX_CHECK(mapType->kindEquals(arg->type()));
     }
     VELOX_CHECK(mapType->kindEquals(outputType));
 
-    auto numArgs = args.size();
+    const size_t numArgs = args.size();
+    if constexpr (!AllowSingleArg) {
+      VELOX_CHECK_GE(numArgs, 2);
+    }
+
     exec::DecodedArgs decodedArgs(rows, args, context);
     vector_size_t maxSize = 0;
-    for (auto i = 0; i < numArgs; i++) {
-      auto decodedArg = decodedArgs.at(i);
-      auto inputMap = decodedArg->base()->as<MapVector>();
-      auto rawSizes = inputMap->rawSizes();
+    for (int i = 0; i < numArgs; i++) {
+      const DecodedVector* decodedArg = decodedArgs.at(i);
+      const MapVector* inputMap = decodedArg->base()->as<MapVector>();
+      const vector_size_t* rawSizes = inputMap->rawSizes();
       rows.applyToSelected([&](vector_size_t row) {
         if (EmptyForNull && decodedArg->isNullAt(row)) {
           return;
@@ -58,34 +58,34 @@ class MapConcatFunction : public exec::VectorFunction {
       });
     }
 
-    auto keyType = outputType->asMap().keyType();
-    auto valueType = outputType->asMap().valueType();
+    const TypePtr& keyType = outputType->asMap().keyType();
+    const TypePtr& valueType = outputType->asMap().valueType();
 
-    auto* pool = context.pool();
+    memory::MemoryPool* pool = context.pool();
     auto combinedKeys = BaseVector::create(keyType, maxSize, pool);
     auto combinedValues = BaseVector::create(valueType, maxSize, pool);
 
     // Initialize offsets and sizes to 0 so that canonicalize() will
     // work also for sparse 'rows'.
     BufferPtr offsets = allocateOffsets(rows.end(), pool);
-    auto rawOffsets = offsets->asMutable<vector_size_t>();
+    int* rawOffsets = offsets->asMutable<vector_size_t>();
 
     BufferPtr sizes = allocateSizes(rows.end(), pool);
-    auto rawSizes = sizes->asMutable<vector_size_t>();
+    int* rawSizes = sizes->asMutable<vector_size_t>();
 
     vector_size_t offset = 0;
     rows.applyToSelected([&](vector_size_t row) {
       rawOffsets[row] = offset;
       // Reuse the last offset and size if null key must create empty map
-      for (auto i = 0; i < numArgs; i++) {
-        auto decodedArg = decodedArgs.at(i);
+      for (int i = 0; i < numArgs; i++) {
+        const DecodedVector* decodedArg = decodedArgs.at(i);
         if (EmptyForNull && decodedArg->isNullAt(row)) {
           continue; // Treat NULL maps as empty.
         }
-        auto inputMap = decodedArg->base()->as<MapVector>();
-        auto index = decodedArg->index(row);
-        auto inputOffset = inputMap->offsetAt(index);
-        auto inputSize = inputMap->sizeAt(index);
+        const MapVector* inputMap = decodedArg->base()->as<MapVector>();
+        const vector_size_t index = decodedArg->index(row);
+        const vector_size_t inputOffset = inputMap->offsetAt(index);
+        const vector_size_t inputSize = inputMap->sizeAt(index);
         combinedKeys->copy(
             inputMap->mapKeys().get(), offset, inputOffset, inputSize);
         combinedValues->copy(
@@ -113,15 +113,25 @@ class MapConcatFunction : public exec::VectorFunction {
     // Check for duplicate keys
     SelectivityVector uniqueKeys(offset);
     vector_size_t duplicateCnt = 0;
+    bool throwExceptionOnDuplicateMapKeys = false;
+    if (auto* ctx = context.execCtx()->queryCtx()) {
+      throwExceptionOnDuplicateMapKeys =
+          ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
+    }
     rows.applyToSelected([&](vector_size_t row) {
-      auto mapOffset = rawOffsets[row];
-      auto mapSize = rawSizes[row];
+      const int mapOffset = rawOffsets[row];
+      const int mapSize = rawSizes[row];
       if (duplicateCnt) {
         rawOffsets[row] -= duplicateCnt;
       }
       for (vector_size_t i = 1; i < mapSize; i++) {
         if (combinedKeys->equalValueAt(
                 combinedKeys.get(), mapOffset + i, mapOffset + i - 1)) {
+          if (throwExceptionOnDuplicateMapKeys) {
+            const auto duplicateKey = combinedKeys->wrappedVector()->toString(
+                combinedKeys->wrappedIndex(mapOffset + i));
+            VELOX_USER_FAIL("Duplicate map key {} was found.", duplicateKey);
+          }
           duplicateCnt++;
           // "remove" duplicate entry
           uniqueKeys.setValid(mapOffset + i - 1, false);
@@ -132,16 +142,18 @@ class MapConcatFunction : public exec::VectorFunction {
 
     if (duplicateCnt) {
       uniqueKeys.updateBounds();
-      auto uniqueCount = uniqueKeys.countSelected();
+      const vector_size_t uniqueCount = uniqueKeys.countSelected();
 
       BufferPtr uniqueIndices = allocateIndices(uniqueCount, pool);
-      auto rawUniqueIndices = uniqueIndices->asMutable<vector_size_t>();
+      vector_size_t* rawUniqueIndices =
+          uniqueIndices->asMutable<vector_size_t>();
       vector_size_t index = 0;
       uniqueKeys.applyToSelected(
           [&](vector_size_t row) { rawUniqueIndices[index++] = row; });
 
-      auto keys = BaseVector::transpose(uniqueIndices, std::move(combinedKeys));
-      auto values =
+      VectorPtr keys =
+          BaseVector::transpose(uniqueIndices, std::move(combinedKeys));
+      VectorPtr values =
           BaseVector::transpose(uniqueIndices, std::move(combinedValues));
 
       combinedMap = std::make_shared<MapVector>(
@@ -151,8 +163,8 @@ class MapConcatFunction : public exec::VectorFunction {
           rows.end(),
           offsets,
           sizes,
-          keys,
-          values);
+          std::move(keys),
+          std::move(values));
     }
 
     context.moveOrCopyResult(combinedMap, rows, result);
@@ -161,12 +173,11 @@ class MapConcatFunction : public exec::VectorFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // map(K,V), map(K,V), ... -> map(K,V)
     return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V")
                 .returnType("map(K,V)")
                 .argumentType("map(K,V)")
-                .argumentType("map(K,V)")
-                .variableArity()
+                .variableArity("map(K,V)")
                 .build()};
   }
 };
@@ -175,14 +186,31 @@ class MapConcatFunction : public exec::VectorFunction {
 void registerMapConcatFunction(const std::string& name) {
   exec::registerVectorFunction(
       name,
-      MapConcatFunction</*EmptyForNull=*/false>::signatures(),
-      std::make_unique<MapConcatFunction</*EmptyForNull=*/false>>());
+      MapConcatFunction</*EmptyForNull=*/false,
+                        /*AllowSingleArg=*/false>::signatures(),
+      std::make_unique<MapConcatFunction<
+          /*EmptyForNull=*/false,
+          /*AllowSingleArg=*/false>>());
+}
+
+void registerMapConcatAllowSingleArg(const std::string& name) {
+  exec::registerVectorFunction(
+      name,
+      MapConcatFunction</*EmptyForNull=*/false,
+                        /*AllowSingleArg=*/true>::signatures(),
+      std::make_unique<MapConcatFunction<
+          /*EmptyForNull=*/false,
+          /*AllowSingleArg=*/true>>());
 }
 
 void registerMapConcatEmptyNullsFunction(const std::string& name) {
   exec::registerVectorFunction(
       name,
-      MapConcatFunction</*EmptyForNull=*/true>::signatures(),
-      std::make_unique<MapConcatFunction</*EmptyForNull=*/true>>());
+      MapConcatFunction</*EmptyForNull=*/true,
+                        /*AllowSingleArg=*/false>::signatures(),
+      std::make_unique<MapConcatFunction<
+          /*EmptyForNull=*/true,
+          /*AllowSingleArg=*/false>>(),
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 }
 } // namespace facebook::velox::functions

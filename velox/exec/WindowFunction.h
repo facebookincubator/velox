@@ -33,6 +33,28 @@ struct WindowFunctionArg {
 
 class WindowFunction {
  public:
+  /// The data process mode for calculating the window function.
+  enum class ProcessMode {
+    /// Process can only start after all the rows from a partition become
+    /// available.
+    kPartition,
+    /// Process can start as soon as rows are available within a partition,
+    /// without waiting for all the rows in the partition to be ready.
+    kRows,
+  };
+
+  /// Indicates whether this is an aggregate window function and its process
+  /// unit.
+  struct Metadata {
+    ProcessMode processMode;
+    bool isAggregate;
+
+    static Metadata defaultMetadata() {
+      static Metadata defaultValue{ProcessMode::kPartition, false};
+      return defaultValue;
+    }
+  };
+
   explicit WindowFunction(
       TypePtr resultType,
       memory::MemoryPool* pool,
@@ -105,16 +127,20 @@ class WindowFunction {
       const std::string& name,
       const std::vector<WindowFunctionArg>& args,
       const TypePtr& resultType,
+      bool ignoreNulls,
       memory::MemoryPool* pool,
       HashStringAllocator* stringAllocator,
       const core::QueryConfig& config);
 
  protected:
-  // This utility function can be used across WindowFunctions to set NULL for
-  // rows with invalid frames in the input.
-  void setNullEmptyFramesResults(
+  // defaultResult is a vector of size 1 containing the default value to be
+  // returned for rows with empty frames. For aggregate window functions,
+  // defaultResult contains the value returned by the aggregate when there are
+  // no input rows.
+  void setEmptyFramesResult(
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
+      const VectorPtr& defaultResult,
       const VectorPtr& result);
 
   const TypePtr resultType_;
@@ -134,6 +160,7 @@ class WindowFunction {
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
     const std::vector<WindowFunctionArg>& args,
     const TypePtr& resultType,
+    bool ignoreNulls,
     memory::MemoryPool* pool,
     HashStringAllocator* stringAllocator,
     const core::QueryConfig& config)>;
@@ -144,6 +171,7 @@ using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
 bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
+    WindowFunction::Metadata metadata,
     WindowFunctionFactory factory);
 
 /// Returns signatures of the window function with the specified name.
@@ -154,7 +182,11 @@ std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
 struct WindowFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;
   WindowFunctionFactory factory;
+  WindowFunction::Metadata metadata;
 };
+
+/// Returns window function metadata.
+WindowFunction::Metadata getWindowFunctionMetadata(const std::string& name);
 
 using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;
 

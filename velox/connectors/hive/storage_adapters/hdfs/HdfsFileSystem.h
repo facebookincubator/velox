@@ -16,9 +16,13 @@
 #include "velox/common/file/FileSystems.h"
 
 namespace facebook::velox::filesystems {
+
 struct HdfsServiceEndpoint {
-  HdfsServiceEndpoint(const std::string& hdfsHost, const std::string& hdfsPort)
-      : host(hdfsHost), port(hdfsPort) {}
+  HdfsServiceEndpoint(
+      const std::string& hdfsHost,
+      const std::string& hdfsPort,
+      bool isViewfs = false)
+      : host(hdfsHost), port(hdfsPort), isViewfs(isViewfs) {}
 
   /// In HDFS HA mode, the identity is a nameservice ID with no port, e.g.,
   /// the identity is nameservice_id for
@@ -31,6 +35,7 @@ struct HdfsServiceEndpoint {
 
   const std::string host;
   const std::string port;
+  bool isViewfs;
 };
 
 /**
@@ -41,12 +46,9 @@ struct HdfsServiceEndpoint {
  * Internally you can use hdfsBuilderConfSetStr to configure the client
  */
 class HdfsFileSystem : public FileSystem {
- private:
-  static std::string_view kScheme;
-
  public:
   explicit HdfsFileSystem(
-      const std::shared_ptr<const Config>& config,
+      const std::shared_ptr<const config::ConfigBase>& config,
       const HdfsServiceEndpoint& endpoint);
 
   std::string name() const override;
@@ -59,30 +61,25 @@ class HdfsFileSystem : public FileSystem {
       std::string_view path,
       const FileOptions& options = {}) override;
 
+  void close();
+
+  // Deletes the hdfs files.
   void remove(std::string_view path) override;
 
-  virtual void rename(
+  void rename(
       std::string_view path,
       std::string_view newPath,
-      bool overWrite = false) {
-    VELOX_UNSUPPORTED("rename for HDFs not implemented");
-  }
+      bool overWrite = false) override;
 
-  bool exists(std::string_view path) override {
-    VELOX_UNSUPPORTED("exists for HDFS not implemented");
-  }
+  bool exists(std::string_view path) override;
 
-  virtual std::vector<std::string> list(std::string_view path) override {
-    VELOX_UNSUPPORTED("list for HDFS not implemented");
-  }
+  /// List the objects associated to a path.
+  std::vector<std::string> list(std::string_view path) override;
 
-  void mkdir(std::string_view path) override {
-    VELOX_UNSUPPORTED("mkdir for HDFS not implemented");
-  }
+  void mkdir(std::string_view path, const DirectoryOptions& options = {})
+      override;
 
-  void rmdir(std::string_view path) override {
-    VELOX_UNSUPPORTED("rmdir for HDFS not implemented");
-  }
+  void rmdir(std::string_view path) override;
 
   static bool isHdfsFile(std::string_view filename);
 
@@ -91,7 +88,11 @@ class HdfsFileSystem : public FileSystem {
   /// will be used.
   static HdfsServiceEndpoint getServiceEndpoint(
       const std::string_view filePath,
-      const Config* config);
+      const config::ConfigBase* config);
+
+  static std::string_view kScheme;
+
+  static std::string_view kViewfsScheme;
 
  protected:
   class Impl;

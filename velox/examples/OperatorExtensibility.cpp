@@ -124,8 +124,9 @@ class DuplicateRowOperator : public exec::Operator {
     outputChildren.reserve(input->childrenSize());
 
     for (const auto& child : input->children()) {
-      outputChildren.push_back(BaseVector::wrapInDictionary(
-          BufferPtr(), indices, outputSize, child));
+      outputChildren.push_back(
+          BaseVector::wrapInDictionary(
+              BufferPtr(), indices, outputSize, child));
     }
     return std::make_shared<RowVector>(
         pool(),
@@ -160,7 +161,7 @@ class DuplicateRowTranslator : public exec::Operator::PlanNodeTranslator {
 };
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   // Fourth, we register the custom plan translator. We're now ready to use our
   // operator in a query plan.
@@ -170,7 +171,8 @@ int main(int argc, char** argv) {
   // assert that the output results contain the dataset properly duplicated.
 
   // Create a new memory pool to in this example.
-  auto pool = memory::addDefaultLeafMemoryPool();
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  auto pool = memory::memoryManager()->addLeafPool();
 
   // VectorMaker is a test utility that helps you build vectors. Shouldn't be
   // used in production.

@@ -28,7 +28,7 @@ VectorPtr toConstant(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator) {
   auto exprSet = evaluator->compile(expr);
-  if (!exprSet->exprs()[0]->isConstant()) {
+  if (!exprSet->exprs()[0]->isConstantExpr()) {
     return nullptr;
   }
   RowVector input(
@@ -50,51 +50,12 @@ T singleValue(const VectorPtr& vector) {
   return simpleVector->valueAt(0);
 }
 
-const core::FieldAccessTypedExpr* asField(
-    const core::ITypedExpr* expr,
-    int index) {
-  return dynamic_cast<const core::FieldAccessTypedExpr*>(
-      expr->inputs()[index].get());
+bool isBigintRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBigintRange);
 }
 
-const core::CallTypedExpr* asCall(const core::ITypedExpr* expr) {
-  return dynamic_cast<const core::CallTypedExpr*>(expr);
-}
-
-bool toSubfield(
-    const core::FieldAccessTypedExpr* field,
-    common::Subfield& subfield) {
-  std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
-  for (auto* current = field;;) {
-    path.push_back(
-        std::make_unique<common::Subfield::NestedField>(current->name()));
-    if (current->inputs().empty()) {
-      break;
-    }
-    if (current->inputs().size() != 1) {
-      return false;
-    }
-    auto* parent = current->inputs()[0].get();
-    current = dynamic_cast<const core::FieldAccessTypedExpr*>(parent);
-    if (!current) {
-      if (!dynamic_cast<const core::InputTypedExpr*>(parent)) {
-        return false;
-      }
-      break;
-    }
-  }
-  std::reverse(path.begin(), path.end());
-  subfield = common::Subfield(std::move(path));
-  return true;
-}
-
-common::BigintRange* asBigintRange(std::unique_ptr<common::Filter>& filter) {
-  return dynamic_cast<common::BigintRange*>(filter.get());
-}
-
-common::BigintMultiRange* asBigintMultiRange(
-    std::unique_ptr<common::Filter>& filter) {
-  return dynamic_cast<common::BigintMultiRange*>(filter.get());
+bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBigintMultiRange);
 }
 
 template <typename T, typename U>
@@ -102,127 +63,148 @@ std::unique_ptr<T> asUniquePtr(std::unique_ptr<U> ptr) {
   return std::unique_ptr<T>(static_cast<T*>(ptr.release()));
 }
 
-std::unique_ptr<common::Filter> makeOrFilter(
-    std::unique_ptr<common::Filter> a,
-    std::unique_ptr<common::Filter> b) {
-  if (asBigintRange(a) && asBigintRange(b)) {
-    return bigintOr(
-        asUniquePtr<common::BigintRange>(std::move(a)),
-        asUniquePtr<common::BigintRange>(std::move(b)));
-  }
+std::unique_ptr<common::BigintRange> asBigintRange(
+    std::unique_ptr<common::Filter>& ptr) {
+  return asUniquePtr<common::BigintRange>(std::move(ptr));
+}
 
-  if (asBigintRange(a) && asBigintMultiRange(b)) {
-    const auto& ranges = asBigintMultiRange(b)->ranges();
-    std::vector<std::unique_ptr<common::BigintRange>> newRanges;
-    newRanges.emplace_back(asUniquePtr<common::BigintRange>(std::move(a)));
-    for (const auto& range : ranges) {
-      newRanges.emplace_back(asUniquePtr<common::BigintRange>(range->clone()));
+template <typename T>
+std::vector<int64_t>
+toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
+  auto ints = vector->as<SimpleVector<T>>();
+  std::vector<int64_t> values;
+  values.reserve(size);
+  for (auto i = 0; i < size; i++) {
+    values.push_back(ints->valueAt(start + i));
+  }
+  return values;
+}
+
+} // namespace
+
+std::shared_ptr<ExprToSubfieldFilterParser>
+    ExprToSubfieldFilterParser::parser_ =
+        std::make_shared<PrestoExprToSubfieldFilterParser>();
+
+// static
+bool ExprToSubfieldFilterParser::toSubfield(
+    const core::ITypedExpr* field,
+    common::Subfield& subfield) {
+  std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
+  for (auto* current = field;;) {
+    if (auto* fieldAccess =
+            dynamic_cast<const core::FieldAccessTypedExpr*>(current)) {
+      path.push_back(
+          std::make_unique<common::Subfield::NestedField>(fieldAccess->name()));
+    } else if (
+        auto* dereference =
+            dynamic_cast<const core::DereferenceTypedExpr*>(current)) {
+      const auto& name = dereference->name();
+      // When the field name is empty string, it typically means that the
+      // field name was not set in the parent type.
+      if (name.empty()) {
+        return false;
+      }
+      path.push_back(std::make_unique<common::Subfield::NestedField>(name));
+    } else if (dynamic_cast<const core::InputTypedExpr*>(current) == nullptr) {
+      return false;
+    } else {
+      break;
     }
 
-    std::sort(
-        newRanges.begin(), newRanges.end(), [](const auto& a, const auto& b) {
-          return a->lower() < b->lower();
-        });
+    if (current->inputs().empty()) {
+      break;
+    }
+    if (current->inputs().size() != 1) {
+      return false;
+    }
+    current = current->inputs()[0].get();
+    if (current == nullptr) {
+      return false;
+    }
+  }
+  std::reverse(path.begin(), path.end());
+  subfield = common::Subfield(std::move(path));
+  return true;
+}
 
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
+    const core::TypedExprPtr& valueExpr,
+    core::ExpressionEvaluator* evaluator) {
+  auto value = toConstant(valueExpr, evaluator);
+  if (!value) {
+    return nullptr;
+  }
+
+  auto lessThanFilter = makeLessThanFilter(valueExpr, evaluator);
+  if (!lessThanFilter) {
+    return nullptr;
+  }
+
+  auto greaterThanFilter = makeGreaterThanFilter(valueExpr, evaluator);
+  if (!greaterThanFilter) {
+    return nullptr;
+  }
+
+  const auto typeKind = value->typeKind();
+
+  if (typeKind == TypeKind::TINYINT || typeKind == TypeKind::SMALLINT ||
+      typeKind == TypeKind::INTEGER || typeKind == TypeKind::BIGINT) {
+    VELOX_CHECK(isBigintRange(lessThanFilter));
+    VELOX_CHECK(isBigintRange(greaterThanFilter));
+
+    std::vector<std::unique_ptr<common::BigintRange>> filters;
+    filters.emplace_back(asBigintRange(lessThanFilter));
+    filters.emplace_back(asBigintRange(greaterThanFilter));
     return std::make_unique<common::BigintMultiRange>(
-        std::move(newRanges), false);
+        std::move(filters), false);
   }
 
-  if (asBigintMultiRange(a) && asBigintRange(b)) {
-    return makeOrFilter(std::move(b), std::move(a));
-  }
+  if (typeKind == TypeKind::HUGEINT) {
+    VELOX_NYI();
+  } else {
+    std::vector<std::unique_ptr<common::Filter>> filters;
+    filters.emplace_back(std::move(lessThanFilter));
+    filters.emplace_back(std::move(greaterThanFilter));
 
-  return orFilter(std::move(a), std::move(b));
+    return std::make_unique<common::MultiRange>(std::move(filters), false);
+  }
 }
 
-std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
-    const core::TypedExprPtr& upperExpr,
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeEqualFilter(
+    const core::TypedExprPtr& valueExpr,
     core::ExpressionEvaluator* evaluator) {
-  auto upper = toConstant(upperExpr, evaluator);
-  if (!upper) {
+  auto value = toConstant(valueExpr, evaluator);
+  if (!value) {
     return nullptr;
   }
-  switch (upper->typeKind()) {
+  switch (value->typeKind()) {
+    case TypeKind::BOOLEAN:
+      return boolEqual(singleValue<bool>(value));
     case TypeKind::TINYINT:
-      return lessThanOrEqual(singleValue<int8_t>(upper));
+      return equal(singleValue<int8_t>(value));
     case TypeKind::SMALLINT:
-      return lessThanOrEqual(singleValue<int16_t>(upper));
+      return equal(singleValue<int16_t>(value));
     case TypeKind::INTEGER:
-      return lessThanOrEqual(singleValue<int32_t>(upper));
+      return equal(singleValue<int32_t>(value));
     case TypeKind::BIGINT:
-      return lessThanOrEqual(singleValue<int64_t>(upper));
+      return equal(singleValue<int64_t>(value));
     case TypeKind::HUGEINT:
-      return lessThanOrEqualHugeint(singleValue<int128_t>(upper));
-    case TypeKind::DOUBLE:
-      return lessThanOrEqualDouble(singleValue<double>(upper));
-    case TypeKind::REAL:
-      return lessThanOrEqualFloat(singleValue<float>(upper));
+      return equalHugeint(singleValue<int128_t>(value));
     case TypeKind::VARCHAR:
-      return lessThanOrEqual(singleValue<StringView>(upper));
+      return equal(std::string(singleValue<StringView>(value)));
+    case TypeKind::TIMESTAMP:
+      return equal(singleValue<Timestamp>(value));
     default:
       return nullptr;
   }
 }
 
-std::unique_ptr<common::Filter> makeLessThanFilter(
-    const core::TypedExprPtr& upperExpr,
-    core::ExpressionEvaluator* evaluator) {
-  auto upper = toConstant(upperExpr, evaluator);
-  if (!upper) {
-    return nullptr;
-  }
-  switch (upper->typeKind()) {
-    case TypeKind::TINYINT:
-      return lessThan(singleValue<int8_t>(upper));
-    case TypeKind::SMALLINT:
-      return lessThan(singleValue<int16_t>(upper));
-    case TypeKind::INTEGER:
-      return lessThan(singleValue<int32_t>(upper));
-    case TypeKind::BIGINT:
-      return lessThan(singleValue<int64_t>(upper));
-    case TypeKind::HUGEINT:
-      return lessThanHugeint(singleValue<int128_t>(upper));
-    case TypeKind::DOUBLE:
-      return lessThanDouble(singleValue<double>(upper));
-    case TypeKind::REAL:
-      return lessThanFloat(singleValue<float>(upper));
-    case TypeKind::VARCHAR:
-      return lessThan(singleValue<StringView>(upper));
-    default:
-      return nullptr;
-  }
-}
-
-std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
-    const core::TypedExprPtr& lowerExpr,
-    core::ExpressionEvaluator* evaluator) {
-  auto lower = toConstant(lowerExpr, evaluator);
-  if (!lower) {
-    return nullptr;
-  }
-  switch (lower->typeKind()) {
-    case TypeKind::TINYINT:
-      return greaterThanOrEqual(singleValue<int8_t>(lower));
-    case TypeKind::SMALLINT:
-      return greaterThanOrEqual(singleValue<int16_t>(lower));
-    case TypeKind::INTEGER:
-      return greaterThanOrEqual(singleValue<int32_t>(lower));
-    case TypeKind::BIGINT:
-      return greaterThanOrEqual(singleValue<int64_t>(lower));
-    case TypeKind::HUGEINT:
-      return greaterThanOrEqualHugeint(singleValue<int128_t>(lower));
-    case TypeKind::DOUBLE:
-      return greaterThanOrEqualDouble(singleValue<double>(lower));
-    case TypeKind::REAL:
-      return greaterThanOrEqualFloat(singleValue<float>(lower));
-    case TypeKind::VARCHAR:
-      return greaterThanOrEqual(singleValue<StringView>(lower));
-    default:
-      return nullptr;
-  }
-}
-
-std::unique_ptr<common::Filter> makeGreaterThanFilter(
+// static
+std::unique_ptr<common::Filter>
+ExprToSubfieldFilterParser::makeGreaterThanFilter(
     const core::TypedExprPtr& lowerExpr,
     core::ExpressionEvaluator* evaluator) {
   auto lower = toConstant(lowerExpr, evaluator);
@@ -245,99 +227,114 @@ std::unique_ptr<common::Filter> makeGreaterThanFilter(
     case TypeKind::REAL:
       return greaterThanFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
-      return greaterThan(singleValue<StringView>(lower));
+      return greaterThan(std::string(singleValue<StringView>(lower)));
+    case TypeKind::TIMESTAMP:
+      return greaterThan(singleValue<Timestamp>(lower));
     default:
       return nullptr;
   }
 }
 
-std::unique_ptr<common::Filter> makeEqualFilter(
-    const core::TypedExprPtr& valueExpr,
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeLessThanFilter(
+    const core::TypedExprPtr& upperExpr,
     core::ExpressionEvaluator* evaluator) {
-  auto value = toConstant(valueExpr, evaluator);
-  if (!value) {
+  auto upper = toConstant(upperExpr, evaluator);
+  if (!upper) {
     return nullptr;
   }
-  switch (value->typeKind()) {
-    case TypeKind::BOOLEAN:
-      return boolEqual(singleValue<bool>(value));
+  switch (upper->typeKind()) {
     case TypeKind::TINYINT:
-      return equal(singleValue<int8_t>(value));
+      return lessThan(singleValue<int8_t>(upper));
     case TypeKind::SMALLINT:
-      return equal(singleValue<int16_t>(value));
+      return lessThan(singleValue<int16_t>(upper));
     case TypeKind::INTEGER:
-      return equal(singleValue<int32_t>(value));
+      return lessThan(singleValue<int32_t>(upper));
     case TypeKind::BIGINT:
-      return equal(singleValue<int64_t>(value));
+      return lessThan(singleValue<int64_t>(upper));
     case TypeKind::HUGEINT:
-      return equalHugeint(singleValue<int128_t>(value));
+      return lessThanHugeint(singleValue<int128_t>(upper));
+    case TypeKind::DOUBLE:
+      return lessThanDouble(singleValue<double>(upper));
+    case TypeKind::REAL:
+      return lessThanFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
-      return equal(singleValue<StringView>(value));
+      return lessThan(std::string(singleValue<StringView>(upper)));
+    case TypeKind::TIMESTAMP:
+      return lessThan(singleValue<Timestamp>(upper));
     default:
       return nullptr;
   }
 }
 
-std::unique_ptr<common::Filter> makeNotEqualFilter(
-    const core::TypedExprPtr& valueExpr,
+// static
+std::unique_ptr<common::Filter>
+ExprToSubfieldFilterParser::makeLessThanOrEqualFilter(
+    const core::TypedExprPtr& upperExpr,
     core::ExpressionEvaluator* evaluator) {
-  auto value = toConstant(valueExpr, evaluator);
-  if (!value) {
+  auto upper = toConstant(upperExpr, evaluator);
+  if (!upper) {
     return nullptr;
   }
-
-  std::unique_ptr<common::Filter> lessThanFilter =
-      makeLessThanFilter(valueExpr, evaluator);
-  if (!lessThanFilter) {
-    return nullptr;
-  }
-  std::unique_ptr<common::Filter> greaterThanFilter =
-      makeGreaterThanFilter(valueExpr, evaluator);
-  if (!greaterThanFilter) {
-    return nullptr;
-  }
-
-  if (value->typeKind() == TypeKind::TINYINT ||
-      value->typeKind() == TypeKind::SMALLINT ||
-      value->typeKind() == TypeKind::INTEGER ||
-      value->typeKind() == TypeKind::BIGINT) {
-    // Cast lessThanFilter and greaterThanFilter to
-    // std::unique_ptr<common::BigintRange>.
-    std::vector<std::unique_ptr<common::BigintRange>> ranges;
-    auto lessRange =
-        dynamic_cast<common::BigintRange*>(lessThanFilter.release());
-    VELOX_CHECK_NOT_NULL(lessRange, "Less-than range is null");
-    ranges.emplace_back(std::unique_ptr<common::BigintRange>(lessRange));
-
-    auto greaterRange =
-        dynamic_cast<common::BigintRange*>(greaterThanFilter.release());
-    VELOX_CHECK_NOT_NULL(greaterRange, "Greater-than range is null");
-    ranges.emplace_back(std::unique_ptr<common::BigintRange>(greaterRange));
-
-    return std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
-  } else if (value->typeKind() == TypeKind::HUGEINT) {
-    VELOX_NYI();
-  } else {
-    std::vector<std::unique_ptr<common::Filter>> filters;
-    filters.emplace_back(std::move(lessThanFilter));
-    filters.emplace_back(std::move(greaterThanFilter));
-    return std::make_unique<common::MultiRange>(
-        std::move(filters), false, false);
+  switch (upper->typeKind()) {
+    case TypeKind::TINYINT:
+      return lessThanOrEqual(singleValue<int8_t>(upper));
+    case TypeKind::SMALLINT:
+      return lessThanOrEqual(singleValue<int16_t>(upper));
+    case TypeKind::INTEGER:
+      return lessThanOrEqual(singleValue<int32_t>(upper));
+    case TypeKind::BIGINT:
+      return lessThanOrEqual(singleValue<int64_t>(upper));
+    case TypeKind::HUGEINT:
+      return lessThanOrEqualHugeint(singleValue<int128_t>(upper));
+    case TypeKind::DOUBLE:
+      return lessThanOrEqualDouble(singleValue<double>(upper));
+    case TypeKind::REAL:
+      return lessThanOrEqualFloat(singleValue<float>(upper));
+    case TypeKind::VARCHAR:
+      return lessThanOrEqual(std::string(singleValue<StringView>(upper)));
+    case TypeKind::TIMESTAMP:
+      return lessThanOrEqual(singleValue<Timestamp>(upper));
+    default:
+      return nullptr;
   }
 }
 
-template <typename T>
-std::vector<int64_t>
-toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
-  auto ints = vector->as<SimpleVector<T>>();
-  std::vector<int64_t> values;
-  for (auto i = 0; i < size; i++) {
-    values.push_back(ints->valueAt(start + i));
+// static
+std::unique_ptr<common::Filter>
+ExprToSubfieldFilterParser::makeGreaterThanOrEqualFilter(
+    const core::TypedExprPtr& lowerExpr,
+    core::ExpressionEvaluator* evaluator) {
+  auto lower = toConstant(lowerExpr, evaluator);
+  if (!lower) {
+    return nullptr;
   }
-  return values;
+  switch (lower->typeKind()) {
+    case TypeKind::TINYINT:
+      return greaterThanOrEqual(singleValue<int8_t>(lower));
+    case TypeKind::SMALLINT:
+      return greaterThanOrEqual(singleValue<int16_t>(lower));
+    case TypeKind::INTEGER:
+      return greaterThanOrEqual(singleValue<int32_t>(lower));
+    case TypeKind::BIGINT:
+      return greaterThanOrEqual(singleValue<int64_t>(lower));
+    case TypeKind::HUGEINT:
+      return greaterThanOrEqualHugeint(singleValue<int128_t>(lower));
+    case TypeKind::DOUBLE:
+      return greaterThanOrEqualDouble(singleValue<double>(lower));
+    case TypeKind::REAL:
+      return greaterThanOrEqualFloat(singleValue<float>(lower));
+    case TypeKind::VARCHAR:
+      return greaterThanOrEqual(std::string(singleValue<StringView>(lower)));
+    case TypeKind::TIMESTAMP:
+      return greaterThanOrEqual(singleValue<Timestamp>(lower));
+    default:
+      return nullptr;
+  }
 }
 
-std::unique_ptr<common::Filter> makeInFilter(
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
     bool negated) {
@@ -373,8 +370,9 @@ std::unique_ptr<common::Filter> makeInFilter(
     case TypeKind::VARCHAR: {
       auto stringElements = elements->as<SimpleVector<StringView>>();
       std::vector<std::string> values;
+      values.reserve(size);
       for (auto i = 0; i < size; i++) {
-        values.push_back(stringElements->valueAt(offset + i).str());
+        values.push_back(std::string(stringElements->valueAt(offset + i)));
       }
       if (negated) {
         return notIn(values);
@@ -386,7 +384,8 @@ std::unique_ptr<common::Filter> makeInFilter(
   }
 }
 
-std::unique_ptr<common::Filter> makeBetweenFilter(
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeBetweenFilter(
     const core::TypedExprPtr& lowerExpr,
     const core::TypedExprPtr& upperExpr,
     core::ExpressionEvaluator* evaluator,
@@ -424,119 +423,351 @@ std::unique_ptr<common::Filter> makeBetweenFilter(
     case TypeKind::VARCHAR:
       if (negated) {
         return notBetween(
-            singleValue<StringView>(lower), singleValue<StringView>(upper));
+            std::string(singleValue<StringView>(lower)),
+            std::string(singleValue<StringView>(upper)));
       }
       return between(
-          singleValue<StringView>(lower), singleValue<StringView>(upper));
+          std::string(singleValue<StringView>(lower)),
+          std::string(singleValue<StringView>(upper)));
+    case TypeKind::TIMESTAMP:
+      return negated
+          ? nullptr
+          : between(
+                singleValue<Timestamp>(lower), singleValue<Timestamp>(upper));
     default:
       return nullptr;
   }
 }
 
-} // namespace
+namespace {
 
-std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
-    const core::CallTypedExpr& call,
-    common::Subfield& subfield,
-    core::ExpressionEvaluator* evaluator,
-    bool negated) {
-  if (call.name() == "eq") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
-                       : makeEqualFilter(call.inputs()[1], evaluator);
-      }
+bool isNullAllowed(
+    const std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  return std::any_of(
+      disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->nullAllowed();
+      });
+}
+
+// Combines overlapping ranges into one using OR semantic. Returns nullptr if
+// ranges do not overlap. Ignores nullAllowed flag.
+// @pre a.lower() <= b.lower()
+std::unique_ptr<common::BigintRange> tryMergeOverlappingRanges(
+    const common::BigintRange& a,
+    const common::BigintRange& b,
+    bool& alwaysTrue) {
+  static constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  static constexpr auto kMin = std::numeric_limits<int64_t>::min();
+
+  if (a.upper() == kMax || a.upper() + 1 >= b.lower()) {
+    if (a.lower() == kMin && (a.upper() == kMax || b.upper() == kMax)) {
+      alwaysTrue = true;
+      return nullptr;
     }
-  } else if (call.name() == "neq") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeEqualFilter(call.inputs()[1], evaluator)
-                       : makeNotEqualFilter(call.inputs()[1], evaluator);
-      }
-    }
-  } else if (call.name() == "lte") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeGreaterThanFilter(call.inputs()[1], evaluator)
-                       : makeLessThanOrEqualFilter(call.inputs()[1], evaluator);
-      }
-    }
-  } else if (call.name() == "lt") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated
-            ? makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator)
-            : makeLessThanFilter(call.inputs()[1], evaluator);
-      }
-    }
-  } else if (call.name() == "gte") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated
-            ? makeLessThanFilter(call.inputs()[1], evaluator)
-            : makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator);
-      }
-    }
-  } else if (call.name() == "gt") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeLessThanOrEqualFilter(call.inputs()[1], evaluator)
-                       : makeGreaterThanFilter(call.inputs()[1], evaluator);
-      }
-    }
-  } else if (call.name() == "between") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return makeBetweenFilter(
-            call.inputs()[1], call.inputs()[2], evaluator, negated);
-      }
-    }
-  } else if (call.name() == "in") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return makeInFilter(call.inputs()[1], evaluator, negated);
-      }
-    }
-  } else if (call.name() == "is_null") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        if (negated) {
-          return isNotNull();
-        }
-        return isNull();
-      }
-    }
+
+    return std::make_unique<common::BigintRange>(
+        a.lower(), std::max(a.upper(), b.upper()), /*nullAllowed=*/false);
   }
   return nullptr;
 }
 
-std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator* evaluator) {
-  if (auto call = asCall(expr.get())) {
-    if (call->name() == "or") {
-      auto left = toSubfieldFilter(call->inputs()[0], evaluator);
-      auto right = toSubfieldFilter(call->inputs()[1], evaluator);
-      VELOX_CHECK(left.first == right.first);
-      return {
-          std::move(left.first),
-          makeOrFilter(std::move(left.second), std::move(right.second))};
-    }
-    common::Subfield subfield;
-    std::unique_ptr<common::Filter> filter;
-    if (call->name() == "not") {
-      if (auto* inner = asCall(call->inputs()[0].get())) {
-        filter = leafCallToSubfieldFilter(*inner, subfield, evaluator, true);
-      }
+// Returns a single range that represents "a OR b" or nullptr if no such range
+// exists.
+// @pre a.lower() <= b.lower()
+template <typename T>
+std::unique_ptr<common::FloatingPointRange<T>> tryMergeOverlappingRanges(
+    const common::FloatingPointRange<T>& a,
+    const common::FloatingPointRange<T>& b,
+    bool& alwaysTrue) {
+  if (!a.upperUnbounded() && !b.lowerUnbounded() &&
+      (a.upper() < b.lower() ||
+       (a.upper() == b.lower() && a.upperExclusive() && b.lowerExclusive()))) {
+    return nullptr;
+  }
+
+  const bool lowerUnbounded = a.lowerUnbounded() || b.lowerUnbounded();
+  const bool upperUnbounded = a.upperUnbounded() || b.upperUnbounded();
+
+  const T lower = lowerUnbounded ? std::numeric_limits<T>::lowest()
+                                 : std::min(a.lower(), b.lower());
+
+  bool lowerExclusive = lowerUnbounded;
+  if (!lowerUnbounded) {
+    if (a.lower() < b.lower()) {
+      lowerExclusive = a.lowerExclusive();
     } else {
-      filter = leafCallToSubfieldFilter(*call, subfield, evaluator, false);
-    }
-    if (filter) {
-      return std::make_pair(std::move(subfield), std::move(filter));
+      lowerExclusive = a.lowerExclusive() && b.lowerExclusive();
     }
   }
-  VELOX_UNSUPPORTED(
-      "Unsupported expression for range filter: {}", expr->toString());
+
+  const T upper = upperUnbounded ? std::numeric_limits<T>::max()
+                                 : std::max(a.upper(), b.upper());
+
+  bool upperExclusive = upperUnbounded;
+  if (!upperUnbounded) {
+    if (a.upper() > b.upper()) {
+      upperExclusive = a.upperExclusive();
+    } else if (a.upper() < b.upper()) {
+      upperExclusive = b.upperExclusive();
+    } else {
+      upperExclusive = a.upperExclusive() && b.upperExclusive();
+    }
+  }
+
+  if (lowerUnbounded && upperUnbounded) {
+    alwaysTrue = true;
+    return nullptr;
+  }
+
+  return std::make_unique<common::FloatingPointRange<T>>(
+      lower,
+      lowerUnbounded,
+      lowerExclusive,
+      upper,
+      upperUnbounded,
+      upperExclusive,
+      /*nullAllowed=*/false);
+}
+
+template <typename T, typename TToMultiRange>
+std::unique_ptr<common::Filter> mergeOverlappingDisjuncts(
+    std::vector<std::unique_ptr<T>>& ranges,
+    bool nullAllowed,
+    const TToMultiRange& toMultiRange) {
+  std::vector<std::unique_ptr<T>> newRanges;
+  newRanges.emplace_back(asUniquePtr<T>(ranges.front()->clone(nullAllowed)));
+
+  for (auto i = 1; i < ranges.size(); i++) {
+    bool alwaysTrue = false;
+    if (auto merged = tryMergeOverlappingRanges(
+            *newRanges.back(), *ranges[i], alwaysTrue)) {
+      newRanges.back() = std::move(merged);
+    } else {
+      if (alwaysTrue) {
+        if (nullAllowed) {
+          return std::make_unique<common::AlwaysTrue>();
+        }
+        return isNotNull();
+      }
+      newRanges.emplace_back(std::move(ranges[i]));
+    }
+  }
+
+  if (newRanges.size() == 1) {
+    return std::move(newRanges.front());
+  }
+
+  return toMultiRange(newRanges, nullAllowed);
+}
+
+std::unique_ptr<common::Filter> tryMergeBigintRanges(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  // Check if all filters are single-value equalities: a = 5. Convert these to
+  // an IN list.
+  if (std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBigintRange(filter) &&
+            filter->template as<common::BigintRange>()->isSingleValue();
+      })) {
+    std::vector<int64_t> values;
+    values.reserve(disjuncts.size());
+
+    for (auto& filter : disjuncts) {
+      values.emplace_back(filter->as<common::BigintRange>()->lower());
+    }
+
+    return common::createBigintValues(values, isNullAllowed(disjuncts));
+  }
+
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBigintRange(filter) || isBigintMultiRange(filter);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  for (auto& filter : disjuncts) {
+    if (isBigintRange(filter)) {
+      ranges.emplace_back(asBigintRange(filter));
+    } else {
+      for (const auto& range :
+           filter->as<common::BigintMultiRange>()->ranges()) {
+        ranges.emplace_back(std::make_unique<common::BigintRange>(*range));
+      }
+    }
+  }
+
+  std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
+    return a->lower() < b->lower();
+  });
+
+  return mergeOverlappingDisjuncts(
+      ranges, nullAllowed, [](auto& newRanges, bool nullAllowed) {
+        return std::make_unique<common::BigintMultiRange>(
+            std::move(newRanges), nullAllowed);
+      });
+}
+
+template <typename T>
+std::unique_ptr<common::Filter> tryMergeFloatingPointRanges(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  constexpr auto filterKind = std::is_same_v<T, double>
+      ? common::FilterKind::kDoubleRange
+      : common::FilterKind::kFloatRange;
+
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(filterKind);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  std::vector<std::unique_ptr<common::FloatingPointRange<T>>> ranges;
+  ranges.reserve(disjuncts.size());
+  for (auto& filter : disjuncts) {
+    ranges.emplace_back(
+        asUniquePtr<common::FloatingPointRange<T>>(std::move(filter)));
+  }
+
+  std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
+    if (a->lowerUnbounded() && b->lowerUnbounded()) {
+      return false;
+    }
+
+    if (a->lowerUnbounded()) {
+      return true;
+    }
+
+    if (b->lowerUnbounded()) {
+      return false;
+    }
+
+    return a->lower() < b->lower();
+  });
+
+  return mergeOverlappingDisjuncts(
+      ranges, nullAllowed, [](auto& newRanges, bool nullAllowed) {
+        std::vector<std::unique_ptr<common::Filter>> filters;
+        filters.reserve(newRanges.size());
+        for (auto& range : newRanges) {
+          filters.emplace_back(std::move(range));
+        }
+        return std::make_unique<common::MultiRange>(
+            std::move(filters), nullAllowed);
+      });
+}
+
+} // namespace
+
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
+    std::vector<std::unique_ptr<common::Filter>> disjuncts) {
+  VELOX_CHECK_GE(disjuncts.size(), 2);
+
+  if (auto merged = tryMergeBigintRanges(disjuncts)) {
+    return merged;
+  }
+
+  if (auto merged = tryMergeFloatingPointRanges<double>(disjuncts)) {
+    return merged;
+  }
+
+  if (auto merged = tryMergeFloatingPointRanges<float>(disjuncts)) {
+    return merged;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  return std::make_unique<common::MultiRange>(
+      std::move(disjuncts), nullAllowed);
+}
+
+namespace {
+std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+combine(common::Subfield& subfield, std::unique_ptr<common::Filter>& filter) {
+  if (filter != nullptr) {
+    return std::make_pair(std::move(subfield), std::move(filter));
+  }
+
+  return std::nullopt;
+}
+} // namespace
+
+std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
+    const core::CallTypedExpr& call,
+    core::ExpressionEvaluator* evaluator,
+    bool negated) {
+  if (call.inputs().empty()) {
+    return std::nullopt;
+  }
+
+  const auto* leftSide = call.inputs()[0].get();
+
+  common::Subfield subfield;
+  if (call.name() == "eq") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
+                            : makeEqualFilter(call.inputs()[1], evaluator);
+
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "neq") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = negated ? makeEqualFilter(call.inputs()[1], evaluator)
+                            : makeNotEqualFilter(call.inputs()[1], evaluator);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "lte") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = negated
+          ? makeGreaterThanFilter(call.inputs()[1], evaluator)
+          : makeLessThanOrEqualFilter(call.inputs()[1], evaluator);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "lt") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = negated
+          ? makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator)
+          : makeLessThanFilter(call.inputs()[1], evaluator);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "gte") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = negated
+          ? makeLessThanFilter(call.inputs()[1], evaluator)
+          : makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "gt") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = negated
+          ? makeLessThanOrEqualFilter(call.inputs()[1], evaluator)
+          : makeGreaterThanFilter(call.inputs()[1], evaluator);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "between") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = makeBetweenFilter(
+          call.inputs()[1], call.inputs()[2], evaluator, negated);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "in") {
+    if (toSubfield(leftSide, subfield)) {
+      auto filter = makeInFilter(call.inputs()[1], evaluator, negated);
+      return combine(subfield, filter);
+    }
+  } else if (call.name() == "is_null") {
+    if (toSubfield(leftSide, subfield)) {
+      if (negated) {
+        return std::make_pair(std::move(subfield), isNotNull());
+      }
+      return std::make_pair(std::move(subfield), isNull());
+    }
+  }
+  return std::nullopt;
 }
 
 } // namespace facebook::velox::exec

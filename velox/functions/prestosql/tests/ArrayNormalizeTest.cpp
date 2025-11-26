@@ -30,8 +30,7 @@ class ArrayNormalizeTest : public FunctionBaseTest {
   void testExpr(
       const VectorPtr& expected,
       const std::vector<VectorPtr>& input) {
-    auto result =
-        evaluate<ArrayVector>("array_normalize(C0, C1)", makeRowVector(input));
+    auto result = evaluate("array_normalize(C0, C1)", makeRowVector(input));
     assertEqualVectors(expected, result);
   }
 
@@ -56,15 +55,17 @@ class ArrayNormalizeTest : public FunctionBaseTest {
 
   template <typename T>
   void testArrayWithElementsEqualZero() {
-    auto input = makeArrayVector<T>({{0.0, -0.0, 0.0}});
-    auto p = makeConstant<T>(2.0, input->size());
+    auto input = makeArrayVector<T>(
+        {{static_cast<T>(0.0), static_cast<T>(-0.0), static_cast<T>(0.0)}});
+    auto p = makeConstant<T>(static_cast<T>(2.0), input->size());
     testExpr(input, {input, p});
   }
 
   template <typename T>
   void testArrayWithPLessThanZero() {
-    auto input = makeArrayVector<T>({{1.0, 2.0, 3.0}});
-    auto p = makeConstant<T>(-1.0, input->size());
+    auto input = makeArrayVector<T>(
+        {{static_cast<T>(1.0), static_cast<T>(2.0), static_cast<T>(3.0)}});
+    auto p = makeConstant<T>(static_cast<T>(-1.0), input->size());
     VELOX_ASSERT_THROW(
         testExpr(input, {input, p}),
         "array_normalize only supports non-negative p");
@@ -72,8 +73,9 @@ class ArrayNormalizeTest : public FunctionBaseTest {
 
   template <typename T>
   void testArrayWithPEqualZero() {
-    auto vector = makeArrayVector<T>({{1.0, -2.0, 3.0}});
-    auto p = makeConstant<T>(0.0, vector->size());
+    auto vector = makeArrayVector<T>(
+        {{static_cast<T>(1.0), static_cast<T>(-2.0), static_cast<T>(3.0)}});
+    auto p = makeConstant<T>(static_cast<T>(0.0), vector->size());
     testExpr(vector, {vector, p});
   }
 
@@ -197,6 +199,14 @@ TEST_F(ArrayNormalizeTest, nullValues) {
 TEST_F(ArrayNormalizeTest, differentValues) {
   testArrayWithDifferentValues<float>();
   testArrayWithDifferentValues<double>();
+}
+
+TEST_F(ArrayNormalizeTest, throwForIntTypes) {
+  std::string errorMessage =
+      "array_normalize only supports double and float types";
+  VELOX_ASSERT_THROW(testArrayWithElementsEqualZero<int>(), errorMessage);
+  VELOX_ASSERT_THROW(testArrayWithPEqualZero<int>(), errorMessage);
+  VELOX_ASSERT_THROW(testArrayWithPEqualOne<int>(), errorMessage);
 }
 
 } // namespace

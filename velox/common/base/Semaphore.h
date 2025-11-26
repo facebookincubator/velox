@@ -55,11 +55,16 @@ class Semaphore {
     }
   }
 
+  int32_t count() {
+    std::lock_guard<std::mutex> l(mutex_);
+    return count_;
+  }
+
  private:
   std::mutex mutex_;
   std::condition_variable cv_;
-  volatile int32_t count_;
-  volatile int32_t numWaiting_{0};
+  int32_t count_;
+  int32_t numWaiting_{0};
 };
 
 } // namespace facebook::velox

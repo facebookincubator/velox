@@ -131,6 +131,50 @@ struct Batch64 {
   }
 };
 
+template <typename T>
+struct Batch128 {
+  static constexpr size_t size = [] {
+    static_assert(16 % sizeof(T) == 0);
+    return 16 / sizeof(T);
+  }();
+
+  T data[size];
+
+  static Batch128 from(std::initializer_list<T> values) {
+    VELOX_DCHECK_EQ(values.size(), size);
+    Batch128 ans;
+    for (int i = 0; i < size; ++i) {
+      ans.data[i] = *(values.begin() + i);
+    }
+    return ans;
+  }
+
+  void store_unaligned(T* out) const {
+    std::copy(std::begin(data), std::end(data), out);
+  }
+
+  static Batch128 load_aligned(const T* mem) {
+    return load_unaligned(mem);
+  }
+
+  static Batch128 load_unaligned(const T* mem) {
+    Batch128 ans;
+    std::copy(mem, mem + size, ans.data);
+    return ans;
+  }
+
+  friend Batch128 operator+(Batch128 x, T y) {
+    for (int i = 0; i < size; ++i) {
+      x.data[i] += y;
+    }
+    return x;
+  }
+
+  friend Batch128 operator-(Batch128 x, T y) {
+    return x + (-y);
+  }
+};
+
 namespace detail {
 template <typename T, typename IndexType, typename A, int kSizeT = sizeof(T)>
 struct Gather;
@@ -174,6 +218,17 @@ template <
     typename A = xsimd::default_arch>
 xsimd::batch<T, A>
 gather(const T* base, Batch64<IndexType> vindex, const A& arch = {}) {
+  using Impl = detail::Gather<T, IndexType, A>;
+  return Impl::template apply<kScale>(base, vindex.data, arch);
+}
+
+template <
+    typename T,
+    typename IndexType,
+    int kScale = sizeof(T),
+    typename A = xsimd::default_arch>
+xsimd::batch<T, A>
+gather(const T* base, Batch128<IndexType> vindex, const A& arch = {}) {
   using Impl = detail::Gather<T, IndexType, A>;
   return Impl::template apply<kScale>(base, vindex.data, arch);
 }
@@ -223,6 +278,21 @@ xsimd::batch<T, A> maskGather(
   return Impl::template maskApply<kScale>(src, mask, base, vindex.data, arch);
 }
 
+template <
+    typename T,
+    typename IndexType,
+    int kScale = sizeof(T),
+    typename A = xsimd::default_arch>
+xsimd::batch<T, A> maskGather(
+    xsimd::batch<T, A> src,
+    xsimd::batch_bool<T, A> mask,
+    const T* base,
+    Batch128<IndexType> vindex,
+    const A& arch = {}) {
+  using Impl = detail::Gather<T, IndexType, A>;
+  return Impl::template maskApply<kScale>(src, mask, base, vindex.data, arch);
+}
+
 // Same as 'maskGather' above but read indices from memory.
 template <
     typename T,
@@ -265,6 +335,17 @@ uint8_t gather8Bits(
     const A& arch = {}) {
   return gather8Bits(
       bits, loadGatherIndices<int32_t>(indices, arch), numIndices, arch);
+}
+
+namespace detail {
+template <typename T, typename A, size_t kSizeT = sizeof(T)>
+struct MaskLoad;
+}
+
+template <typename T, typename A = xsimd::default_arch>
+xsimd::batch<T, A>
+maskLoad(const T* addr, xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+  return detail::MaskLoad<T, A>::apply(addr, mask, arch);
 }
 
 namespace detail {
@@ -349,6 +430,7 @@ uint32_t crc32U64(uint32_t checksum, uint64_t value, const A& arch = {}) {
 template <typename T, typename A = xsimd::default_arch>
 xsimd::batch<T, A> iota(const A& = {});
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 // Returns a batch with all elements set to value.  For batch<bool> we
 // use one bit to represent one element.
 template <typename T, typename A = xsimd::default_arch>
@@ -364,6 +446,74 @@ xsimd::batch<T, A> setAll(T value, const A& = {}) {
     return xsimd::broadcast<T, A>(value);
   }
 }
+#endif
+
+// Stores 'data' into 'destination' for the lanes in 'mask'. 'mask' is expected
+// to specify contiguous lower lanes of 'batch'. For non-SIMD cases, 'mask' is
+// not used but rather the number of leading lanes of 'batch' to store is given
+// by 'n'.
+template <typename T, typename A = xsimd::default_arch>
+inline void storeLeading(
+    const xsimd::batch<T, A>& data,
+    const xsimd::batch_bool<T, A>& mask,
+    int32_t n,
+    T* destination) {
+#if XSIMD_WITH_AVX2
+  if constexpr (sizeof(T) == 8) {
+    _mm256_maskstore_epi64(
+        reinterpret_cast<long long*>(destination),
+        *reinterpret_cast<const __m256i*>(&mask),
+        *reinterpret_cast<const __m256i*>(&data));
+  } else if constexpr (sizeof(T) == 4) {
+    _mm256_maskstore_epi32(
+        reinterpret_cast<int*>(destination),
+        *reinterpret_cast<const __m256i*>(&mask),
+        *reinterpret_cast<const __m256i*>(&data));
+  } else {
+#endif
+    for (auto i = 0; i < n; ++i) {
+      reinterpret_cast<T*>(destination)[i] =
+          reinterpret_cast<const T*>(&data)[i];
+    }
+#if XSIMD_WITH_AVX2
+  }
+#endif
+}
+
+/// Stores elements of 'input' selected by 'indices' into 'output'. output[i] =
+/// input[indices[i]].
+/// Indices and output may be the same. May over-read indices but will not
+/// dereference indices that are not in range. Writes exactly indices.size()
+/// elements of 'output'.
+template <typename TData, typename TIndex, typename A = xsimd::default_arch>
+inline void transpose(
+    const TData* input,
+    folly::Range<const TIndex*> indices,
+    TData* output) {
+  constexpr int32_t kBatch = xsimd::batch<TData>::size;
+  const auto size = indices.size();
+  int32_t i = 0;
+  for (; i + kBatch < size; i += kBatch) {
+    auto indexBatch = loadGatherIndices<TData, TIndex>(indices.data() + i);
+    simd::gather<TData, TIndex>(input, indexBatch).store_unaligned(output + i);
+  }
+  if (i < size) {
+    const auto numLeft = size - i;
+    auto mask = simd::leadingMask<TData>(numLeft);
+    auto indexBatch = loadGatherIndices<TData, TIndex>(indices.data() + i);
+    const auto values = simd::maskGather<TData, TIndex>(
+        xsimd::broadcast<TData>(0), mask, input, indexBatch);
+    storeLeading<TData, A>(values, mask, numLeft, output + i);
+  }
+}
+
+/// Gathers the bit from 'bits' for each bit offset in 'indices'. Stores the
+/// result in 'result'. Writes one byte of 'result' for each 8 bits. If the last
+/// byte is not full the trailing bits are undefined.
+void gatherBits(
+    const uint64_t* bits,
+    folly::Range<const int32_t*> indices,
+    uint64_t* result);
 
 // Adds 'bytes' bytes to an address of arbitrary type.
 template <typename T>
@@ -374,7 +524,7 @@ inline T* addBytes(T* pointer, int32_t bytes) {
 // 'memcpy' implementation that copies at maximum width and unrolls
 // when 'bytes' is constant.
 template <typename A = xsimd::default_arch>
-void memcpy(void* to, const void* from, int32_t bytes, const A& = {});
+inline void memcpy(void* to, const void* from, int64_t bytes, const A& = {});
 
 // memset implementation that writes at maximum width and unrolls for
 // constant values of 'bytes'.
@@ -413,6 +563,14 @@ inline bool isDense(const T* values, int32_t size) {
 // Reinterpret batch of U into batch of T.
 template <typename T, typename U, typename A = xsimd::default_arch>
 xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A>, const A& = {});
+
+// Compares memory at 'x' and 'y' and returns true if 'size' leading bytes are
+// equal. May address up to SIMD width -1 past end of either 'x' or 'y'.
+template <typename A = xsimd::default_arch>
+inline bool memEqualUnsafe(const void* x, const void* y, int32_t size);
+
+FOLLY_ALWAYS_INLINE size_t
+simdStrstr(const char* s, size_t n, const char* needle, size_t k);
 
 } // namespace facebook::velox::simd
 

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 namespace facebook::velox::parquet {
@@ -39,10 +40,12 @@ inline int32_t parquetSizeOfIntKind(TypeKind kind) {
 /// Wrapper for static functions for Parquet columns.
 class ParquetColumnReader {
  public:
-  /// Builds a reader tree producing 'dataType'. The metadata is in 'params'.
+  /// Builds a reader tree producing 'fileType'. The metadata is in 'params'.
   /// The filters and pruning are in 'scanSpec'.
   static std::unique_ptr<dwio::common::SelectiveColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 };

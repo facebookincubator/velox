@@ -22,6 +22,14 @@ var             ([[:alpha:]][[:alnum:]_]*)
 "="             return Parser::token::ASSIGN;
 "min"           return Parser::token::MIN;
 "max"           return Parser::token::MAX;
+"<"             return Parser::token::LT;
+"<="            return Parser::token::LTE;
+">"             return Parser::token::GT;
+">="            return Parser::token::GTE;
+"=="            return Parser::token::EQ;
+"!="            return Parser::token::NEQ;
+"?"             return Parser::token::TERNARY;
+":"             return Parser::token::COLON;
 {integer}       yylval->build<long long>(strtoll(YYText(), nullptr, 10)); return Parser::token::INT;
 {var}           yylval->build<std::string>(YYText()); return Parser::token::VAR;
 <<EOF>>         return Parser::token::YYEOF;
@@ -35,9 +43,12 @@ int yyFlexLexer::yylex() {
 
 #include "velox/expression/type_calculation/TypeCalculation.h"
 
-void facebook::velox::expression::calculation::evaluate(const std::string& calculation, std::unordered_map<std::string, int>& variables) {
-    std::istringstream is(calculation);
-    facebook::velox::expression::calculate::Scanner scanner{ is, std::cerr, variables};
-    facebook::velox::expression::calculate::Parser parser{ &scanner };
-    parser.parse();
+void facebook::velox::expression::calculation::evaluate(
+    const std::string& calculation,
+    std::unordered_map<std::string, int>& variables) {
+  std::istringstream is(calculation);
+  std::ostringstream os;
+  facebook::velox::expression::calculate::Scanner scanner{is, os, variables};
+  facebook::velox::expression::calculate::Parser parser{&scanner};
+  parser.parse();
 }

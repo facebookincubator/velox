@@ -17,21 +17,17 @@
 #pragma once
 
 #include <boost/random/uniform_01.hpp>
-#include <random>
 
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/GeneratorSpec.h"
+#include "velox/vector/fuzzer/Utils.h"
 
 namespace facebook::velox {
 
-enum UTF8CharList {
-  ASCII = 0, // Ascii character set.
-  UNICODE_CASE_SENSITIVE = 1, // Unicode scripts that support case.
-  EXTENDED_UNICODE = 2, // Extended Unicode: Arabic, Devanagiri etc
-  MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
-};
+const std::vector<TypePtr>& defaultScalarTypes();
 
 /// VectorFuzzer is a helper class that generates randomized vectors and their
 /// data for testing, with a high degree of entropy.
@@ -87,11 +83,14 @@ class VectorFuzzer {
     /// double between 0 and 1).
     double nullRatio{0};
 
-    /// If true, fuzzer will generate top-level nulls for containers
-    /// (arrays/maps/rows), i.e, nulls for the containers themselves, not the
-    /// elements.
+    /// If false, fuzzer will not generate nulls for elements within containers
+    /// (arrays/maps/rows). It might still generate null for the container
+    /// itself.
     ///
-    /// The amount of nulls are controlled by `nullRatio`.
+    /// The amount of nulls (if true) is controlled by `nullRatio`.
+    ///
+    /// If you want to prevent the top-level row containers from being null, see
+    /// `fuzzInputRow()` instead.
     bool containerHasNulls{true};
 
     /// If true, fuzzer will generate top-level nulls for dictionaries.
@@ -104,7 +103,7 @@ class VectorFuzzer {
 
     /// Vector of String charsets to choose from; bias a charset by including it
     /// multiple times.
-    std::vector<UTF8CharList> charEncodings{ASCII};
+    std::vector<fuzzer::UTF8CharList> charEncodings{fuzzer::ASCII};
 
     /// If true, the length of strings are randomly generated and `stringLength`
     /// is treated as maximum length.
@@ -122,17 +121,15 @@ class VectorFuzzer {
     /// generating nested vectors (arrays, maps, and rows).
     size_t complexElementsMaxSize{10000};
 
+    /// maximum size of array/map wrapped inside constant.
+    std::optional<int32_t> maxConstantContainerSize{std::nullopt};
+
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
     /// Control the precision of timestamps generated. By default generate using
     /// nanoseconds precision.
-    enum class TimestampPrecision : int8_t {
-      kNanoSeconds = 0,
-      kMicroSeconds = 1,
-      kMilliSeconds = 2,
-      kSeconds = 3,
-    };
+    using TimestampPrecision = fuzzer::FuzzerTimestampPrecision;
     TimestampPrecision timestampPrecision{TimestampPrecision::kNanoSeconds};
 
     /// If true, fuzz() will randomly generate lazy vectors and fuzzInputRow()
@@ -140,15 +137,47 @@ class VectorFuzzer {
     /// vectors. The generated lazy vectors can also have any number of
     /// dictionary layers on top of them.
     bool allowLazyVector{false};
+
+    bool allowSlice{true};
+    bool allowConstantVector{true};
+    bool allowDictionaryVector{true};
+
+    /// Data spec for randomly generated data.
+    fuzzer::DataSpec dataSpec{false, false};
+
+    /// FlatMap options:
+    ///
+    /// Toggle for functions that support flat map vector encodings.
+    bool allowFlatMapVector{false};
+
+    /// Flat map vs regular map generation ratio.
+    double flatMapRatio{.5};
+
+    /// Probability of a particular inMap BufferPtr bit being set, signifying
+    /// whether or not the corresponding key is present in that row's map.
+    double inMapRatio{.25};
+
+    /// Probability of a inMap buffer being null (suggesting key is present in
+    /// all rows).
+    double inMapNullRatio{.1};
   };
 
+  // Suppress spurious warnings in GCC 12.4 and later
+#if defined(__GNUC__) && \
+    ((__GNUC__ > 12) || (__GNUC__ == 12 && __GNUC_MINOR__ >= 4))
+  VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
+#endif
   VectorFuzzer(
-      VectorFuzzer::Options options,
+      const VectorFuzzer::Options& options,
       memory::MemoryPool* pool,
       size_t seed = 123456)
       : opts_(options), pool_(pool), rng_(seed) {}
+#if defined(__GNUC__) && \
+    ((__GNUC__ > 12) || (__GNUC__ == 12 && __GNUC_MINOR__ >= 4))
+  VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
+#endif
 
-  void setOptions(VectorFuzzer::Options options) {
+  void setOptions(const VectorFuzzer::Options& options) {
     opts_ = options;
   }
 
@@ -156,109 +185,196 @@ class VectorFuzzer {
     return opts_;
   }
 
-  // Returns a "fuzzed" vector, containing randomized data, nulls, and indices
-  // vector (dictionary). Returns a vector containing `opts_.vectorSize` or
-  // `size` elements.
-  VectorPtr fuzz(const TypePtr& type);
-  VectorPtr fuzz(const TypePtr& type, vector_size_t size);
+  VectorFuzzer::Options& getMutableOptions() {
+    return opts_;
+  }
 
-  // Returns a "fuzzed" vector containing randomized data customized according
-  // to generatorSpec.
+  /// Returns a "fuzzed" vector, containing randomized data, nulls, and indices
+  /// vector (dictionary). Returns a vector containing `opts_.vectorSize` or
+  /// `size` elements.
+  VectorPtr fuzz(
+      const TypePtr& type,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
+  VectorPtr fuzz(
+      const TypePtr& type,
+      vector_size_t size,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
+
+  /// Returns a "fuzzed" vector containing randomized data customized according
+  /// to generatorSpec.
   VectorPtr fuzz(const GeneratorSpec& generatorSpec);
 
-  // Same as above, but returns a vector without nulls (regardless of the value
-  // of opts.nullRatio).
-  VectorPtr fuzzNotNull(const TypePtr& type);
-  VectorPtr fuzzNotNull(const TypePtr& type, vector_size_t size);
+  /// Same as above, but returns a vector without nulls (regardless of the value
+  /// of opts.nullRatio).
+  VectorPtr fuzzNotNull(
+      const TypePtr& type,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
+  VectorPtr fuzzNotNull(
+      const TypePtr& type,
+      vector_size_t size,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
 
-  // Returns a flat vector or a complex vector with flat children with
-  // randomized data and nulls. Returns a vector containing `opts_.vectorSize`
-  // or `size` elements.
-  VectorPtr fuzzFlat(const TypePtr& type);
-  VectorPtr fuzzFlat(const TypePtr& type, vector_size_t size);
+  /// Returns a flat vector or a complex vector with flat children with
+  /// randomized data and nulls. Returns a vector containing `opts_.vectorSize`
+  /// or `size` elements.
+  VectorPtr fuzzFlat(
+      const TypePtr& type,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
+  VectorPtr fuzzFlat(
+      const TypePtr& type,
+      vector_size_t size,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
 
-  // Same as above, but returns a vector without nulls (regardless of the value
-  // of opts.nullRatio).
+  /// Same as above, but returns a vector without nulls (regardless of the value
+  /// of opts.nullRatio).
   VectorPtr fuzzFlatNotNull(const TypePtr& type);
   VectorPtr fuzzFlatNotNull(const TypePtr& type, vector_size_t size);
 
-  // Returns a random constant vector (which could be a null constant). Returns
-  // a vector with size set to `opts_.vectorSize` or 'size'.
-  VectorPtr fuzzConstant(const TypePtr& type);
-  VectorPtr fuzzConstant(const TypePtr& type, vector_size_t size);
+  /// Generate a distinct vector of non-null values of type type.
+  VectorPtr fuzzUniqueFlatNotNull(const TypePtr& type, vector_size_t size);
 
-  // Wraps `vector` using a randomized indices vector, returning a
-  // DictionaryVector which has same number of indices as the underlying
-  // `vector` size.
+  /// Returns a map vector with randomized values and nulls. Returns a vector
+  /// containing `opts_.vectorSize` or `size` elements.
+  VectorPtr
+  fuzzMap(const TypePtr& keyType, const TypePtr& valueType, vector_size_t size);
+
+  /// Returns a random constant vector (which could be a null constant). Returns
+  /// a vector with size set to `opts_.vectorSize` or 'size'.
+  VectorPtr fuzzConstant(
+      const TypePtr& type,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
+  VectorPtr fuzzConstant(
+      const TypePtr& type,
+      vector_size_t size,
+      const AbstractInputGeneratorPtr& customGenerator = nullptr);
+
+  /// Wraps `vector` using a randomized indices vector, returning a
+  /// DictionaryVector which has same number of indices as the underlying
+  /// `vector` size.
   VectorPtr fuzzDictionary(const VectorPtr& vector);
   VectorPtr fuzzDictionary(const VectorPtr& vector, vector_size_t size);
 
-  // Uses `elements` as the internal elements vector, wrapping them into an
-  // ArrayVector of `size` rows.
-  //
-  // The number of elements per array row is based on the size of the
-  // `elements` vector and `size`, and either fixed or variable (depending on
-  // `opts.containerVariableLength`).
+  /// Uses `elements` as the internal elements vector, wrapping them into an
+  /// ArrayVector of `size` rows.
+  ///
+  /// The number of elements per array row is based on the size of the
+  /// `elements` vector and `size`, and either fixed or variable (depending on
+  /// `opts.containerVariableLength`).
   ArrayVectorPtr fuzzArray(const VectorPtr& elements, vector_size_t size);
 
-  // Uses `keys` and `values` as the internal elements vectors, wrapping them
-  // into a MapVector of `size` rows.
-  //
-  // The number of elements per map row is based on the size of the `keys` and
-  // `values` vectors and `size`, and either fixed or variable (depending on
-  // `opts.containerVariableLength`).
-  //
-  // If opt.normalizeMapKeys is true, keys will be normalized - duplicated key
-  // values for a particular element will be removed/skipped. In that case, this
-  // method throws if the keys vector has nulls.
+  /// Same as above, but fuzz the element vector. The length of the element
+  /// vector is based on opts.containerLength and does not exceed
+  /// opts.complexElementsMaxSize.
+  ArrayVectorPtr fuzzArray(const TypePtr& elementType, vector_size_t size);
+
+  /// Uses `keys` and `values` as the internal elements vectors, wrapping them
+  /// into a MapVector of `size` rows.
+  ///
+  /// The number of elements per map row is based on the size of the `keys` and
+  /// `values` vectors and `size`, and either fixed or variable (depending on
+  /// `opts.containerVariableLength`).
+  ///
+  /// If opt.normalizeMapKeys is true, keys will be normalized - duplicated key
+  /// values for a particular element will be removed/skipped. In that case,
+  /// this method throws if the keys vector has nulls.
   MapVectorPtr
   fuzzMap(const VectorPtr& keys, const VectorPtr& values, vector_size_t size);
 
-  // Returns a "fuzzed" row vector with randomized data and nulls.
-  RowVectorPtr fuzzRow(const RowTypePtr& rowType);
-  RowVectorPtr fuzzRow(const RowTypePtr& rowType, vector_size_t size);
+  /// Generates a fuzzed flat map vector using the given key and value types.
+  ///
+  /// This function will fuzz keys values and use them to generate the distinct
+  /// keys for the flat map. Subsequent inMaps and mapValues buffers and vectors
+  /// (respectively) are generated per channel. The result is a flatMapVectorPtr
+  /// generated from the ground up. This can be used with
+  /// FlatMapVector::toMapVector for encoding testing.
+  FlatMapVectorPtr fuzzFlatMap(
+      const TypePtr& keyType,
+      const TypePtr& valueType,
+      vector_size_t size);
 
-  // Returns a RowVector based on the provided vectors, fuzzing its top-level
-  // null buffer.
+  /// Returns a "fuzzed" row vector with randomized data and nulls.
+  RowVectorPtr fuzzRow(const RowTypePtr& rowType);
+
+  /// If allowTopLevelNulls is false, the top level row wont have nulls.
+  RowVectorPtr fuzzRow(
+      const RowTypePtr& rowType,
+      vector_size_t size,
+      bool allowTopLevelNulls = true,
+      const std::vector<AbstractInputGeneratorPtr>& inputGenerators = {});
+
+  /// Returns a RowVector based on the provided vectors, fuzzing its top-level
+  /// null buffer.
   RowVectorPtr fuzzRow(
       std::vector<VectorPtr>&& children,
       std::vector<std::string> childrenNames,
       vector_size_t size);
 
-  // Returns a RowVector based on the provided vectors, fuzzing its top-level
-  // null buffer.
+  /// Returns a RowVector based on the provided vectors, fuzzing its top-level
+  /// null buffer.
   RowVectorPtr fuzzRow(std::vector<VectorPtr>&& children, vector_size_t size);
 
-  // Same as the function above, but never return nulls for the top-level row
-  // elements.
-  RowVectorPtr fuzzInputRow(const RowTypePtr& rowType);
+  /// Same as the function above, but never return nulls for the top-level row
+  /// elements.
+  RowVectorPtr fuzzInputRow(
+      const RowTypePtr& rowType,
+      const std::vector<AbstractInputGeneratorPtr>& inputGenerators = {});
 
-  // Generates a random type, including maps, vectors, and arrays. maxDepth
-  // limits the maximum level of nesting for complex types. maxDepth <= 1 means
-  // no complex types are allowed.
-  //
-  // There are no options to control type generation yet; these may be added in
-  // the future.
+  /// Same as the function above, but all generated vectors are flat, i.e. no
+  /// constant or dictionary-encoded vectors at any level.
+  RowVectorPtr fuzzInputFlatRow(const RowTypePtr& rowType);
+
+  /// Generates a random type, including maps, vectors, and arrays. maxDepth
+  /// limits the maximum level of nesting for complex types. maxDepth <= 1 means
+  /// no complex types are allowed.
+  ///
+  /// There are no options to control type generation yet; these may be added in
+  /// the future.
   TypePtr randType(int maxDepth = 5);
-  RowTypePtr randRowType(int maxDepth = 5);
 
-  // Generates short decimal TypePtr with random precision and scale.
+  TypePtr randType(const std::vector<TypePtr>& scalarTypes, int maxDepth = 5);
+
+  /// Generate a random RowType with random fields including maps, vectors, and
+  /// arrays. minWidth limits the minimum width of the RowType, i.e., the number
+  /// of streams involved when reading or writing data of this type.
+  TypePtr randRowTypeByWidth(int minWidth);
+
+  TypePtr randRowTypeByWidth(
+      const std::vector<TypePtr>& scalarTypes,
+      int minWidth);
+
+  /// Same as the function above, but only generate orderable types.
+  /// MAP types are not generated as they are not orderable.
+  TypePtr randOrderableType(int maxDepth = 5);
+
+  TypePtr randOrderableType(
+      const std::vector<TypePtr>& scalarTypes,
+      int maxDepth = 5);
+
+  RowTypePtr randRowType(int maxDepth = 5);
+  RowTypePtr randRowType(
+      const std::vector<TypePtr>& scalarTypes,
+      int maxDepth = 5);
+
+  /// Generates a random map type where keys cannot be nested. maxDepth limits
+  /// the maximum level of nesting for values.
+  TypePtr randMapType(int maxDepth = 5);
+
+  /// Returns a random integer between min and max inclusive
+  size_t randInRange(size_t min, size_t max);
+
+  /// Generates short decimal TypePtr with random precision and scale.
   inline TypePtr randShortDecimalType() {
     auto [precision, scale] =
         randPrecisionScale(ShortDecimalType::kMaxPrecision);
     return DECIMAL(precision, scale);
   }
 
-  // Generates long decimal TypePtr with random precision and scale.
+  /// Generates long decimal TypePtr with random precision and scale.
   inline TypePtr randLongDecimalType() {
     auto [precision, scale] =
         randPrecisionScale(LongDecimalType::kMaxPrecision);
     return DECIMAL(precision, scale);
   }
-
-  // Generate a random non-floating-point primitive type to be used as join keys
-  // or group-by key for aggregations, etc.
-  TypePtr randScalarNonFloatingPointType();
 
   void reSeed(size_t seed) {
     rng_.seed(seed);
@@ -269,40 +385,59 @@ class VectorFuzzer {
     return boost::random::uniform_01<double>()(rng_) < n;
   }
 
-  // Wraps the given vector in a LazyVector. If there are multiple dictionary
-  // layers then the lazy wrap is applied over the innermost dictionary layer.
+  /// Wraps the given vector in a LazyVector. If there are multiple dictionary
+  /// layers then the lazy wrap is applied over the innermost dictionary layer.
   static VectorPtr wrapInLazyVector(VectorPtr baseVector);
 
-  // Randomly applies wrapInLazyVector() to the children of the given input row
-  // vector. Must only be used for input row vectors where all children are
-  // non-null and non-lazy. Is useful when the input rowVector needs to be
-  // re-used between multiple evaluations.
+  /// Randomly applies wrapInLazyVector() to the children of the given input row
+  /// vector. Must only be used for input row vectors where all children are
+  /// non-null and non-lazy. Is useful when the input rowVector needs to be
+  /// re-used between multiple evaluations.
   RowVectorPtr fuzzRowChildrenToLazy(RowVectorPtr rowVector);
 
-  // Returns a copy of 'rowVector' but with the columns having indices listed in
-  // 'columnsToWrapInLazy' wrapped in lazy encoding. Must only be used for input
-  // row vectors where all children are non-null and non-lazy.
-  // 'columnsToWrapInLazy' can contain negative column indices that represent
-  // lazy vectors that should be preloaded before being fed to the evaluator.
-  // This list is sorted on the absolute value of the entries.
+  /// Returns a copy of 'rowVector' but with the columns having indices listed
+  /// in 'columnsToWrapInLazy' wrapped in lazy encoding. Must only be used for
+  /// input row vectors where all children are non-null and non-lazy.
+  /// 'columnsToWrapInLazy' can contain negative column indices that represent
+  /// lazy vectors that should be preloaded before being fed to the evaluator.
+  /// This list is sorted on the absolute value of the entries.
   static RowVectorPtr fuzzRowChildrenToLazy(
       RowVectorPtr rowVector,
       const std::vector<int>& columnsToWrapInLazy);
 
-  // Generate a random null buffer.
+  /// Generate a random null buffer. Can return nullptr if no nulls are set.
   BufferPtr fuzzNulls(vector_size_t size);
 
-  // Generate a random indices buffer of 'size' with maximum possible index
-  // pointing to (baseVectorSize-1).
+  /// Generate a random indices buffer of 'size' with maximum possible index
+  /// pointing to (baseVectorSize-1).
   BufferPtr fuzzIndices(vector_size_t size, vector_size_t baseVectorSize);
+
+  /// Generate a random inMap buffer (for use with flat map vectors) of 'size'
+  /// number of rows. This should randomize the keys per row in the map.
+  BufferPtr fuzzFlatMapInMap(vector_size_t size);
+
+  template <typename Class>
+  void registerOpaqueTypeGenerator(
+      std::function<std::shared_ptr<Class>(FuzzerGenerator& rng)> generator) {
+    opaqueTypeGenerators_[std::type_index(typeid(Class))] = generator;
+  }
+
+  // Maximum values allowed values by Presto for interval types.
+  static const int64_t kMaxAllowedIntervalDayTime = 2147483647;
+  static const int32_t kMaxAllowedIntervalYearMonth = 178956970;
 
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
 
-  /// Generates random precision in range [1, maxPrecision]
+  // Generates a flat vector for opaque types.
+  // Throws if the type is not OpaqueType<Class>.
+  // Expects registerOpaqueTypeGenerator<Class>() to be called beforehand.
+  VectorPtr fuzzFlatOpaque(const TypePtr& type, vector_size_t size);
+
+  // Generates random precision in range [1, maxPrecision]
   // and scale in range [0, random precision generated].
-  /// @param maximum precision.
+  // @param maximum precision.
   std::pair<int8_t, int8_t> randPrecisionScale(int8_t maxPrecision);
 
   // Returns a complex vector with randomized data and nulls.  The children and
@@ -335,6 +470,58 @@ class VectorFuzzer {
   // function.  C++ does not guarantee the order in which arguments are
   // evaluated, which can lead to inconsistent results across platforms.
   FuzzerGenerator rng_;
+
+  // Since the underlying type of opaque types are transparent to Velox, we
+  // require callers to register a generator for each underlying type, so we're
+  // able to generate random data for opaque types.
+  // This is done via registerOpaqueTypeGenerator().
+  std::unordered_map<
+      std::type_index,
+      std::function<std::shared_ptr<void>(FuzzerGenerator& rng)>>
+      opaqueTypeGenerators_;
 };
+
+/// Generates a random type, including maps, structs, and arrays. maxDepth
+/// limits the maximum level of nesting for complex types. maxDepth <= 1 means
+/// no complex types are allowed.
+TypePtr randType(FuzzerGenerator& rng, int maxDepth = 5);
+
+TypePtr randType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth = 5);
+
+/// Generates a random map type given a vector of scalarTypes as keys. maxDepth
+/// limits the maximum level of nesting for values.
+TypePtr randMapType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth = 5);
+
+/// Same as the function above, but only generate orderable types.
+/// MAP types are not generated as they are not orderable.
+TypePtr randOrderableType(FuzzerGenerator& rng, int maxDepth = 5);
+
+TypePtr randOrderableType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth = 5);
+
+/// Generates a random ROW type.
+RowTypePtr randRowType(FuzzerGenerator& rng, int maxDepth = 5);
+
+RowTypePtr randRowType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth = 5);
+
+/// Generate a random RowType with a minimal width.
+TypePtr randRowTypeByWidth(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int minWidth);
+
+/// Default set of scalar types to be chosen from when generating random types.
+const std::vector<TypePtr>& defaultScalarTypes();
 
 } // namespace facebook::velox

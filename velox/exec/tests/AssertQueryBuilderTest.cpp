@@ -34,6 +34,19 @@ TEST_F(AssertQueryBuilderTest, basic) {
       .assertResults(data);
 }
 
+TEST_F(AssertQueryBuilderTest, serialExecution) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+
+  PlanBuilder builder;
+  const auto& plan = builder.values({data}).planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .serialExecution(true)
+      .assertResults("VALUES (1), (2), (3)");
+
+  AssertQueryBuilder(plan).serialExecution(true).assertResults(data);
+}
+
 TEST_F(AssertQueryBuilderTest, orderedResults) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
@@ -67,32 +80,65 @@ TEST_F(AssertQueryBuilderTest, config) {
 }
 
 TEST_F(AssertQueryBuilderTest, hiveSplits) {
-  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})});
 
   auto file = TempFilePath::create();
-  writeToFile(file->path, {data});
+  writeToFile(file->getPath(), {data});
 
   // Single leaf node.
   AssertQueryBuilder(
       PlanBuilder().tableScan(asRowType(data->type())).planNode(),
       duckDbQueryRunner_)
-      .split(makeHiveConnectorSplit(file->path))
+      .split(makeHiveConnectorSplit(file->getPath()))
       .assertResults("VALUES (1), (2), (3)");
 
+  // Single leaf node with two splits.
+  auto makeSplits = [](const std::string& path, size_t numRepeats = 1) {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits(
+        numRepeats, makeHiveConnectorSplit(path));
+    return splits;
+  };
+
+  for (const auto withSequence : {false, true}) {
+    AssertQueryBuilder(
+        PlanBuilder().tableScan(asRowType(data->type())).planNode(),
+        duckDbQueryRunner_)
+        .splits(makeSplits(file->getPath(), 2))
+        .addSplitWithSequence(withSequence)
+        .assertResults("VALUES (1), (2), (3), (1), (2), (3)");
+  }
+
+  // Single leaf node with two splits and barrier execution.
+  for (const auto withSequence : {false, true}) {
+    auto splits = makeSplits(file->getPath(), 2);
+    AssertQueryBuilder(
+        PlanBuilder()
+            .tableScan(asRowType(data->type()))
+            .project({"c0 + 1"})
+            .planNode(),
+        duckDbQueryRunner_)
+        .splits(splits)
+        .addSplitWithSequence(withSequence)
+        .barrierExecution(true)
+        .serialExecution(true)
+        .assertResults("VALUES (2), (3), (4), (2), (3), (4)");
+  }
+
   // Split with partition key.
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"ds", partitionKey("ds", VARCHAR())},
       {"c0", regularColumn("c0", BIGINT())}};
 
   AssertQueryBuilder(
       PlanBuilder()
-          .tableScan(
-              ROW({"c0", "ds"}, {INTEGER(), VARCHAR()}),
-              makeTableHandle(),
-              assignments)
+          .startTableScan()
+          .outputType(ROW({"c0", "ds"}, {INTEGER(), VARCHAR()}))
+          .tableHandle(makeTableHandle())
+          .assignments(assignments)
+          .endTableScan()
           .planNode(),
       duckDbQueryRunner_)
-      .split(HiveConnectorSplitBuilder(file->path)
+      .split(HiveConnectorSplitBuilder(file->getPath())
                  .partitionKey("ds", "2022-05-10")
                  .build())
       .assertResults(
@@ -101,7 +147,7 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
   // Two leaf nodes.
   auto buildData = makeRowVector({makeFlatVector<int32_t>({2, 3})});
   auto buildFile = TempFilePath::create();
-  writeToFile(buildFile->path, {buildData});
+  writeToFile(buildFile->getPath(), {buildData});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId probeScanId;
@@ -123,8 +169,8 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
                       .planNode();
 
   AssertQueryBuilder(joinPlan, duckDbQueryRunner_)
-      .split(probeScanId, makeHiveConnectorSplit(file->path))
-      .split(buildScanId, makeHiveConnectorSplit(buildFile->path))
+      .split(probeScanId, makeHiveConnectorSplit(file->getPath()))
+      .split(buildScanId, makeHiveConnectorSplit(buildFile->getPath()))
       .assertResults("SELECT 2");
 }
 

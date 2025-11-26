@@ -19,15 +19,12 @@
 #include <folly/Conv.h>
 #include <random>
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class RandGen {
  public:
   RandGen()
-      : rand_{}, mt_{rand_()}, dist_(0, std::numeric_limits<int32_t>::max()){};
+      : rand_{}, mt_{rand_()}, dist_(0, std::numeric_limits<int32_t>::max()) {}
 
   template <typename T>
   T gen(int32_t max) {
@@ -68,7 +65,4 @@ class RandGen {
   std::uniform_int_distribution<int32_t> dist_;
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

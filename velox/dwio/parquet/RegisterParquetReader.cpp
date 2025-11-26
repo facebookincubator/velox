@@ -14,30 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-
 #ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
 #endif
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory(ParquetReaderType parquetReaderType) {
+void registerParquetReaderFactory() {
 #ifdef VELOX_ENABLE_PARQUET
-  switch (parquetReaderType) {
-    case ParquetReaderType::DUCKDB:
-      dwio::common::registerReaderFactory(
-          std::make_shared<duckdb_reader::ParquetReaderFactory>());
-      break;
-    case ParquetReaderType::NATIVE:
-      dwio::common::registerReaderFactory(
-          std::make_shared<ParquetReaderFactory>());
-      break;
-    default:
-      VELOX_UNSUPPORTED(
-          "Velox does not support ParquetReaderType ", parquetReaderType);
-  }
+  dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
 #endif
 }
 

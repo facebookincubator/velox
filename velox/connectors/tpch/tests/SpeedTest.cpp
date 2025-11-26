@@ -56,10 +56,11 @@ using std::chrono::system_clock;
 class TpchSpeedTest {
  public:
   TpchSpeedTest() {
-    auto tpchConnector =
-        connector::getConnectorFactory(
-            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId_, nullptr);
+    connector::tpch::TpchConnectorFactory factory;
+    auto tpchConnector = factory.newConnector(
+        kTpchConnectorId_,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(tpchConnector);
   }
 
@@ -74,7 +75,7 @@ class TpchSpeedTest {
     core::PlanNodeId scanId;
     auto plan =
         PlanBuilder()
-            .tableScan(
+            .tpchTableScan(
                 table, folly::copy(getTableSchema(table)->names()), scaleFactor)
             .capturePlanNodeId(scanId)
             .planNode();
@@ -87,23 +88,22 @@ class TpchSpeedTest {
     auto startTime = system_clock::now();
     intervalStart_ = startTime;
 
-    CursorParameters params;
+    exec::CursorParameters params;
     params.planNode = plan;
     params.maxDrivers = FLAGS_max_drivers;
 
-    TaskCursor taskCursor(params);
-    taskCursor.start();
+    auto taskCursor = exec::TaskCursor::create(params);
+    taskCursor->start();
 
-    auto task = taskCursor.task();
+    auto task = taskCursor->task();
     addSplits(*task, scanId, numSplits);
 
-    while (taskCursor.moveNext()) {
-      processBatch(taskCursor.current());
+    while (taskCursor->moveNext()) {
+      processBatch(taskCursor->current());
     }
 
     // Wait for the task to finish.
-    auto& inlineExecutor = folly::QueuedImmediateExecutor::instance();
-    task->taskCompletionFuture(0).via(&inlineExecutor).wait();
+    task->taskCompletionFuture().wait();
 
     std::chrono::duration<double> elapsed = system_clock::now() - startTime;
     LOG(INFO) << "Summary:";
@@ -117,8 +117,9 @@ class TpchSpeedTest {
     for (size_t i = 0; i < numSplits; ++i) {
       task.addSplit(
           scanId,
-          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-              kTpchConnectorId_, numSplits, i)));
+          exec::Split(
+              std::make_shared<connector::tpch::TpchConnectorSplit>(
+                  kTpchConnectorId_, /*cacheable=*/true, numSplits, i)));
     }
 
     task.noMoreSplits(scanId);
@@ -179,7 +180,7 @@ class TpchSpeedTest {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
 
   TpchSpeedTest speedTest;
   speedTest.run(

@@ -28,6 +28,7 @@
 
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/expression/DecodedArgs.h"
+#include "velox/expression/KindToSimpleType.h"
 #include "velox/expression/UdfTypeResolver.h"
 #include "velox/expression/VariadicView.h"
 #include "velox/type/StringView.h"
@@ -50,6 +51,10 @@ struct VectorReader {
 
   explicit VectorReader(const VectorReader<T>&) = delete;
   VectorReader<T>& operator=(const VectorReader<T>&) = delete;
+
+  vector_size_t index(vector_size_t idx) const {
+    return decoded_.index(idx);
+  }
 
   exec_in_t operator[](size_t offset) const {
     return decoded_.template valueAt<exec_in_t>(offset);
@@ -110,7 +115,7 @@ struct ConstantVectorReader {
 
   std::optional<exec_in_t> value;
 
-  explicit ConstantVectorReader<T>(ConstantVector<exec_in_t>& vector) {
+  explicit ConstantVectorReader(ConstantVector<exec_in_t>& vector) {
     if (!vector.isNullAt(0)) {
       value = *vector.rawValues();
     }
@@ -155,7 +160,7 @@ struct FlatVectorReader {
   const exec_in_t* values;
   FlatVector<exec_in_t>* vector;
 
-  explicit FlatVectorReader<T>(FlatVector<exec_in_t>& baseVector)
+  explicit FlatVectorReader(FlatVector<exec_in_t>& baseVector)
       : values(baseVector.rawValues()), vector(&baseVector) {}
 
   exec_in_t operator[](vector_size_t offset) const {
@@ -632,16 +637,31 @@ struct VectorReader<Variadic<T>> {
   std::vector<std::unique_ptr<VectorReader<T>>> childReaders_;
 };
 
-template <typename T>
-struct VectorReader<Generic<T>> {
+template <typename T, bool comparable, bool orderable>
+struct VectorReader<Generic<T, comparable, orderable>> {
   using exec_in_t = GenericView;
   using exec_null_free_in_t = exec_in_t;
 
-  explicit VectorReader(const DecodedVector* decoded) : decoded_(*decoded) {}
+  template <TypeKind kind>
+  void ensureCastedReader() {
+    if constexpr (TypeTraits<kind>::isPrimitiveType) {
+      this->operator[](0)
+          .template ensureReader<typename KindToSimpleType<kind>::type>();
+    }
+  }
 
-  explicit VectorReader(const VectorReader<Generic<T>>&) = delete;
+  explicit VectorReader(const DecodedVector* decoded) : decoded_(*decoded) {
+    if (decoded->size() && decoded->base()->type()->isPrimitiveType()) {
+      TypeKind kind = decoded->base()->typeKind();
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(ensureCastedReader, kind);
+    }
+  }
 
-  VectorReader<Generic<T>>& operator=(const VectorReader<Generic<T>>&) = delete;
+  explicit VectorReader(
+      const VectorReader<Generic<T, comparable, orderable>>&) = delete;
+
+  VectorReader<Generic<T, comparable, orderable>>& operator=(
+      const VectorReader<Generic<T, comparable, orderable>>&) = delete;
 
   bool isSet(vector_size_t offset) const {
     return !decoded_.isNullAt(offset);
@@ -713,8 +733,9 @@ struct VectorReader<DynamicRow> {
         vector_(detail::getDecoded<in_vector_t>(decoded_)),
         childrenDecoders_{vector_.childrenSize()} {
     for (int i = 0; i < vector_.childrenSize(); i++) {
-      childReaders_.push_back(std::make_unique<VectorReader<Any>>(
-          detail::decode(childrenDecoders_[i], *vector_.childAt(i))));
+      childReaders_.push_back(
+          std::make_unique<VectorReader<Any>>(
+              detail::decode(childrenDecoders_[i], *vector_.childAt(i))));
     }
   }
 
@@ -747,10 +768,88 @@ struct VectorReader<DynamicRow> {
   std::vector<std::unique_ptr<VectorReader<Any>>> childReaders_;
 };
 
-template <typename T>
-struct VectorReader<CustomType<T>> : public VectorReader<typename T::type> {
+template <typename T, bool providesCustomComparison>
+struct VectorReader<CustomType<T, providesCustomComparison>>
+    : public VectorReader<typename T::type> {
   explicit VectorReader(const DecodedVector* decoded)
       : VectorReader<typename T::type>(decoded) {}
+};
+
+template <typename T>
+struct VectorReader<CustomType<T, true>> {
+  using exec_underlying_in_t =
+      typename VectorExec::template resolver<typename T::type>::in_type;
+  using exec_in_t = CustomTypeWithCustomComparisonView<exec_underlying_in_t>;
+  // Only custom types around primitive types can provide custom comparison
+  // operators, so they cannot contain null, they can only be null, so they're
+  // in_type is already null_free.
+  using exec_null_free_in_t = exec_in_t;
+
+  explicit VectorReader(const DecodedVector* decoded)
+      : decoded_(*decoded),
+        customComparisonType_(
+            std::dynamic_pointer_cast<const CanProvideCustomComparisonType<
+                SimpleTypeTrait<exec_underlying_in_t>::typeKind>>(
+                decoded_.base()->type())) {}
+
+  explicit VectorReader(const VectorReader<CustomType<T, true>>&) = delete;
+  CustomType<T, true>& operator=(const CustomType<T, true>&) = delete;
+
+  exec_in_t operator[](size_t offset) const {
+    return exec_in_t(
+        decoded_.template valueAt<exec_underlying_in_t>(offset),
+        customComparisonType_);
+  }
+
+  exec_null_free_in_t readNullFree(size_t offset) const {
+    return exec_null_free_in_t(
+        decoded_.template valueAt<exec_underlying_in_t>(offset),
+        customComparisonType_);
+  }
+
+  bool isSet(size_t offset) const {
+    return !decoded_.isNullAt(offset);
+  }
+
+  bool mayHaveNulls() const {
+    return decoded_.mayHaveNulls();
+  }
+
+  // These functions can be used to check if any elements in a given row are
+  // NULL. They are not especially fast, so they should only be used when
+  // necessary, and other options, e.g. calling mayHaveNullsRecursive() on the
+  // vector, have already been exhausted.
+  inline bool containsNull(vector_size_t index) const {
+    return decoded_.isNullAt(index);
+  }
+
+  bool containsNull(vector_size_t startIndex, vector_size_t endIndex) const {
+    // Note: This can be optimized for the special case where the underlying
+    // vector is flat using bit operations on the nulls buffer.
+    for (auto index = startIndex; index < endIndex; ++index) {
+      if (containsNull(index)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  inline bool mayHaveNullsRecursive() const {
+    return decoded_.mayHaveNulls();
+  }
+
+  // Scalars don't have children, so this is a no-op.
+  void setChildrenMayHaveNulls() {}
+
+  const BaseVector* baseVector() const {
+    return decoded_.base();
+  }
+
+  const DecodedVector& decoded_;
+  const std::shared_ptr<const CanProvideCustomComparisonType<
+      SimpleTypeTrait<exec_underlying_in_t>::typeKind>>
+      customComparisonType_;
 };
 
 } // namespace facebook::velox::exec

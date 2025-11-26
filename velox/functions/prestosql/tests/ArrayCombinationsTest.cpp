@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -42,7 +43,7 @@ class ArrayCombinationsTest : public FunctionBaseTest {
         {{{{std::vector<std::optional<T>>()}}},
          {{{{0, 1, 2}}, {{0, 1, 3}}, {{0, 2, 3}}, {{1, 2, 3}}}},
          {{{{0, 1, 2, 3}}}},
-         {{}}});
+         common::testutil::optionalEmpty});
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
   }
@@ -68,7 +69,7 @@ class ArrayCombinationsTest : public FunctionBaseTest {
         {{
             {{0, 1, std::nullopt, 3}},
         }},
-        {{}},
+        common::testutil::optionalEmpty,
     });
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
@@ -93,6 +94,36 @@ class ArrayCombinationsTest : public FunctionBaseTest {
 };
 
 } // namespace
+
+TEST_F(ArrayCombinationsTest, arrayOfRows) {
+  auto arrayOfRowVector = makeArrayOfRowVector(
+      ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BOOLEAN()}),
+      {
+          {},
+          {variant::row({11, "a", true}),
+           variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+           variant::row({31, "d", false})},
+          {variant::row({11, "a", true}),
+           variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+           variant::row({31, "d", false})},
+      });
+  auto comboLengthVector = makeFlatVector(std::vector<int32_t>({0, 2, 5}));
+  auto result = evaluate(
+      "combinations(C0, C1)",
+      makeRowVector({arrayOfRowVector, comboLengthVector}));
+
+  auto expected = makeArrayVector(
+      {0, 1, 4},
+      makeArrayOfRowVector(
+          ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BOOLEAN()}),
+          {{},
+           {variant::row({11, "a", true}),
+            variant::row({2, variant::null(TypeKind::VARCHAR), true})},
+           {variant::row({11, "a", true}), variant::row({31, "d", false})},
+           {variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+            variant::row({31, "d", false})}}));
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
 
 TEST_F(ArrayCombinationsTest, intArrays) {
   testIntNullable<int8_t>();
@@ -145,7 +176,7 @@ TEST_F(ArrayCombinationsTest, inlineVarcharArrays) {
          {{"bb", "aa", "aa", "ddd"}},
          {{"bb", "cc", "aa", "ddd"}},
          {{"aa", "cc", "aa", "ddd"}}}},
-       {{}}});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -192,7 +223,7 @@ TEST_F(ArrayCombinationsTest, varcharArrays) {
            "yellow rose flowers",
            "red shiny car ahead",
            "purple is an elegant color"}}}},
-       {{}}});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -215,7 +246,7 @@ TEST_F(ArrayCombinationsTest, boolNullableArrays) {
          {{false, true, true, true}},
          {{false, false, true, true}},
          {{true, false, true, true}}}},
-       {{}}});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -238,6 +269,6 @@ TEST_F(ArrayCombinationsTest, boolArrays) {
          {{false, true, true, true}},
          {{false, false, true, true}},
          {{true, false, true, true}}}},
-       {{}}});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }

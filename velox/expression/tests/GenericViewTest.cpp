@@ -19,6 +19,7 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -38,7 +39,7 @@ class GenericViewTest : public functions::test::FunctionBaseTest {
       std::vector<std::optional<std::vector<std::optional<int64_t>>>>;
 
   array_data_t arrayData1 = {
-      {{}},
+      common::testutil::optionalEmpty,
       {{{{std::nullopt}}}},
       {{std::nullopt, 1}},
       {{std::nullopt, std::nullopt, std::nullopt}},
@@ -56,7 +57,7 @@ class GenericViewTest : public functions::test::FunctionBaseTest {
   };
 
   array_data_t arrayData2 = {
-      {{}},
+      common::testutil::optionalEmpty,
       {{{{std::nullopt}}}},
       {{std::nullopt, 1}},
       {{std::nullopt, std::nullopt, std::nullopt}},
@@ -131,21 +132,37 @@ TEST_F(GenericViewTest, primitive) {
 }
 
 TEST_F(GenericViewTest, compare) {
-  std::vector<std::optional<int64_t>> data = {1, 2, std::nullopt, 1};
+  {
+    auto vector = makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 1});
+    DecodedVector decoded;
+    exec::VectorReader<Any> reader(decode(decoded, *vector));
 
-  auto vector = vectorMaker_.flatVectorNullable<int64_t>(data);
-  DecodedVector decoded;
-  exec::VectorReader<Any> reader(decode(decoded, *vector));
-  CompareFlags flags;
-  ASSERT_EQ(reader[0].compare(reader[0], flags).value(), 0);
-  ASSERT_EQ(reader[0].compare(reader[3], flags).value(), 0);
+    CompareFlags flags;
+    ASSERT_EQ(reader[0].compare(reader[0], flags).value(), 0);
+    ASSERT_EQ(reader[0].compare(reader[3], flags).value(), 0);
 
-  ASSERT_NE(reader[0].compare(reader[1], flags).value(), 0);
-  ASSERT_NE(reader[0].compare(reader[2], flags).value(), 0);
+    ASSERT_NE(reader[0].compare(reader[1], flags).value(), 0);
+    ASSERT_NE(reader[0].compare(reader[2], flags).value(), 0);
 
-  flags.stopAtNull = true;
-  ASSERT_FALSE(reader[0].compare(reader[2], flags).has_value());
-  ASSERT_TRUE(reader[0].compare(reader[1], flags).has_value());
+    flags.nullHandlingMode =
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate;
+    VELOX_ASSERT_THROW(
+        reader[0].compare(reader[2], flags), "Ordering nulls is not supported");
+    ASSERT_TRUE(reader[0].compare(reader[1], flags).has_value());
+  }
+
+  // Test that [null, 1] = [null, 2] is false, and that
+  // [null, 1] = [null, 1] is indeterminate.
+  {
+    CompareFlags flags = CompareFlags::equality(
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+    auto arrayVector =
+        makeArrayVectorFromJson<int64_t>({"[null, 1]", "[null, 2]"});
+    DecodedVector decoded;
+    exec::VectorReader<Any> reader(decode(decoded, *arrayVector));
+    ASSERT_EQ(reader[0].compare(reader[1], flags).value(), -1);
+    ASSERT_EQ(reader[0].compare(reader[0], flags), kIndeterminate);
+  }
 }
 
 // Test reader<Generic> where generic elements are arrays<ints>
@@ -182,6 +199,46 @@ TEST_F(GenericViewTest, arrayOfGeneric) {
             generic1 == generic2,
             arrayData1[i].value()[j] == arrayData2[i].value()[k]);
       }
+    }
+  }
+}
+
+TEST_F(GenericViewTest, toString) {
+  {
+    auto data = makeArrayVectorFromJson<int32_t>({
+        "[1, 2, 3]",
+    });
+
+    DecodedVector decoded(*data);
+    exec::VectorReader<Array<Any>> reader(&decoded);
+
+    auto arrayView = reader[0];
+    EXPECT_EQ("1", arrayView[0].value().toString());
+    EXPECT_EQ("2", arrayView[1].value().toString());
+    EXPECT_EQ("3", arrayView[2].value().toString());
+  }
+
+  {
+    auto data = makeMapVectorFromJson<int32_t, int64_t>({
+        "{1: 10, 2: null, 3: 30}",
+    });
+
+    auto keys = data->mapKeys();
+    auto values = data->mapValues();
+
+    DecodedVector decoded(*data);
+    exec::VectorReader<Map<Any, Any>> reader(&decoded);
+
+    auto mapView = reader[0];
+    auto it = mapView.begin();
+    for (auto i = 0; i < 3; ++i) {
+      EXPECT_EQ(keys->toString(i), it->first.toString());
+      if (values->isNullAt(i)) {
+        EXPECT_FALSE(it->second.has_value());
+      } else {
+        EXPECT_EQ(values->toString(i), it->second->toString());
+      }
+      ++it;
     }
   }
 }
@@ -756,7 +813,7 @@ struct ArrayHasDuplicateFunc {
       }
 
       if (set.count(*item)) {
-        // Item already exisits.
+        // Item already exists.
         out = true;
         return true;
       }

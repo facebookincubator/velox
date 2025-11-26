@@ -15,26 +15,31 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/common/Config.h"
-#include "velox/exec/Operator.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
-#include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 namespace facebook::velox::exec::test {
 
 static const std::string kHiveConnectorId = "test-hive";
 
-using ColumnHandleMap =
-    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>;
-
 class HiveConnectorTestBase : public OperatorTestBase {
  public:
   HiveConnectorTestBase();
+
   void SetUp() override;
   void TearDown() override;
+
+  void resetHiveConnector(
+      const std::shared_ptr<const config::ConfigBase>& config);
+
+  void writeToFiles(
+      const std::vector<std::string>& filePaths,
+      std::vector<RowVectorPtr> vectors);
 
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
@@ -42,7 +47,29 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,
       std::shared_ptr<dwrf::Config> config =
-          std::make_shared<facebook::velox::dwrf::Config>());
+          std::make_shared<facebook::velox::dwrf::Config>(),
+      const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
+          flushPolicyFactory = nullptr);
+
+  void writeToFile(
+      const std::string& filePath,
+      const std::vector<RowVectorPtr>& vectors,
+      std::shared_ptr<dwrf::Config> config,
+      const TypePtr& schema,
+      const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
+          flushPolicyFactory = nullptr);
+
+  // Creates a directory using matching file system based on directoryPath.
+  // No throw when directory already exists.
+  void createDirectory(const std::string& directoryPath);
+
+  // Removes a directory using matching file system based on directoryPath.
+  // No op when directory does not exist.
+  void removeDirectory(const std::string& directoryPath);
+
+  // Removes a file using matching file system based on filePath.
+  // No op when file does not exist.
+  void removeFile(const std::string& filePath);
 
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
@@ -57,16 +84,33 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
       const std::string& duckDbSql);
 
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
+      const std::string& duckDbSql,
+      const int32_t numPrefetchSplit);
+
   static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count);
 
   static std::vector<std::shared_ptr<connector::ConnectorSplit>>
   makeHiveConnectorSplits(
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths);
 
-  static std::shared_ptr<connector::ConnectorSplit> makeHiveConnectorSplit(
+  static std::shared_ptr<connector::hive::HiveConnectorSplit>
+  makeHiveConnectorSplit(
       const std::string& filePath,
       uint64_t start = 0,
-      uint64_t length = std::numeric_limits<uint64_t>::max());
+      uint64_t length = std::numeric_limits<uint64_t>::max(),
+      int64_t splitWeight = 0,
+      bool cacheable = true);
+
+  static std::shared_ptr<connector::hive::HiveConnectorSplit>
+  makeHiveConnectorSplit(
+      const std::string& filePath,
+      int64_t fileSize,
+      int64_t fileModifiedTime,
+      uint64_t start,
+      uint64_t length);
 
   /// Split file at path 'filePath' into 'splitCount' splits. If not local file,
   /// file size can be given as 'externalSize'.
@@ -74,27 +118,35 @@ class HiveConnectorTestBase : public OperatorTestBase {
   makeHiveConnectorSplits(
       const std::string& filePath,
       uint32_t splitCount,
-      dwio::common::FileFormat format);
+      dwio::common::FileFormat format,
+      const std::optional<
+          std::unordered_map<std::string, std::optional<std::string>>>&
+          partitionKeys = {},
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = {});
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
-      common::test::SubfieldFilters subfieldFilters = {},
+      common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
-      bool filterPushdownEnabled = true) {
+      bool filterPushdownEnabled = true,
+      const std::unordered_map<std::string, std::string>& tableParameters =
+          {}) {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
         tableName,
         filterPushdownEnabled,
         std::move(subfieldFilters),
         remainingFilter,
-        dataColumns);
+        dataColumns,
+        tableParameters);
   }
 
   /// @param name Column name.
   /// @param type Column type.
   /// @param Required subfields of this column.
-  static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
+  static std::unique_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
       const std::string& name,
       const TypePtr& type,
       const std::vector<std::string>& requiredSubfields);
@@ -103,11 +155,13 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param type Column type.
   /// @param type Hive type.
   /// @param Required subfields of this column.
-  static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
+  static std::unique_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
       const std::string& name,
       const TypePtr& dataType,
       const TypePtr& hiveType,
-      const std::vector<std::string>& requiredSubfields);
+      const std::vector<std::string>& requiredSubfields,
+      connector::hive::HiveColumnHandle::ColumnType columnType =
+          connector::hive::HiveColumnHandle::ColumnType::kRegular);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.
@@ -132,6 +186,10 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param bucketProperty if not nulll, specifies the property for a bucket
   /// table.
   /// @param locationHandle Location handle for the table write.
+  /// @param compressionKind compression algorithm to use for table write.
+  /// @param serdeParameters Table writer configuration parameters.
+  /// @param ensureFiles When this option is set the HiveDataSink will always
+  /// create a file even if there is no data.
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
       const std::vector<std::string>& tableColumnNames,
@@ -140,7 +198,12 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
-          dwio::common::FileFormat::DWRF);
+          dwio::common::FileFormat::DWRF,
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::unordered_map<std::string, std::string>& serdeParameters = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr,
+      const bool ensureFiles = false);
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
@@ -149,7 +212,11 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::vector<std::string>& partitionedBy,
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
-          dwio::common::FileFormat::DWRF);
+          dwio::common::FileFormat::DWRF,
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr,
+      const bool ensureFiles = false);
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,
@@ -163,8 +230,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& name,
       const TypePtr& type);
 
-  static ColumnHandleMap allRegularColumns(const RowTypePtr& rowType) {
-    ColumnHandleMap assignments;
+  static connector::ColumnHandleMap allRegularColumns(
+      const RowTypePtr& rowType) {
+    connector::ColumnHandleMap assignments;
     assignments.reserve(rowType->size());
     for (uint32_t i = 0; i < rowType->size(); ++i) {
       const auto& name = rowType->nameOf(i);
@@ -172,62 +240,17 @@ class HiveConnectorTestBase : public OperatorTestBase {
     }
     return assignments;
   }
-
-  memory::MemoryAllocator* allocator() {
-    return memory::MemoryAllocator::getInstance();
-  }
 };
 
-class HiveConnectorSplitBuilder {
+/// Same as connector::hive::HiveConnectorBuilder, except that this defaults
+/// connectorId to kHiveConnectorId.
+class HiveConnectorSplitBuilder
+    : public connector::hive::HiveConnectorSplitBuilder {
  public:
-  HiveConnectorSplitBuilder(std::string filePath)
-      : filePath_{std::move(filePath)} {}
-
-  HiveConnectorSplitBuilder& start(uint64_t start) {
-    start_ = start;
-    return *this;
+  explicit HiveConnectorSplitBuilder(std::string filePath)
+      : connector::hive::HiveConnectorSplitBuilder(std::move(filePath)) {
+    connectorId(kHiveConnectorId);
   }
-
-  HiveConnectorSplitBuilder& length(uint64_t length) {
-    length_ = length;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& fileFormat(dwio::common::FileFormat format) {
-    fileFormat_ = format;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& partitionKey(
-      std::string name,
-      std::optional<std::string> value) {
-    partitionKeys_.emplace(std::move(name), std::move(value));
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& tableBucketNumber(int32_t bucket) {
-    tableBucketNumber_ = bucket;
-    return *this;
-  }
-
-  std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
-    return std::make_shared<connector::hive::HiveConnectorSplit>(
-        kHiveConnectorId,
-        filePath_.find("/") == 0 ? "file:" + filePath_ : filePath_,
-        fileFormat_,
-        start_,
-        length_,
-        partitionKeys_,
-        tableBucketNumber_);
-  }
-
- private:
-  const std::string filePath_;
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
-  uint64_t start_{0};
-  uint64_t length_{std::numeric_limits<uint64_t>::max()};
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
-  std::optional<int32_t> tableBucketNumber_;
 };
 
 } // namespace facebook::velox::exec::test

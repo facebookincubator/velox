@@ -16,11 +16,11 @@
 
 #pragma once
 
+#include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
 
-template <bool reuseInput>
 class StringWriter;
 
 template <bool nullable, typename V>
@@ -101,18 +101,32 @@ struct resolver<Array<V>> {
   using out_type = ArrayWriter<V>;
 };
 
+template <typename P, typename S>
+struct resolver<ShortDecimal<P, S>> {
+  using in_type = int64_t;
+  using null_free_in_type = in_type;
+  using out_type = int64_t;
+};
+
+template <typename P, typename S>
+struct resolver<LongDecimal<P, S>> {
+  using in_type = int128_t;
+  using null_free_in_type = in_type;
+  using out_type = int128_t;
+};
+
 template <>
 struct resolver<Varchar> {
   using in_type = StringView;
   using null_free_in_type = in_type;
-  using out_type = StringWriter<false>;
+  using out_type = StringWriter;
 };
 
 template <>
 struct resolver<Varbinary> {
   using in_type = StringView;
   using null_free_in_type = in_type;
-  using out_type = StringWriter<false>;
+  using out_type = StringWriter;
 };
 
 template <>
@@ -124,6 +138,20 @@ struct resolver<Date> {
 
 template <>
 struct resolver<IntervalDayTime> {
+  using in_type = int64_t;
+  using null_free_in_type = in_type;
+  using out_type = int64_t;
+};
+
+template <>
+struct resolver<IntervalYearMonth> {
+  using in_type = int32_t;
+  using null_free_in_type = in_type;
+  using out_type = int32_t;
+};
+
+template <>
+struct resolver<Time> {
   using in_type = int64_t;
   using null_free_in_type = in_type;
   using out_type = int64_t;
@@ -143,18 +171,25 @@ struct resolver<Variadic<T>> {
   // Variadic cannot be used as an out_type
 };
 
-template <typename T>
-struct resolver<Generic<T>> {
+template <typename T, bool comparable, bool orderable>
+struct resolver<Generic<T, comparable, orderable>> {
   using in_type = GenericView;
   using null_free_in_type = in_type;
   using out_type = GenericWriter;
 };
 
-template <typename T>
-struct resolver<CustomType<T>> {
-  using in_type = typename resolver<typename T::type>::in_type;
-  using null_free_in_type =
-      typename resolver<typename T::type>::null_free_in_type;
+template <typename T, bool providesCustomComparison>
+struct resolver<CustomType<T, providesCustomComparison>> {
+  using in_type = std::conditional_t<
+      providesCustomComparison,
+      CustomTypeWithCustomComparisonView<
+          typename resolver<typename T::type>::in_type>,
+      typename resolver<typename T::type>::in_type>;
+  using null_free_in_type = std::conditional_t<
+      providesCustomComparison,
+      CustomTypeWithCustomComparisonView<
+          typename resolver<typename T::type>::null_free_in_type>,
+      typename resolver<typename T::type>::null_free_in_type>;
   using out_type = typename resolver<typename T::type>::out_type;
 };
 } // namespace detail

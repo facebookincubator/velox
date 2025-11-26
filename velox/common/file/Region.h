@@ -16,15 +16,16 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 
 namespace facebook::velox::common {
 
-// define a disk region to read
+/// Defines a disk region to read.
 struct Region {
   uint64_t offset;
   uint64_t length;
-  // Optional label used by lower layers for cache warm up
+  /// Optional label used by lower layers for cache warm up.
   std::string_view label;
 
   Region(uint64_t offset = 0, uint64_t length = 0, std::string_view label = {})

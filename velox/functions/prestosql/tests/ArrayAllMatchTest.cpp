@@ -15,12 +15,12 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/LambdaParameterizedBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ArrayAllMatchTest : public functions::test::FunctionBaseTest {
+class ArrayAllMatchTest : public functions::test::LambdaParameterizedBaseTest {
  protected:
   void testAllMatchExpr(
       const std::vector<std::optional<bool>>& expected,
@@ -44,12 +44,12 @@ class ArrayAllMatchTest : public functions::test::FunctionBaseTest {
       const std::vector<std::optional<bool>>& expected,
       const std::string& expression,
       const RowVectorPtr& input) {
-    auto result = evaluate(expression, (input));
+    auto result = evaluateParameterized(expression, (input));
     assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
   }
 };
 
-TEST_F(ArrayAllMatchTest, basic) {
+TEST_P(ArrayAllMatchTest, basic) {
   std::vector<std::vector<std::optional<int32_t>>> ints{
       {std::nullopt, 2, 3},
       {-1, 3},
@@ -91,22 +91,12 @@ TEST_F(ArrayAllMatchTest, basic) {
   testAllMatchExpr(expectedResult, "x", bools);
 }
 
-TEST_F(ArrayAllMatchTest, complexTypes) {
-  auto baseVector = makeArrayVector<int64_t>({
-      {1, 2, 3},
-      {2, 2},
-      {3, 3},
-      {4, 4},
-      {5, 5},
-      {},
+TEST_P(ArrayAllMatchTest, complexTypes) {
+  auto arrayOfArrays = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3]]",
+      "[[2, 2], [3, 3], [4, 4], [5, 5]]",
+      "[[]]",
   });
-  // Create an array of array vector using above base vector using offsets.
-  // [
-  //  [[1, 2, 3]],
-  //  [[2, 2], [3, 3], [4, 4], [5, 5]],
-  //  [[]]
-  // ]
-  auto arrayOfArrays = makeArrayVector({0, 1, 5}, baseVector);
   std::vector<std::optional<bool>> expectedResult{
       true,
       true,
@@ -114,19 +104,17 @@ TEST_F(ArrayAllMatchTest, complexTypes) {
   };
   testAllMatchExpr(expectedResult, "cardinality(x) > 0", arrayOfArrays);
 
-  // Create an array of array vector using above base vector using offsets.
-  // [
-  //  [[1, 2, 3]],  cardinalities is 3
-  //  [[2, 2], [3, 3], [4, 4], [5, 5]], all cardinalities is 2
-  //  [[]],
-  //  null
-  // ]
-  arrayOfArrays = makeArrayVector({0, 1, 5, 6}, baseVector, {3});
+  arrayOfArrays = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3]]",
+      "[[2, 2], [3, 3], [4, 4], [5, 5]]",
+      "[[]]",
+      "null",
+  });
   expectedResult = {true, false, false, std::nullopt};
   testAllMatchExpr(expectedResult, "cardinality(x) > 2", arrayOfArrays);
 }
 
-TEST_F(ArrayAllMatchTest, strings) {
+TEST_P(ArrayAllMatchTest, strings) {
   std::vector<std::vector<std::optional<StringView>>> input{
       {},
       {"abc"},
@@ -138,7 +126,7 @@ TEST_F(ArrayAllMatchTest, strings) {
   testAllMatchExpr(expectedResult, "x = 'abc'", input);
 }
 
-TEST_F(ArrayAllMatchTest, doubles) {
+TEST_P(ArrayAllMatchTest, doubles) {
   std::vector<std::vector<std::optional<double>>> input{
       {},
       {1.2},
@@ -154,7 +142,7 @@ TEST_F(ArrayAllMatchTest, doubles) {
   testAllMatchExpr(expectedResult, "x > 1.1", input);
 }
 
-TEST_F(ArrayAllMatchTest, errors) {
+TEST_P(ArrayAllMatchTest, errors) {
   // No throw and return false if there are unmatched elements except nulls
   auto expression = "(10 / x) > 2";
   std::vector<std::vector<std::optional<int8_t>>> input{
@@ -191,9 +179,9 @@ TEST_F(ArrayAllMatchTest, errors) {
       expectedResult, "all_match(c0, x -> (TRY((10 / x) > 2)))", errorInputRow);
 }
 
-TEST_F(ArrayAllMatchTest, conditional) {
+TEST_P(ArrayAllMatchTest, conditional) {
   // No throw and return false if there are unmatched elements except nulls
-  auto c0 = makeFlatVector<uint32_t>({1, 2, 3, 4, 5});
+  auto c0 = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto c1 = makeNullableArrayVector<int32_t>({
       {100, std::nullopt},
       {500, 120},
@@ -214,3 +202,8 @@ TEST_F(ArrayAllMatchTest, conditional) {
       "all_match(c1, if (c0 <= 2, x -> (x > 100), x -> (10 / x > 2)))",
       input);
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    ArrayAllMatchTest,
+    ArrayAllMatchTest,
+    testing::ValuesIn(ArrayAllMatchTest::getTestParams()));

@@ -35,10 +35,13 @@ class AggregateWindowFunction : public exec::WindowFunction {
       const std::string& name,
       const std::vector<exec::WindowFunctionArg>& args,
       const TypePtr& resultType,
+      bool ignoreNulls,
       velox::memory::MemoryPool* pool,
       HashStringAllocator* stringAllocator,
       const core::QueryConfig& config)
       : WindowFunction(resultType, pool, stringAllocator) {
+    VELOX_USER_CHECK(
+        !ignoreNulls, "Aggregate window functions do not support IGNORE NULLS");
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
@@ -72,8 +75,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
     //
     // Here we always make space for a row size since we only have one
     // row and no RowContainer. We also have a single aggregate here, so there
-    // is only one null bit.
-    static const int32_t kNullOffset = 0;
+    // is only one null bit and one initialized bit.
+    static const int32_t kAccumulatorFlagsOffset = 0;
     static const int32_t kRowSizeOffset = bits::nbytes(1);
     singleGroupRowSize_ = kRowSizeOffset + sizeof(int32_t);
     // Accumulator offset must be aligned by their alignment size.
@@ -81,8 +84,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
         singleGroupRowSize_, aggregate_->accumulatorAlignmentSize());
     aggregate_->setOffsets(
         singleGroupRowSize_,
-        exec::RowContainer::nullByte(kNullOffset),
-        exec::RowContainer::nullMask(kNullOffset),
+        exec::RowContainer::nullByte(kAccumulatorFlagsOffset),
+        exec::RowContainer::nullMask(kAccumulatorFlagsOffset),
+        exec::RowContainer::initializedByte(kAccumulatorFlagsOffset),
+        exec::RowContainer::initializedMask(kAccumulatorFlagsOffset),
         /* needed for out of line allocations */ kRowSizeOffset);
     singleGroupRowSize_ += aggregate_->accumulatorFixedWidthSize();
 
@@ -94,6 +99,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // Constructing a vector of a single result value used for copying from
     // the aggregate to the final result.
     aggregateResultVector_ = BaseVector::create(resultType, 1, pool_);
+
+    computeDefaultAggregateValue(resultType);
   }
 
   ~AggregateWindowFunction() {
@@ -193,10 +200,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       vector_size_t resultOffset,
       const VectorPtr& result) {
     if (!validRows.hasSelections()) {
-      uint64_t* rawNulls = result->mutableRawNulls();
-      for (auto row = 0; row < validRows.size(); row++) {
-        bits::setNull(rawNulls, row + resultOffset, true);
-      }
+      setEmptyFramesResult(validRows, resultOffset, emptyResult_, result);
       return true;
     }
     return false;
@@ -305,7 +309,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     });
 
     // Set null values for empty (non valid) frames in the output block.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
+    setEmptyFramesResult(validRows, resultOffset, emptyResult_, result);
   }
 
   void simpleAggregation(
@@ -338,7 +342,20 @@ class AggregateWindowFunction : public exec::WindowFunction {
     });
 
     // Set null values for empty (non valid) frames in the output block.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
+    setEmptyFramesResult(validRows, resultOffset, emptyResult_, result);
+  }
+
+  // Precompute and save the aggregate output for empty input in emptyResult_.
+  // This value is returned for rows with empty frames.
+  void computeDefaultAggregateValue(const TypePtr& resultType) {
+    aggregate_->clear();
+    aggregate_->initializeNewGroups(
+        &rawSingleGroupRow_, std::vector<vector_size_t>{0});
+    aggregateInitialized_ = true;
+
+    emptyResult_ = BaseVector::create(resultType, 1, pool_);
+    aggregate_->extractValues(&rawSingleGroupRow_, 1, &emptyResult_);
+    aggregate_->clear();
   }
 
   // Aggregate function object required for this window function evaluation.
@@ -371,6 +388,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Stores metadata about the previous output block of the partition
   // to optimize aggregate computation and reading argument vectors.
   std::optional<FrameMetadata> previousFrameMetadata_;
+
+  // Stores default result value for empty frame aggregation. Window functions
+  // return the default value of an aggregate (aggregation with no rows) for
+  // empty frames. e.g. count for empty frames should return 0 and not null.
+  VectorPtr emptyResult_;
 };
 
 } // namespace
@@ -388,15 +410,23 @@ void registerAggregateWindowFunction(const std::string& name) {
     exec::registerWindowFunction(
         name,
         std::move(signatures),
+        {exec::WindowFunction::ProcessMode::kRows, true},
         [name](
             const std::vector<exec::WindowFunctionArg>& args,
             const TypePtr& resultType,
+            bool ignoreNulls,
             velox::memory::MemoryPool* pool,
             HashStringAllocator* stringAllocator,
             const core::QueryConfig& config)
             -> std::unique_ptr<exec::WindowFunction> {
           return std::make_unique<AggregateWindowFunction>(
-              name, args, resultType, pool, stringAllocator, config);
+              name,
+              args,
+              resultType,
+              ignoreNulls,
+              pool,
+              stringAllocator,
+              config);
         });
   }
 }

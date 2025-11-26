@@ -26,24 +26,29 @@
 
 #include <gtest/gtest.h>
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
+
 using namespace facebook::velox::common;
 using namespace facebook::velox::exec;
 
 TEST(FilterTest, alwaysFalse) {
   AlwaysFalse alwaysFalse;
   EXPECT_FALSE(alwaysFalse.testInt64(1));
+  EXPECT_FALSE(alwaysFalse.testInt128Range(0, 0, false));
+  EXPECT_FALSE(alwaysFalse.testInt128Range(0, 0, true));
   EXPECT_FALSE(alwaysFalse.testNonNull());
   EXPECT_FALSE(alwaysFalse.testNull());
 
   EXPECT_EQ(
-      "Filter(AlwaysFalse, deterministic, null not allowed)",
-      alwaysFalse.toString());
+      "Filter(AlwaysFalse, deterministic, no nulls)", alwaysFalse.toString());
 }
 
 TEST(FilterTest, alwaysTrue) {
   AlwaysTrue alwaysTrue;
   EXPECT_TRUE(alwaysTrue.testInt64(1));
+  EXPECT_TRUE(alwaysTrue.testInt128Range(0, 0, false));
+  EXPECT_TRUE(alwaysTrue.testInt128Range(0, 0, true));
   EXPECT_TRUE(alwaysTrue.testNonNull());
   EXPECT_TRUE(alwaysTrue.testNull());
   xsimd::batch<int64_t> int64s(1);
@@ -59,13 +64,15 @@ TEST(FilterTest, alwaysTrue) {
       simd::allSetBitMask<int16_t>(),
       simd::toBitMask(alwaysTrue.testValues(int16s)));
   EXPECT_EQ(
-      "Filter(AlwaysTrue, deterministic, null allowed)", alwaysTrue.toString());
+      "Filter(AlwaysTrue, deterministic, with nulls)", alwaysTrue.toString());
 }
 
 TEST(FilterTest, isNotNull) {
   IsNotNull notNull;
   EXPECT_TRUE(notNull.testNonNull());
   EXPECT_TRUE(notNull.testInt64(10));
+  EXPECT_TRUE(notNull.testInt128Range(0, 0, false));
+  EXPECT_TRUE(notNull.testInt128Range(0, 0, true));
 
   EXPECT_FALSE(notNull.testNull());
 }
@@ -76,8 +83,11 @@ TEST(FilterTest, isNull) {
 
   EXPECT_FALSE(isNull.testNonNull());
   EXPECT_FALSE(isNull.testInt64(10));
+  EXPECT_FALSE(isNull.testInt128(10));
+  EXPECT_FALSE(isNull.testInt128Range(0, 0, false));
+  EXPECT_TRUE(isNull.testInt128Range(0, 0, true));
 
-  EXPECT_EQ("Filter(IsNull, deterministic, null allowed)", isNull.toString());
+  EXPECT_EQ("Filter(IsNull, deterministic, with nulls)", isNull.toString());
 }
 
 // Applies 'filter' to all T type lanes of 'values' and compares the result to
@@ -174,6 +184,32 @@ TEST(FilterTest, bigIntRange) {
   EXPECT_TRUE(filter->testInt64Range(-100, -10, true));
   EXPECT_TRUE(filter->testInt64Range(-100, 10, false));
   EXPECT_TRUE(filter->testInt64Range(-100, 10, true));
+
+  {
+    SCOPED_TRACE("Filter range outside of smaller type");
+    filter = between(2147483747ll, 2147483847ll);
+    int32_t n8[] = {
+        1, 100, 200, 201, 2147483647, -1000, 1000000000, -2000000000};
+    checkSimd(filter.get(), n8, testInt64);
+    int16_t n16[] = {
+        1,
+        100,
+        200,
+        201,
+        32767,
+        2,
+        32000,
+        -1000,
+        -32000,
+        1111,
+        1000,
+        -1000,
+        1,
+        1,
+        0,
+        1111};
+    checkSimd(filter.get(), n16, testInt64);
+  }
 }
 
 TEST(FilterTest, negatedBigintRange) {
@@ -267,6 +303,13 @@ TEST(FilterTest, bigintValuesUsingHashTable) {
   EXPECT_FALSE(filter->testInt64Range(9'000, 9'999, false));
   EXPECT_TRUE(filter->testInt64Range(9'000, 10'000, false));
   EXPECT_TRUE(filter->testInt64Range(0, 1, false));
+}
+
+TEST(FilterTest, negatedBigintValuesUsingHashTableOverflow) {
+  auto filter = createNegatedBigintValues(
+      {-9074444101981834051, 7013258837215469735}, false);
+  EXPECT_TRUE(
+      filter->testInt64Range(-9074444101981834051, 7013258837215469735, false));
 }
 
 TEST(FilterTest, negatedBigintValuesUsingHashTable) {
@@ -435,7 +478,10 @@ TEST(FilterTest, negatedBigintValuesUsingHashTableSimd) {
 
 TEST(FilterTest, bigintValuesUsingBitmask) {
   auto filter = createBigintValues({1, 10, 100, 1000}, false);
-  ASSERT_TRUE(dynamic_cast<BigintValuesUsingBitmask*>(filter.get()));
+  auto castedFilter = dynamic_cast<BigintValuesUsingBitmask*>(filter.get());
+  ASSERT_TRUE(castedFilter);
+  ASSERT_EQ(castedFilter->min(), 1);
+  ASSERT_EQ(castedFilter->max(), 1000);
 
   EXPECT_TRUE(filter->testInt64(1));
   EXPECT_TRUE(filter->testInt64(10));
@@ -461,6 +507,8 @@ TEST(FilterTest, negatedBigintValuesUsingBitmask) {
   ASSERT_TRUE(castedFilter);
   std::vector<int64_t> filterVals = {1, 6, 8, 9, 10, 100, 1000};
   ASSERT_EQ(castedFilter->values(), filterVals);
+  ASSERT_EQ(castedFilter->min(), 1);
+  ASSERT_EQ(castedFilter->max(), 1000);
 
   EXPECT_FALSE(filter->testInt64(1));
   EXPECT_FALSE(filter->testInt64(10));
@@ -644,6 +692,8 @@ TEST(FilterTest, doubleRange) {
   EXPECT_FALSE(filter->testNull());
   EXPECT_FALSE(filter->testDouble(1.2));
   EXPECT_FALSE(filter->testDouble(-19.267));
+  EXPECT_TRUE(filter->testDouble(std::nanf("nan1")));
+  EXPECT_TRUE(filter->testDouble(std::nanf("nan2")));
   {
     double n4[] = {-1e100, std::nan("nan"), 1.3, 1e200};
     checkSimd(filter.get(), n4, verify);
@@ -666,6 +716,16 @@ TEST(FilterTest, doubleRange) {
 
   EXPECT_THROW(betweenDouble(NAN, NAN), VeloxRuntimeError)
       << "able to create a DoubleRange with NaN";
+
+  // A filter that has upper value set but really is unbounded.
+  filter = std::make_unique<common::DoubleRange>(
+      3, false, false, 0, true, false, true);
+  EXPECT_TRUE(filter->testDoubleRange(1, 100, false));
+  EXPECT_FALSE(filter->testDoubleRange(0, 1, false));
+  EXPECT_TRUE(filter->testDoubleRange(0, 1, true));
+  EXPECT_FALSE(filter->testDouble(1));
+  EXPECT_TRUE(filter->testDouble(3));
+  EXPECT_TRUE(filter->testDouble(100));
 }
 
 TEST(FilterTest, floatRange) {
@@ -705,16 +765,45 @@ TEST(FilterTest, floatRange) {
     checkSimd(filter.get(), n8, verify);
   }
 
+  filter = greaterThanFloat(1.2);
+  EXPECT_FALSE(filter->testFloat(1.1f));
+
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testFloat(1.2f));
+  EXPECT_TRUE(filter->testFloat(15.632f));
+  EXPECT_TRUE(filter->testFloat(std::nanf("nan1")));
+  EXPECT_TRUE(filter->testFloat(std::nanf("nan2")));
+  {
+    float n8[] = {1.0, std::nanf("nan"), 1.3, 1e20, -1e20, 0, 1.1, 1.2};
+    checkSimd(filter.get(), n8, verify);
+  }
+
   EXPECT_THROW(
       betweenFloat(std::nanf("NAN"), std::nanf("NAN")), VeloxRuntimeError)
       << "able to create a FloatRange with NaN";
+
+  // A filter that has upper value set but really is unbounded.
+  filter = std::make_unique<common::FloatRange>(
+      3, false, false, 0, true, false, true);
+  EXPECT_TRUE(filter->testDoubleRange(1, 100, false));
+  EXPECT_FALSE(filter->testDoubleRange(0, 1, false));
+  EXPECT_TRUE(filter->testDoubleRange(0, 1, true));
+  EXPECT_FALSE(filter->testFloat(1));
+  EXPECT_TRUE(filter->testFloat(3));
+  EXPECT_TRUE(filter->testFloat(100));
+}
+
+bool testBytes(const Filter& filter, std::string_view value) {
+  bool result = filter.testBytes(value.data(), value.size());
+  VELOX_CHECK_EQ(filter.testStringView(StringView(value)), result);
+  return result;
 }
 
 TEST(FilterTest, bytesRange) {
   {
     auto filter = equal("abc");
-    EXPECT_TRUE(filter->testBytes("abc", 3));
-    EXPECT_FALSE(filter->testBytes("acb", 3));
+    EXPECT_TRUE(testBytes(*filter, "abc"));
+    EXPECT_FALSE(testBytes(*filter, "acb"));
     EXPECT_TRUE(filter->testLength(3));
     // The bit for lane 2 should be set.
     int32_t lens[] = {0, 1, 3, 0, 4, 10, 11, 12};
@@ -722,8 +811,8 @@ TEST(FilterTest, bytesRange) {
         4, simd::toBitMask(filter->testLengths(xsimd::load_unaligned(lens))));
 
     EXPECT_FALSE(filter->testNull());
-    EXPECT_FALSE(filter->testBytes("apple", 5));
-    EXPECT_FALSE(filter->testBytes(nullptr, 0));
+    EXPECT_FALSE(testBytes(*filter, "apple"));
+    EXPECT_FALSE(testBytes(*filter, {}));
     EXPECT_FALSE(filter->testLength(4));
 
     EXPECT_TRUE(filter->testBytesRange("abc", "abc", false));
@@ -742,128 +831,132 @@ TEST(FilterTest, bytesRange) {
 
     // = ''
     filter = equal("");
-    EXPECT_TRUE(filter->testBytes(nullptr, 0));
-    EXPECT_FALSE(filter->testBytes("abc", 3));
+    EXPECT_TRUE(testBytes(*filter, {}));
+    EXPECT_FALSE(testBytes(*filter, "abc"));
   }
 
   char const* theBestOfTimes =
       "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity,...";
   auto filter = lessThanOrEqual(theBestOfTimes);
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, std::strlen(theBestOfTimes)));
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, 5));
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, 50));
-  EXPECT_TRUE(filter->testBytes(theBestOfTimes, 100));
+  EXPECT_TRUE(testBytes(*filter, theBestOfTimes));
+  EXPECT_TRUE(testBytes(*filter, {theBestOfTimes, 5}));
+  EXPECT_TRUE(testBytes(*filter, {theBestOfTimes, 50}));
+  EXPECT_TRUE(testBytes(*filter, {theBestOfTimes, 100}));
   // testLength is true of all lengths for a range filter.
   EXPECT_TRUE(filter->testLength(1));
   EXPECT_TRUE(filter->testLength(1000));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("Zzz", 3));
-  EXPECT_FALSE(filter->testBytes("It was the best of times, zzz", 30));
+  EXPECT_FALSE(testBytes(*filter, "Zzz"));
+  EXPECT_FALSE(testBytes(*filter, {"It was the best of times, zzz", 30}));
 
   EXPECT_TRUE(filter->testBytesRange("Apple", "banana", false));
   EXPECT_FALSE(filter->testBytesRange("Pear", "Plum", false));
   EXPECT_FALSE(filter->testBytesRange("apple", "banana", false));
 
   filter = greaterThanOrEqual("abc");
-  EXPECT_TRUE(filter->testBytes("abc", 3));
-  EXPECT_TRUE(filter->testBytes("ad", 2));
-  EXPECT_TRUE(filter->testBytes("apple", 5));
-  EXPECT_TRUE(filter->testBytes("banana", 6));
+  EXPECT_TRUE(testBytes(*filter, "abc"));
+  EXPECT_TRUE(testBytes(*filter, "ad"));
+  EXPECT_TRUE(testBytes(*filter, "apple"));
+  EXPECT_TRUE(testBytes(*filter, "banana"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("ab", 2));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "ab"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   filter = between("apple", "banana");
-  EXPECT_TRUE(filter->testBytes("apple", 5));
-  EXPECT_TRUE(filter->testBytes("banana", 6));
-  EXPECT_TRUE(filter->testBytes("avocado", 7));
+  EXPECT_TRUE(testBytes(*filter, "apple"));
+  EXPECT_TRUE(testBytes(*filter, "banana"));
+  EXPECT_TRUE(testBytes(*filter, "avocado"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("camel", 5));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "camel"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   filter = std::make_unique<BytesRange>(
       "apple", false, true, "banana", false, false, false);
-  EXPECT_TRUE(filter->testBytes("banana", 6));
-  EXPECT_TRUE(filter->testBytes("avocado", 7));
+  EXPECT_TRUE(testBytes(*filter, "banana"));
+  EXPECT_TRUE(testBytes(*filter, "avocado"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("apple", 5));
-  EXPECT_FALSE(filter->testBytes("camel", 5));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "apple"));
+  EXPECT_FALSE(testBytes(*filter, "camel"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   filter = std::make_unique<BytesRange>(
       "apple", false, true, "banana", false, true, false);
-  EXPECT_TRUE(filter->testBytes("avocado", 7));
+  EXPECT_TRUE(testBytes(*filter, "avocado"));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testBytes("apple", 5));
-  EXPECT_FALSE(filter->testBytes("banana", 6));
-  EXPECT_FALSE(filter->testBytes("camel", 5));
-  EXPECT_FALSE(filter->testBytes("_abc", 4));
+  EXPECT_FALSE(testBytes(*filter, "apple"));
+  EXPECT_FALSE(testBytes(*filter, "banana"));
+  EXPECT_FALSE(testBytes(*filter, "camel"));
+  EXPECT_FALSE(testBytes(*filter, "_abc"));
 
   // < b
   filter = lessThan("b");
-  EXPECT_TRUE(filter->testBytes("a", 1));
-  EXPECT_FALSE(filter->testBytes("b", 1));
-  EXPECT_FALSE(filter->testBytes("c", 1));
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
+  EXPECT_TRUE(testBytes(*filter, "a"));
+  EXPECT_FALSE(testBytes(*filter, "b"));
+  EXPECT_FALSE(testBytes(*filter, "c"));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_FALSE(filter->testBytesRange("b", "c", false));
 
   // <= b
   filter = lessThanOrEqual("b");
-  EXPECT_TRUE(filter->testBytes("a", 1));
-  EXPECT_TRUE(filter->testBytes("b", 1));
-  EXPECT_FALSE(filter->testBytes("c", 1));
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
+  EXPECT_TRUE(testBytes(*filter, "a"));
+  EXPECT_TRUE(testBytes(*filter, "b"));
+  EXPECT_FALSE(testBytes(*filter, "c"));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_TRUE(filter->testBytesRange("b", "c", false));
 
   // >= b
   filter = greaterThanOrEqual("b");
-  EXPECT_FALSE(filter->testBytes("a", 1));
-  EXPECT_TRUE(filter->testBytes("b", 1));
-  EXPECT_TRUE(filter->testBytes("c", 1));
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
+  EXPECT_FALSE(testBytes(*filter, "a"));
+  EXPECT_TRUE(testBytes(*filter, "b"));
+  EXPECT_TRUE(testBytes(*filter, "c"));
+  EXPECT_FALSE(testBytes(*filter, {}));
+  EXPECT_TRUE(filter->testBytesRange("a", "b", false));
 
   // > b
   filter = greaterThan("b");
-  EXPECT_FALSE(filter->testBytes("a", 1));
-  EXPECT_FALSE(filter->testBytes("b", 1));
-  EXPECT_TRUE(filter->testBytes("c", 1));
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
+  EXPECT_FALSE(testBytes(*filter, "a"));
+  EXPECT_FALSE(testBytes(*filter, "b"));
+  EXPECT_TRUE(testBytes(*filter, "c"));
+  EXPECT_FALSE(testBytes(*filter, {}));
+  EXPECT_FALSE(filter->testBytesRange("a", "b", false));
 
   // < ''
   filter = lessThan("");
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
-  EXPECT_FALSE(filter->testBytes("abc", 3));
+  EXPECT_FALSE(testBytes(*filter, {}));
+  EXPECT_FALSE(testBytes(*filter, "abc"));
 
   // <= ''
   filter = lessThanOrEqual("");
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
-  EXPECT_FALSE(filter->testBytes("abc", 3));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_FALSE(testBytes(*filter, "abc"));
 
   // > ''
   filter = greaterThan("");
-  EXPECT_FALSE(filter->testBytes(nullptr, 0));
-  EXPECT_TRUE(filter->testBytes("abc", 3));
+  EXPECT_FALSE(testBytes(*filter, {}));
+  EXPECT_TRUE(testBytes(*filter, "abc"));
 
   // >= ''
   filter = greaterThanOrEqual("");
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
-  EXPECT_TRUE(filter->testBytes("abc", 3));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_TRUE(testBytes(*filter, "abc"));
 }
 
 TEST(FilterTest, negatedBytesRange) {
   auto filter = notBetween("a", "c");
 
-  EXPECT_TRUE(filter->testBytes("A", 1));
-  EXPECT_TRUE(filter->testBytes(nullptr, 0));
-  EXPECT_TRUE(filter->testBytes("ca", 2));
-  EXPECT_TRUE(filter->testBytes("z", 1));
+  EXPECT_TRUE(testBytes(*filter, "A"));
+  EXPECT_TRUE(testBytes(*filter, {}));
+  EXPECT_TRUE(testBytes(*filter, "ca"));
+  EXPECT_TRUE(testBytes(*filter, "z"));
 
-  EXPECT_FALSE(filter->testBytes("a", 1));
-  EXPECT_FALSE(filter->testBytes("apple", 5));
-  EXPECT_FALSE(filter->testBytes("c", 1));
+  EXPECT_FALSE(testBytes(*filter, "a"));
+  EXPECT_FALSE(testBytes(*filter, "apple"));
+  EXPECT_FALSE(testBytes(*filter, "c"));
   EXPECT_FALSE(filter->testNull());
 
   EXPECT_TRUE(filter->testLength(1));
@@ -884,10 +977,12 @@ TEST(FilterTest, negatedBytesRange) {
   EXPECT_EQ("c", filter->upper());
   EXPECT_FALSE(filter->isLowerUnbounded());
   EXPECT_FALSE(filter->isUpperUnbounded());
+  EXPECT_FALSE(filter->isLowerExclusive());
+  EXPECT_FALSE(filter->isUpperExclusive());
 
   filter = notBetweenExclusive("b", "d");
-  EXPECT_TRUE(filter->testBytes("b", 1));
-  EXPECT_TRUE(filter->testBytes("d", 1));
+  EXPECT_TRUE(testBytes(*filter, "b"));
+  EXPECT_TRUE(testBytes(*filter, "d"));
 
   EXPECT_TRUE(filter->testBytesRange("b", "c", false));
   EXPECT_TRUE(filter->testBytesRange("c", "d", false));
@@ -898,6 +993,8 @@ TEST(FilterTest, negatedBytesRange) {
   EXPECT_EQ("d", filter->upper());
   EXPECT_FALSE(filter->isLowerUnbounded());
   EXPECT_FALSE(filter->isUpperUnbounded());
+  EXPECT_TRUE(filter->isLowerExclusive());
+  EXPECT_TRUE(filter->isUpperExclusive());
 
   auto filter_with_null = filter->clone(true);
   EXPECT_TRUE(filter_with_null->testBytesRange("bb", "cc", true));
@@ -1031,7 +1128,7 @@ TEST(FilterTest, multiRange) {
   EXPECT_TRUE(filter->testDouble(1.3));
 
   EXPECT_FALSE(filter->testNull());
-  EXPECT_FALSE(filter->testDouble(std::nan("nan")));
+  EXPECT_TRUE(filter->testDouble(std::nan("nan")));
   EXPECT_FALSE(filter->testDouble(1.2));
 
   filter = orFilter(lessThanFloat(1.2), greaterThanFloat(1.2));
@@ -1040,7 +1137,7 @@ TEST(FilterTest, multiRange) {
   EXPECT_TRUE(filter->testFloat(1.1f));
   EXPECT_FALSE(filter->testFloat(1.2f));
   EXPECT_TRUE(filter->testFloat(1.3f));
-  EXPECT_FALSE(filter->testFloat(std::nanf("nan")));
+  EXPECT_TRUE(filter->testFloat(std::nanf("nan")));
 
   // != ''
   filter = orFilter(lessThan(""), greaterThan(""));
@@ -1050,51 +1147,39 @@ TEST(FilterTest, multiRange) {
 
 TEST(FilterTest, multiRangeWithNaNs) {
   // x <> 1.2 with nanAllowed true
-  auto filter =
-      orFilter(lessThanFloat(1.2), greaterThanFloat(1.2), false, true);
+  auto filter = orFilter(lessThanFloat(1.2), greaterThanFloat(1.2), false);
   EXPECT_TRUE(filter->testFloat(std::nanf("nan")));
   EXPECT_FALSE(filter->testFloat(1.2f));
   EXPECT_TRUE(filter->testFloat(1.1f));
 
-  filter = orFilter(lessThanDouble(1.2), greaterThanDouble(1.2), false, true);
+  filter = orFilter(lessThanDouble(1.2), greaterThanDouble(1.2), false);
   EXPECT_TRUE(filter->testDouble(std::nan("nan")));
   EXPECT_FALSE(filter->testDouble(1.2));
   EXPECT_TRUE(filter->testDouble(1.1));
 
   // x <> 1.2 with nanAllowed false
   filter = orFilter(lessThanFloat(1.2), greaterThanFloat(1.2));
-  EXPECT_FALSE(filter->testFloat(std::nanf("nan")));
+  EXPECT_TRUE(filter->testFloat(std::nanf("nan")));
   EXPECT_TRUE(filter->testFloat(1.0f));
 
   filter = orFilter(lessThanDouble(1.2), greaterThanDouble(1.2));
-  EXPECT_FALSE(filter->testDouble(std::nan("nan")));
+  EXPECT_TRUE(filter->testDouble(std::nan("nan")));
   EXPECT_TRUE(filter->testDouble(1.4));
 
   // x NOT IN (1.2, 1.3) with nanAllowed true
-  filter = orFilter(lessThanFloat(1.2), greaterThanFloat(1.3), false, true);
+  filter = orFilter(lessThanFloat(1.2), greaterThanFloat(1.3), false);
   EXPECT_TRUE(filter->testFloat(std::nanf("nan")));
   EXPECT_FALSE(filter->testFloat(1.2f));
   EXPECT_FALSE(filter->testFloat(1.3f));
   EXPECT_TRUE(filter->testFloat(1.4f));
   EXPECT_TRUE(filter->testFloat(1.1f));
 
-  filter = orFilter(lessThanDouble(1.2), greaterThanDouble(1.3), false, true);
+  filter = orFilter(lessThanDouble(1.2), greaterThanDouble(1.3), false);
   EXPECT_TRUE(filter->testDouble(std::nan("nan")));
   EXPECT_FALSE(filter->testDouble(1.2));
   EXPECT_FALSE(filter->testDouble(1.3));
   EXPECT_TRUE(filter->testDouble(1.4));
   EXPECT_TRUE(filter->testDouble(1.1));
-
-  // x NOT IN (1.2) with nanAllowed false
-  filter = orFilter(lessThanFloat(1.2), greaterThanFloat(1.2));
-  EXPECT_FALSE(filter->testFloat(std::nanf("nan")));
-  EXPECT_FALSE(filter->testFloat(1.2f));
-  EXPECT_TRUE(filter->testFloat(1.3f));
-
-  filter = orFilter(lessThanDouble(1.2), greaterThanDouble(1.2));
-  EXPECT_FALSE(filter->testDouble(std::nan("nan")));
-  EXPECT_FALSE(filter->testDouble(1.2));
-  EXPECT_TRUE(filter->testDouble(1.3));
 }
 
 TEST(FilterTest, createBigintValues) {
@@ -1306,8 +1391,8 @@ void testMergeWithBytes(Filter* left, Filter* right) {
         merged->testBytes(test.data(), test.size()),
         left->testBytes(test.data(), test.size()) &&
             right->testBytes(test.data(), test.size()))
-        << test << " "
-        << "left: " << left->toString() << ", right: " << right->toString()
+        << test << " " << "left: " << left->toString()
+        << ", right: " << right->toString()
         << ", merged: " << merged->toString();
   }
 }
@@ -1383,6 +1468,94 @@ TEST(FilterTest, mergeWithBigint) {
   filters.push_back(in({1, 5, 210, empty}, true));
   filters.push_back(in({empty - 10, empty, empty + 5}, false));
   filters.push_back(in({empty - 10, empty, empty + 5}, true));
+  filters.push_back(
+      in({303624755802858,
+          384136357751697,
+          423368943828438,
+          476859918288764,
+          515956188024717,
+          530476219784376,
+          540277308863418,
+          541942388637759,
+          547188151816561,
+          594891360374231,
+          2959637400868637,
+          3721199441487026,
+          5114096828649969,
+          5740659369327042,
+          7458347650862984,
+          7772595162800109,
+          9047066205367949,
+          9499197740094903,
+          10164541576263747},
+         false));
+  filters.push_back(
+      in({366156343044031,   419600327914330,   422718254267138,
+          424415250736060,   432660186580905,   433507116523339,
+          435212426352282,   438781105992603,   462668840270469,
+          469721892897704,   475424508904228,   483961588133744,
+          489952690871193,   490100434182734,   490819974117919,
+          497522143079784,   498117470059295,   507069815819932,
+          510252055500200,   511649005360431,   528948513624967,
+          530007393190773,   532093806643372,   532858776337696,
+          533698686153076,   534941456359069,   534952966357439,
+          535328579401504,   536514619192305,   538518528865308,
+          539629822309977,   541635018758516,   542645398681605,
+          546538218258352,   549075251184136,   552034220783356,
+          555830763849991,   556128663698410,   557441673901702,
+          557518250566058,   558506873800117,   560841773258853,
+          564440396502105,   564619926218582,   565301696087188,
+          566576865977204,   567327966039757,   571300905632024,
+          571507642484409,   576283914994222,   583838294159962,
+          584905160854028,   585126200832284,   585144667234794,
+          585512340796065,   589020370310849,   590619753637829,
+          590968883472318,   602908642207125,   607722928272194,
+          630688649629213,   885942503719703,   901036228842690,
+          962070099101869,   969139801894639,   969995364959528,
+          973627137921970,   1002311311705971,  1038877281341469,
+          1065903171959919,  1087370529605788,  1098287305028396,
+          1101645231614814,  1102068331524993,  1105447177903198,
+          1133861121777932,  1276407910222050,  1287904945548777,
+          1288419322354242,  1291701008519687,  1316499312639548,
+          1673720443174607,  1718049419052929,  1764589184342287,
+          1956371744842865,  1957088988143983,  2294783974193603,
+          2310611259279723,  2489988147857778,  2506680886188504,
+          2778644458941619,  2864989937002641,  3330532020422880,
+          3379144482229182,  3531656983798849,  3684799191810397,
+          3767646070216820,  3780026845640994,  3866482590263275,
+          3908237629460878,  3929286414014934,  3997016003866875,
+          6662924023746038,  8514927431889941,  8612971988750230,
+          8636020789790871,  8719877121393549,  8725132074239741,
+          8780651958686524,  8787110144711385,  8787330658025567,
+          8819046344852395,  8924909114261419,  8975532075831271,
+          9259979694035612,  9315469178463099,  9337669522923600,
+          9568982303132896,  9577455068986597,  9581431555203631,
+          9829903477024362,  10109338878839298, 10111913146675745,
+          10116454049060631, 10124906929770020, 10134576737527714,
+          10159848794251706, 10160080836411106, 10160121877061863,
+          10160278547826680, 10160634373033302, 10160634378133302,
+          10160634384343302, 10160690892401937, 10160813905552695,
+          10160947889699506, 10160952984619779, 10161103697043337,
+          10161366446441677, 10161764887950446, 10161987568435865,
+          10161990333441343, 10162023187830630, 10162078292985953,
+          10162218597897184, 10162437068533464, 10162437274543464,
+          10162778721371988, 10162785900361133, 10162858926244783,
+          10163123124869467, 10163146005786988, 10163215994438487,
+          10163381914257985, 10164541576263747, 10164917662438438,
+          10169186680190153, 10169728530660634, 10170078224595191,
+          10222519309531166, 10222619264790035, 10226169282240298,
+          10226533527356871, 10226809478652237, 10228886958906475,
+          10229587253999927, 10230037972188280, 10230384967105126,
+          10230604232962437, 10230895412882189, 10231056553451466,
+          10231187746449346, 10231194618102996, 10231349384532060,
+          10231749348709149, 10231816240283162, 10232659299412293,
+          10232936398942338, 10233350393082617, 10233775873439095,
+          10233821539425403, 10234016712428289, 10234070019035259,
+          10234328283366746, 10234421657513549, 10234695927556443,
+          10236169460675790, 10236184353810192, 10236719696391339,
+          10236734971453206, 10236817060225653, 28113146188270673,
+          28349528491304705},
+         false));
 
   // NOT IN-list.
   filters.push_back(notIn({1, 2, 3, 67'000'000'000, 134}));
@@ -1732,7 +1905,6 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
 
 TEST(FilterTest, hugeIntRange) {
   auto filter = equalHugeint(HugeInt::build(1, 1), false);
-  auto testInt128 = [&](int128_t x) { return filter->testInt128(x); };
   auto max = DecimalUtil::kLongDecimalMax;
   auto min = DecimalUtil::kLongDecimalMin;
 
@@ -1819,3 +1991,61 @@ TEST(FilterTest, dateRange) {
   EXPECT_TRUE(applyFilter(*filter, DATE()->toDays("1970-06-01")));
   EXPECT_FALSE(applyFilter(*filter, DATE()->toDays("1980-06-01")));
 }
+
+TEST(FilterTest, timestampRange) {
+  // x = timestamp '1970-01-01 00:00:10.123'
+  auto filter = equal(Timestamp(10, 123000000), false);
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 123000000)));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp()));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp(-10, 123000000)));
+
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-777, 123450000), Timestamp(9, 123000000), false));
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(10, 125000000), Timestamp(999, 12), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(123, 123450000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(10, 122000000), Timestamp(10, 124000000), false));
+
+  // x between timestamp '1970-01-01 00:00:10.123' and timestamp '1970-01-01
+  // 00:02:00.456'
+  filter = between(Timestamp(10, 123000000), Timestamp(120, 456000000), false);
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 123000001)));
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(111, 999999999)));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp()));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp(123, 0)));
+
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123450000), false));
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123450000), true));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(20, 123450000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(111, 999999999), Timestamp(123, 777777777), false));
+
+  //  x > timestamp '1970-01-01 00:00:10.123' or x = null
+  Timestamp ts(10, 123000000);
+  filter = greaterThan(ts, true);
+  EXPECT_TRUE(filter->testNull());
+
+  EXPECT_FALSE(filter->testTimestamp(Timestamp()));
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 124000000)));
+
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123000000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123000000), true));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(5, 123000000), Timestamp(30, 123000000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(5, 123000000), Timestamp(30, 123000000), true));
+}
+
+} // namespace
+} // namespace facebook::velox

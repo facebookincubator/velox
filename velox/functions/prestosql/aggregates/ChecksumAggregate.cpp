@@ -15,11 +15,12 @@
  */
 
 #define XXH_INLINE_ALL
-#include <xxhash.h>
+#include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/ChecksumAggregate.h"
 #include "velox/functions/prestosql/aggregates/PrestoHasher.h"
 #include "velox/vector/FlatVector.h"
 
@@ -38,15 +39,6 @@ class ChecksumAggregate : public exec::Aggregate {
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(int64_t);
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      *value<int64_t>(groups[i]) = 0;
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -85,12 +77,37 @@ class ChecksumAggregate : public exec::Aggregate {
     }
   }
 
+  bool isNullOrNullArray(const TypePtr& type) {
+    if (type->isUnKnown()) {
+      return true;
+    }
+    // Only supports null array type for now.
+    if (type->kind() == TypeKind::ARRAY) {
+      return type->asArray().elementType()->isUnKnown();
+    }
+    return false;
+  }
+
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushDown*/) override {
     const auto& arg = args[0];
+
+    if (isNullOrNullArray(arg->type())) {
+      rows.applyToSelected([&](auto row) {
+        auto group = groups[row];
+        clearNull(group);
+        if (arg->isNullAt(row)) {
+          computeHashForNull(group);
+        } else {
+          computeHashForEmptyNullArray(group);
+        }
+      });
+      return;
+    }
+
     auto hasher = getPrestoHasher(arg->type());
     auto hashes = getHashBuffer(rows.end(), arg->pool());
     hasher->hash(arg, rows, hashes);
@@ -137,6 +154,20 @@ class ChecksumAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushDown*/) override {
     const auto& arg = args[0];
+
+    if (isNullOrNullArray(arg->type())) {
+      rows.applyToSelected([&](auto row) {
+        clearNull(group);
+        if (arg->isNullAt(row)) {
+          computeHashForNull(group);
+        } else {
+          computeHashForEmptyNullArray(group);
+        }
+      });
+
+      return;
+    }
+
     auto hasher = getPrestoHasher(arg->type());
     auto hashes = getHashBuffer(rows.end(), arg->pool());
     hasher->hash(arg, rows, hashes);
@@ -173,6 +204,16 @@ class ChecksumAggregate : public exec::Aggregate {
     safeAdd(*value<int64_t>(group), result);
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *value<int64_t>(groups[i]) = 0;
+    }
+  }
+
  private:
   FOLLY_ALWAYS_INLINE void computeHash(char* group, const int64_t hash) {
     *value<int64_t>(group) += hash * XXH_PRIME64_1;
@@ -180,6 +221,10 @@ class ChecksumAggregate : public exec::Aggregate {
 
   FOLLY_ALWAYS_INLINE void computeHashForNull(char* group) {
     *value<int64_t>(group) += XXH_PRIME64_1;
+  }
+
+  FOLLY_ALWAYS_INLINE void computeHashForEmptyNullArray(char* group) {
+    *value<int64_t>(group) += 0;
   }
 
   FOLLY_ALWAYS_INLINE PrestoHasher* getPrestoHasher(TypePtr typePtr) {
@@ -207,7 +252,12 @@ class ChecksumAggregate : public exec::Aggregate {
   DecodedVector decodedIntermediate_;
 };
 
-exec::AggregateRegistrationResult registerChecksum(const std::string& name) {
+} // namespace
+
+void registerChecksumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -217,7 +267,8 @@ exec::AggregateRegistrationResult registerChecksum(const std::string& name) {
           .build(),
   };
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kChecksum;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [&name](
@@ -233,13 +284,10 @@ exec::AggregateRegistrationResult registerChecksum(const std::string& name) {
         }
 
         return std::make_unique<ChecksumAggregate>(VARBINARY());
-      });
-}
-
-} // namespace
-
-void registerChecksumAggregate(const std::string& prefix) {
-  registerChecksum(prefix + kChecksum);
+      },
+      {.orderSensitive = false},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

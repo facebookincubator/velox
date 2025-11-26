@@ -19,10 +19,48 @@
 
 namespace facebook::velox::simd {
 
+void gatherBits(
+    const uint64_t* bits,
+    folly::Range<const int32_t*> indexRange,
+    uint64_t* result) {
+  constexpr int32_t kStep = xsimd::batch<int32_t>::size;
+  const auto size = indexRange.size();
+  auto indices = indexRange.data();
+  uint8_t* resultPtr = reinterpret_cast<uint8_t*>(result);
+  if (FOLLY_LIKELY(size < 5)) {
+    uint8_t smallResult = 0;
+    for (auto i = 0; i < size; ++i) {
+      smallResult |= static_cast<uint8_t>(bits::isBitSet(bits, indices[i]))
+          << i;
+    }
+    *resultPtr = smallResult;
+    return;
+  }
+
+  int32_t i = 0;
+  for (; i + kStep < size; i += kStep) {
+    uint16_t flags =
+        simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), kStep);
+    bits::storeBitsToByte<kStep>(flags, resultPtr, i);
+  }
+  const auto bitsLeft = size - i;
+  if (bitsLeft > 0) {
+    uint16_t flags =
+        simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), bitsLeft);
+    bits::storeBitsToByte<kStep>(flags, resultPtr, i);
+  }
+}
+
 namespace detail {
 
 alignas(kPadding) int32_t byteSetBits[256][8];
 alignas(kPadding) int32_t permute4x64Indices[16][8];
+
+const LeadingMask<int32_t, xsimd::default_arch> leadingMask32;
+const LeadingMask<int64_t, xsimd::default_arch> leadingMask64;
+
+const FromBitMask<int32_t, xsimd::default_arch> fromBitMask32;
+const FromBitMask<int64_t, xsimd::default_arch> fromBitMask64;
 
 } // namespace detail
 

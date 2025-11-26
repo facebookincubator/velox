@@ -18,13 +18,12 @@
 
 #include "velox/vector/BuilderTypeUtils.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 template <typename T>
 SequenceVector<T>::SequenceVector(
     velox::memory::MemoryPool* pool,
-    size_t length,
+    vector_size_t length,
     VectorPtr sequenceValues,
     BufferPtr sequenceLengths,
     const SimpleVectorStats<T>& stats,
@@ -47,7 +46,6 @@ SequenceVector<T>::SequenceVector(
           storageByteCount),
       sequenceValues_(std::move(sequenceValues)),
       sequenceLengths_(std::move(sequenceLengths)) {
-  VELOX_CHECK_GE(length, 0, "Must provide length >= 0");
   VELOX_CHECK(sequenceLengths_ != nullptr, "Sequence Lengths must be not null");
   VELOX_CHECK_EQ(
       sequenceLengths_->size(),
@@ -64,21 +62,17 @@ void SequenceVector<T>::setInternalState() {
   }
   lengths_ = sequenceLengths_->as<vector_size_t>();
   lastIndexRangeEnd_ = lengths_[0];
-  BaseVector::inMemoryBytes_ += sequenceValues_->inMemoryBytes();
-  BaseVector::inMemoryBytes_ += sequenceLengths_->capacity();
 }
 
 template <typename T>
 bool SequenceVector<T>::isNullAtFast(vector_size_t idx) const {
   size_t offset = offsetOfIndex(idx);
-  DCHECK(offset >= 0) << "Invalid index";
   return sequenceValues_->isNullAt(offset);
 }
 
 template <typename T>
 const T SequenceVector<T>::valueAtFast(vector_size_t idx) const {
   size_t offset = offsetOfIndex(idx);
-  VELOX_DCHECK_GE(offset, 0, "Invalid index");
   return scalarSequenceValues_->valueAt(offset);
 }
 
@@ -123,6 +117,7 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       0 /* nullSequenceCount */);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
@@ -142,6 +137,7 @@ xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     return xsimd::load_aligned(tmp);
   }
 }
+#endif
 
 template <typename T>
 bool SequenceVector<T>::checkLoadRange(size_t index, size_t count) const {
@@ -199,5 +195,4 @@ static inline vector_size_t offsetOfIndex(
   return *lastIndex;
 }
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

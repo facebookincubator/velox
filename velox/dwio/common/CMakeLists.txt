@@ -14,6 +14,7 @@
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
+add_subdirectory(wrap)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
@@ -21,51 +22,67 @@ elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()
 
-include_directories(/opt/homebrew/opt/protobuf/include)
-
-add_library(
+velox_add_library(
   velox_dwio_common
   BitConcatenation.cpp
   BitPackDecoder.cpp
   BufferedInput.cpp
-  CachedBufferedInput.cpp
   CacheInputStream.cpp
+  CachedBufferedInput.cpp
+  ColumnLoader.cpp
   ColumnSelector.cpp
-  Common.cpp
-  DataSink.cpp
+  DataBufferHolder.cpp
   DecoderUtil.cpp
+  DirectBufferedInput.cpp
   DirectDecoder.cpp
+  DirectInputStream.cpp
   DwioMetricsLog.cpp
+  ExecutorBarrier.cpp
+  FileSink.cpp
   FlatMapHelper.cpp
+  OnDemandUnitLoader.cpp
   InputStream.cpp
   IntDecoder.cpp
-  IoStatistics.cpp
   MetadataFilter.cpp
   Options.cpp
+  OutputStream.cpp
+  ParallelUnitLoader.cpp
+  ParallelFor.cpp
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp
   ScanSpec.cpp
-  ColumnLoader.cpp
+  SeekableInputStream.cpp
   SelectiveByteRleColumnReader.cpp
   SelectiveColumnReader.cpp
+  SelectiveFlatMapColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
-  SeekableInputStream.cpp
+  SortingWriter.cpp
+  SortingWriter.h
+  Throttler.cpp
   TypeUtils.cpp
   TypeWithId.cpp
-  WriterFactory.cpp)
+  Writer.cpp
+  WriterFactory.cpp
+)
 
-target_link_libraries(
+velox_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})
+
+velox_link_libraries(
   velox_dwio_common
   velox_buffer
   velox_caching
-  velox_dwio_common_compression
+  velox_common_io
+  velox_common_compression
+  velox_common_config
   velox_dwio_common_encryption
   velox_dwio_common_exception
   velox_exception
   velox_expression
   velox_memory
-  Boost::regex
+  velox_type_tz
   Folly::folly
-  glog::glog)
+  glog::glog
+  protobuf::libprotobuf
+)

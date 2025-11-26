@@ -14,10 +14,20 @@
  * limitations under the License.
  */
 #include "velox/expression/VectorFunction.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions {
 namespace {
+
+template <typename T>
+inline bool isPrimitiveEqual(const T& lhs, const T& rhs) {
+  if constexpr (std::is_floating_point_v<T>) {
+    return util::floating_point::NaNAwareEquals<T>{}(lhs, rhs);
+  } else {
+    return lhs == rhs;
+  }
+}
 
 template <TypeKind kind>
 void applyTyped(
@@ -25,7 +35,9 @@ void applyTyped(
     DecodedVector& arrayDecoded,
     DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
-    FlatVector<bool>& flatResult) {
+    exec::EvalCtx& /*context*/,
+    FlatVector<bool>& flatResult,
+    bool /*throwOnNestedNull*/) {
   using T = typename TypeTraits<kind>::NativeType;
 
   auto baseArray = arrayDecoded.base()->as<ArrayVector>();
@@ -45,12 +57,11 @@ void applyTyped(
       auto offset = rawOffsets[indices[row]];
 
       for (auto i = 0; i < size; i++) {
-        if (rawElements[offset + i] == search) {
+        if (isPrimitiveEqual<T>(rawElements[offset + i], search)) {
           flatResult.set(row, true);
           return;
         }
       }
-
       flatResult.set(row, false);
     });
   } else {
@@ -65,7 +76,8 @@ void applyTyped(
       for (auto i = 0; i < size; i++) {
         if (elementsDecoded.isNullAt(offset + i)) {
           foundNull = true;
-        } else if (elementsDecoded.valueAt<T>(offset + i) == search) {
+        } else if (isPrimitiveEqual<T>(
+                       elementsDecoded.valueAt<T>(offset + i), search)) {
           flatResult.set(row, true);
           return;
         }
@@ -85,31 +97,45 @@ void applyComplexType(
     DecodedVector& arrayDecoded,
     DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
-    FlatVector<bool>& flatResult) {
+    exec::EvalCtx& context,
+    FlatVector<bool>& flatResult,
+    bool throwOnNestedNull) {
   auto baseArray = arrayDecoded.base()->as<ArrayVector>();
   auto rawSizes = baseArray->rawSizes();
   auto rawOffsets = baseArray->rawOffsets();
   auto indices = arrayDecoded.indices();
 
   auto elementsBase = elementsDecoded.base();
-
+  auto elementIndices = elementsDecoded.indices();
   auto searchBase = searchDecoded.base();
   auto searchIndices = searchDecoded.indices();
 
-  rows.applyToSelected([&](auto row) {
+  const auto nullHandlingMode = throwOnNestedNull
+      ? CompareFlags::NullHandlingMode::kNullAsIndeterminate
+      : CompareFlags::NullHandlingMode::kNullAsValue;
+
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto size = rawSizes[indices[row]];
     auto offset = rawOffsets[indices[row]];
-
     bool foundNull = false;
-
     auto searchIndex = searchIndices[row];
+
     for (auto i = 0; i < size; i++) {
-      if (elementsBase->isNullAt(offset + i)) {
+      if (elementsDecoded.isNullAt(offset + i)) {
         foundNull = true;
-      } else if (elementsBase->equalValueAt(
-                     searchBase, offset + i, searchIndex)) {
-        flatResult.set(row, true);
-        return;
+      } else {
+        std::optional<bool> result = elementsBase->equalValueAt(
+            searchBase,
+            elementIndices[offset + i],
+            searchIndex,
+            nullHandlingMode);
+        VELOX_USER_CHECK(
+            result.has_value(),
+            "contains does not support arrays with elements that contain null");
+        if (result.value()) {
+          flatResult.set(row, true);
+          return;
+        }
       }
     }
 
@@ -127,9 +153,17 @@ void applyTyped<TypeKind::ARRAY>(
     DecodedVector& arrayDecoded,
     DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
-    FlatVector<bool>& flatResult) {
+    exec::EvalCtx& context,
+    FlatVector<bool>& flatResult,
+    bool throwOnNestedNull) {
   applyComplexType(
-      rows, arrayDecoded, elementsDecoded, searchDecoded, flatResult);
+      rows,
+      arrayDecoded,
+      elementsDecoded,
+      searchDecoded,
+      context,
+      flatResult,
+      throwOnNestedNull);
 }
 
 template <>
@@ -138,9 +172,17 @@ void applyTyped<TypeKind::MAP>(
     DecodedVector& arrayDecoded,
     DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
-    FlatVector<bool>& flatResult) {
+    exec::EvalCtx& context,
+    FlatVector<bool>& flatResult,
+    bool throwOnNestedNull) {
   applyComplexType(
-      rows, arrayDecoded, elementsDecoded, searchDecoded, flatResult);
+      rows,
+      arrayDecoded,
+      elementsDecoded,
+      searchDecoded,
+      context,
+      flatResult,
+      throwOnNestedNull);
 }
 
 template <>
@@ -149,13 +191,24 @@ void applyTyped<TypeKind::ROW>(
     DecodedVector& arrayDecoded,
     DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
-    FlatVector<bool>& flatResult) {
+    exec::EvalCtx& context,
+    FlatVector<bool>& flatResult,
+    bool throwOnNestedNull) {
   applyComplexType(
-      rows, arrayDecoded, elementsDecoded, searchDecoded, flatResult);
+      rows,
+      arrayDecoded,
+      elementsDecoded,
+      searchDecoded,
+      context,
+      flatResult,
+      throwOnNestedNull);
 }
 
 class ArrayContainsFunction : public exec::VectorFunction {
  public:
+  explicit ArrayContainsFunction(bool throwOnNestedNull)
+      : throwOnNestedNull_(throwOnNestedNull) {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -184,14 +237,31 @@ class ArrayContainsFunction : public exec::VectorFunction {
 
     exec::LocalDecodedVector searchHolder(context, *searchVector, rows);
 
-    VELOX_DYNAMIC_TYPE_DISPATCH(
-        applyTyped,
-        searchVector->typeKind(),
-        rows,
-        *arrayHolder.get(),
-        *elementsHolder.get(),
-        *searchHolder.get(),
-        *flatResult);
+    if (searchVector->type()->providesCustomComparison()) {
+      // We use applyComplexType for types that provide custom comparison
+      // operators because the main difference between applyComplexType and
+      // applyTyped is that applyComplexType calls the Vector's equalValueAt
+      // method, which calls the Types custom comparison operator internally.
+      applyComplexType(
+          rows,
+          *arrayHolder.get(),
+          *elementsHolder.get(),
+          *searchHolder.get(),
+          context,
+          *flatResult,
+          throwOnNestedNull_);
+    } else {
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          applyTyped,
+          searchVector->typeKind(),
+          rows,
+          *arrayHolder.get(),
+          *elementsHolder.get(),
+          *searchHolder.get(),
+          context,
+          *flatResult,
+          throwOnNestedNull_);
+    }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -203,6 +273,9 @@ class ArrayContainsFunction : public exec::VectorFunction {
                 .argumentType("T")
                 .build()};
   }
+
+ private:
+  bool throwOnNestedNull_;
 };
 
 } // namespace
@@ -210,6 +283,13 @@ class ArrayContainsFunction : public exec::VectorFunction {
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_contains,
     ArrayContainsFunction::signatures(),
-    std::make_unique<ArrayContainsFunction>());
+    std::make_unique<ArrayContainsFunction>(true));
+
+// Internal function only used for testing. This function allows the array to
+// have null elements and considers null as a value, i.e., null == null.
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_$internal$contains,
+    ArrayContainsFunction::signatures(),
+    std::make_unique<ArrayContainsFunction>(false));
 
 } // namespace facebook::velox::functions

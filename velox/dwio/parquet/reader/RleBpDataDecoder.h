@@ -31,17 +31,11 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
  public:
   using super = facebook::velox::parquet::RleBpDecoder;
 
-  RleBpDataDecoder(
-      const char* FOLLY_NONNULL start,
-      const char* FOLLY_NONNULL end,
-      uint8_t bitWidth)
+  RleBpDataDecoder(const char* start, const char* end, uint8_t bitWidth)
       : super::RleBpDecoder{start, end, bitWidth} {}
 
   template <bool hasNulls>
-  inline void skip(
-      int32_t numValues,
-      int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -54,14 +48,17 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
-    if (dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
-      fastPath<hasNulls>(nulls, visitor);
-      return;
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+    // processRle is not implemented for signed char ColumnVisitor
+    if constexpr (!std::is_same_v<typename Visitor::DataType, signed char>) {
+      if (dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
+        fastPath<hasNulls>(nulls, visitor);
+        return;
+      }
     }
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
-    int32_t toSkip;
+    int32_t toSkip = 0;
     bool atEnd = false;
     const bool allowNulls = hasNulls && visitor.allowNulls();
     for (;;) {
@@ -103,7 +100,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
 
  private:
   template <bool hasNulls, typename Visitor>
-  void fastPath(const uint64_t* FOLLY_NULLABLE nulls, Visitor& visitor) {
+  void fastPath(const uint64_t* nulls, Visitor& visitor) {
     constexpr bool hasFilter =
         !std::is_same_v<typename Visitor::FilterType, common::AlwaysTrue>;
     constexpr bool hasHook =
@@ -119,6 +116,11 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         if (outerVector->empty()) {
           visitor.setAllNull(hasFilter ? 0 : numRows);
           return;
+        }
+        if (hasHook && visitor.numValuesBias() > 0) {
+          for (auto& row : *outerVector) {
+            row += visitor.numValuesBias();
+          }
         }
         bulkScan<hasFilter, hasHook, true>(
             folly::Range<const int32_t*>(rows, outerVector->size()),
@@ -144,6 +146,11 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
           visitor.setAllNull(hasFilter ? 0 : numRows);
           return;
         }
+        if (hasHook && visitor.numValuesBias() > 0) {
+          for (auto& row : *outerVector) {
+            row += visitor.numValuesBias();
+          }
+        }
         bulkScan<hasFilter, hasHook, true>(
             *innerVector, outerVector->data(), visitor);
         skip<false>(tailSkip, 0, nullptr);
@@ -155,13 +162,13 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
 
   template <bool hasFilter, bool hasHook, bool scatter, typename Visitor>
   void processRun(
-      const int32_t* FOLLY_NONNULL rows,
+      const int32_t* rows,
       int32_t rowIndex,
       int32_t currentRow,
       int32_t numRows,
-      const int32_t* FOLLY_NULLABLE scatterRows,
-      int32_t* FOLLY_NULLABLE filterHits,
-      typename Visitor::DataType* FOLLY_NONNULL values,
+      const int32_t* scatterRows,
+      int32_t* filterHits,
+      typename Visitor::DataType* values,
       int32_t& numValues,
       Visitor& visitor) {
     auto numBits = bitOffset_ +
@@ -194,7 +201,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
   // last in rows that falls in the current run.
   template <bool dense>
   std::pair<int32_t, std::int32_t> findNumInRun(
-      const int32_t* FOLLY_NONNULL rows,
+      const int32_t* rows,
       int32_t rowIndex,
       int32_t numRows,
       int32_t currentRow) {
@@ -220,7 +227,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
   template <bool hasFilter, bool hasHook, bool scatter, typename Visitor>
   void bulkScan(
       folly::Range<const int32_t*> nonNullRows,
-      const int32_t* FOLLY_NULLABLE scatterRows,
+      const int32_t* scatterRows,
       Visitor& visitor) {
     auto numAllRows = visitor.numRows();
     visitor.setRows(nonNullRows);
@@ -276,28 +283,10 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
     }
   }
 
-  // Loads a bit field from 'ptr' + bitOffset for up to 'bitWidth' bits. makes
-  // sure not to access bytes past lastSafeWord + 7.
-  static inline uint64_t safeLoadBits(
-      const char* FOLLY_NONNULL ptr,
-      int32_t bitOffset,
-      uint8_t bitWidth,
-      const char* FOLLY_NONNULL lastSafeWord) {
-    VELOX_DCHECK_GE(7, bitOffset);
-    VELOX_DCHECK_GE(56, bitWidth);
-    if (ptr < lastSafeWord) {
-      return *reinterpret_cast<const uint64_t*>(ptr) >> bitOffset;
-    }
-    int32_t byteWidth = bits::roundUp(bitOffset + bitWidth, 8) / 8;
-    return bits::loadPartialWord(
-               reinterpret_cast<const uint8_t*>(ptr), byteWidth) >>
-        bitOffset;
-  }
-
   // Reads one value of 'bitWithd_' bits and advances the position.
   int64_t readBitField() {
     auto value =
-        safeLoadBits(
+        dwio::common::safeLoadBits(
             super::bufferStart_, bitOffset_, bitWidth_, lastSafeWord_) &
         bitMask_;
     bitOffset_ += bitWidth_;

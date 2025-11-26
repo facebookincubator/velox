@@ -18,10 +18,7 @@
 
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 // Base class for closeable object which need to be explicitly closed before
 // being destructed
@@ -52,7 +49,6 @@ class Closeable {
   virtual void doClose() {}
 
   void destroy() {
-    DCHECK(closed_);
     if (!closed_) {
       DWIO_WARN_EVERY_N(1000, "close() not called");
       try {
@@ -61,13 +57,11 @@ class Closeable {
         DWIO_WARN("failed to call close()");
       }
     }
+    DWIO_ENSURE(closed_);
   }
 
  private:
   bool closed_;
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

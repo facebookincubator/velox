@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/ConcurrentCounter.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
 
@@ -25,16 +26,19 @@ namespace facebook::velox::memory {
 /// The implementation of MemoryAllocator using malloc.
 class MallocAllocator : public MemoryAllocator {
  public:
-  explicit MallocAllocator(size_t capacity = 0);
+  MallocAllocator(size_t capacity, uint32_t reservationByteLimit);
 
-  ~MallocAllocator() override {
-    // TODO: Remove the check when memory leak issue is resolved.
-    if (FLAGS_velox_memory_leak_check_enabled) {
-      VELOX_CHECK(
-          (allocatedBytes_ == 0) && (numAllocated_ == 0) && (numMapped_ == 0),
-          "{}",
-          toString());
-    }
+  ~MallocAllocator() override;
+
+  void registerCache(const std::shared_ptr<Cache>& cache) override {
+    VELOX_CHECK_NULL(cache_);
+    VELOX_CHECK_NOT_NULL(cache);
+    VELOX_CHECK(cache->allocator() == this);
+    cache_ = cache;
+  }
+
+  Cache* cache() const override {
+    return cache_.get();
   }
 
   Kind kind() const override {
@@ -45,46 +49,24 @@ class MallocAllocator : public MemoryAllocator {
     return capacity_;
   }
 
-  bool allocateNonContiguous(
-      MachinePageCount numPages,
-      Allocation& out,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount minSizeClass = 0) override;
+  void freeContiguous(ContiguousAllocation& allocation) override;
 
   int64_t freeNonContiguous(Allocation& allocation) override;
 
-  bool allocateContiguous(
-      MachinePageCount numPages,
-      Allocation* collateral,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount maxPages = 0) override {
-    bool result;
-    stats_.recordAllocate(AllocationTraits::pageBytes(numPages), 1, [&]() {
-      result = allocateContiguousImpl(
-          numPages, collateral, allocation, reservationCB, maxPages);
-    });
-    return result;
-  }
-
-  void freeContiguous(ContiguousAllocation& allocation) override {
-    stats_.recordFree(
-        allocation.size(), [&]() { freeContiguousImpl(allocation); });
-  }
-
-  bool growContiguous(
+  bool growContiguousWithoutRetry(
       MachinePageCount increment,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) override;
-
-  void* allocateBytes(uint64_t bytes, uint16_t alignment) override;
-
-  void* allocateZeroFilled(uint64_t bytes) override;
+      ContiguousAllocation& allocation) override;
 
   void freeBytes(void* p, uint64_t bytes) noexcept override;
 
+  MachinePageCount unmap(MachinePageCount targetPages) override {
+    // NOTE: MallocAllocator doesn't support unmap as it delegates all the
+    // memory allocations to std::malloc.
+    return 0;
+  }
+
   size_t totalUsedBytes() const override {
-    return allocatedBytes_;
+    return allocatedBytes_ - reservations_.read();
   }
 
   MachinePageCount numAllocated() const override {
@@ -95,8 +77,8 @@ class MallocAllocator : public MemoryAllocator {
     return numMapped_;
   }
 
-  Stats stats() const override {
-    return stats_;
+  MachinePageCount numExternalMapped() const override {
+    return numExternalMapped_;
   }
 
   bool checkConsistency() const override;
@@ -104,22 +86,74 @@ class MallocAllocator : public MemoryAllocator {
   std::string toString() const override;
 
  private:
+  bool allocateNonContiguousWithoutRetry(
+      const SizeMix& sizeMix,
+      Allocation& out) override;
+
+  bool allocateContiguousWithoutRetry(
+      MachinePageCount numPages,
+      Allocation* collateral,
+      ContiguousAllocation& allocation,
+      MachinePageCount maxPages = 0) override;
+
   bool allocateContiguousImpl(
       MachinePageCount numPages,
-      Allocation* FOLLY_NULLABLE collateral,
+      Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB,
       MachinePageCount maxPages);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 
-  /// Increment current usage and check current allocator consistency to make
-  /// sure current usage does not go above 'capacity_'. If it goes above
-  /// 'capacity_', the increment will not be applied. Returns true if within
-  /// capacity, false otherwise.
-  ///
-  /// NOTE: This method should always be called BEFORE actual allocation.
+  void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
+
+  void* allocateZeroFilledWithoutRetry(uint64_t bytes) override;
+
+  // Increments current usage and check current 'allocatedBytes_' counter to
+  // make sure current usage does not go above 'capacity_'. If it goes above
+  // 'capacity_', the increment will not be applied. Returns true if within
+  // capacity, false otherwise.
+  //
+  // NOTE: This method should always be called BEFORE the actual allocation.
   inline bool incrementUsage(int64_t bytes) {
+    if (bytes < reservationByteLimit_) {
+      return incrementUsageWithReservation(bytes);
+    }
+    return incrementUsageWithoutReservation(bytes);
+  }
+
+  // Increments the memory usage in the local sharded counter from
+  // 'reservations_' for memory allocation with size < 'reservationByteLimit_'
+  // without updating the global 'allocatedBytes_' counter. If there is not
+  // enough reserved bytes in local sharded counter, then 'reserveFunc_' is
+  // called to reserve 'reservationByteLimit_' bytes from the global counter at
+  // a time.
+  inline bool incrementUsageWithReservation(uint32_t bytes) {
+    return reservations_.update(bytes, reserveFunc_);
+  }
+
+  inline bool incrementUsageWithReservationFunc(
+      uint32_t& counter,
+      uint32_t increment,
+      std::mutex& lock) {
+    VELOX_CHECK_LT(increment, reservationByteLimit_);
+    std::lock_guard<std::mutex> l(lock);
+    if (counter > increment) {
+      counter -= increment;
+      return true;
+    }
+    if (!incrementUsageWithoutReservation(reservationByteLimit_)) {
+      return false;
+    }
+    counter += reservationByteLimit_;
+    counter -= increment;
+    VELOX_CHECK_GT(counter, 0);
+    return true;
+  }
+
+  // Increments the memory usage from the global 'allocatedBytes_' counter
+  // directly.
+  inline bool incrementUsageWithoutReservation(int64_t bytes) {
+    VELOX_CHECK_GE(bytes, reservationByteLimit_);
     const auto originalBytes = allocatedBytes_.fetch_add(bytes);
     // We don't do the check when capacity_ is 0, meaning unlimited capacity.
     if (capacity_ != 0 && originalBytes + bytes > capacity_) {
@@ -129,38 +163,73 @@ class MallocAllocator : public MemoryAllocator {
     return true;
   }
 
-  /// Decrement current usage and check current allocator consistency to make
-  /// sure current usage does not go below 0. Throws if usage goes below 0.
-  ///
-  /// NOTE: This method should always be called AFTER actual free.
+  // Decrements current usage and check current 'allocatedBytes_' counter to
+  // make sure current usage does not go below 0. Throws if usage goes below 0.
+  //
+  // NOTE: This method should always be called AFTER actual free.
   inline void decrementUsage(int64_t bytes) {
+    if (bytes < reservationByteLimit_) {
+      decrementUsageWithReservation(bytes);
+      return;
+    }
+    decrementUsageWithoutReservation(bytes);
+  }
+
+  // Decrements the memory usage in the local sharded counter from
+  // 'reservations_' for memory free with size < 'reservationByteLimit_'
+  // without updating the global 'allocatedBytes_' counter. If there is more
+  // than 2 * 'reservationByteLimit_' free reserved bytes in local sharded
+  // counter, then 'releaseFunc_' is called to release 'reservationByteLimit_'
+  // bytes back to the global counter.
+  inline void decrementUsageWithReservation(int64_t bytes) {
+    reservations_.update(bytes, releaseFunc_);
+  }
+
+  inline void decrementUsageWithReservationFunc(
+      uint32_t& counter,
+      uint32_t decrement,
+      std::mutex& lock) {
+    VELOX_CHECK_LT(decrement, reservationByteLimit_);
+    std::lock_guard<std::mutex> l(lock);
+    counter += decrement;
+    if (counter >= 2 * reservationByteLimit_) {
+      decrementUsageWithoutReservation(reservationByteLimit_);
+      counter -= reservationByteLimit_;
+    }
+    VELOX_CHECK_LT(counter, 2 * reservationByteLimit_);
+  }
+
+  // Decrements the memory usage from the global 'allocatedBytes_' counter
+  // directly.
+  inline void decrementUsageWithoutReservation(int64_t bytes) {
     const auto originalBytes = allocatedBytes_.fetch_sub(bytes);
     if (originalBytes - bytes < 0) {
       // In case of inconsistency while freeing memory, do not revert in this
       // case because free is guaranteed to happen.
-      VELOX_MEM_ALLOC_ERROR(fmt::format(
-          "Trying to free {} bytes, which is larger than current allocated "
-          "bytes {}",
-          bytes,
-          originalBytes))
+      VELOX_MEM_ALLOC_ERROR(
+          fmt::format(
+              "Trying to free {} bytes, which is larger than current allocated "
+              "bytes {}",
+              bytes,
+              originalBytes))
     }
   }
 
   const Kind kind_;
 
-  /// Capacity in bytes. Total allocation byte is not allowed to exceed this
-  /// value. Setting this to 0 means no capacity enforcement.
+  // Capacity in bytes. Total allocation byte is not allowed to exceed this
+  // value.
   const size_t capacity_;
+  const uint32_t reservationByteLimit_;
 
-  /// Current total allocated bytes by this 'MallocAllocator'.
+  const ConcurrentCounter<uint32_t>::UpdateFn reserveFunc_;
+  const ConcurrentCounter<uint32_t>::UpdateFn releaseFunc_;
+
+  ConcurrentCounter<uint32_t> reservations_;
+
+  // Current total allocated bytes by this 'MallocAllocator'.
   std::atomic<int64_t> allocatedBytes_{0};
 
-  /// Mutex for 'mallocs_'.
-  std::mutex mallocsMutex_;
-
-  /// Tracks malloc'd pointers to detect bad frees.
-  std::unordered_set<void*> mallocs_;
-
-  Stats stats_;
+  std::shared_ptr<Cache> cache_;
 };
 } // namespace facebook::velox::memory

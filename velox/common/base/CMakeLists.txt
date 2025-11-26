@@ -12,29 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_exception Exceptions.cpp VeloxException.cpp Exceptions.h)
-target_link_libraries(
+velox_add_library(velox_exception Exceptions.cpp VeloxException.cpp Exceptions.h)
+velox_link_libraries(
   velox_exception
-  velox_flag_definitions
-  velox_process
-  glog::glog
-  Folly::folly
-  fmt::fmt
-  gflags::gflags)
+  PUBLIC velox_flag_definitions velox_process Folly::folly fmt::fmt gflags::gflags glog::glog
+)
 
-add_library(
+velox_add_library(
   velox_common_base
+  AdmissionController.cpp
   BitUtil.cpp
   Counters.cpp
   Fs.cpp
+  PeriodicStatsReporter.cpp
   RandomUtil.cpp
-  RawVector.cpp
   RuntimeMetrics.cpp
   SimdUtil.cpp
+  SkewedPartitionBalancer.cpp
+  SpillConfig.cpp
+  SpillStats.cpp
   StatsReporter.cpp
-  SuccinctPrinter.cpp)
+  SuccinctPrinter.cpp
+  TraceConfig.cpp
+)
 
-target_link_libraries(velox_common_base velox_exception velox_process xsimd)
+velox_link_libraries(
+  velox_common_base
+  PUBLIC velox_exception Folly::folly fmt::fmt xsimd
+  PRIVATE velox_caching velox_common_compression velox_process velox_test_util glog::glog
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
@@ -43,3 +49,17 @@ endif()
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()
+
+velox_add_library(velox_id_map BigintIdMap.cpp)
+velox_link_libraries(
+  velox_id_map
+  velox_memory
+  velox_flag_definitions
+  velox_process
+  glog::glog
+  Folly::folly
+  fmt::fmt
+)
+
+velox_add_library(velox_status Status.cpp)
+velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE glog::glog)

@@ -19,7 +19,7 @@
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/Strings.h"
-#include "velox/functions/prestosql/aggregates/ValueList.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -105,6 +105,7 @@ struct MapAccumulator {
   }
 
   void free(HashStringAllocator& allocator) {
+    std::destroy_at(&keys);
     values.free(&allocator);
   }
 };
@@ -160,7 +161,7 @@ struct StringViewMapAccumulator {
 struct ComplexTypeMapAccumulator {
   /// A set of pointers to values stored in AddressableNonNullValueList.
   MapAccumulator<
-      HashStringAllocator::Position,
+      AddressableNonNullValueList::Entry,
       AddressableNonNullValueList::Hash,
       AddressableNonNullValueList::EqualTo>
       base;
@@ -179,11 +180,11 @@ struct ComplexTypeMapAccumulator {
       const DecodedVector& decodedValues,
       vector_size_t index,
       HashStringAllocator& allocator) {
-    auto position = serializedKeys.append(decodedKeys, index, &allocator);
+    auto entry = serializedKeys.append(decodedKeys, index, &allocator);
 
     auto cnt = base.keys.size();
-    if (!base.keys.insert({position, cnt}).second) {
-      serializedKeys.removeLast(position);
+    if (!base.keys.insert({entry, cnt}).second) {
+      serializedKeys.removeLast(entry);
       return;
     }
 
@@ -225,6 +226,22 @@ struct MapAccumulatorTypeTraits {
 };
 
 template <>
+struct MapAccumulatorTypeTraits<float> {
+  using AccumulatorType = MapAccumulator<
+      float,
+      util::floating_point::NaNAwareHash<float>,
+      util::floating_point::NaNAwareEquals<float>>;
+};
+
+template <>
+struct MapAccumulatorTypeTraits<double> {
+  using AccumulatorType = MapAccumulator<
+      double,
+      util::floating_point::NaNAwareHash<double>,
+      util::floating_point::NaNAwareEquals<double>>;
+};
+
+template <>
 struct MapAccumulatorTypeTraits<StringView> {
   using AccumulatorType = StringViewMapAccumulator;
 };
@@ -235,6 +252,81 @@ struct MapAccumulatorTypeTraits<ComplexType> {
 };
 
 } // namespace detail
+
+/// A wrapper around MapAccumulator that overrides hash and equal_to functions
+/// to use the custom comparisons provided by a custom type.
+template <TypeKind Kind>
+struct CustomComparisonMapAccumulator {
+  using NativeType = typename TypeTraits<Kind>::NativeType;
+
+  struct Hash {
+    const TypePtr& type;
+
+    size_t operator()(const NativeType& value) const {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(
+                 type.get())
+          ->hash(value);
+    }
+  };
+
+  struct EqualTo {
+    const TypePtr& type;
+
+    bool operator()(const NativeType& left, const NativeType& right) const {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(
+                 type.get())
+                 ->compare(left, right) == 0;
+    }
+  };
+
+  /// The underlying MapAccumulator to which all operations are delegated.
+  detail::MapAccumulator<
+      NativeType,
+      CustomComparisonMapAccumulator::Hash,
+      CustomComparisonMapAccumulator::EqualTo>
+      base;
+
+  CustomComparisonMapAccumulator(
+      const TypePtr& type,
+      HashStringAllocator* allocator)
+      : base{
+            CustomComparisonMapAccumulator::Hash{type},
+            CustomComparisonMapAccumulator::EqualTo{type},
+            allocator} {}
+
+  /// Adds key-value pair if entry with that key doesn't exist yet.
+  void insert(
+      const DecodedVector& decodedKeys,
+      const DecodedVector& decodedValues,
+      vector_size_t index,
+      HashStringAllocator& allocator) {
+    return base.insert(decodedKeys, decodedValues, index, allocator);
+  }
+
+  /// Returns number of key-value pairs.
+  size_t size() const {
+    return base.size();
+  }
+
+  void extract(
+      const VectorPtr& mapKeys,
+      const VectorPtr& mapValues,
+      vector_size_t offset) {
+    base.extract(mapKeys, mapValues, offset);
+  }
+
+  void extractValues(
+      const VectorPtr& mapValues,
+      vector_size_t offset,
+      int32_t mapSize,
+      const folly::F14FastMap<int32_t, int32_t>& indices) {
+    base.extractValues(mapValues, offset, mapSize, indices);
+  }
+
+  void free(HashStringAllocator& allocator) {
+    base.free(allocator);
+  }
+};
 
 template <typename T>
 using MapAccumulator =

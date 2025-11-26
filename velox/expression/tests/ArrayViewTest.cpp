@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+#include <glog/logging.h>
 #include <cstdint>
 #include <optional>
 #include <vector>
-#include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/expression/VectorReaders.h"
@@ -575,6 +575,7 @@ TEST_F(NullableArrayViewTest, materializeArrayOfCustomTypes) {
           MaterializeType<Array<UDTTypeRegistrar::SimpleType>>::nullable_t,
           std::vector<std::optional<UDT>>>);
   UDTTypeRegistrar::registerType();
+  auto guard = folly::makeGuard([&] { UDTTypeRegistrar::unregisterType(); });
   registerFunction<MakeUDTFunc, UDTTypeRegistrar::SimpleType>({"make_udt"});
 
   auto result = evaluate(
@@ -597,6 +598,7 @@ TEST_F(NullFreeArrayViewTest, materializeArrayOfCustomTypes) {
           MaterializeType<Array<UDTTypeRegistrar::SimpleType>>::null_free_t,
           std::vector<UDT>>);
   UDTTypeRegistrar::registerType();
+  auto guard = folly::makeGuard([&] { UDTTypeRegistrar::unregisterType(); });
   registerFunction<MakeUDTFunc, UDTTypeRegistrar::SimpleType>({"make_udt"});
 
   auto result = evaluate(

@@ -16,11 +16,14 @@
 
 #pragma once
 
+#include <gflags/gflags.h>
 #include <memory>
 #include <mutex>
 
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dss.h"
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dsstypes.h"
+#include <velox/tpch/gen/dbgen/include/dbgen/dss.h>
+#include <velox/tpch/gen/dbgen/include/dbgen/dsstypes.h>
+
+DECLARE_int32(velox_tpch_text_pool_size_mb);
 
 namespace facebook::velox::tpch {
 
@@ -41,14 +44,14 @@ class DBGenIterator {
   void initCustomer(size_t offset);
 
   // Generate different types of records.
-  void genNation(size_t index, code_t& code);
-  void genRegion(size_t index, code_t& code);
-  void genOrder(size_t index, order_t& order);
-  void genSupplier(size_t index, supplier_t& supplier);
-  void genPart(size_t index, part_t& part);
-  void genCustomer(size_t index, customer_t& customer);
+  void genNation(size_t index, dbgen::code_t& code);
+  void genRegion(size_t index, dbgen::code_t& code);
+  void genOrder(size_t index, dbgen::order_t& order);
+  void genSupplier(size_t index, dbgen::supplier_t& supplier);
+  void genPart(size_t index, dbgen::part_t& part);
+  void genCustomer(size_t index, dbgen::customer_t& customer);
 
-  DBGenContext dbgenCtx_;
+  dbgen::DBGenContext dbgenCtx_;
 };
 
 } // namespace facebook::velox::tpch

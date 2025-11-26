@@ -26,36 +26,49 @@ class SelectiveByteRleColumnReader
   using ValueType = int8_t;
 
   SelectiveByteRleColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
       bool isBool)
       : dwio::common::SelectiveByteRleColumnReader(
-            std::move(requestedType),
+            requestedType,
+            std::move(fileType),
             params,
-            scanSpec,
-            dataType->type) {
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+            scanSpec) {
+    const EncodingKey encodingKey{
+        fileType_->id(), params.flatMapContext().sequence};
     auto& stripe = params.stripeStreams();
     if (isBool) {
       boolRle_ = createBooleanRleDecoder(
           stripe.getStream(
-              encodingKey.forKind(proto::Stream_Kind_DATA),
+              StripeStreamsUtil::getStreamForKind(
+                  stripe,
+                  encodingKey,
+                  proto::Stream_Kind_DATA,
+                  proto::orc::Stream_Kind_DATA),
               params.streamLabels().label(),
               true),
           encodingKey);
     } else {
       byteRle_ = createByteRleDecoder(
           stripe.getStream(
-              encodingKey.forKind(proto::Stream_Kind_DATA),
+              StripeStreamsUtil::getStreamForKind(
+                  stripe,
+                  encodingKey,
+                  proto::Stream_Kind_DATA,
+                  proto::orc::Stream_Kind_DATA),
               params.streamLabels().label(),
               true),
           encodingKey);
     }
   }
 
-  void seekToRowGroup(uint32_t index) override {
+  bool hasBulkPath() const override {
+    return false;
+  }
+
+  void seekToRowGroup(int64_t index) override {
     dwio::common::SelectiveByteRleColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
     if (boolRle_) {
@@ -77,13 +90,14 @@ class SelectiveByteRleColumnReader
     return numValues;
   }
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
-    readCommon<SelectiveByteRleColumnReader>(offset, rows, incomingNulls);
+    readCommon<SelectiveByteRleColumnReader, true>(offset, rows, incomingNulls);
+    readOffset_ += rows.back() + 1;
   }
 
   template <typename ColumnVisitor>
-  void readWithVisitor(RowSet rows, ColumnVisitor visitor);
+  void readWithVisitor(const RowSet& rows, ColumnVisitor visitor);
 
   std::unique_ptr<ByteRleDecoder> byteRle_;
   std::unique_ptr<BooleanRleDecoder> boolRle_;
@@ -91,9 +105,8 @@ class SelectiveByteRleColumnReader
 
 template <typename ColumnVisitor>
 void SelectiveByteRleColumnReader::readWithVisitor(
-    RowSet rows,
+    const RowSet& rows,
     ColumnVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
   if (boolRle_) {
     if (nullsInReadRange_) {
       boolRle_->readWithVisitor<true>(
@@ -109,7 +122,6 @@ void SelectiveByteRleColumnReader::readWithVisitor(
       byteRle_->readWithVisitor<false>(nullptr, visitor);
     }
   }
-  readOffset_ += numRows;
 }
 
 } // namespace facebook::velox::dwrf

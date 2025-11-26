@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -143,19 +144,89 @@ TEST_F(ArrayMaxTest, longVarcharNoNulls) {
   testArrayMax(input, expected);
 }
 
+TEST_F(ArrayMaxTest, timestampWithTimezone) {
+  auto testArrayMax = [this](
+                          const std::vector<std::optional<int64_t>>& inputArray,
+                          std::optional<int64_t> expectedValue) {
+    // Test with primitive types.
+    auto input = makeRowVector({makeArrayVector(
+        {0}, makeNullableFlatVector(inputArray, TIMESTAMP_WITH_TIME_ZONE()))});
+    VectorPtr expected = makeNullableFlatVector<int64_t>(
+        {expectedValue}, TIMESTAMP_WITH_TIME_ZONE());
+
+    auto result = evaluate<BaseVector>("array_max(C0)", input);
+    assertEqualVectors(expected, result);
+
+    // array_max does not support nulls inside complex types. To exclude these
+    // we exclude tests where the expected result is null.  However, the result
+    // can also be null when the input is empty, so we add an exception for that
+    // case.
+    if (expectedValue.has_value() || inputArray.empty()) {
+      // Test wrapped in complex type.
+      input = makeRowVector({makeArrayVector(
+          {0},
+          makeRowVector({makeNullableFlatVector(
+              inputArray, TIMESTAMP_WITH_TIME_ZONE())}))});
+      expected = makeRowVector(
+          {expected}, [&](vector_size_t) { return inputArray.empty(); });
+
+      result = evaluate<BaseVector>("array_max(C0)", input);
+      assertEqualVectors(expected, result);
+    }
+  };
+
+  testArrayMax(
+      {pack(-1, 0), pack(0, 1), pack(1, 2), pack(2, 3), pack(3, 4), pack(4, 5)},
+      pack(4, 5));
+  testArrayMax(
+      {pack(4, 0),
+       pack(3, 1),
+       pack(2, 2),
+       pack(1, 3),
+       pack(0, 4),
+       pack(-1, 5),
+       pack(-2, 6)},
+      pack(4, 0));
+  testArrayMax(
+      {pack(-5, 3), pack(-4, 2), pack(-3, 1), pack(-2, 0), pack(-1, 4)},
+      pack(-1, 4));
+  testArrayMax(
+      {pack(101, 4), pack(102, 0), pack(103, 1), pack(104, 2), pack(105, 3)},
+      pack(105, 3));
+  testArrayMax({}, std::nullopt);
+  testArrayMax(
+      {pack(101, 4), pack(102, 0), pack(103, 1), pack(104, 2), std::nullopt},
+      std::nullopt);
+  testArrayMax(
+      {std::nullopt, pack(-1, 4), pack(-2, 5), pack(-3, 1), pack(-4, 0)},
+      std::nullopt);
+  testArrayMax({std::nullopt}, std::nullopt);
+  testArrayMax({pack(1, 0), pack(1, 1), pack(1, 2)}, pack(1, 0));
+}
+
 // Test documented example.
 TEST_F(ArrayMaxTest, docs) {
-  auto input = makeNullableArrayVector<int32_t>(
-      {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
-  auto expected =
-      makeNullableFlatVector<int32_t>({3, -1, std::nullopt, std::nullopt});
-  testArrayMax(input, expected);
+  {
+    auto input = makeNullableArrayVector<int32_t>(
+        {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
+    auto expected =
+        makeNullableFlatVector<int32_t>({3, -1, std::nullopt, std::nullopt});
+    testArrayMax(input, expected);
+  }
+  {
+    static const float kNaN = std::numeric_limits<float>::quiet_NaN();
+    static const float kInfinity = std::numeric_limits<float>::infinity();
+    auto input = makeNullableArrayVector<float>(
+        {{-1, kNaN, std::nullopt}, {-1, -2, -3, kNaN}, {kInfinity, kNaN}});
+    auto expected = makeNullableFlatVector<float>({std::nullopt, kNaN, kNaN});
+    testArrayMax(input, expected);
+  }
 }
 
 template <typename Type>
 class ArrayMaxIntegralTest : public FunctionBaseTest {
  public:
-  using T = typename Type::NativeType::NativeType;
+  using T = typename Type::NativeType;
 
   void testArrayMax(const VectorPtr& input, const VectorPtr& expected) {
     auto result =
@@ -220,7 +291,7 @@ class ArrayMaxIntegralTest : public FunctionBaseTest {
 template <typename Type>
 class ArrayMaxFloatingPointTest : public FunctionBaseTest {
  public:
-  using T = typename Type::NativeType::NativeType;
+  using T = typename Type::NativeType;
 
   void testArrayMax(VectorPtr input, VectorPtr expected) {
     auto result =
@@ -238,6 +309,7 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
           -0.0003,
           std::numeric_limits<T>::max()},
          {},
+         {std::nullopt},
          {std::numeric_limits<T>::min(), 1.1, 1.22222, 1.33, std::nullopt},
          {-0.00001, -0.0002, 0.0001}});
 
@@ -245,6 +317,7 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
         {0.00001,
          std::nullopt,
          std::numeric_limits<T>::max(),
+         std::nullopt,
          std::nullopt,
          std::nullopt,
          0.0001});
@@ -278,6 +351,22 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
          0.0001});
     testArrayMax(input, expected);
   }
+
+  void testExtremeValues() {
+    static const T kNaN = std::numeric_limits<T>::quiet_NaN();
+    static const T kInfinity = std::numeric_limits<T>::infinity();
+    static const T kNegativeInfinity = -1 * std::numeric_limits<T>::infinity();
+    auto input = makeNullableArrayVector<T>(
+        {{-1, std::nullopt, kNaN},
+         {-1, std::nullopt, 2},
+         {-1, 0, 2},
+         {kNegativeInfinity, kNegativeInfinity},
+         {-1, 2, kInfinity},
+         {kInfinity, kNaN}});
+    auto expected = makeNullableFlatVector<T>(
+        {std::nullopt, std::nullopt, 2, kNegativeInfinity, kInfinity, kNaN});
+    testArrayMax(input, expected);
+  }
 };
 
 } // namespace
@@ -302,4 +391,8 @@ TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxNullable) {
 
 TYPED_TEST(ArrayMaxFloatingPointTest, arrayMax) {
   this->testNoNulls();
+}
+
+TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxExtreme) {
+  this->testExtremeValues();
 }

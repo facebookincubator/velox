@@ -35,7 +35,7 @@ class BenchmarkHelper {
 
   std::vector<MemoryPool*> findLeaves() {
     std::vector<MemoryPool*> leaves;
-    findLeavesOf(manager_.testingDefaultRoot(), leaves);
+    findLeavesOf(manager_.deprecatedSysRootPool(), leaves);
     return leaves;
   }
 
@@ -158,7 +158,7 @@ void addNLeaves(MemoryPool& pool, size_t n) {
 BENCHMARK(FlatTree, iters) {
   folly::BenchmarkSuspender suspender;
   MemoryManager manager{};
-  addNLeaves(manager.testingDefaultRoot(), 10 * 20);
+  addNLeaves(manager.deprecatedSysRootPool(), 10 * 20);
   BenchmarkHelper helper{manager};
   suspender.dismiss();
   helper.runForEachPool([iters](MemoryPool& pool) {
@@ -239,7 +239,7 @@ BENCHMARK(FlatSticks, iters) {
 }
 
 int main(int argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   folly::runBenchmarks();
   return 0;
 }

@@ -21,25 +21,22 @@ void ConstantExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
-  if (sharedConstantValue_.unique()) {
-    sharedConstantValue_->resize(rows.end());
-  } else {
-    // By reassigning sharedConstantValue_ we increase the chances that it will
-    // be unique the next time this expression is evaluated.
-    sharedConstantValue_ =
-        BaseVector::wrapInConstant(rows.end(), 0, sharedConstantValue_);
-  }
-
   if (needToSetIsAscii_) {
-    // sharedConstantValue_ must be unique because computeAndSetIsAscii may
-    // modify it.
-    VELOX_CHECK(sharedConstantValue_.unique());
     auto* vector =
         sharedConstantValue_->asUnchecked<SimpleVector<StringView>>();
     LocalSingleRow singleRow(context, 0);
     bool isAscii = vector->computeAndSetIsAscii(*singleRow);
     vector->setAllIsAscii(isAscii);
     needToSetIsAscii_ = false;
+  }
+
+  if (sharedConstantValue_.use_count() == 1) {
+    sharedConstantValue_->resize(rows.end());
+  } else {
+    // By reassigning sharedConstantValue_ we increase the chances that it will
+    // be unique the next time this expression is evaluated.
+    sharedConstantValue_ =
+        BaseVector::wrapInConstant(rows.end(), 0, sharedConstantValue_);
   }
 
   context.moveOrCopyResult(sharedConstantValue_, rows, result);
@@ -118,7 +115,7 @@ std::string toSqlType(const TypePtr& type) {
         if (i > 0) {
           out << ", ";
         }
-        out << type->asRow().nameOf(i) << " " << type->childAt(i)->toString();
+        out << type->asRow().nameOf(i) << " " << toSqlType(type->childAt(i));
       }
       out << ")";
       return out.str();
@@ -141,30 +138,54 @@ void appendSqlLiteral(
     return;
   }
 
-  if (vector.type()->isDate()) {
-    auto dateVector = vector.wrappedVector()->as<SimpleVector<int32_t>>();
-    out << "'"
-        << DATE()->toString(dateVector->valueAt(vector.wrappedIndex(row)))
-        << "'::" << vector.type()->toString();
-    return;
-  }
-
   switch (vector.typeKind()) {
     case TypeKind::BOOLEAN: {
       auto value = vector.as<SimpleVector<bool>>()->valueAt(row);
       out << (value ? "TRUE" : "FALSE");
       break;
     }
+    case TypeKind::INTEGER: {
+      if (vector.type()->isDate()) {
+        auto dateVector = vector.wrappedVector()->as<SimpleVector<int32_t>>();
+        out << "'"
+            << DATE()->toString(dateVector->valueAt(vector.wrappedIndex(row)))
+            << "'::" << vector.type()->toString();
+      } else {
+        out << "'" << vector.wrappedVector()->toString(vector.wrappedIndex(row))
+            << "'::" << vector.type()->toString();
+      }
+      break;
+    }
     case TypeKind::TINYINT:
+      [[fallthrough]];
     case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
-    case TypeKind::TIMESTAMP:
+      [[fallthrough]];
+    case TypeKind::BIGINT: {
+      if (vector.type()->isIntervalDayTime()) {
+        auto* intervalVector =
+            vector.wrappedVector()->as<SimpleVector<int64_t>>();
+        out << "INTERVAL " << intervalVector->valueAt(vector.wrappedIndex(row))
+            << " MILLISECOND";
+        break;
+      }
+      [[fallthrough]];
+    }
+    case TypeKind::HUGEINT:
+      [[fallthrough]];
     case TypeKind::REAL:
+      [[fallthrough]];
     case TypeKind::DOUBLE:
       out << "'" << vector.wrappedVector()->toString(vector.wrappedIndex(row))
           << "'::" << vector.type()->toString();
       break;
+    case TypeKind::TIMESTAMP: {
+      TimestampToStringOptions options;
+      options.dateTimeSeparator = ' ';
+      const auto ts =
+          vector.wrappedVector()->as<SimpleVector<Timestamp>>()->valueAt(row);
+      out << "'" << ts.toString(options) << "'::" << vector.type()->toString();
+      break;
+    }
     case TypeKind::VARCHAR:
       appendSqlString(
           vector.wrappedVector()->toString(vector.wrappedIndex(row)), out);
@@ -211,13 +232,29 @@ void appendSqlLiteral(
           "Type not supported yet: {}", vector.type()->toString());
   }
 }
+
+bool canBeExpressedInSQL(const TypePtr& type) {
+  // Logical types cannot be expressed in SQL.
+  const bool isLogicalType = type->name() != type->kindName();
+  return type->isPrimitiveType() && type != VARBINARY() && !isLogicalType;
+}
+
 } // namespace
 
 std::string ConstantExpr::toSql(
     std::vector<VectorPtr>* complexConstants) const {
   VELOX_CHECK_NOT_NULL(sharedConstantValue_);
+
+  // TODO canBeExpressedInSQL is misleading. ARRAY(INTEGER()) can be expressed
+  // in SQL, but canBeExpressedInSQL returns false for that type. we need to
+  // distinguish between types that cannot be expressed in SQL at all
+  // (VARBINARY, logic types like JSON) and types that can be expressed in
+  // SQL, but they can be large and therefore we want to provider an option to
+  // represent then using 'complex constants'. If a type cannot be expressed
+  // in SQL, we should assert that complexConstants is not null.
+
   std::ostringstream out;
-  if (complexConstants && !sharedConstantValue_->type()->isPrimitiveType()) {
+  if (complexConstants && !canBeExpressedInSQL(sharedConstantValue_->type())) {
     int idx = complexConstants->size();
     out << "__complex_constant(c" << idx << ")";
     complexConstants->push_back(sharedConstantValue_);

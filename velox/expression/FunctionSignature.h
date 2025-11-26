@@ -23,6 +23,8 @@
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/expression/TypeSignature.h"
+#include "velox/expression/signature_parser/SignatureParser.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
@@ -32,7 +34,19 @@ std::string sanitizeName(const std::string& name);
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
 
-enum class ParameterType : int8_t { kTypeParameter, kIntegerParameter };
+enum class ParameterType : int8_t {
+  kTypeParameter,
+  kIntegerParameter,
+  kEnumParameter,
+};
+
+/// Canonical names for functions that have special treatments in pushdowns.
+enum class FunctionCanonicalName {
+  kUnknown,
+  kLt,
+  kNot,
+  kRand,
+};
 
 /// SignatureVariable holds both, type parameters (e.g. K or V in map(K,
 /// V)), and integer parameters with optional constraints (e.g. "r_precision =
@@ -43,7 +57,9 @@ class SignatureVariable {
       std::string name,
       std::optional<std::string> constraint,
       ParameterType type,
-      bool knownTypesOnly = false);
+      bool knownTypesOnly = false,
+      bool orderableTypesOnly = false,
+      bool comparableTypesOnly = false);
 
   const std::string& name() const {
     return name_;
@@ -58,6 +74,16 @@ class SignatureVariable {
     return knownTypesOnly_;
   }
 
+  bool orderableTypesOnly() const {
+    VELOX_USER_CHECK(isTypeParameter());
+    return orderableTypesOnly_;
+  }
+
+  bool comparableTypesOnly() const {
+    VELOX_USER_CHECK(isTypeParameter());
+    return comparableTypesOnly_;
+  }
+
   bool isTypeParameter() const {
     return type_ == ParameterType::kTypeParameter;
   }
@@ -66,45 +92,27 @@ class SignatureVariable {
     return type_ == ParameterType::kIntegerParameter;
   }
 
+  bool isEnumParameter() const {
+    return type_ == ParameterType::kEnumParameter;
+  }
+
   bool operator==(const SignatureVariable& rhs) const {
     return type_ == rhs.type_ && name_ == rhs.name_ &&
         constraint_ == rhs.constraint_ &&
-        knownTypesOnly_ == rhs.knownTypesOnly_;
+        knownTypesOnly_ == rhs.knownTypesOnly_ &&
+        orderableTypesOnly_ == rhs.orderableTypesOnly_ &&
+        comparableTypesOnly_ == rhs.comparableTypesOnly_;
   }
 
  private:
   const std::string name_;
   const std::string constraint_;
   const ParameterType type_;
-  // This property only applies to type variables and indicates if the type
-  // can bind to unknown or not.
+  // The following properties apply only to type variables and indicate whether
+  // the type can bind only to known, orderable or comparable types.
   bool knownTypesOnly_ = false;
-};
-
-// Base type (e.g. map) and optional parameters (e.g. K, V).
-// All parameters must be of the same ParameterType.
-class TypeSignature {
- public:
-  TypeSignature(std::string baseName, std::vector<TypeSignature> parameters)
-      : baseName_{std::move(baseName)}, parameters_{std::move(parameters)} {}
-
-  const std::string& baseName() const {
-    return baseName_;
-  }
-
-  const std::vector<TypeSignature>& parameters() const {
-    return parameters_;
-  }
-
-  std::string toString() const;
-
-  bool operator==(const TypeSignature& rhs) const {
-    return baseName_ == rhs.baseName_ && parameters_ == rhs.parameters_;
-  }
-
- private:
-  const std::string baseName_;
-  const std::vector<TypeSignature> parameters_;
+  bool orderableTypesOnly_ = false;
+  bool comparableTypesOnly_ = false;
 };
 
 class FunctionSignature {
@@ -139,8 +147,30 @@ class FunctionSignature {
     return argumentTypes_;
   }
 
+  const TypeSignature& argumentTypeAt(size_t index) const {
+    return argumentTypes_.at(index);
+  }
+
+  bool isLambdaArgumentAt(size_t index) const {
+    return argumentTypes().at(index).baseName() == "function";
+  }
+
+  bool hasLambdaArgument() const {
+    for (auto i = 0; i < argumentTypes_.size(); ++i) {
+      if (isLambdaArgumentAt(i)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   const std::vector<bool>& constantArguments() const {
     return constantArguments_;
+  }
+
+  bool hasConstantArgument() const {
+    return std::any_of(
+        constantArguments_.begin(), constantArguments_.end(), folly::identity);
   }
 
   bool variableArity() const {
@@ -163,6 +193,22 @@ class FunctionSignature {
   }
 
  protected:
+  /// @param additionalTypes A list of additional types introduced by subclass.
+  /// Since FunctionSignature will validate that the number of used variables
+  /// and the size of variables_ must be equal. If the subclass introduces new
+  /// types, such as intermediateType in AggregateFunctionSignature, and these
+  /// types uses signature variables, it needs to pass the additional types to
+  /// the constructor of FunctionSignature for validation, to ensure that the
+  /// variables used by the subclass will also be counted in the validation of
+  /// FunctionSignature.
+  FunctionSignature(
+      std::unordered_map<std::string, SignatureVariable> variables,
+      TypeSignature returnType,
+      std::vector<TypeSignature> argumentTypes,
+      std::vector<bool> constantArguments,
+      bool variableArity,
+      const std::vector<TypeSignature>& additionalTypes);
+
   // Return a string of the list of argument types.
   std::string argumentsToString() const;
 
@@ -190,7 +236,8 @@ class AggregateFunctionSignature : public FunctionSignature {
             std::move(returnType),
             std::move(argumentTypes),
             std::move(constantArguments),
-            variableArity),
+            variableArity,
+            {intermediateType}),
         intermediateType_{std::move(intermediateType)} {}
 
   const TypeSignature& intermediateType() const {
@@ -221,18 +268,8 @@ inline void addVariable(
 
 } // namespace
 
-/// Parses a string into TypeSignature. The format of the string is type name,
-/// optionally followed by type parameters enclosed in parenthesis.
-/// Examples:
-///     - bigint
-///     - double
-///     - array(T)
-///     - map(K,V)
-///     - row(bigint,array(tinyint),T)
-///     - function(S,T,R)
-TypeSignature parseTypeSignature(const std::string& signature);
-
 /// Convenience class for creating FunctionSignature instances.
+///
 /// Example of usage:
 ///     - signature of "concat" function: varchar... -> varchar
 ///
@@ -258,12 +295,18 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
-  FunctionSignatureBuilder& knownTypeVariable(const std::string& name) {
-    addVariable(
-        variables_,
-        SignatureVariable(name, "", ParameterType::kTypeParameter, true));
+  FunctionSignatureBuilder& variable(const SignatureVariable& variable) {
+    addVariable(variables_, variable);
     return *this;
   }
+
+  FunctionSignatureBuilder& knownTypeVariable(const std::string& name);
+
+  /// Orderable implies comparable, this method would enable
+  /// comparableTypesOnly_ too.
+  FunctionSignatureBuilder& orderableTypeVariable(const std::string& name);
+
+  FunctionSignatureBuilder& comparableTypeVariable(const std::string& name);
 
   FunctionSignatureBuilder& integerVariable(
       const std::string& name,
@@ -271,6 +314,15 @@ class FunctionSignatureBuilder {
     addVariable(
         variables_,
         SignatureVariable(name, constraint, ParameterType::kIntegerParameter));
+    return *this;
+  }
+
+  FunctionSignatureBuilder& enumVariable(
+      const std::string& name,
+      std::optional<std::string> constraint = std::nullopt) {
+    addVariable(
+        variables_,
+        SignatureVariable(name, constraint, ParameterType::kEnumParameter));
     return *this;
   }
 
@@ -291,7 +343,28 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
+  /// Variable arity arguments can appear only at the end of the argument list
+  /// and their types must match the type specified in the last entry of
+  /// 'argumentTypes'. Variable arity arguments can appear zero or more times.
   FunctionSignatureBuilder& variableArity() {
+    variableArity_ = true;
+    return *this;
+  }
+
+  /// Variable arity arguments can appear only at the end of the argument list
+  /// and can appear zero or more times.
+  FunctionSignatureBuilder& variableArity(const std::string& type) {
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(false);
+    variableArity_ = true;
+    return *this;
+  }
+
+  /// Variable arity arguments can appear only at the end of the argument list
+  /// and can appear zero or more times.
+  FunctionSignatureBuilder& constantVariableArity(const std::string& type) {
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(true);
     variableArity_ = true;
     return *this;
   }
@@ -326,13 +399,15 @@ class AggregateFunctionSignatureBuilder {
     return *this;
   }
 
-  AggregateFunctionSignatureBuilder& knownTypeVariable(
-      const std::string& name) {
-    addVariable(
-        variables_,
-        SignatureVariable(name, "", ParameterType::kTypeParameter, true));
-    return *this;
-  }
+  AggregateFunctionSignatureBuilder& knownTypeVariable(const std::string& name);
+
+  /// Orderable implies comparable, this method would enable
+  /// comparableTypesOnly_ too.
+  AggregateFunctionSignatureBuilder& orderableTypeVariable(
+      const std::string& name);
+
+  AggregateFunctionSignatureBuilder& comparableTypeVariable(
+      const std::string& name);
 
   AggregateFunctionSignatureBuilder& integerVariable(
       const std::string& name,
@@ -367,6 +442,25 @@ class AggregateFunctionSignatureBuilder {
   }
 
   AggregateFunctionSignatureBuilder& variableArity() {
+    variableArity_ = true;
+    return *this;
+  }
+
+  /// Variable arity arguments can appear only at the end of the argument list
+  /// and can appear zero or more times.
+  AggregateFunctionSignatureBuilder& variableArity(const std::string& type) {
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(false);
+    variableArity_ = true;
+    return *this;
+  }
+
+  /// Variable arity arguments can appear only at the end of the argument list
+  /// and can appear zero or more times.
+  AggregateFunctionSignatureBuilder& constantVariableArity(
+      const std::string& type) {
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(true);
     variableArity_ = true;
     return *this;
   }

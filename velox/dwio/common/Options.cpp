@@ -16,12 +16,9 @@
 
 #include "velox/dwio/common/Options.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
-FileFormat toFileFormat(std::string s) {
+FileFormat toFileFormat(std::string_view s) {
   if (s == "dwrf") {
     return FileFormat::DWRF;
   } else if (s == "rc") {
@@ -36,15 +33,17 @@ FileFormat toFileFormat(std::string s) {
     return FileFormat::JSON;
   } else if (s == "parquet") {
     return FileFormat::PARQUET;
-  } else if (s == "alpha") {
-    return FileFormat::ALPHA;
+  } else if (s == "nimble" || s == "alpha") {
+    return FileFormat::NIMBLE;
   } else if (s == "orc") {
     return FileFormat::ORC;
+  } else if (s == "sst") {
+    return FileFormat::SST;
   }
   return FileFormat::UNKNOWN;
 }
 
-std::string toString(FileFormat fmt) {
+std::string_view toString(FileFormat fmt) {
   switch (fmt) {
     case FileFormat::DWRF:
       return "dwrf";
@@ -60,16 +59,22 @@ std::string toString(FileFormat fmt) {
       return "json";
     case FileFormat::PARQUET:
       return "parquet";
-    case FileFormat::ALPHA:
-      return "alpha";
+    case FileFormat::NIMBLE:
+      return "nimble";
     case FileFormat::ORC:
       return "orc";
+    case FileFormat::SST:
+      return "sst";
     default:
       return "unknown";
   }
 }
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
+  ColumnReaderOptions columnReaderOptions;
+  columnReaderOptions.useColumnNamesForColumnMapping_ =
+      options.useColumnNamesForColumnMapping();
+  return columnReaderOptions;
+}
+
+} // namespace facebook::velox::dwio::common

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
 
 namespace facebook::velox::test {
@@ -26,13 +27,15 @@ class HyperLogLogTypeTest : public testing::Test, public TypeTestBase {
 };
 
 TEST_F(HyperLogLogTypeTest, basic) {
-  ASSERT_EQ(HYPERLOGLOG()->name(), "HYPERLOGLOG");
-  ASSERT_EQ(HYPERLOGLOG()->kindName(), "VARBINARY");
+  ASSERT_STREQ(HYPERLOGLOG()->name(), "HYPERLOGLOG");
+  ASSERT_STREQ(HYPERLOGLOG()->kindName(), "VARBINARY");
   ASSERT_TRUE(HYPERLOGLOG()->parameters().empty());
   ASSERT_EQ(HYPERLOGLOG()->toString(), "HYPERLOGLOG");
 
   ASSERT_TRUE(hasType("HYPERLOGLOG"));
   ASSERT_EQ(*getType("HYPERLOGLOG", {}), *HYPERLOGLOG());
+
+  ASSERT_FALSE(HYPERLOGLOG()->isOrderable());
 }
 
 TEST_F(HyperLogLogTypeTest, serde) {

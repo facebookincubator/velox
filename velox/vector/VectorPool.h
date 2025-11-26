@@ -42,6 +42,9 @@ class VectorPool {
 
   size_t release(std::vector<VectorPtr>& vectors);
 
+  /// Clears all the cached vectors.
+  void clear();
+
  private:
   /// Max number of elements for a vector to be recyclable. The larger
   /// the batch the less the win from recycling.
@@ -58,6 +61,9 @@ class VectorPool {
         const TypePtr& type,
         vector_size_t vectorSize,
         memory::MemoryPool& pool);
+
+    /// Clears all the cached vectors.
+    void clear();
   };
 
   memory::MemoryPool* const pool_;
@@ -73,8 +79,8 @@ class VectorPool {
 /// the allocated vector back to vector pool on destruction.
 class VectorRecycler {
  public:
-  explicit VectorRecycler(VectorPtr& vector, VectorPool& pool)
-      : vector_(vector), pool_(pool) {}
+  VectorRecycler(VectorPtr& vector, VectorPool* pool)
+      : pool_(pool), vector_(vector) {}
   VectorRecycler(const VectorRecycler&) = delete;
   VectorRecycler& operator=(const VectorRecycler&) = delete;
   VectorRecycler(const VectorRecycler&&) = delete;
@@ -83,12 +89,14 @@ class VectorRecycler {
   VectorRecycler& operator=(VectorRecycler&) = delete;
 
   ~VectorRecycler() {
-    pool_.release(vector_);
+    if (pool_) {
+      pool_->release(vector_);
+    }
   }
 
  private:
+  VectorPool* const pool_;
   VectorPtr& vector_;
-  VectorPool& pool_;
 };
 
 } // namespace facebook::velox

@@ -19,8 +19,7 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 template <typename T>
 void DictionaryVector<T>::setInternalState() {
@@ -29,26 +28,7 @@ void DictionaryVector<T>::setInternalState() {
   // Sanity check indices for non-null positions. Enabled in debug mode only to
   // avoid performance hit in production.
 #ifndef NDEBUG
-  for (auto i = 0; i < BaseVector::length_; ++i) {
-    const bool isNull =
-        BaseVector::rawNulls_ && bits::isBitNull(BaseVector::rawNulls_, i);
-    if (isNull) {
-      continue;
-    }
-
-    // Verify index for a non-null position. It must be >= 0 and < size of the
-    // base vector.
-    VELOX_DCHECK_GE(
-        rawIndices_[i],
-        0,
-        "Dictionary index must be greater than zero. Index: {}.",
-        i);
-    VELOX_DCHECK_LT(
-        rawIndices_[i],
-        dictionaryValues_->size(),
-        "Dictionary index must be less than base vector's size. Index: {}.",
-        i);
-  }
+  validate({});
 #endif
 
   if (isLazyNotLoaded(*dictionaryValues_)) {
@@ -59,6 +39,9 @@ void DictionaryVector<T>::setInternalState() {
     // Do not load Lazy vector
     return;
   }
+  // Ensure any internal state in dictionaryValues_ is initialized, and it
+  // points to the loaded vector underneath any lazy layers.
+  dictionaryValues_ = BaseVector::loadedVectorShared(dictionaryValues_);
 
   if (dictionaryValues_->isScalar()) {
     scalarDictionaryValues_ =
@@ -70,18 +53,13 @@ void DictionaryVector<T>::setInternalState() {
     }
   }
   initialized_ = true;
-
-  BaseVector::inMemoryBytes_ =
-      BaseVector::nulls_ ? BaseVector::nulls_->capacity() : 0;
-  BaseVector::inMemoryBytes_ += indices_->capacity();
-  BaseVector::inMemoryBytes_ += dictionaryValues_->inMemoryBytes();
 }
 
 template <typename T>
 DictionaryVector<T>::DictionaryVector(
     velox::memory::MemoryPool* pool,
     BufferPtr nulls,
-    size_t length,
+    vector_size_t length,
     VectorPtr dictionaryValues,
     BufferPtr dictionaryIndices,
     const SimpleVectorStats<T>& stats,
@@ -94,7 +72,7 @@ DictionaryVector<T>::DictionaryVector(
           pool,
           dictionaryValues->type(),
           VectorEncoding::Simple::DICTIONARY,
-          nulls,
+          std::move(nulls),
           length,
           stats,
           distinctValueCount,
@@ -176,6 +154,7 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
       sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
@@ -191,6 +170,7 @@ xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     VELOX_UNREACHABLE();
   }
 }
+#endif
 
 template <typename T>
 VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)
@@ -201,9 +181,37 @@ VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)
       this->sliceNulls(offset, length),
       length,
       valueVector(),
-      BaseVector::sliceBuffer(
-          *INTEGER(), indices_, offset, length, this->pool_));
+      indices_
+          ? Buffer::slice<vector_size_t>(indices_, offset, length, this->pool_)
+          : indices_);
 }
 
-} // namespace velox
-} // namespace facebook
+template <typename T>
+void DictionaryVector<T>::validate(const VectorValidateOptions& options) const {
+  SimpleVector<T>::validate(options);
+  auto indicesByteSize =
+      BaseVector::byteSize<vector_size_t>(BaseVector::length_);
+  VELOX_CHECK_GE(indices_->size(), indicesByteSize);
+  for (auto i = 0; i < BaseVector::length_; ++i) {
+    const bool isNull =
+        BaseVector::rawNulls_ && bits::isBitNull(BaseVector::rawNulls_, i);
+    if (isNull) {
+      continue;
+    }
+    // Verify index for a non-null position. It must be >= 0 and < size of the
+    // base vector.
+    VELOX_CHECK_GE(
+        rawIndices_[i],
+        0,
+        "Dictionary index must be greater than zero. Index: {}.",
+        i);
+    VELOX_CHECK_LT(
+        rawIndices_[i],
+        dictionaryValues_->size(),
+        "Dictionary index must be less than base vector's size. Index: {}.",
+        i);
+  }
+  dictionaryValues_->validate(options);
+}
+
+} // namespace facebook::velox

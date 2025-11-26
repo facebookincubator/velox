@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -27,7 +27,6 @@ class BitwiseAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   RowTypePtr rowType_{
@@ -87,6 +86,33 @@ TEST_F(BitwiseAggregationTest, bitwiseAnd) {
        "bitwise_and_agg(c3)",
        "bitwise_and_agg(c4)"},
       "SELECT c0 % 10, bit_and(c1), bit_and(c2), bit_and(c3), bit_and(c4) FROM tmp GROUP BY 1");
+}
+
+TEST_F(BitwiseAggregationTest, bitwiseXor) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // Global aggregation.
+  testAggregations(
+      vectors,
+      {},
+      {"bitwise_xor_agg(c1)",
+       "bitwise_xor_agg(c2)",
+       "bitwise_xor_agg(c3)",
+       "bitwise_xor_agg(c4)"},
+      "SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp");
+
+  // Group by aggregation.
+  testAggregations(
+      [&](auto& builder) {
+        builder.values(vectors).project({"c0 % 10", "c1", "c2", "c3", "c4"});
+      },
+      {"p0"},
+      {"bitwise_xor_agg(c1)",
+       "bitwise_xor_agg(c2)",
+       "bitwise_xor_agg(c3)",
+       "bitwise_xor_agg(c4)"},
+      "SELECT c0 % 10, bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp GROUP BY 1");
 }
 
 } // namespace

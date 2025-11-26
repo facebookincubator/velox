@@ -26,14 +26,6 @@ namespace {
 // See documentation at https://prestodb.io/docs/current/functions/map.html
 class TransformKeysFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    // transform_keys is null preserving for the map. But
-    // since an expr tree with a lambda depends on all named fields, including
-    // captures, a null in a capture does not automatically make a
-    // null result.
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -59,6 +51,8 @@ class TransformKeysFunction : public exec::VectorFunction {
 
     auto elementToTopLevelRows =
         getElementToTopLevelRows(numKeys, rows, flatMap.get(), context.pool());
+    const auto* rawElementToTopLevelRows =
+        elementToTopLevelRows->as<vector_size_t>();
 
     // Loop over lambda functions and apply these to keys of the map.
     // In most cases there will be only one function and the loop will run once.
@@ -77,19 +71,48 @@ class TransformKeysFunction : public exec::VectorFunction {
           lambdaArgs,
           elementToTopLevelRows,
           &transformedKeys);
+
+      if (transformedKeys->mayHaveNulls() ||
+          transformedKeys->mayHaveNullsRecursive()) {
+        static const char* kNullKeyErrorMessage = "map key cannot be null";
+        static const char* kIndeterminateKeyErrorMessage =
+            "map key cannot be indeterminate";
+
+        keyRows.applyToSelected([&](vector_size_t keyRow) {
+          try {
+            VELOX_USER_CHECK(
+                !transformedKeys->isNullAt(keyRow), kNullKeyErrorMessage);
+
+            VELOX_USER_CHECK(
+                !transformedKeys->containsNullAt(keyRow),
+                "{}: {}",
+                kIndeterminateKeyErrorMessage,
+                transformedKeys->toString(keyRow));
+          } catch (VeloxException&) {
+            context.setVeloxExceptionError(
+                rawElementToTopLevelRows[keyRow], std::current_exception());
+          }
+        });
+      }
     }
+
+    exec::LocalSelectivityVector remainingRows(context, rows);
+    context.deselectErrors(*remainingRows);
+
+    // Set nulls for rows not present in 'remainingRows'.
+    BufferPtr newNulls = addNullsForUnselectedRows(flatMap, *remainingRows);
 
     auto localResult = std::make_shared<MapVector>(
         flatMap->pool(),
         outputType,
-        flatMap->nulls(),
-        flatMap->size(),
+        std::move(newNulls),
+        rows.end(),
         flatMap->offsets(),
         flatMap->sizes(),
         transformedKeys,
         flatMap->mapValues());
 
-    checkDuplicateKeys(localResult, rows, context);
+    checkDuplicateKeys(localResult, *remainingRows, context);
 
     context.moveOrCopyResult(localResult, rows, result);
   }
@@ -108,9 +131,15 @@ class TransformKeysFunction : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+/// transform_keys is null preserving for the map. But
+/// since an expr tree with a lambda depends on all named fields, including
+/// captures, a null in a capture does not automatically make a
+/// null result.
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_transform_keys,
     TransformKeysFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<TransformKeysFunction>());
 
 } // namespace facebook::velox::functions

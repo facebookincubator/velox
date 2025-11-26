@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/ConstantVector.h"
@@ -25,9 +26,32 @@
 
 namespace facebook::velox {
 
+using namespace common::testutil;
 using namespace facebook::velox::test;
 
-class TryExprTest : public functions::test::FunctionBaseTest {};
+class TryExprTest : public functions::test::FunctionBaseTest {
+ protected:
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    TestValue::enable();
+  }
+
+  VectorPtr evaluateWithCustomMemoryPool(
+      const std::string& sql,
+      const RowVectorPtr& data,
+      memory::MemoryPool* pool) {
+    auto typedExpr = makeTypedExpr(sql, asRowType(data->type()));
+
+    core::ExecCtx execCtx{pool, queryCtx_.get()};
+    exec::ExprSet exprSet({typedExpr}, &execCtx);
+    exec::EvalCtx context(&execCtx, &exprSet, data.get());
+
+    std::vector<VectorPtr> result(1);
+    SelectivityVector allRows(data->size());
+    exprSet.eval(allRows, context, result);
+    return result[0];
+  }
+};
 
 TEST_F(TryExprTest, tryExpr) {
   auto a = makeFlatVector<int32_t>({10, 20, 30, 20, 50, 30});
@@ -211,10 +235,6 @@ class CreateConstantAndThrow : public exec::VectorFunction {
  public:
   CreateConstantAndThrow(bool throwOnFirstRow = false)
       : throwOnFirstRow_{throwOnFirstRow} {}
-
-  bool isDefaultNullBehavior() const override {
-    return true;
-  }
 
   void apply(
       const SelectivityVector& rows,
@@ -432,4 +452,110 @@ TEST_F(TryExprTest, earlyTerminationWithEmptyRows) {
   assertEqualVectors(
       makeNullableFlatVector<bool>({false, false, std::nullopt}), result);
 }
+
+TEST_F(TryExprTest, doesNotMutateSharedResults) {
+  auto input = makeFlatVector<StringView>({"1", "", ""});
+
+  auto data = makeRowVector({input});
+  // The cast here will throw an error, the result of the switch will be c0, but
+  // then the try will set errors on top of c0 for all rows. c0 vector must not
+  // be changed.
+  auto result = evaluate("try(switch(cast(c0 as bool), c0, '1'))", data);
+  // Make sure input did not change.
+  assertEqualVectors(input, makeFlatVector<StringView>({"1", "", ""}));
+}
+
+TEST_F(TryExprTest, decimalDivideByZero) {
+  options_.parseDecimalAsDouble = false;
+  auto shortDecimalFlatVector =
+      makeFlatVector<int64_t>({10, 20, 30}, DECIMAL(10, 2));
+  auto longDecimalFlatVector =
+      makeFlatVector<int128_t>({10100, 20202, 30300}, DECIMAL(30, 10));
+
+  auto result =
+      evaluate("try(c0 / 0.0)", makeRowVector({shortDecimalFlatVector}));
+  auto expectedShort = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(11, 2));
+  assertEqualVectors(expectedShort, result);
+
+  result = evaluate("try(c0 / 0.0)", makeRowVector({longDecimalFlatVector}));
+  auto expectedLong = makeNullableFlatVector<int128_t>(
+      {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(31, 10));
+  assertEqualVectors(expectedLong, result);
+}
+
+// This test must be DEBUG_ONLY because it uses SCOPED_TESTVALUE_SET.
+DEBUG_ONLY_TEST_F(TryExprTest, errorRestoringContext) {
+  registerFunction<TestingAlwaysThrowsFunction, bool, bool>({"always_throws"});
+  // Use a constant input so the encoding is peeled, triggering the EvalCtx to
+  // be saved and restored.
+  auto data = makeRowVector({makeConstant(true, 3)});
+
+  // EvalCtx::restore calls addError to propagate errors to the original
+  // context, this can resize the ErrorVector leading to exceptions through a
+  // variety of paths.  For the sake of simplicity, the TestValue is used here
+  // to simulate an OOM.
+  std::string exceptionMessage =
+      "Expected exception. Pretend we're out of memory.";
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::EvalCtx::restore",
+      std::function<void(exec::EvalCtx*)>(
+          ([&](exec::EvalCtx*) { VELOX_FAIL(exceptionMessage); })));
+
+  VELOX_ASSERT_THROW(
+      evaluate("try(always_throws(c0))", data), exceptionMessage);
+}
+
+// Verify memory usage increase from wrapping an expression in TRY.
+//
+// When wrapping an expression memory usage increase should not exceed
+// the amount of memory needed to store 1 bit per row (to track whether an
+// error occurred or not).
+TEST_F(TryExprTest, memoryUsage) {
+  vector_size_t size = 10'000;
+
+  auto data = makeRowVector({makeFlatVector<int64_t>(size, folly::identity)});
+
+  // Measure memory usage without TRY.
+  int64_t baseline;
+
+  {
+    auto pool = rootPool_->addLeafChild("test-memory-usage");
+    auto result = evaluateWithCustomMemoryPool("c0 + 1", data, pool.get());
+    ASSERT_FALSE(result->mayHaveNulls());
+
+    baseline = pool->peakBytes();
+  }
+
+  // Measure memory usage with TRY over non-throwing expression.
+  {
+    // Memory allocation is not precisise. There is some padding, rounding and
+    // quantizing that makes it hard to tell exactly how much memory is
+    // allocated. Given that we only need 1 bit per row, allowing 4 bits per row
+    // seems conservative enough.
+    const auto expectedIncrease = size / 2;
+
+    auto pool = rootPool_->addLeafChild("test-memory-usage");
+    auto result = evaluateWithCustomMemoryPool("try(c0 + 1)", data, pool.get());
+    ASSERT_FALSE(result->mayHaveNulls());
+
+    ASSERT_GE(pool->peakBytes(), baseline);
+    ASSERT_LE(pool->peakBytes(), baseline + expectedIncrease)
+        << (pool->peakBytes() - baseline);
+  }
+
+  // Measure memory usage with TRY over expression that throws from every row.
+  {
+    const auto expectedIncrease = size / 2;
+
+    auto pool = rootPool_->addLeafChild("test-memory-usage");
+    auto result = evaluateWithCustomMemoryPool("try(c0 / 0)", data, pool.get());
+    ASSERT_TRUE(result->mayHaveNulls());
+
+    ASSERT_GE(pool->peakBytes(), baseline);
+    ASSERT_LE(pool->peakBytes(), baseline + expectedIncrease)
+        << (pool->peakBytes() - baseline);
+  }
+}
+
 } // namespace facebook::velox

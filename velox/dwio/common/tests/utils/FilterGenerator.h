@@ -32,8 +32,6 @@ namespace facebook::velox::dwio::common {
 
 using namespace facebook::velox::common;
 
-using SubfieldFilters = std::unordered_map<Subfield, std::unique_ptr<Filter>>;
-
 struct FilterSpec {
   FilterSpec() {}
 
@@ -153,8 +151,15 @@ class ColumnStats : public AbstractColumnStats {
       case FilterKind::kIsNotNull:
         filter = std::make_unique<velox::common::IsNotNull>();
         break;
-      default:
+      case FilterKind::kBytesRange:
         filter = makeRangeFilter(filterSpec);
+        break;
+      default:
+        if (type_->kind() == TypeKind::VARCHAR) {
+          filter = makeRandomFilter(filterSpec);
+        } else {
+          filter = makeRangeFilter(filterSpec);
+        }
         break;
     }
 
@@ -334,6 +339,10 @@ class ColumnStats : public AbstractColumnStats {
         getIntegerValue(max), getIntegerValue(max), false);
   }
 
+  std::unique_ptr<Filter> makeRandomFilter(const FilterSpec& filterSpec) {
+    VELOX_FAIL("This method is only used in specific types.");
+  }
+
   // The sample size is 65536.
   static constexpr size_t kUniquesMask = 0xffff;
   std::vector<T> values_;
@@ -415,6 +424,10 @@ class ComplexColumnStats : public AbstractColumnStats {
     VELOX_FAIL("N/A in ComplexType");
   }
 
+  std::unique_ptr<Filter> makeRandomFilter(const FilterSpec&) {
+    VELOX_FAIL("N/A in ComplexType");
+  }
+
   std::unique_ptr<Filter> makeRowGroupSkipRangeFilter(
       const std::vector<RowVectorPtr>& batches,
       const Subfield& subfield) {
@@ -435,11 +448,28 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
     const FilterSpec& filterSpec);
 
 template <>
+std::unique_ptr<Filter> ColumnStats<int128_t>::makeRangeFilter(
+    const FilterSpec& filterSpec);
+
+template <>
+std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
+    const FilterSpec& filterSpec);
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
     const FilterSpec& filterSpec);
 
 template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRangeFilter(
+    const FilterSpec& filterSpec);
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRowGroupSkipRangeFilter(
+    const std::vector<RowVectorPtr>& /*batches*/,
+    const Subfield& /*subfield*/);
+
+template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRowGroupSkipRangeFilter(
     const std::vector<RowVectorPtr>& /*batches*/,
     const Subfield& /*subfield*/);
 

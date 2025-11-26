@@ -21,9 +21,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/vector/SelectivityVector.h"
 
-namespace facebook {
-namespace velox {
-namespace test {
+namespace facebook::velox::test {
 
 // ctor Tests
 
@@ -300,15 +298,13 @@ BENCHMARK_PARAM(BM_operatorEquals, 1000000);
 BENCHMARK_PARAM(BM_operatorEquals, 10000000);
 BENCHMARK_DRAW_LINE();
 
-} // namespace test
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::test
 
 // To run:
 // buck run @mode/opt-clang-thinlto \
 //   velox/vector/benchmarks:selectivity_vector_benchmark
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   folly::runBenchmarks();
   return 0;
 }

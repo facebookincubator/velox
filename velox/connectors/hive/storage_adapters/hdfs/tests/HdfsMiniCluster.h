@@ -22,24 +22,21 @@
 #include "boost/process.hpp"
 
 namespace facebook::velox::filesystems::test {
-static const std::string miniClusterExecutableName{"hadoop"};
-static const std::string hadoopSearchPath{":/usr/local/hadoop-2.10.1/bin"};
-static const std::string jarCommand{"jar"};
-static const std::string miniclusterJar{
-    "/share/hadoop/mapreduce/hadoop-mapreduce-client-jobclient-2.10.1-tests.jar"};
-static const std::string miniclusterCommand{"minicluster"};
-static const std::string noMapReduceOption{"-nomr"};
-static const std::string formatNameNodeOption{"-format"};
-static const std::string httpPortOption{"-nnhttpport"};
-static const std::string httpPort{"7676"};
-static const std::string nameNodePortOption{"-nnport"};
-static const std::string nameNodePort{"7878"};
-static const std::string configurationOption{"-D"};
-static const std::string turnOffPermissions{"dfs.permissions=false"};
-static const std::string filesystemCommand{"fs"};
-static const std::string filesystemUrlOption{"-fs"};
-static const std::string filesystemUrl{"hdfs://localhost:" + nameNodePort};
-static const std::string filePutOption{"-put"};
+static const std::string kMiniClusterExecutableName{"hadoop"};
+static const std::string kHadoopSearchPath{":/usr/local/hadoop/bin"};
+static const std::string kJarCommand{"jar"};
+static const std::string kMiniclusterJar{
+    "/share/hadoop/mapreduce/hadoop-mapreduce-client-jobclient-3.3.6-tests.jar"};
+static const std::string kMiniclusterCommand{"minicluster"};
+static const std::string kNoMapReduceOption{"-nomr"};
+static const std::string kFormatNameNodeOption{"-format"};
+static const std::string kHttpPortOption{"-nnhttpport"};
+static const std::string kNameNodePortOption{"-nnport"};
+static const std::string kConfigurationOption{"-D"};
+static const std::string kTurnOffPermissions{"dfs.permissions=false"};
+static const std::string kFilesystemCommand{"fs"};
+static const std::string kFilesystemUrlOption{"-fs"};
+static const std::string kFilePutOption{"-put"};
 
 class HdfsMiniCluster {
  public:
@@ -54,11 +51,27 @@ class HdfsMiniCluster {
   void addFile(std::string source, std::string destination);
   virtual ~HdfsMiniCluster();
 
+  std::string_view nameNodePort() const {
+    return nameNodePort_;
+  }
+
+  std::string_view url() const {
+    return filesystemUrl_;
+  }
+
+  std::string_view host() const {
+    static const std::string_view kLocalhost = "localhost";
+    return kLocalhost;
+  }
+
  private:
   void setupEnvironment(const std::string& homeDirectory);
 
   std::unique_ptr<::boost::process::child> serverProcess_;
   boost::filesystem::path exePath_;
   boost::process::environment env_;
+  std::string nameNodePort_;
+  std::string httpPort_;
+  std::string filesystemUrl_;
 };
 } // namespace facebook::velox::filesystems::test

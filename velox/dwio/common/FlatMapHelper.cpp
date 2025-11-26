@@ -21,8 +21,17 @@
 namespace facebook::velox::dwio::common::flatmap {
 namespace detail {
 
-void reset(VectorPtr& vector, vector_size_t size, bool hasNulls) {
+void reset(
+    VectorPtr& vector,
+    VectorEncoding::Simple desiredEncoding,
+    vector_size_t size,
+    bool hasNulls) {
   if (!vector) {
+    return;
+  }
+
+  if (vector->encoding() != desiredEncoding) {
+    vector.reset();
     return;
   }
 
@@ -43,6 +52,7 @@ void reset(VectorPtr& vector, vector_size_t size, bool hasNulls) {
 
 void initializeStringVector(
     VectorPtr& vector,
+    const TypePtr& type,
     memory::MemoryPool& pool,
     const std::vector<const BaseVector*>& vectors) {
   vector_size_t size = 0;
@@ -64,7 +74,7 @@ void initializeStringVector(
     }
   }
   initializeFlatVector<StringView>(
-      vector, pool, VARCHAR(), size, hasNulls, std::move(buffers));
+      vector, pool, type, size, hasNulls, std::move(buffers));
 }
 
 } // namespace detail
@@ -103,19 +113,19 @@ void initializeVectorImpl(
 template <>
 void initializeVectorImpl<TypeKind::VARCHAR>(
     VectorPtr& vector,
-    const TypePtr& /* type */,
+    const TypePtr& type,
     memory::MemoryPool& pool,
     const std::vector<const BaseVector*>& vectors) {
-  detail::initializeStringVector(vector, pool, vectors);
+  detail::initializeStringVector(vector, type, pool, vectors);
 }
 
 template <>
 void initializeVectorImpl<TypeKind::VARBINARY>(
     VectorPtr& vector,
-    const TypePtr& /* type */,
+    const TypePtr& type,
     memory::MemoryPool& pool,
     const std::vector<const BaseVector*>& vectors) {
-  detail::initializeStringVector(vector, pool, vectors);
+  detail::initializeStringVector(vector, type, pool, vectors);
 }
 
 namespace {
@@ -161,7 +171,7 @@ void initializeVectorImpl<TypeKind::ARRAY>(
     }
   }
 
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::ARRAY, size, hasNulls);
   VectorPtr origElementsVector;
   if (vector) {
     auto& arrayVector = dynamic_cast<ArrayVector&>(*vector);
@@ -225,7 +235,7 @@ void initializeMapVector(
     size = sizeOverride.value();
   }
 
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::MAP, size, hasNulls);
   VectorPtr origKeysVector;
   VectorPtr origValuesVector;
   if (vector) {
@@ -297,7 +307,7 @@ void initializeVectorImpl<TypeKind::ROW>(
     }
   }
 
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::ROW, size, hasNulls);
   std::vector<VectorPtr> origChildren;
   if (vector) {
     auto& rowVector = dynamic_cast<RowVector&>(*vector);
@@ -527,7 +537,8 @@ void copyOffsetsFromConstInput(
     const BaseVector& source,
     vector_size_t sourceIndex,
     vector_size_t count) {
-  auto nullCount = copyNulls(target, targetIndex, source, sourceIndex, count);
+  VELOX_DEBUG_ONLY const auto nullCount =
+      copyNulls(target, targetIndex, source, sourceIndex, count);
   VELOX_DCHECK_EQ(nullCount, count, "Expecting constant null vector input");
   // We cannot track the last non-null index efficiently across copy
   // invocations. In order to make it easier for computing child offset, we

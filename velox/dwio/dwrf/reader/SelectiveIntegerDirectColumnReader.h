@@ -28,73 +28,82 @@ class SelectiveIntegerDirectColumnReader
   using ValueType = int64_t;
 
   SelectiveIntegerDirectColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       uint32_t numBytes,
       common::ScanSpec& scanSpec)
       : SelectiveIntegerColumnReader(
-            std::move(requestedType),
+            requestedType,
             params,
             scanSpec,
-            dataType->type) {
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-    auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
-    auto& stripe = params.stripeStreams();
-    bool dataVInts = stripe.getUseVInts(data);
+            std::move(fileType)) {
+    const EncodingKey encodingKey{
+        fileType_->id(), params.flatMapContext().sequence};
+    const auto& stripe = params.stripeStreams();
+    const auto si = StripeStreamsUtil::getStreamForKind(
+        stripe,
+        encodingKey,
+        proto::Stream_Kind_DATA,
+        proto::orc::Stream_Kind_DATA);
+    const bool dataVInts = stripe.getUseVInts(si);
 
-    format = stripe.format();
-    if (format == velox::dwrf::DwrfFormat::kDwrf) {
-      ints = createDirectDecoder</*isSigned*/ true>(
-          stripe.getStream(data, params.streamLabels().label(), true),
+    format_ = stripe.format();
+    version_ = convertRleVersion(stripe, encodingKey);
+
+    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
+      intDecoder_ = createDirectDecoder</*isSigned=*/true>(
+          stripe.getStream(si, params.streamLabels().label(), true),
           dataVInts,
           numBytes);
-    } else if (format == velox::dwrf::DwrfFormat::kOrc) {
-      version = convertRleVersion(stripe.getEncoding(encodingKey).kind());
-      ints = createRleDecoder</*isSigned*/ true>(
-          stripe.getStream(data, params.streamLabels().label(), true),
-          version,
+    } else if (format_ == velox::dwrf::DwrfFormat::kOrc) {
+      intDecoder_ = createRleDecoder</*isSigned*/ true>(
+          stripe.getStream(si, params.streamLabels().label(), true),
+          version_,
           params.pool(),
           dataVInts,
           numBytes);
     } else {
-      VELOX_FAIL("invalid stripe format");
+      VELOX_FAIL("invalid stripe format: {}", format_);
     }
   }
 
   bool hasBulkPath() const override {
-    return true;
+    // Only ORC uses RLEv2 encoding. Currently, ORC integer data does not
+    // support fastpath reads. When reading RLEv2-encoded integer data
+    // with null, the query will fail.
+    return version_ != velox::dwrf::RleVersion_2;
   }
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     dwio::common::SelectiveIntegerColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
-    ints->seekToRowGroup(positionsProvider);
+    intDecoder_->seekToRowGroup(positionsProvider);
 
     VELOX_CHECK(!positionsProvider.hasNext());
   }
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
   template <typename ColumnVisitor>
-  void readWithVisitor(RowSet rows, ColumnVisitor visitor);
+  void readWithVisitor(const RowSet& rows, ColumnVisitor visitor);
 
  private:
-  dwrf::DwrfFormat format;
-  RleVersion version;
-  std::unique_ptr<dwio::common::IntDecoder<true>> ints;
+  dwrf::DwrfFormat format_;
+  RleVersion version_;
+  std::unique_ptr<dwio::common::IntDecoder<true>> intDecoder_;
 };
 
 template <typename ColumnVisitor>
 void SelectiveIntegerDirectColumnReader::readWithVisitor(
-    RowSet rows,
+    const RowSet& rows,
     ColumnVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
-  if (format == velox::dwrf::DwrfFormat::kDwrf) {
-    decodeWithVisitor<dwio::common::DirectDecoder<true>>(ints.get(), visitor);
+  if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
+    decodeWithVisitor<dwio::common::DirectDecoder<true>>(
+        intDecoder_.get(), visitor);
   } else {
     // orc format does not use int128
     if constexpr (!std::is_same_v<typename ColumnVisitor::DataType, int128_t>) {
@@ -108,20 +117,19 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
               &visitor.reader(),
               rows,
               visitor.extractValues());
-      if (version == velox::dwrf::RleVersion_1) {
+      if (version_ == velox::dwrf::RleVersion_1) {
         decodeWithVisitor<velox::dwrf::RleDecoderV1<true>>(
-            ints.get(), drVisitor);
+            intDecoder_.get(), drVisitor);
       } else {
-        VELOX_CHECK(version == velox::dwrf::RleVersion_2);
+        VELOX_CHECK(version_ == velox::dwrf::RleVersion_2);
         decodeWithVisitor<velox::dwrf::RleDecoderV2<true>>(
-            ints.get(), drVisitor);
+            intDecoder_.get(), drVisitor);
       }
     } else {
       VELOX_UNREACHABLE(
           "SelectiveIntegerDirectColumnReader::readWithVisitor get int128_t");
     }
   }
-  readOffset_ += numRows;
 }
 
 } // namespace facebook::velox::dwrf

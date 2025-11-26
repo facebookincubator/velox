@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/dwio/common/SelectiveColumnReaderInternal.h"
+#include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 namespace facebook::velox::parquet {
@@ -25,16 +25,17 @@ class StringColumnReader : public dwio::common::SelectiveColumnReader {
  public:
   using ValueType = StringView;
   StringColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
   bool hasBulkPath() const override {
     //  Non-dictionary encodings do not have fast path.
-    return scanState_.dictionary.values != nullptr;
+    return !formatData_->as<ParquetData>().isDeltaByteArray() &&
+        scanState_.dictionary.values != nullptr;
   }
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     SelectiveColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
@@ -43,33 +44,12 @@ class StringColumnReader : public dwio::common::SelectiveColumnReader {
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void getValues(RowSet rows, VectorPtr* result) override;
+  void getValues(const RowSet& rows, VectorPtr* result) override;
 
   void dedictionarize() override;
-
- private:
-  template <bool hasNulls>
-  void skipInDecode(int32_t numValues, int32_t current, const uint64_t* nulls);
-
-  folly::StringPiece readValue(int32_t length);
-
-  template <bool hasNulls, typename Visitor>
-  void decode(const uint64_t* nulls, Visitor visitor);
-
-  template <typename TVisitor>
-  void readWithVisitor(RowSet rows, TVisitor visitor);
-
-  template <typename TFilter, bool isDense, typename ExtractValues>
-  void readHelper(common::Filter* filter, RowSet rows, ExtractValues values);
-
-  template <bool isDense, typename ExtractValues>
-  void processFilter(
-      common::Filter* filter,
-      RowSet rows,
-      ExtractValues extractValues);
 };
 
 } // namespace facebook::velox::parquet

@@ -16,27 +16,7 @@
 
 #include <gflags/gflags.h>
 
-// Used in velox/builder/SimpleVectorBuilder.cpp
-
-DEFINE_int32(
-    max_block_value_set_length,
-    5,
-    "Max entries per column that the block meta-record stores for pre-flight "
-    "filtering optimization");
-
 // Used in velox/common/memory/Memory.cpp
-
-DEFINE_int32(
-    memory_usage_aggregation_interval_millis,
-    2,
-    "Interval to compute aggregate memory usage for all nodes");
-
-// Used in velox/common/memory/MappedMemory.cpp
-
-DEFINE_int32(
-    velox_memory_pool_mb,
-    4 * 1024,
-    "Size of file cache/operator working memory in MB");
 
 DEFINE_int32(
     velox_memory_num_shared_leaf_pools,
@@ -45,7 +25,7 @@ DEFINE_int32(
 
 DEFINE_bool(
     velox_time_allocations,
-    true,
+    false,
     "Record time and volume for large allocation/free");
 
 // Used in common/base/VeloxException.cpp
@@ -94,6 +74,25 @@ DEFINE_string(
     "vectors and expression SQL strings. This flag is ignored if "
     "velox_save_input_on_expression_any_failure_path is set.");
 
+DEFINE_bool(
+    force_eval_simplified,
+    false,
+    "Whether to overwrite queryCtx and force the "
+    "use of simplified expression evaluation path.");
+
+DEFINE_bool(
+    velox_experimental_save_input_on_fatal_signal,
+    false,
+    "This is an experimental flag only to be used for debugging "
+    "purposes. If set to true, serializes the input vector data and "
+    "all the SQL expressions in the ExprSet that is currently "
+    "executing, whenever a fatal signal is encountered. Enabling "
+    "this flag makes the signal handler async signal unsafe, so it "
+    "should only be used for debugging purposes. The vector and SQLs "
+    "are serialized to files in directories specified by either "
+    "'velox_save_input_on_expression_any_failure_path' or "
+    "'velox_save_input_on_expression_system_failure_path'");
+
 // TODO: deprecate this once all the memory leak issues have been fixed in
 // existing meta internal use cases.
 DEFINE_bool(
@@ -120,3 +119,21 @@ DEFINE_bool(
     "exception. This is only used by test to control the test error output size");
 
 DEFINE_bool(velox_memory_use_hugepages, true, "Use explicit huge pages");
+
+DEFINE_int32(
+    cache_prefetch_min_pct,
+    80,
+    "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
+
+DEFINE_bool(velox_ssd_odirect, true, "Use O_DIRECT for SSD cache IO");
+
+DEFINE_bool(
+    velox_ssd_verify_write,
+    false,
+    "Read back data after writing to SSD");
+
+// Used in /connectors/tpch
+DEFINE_int32(
+    velox_tpch_text_pool_size_mb,
+    300,
+    "TPC-H DBGen text pool size in MB");

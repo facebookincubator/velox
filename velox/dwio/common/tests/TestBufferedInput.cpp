@@ -20,6 +20,7 @@
 
 using namespace facebook::velox::dwio::common;
 using facebook::velox::common::Region;
+using namespace facebook::velox::memory;
 using namespace ::testing;
 
 namespace {
@@ -28,10 +29,25 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
  public:
   virtual ~ReadFileMock() override = default;
 
+// On Centos9 the gtest mock header doesn't initialize the
+// buffer_ member in MatcherBase correctly - the default constructor only
+// initializes one: /usr/include/gtest/gtest-matchers.h:302:33 resulting in
+// error:
+// '<unnamed>.testing::Matcher<const
+// facebook::velox::FileStorageContext&>::<unnamed>.testing::internal::MatcherBase<const
+// facebook::velox::FileStorageContext&>::buffer_' is used uninitialized
+// [-Werror=uninitialized]
+//  302 |       : vtable_(other.vtable_), buffer_(other.buffer_) {
+// Fix: https://github.com/google/googletest/pull/3797
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
   MOCK_METHOD(
       std::string_view,
       pread,
-      (uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf),
+      (uint64_t offset,
+       uint64_t length,
+       void* buf,
+       (const facebook::velox::FileStorageContext&)fileStorageContext),
       (const, override));
 
   MOCK_METHOD(bool, shouldCoalesce, (), (const, override));
@@ -40,9 +56,11 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
   MOCK_METHOD(std::string, getName, (), (const, override));
   MOCK_METHOD(uint64_t, getNaturalReadSize, (), (const, override));
   MOCK_METHOD(
-      void,
+      uint64_t,
       preadv,
-      (folly::Range<const Region*> regions, folly::Range<folly::IOBuf*> iobufs),
+      (folly::Range<const Region*> regions,
+       folly::Range<folly::IOBuf*> iobufs,
+       (const facebook::velox::FileStorageContext&)fileStorageContext),
       (const, override));
 };
 
@@ -54,10 +72,14 @@ void expectPreads(
   EXPECT_CALL(file, size()).WillRepeatedly(Return(content.size()));
   for (auto& read : reads) {
     ASSERT_GE(content.size(), read.offset + read.length);
-    EXPECT_CALL(file, pread(read.offset, read.length, _))
+    EXPECT_CALL(file, pread(read.offset, read.length, _, _))
         .Times(1)
         .WillOnce(
-            [content](uint64_t offset, uint64_t length, void* buf)
+            [content](
+                uint64_t offset,
+                uint64_t length,
+                void* buf,
+                const facebook::velox::FileStorageContext& fileStorageContext)
                 -> std::string_view {
               memcpy(buf, content.data() + offset, length);
               return {content.data() + offset, length};
@@ -71,29 +93,37 @@ void expectPreadvs(
     std::vector<Region> reads) {
   EXPECT_CALL(file, getName()).WillRepeatedly(Return("mock_name"));
   EXPECT_CALL(file, size()).WillRepeatedly(Return(content.size()));
-  EXPECT_CALL(file, preadv(_, _))
+  EXPECT_CALL(file, preadv(_, _, _))
       .Times(1)
-      .WillOnce([content, reads](
-                    folly::Range<const Region*> regions,
-                    folly::Range<folly::IOBuf*> iobufs) {
-        ASSERT_EQ(regions.size(), reads.size());
-        for (size_t i = 0; i < reads.size(); ++i) {
-          const auto& region = regions[i];
-          const auto& read = reads[i];
-          auto& iobuf = iobufs[i];
-          ASSERT_EQ(region.offset, read.offset);
-          ASSERT_EQ(region.length, read.length);
-          if (!read.label.empty()) {
-            EXPECT_EQ(read.label, region.label);
-          }
-          ASSERT_LE(region.offset + region.length, content.size());
-          iobuf = folly::IOBuf(
-              folly::IOBuf::COPY_BUFFER,
-              content.data() + region.offset,
-              region.length);
-        }
-      });
+      .WillOnce(
+          [content, reads](
+              folly::Range<const Region*> regions,
+              folly::Range<folly::IOBuf*> iobufs,
+              const facebook::velox::FileStorageContext& fileStorageContext)
+              -> uint64_t {
+            EXPECT_EQ(regions.size(), reads.size());
+            uint64_t length = 0;
+            for (size_t i = 0; i < reads.size(); ++i) {
+              const auto& region = regions[i];
+              const auto& read = reads[i];
+              auto& iobuf = iobufs[i];
+              length += region.length;
+              EXPECT_EQ(region.offset, read.offset);
+              EXPECT_EQ(region.length, read.length);
+              if (!read.label.empty()) {
+                EXPECT_EQ(read.label, region.label);
+              }
+              EXPECT_LE(region.offset + region.length, content.size());
+              iobuf = folly::IOBuf(
+                  folly::IOBuf::COPY_BUFFER,
+                  content.data() + region.offset,
+                  region.length);
+            }
+
+            return length;
+          });
 }
+#pragma GCC diagnostic pop
 
 std::optional<std::string> getNext(SeekableInputStream& input) {
   const void* buf = nullptr;
@@ -106,21 +136,22 @@ std::optional<std::string> getNext(SeekableInputStream& input) {
   }
 }
 
+class TestBufferedInput : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance(MemoryManager::Options{});
+  }
+
+  const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+};
 } // namespace
 
-TEST(TestBufferedInput, AllowMoveConstructor) {
-  auto readFileMock = std::make_shared<ReadFileMock>();
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-  BufferedInput a(readFileMock, *pool);
-  BufferedInput b(std::move(a));
-}
-
-TEST(TestBufferedInput, ZeroLengthStream) {
+TEST_F(TestBufferedInput, ZeroLengthStream) {
   auto readFile =
       std::make_shared<facebook::velox::InMemoryReadFile>(std::string());
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-  BufferedInput input(readFile, *pool);
+  BufferedInput input(readFile, *pool_);
   auto ret = input.enqueue({0, 0});
+  EXPECT_EQ(input.nextFetchSize(), 0);
   EXPECT_NE(ret, nullptr);
   const void* buf = nullptr;
   int32_t size = 1;
@@ -128,22 +159,23 @@ TEST(TestBufferedInput, ZeroLengthStream) {
   EXPECT_EQ(size, 0);
 }
 
-TEST(TestBufferedInput, UseRead) {
+TEST_F(TestBufferedInput, UseRead) {
   std::string content = "hello";
   auto readFileMock = std::make_shared<ReadFileMock>();
   expectPreads(*readFileMock, content, {{0, 5}});
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   // Use read
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ false);
   auto ret = input.enqueue({0, 5});
   ASSERT_NE(ret, nullptr);
 
+  EXPECT_EQ(input.nextFetchSize(), 5);
   input.load(LogType::TEST);
 
   auto next = getNext(*ret);
@@ -151,22 +183,23 @@ TEST(TestBufferedInput, UseRead) {
   EXPECT_EQ(next.value(), content);
 }
 
-TEST(TestBufferedInput, UseVRead) {
+TEST_F(TestBufferedInput, UseVRead) {
   std::string content = "hello";
   auto readFileMock = std::make_shared<ReadFileMock>();
   expectPreadvs(*readFileMock, content, {{0, 5}});
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   // Use vread
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ true);
   auto ret = input.enqueue({0, 5});
   ASSERT_NE(ret, nullptr);
 
+  EXPECT_EQ(input.nextFetchSize(), 5);
   input.load(LogType::TEST);
 
   auto next = getNext(*ret);
@@ -174,7 +207,7 @@ TEST(TestBufferedInput, UseVRead) {
   EXPECT_EQ(next.value(), content);
 }
 
-TEST(TestBufferedInput, WillMerge) {
+TEST_F(TestBufferedInput, WillMerge) {
   std::string content = "hello world";
   auto readFileMock = std::make_shared<ReadFileMock>();
 
@@ -182,11 +215,11 @@ TEST(TestBufferedInput, WillMerge) {
   // Expect only one call.
   expectPreads(*readFileMock, content, {{0, 11}});
 
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       10, // Will merge if distance <= 10
       /* wsVRLoad = */ false);
@@ -196,6 +229,7 @@ TEST(TestBufferedInput, WillMerge) {
   ASSERT_NE(ret1, nullptr);
   ASSERT_NE(ret2, nullptr);
 
+  EXPECT_EQ(input.nextFetchSize(), 10);
   input.load(LogType::TEST);
 
   auto next1 = getNext(*ret1);
@@ -207,7 +241,7 @@ TEST(TestBufferedInput, WillMerge) {
   EXPECT_EQ(next2.value(), "world");
 }
 
-TEST(TestBufferedInput, WontMerge) {
+TEST_F(TestBufferedInput, WontMerge) {
   std::string content = "hello  world"; // two spaces
   auto readFileMock = std::make_shared<ReadFileMock>();
 
@@ -215,11 +249,11 @@ TEST(TestBufferedInput, WontMerge) {
   // Expect two calls
   expectPreads(*readFileMock, content, {{0, 5}, {7, 5}});
 
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ false);
@@ -229,6 +263,7 @@ TEST(TestBufferedInput, WontMerge) {
   ASSERT_NE(ret1, nullptr);
   ASSERT_NE(ret2, nullptr);
 
+  EXPECT_EQ(input.nextFetchSize(), 10);
   input.load(LogType::TEST);
 
   auto next1 = getNext(*ret1);
@@ -240,17 +275,17 @@ TEST(TestBufferedInput, WontMerge) {
   EXPECT_EQ(next2.value(), "world");
 }
 
-TEST(TestBufferedInput, ReadSorting) {
+TEST_F(TestBufferedInput, ReadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
   auto readFileMock = std::make_shared<ReadFileMock>();
   expectPreads(*readFileMock, content, {{0, 9}, {24, 3}, {29, 3}});
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ false);
@@ -258,13 +293,16 @@ TEST(TestBufferedInput, ReadSorting) {
   std::vector<std::pair<std::unique_ptr<SeekableInputStream>, std::string>>
       result;
   result.reserve(regions.size());
+  int64_t bytesToRead = 0;
   for (auto& region : regions) {
+    bytesToRead += region.length;
     auto ret = input.enqueue(region);
     ASSERT_NE(ret, nullptr);
     result.push_back(
         {std::move(ret), content.substr(region.offset, region.length)});
   }
 
+  EXPECT_EQ(input.nextFetchSize(), bytesToRead);
   input.load(LogType::TEST);
 
   for (auto& r : result) {
@@ -274,18 +312,18 @@ TEST(TestBufferedInput, ReadSorting) {
   }
 }
 
-TEST(TestBufferedInput, VReadSorting) {
+TEST_F(TestBufferedInput, VReadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
   auto readFileMock = std::make_shared<ReadFileMock>();
   expectPreadvs(
       *readFileMock, content, {{0, 3}, {3, 3}, {6, 3}, {24, 3}, {29, 3}});
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ true);
@@ -293,13 +331,16 @@ TEST(TestBufferedInput, VReadSorting) {
   std::vector<std::pair<std::unique_ptr<SeekableInputStream>, std::string>>
       result;
   result.reserve(regions.size());
+  int64_t bytesToRead = 0;
   for (auto& region : regions) {
+    bytesToRead += region.length;
     auto ret = input.enqueue(region);
     ASSERT_NE(ret, nullptr);
     result.push_back(
         {std::move(ret), content.substr(region.offset, region.length)});
   }
 
+  EXPECT_EQ(input.nextFetchSize(), bytesToRead);
   input.load(LogType::TEST);
 
   for (auto& r : result) {
@@ -309,7 +350,7 @@ TEST(TestBufferedInput, VReadSorting) {
   }
 }
 
-TEST(TestBufferedInput, VReadSortingWithLabels) {
+TEST_F(TestBufferedInput, VReadSortingWithLabels) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<std::string> l = {"a", "b", "c", "d", "e"};
   std::vector<Region> regions = {
@@ -320,11 +361,11 @@ TEST(TestBufferedInput, VReadSortingWithLabels) {
       *readFileMock,
       content,
       {{0, 3, l[0]}, {3, 3, l[1]}, {6, 3, l[2]}, {24, 3, l[3]}, {29, 3, l[4]}});
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   BufferedInput input(
       readFileMock,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ true);
@@ -332,13 +373,16 @@ TEST(TestBufferedInput, VReadSortingWithLabels) {
   std::vector<std::pair<std::unique_ptr<SeekableInputStream>, std::string>>
       result;
   result.reserve(regions.size());
+  int64_t bytesToRead = 0;
   for (auto& region : regions) {
+    bytesToRead += region.length;
     auto ret = input.enqueue(region);
     ASSERT_NE(ret, nullptr);
     result.push_back(
         {std::move(ret), content.substr(region.offset, region.length)});
   }
 
+  EXPECT_EQ(input.nextFetchSize(), bytesToRead);
   input.load(LogType::TEST);
 
   for (auto& r : result) {

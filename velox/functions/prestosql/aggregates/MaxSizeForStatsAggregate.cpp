@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/MaxSizeForStatsAggregate.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
@@ -56,15 +57,6 @@ class MaxSizeForStatsAggregate
     });
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      *BaseAggregate ::value<int64_t>(groups[i]) = 0;
-    }
-  }
-
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     // Partial and final aggregations are the same.
@@ -104,7 +96,7 @@ class MaxSizeForStatsAggregate
           result = value;
         },
         mayPushdown,
-        (int64_t)0);
+        static_cast<int64_t>(0));
   }
 
   void addSingleGroupRawInput(
@@ -175,7 +167,7 @@ class MaxSizeForStatsAggregate
     });
 
     getVectorSerde()->estimateSerializedSize(
-        vector,
+        vector.get(),
         folly::Range(elementIndices_.data(), elementIndices_.size()),
         elementSizePtrs_.data());
   }
@@ -200,20 +192,35 @@ class MaxSizeForStatsAggregate
       });
     }
   }
+
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *BaseAggregate ::value<int64_t>(groups[i]) = 0;
+    }
+  }
 };
 
-exec::AggregateRegistrationResult registerMaxSizeForStats(
-    const std::string& name) {
+} // namespace
+
+void registerMaxDataSizeForStatsAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .typeVariable("T")
-                           .returnType("BIGINT")
-                           .intermediateType("BIGINT")
-                           .argumentType("T")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("T")
+          .build());
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kMaxSizeForStats;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -226,13 +233,10 @@ exec::AggregateRegistrationResult registerMaxSizeForStats(
         auto inputType = argTypes[0];
 
         return std::make_unique<MaxSizeForStatsAggregate>(resultType);
-      });
-}
-
-} // namespace
-
-void registerMaxDataSizeForStatsAggregate(const std::string& prefix) {
-  registerMaxSizeForStats(prefix + kMaxSizeForStats);
+      },
+      {.ignoreDuplicates = true, .orderSensitive = false},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

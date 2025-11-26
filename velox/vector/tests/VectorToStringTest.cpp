@@ -13,11 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
 
-class VectorToStringTest : public testing::Test, public VectorTestBase {};
+class VectorToStringTest : public testing::Test, public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+};
 
 TEST_F(VectorToStringTest, flatIntegers) {
   // No nulls.
@@ -28,8 +34,8 @@ TEST_F(VectorToStringTest, flatIntegers) {
   ASSERT_EQ(flat->toString(3, 8, ", ", false), "4, 5, 6, 7, 8");
 
   // With nulls.
-  flat = makeFlatVector<int32_t>(
-      100, [](auto row) { return row; }, nullEvery(3));
+  flat =
+      makeFlatVector<int32_t>(100, [](auto row) { return row; }, nullEvery(3));
   ASSERT_EQ(flat->toString(), "[FLAT INTEGER: 100 elements, 34 nulls]");
   ASSERT_EQ(flat->toString(true), "[FLAT INTEGER: 100 elements, 34 nulls]");
   ASSERT_EQ(flat->toString(1), "1");
@@ -42,13 +48,13 @@ TEST_F(VectorToStringTest, arrayOfIntegers) {
   auto arr = makeArrayVector<int64_t>(
       {{0}, {1, 2}, {3, 4, 5}, {6}, {}, {8, 9, 10, 11}});
   ASSERT_EQ(arr->toString(), "[ARRAY ARRAY<BIGINT>: 6 elements, no nulls]");
-  ASSERT_EQ(arr->toString(3), "1 elements starting at 6 {6}");
+  ASSERT_EQ(arr->toString(3), "{6}");
   ASSERT_EQ(
       arr->toString(2, 6),
-      "2: 3 elements starting at 3 {3, 4, 5}\n"
-      "3: 1 elements starting at 6 {6}\n"
+      "2: {3, 4, 5}\n"
+      "3: {6}\n"
       "4: <empty>\n"
-      "5: 4 elements starting at 7 {8, 9, 10, 11}");
+      "5: {8, 9, 10, 11}");
 
   // With nulls.
   arr = makeNullableArrayVector<int64_t>(
@@ -57,21 +63,18 @@ TEST_F(VectorToStringTest, arrayOfIntegers) {
   ASSERT_EQ(arr->toString(4), "<empty>");
   ASSERT_EQ(
       arr->toString(2, 6),
-      "2: 3 elements starting at 3 {3, 4, 5}\n"
-      "3: 1 elements starting at 6 {6}\n"
+      "2: {3, 4, 5}\n"
+      "3: {6}\n"
       "4: <empty>\n"
-      "5: 2 elements starting at 7 {null, 5}");
+      "5: {null, 5}");
 }
 
 TEST_F(VectorToStringTest, mapOfIntegerToDouble) {
   auto map = makeMapVector<int32_t, double>(
       {{{1, 0.1}, {2, 0.2}, {3, 0.3}}, {}, {{4, 0.4}, {5, 0.5}}});
   ASSERT_EQ(map->toString(), "[MAP MAP<INTEGER,DOUBLE>: 3 elements, no nulls]");
-  ASSERT_EQ(
-      map->toString(0),
-      "3 elements starting at 0 {1 => 0.1, 2 => 0.2, 3 => 0.3}");
-  ASSERT_EQ(
-      map->toString(2, 6), "2: 2 elements starting at 3 {4 => 0.4, 5 => 0.5}");
+  ASSERT_EQ(map->toString(0), "{1 => 0.1, 2 => 0.2, 3 => 0.3}");
+  ASSERT_EQ(map->toString(2, 6), "2: {4 => 0.4, 5 => 0.5}");
 }
 
 TEST_F(VectorToStringTest, row) {
@@ -107,27 +110,27 @@ TEST_F(VectorToStringTest, decimals) {
       makeFlatVector<int64_t>({1000265, 35610, -314159, 7, 0}, DECIMAL(10, 3));
   ASSERT_EQ(
       shortDecimalFlatVector->toString(),
-      "[FLAT DECIMAL(10,3): 5 elements, no nulls]");
+      "[FLAT DECIMAL(10, 3): 5 elements, no nulls]");
   ASSERT_EQ(
       shortDecimalFlatVector->toString(0, 5),
       "0: 1000.265\n"
       "1: 35.610\n"
       "2: -314.159\n"
       "3: 0.007\n"
-      "4: 0");
+      "4: 0.000");
 
   auto longDecimalFlatVector =
       makeFlatVector<int128_t>({1000265, 35610, -314159, 7, 0}, DECIMAL(20, 4));
   ASSERT_EQ(
       longDecimalFlatVector->toString(),
-      "[FLAT DECIMAL(20,4): 5 elements, no nulls]");
+      "[FLAT DECIMAL(20, 4): 5 elements, no nulls]");
   ASSERT_EQ(
       longDecimalFlatVector->toString(0, 5),
       "0: 100.0265\n"
       "1: 3.5610\n"
       "2: -31.4159\n"
       "3: 0.0007\n"
-      "4: 0");
+      "4: 0.0000");
 }
 
 TEST_F(VectorToStringTest, nullableDecimals) {
@@ -135,7 +138,7 @@ TEST_F(VectorToStringTest, nullableDecimals) {
       {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(10, 3));
   ASSERT_EQ(
       shortDecimalFlatVector->toString(),
-      "[FLAT DECIMAL(10,3): 5 elements, 1 nulls]");
+      "[FLAT DECIMAL(10, 3): 5 elements, 1 nulls]");
   ASSERT_EQ(
       shortDecimalFlatVector->toString(0, 5),
       "0: 1000.265\n"
@@ -148,7 +151,7 @@ TEST_F(VectorToStringTest, nullableDecimals) {
       {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(20, 4));
   ASSERT_EQ(
       longDecimalFlatVector->toString(),
-      "[FLAT DECIMAL(20,4): 5 elements, 1 nulls]");
+      "[FLAT DECIMAL(20, 4): 5 elements, 1 nulls]");
   ASSERT_EQ(
       longDecimalFlatVector->toString(0, 5),
       "0: 100.0265\n"
@@ -188,9 +191,9 @@ TEST_F(VectorToStringTest, constant) {
   auto constant = BaseVector::wrapInConstant(100, 1, arrayVector);
   ASSERT_EQ(
       constant->toString(true),
-      "[CONSTANT ARRAY<INTEGER>: 100 elements, 2 elements starting at 3 {4, 5}], "
+      "[CONSTANT ARRAY<INTEGER>: 100 elements, {4, 5}], "
       "[ARRAY ARRAY<INTEGER>: 3 elements, no nulls]");
-  ASSERT_EQ(constant->toString(3), "2 elements starting at 3 {4, 5}");
+  ASSERT_EQ(constant->toString(3), "{4, 5}");
 }
 
 TEST_F(VectorToStringTest, dictionary) {

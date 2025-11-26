@@ -7,21 +7,108 @@ JSON Format
 
 JSON is a language-independent data format that represents data as
 human-readable text. A JSON text can represent a number, a boolean, a
-string, an array, an object, or a null, with slightly different grammar.
-For instance, a JSON text representing a string must escape all characters
-and enclose the string in double quotes, such as ``"123\n"``, whereas a JSON
-text representing a number does not need to, such as ``123``. A JSON text
-representing an array must enclose the array elements in square brackets,
-such as ``[1,2,3]``. More detailed grammar can be found in
-`this JSON introduction`_.
+string, an array, an object, or a null. A JSON text representing a string
+must escape all characters and enclose the string in double quotes, e.g.,
+``"123\n"``, whereas a JSON text representing a number does not need to,
+e.g., ``123``. A JSON text representing an array must enclose the array
+elements in square brackets, e.g., ``[1,2,3]``. More detailed grammar can
+be found in `this JSON introduction`_.
 
 .. _this JSON introduction: https://www.json.org
 
 JSON Functions
 --------------
 
-.. spark:function:: get_json_object(json, path) -> varchar
+.. spark:function:: from_json(jsonString) -> array / map / row
 
-    Extracts a json object from path::
+    Casts ``jsonString`` to an ARRAY, MAP, or ROW type, with the output type
+    determined by the expression. Returns NULL, if the input string is unparsable.
+    Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
+    REAL, DOUBLE, DECIMAL, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
+    or MAP, the element type of the array or the value type of the map must be one
+    of these supported types, and for maps, the key type must be VARCHAR. Casting
+    to ROW supports only JSON objects.
+    Note that since the result type can be inferred from the expression, in Velox we
+    do not need to provide the ``schema`` parameter as required by Spark's from_json
+    function. ::
 
-        SELECT get_json_object('{"a":"b"}', '$.a'); -- b
+        SELECT from_json('{"a": true}', 'a BOOLEAN'); -- {'a'=true}
+        SELECT from_json('{"a": 1}', 'a INT'); -- {'a'=1}
+        SELECT from_json('{"a": 1.0}', 'a DOUBLE'); -- {'a'=1.0}
+        SELECT from_json('{"a": 5.321E2}', 'a DECIMAL(7, 2)'); -- {'a'=532.10}
+        SELECT from_json('{"a":"2021-7-1T"}', 'a DATE'); -- {'a'="2021-07-01"}
+        SELECT from_json('{"a":"1"}', 'a DATE'); -- {'a'="1970-01-02"}
+        SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']
+        SELECT from_json('{"a": 1, "b": 2}', 'MAP<STRING, INT>'); -- {'a'=1, 'b'=2}
+        SELECT from_json('{"a": {"b": 1}}', 'a STRUCT<b INT>'); -- {'a'={b=1}}
+
+    The current implementation has the following limitations.
+
+    * Does not support user provided options, for example, the Spark function below is not supported. ::
+
+        from_json('{"a":1}', 'a INT', map('option', 'value'))
+
+    * Only supports partial result mode, which requires spark configuration spark.sql.json.enablePartialResults = true.
+
+    * Does not allow single quotes enclosed string, {'a':1}. NULL will be returned.
+
+    * Does not support schemas that include a corrupt record column, for example, the Spark function below is not supported. ::
+
+        from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE, _corrupt_record STRING')
+
+.. spark:function:: get_json_object(jsonString, path) -> varchar
+
+    Returns a json object, represented by VARCHAR, from ``jsonString`` by searching ``path``.
+    Returns NULL if ``jsonString`` or ``path`` is malformed or ``path`` does not exist. ::
+
+        SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
+        SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'
+        SELECT get_json_object('{"a":3}', '$.b'); -- NULL (unexisting field)
+        SELECT get_json_object('{"a"-3}'', '$.a'); -- NULL (malformed JSON string)
+        SELECT get_json_object('{"a":3}'', '.a'); -- NULL (malformed JSON path)
+
+    Valid ``path`` syntax:
+        * Must start with '$'.
+        * Using "[index]", "['field']" or ".field" to navigate to the desired JSON object.
+        * Whitespace is allowed **after the dot** and **before the field name**, e.g., "$.  field".
+        * Trailing whitespace after '$' is allowed, e.g., "$   ".
+
+.. spark:function:: json_array_length(jsonString) -> integer
+
+    Returns the number of elements in the outermost JSON array from ``jsonString``.
+    If ``jsonString`` is not a valid JSON array or NULL, the function returns NULL. ::
+
+        SELECT json_array_length('[1,2,3,4]'); -- 4
+        SELECT json_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]'); -- 5
+        SELECT json_array_length('[1,2'); -- NULL
+
+.. spark:function:: json_object_keys(jsonString) -> array(string)
+
+    Returns all the keys of the outermost JSON object as an array if a valid JSON object is given.
+    If it is any other valid JSON string, an invalid JSON string or an empty string, the function
+    returns null. ::
+
+        SELECT json_object_keys('{}'); -- []
+        SELECT json_object_keys('{"name": "Alice", "age": 5, "id": "001"}'); -- ['name', 'age', 'id']
+        SELECT json_object_keys(''); -- NULL
+        SELECT json_object_keys(1); -- NULL
+        SELECT json_object_keys('"hello"'); -- NULL
+        SELECT json_object_keys("invalid json"); -- NULL
+
+.. spark:function:: to_json(jsonObject) -> jsonString
+
+    Converts a Json object (ROW, ARRAY or MAP) into a JSON string. ::
+
+        SELECT to_json(named_struct('c0', 1, 'c1', 'a')); -- {"c0":1,"c1":"a"}
+        SELECT to_json(ARRAY(1, 2, 3)); -- [1,2,3]
+        SELECT to_json(MAP('x', 1, 'y', 2)); -- {"x":1,"y":2}
+
+    The current implementation has following limitations.
+
+    * Does not support user provided options. ::
+
+        to_json(MAP(1, 'a'), map('option', 'value'))
+
+    * MAP key type cannot be/contain MAP. ::
+
+        to_json(MAP(MAP('a', 1), 10))

@@ -17,6 +17,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
 struct TaskCompletedEvent {
@@ -111,7 +112,7 @@ TEST_F(TaskListenerTest, error) {
   auto& events = listener->events();
   ASSERT_TRUE(exec::registerTaskListener(listener));
 
-  EXPECT_THROW(readCursor(params, [](auto) {}), VeloxException);
+  EXPECT_THROW(readCursor(params), VeloxException);
 
   ASSERT_EQ(1, events.size());
   ASSERT_EQ("division by zero", events.back().errorMessage());

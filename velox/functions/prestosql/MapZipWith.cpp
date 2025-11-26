@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include <optional>
-#include "velox/expression/Expr.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -78,14 +78,6 @@ struct MergeResults {
 // https://prestodb.io/docs/current/functions/map.html#map_zip_with
 class MapZipWithFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    // map_zip_with is null preserving for the map, but since an
-    // expr tree with a lambda depends on all named fields, including
-    // captures, a null in a capture does not automatically make a
-    // null result.
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -191,6 +183,13 @@ class MapZipWithFunction : public exec::VectorFunction {
           &mergedValues);
     }
 
+    // Set nulls for rows not present in 'rows'.
+    bits::andBits(
+        mergeResults.rawNewNulls,
+        rows.asRange().bits(),
+        rows.begin(),
+        rows.end());
+
     auto localResult = std::make_shared<MapVector>(
         context.pool(),
         outputType,
@@ -208,7 +207,7 @@ class MapZipWithFunction : public exec::VectorFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // map(K, V1), map(K, V2), function(K, V1, V2, V3) -> map(K, V3)
     return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V1")
                 .typeVariable("V2")
                 .typeVariable("V3")
@@ -484,9 +483,15 @@ class MapZipWithFunction : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+/// map_zip_with is null preserving for the map, but since an
+/// expr tree with a lambda depends on all named fields, including
+/// captures, a null in a capture does not automatically make a
+/// null result.
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_map_zip_with,
     MapZipWithFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<MapZipWithFunction>());
 
 } // namespace facebook::velox::functions

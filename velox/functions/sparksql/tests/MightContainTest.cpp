@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/common/base/BloomFilter.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -32,11 +33,13 @@ class MightContainTest : public SparkFunctionBaseTest {
     auto selected = SelectivityVector(value->size());
     std::vector<core::TypedExprPtr> args;
     if (serialized.has_value()) {
-      args.push_back(std::make_shared<core::ConstantTypedExpr>(
-          VARBINARY(), variant::binary(serialized.value())));
+      args.push_back(
+          std::make_shared<core::ConstantTypedExpr>(
+              VARBINARY(), variant::binary(serialized.value())));
     } else {
-      args.push_back(std::make_shared<core::ConstantTypedExpr>(
-          VARBINARY(), variant::null(TypeKind::VARBINARY)));
+      args.push_back(
+          std::make_shared<core::ConstantTypedExpr>(
+              VARBINARY(), variant::null(TypeKind::VARBINARY)));
     }
     args.push_back(
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0"));

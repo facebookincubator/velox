@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_aggregates
   ApproxDistinctAggregate.cpp
   ApproxMostFrequentAggregate.cpp
@@ -21,37 +21,58 @@ add_library(
   ArrayAggAggregate.cpp
   AverageAggregate.cpp
   BitwiseAggregates.cpp
+  BitwiseXorAggregate.cpp
   BoolAggregates.cpp
   CentralMomentsAggregates.cpp
+  CountAggregate.cpp
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
+  ClassificationAggregation.cpp
   EntropyAggregates.cpp
+  GeometricMeanAggregate.cpp
   HistogramAggregate.cpp
   MapAggAggregate.cpp
   MapUnionAggregate.cpp
   MapUnionSumAggregate.cpp
+  MaxSizeForStatsAggregate.cpp
+  MergeAggregate.cpp
+  NumericHistogramAggregate.cpp
   MinMaxAggregates.cpp
-  MinMaxByAggregates.cpp
-  CountAggregate.cpp
+  MaxByAggregate.cpp
+  MinByAggregate.cpp
+  MultiMapAggAggregate.cpp
   PrestoHasher.cpp
+  QDigestAggAggregate.cpp
+  ReduceAgg.cpp
+  RegisterAggregateFunctions.cpp
+  NoisyAvgGaussianAggregate.cpp
+  NoisyCountIfGaussianAggregate.cpp
+  NoisyCountGaussianAggregate.cpp
+  NoisyHelperFunctionFactory.cpp
+  NoisySumGaussianAggregate.cpp
+  NoisyApproxSfmAggregate.cpp
   SetAggregates.cpp
   SumAggregate.cpp
-  ValueList.cpp
-  VarianceAggregates.cpp
-  MaxSizeForStatsAggregate.cpp
   SumDataSizeForStatsAggregate.cpp
-  RegisterAggregateFunctions.cpp)
+  TDigestAggregate.cpp
+  VarianceAggregates.cpp
+)
 
-target_link_libraries(
+velox_link_libraries(
   velox_aggregates
   velox_common_hyperloglog
   velox_exec
+  velox_expression
   velox_presto_serializer
+  velox_presto_types
   velox_functions_aggregates
   velox_functions_lib
   velox_functions_util
-  Folly::folly)
+  velox_presto_types
+  velox_functions_sfm
+  Folly::folly
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

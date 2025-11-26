@@ -15,7 +15,7 @@ Let’s start by getting access to a MemoryPool:
 
     #include "velox/common/memory/Memory.h"
 
-    auto pool = memory::addDefaultLeafMemoryPool();
+    auto pool = memory::memoryManager()->addLeafPool();
 
 `pool` is a std::shared_ptr<velox::memory::MemoryPool>. We can use it to
 allocate buffers.
@@ -165,8 +165,8 @@ allocated from it are destroyed.
 Let's now look at the nulls buffer.
 
 We use the nulls buffer to store null flags, one bit per value.
-AlignedBuffer<boo>::allocate template is overwritten to allocate only one bit
-per entry, not 1 byte (=sizeof(bool). To read and write null bits we use
+AlignedBuffer<bool>::allocate template is overwritten to allocate only one bit
+per entry, not 1 byte (=sizeof(bool)). To read and write null bits we use
 Buffer::as<uint64_t>() and Buffer::asMutable<uint64_t>() method. Notice that we
 use uint64_t as template parameter, not bool.
 
@@ -282,18 +282,19 @@ discuss these later.
 FlatValue<T> class can be used to store values of primitive types. The following
 types are supported in Velox:
 
-======================  ===========================    ==================
+======================  ===========================    ==============================
 Type                    C++ Type                       Description
-======================  ===========================    ==================
+======================  ===========================    ==============================
 BOOLEAN                 bool                           A boolean flag: true or false.
 TINYINT                 int8_t                         8-bit integer.
 SMALLINT                int16_t                        16-bit integer.
 INTEGER                 int32_t	                       32-bit integer.
 BIGINT                  int64_t                        64-bit integer.
+HUGEINT                 int128_t                       128-bit integer.
 REAL                    float                          32-bit floating point number.
 DOUBLE                  double                         64-bit floating point number.
 VARCHAR                 struct StringView              Variable width string.
-======================  ===========================    ==================
+======================  ===========================    ==============================
 
 Nulls buffer can be null, which indicates that all values are not null.
 

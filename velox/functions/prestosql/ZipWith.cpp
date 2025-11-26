@@ -13,9 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/Expr.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/FunctionVector.h"
 
@@ -46,14 +45,6 @@ struct DecodedInputs {
 // https://prestodb.io/docs/current/functions/array.html#zip_with
 class ZipWithFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    // zip_with is null preserving for the arrays, but since an
-    // expr tree with a lambda depends on all named fields, including
-    // captures, a null in a capture does not automatically make a
-    // null result.
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -182,6 +173,8 @@ class ZipWithFunction : public exec::VectorFunction {
         decodedInputs.decodedRight->mayHaveNulls()) {
       nulls = allocateNulls(rows.end(), pool);
       rawNulls = nulls->asMutable<uint64_t>();
+      // Set nulls for rows not present in 'rows'.
+      memcpy(rawNulls, rows.asRange().bits(), bits::nbytes(rows.end()));
     }
 
     auto leftSizes = decodedInputs.baseLeft->rawSizes();
@@ -320,9 +313,15 @@ class ZipWithFunction : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+/// zip_with is null preserving for the arrays, but since an
+/// expr tree with a lambda depends on all named fields, including
+/// captures, a null in a capture does not automatically make a
+/// null result.
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_zip_with,
     ZipWithFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<ZipWithFunction>());
 
 } // namespace facebook::velox::functions

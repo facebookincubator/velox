@@ -22,10 +22,7 @@
 #include <string>
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class NotImplementedYet : public std::logic_error {
  public:
@@ -89,7 +86,7 @@ void verify_range(uint64_t v, uint64_t rangeMask);
 
 void verify(bool c, std::string fmt...);
 
-void corrupt(std::string fmt...);
+[[noreturn]] void corrupt(std::string fmt...);
 
 std::string error_string(std::string fmt, va_list ap);
 std::string format_error_string(std::string fmt...);
@@ -117,7 +114,4 @@ using logic_error = exception_error<std::logic_error>;
 using runtime_error = exception_error<std::runtime_error>;
 using EOF_error = exception_error<EOFError>;
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

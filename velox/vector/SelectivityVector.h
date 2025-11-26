@@ -24,11 +24,11 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/common/base/Range.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 // A selectivityVector is used to logically filter / select data in place.
 // The goal here is to be able to pass this vector between filter stages on
@@ -134,6 +134,10 @@ class SelectivityVector {
     return MutableRange<bool>(bits_.data(), begin_, end_);
   }
 
+  const uint64_t* allBits() const {
+    return bits_.data();
+  }
+
   vector_size_t begin() const {
     return begin_;
   }
@@ -156,7 +160,9 @@ class SelectivityVector {
     bits::fillBits(bits_.data(), 0, size_, false);
     begin_ = 0;
     end_ = 0;
+    VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
     allSelected_ = false;
+    VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
   }
 
   /**
@@ -248,6 +254,14 @@ class SelectivityVector {
         nulls->asMutable<uint64_t>(), bits_.data(), begin_, end_);
   }
 
+  void setNulls(uint64_t* rawNulls) const {
+    VELOX_CHECK_NOT_NULL(rawNulls);
+    bits::andWithNegatedBits(rawNulls, bits_.data(), begin_, end_);
+  }
+
+  /// Copy null bits from 'src' to 'dest' for active rows.
+  void copyNulls(uint64_t* dest, const uint64_t* src) const;
+
   /// Merges the valid vector of another SelectivityVector by or'ing
   /// them together. This is used to support memoization where a state
   /// may acquire new values over time. Grows 'this' if size of 'other' exceeds
@@ -279,7 +293,9 @@ class SelectivityVector {
     if (begin_ == -1) {
       begin_ = 0;
       end_ = 0;
+      VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
       allSelected_ = false;
+      VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
       return;
     }
     end_ = bits::findLastBit(bits_.data(), begin_, size_) + 1;
@@ -322,9 +338,6 @@ class SelectivityVector {
                  return bits_[index] == other.bits_[index];
                });
   }
-  bool operator!=(const SelectivityVector& other) const {
-    return !(*this == other);
-  }
 
   /// Invokes a function on each selected row. The function must take a single
   /// "row" argument of type vector_size_t and return void.
@@ -348,7 +361,7 @@ class SelectivityVector {
 
     // Intentionally going from zero to avoid surprises debugging if begin() and
     // end() not correct
-    for (size_t i = 0; i < selectivityVector.size(); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(selectivityVector.size()); ++i) {
       if (selectivityVector.isValid(i)) {
         if (!firstValidEncountered) {
           os << ", ";
@@ -425,7 +438,8 @@ class SelectivityIterator {
 template <typename Callable>
 inline void SelectivityVector::applyToSelected(Callable func) const {
   if (isAllSelected()) {
-    for (vector_size_t row = begin_; row < end_; ++row) {
+    const auto end = end_;
+    for (vector_size_t row = begin_; row < end; ++row) {
       func(row);
     }
   } else {
@@ -451,5 +465,5 @@ void translateToInnerRows(
     const vector_size_t* indices,
     const uint64_t* nulls,
     SelectivityVector& innerRows);
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox

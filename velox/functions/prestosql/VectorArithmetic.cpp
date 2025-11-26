@@ -132,11 +132,13 @@ class VectorArithmetic : public VectorFunction {
     // (2) the input type must match the output vector type
     // (3) usually we try to reuse inputs with flat encoding
     if (!result) {
-      if (args[0].unique() && leftEncoding == VectorEncoding::Simple::FLAT) {
+      if (args[0].use_count() == 1 &&
+          leftEncoding == VectorEncoding::Simple::FLAT) {
         result = std::move(args[0]);
       } else if (
 
-          args[1].unique() && rightEncoding == VectorEncoding::Simple::FLAT) {
+          args[1].use_count() == 1 &&
+          rightEncoding == VectorEncoding::Simple::FLAT) {
         result = std::move(args[1]);
       } else {
         result = BaseVector::create(outputType, rows.end(), context.pool());
@@ -147,8 +149,7 @@ class VectorArithmetic : public VectorFunction {
       context.ensureWritable(rows, outputType, result);
     }
     // Here we provide a pointer to the raw flat results.
-    BufferPtr resultValues =
-        result->as<FlatVector<T>>()->mutableValues(rows.end());
+    BufferPtr resultValues = result->as<FlatVector<T>>()->mutableValues();
     T* __restrict rawResult = resultValues->asMutable<T>();
 
     // Step 2: handle input encodings and call the inner kernels
@@ -360,11 +361,12 @@ class ArithmeticRegistration {
         "tinyint", "smallint", "integer", "bigint", "real", "double"};
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
     for (const auto& type : types) {
-      signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                  .returnType(type)
-                                  .argumentType(type)
-                                  .argumentType(type)
-                                  .build());
+      signatures.emplace_back(
+          exec::FunctionSignatureBuilder()
+              .returnType(type)
+              .argumentType(type)
+              .argumentType(type)
+              .build());
     }
 
     registerVectorFunction(

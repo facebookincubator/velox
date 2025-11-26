@@ -23,12 +23,48 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/CastTypeChecker.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::exec {
+
+/// Base class for views that need comparison. Default comparison is forbidden
+/// and this class requires specialization. For now, defaulting the
+/// == flag to be kNullAsValue and other comparison flag to be
+/// kNullAsIndeterminate. Can adjust in the future to be more configurable.
+template <typename T>
+struct ViewWithComparison {
+  friend bool operator==(const T& lhs, const T& rhs) {
+    static constexpr auto kEqualValueAtFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+    return compareOrThrow(lhs, rhs, kEqualValueAtFlags) == 0;
+  }
+
+  friend std::strong_ordering operator<=>(const T& lhs, const T& rhs) {
+    const auto cmp = compareOrThrow(lhs, rhs);
+    return cmp < 0 ? std::strong_ordering::less
+        : cmp > 0  ? std::strong_ordering::greater
+                   : std::strong_ordering::equal;
+  }
+
+ private:
+  static int32_t compareOrThrow(
+      const T& lhs,
+      const T& rhs,
+      CompareFlags flags = CompareFlags{
+          .nullHandlingMode =
+              CompareFlags::NullHandlingMode::kNullAsIndeterminate}) {
+    auto result = lhs.compare(rhs, flags);
+    // Will throw if it encounters null elements before result is determined.
+    VELOX_DCHECK(
+        result.has_value(),
+        "Compare should have thrown when null is encountered in child.");
+    return result.value();
+  }
+};
 
 template <typename T>
 struct VectorReader;
@@ -98,28 +134,12 @@ class IndexBasedIterator {
     return elementAccessor_(index_ + n);
   }
 
-  bool operator!=(const Iterator& rhs) const {
-    return index_ != rhs.index_;
-  }
-
   bool operator==(const Iterator& rhs) const {
     return index_ == rhs.index_;
   }
 
-  bool operator<(const Iterator& rhs) const {
-    return index_ < rhs.index_;
-  }
-
-  bool operator>(const Iterator& rhs) const {
-    return index_ > rhs.index_;
-  }
-
-  bool operator<=(const Iterator& rhs) const {
-    return index_ <= rhs.index_;
-  }
-
-  bool operator>=(const Iterator& rhs) const {
-    return index_ >= rhs.index_;
+  auto operator<=>(const Iterator& rhs) const {
+    return index_ <=> rhs.index_;
   }
 
   // Implement post increment.
@@ -238,9 +258,7 @@ class SkipNullsIterator {
   using reference = value_type;
 
  public:
-  SkipNullsIterator<BaseIterator>(
-      const BaseIterator& begin,
-      const BaseIterator& end)
+  SkipNullsIterator(const BaseIterator& begin, const BaseIterator& end)
       : iter_(begin), end_(end) {}
 
   // Given an element, return an iterator to the first not-null element starting
@@ -273,16 +291,12 @@ class SkipNullsIterator {
     return PointerWrapper(iter_.value());
   }
 
-  bool operator<(const Iterator& rhs) const {
-    return iter_ < rhs.iter_;
-  }
-
-  bool operator!=(const Iterator& rhs) const {
-    return iter_ != rhs.iter_;
-  }
-
   bool operator==(const Iterator& rhs) const {
     return iter_ == rhs.iter_;
+  }
+
+  auto operator<=>(const Iterator& rhs) const {
+    return iter_ <=> rhs.iter_;
   }
 
   // Implement post increment.
@@ -348,15 +362,12 @@ class OptionalAccessor {
     return true;
   }
 
-  bool operator!=(const OptionalAccessor& other) const {
-    return !(*this == other);
-  }
-
   bool has_value() const {
     return reader_->isSet(index_);
   }
 
   element_t value() const {
+    VELOX_DCHECK(has_value());
     return (*reader_)[index_];
   }
 
@@ -365,6 +376,7 @@ class OptionalAccessor {
   }
 
   element_t operator*() const {
+    VELOX_DCHECK(has_value());
     return value();
   }
 
@@ -378,7 +390,7 @@ class OptionalAccessor {
  private:
   const VectorReader<T>* reader_;
   // Index of element within the reader.
-  int64_t index_;
+  const int64_t index_;
 
   template <bool nullable, typename V>
   friend class ArrayView;
@@ -417,40 +429,14 @@ operator==(const OptionalAccessor<U>& lhs, const std::optional<T>& rhs) {
   return rhs == lhs;
 }
 
-template <typename T, typename U>
-typename std::enable_if_t<
-    std::is_trivially_constructible_v<typename VectorReader<U>::exec_in_t, T>,
-    bool>
-operator!=(const std::optional<T>& lhs, const OptionalAccessor<U>& rhs) {
-  return !(lhs == rhs);
-}
-
-template <typename U, typename T>
-typename std::enable_if_t<
-    std::is_trivially_constructible_v<typename VectorReader<U>::exec_in_t, T>,
-    bool>
-operator!=(const OptionalAccessor<U>& lhs, const std::optional<T>& rhs) {
-  return !(lhs == rhs);
-}
-
 template <typename T>
 bool operator==(std::nullopt_t, const OptionalAccessor<T>& rhs) {
   return !rhs.has_value();
 }
 
 template <typename T>
-bool operator!=(std::nullopt_t, const OptionalAccessor<T>& rhs) {
-  return rhs.has_value();
-}
-
-template <typename T>
 bool operator==(const OptionalAccessor<T>& lhs, std::nullopt_t) {
   return !lhs.has_value();
-}
-
-template <typename T>
-bool operator!=(const OptionalAccessor<T>& lhs, std::nullopt_t) {
-  return lhs.has_value();
 }
 
 // Allow comparing OptionalAccessor<T> with T::exec_t.
@@ -468,22 +454,6 @@ typename std::enable_if_t<
     bool>
 operator==(const OptionalAccessor<U>& lhs, const T& rhs) {
   return rhs == lhs;
-}
-
-template <typename T, typename U>
-typename std::enable_if_t<
-    std::is_trivially_constructible_v<typename VectorReader<U>::exec_in_t, T>,
-    bool>
-operator!=(const T& lhs, const OptionalAccessor<U>& rhs) {
-  return !(lhs == rhs);
-}
-
-template <typename U, typename T>
-typename std::enable_if_t<
-    std::is_trivially_constructible_v<typename VectorReader<U>::exec_in_t, T>,
-    bool>
-operator!=(const OptionalAccessor<U>& lhs, const T& rhs) {
-  return !(lhs == rhs);
 }
 
 // Helper function that calls materialize on element if it's not primitive.
@@ -629,6 +599,7 @@ class ArrayView {
 
   materialize_t materialize() const {
     materialize_t result;
+    result.reserve(size_);
 
     for (const auto& element : *this) {
       if constexpr (returnsOptionalValues) {
@@ -671,12 +642,20 @@ class ArrayView {
         "efficient to use the standard iterator interface.");
   }
 
-  const BaseVector* elementsVector() const {
+  const BaseVector* elementsVectorBase() const {
     return reader_->baseVector();
+  }
+
+  bool isFlatElements() const {
+    return reader_->decoded_.isIdentityMapping();
   }
 
   vector_size_t offset() const {
     return offset_;
+  }
+
+  TypeKind elementKind() const {
+    return elementsVectorBase()->typeKind();
   }
 
  private:
@@ -728,20 +707,13 @@ class MapView {
     const KeyAccessor first;
     const ValueAccessor second;
 
-    bool operator==(const Element& other) const {
-      return first == other.first && second == other.second;
-    }
+    bool operator==(const Element& other) const = default;
 
     // T is pair like object.
     // TODO: compare is not defined for view types yet
     template <typename T>
     bool operator==(const T& other) const {
       return first == other.first && second == other.second;
-    }
-
-    template <typename T>
-    bool operator!=(const T& other) const {
-      return !(*this == other);
     }
 
    private:
@@ -918,7 +890,8 @@ class DynamicRowView {
 };
 
 template <bool returnsOptionalValues, typename... T>
-class RowView {
+class RowView
+    : public ViewWithComparison<RowView<returnsOptionalValues, T...>> {
   using reader_t = std::tuple<std::unique_ptr<VectorReader<T>>...>;
   using types = std::tuple<T...>;
 
@@ -958,9 +931,39 @@ class RowView {
     return result;
   }
 
+  std::optional<int32_t> compare(const RowView& other, const CompareFlags flags)
+      const {
+    return compareImpl(other, flags);
+  }
+
  private:
   void initialize() {
     initializeImpl(std::index_sequence_for<T...>());
+  }
+
+  template <std::size_t Is = 0>
+  std::optional<int32_t> compareImpl(
+      const RowView& other,
+      const CompareFlags flags) const {
+    if constexpr (Is < sizeof...(T)) {
+      auto result =
+          std::get<Is>(*childReaders_)
+              ->baseVector()
+              ->compare(
+                  std::get<Is>(*other.childReaders_)->baseVector(),
+                  std::get<Is>(*childReaders_)->index(offset_),
+                  std::get<Is>(*other.childReaders_)->index(other.offset_),
+                  flags);
+      if (!result.has_value()) {
+        return std::nullopt;
+      }
+      if (result.value() != 0) {
+        return result;
+      }
+
+      return compareImpl<Is + 1>(other, flags);
+    }
+    return 0;
   }
 
   using children_types = std::tuple<T...>;
@@ -1002,8 +1005,8 @@ struct HasGeneric {
   }
 };
 
-template <typename T>
-struct HasGeneric<Generic<T>> {
+template <typename T, bool comparable, bool orderable>
+struct HasGeneric<Generic<T, comparable, orderable>> {
   static constexpr bool value() {
     return true;
   }
@@ -1059,7 +1062,7 @@ struct AllGenericExceptTop<Row<T...>> {
   }
 };
 
-class GenericView {
+class GenericView : public ViewWithComparison<GenericView> {
  public:
   GenericView(
       const DecodedVector& decoded,
@@ -1075,16 +1078,19 @@ class GenericView {
     return decoded_.base()->hashValueAt(decodedIndex());
   }
 
-  bool operator==(const GenericView& other) const {
-    return decoded_.base()->equalValueAt(
-        other.decoded_.base(), decodedIndex(), other.decodedIndex());
+  bool isNull() const {
+    return decoded_.isNullAt(index_);
+  }
+
+  const BaseVector* base() const {
+    return decoded_.base();
   }
 
   vector_size_t decodedIndex() const {
     return decoded_.index(index_);
   }
 
-  std::optional<int64_t> compare(
+  std::optional<int32_t> compare(
       const GenericView& other,
       const CompareFlags flags) const {
     return decoded_.base()->compare(
@@ -1099,6 +1105,10 @@ class GenericView {
     return decoded_.base()->type();
   }
 
+  std::string toString() const {
+    return decoded_.toString(index_);
+  }
+
   // If conversion is invalid, behavior is undefined. However, debug time
   // checks will throw an exception.
   template <typename ToType>
@@ -1109,11 +1119,18 @@ class GenericView {
             "castTo type is not compatible with type of vector, vector type is {}",
             type()->toString()));
 
-    // TODO: We can distinguish if this is a null-free or not null-free
-    // generic. And based on that determine if we want to call operator[] or
-    // readNullFree. For now we always return nullable.
-    return ensureReader<ToType>()->operator[](
-        index_); // We pass the non-decoded index.
+    // If its a primitive type, then the casted reader always exists at
+    // castReaders_[0], and is set in Vector readers.
+    if constexpr (SimpleTypeTrait<ToType>::isPrimitiveType) {
+      return reinterpret_cast<VectorReader<ToType>*>(castReaders_[0].get())
+          ->operator[](index_);
+    } else {
+      // TODO: We can distinguish if this is a null-free or not null-free
+      // generic. And based on that determine if we want to call operator[] or
+      // readNullFree. For now we always return nullable.
+      return ensureReader<ToType>()->operator[](
+          index_); // We pass the non-decoded index.
+    }
   }
 
   template <typename ToType>
@@ -1126,7 +1143,6 @@ class GenericView {
         index_); // We pass the non-decoded index.
   }
 
- private:
   template <typename B>
   VectorReader<B>* ensureReader() const {
     static_assert(
@@ -1137,7 +1153,6 @@ class GenericView {
     // the user is always casting to the same type.
     // Types are divided into three sets, for 1, and 2 we do not do the check,
     // since no two types can ever refer to the same vector.
-
     if constexpr (!HasGeneric<B>::value()) {
       // Two types with no generic can never represent same vector.
       return ensureReaderImpl<B, 0>();
@@ -1164,6 +1179,7 @@ class GenericView {
     }
   }
 
+ private:
   template <typename B, size_t I>
   VectorReader<B>* ensureReaderImpl() const {
     auto* reader = static_cast<VectorReader<B>*>(castReaders_[I].get());
@@ -1181,12 +1197,57 @@ class GenericView {
   vector_size_t index_;
 };
 
+template <typename T>
+class CustomTypeWithCustomComparisonView {
+ public:
+  CustomTypeWithCustomComparisonView(
+      const T& value,
+      const std::shared_ptr<
+          const CanProvideCustomComparisonType<SimpleTypeTrait<T>::typeKind>>&
+          type)
+      : value_(value), type_(type) {}
+
+  bool operator==(const CustomTypeWithCustomComparisonView<T>& other) const {
+    return type_->compare(value_, other.value_) == 0;
+  }
+
+  auto operator<=>(const CustomTypeWithCustomComparisonView<T>& other) const {
+    const auto cmp = type_->compare(value_, other.value_);
+    return cmp < 0 ? std::strong_ordering::less
+        : cmp > 0  ? std::strong_ordering::greater
+                   : std::strong_ordering::equal;
+  }
+
+  uint64_t hash() const {
+    return type_->hash(value_);
+  }
+
+  T operator*() const {
+    return value_;
+  }
+
+ private:
+  const T value_;
+  const std::shared_ptr<
+      const CanProvideCustomComparisonType<SimpleTypeTrait<T>::typeKind>>
+      type_;
+};
+
 } // namespace facebook::velox::exec
 
 namespace std {
 template <>
 struct hash<facebook::velox::exec::GenericView> {
   size_t operator()(const facebook::velox::exec::GenericView& x) const {
+    return x.hash();
+  }
+};
+
+template <typename T>
+struct hash<facebook::velox::exec::CustomTypeWithCustomComparisonView<T>> {
+  size_t operator()(
+      const facebook::velox::exec::CustomTypeWithCustomComparisonView<T>& x)
+      const {
     return x.hash();
   }
 };

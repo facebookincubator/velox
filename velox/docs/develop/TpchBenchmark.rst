@@ -16,7 +16,7 @@ following command line to do the build with S3 support:
 
 .. code:: shell
 
-   $ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON -DVELOX_ENABLE_S3=ON"
+   $ make benchmarks-build EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_S3=ON"
 
 ----
 
@@ -113,8 +113,8 @@ Top Optimization Recommendations
    "num_io_threads", "max(16, vCPUs<super>*</super> X 3 / 8)", "vCPUs*"
    "cache_gb", "50% System RAM", "NA (default = 0)"
    "num_splits_per_file", "Row Group Size of Data", "Row Group Size of Data"
-   "max_coalesce_bytes", "Minimum of 90MB", "Minimum of 90MB"
-   "max_coalesce_distance_bytes", "Workload dependent**", "Workload dependent**"
+   "max_coalesced_bytes", "Minimum of 90MB", "Minimum of 90MB"
+   "max_coalesced_distance_bytes", "Workload dependent**", "Workload dependent**"
    "parquet_prefetch_rowgroups", "Best is 1", "Best is 1"
    "split_preload_per_driver", "Best is 2", "Best is 2"
    "cache_prefetch_min_pct", "Best is 80", "Best is 80"

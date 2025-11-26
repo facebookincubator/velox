@@ -44,31 +44,39 @@ int64_t toInt64(Timestamp value) {
 using Days = int64_t;
 using Months = int32_t;
 template <typename T, typename K>
-T add(T value, K steps);
+T add(T value, K step, int32_t sequence);
 
 template <>
-int64_t add(int64_t value, int64_t steps) {
-  return value + steps;
+int64_t add(int64_t value, int64_t step, int32_t sequence) {
+  const auto delta =
+      static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
+  // Since step is calcuated from start and stop,
+  // the sum of 'value' and 'add' is within int64_t.
+  return value + delta;
 }
 
 template <>
-int32_t add(int32_t value, int64_t steps) {
-  return value + steps;
+int32_t add(int32_t value, int64_t step, int32_t sequence) {
+  const auto delta =
+      static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
+  return value + delta;
 }
 
 template <>
-Timestamp add(Timestamp value, int64_t steps) {
-  return Timestamp::fromMillis(value.toMillis() + steps);
+Timestamp add(Timestamp value, int64_t step, int32_t sequence) {
+  const auto delta =
+      static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
+  return Timestamp::fromMillis(value.toMillis() + delta);
 }
 
 template <>
-int32_t add(int32_t value, Months steps) {
-  return addToDate(value, DateTimeUnit::kMonth, steps);
+int32_t add(int32_t value, Months step, int32_t sequence) {
+  return addToDate(value, DateTimeUnit::kMonth, step * sequence);
 }
 
 template <>
-Timestamp add(Timestamp value, Months steps) {
-  return addToTimestamp(value, DateTimeUnit::kMonth, steps);
+Timestamp add(Timestamp value, Months step, int32_t sequence) {
+  return addToTimestamp(value, DateTimeUnit::kMonth, step * sequence);
 }
 
 template <typename T>
@@ -88,8 +96,6 @@ int128_t getStepCount(Timestamp start, Timestamp end, int32_t step) {
 template <typename T, typename K>
 class SequenceFunction : public exec::VectorFunction {
  public:
-  static constexpr int32_t kMaxResultEntries = 10'000;
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -123,7 +129,11 @@ class SequenceFunction : public exec::VectorFunction {
           stepVector,
           row,
           isDate,
-          isIntervalYearMonth);
+          isIntervalYearMonth,
+          context.execCtx()
+              ->queryCtx()
+              ->queryConfig()
+              .maxElementsSizeInRepeatAndSequence());
       numElements += rawSizes[row];
     });
 
@@ -162,7 +172,8 @@ class SequenceFunction : public exec::VectorFunction {
       DecodedVector* stepVector,
       vector_size_t row,
       bool isDate,
-      bool isYearMonth) {
+      bool isYearMonth,
+      int32_t maxElementsSize) {
     T start = startVector->valueAt<T>(row);
     T stop = stopVector->valueAt<T>(row);
     auto step = getStep(
@@ -171,19 +182,22 @@ class SequenceFunction : public exec::VectorFunction {
     VELOX_USER_CHECK(
         step > 0 ? stop >= start : stop <= start,
         "sequence stop value should be greater than or equal to start value if "
-        "step is greater than zero otherwise stop should be less than or equal to start")
+        "step is greater than zero otherwise stop should be less than or equal to start");
     int128_t sequenceCount;
     if (isYearMonth) {
       sequenceCount = getStepCount(start, stop, step);
     } else {
-      sequenceCount =
-          ((int128_t)toInt64(stop) - (int128_t)toInt64(start)) / step +
+      sequenceCount = (static_cast<int128_t>(toInt64(stop)) -
+                       static_cast<int128_t>(toInt64(start))) /
+              step +
           1; // prevent overflow
     }
+
     VELOX_USER_CHECK_LE(
         sequenceCount,
-        kMaxResultEntries,
-        "result of sequence function must not have more than 10000 entries");
+        maxElementsSize,
+        "result of sequence function must not have more than {} entries",
+        maxElementsSize);
     return sequenceCount;
   }
 
@@ -200,8 +214,8 @@ class SequenceFunction : public exec::VectorFunction {
     auto stop = stopVector->valueAt<T>(row);
     auto step = getStep(
         toInt64(start), toInt64(stop), stepVector, row, isDate, isYearMonth);
-    for (auto i = 0; i < sequenceCount; ++i) {
-      elements[i] = add(start, (K)(step * i));
+    for (auto sequence = 0; sequence < sequenceCount; ++sequence) {
+      elements[sequence] = add(start, step, sequence);
     }
   }
 

@@ -17,7 +17,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "velox/expression/Expr.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
@@ -37,6 +37,7 @@ struct NonDefaultWithArrayInitFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<int32_t>* /*first*/,
       const arg_type<velox::Array<int32_t>>* second) {
@@ -98,8 +99,9 @@ TEST_F(SimpleFunctionInitTest, initializationArray) {
 
         auto rhsArrayVector = makeNullableArrayVector(
             std::vector<std::vector<std::optional<int32_t>>>{second});
-        args.push_back(std::make_shared<core::ConstantTypedExpr>(
-            BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
+        args.push_back(
+            std::make_shared<core::ConstantTypedExpr>(
+                BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
         exec::ExprSet expr(
             {std::make_shared<core::CallTypedExpr>(
                 ARRAY(INTEGER()), args, "non_default_behavior_with_init")},
@@ -131,6 +133,7 @@ struct NonDefaultWithMapInitFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<int32_t>* /*first*/,
       const arg_type<velox::Map<int32_t, int64_t>>* second) {
@@ -179,8 +182,9 @@ TEST_F(SimpleFunctionInitTest, initializationMap) {
   std::vector<core::TypedExprPtr> args;
   args.push_back(std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"));
 
-  args.push_back(std::make_shared<core::ConstantTypedExpr>(
-      BaseVector::wrapInConstant(1, 0, mapVectorPtr)));
+  args.push_back(
+      std::make_shared<core::ConstantTypedExpr>(
+          BaseVector::wrapInConstant(1, 0, mapVectorPtr)));
   exec::ExprSet expr(
       {std::make_shared<core::CallTypedExpr>(
           BIGINT(), args, "non_default_behavior_with_map_init")},
@@ -200,9 +204,10 @@ struct InitAlwaysThrowsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<int32_t>* /*first*/) {
-    VELOX_FAIL("Unconditional throw!");
+    VELOX_USER_FAIL("Unconditional throw!");
   }
 
   void call(out_type<int64_t>& out, const arg_type<int32_t>& first) {
@@ -219,7 +224,7 @@ TEST_F(SimpleFunctionInitTest, initException) {
 
   // Ensure this will normally throw if there are active rows.
   auto rowVector = makeRowVector({makeNullableFlatVector<int32_t>({1, 2, 3})});
-  EXPECT_THROW(evaluate("init_throws(c0)", rowVector), VeloxRuntimeError);
+  EXPECT_THROW(evaluate("init_throws(c0)", rowVector), VeloxUserError);
 
   // Shouldn't throw if the input is a Null constant.
   rowVector = makeRowVector({makeNullConstant(TypeKind::INTEGER, 3)});

@@ -22,10 +22,6 @@ namespace {
 
 class ArrayConstructor : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -55,14 +51,57 @@ class ArrayConstructor : public exec::VectorFunction {
     } else {
       elementsResult->resize(baseOffset + numArgs * rows.countSelected());
 
-      vector_size_t offset = baseOffset;
-      rows.applyToSelected([&](vector_size_t row) {
-        rawSizes[row] = numArgs;
-        rawOffsets[row] = offset;
-        for (int i = 0; i < numArgs; i++) {
-          elementsResult->copy(args[i].get(), offset++, row, 1);
+      if (shouldCopyRanges(elementsResult->type())) {
+        std::vector<BaseVector::CopyRange> ranges;
+        ranges.reserve(rows.end());
+
+        vector_size_t offset = baseOffset;
+        rows.applyToSelected([&](vector_size_t row) {
+          rawSizes[row] = numArgs;
+          rawOffsets[row] = offset;
+          ranges.push_back({row, offset, 1});
+          offset += numArgs;
+        });
+
+        elementsResult->copyRanges(args[0].get(), ranges);
+
+        for (int i = 1; i < numArgs; i++) {
+          for (auto& range : ranges) {
+            ++range.targetIndex;
+          }
+          elementsResult->copyRanges(args[i].get(), ranges);
         }
-      });
+      } else {
+        SelectivityVector targetRows(elementsResult->size(), false);
+        std::vector<vector_size_t> toSourceRow(elementsResult->size());
+
+        vector_size_t offset = baseOffset;
+        rows.applyToSelected([&](vector_size_t row) {
+          rawSizes[row] = numArgs;
+          rawOffsets[row] = offset;
+
+          targetRows.setValid(offset, true);
+          toSourceRow[offset] = row;
+
+          offset += numArgs;
+        });
+        targetRows.updateBounds();
+        elementsResult->copy(args[0].get(), targetRows, toSourceRow.data());
+
+        for (int i = 1; i < numArgs; i++) {
+          targetRows.clearAll();
+
+          vector_size_t offset_2 = baseOffset;
+          rows.applyToSelected([&](vector_size_t row) {
+            targetRows.setValid(offset_2 + i, true);
+            toSourceRow[offset_2 + i] = row;
+            offset_2 += numArgs;
+          });
+
+          targetRows.updateBounds();
+          elementsResult->copy(args[i].get(), targetRows, toSourceRow.data());
+        }
+      }
     }
   }
 
@@ -74,17 +113,39 @@ class ArrayConstructor : public exec::VectorFunction {
         exec::FunctionSignatureBuilder()
             .typeVariable("T")
             .returnType("array(T)")
-            .argumentType("T")
-            .variableArity()
+            .variableArity("T")
             .build(),
     };
+  }
+
+ private:
+  // BaseVector::copyRange is faster for arrays and maps and slower for
+  // primitive types. Check if 'type' is an array or map or contains an array or
+  // map. If so, return true, otherwise, false.
+  static bool shouldCopyRanges(const TypePtr& type) {
+    if (type->isPrimitiveType()) {
+      return false;
+    }
+
+    if (!type->isRow()) {
+      return true;
+    }
+
+    const auto& rowType = type->asRow();
+    for (const auto& child : rowType.children()) {
+      if (shouldCopyRanges(child)) {
+        return true;
+      }
+    }
+    return false;
   }
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_array_constructor,
     ArrayConstructor::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<ArrayConstructor>());
 
 void registerArrayConstructor(const std::string& name) {

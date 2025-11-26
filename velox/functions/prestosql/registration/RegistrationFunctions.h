@@ -25,11 +25,23 @@ void registerComparisonFunctions(const std::string& prefix = "");
 
 void registerArrayFunctions(const std::string& prefix = "");
 
+void registerInternalFunctions();
+
 void registerMapFunctions(const std::string& prefix = "");
 
 void registerJsonFunctions(const std::string& prefix = "");
 
 void registerHyperLogFunctions(const std::string& prefix = "");
+
+void registerTDigestFunctions(const std::string& prefix = "");
+
+void registerQDigestFunctions(const std::string& prefix = "");
+
+void registerSfmSketchFunctions(const std::string& prefix = "");
+
+void registerBingTileFunctions(const std::string& prefix = "");
+
+void registerEnumFunctions(const std::string& prefix = "");
 
 void registerGeneralFunctions(const std::string& prefix = "");
 

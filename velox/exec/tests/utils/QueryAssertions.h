@@ -14,20 +14,29 @@
  * limitations under the License.
  */
 #pragma once
+#include <chrono>
+
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/tests/utils/Cursor.h"
-#include "velox/external/duckdb/duckdb.hpp"
-#include "velox/external/duckdb/tpch/include/tpch-extension.hpp"
 #include "velox/vector/ComplexVector.h"
+
+#include <duckdb.hpp> // @manual
 
 namespace facebook::velox::exec::test {
 
 using MaterializedRow = std::vector<velox::variant>;
 using DuckDBQueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
 
-// Multiset that compares floating-point values directly.
+/// Multiset that compares floating-point values directly.
 using MaterializedRowMultiset = std::multiset<MaterializedRow>;
+
+/// Converts input 'RowVector' into a list of 'MaterializedRow's.
+std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
+
+/// Converts a list of 'RowVector's into 'MaterializedRowMultiset'.
+MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors);
 
 class DuckDbQueryRunner {
  public:
@@ -41,7 +50,7 @@ class DuckDbQueryRunner {
 
   MaterializedRowMultiset execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const RowTypePtr& resultRowType) {
     MaterializedRowMultiset allRows;
     execute(
         sql,
@@ -55,7 +64,7 @@ class DuckDbQueryRunner {
 
   std::vector<MaterializedRow> executeOrdered(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const RowTypePtr& resultRowType) {
     std::vector<MaterializedRow> allRows;
     execute(
         sql,
@@ -66,32 +75,115 @@ class DuckDbQueryRunner {
     return allRows;
   }
 
-  // Returns the DuckDB TPC-H Extension Query as string for a given 'queryNo'
-  // Example: queryNo = 1 returns the TPC-H Query1 in the TPC-H Extension
-  std::string getTpchQuery(int queryNo) {
-    auto queryString = ::duckdb::TPCHExtension::GetQuery(queryNo);
-    // Output of GetQuery() has a new line and a semi-colon. These need to be
-    // removed in order to use the query string in a subquery
-    queryString.pop_back(); // remove new line
-    queryString.pop_back(); // remove semi-colon
-    return queryString;
-  }
-
-  void initializeTpch(double scaleFactor);
-
  private:
   ::duckdb::DuckDB db_;
 
   void execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType,
+      const RowTypePtr& resultRowType,
       std::function<void(std::vector<MaterializedRow>&)> resultCallback);
 };
 
+/// Scoped abort percentage utility that allows user to trigger abort during the
+///  query execution.
+/// 'abortPct' specifies the probability of of triggering abort. 100% means
+/// abort will always be triggered.
+/// 'maxInjections' indicates the max number of actual triggering, e.g. when
+/// 'abortPct' is 20 and 'maxInjections' is 10, continuous calls to
+/// testingMaybeTriggerAbort() will keep rolling the dice that has a chance of
+/// 20% triggering until 10 triggers have been invoked.
+/// 'hook' will be invoked whenever abort is triggered, if not nullptr.
+class TestScopedAbortInjection {
+ public:
+  explicit TestScopedAbortInjection(
+      int32_t abortPct,
+      int32_t maxInjections = std::numeric_limits<int32_t>::max(),
+      std::function<void(Task*)> hook = nullptr);
+
+  ~TestScopedAbortInjection();
+};
+
+// This class leverages TestValue to inject OOMs into query execution.
+// Therefore, it can only be used in debug builds, and only one instance
+// of this class can be enabled at a time.
+class ScopedOOMInjector {
+ public:
+  ScopedOOMInjector(
+      const std::function<bool()>& oomConditionChecker,
+      uint64_t oomCheckIntervalMs)
+      : oomConditionChecker_(oomConditionChecker),
+        oomCheckIntervalMs_(oomCheckIntervalMs) {}
+
+  inline static const std::string kErrorMessage = "Injected OOM";
+
+  void enable() {
+    // Since this relies on TestValue to trigger the OOMs, it only supports
+    // debug builds.
+#ifdef NDEBUG
+    VELOX_FAIL("OOM injection can only be used in debug builds");
+#endif
+
+    if (enabled_.exchange(true)) {
+      VELOX_FAIL("Already enabled");
+    }
+
+    // Make sure TestValues are enabled.
+    common::testutil::TestValue::enable();
+
+    common::testutil::TestValue::set(
+        kInjectionPoint,
+        std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool*) {
+          const auto currentTime = now();
+          if (currentTime - lastOomCheckTime_ >= oomCheckIntervalMs_) {
+            lastOomCheckTime_ = currentTime;
+            if (oomConditionChecker_()) {
+              LOG(INFO) << "<-- Triggering OOM --";
+              VELOX_MEM_POOL_CAP_EXCEEDED(kErrorMessage);
+            }
+          }
+        }));
+  }
+
+  ~ScopedOOMInjector() {
+    common::testutil::TestValue::clear(kInjectionPoint);
+    enabled_ = false;
+  }
+
+ private:
+  inline static const std::string kInjectionPoint =
+      "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe";
+  // If more than one instance of this class is enabled, they'll overwrite
+  // each other, so make sure no one does this by accident.
+  inline static std::atomic_bool enabled_{false};
+
+  static size_t now() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  }
+
+  // When this function returns true, an OOM will be triggered.
+  const std::function<bool()> oomConditionChecker_;
+  // The interval between each check of the condition.
+  const uint64_t oomCheckIntervalMs_;
+
+  std::atomic<size_t> lastOomCheckTime_{0};
+};
+
+/// Test utility that might trigger task abort. The function returns true if
+/// abortion triggers otherwise false.
+bool testingMaybeTriggerAbort(exec::Task* task);
+
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
-    std::function<void(exec::Task*)> addSplits,
-    uint64_t maxWaitMicros = 1'000'000);
+    std::function<void(TaskCursor*)> addSplits =
+        [](TaskCursor* taskCursor) {
+          if (taskCursor->noMoreSplits()) {
+            return;
+          }
+          taskCursor->setNoMoreSplits();
+        },
+    uint64_t maxWaitMicros = 5'000'000);
 
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
@@ -123,13 +215,16 @@ bool waitForTaskStateChange(
     TaskState state,
     uint64_t maxWaitMicros = 1'000'000);
 
-/// Wait up to maxWaitMicros for all the task drivers to finish. The function
-/// returns true if all the drivers have finished, otherwise false.
+/// Invoked to wait for all the tasks created by the test to be deleted.
 ///
-/// NOTE: user must call this on a finished or failed task.
-bool waitForTaskDriversToFinish(
-    exec::Task* task,
-    uint64_t maxWaitMicros = 1'000'000);
+/// NOTE: it is assumed that there is no more task to be created after or
+/// during this wait call. This is for testing purpose for now.
+void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
+
+/// Cancels all currently running tasks across all available task managers.
+/// This is primarily used in testing scenarios to clean up active tasks
+/// and ensure test isolation between test cases.
+void cancelAllTasks();
 
 std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
@@ -139,14 +234,14 @@ std::shared_ptr<Task> assertQuery(
 
 std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
-    std::function<void(exec::Task*)> addSplits,
+    std::function<void(exec::TaskCursor*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const CursorParameters& params,
-    std::function<void(exec::Task*)> addSplits,
+    std::function<void(exec::TaskCursor*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
@@ -154,17 +249,20 @@ std::shared_ptr<Task> assertQuery(
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const core::PlanNodePtr& plan);
 
+std::shared_ptr<Task> assertQueryReturnsEmptyResult(
+    const CursorParameters& params);
+
 void assertEmptyResults(const std::vector<RowVectorPtr>& results);
 
 void assertResults(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner);
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys);
@@ -199,14 +297,27 @@ velox::variant readSingleValue(
 /// floating-point column in each set. Verifying arbitrary result sets with
 /// epsilon comparison would require more advanced algorithms such as maximum
 /// bipartite matching. Hence we leave them as future work. Check out
-/// https://github.com/facebookincubator/velox/issues/3493 for more dicsussion.
+/// https://github.com/facebookincubator/velox/issues/3493 for more discussion.
 bool assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual);
 
 bool assertEqualResults(
-    const MaterializedRowMultiset& expected,
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedRowType,
     const std::vector<RowVectorPtr>& actual);
+
+/// Ensure both plans have the same results.
+bool assertEqualResults(
+    const core::PlanNodePtr& plan1,
+    const core::PlanNodePtr& plan2);
+
+bool assertEqualResults(
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedType,
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& actualType,
+    const std::string& message);
 
 /// Ensure both datasets have the same type and number of rows.
 void assertEqualTypeAndNumRows(
@@ -215,5 +326,11 @@ void assertEqualTypeAndNumRows(
     const std::vector<RowVectorPtr>& actual);
 
 void printResults(const RowVectorPtr& result, std::ostream& out);
+
+/// Aggregates operator stats by operator type. If a task has more than one plan
+/// nodes having the same operator types, then their operator stats are merged
+/// together.
+std::unordered_map<std::string, OperatorStats> toOperatorStats(
+    const TaskStats& taskStats);
 
 } // namespace facebook::velox::exec::test

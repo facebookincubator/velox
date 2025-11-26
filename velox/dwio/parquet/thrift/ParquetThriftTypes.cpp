@@ -849,21 +849,16 @@ void Statistics::printTo(std::ostream& out) const {
   out << "Statistics(";
   out << "max=";
   (__isset.max ? (out << to_string(max)) : (out << "<null>"));
-  out << ", "
-      << "min=";
+  out << ", " << "min=";
   (__isset.min ? (out << to_string(min)) : (out << "<null>"));
-  out << ", "
-      << "null_count=";
+  out << ", " << "null_count=";
   (__isset.null_count ? (out << to_string(null_count)) : (out << "<null>"));
-  out << ", "
-      << "distinct_count=";
+  out << ", " << "distinct_count=";
   (__isset.distinct_count ? (out << to_string(distinct_count))
                           : (out << "<null>"));
-  out << ", "
-      << "max_value=";
+  out << ", " << "max_value=";
   (__isset.max_value ? (out << to_string(max_value)) : (out << "<null>"));
-  out << ", "
-      << "min_value=";
+  out << ", " << "min_value=";
   (__isset.min_value ? (out << to_string(min_value)) : (out << "<null>"));
   out << ")";
 }
@@ -910,19 +905,14 @@ uint32_t StringType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(StringType& a, StringType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(StringType& /*a*/, StringType& /*b*/) {}
 
-StringType::StringType(const StringType& other2) {
-  (void)other2;
-}
-StringType& StringType::operator=(const StringType& other3) {
-  (void)other3;
+StringType::StringType(const StringType& /*other2*/) {}
+
+StringType& StringType::operator=(const StringType& /*other3*/) {
   return *this;
 }
+
 void StringType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "StringType(";
@@ -971,19 +961,14 @@ uint32_t UUIDType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(UUIDType& a, UUIDType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(UUIDType& /*a*/, UUIDType& /*b*/) {}
 
-UUIDType::UUIDType(const UUIDType& other4) {
-  (void)other4;
-}
-UUIDType& UUIDType::operator=(const UUIDType& other5) {
-  (void)other5;
+UUIDType::UUIDType(const UUIDType& /*other4*/) {}
+
+UUIDType& UUIDType::operator=(const UUIDType& /*other5*/) {
   return *this;
 }
+
 void UUIDType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "UUIDType(";
@@ -1032,19 +1017,14 @@ uint32_t MapType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(MapType& a, MapType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(MapType& /*a*/, MapType& /*b*/) {}
 
-MapType::MapType(const MapType& other6) {
-  (void)other6;
-}
-MapType& MapType::operator=(const MapType& other7) {
-  (void)other7;
+MapType::MapType(const MapType& /*other6*/) {}
+
+MapType& MapType::operator=(const MapType& /*other7*/) {
   return *this;
 }
+
 void MapType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "MapType(";
@@ -1093,19 +1073,14 @@ uint32_t ListType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(ListType& a, ListType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(ListType& /*a*/, ListType& /*b*/) {}
 
-ListType::ListType(const ListType& other8) {
-  (void)other8;
-}
-ListType& ListType::operator=(const ListType& other9) {
-  (void)other9;
+ListType::ListType(const ListType& /*other8*/) {}
+
+ListType& ListType::operator=(const ListType& /*other9*/) {
   return *this;
 }
+
 void ListType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "ListType(";
@@ -1154,19 +1129,14 @@ uint32_t EnumType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(EnumType& a, EnumType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(EnumType& /*a*/, EnumType& /*b*/) {}
 
-EnumType::EnumType(const EnumType& other10) {
-  (void)other10;
-}
-EnumType& EnumType::operator=(const EnumType& other11) {
-  (void)other11;
+EnumType::EnumType(const EnumType& /*other10*/) {}
+
+EnumType& EnumType::operator=(const EnumType& /*other11*/) {
   return *this;
 }
+
 void EnumType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "EnumType(";
@@ -1215,19 +1185,14 @@ uint32_t DateType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(DateType& a, DateType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(DateType& /*a*/, DateType& /*b*/) {}
 
-DateType::DateType(const DateType& other12) {
-  (void)other12;
-}
-DateType& DateType::operator=(const DateType& other13) {
-  (void)other13;
+DateType::DateType(const DateType& /*other12*/) {}
+
+DateType& DateType::operator=(const DateType& /*other13*/) {
   return *this;
 }
+
 void DateType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "DateType(";
@@ -1276,19 +1241,14 @@ uint32_t NullType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(NullType& a, NullType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(NullType& /*a*/, NullType& /*b*/) {}
 
-NullType::NullType(const NullType& other14) {
-  (void)other14;
-}
-NullType& NullType::operator=(const NullType& other15) {
-  (void)other15;
+NullType::NullType(const NullType& /*other14*/) {}
+
+NullType& NullType::operator=(const NullType& /*other15*/) {
   return *this;
 }
+
 void NullType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "NullType(";
@@ -1400,8 +1360,7 @@ void DecimalType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "DecimalType(";
   out << "scale=" << to_string(scale);
-  out << ", "
-      << "precision=" << to_string(precision);
+  out << ", " << "precision=" << to_string(precision);
   out << ")";
 }
 
@@ -1448,19 +1407,14 @@ uint32_t MilliSeconds::write(
   return xfer;
 }
 
-void swap(MilliSeconds& a, MilliSeconds& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(MilliSeconds& /*a*/, MilliSeconds& /*b*/) {}
 
-MilliSeconds::MilliSeconds(const MilliSeconds& other18) {
-  (void)other18;
-}
-MilliSeconds& MilliSeconds::operator=(const MilliSeconds& other19) {
-  (void)other19;
+MilliSeconds::MilliSeconds(const MilliSeconds& /*other18*/) {}
+
+MilliSeconds& MilliSeconds::operator=(const MilliSeconds& /*other19*/) {
   return *this;
 }
+
 void MilliSeconds::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "MilliSeconds(";
@@ -1510,19 +1464,14 @@ uint32_t MicroSeconds::write(
   return xfer;
 }
 
-void swap(MicroSeconds& a, MicroSeconds& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(MicroSeconds& /*a*/, MicroSeconds& /*b*/) {}
 
-MicroSeconds::MicroSeconds(const MicroSeconds& other20) {
-  (void)other20;
-}
-MicroSeconds& MicroSeconds::operator=(const MicroSeconds& other21) {
-  (void)other21;
+MicroSeconds::MicroSeconds(const MicroSeconds& /*other20*/) {}
+
+MicroSeconds& MicroSeconds::operator=(const MicroSeconds& /*other21*/) {
   return *this;
 }
+
 void MicroSeconds::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "MicroSeconds(";
@@ -1572,19 +1521,14 @@ uint32_t NanoSeconds::write(
   return xfer;
 }
 
-void swap(NanoSeconds& a, NanoSeconds& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(NanoSeconds& /*a*/, NanoSeconds& /*b*/) {}
 
-NanoSeconds::NanoSeconds(const NanoSeconds& other22) {
-  (void)other22;
-}
-NanoSeconds& NanoSeconds::operator=(const NanoSeconds& other23) {
-  (void)other23;
+NanoSeconds::NanoSeconds(const NanoSeconds& /*other22*/) {}
+
+NanoSeconds& NanoSeconds::operator=(const NanoSeconds& /*other23*/) {
   return *this;
 }
+
 void NanoSeconds::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "NanoSeconds(";
@@ -1719,11 +1663,9 @@ void TimeUnit::printTo(std::ostream& out) const {
   out << "TimeUnit(";
   out << "MILLIS=";
   (__isset.MILLIS ? (out << to_string(MILLIS)) : (out << "<null>"));
-  out << ", "
-      << "MICROS=";
+  out << ", " << "MICROS=";
   (__isset.MICROS ? (out << to_string(MICROS)) : (out << "<null>"));
-  out << ", "
-      << "NANOS=";
+  out << ", " << "NANOS=";
   (__isset.NANOS ? (out << to_string(NANOS)) : (out << "<null>"));
   out << ")";
 }
@@ -1834,8 +1776,7 @@ void TimestampType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "TimestampType(";
   out << "isAdjustedToUTC=" << to_string(isAdjustedToUTC);
-  out << ", "
-      << "unit=" << to_string(unit);
+  out << ", " << "unit=" << to_string(unit);
   out << ")";
 }
 
@@ -1944,8 +1885,7 @@ void TimeType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "TimeType(";
   out << "isAdjustedToUTC=" << to_string(isAdjustedToUTC);
-  out << ", "
-      << "unit=" << to_string(unit);
+  out << ", " << "unit=" << to_string(unit);
   out << ")";
 }
 
@@ -2054,8 +1994,7 @@ void IntType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "IntType(";
   out << "bitWidth=" << to_string(bitWidth);
-  out << ", "
-      << "isSigned=" << to_string(isSigned);
+  out << ", " << "isSigned=" << to_string(isSigned);
   out << ")";
 }
 
@@ -2101,19 +2040,14 @@ uint32_t JsonType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(JsonType& a, JsonType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(JsonType& /*a*/, JsonType& /*b*/) {}
 
-JsonType::JsonType(const JsonType& other32) {
-  (void)other32;
-}
-JsonType& JsonType::operator=(const JsonType& other33) {
-  (void)other33;
+JsonType::JsonType(const JsonType& /*other32*/) {}
+
+JsonType& JsonType::operator=(const JsonType& /*other33*/) {
   return *this;
 }
+
 void JsonType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "JsonType(";
@@ -2162,19 +2096,14 @@ uint32_t BsonType::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(BsonType& a, BsonType& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(BsonType& /*a*/, BsonType& /*b*/) {}
 
-BsonType::BsonType(const BsonType& other34) {
-  (void)other34;
-}
-BsonType& BsonType::operator=(const BsonType& other35) {
-  (void)other35;
+BsonType::BsonType(const BsonType& /*other34*/) {}
+
+BsonType& BsonType::operator=(const BsonType& /*other35*/) {
   return *this;
 }
+
 void BsonType::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "BsonType(";
@@ -2530,41 +2459,29 @@ void LogicalType::printTo(std::ostream& out) const {
   out << "LogicalType(";
   out << "STRING=";
   (__isset.STRING ? (out << to_string(STRING)) : (out << "<null>"));
-  out << ", "
-      << "MAP=";
+  out << ", " << "MAP=";
   (__isset.MAP ? (out << to_string(MAP)) : (out << "<null>"));
-  out << ", "
-      << "LIST=";
+  out << ", " << "LIST=";
   (__isset.LIST ? (out << to_string(LIST)) : (out << "<null>"));
-  out << ", "
-      << "ENUM=";
+  out << ", " << "ENUM=";
   (__isset.ENUM ? (out << to_string(ENUM)) : (out << "<null>"));
-  out << ", "
-      << "DECIMAL=";
+  out << ", " << "DECIMAL=";
   (__isset.DECIMAL ? (out << to_string(DECIMAL)) : (out << "<null>"));
-  out << ", "
-      << "DATE=";
+  out << ", " << "DATE=";
   (__isset.DATE ? (out << to_string(DATE)) : (out << "<null>"));
-  out << ", "
-      << "TIME=";
+  out << ", " << "TIME=";
   (__isset.TIME ? (out << to_string(TIME)) : (out << "<null>"));
-  out << ", "
-      << "TIMESTAMP=";
+  out << ", " << "TIMESTAMP=";
   (__isset.TIMESTAMP ? (out << to_string(TIMESTAMP)) : (out << "<null>"));
-  out << ", "
-      << "INTEGER=";
+  out << ", " << "INTEGER=";
   (__isset.INTEGER ? (out << to_string(INTEGER)) : (out << "<null>"));
-  out << ", "
-      << "UNKNOWN=";
+  out << ", " << "UNKNOWN=";
   (__isset.UNKNOWN ? (out << to_string(UNKNOWN)) : (out << "<null>"));
-  out << ", "
-      << "JSON=";
+  out << ", " << "JSON=";
   (__isset.JSON ? (out << to_string(JSON)) : (out << "<null>"));
-  out << ", "
-      << "BSON=";
+  out << ", " << "BSON=";
   (__isset.BSON ? (out << to_string(BSON)) : (out << "<null>"));
-  out << ", "
-      << "UUID=";
+  out << ", " << "UUID=";
   (__isset.UUID ? (out << to_string(UUID)) : (out << "<null>"));
   out << ")";
 }
@@ -2647,7 +2564,7 @@ uint32_t SchemaElement::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast38;
           xfer += iprot->readI32(ecast38);
-          this->type = (Type::type)ecast38;
+          this->type = static_cast<Type::type>(ecast38);
           this->__isset.type = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -2665,7 +2582,8 @@ uint32_t SchemaElement::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast39;
           xfer += iprot->readI32(ecast39);
-          this->repetition_type = (FieldRepetitionType::type)ecast39;
+          this->repetition_type =
+              static_cast<FieldRepetitionType::type>(ecast39);
           this->__isset.repetition_type = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -2691,7 +2609,7 @@ uint32_t SchemaElement::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast40;
           xfer += iprot->readI32(ecast40);
-          this->converted_type = (ConvertedType::type)ecast40;
+          this->converted_type = static_cast<ConvertedType::type>(ecast40);
           this->__isset.converted_type = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -2752,7 +2670,7 @@ uint32_t SchemaElement::write(
   if (this->__isset.type) {
     xfer +=
         oprot->writeFieldBegin("type", ::apache::thrift::protocol::T_I32, 1);
-    xfer += oprot->writeI32((int32_t)this->type);
+    xfer += oprot->writeI32(static_cast<int32_t>(this->type));
     xfer += oprot->writeFieldEnd();
   }
   if (this->__isset.type_length) {
@@ -2764,7 +2682,7 @@ uint32_t SchemaElement::write(
   if (this->__isset.repetition_type) {
     xfer += oprot->writeFieldBegin(
         "repetition_type", ::apache::thrift::protocol::T_I32, 3);
-    xfer += oprot->writeI32((int32_t)this->repetition_type);
+    xfer += oprot->writeI32(static_cast<int32_t>(this->repetition_type));
     xfer += oprot->writeFieldEnd();
   }
   xfer +=
@@ -2781,7 +2699,7 @@ uint32_t SchemaElement::write(
   if (this->__isset.converted_type) {
     xfer += oprot->writeFieldBegin(
         "converted_type", ::apache::thrift::protocol::T_I32, 6);
-    xfer += oprot->writeI32((int32_t)this->converted_type);
+    xfer += oprot->writeI32(static_cast<int32_t>(this->converted_type));
     xfer += oprot->writeFieldEnd();
   }
   if (this->__isset.scale) {
@@ -2860,33 +2778,24 @@ void SchemaElement::printTo(std::ostream& out) const {
   out << "SchemaElement(";
   out << "type=";
   (__isset.type ? (out << to_string(type)) : (out << "<null>"));
-  out << ", "
-      << "type_length=";
+  out << ", " << "type_length=";
   (__isset.type_length ? (out << to_string(type_length)) : (out << "<null>"));
-  out << ", "
-      << "repetition_type=";
+  out << ", " << "repetition_type=";
   (__isset.repetition_type ? (out << to_string(repetition_type))
                            : (out << "<null>"));
-  out << ", "
-      << "name=" << to_string(name);
-  out << ", "
-      << "num_children=";
+  out << ", " << "name=" << to_string(name);
+  out << ", " << "num_children=";
   (__isset.num_children ? (out << to_string(num_children)) : (out << "<null>"));
-  out << ", "
-      << "converted_type=";
+  out << ", " << "converted_type=";
   (__isset.converted_type ? (out << to_string(converted_type))
                           : (out << "<null>"));
-  out << ", "
-      << "scale=";
+  out << ", " << "scale=";
   (__isset.scale ? (out << to_string(scale)) : (out << "<null>"));
-  out << ", "
-      << "precision=";
+  out << ", " << "precision=";
   (__isset.precision ? (out << to_string(precision)) : (out << "<null>"));
-  out << ", "
-      << "field_id=";
+  out << ", " << "field_id=";
   (__isset.field_id ? (out << to_string(field_id)) : (out << "<null>"));
-  out << ", "
-      << "logicalType=";
+  out << ", " << "logicalType=";
   (__isset.logicalType ? (out << to_string(logicalType)) : (out << "<null>"));
   out << ")";
 }
@@ -2952,7 +2861,7 @@ uint32_t DataPageHeader::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast43;
           xfer += iprot->readI32(ecast43);
-          this->encoding = (Encoding::type)ecast43;
+          this->encoding = static_cast<Encoding::type>(ecast43);
           isset_encoding = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -2962,7 +2871,8 @@ uint32_t DataPageHeader::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast44;
           xfer += iprot->readI32(ecast44);
-          this->definition_level_encoding = (Encoding::type)ecast44;
+          this->definition_level_encoding =
+              static_cast<Encoding::type>(ecast44);
           isset_definition_level_encoding = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -2972,7 +2882,8 @@ uint32_t DataPageHeader::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast45;
           xfer += iprot->readI32(ecast45);
-          this->repetition_level_encoding = (Encoding::type)ecast45;
+          this->repetition_level_encoding =
+              static_cast<Encoding::type>(ecast45);
           isset_repetition_level_encoding = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -3019,17 +2930,19 @@ uint32_t DataPageHeader::write(
 
   xfer +=
       oprot->writeFieldBegin("encoding", ::apache::thrift::protocol::T_I32, 2);
-  xfer += oprot->writeI32((int32_t)this->encoding);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->encoding));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin(
       "definition_level_encoding", ::apache::thrift::protocol::T_I32, 3);
-  xfer += oprot->writeI32((int32_t)this->definition_level_encoding);
+  xfer +=
+      oprot->writeI32(static_cast<int32_t>(this->definition_level_encoding));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin(
       "repetition_level_encoding", ::apache::thrift::protocol::T_I32, 4);
-  xfer += oprot->writeI32((int32_t)this->repetition_level_encoding);
+  xfer +=
+      oprot->writeI32(static_cast<int32_t>(this->repetition_level_encoding));
   xfer += oprot->writeFieldEnd();
 
   if (this->__isset.statistics) {
@@ -3074,14 +2987,12 @@ void DataPageHeader::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "DataPageHeader(";
   out << "num_values=" << to_string(num_values);
-  out << ", "
-      << "encoding=" << to_string(encoding);
+  out << ", " << "encoding=" << to_string(encoding);
   out << ", "
       << "definition_level_encoding=" << to_string(definition_level_encoding);
   out << ", "
       << "repetition_level_encoding=" << to_string(repetition_level_encoding);
-  out << ", "
-      << "statistics=";
+  out << ", " << "statistics=";
   (__isset.statistics ? (out << to_string(statistics)) : (out << "<null>"));
   out << ")";
 }
@@ -3129,19 +3040,15 @@ uint32_t IndexPageHeader::write(
   return xfer;
 }
 
-void swap(IndexPageHeader& a, IndexPageHeader& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(IndexPageHeader& /*a*/, IndexPageHeader& /*b*/) {}
 
-IndexPageHeader::IndexPageHeader(const IndexPageHeader& other48) {
-  (void)other48;
-}
-IndexPageHeader& IndexPageHeader::operator=(const IndexPageHeader& other49) {
-  (void)other49;
+IndexPageHeader::IndexPageHeader(const IndexPageHeader& /*other48*/) {}
+
+IndexPageHeader& IndexPageHeader::operator=(
+    const IndexPageHeader& /*other49*/) {
   return *this;
 }
+
 void IndexPageHeader::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "IndexPageHeader(";
@@ -3200,7 +3107,7 @@ uint32_t DictionaryPageHeader::read(
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast50;
           xfer += iprot->readI32(ecast50);
-          this->encoding = (Encoding::type)ecast50;
+          this->encoding = static_cast<Encoding::type>(ecast50);
           isset_encoding = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -3243,7 +3150,7 @@ uint32_t DictionaryPageHeader::write(
 
   xfer +=
       oprot->writeFieldBegin("encoding", ::apache::thrift::protocol::T_I32, 2);
-  xfer += oprot->writeI32((int32_t)this->encoding);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->encoding));
   xfer += oprot->writeFieldEnd();
 
   if (this->__isset.is_sorted) {
@@ -3284,10 +3191,8 @@ void DictionaryPageHeader::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "DictionaryPageHeader(";
   out << "num_values=" << to_string(num_values);
-  out << ", "
-      << "encoding=" << to_string(encoding);
-  out << ", "
-      << "is_sorted=";
+  out << ", " << "encoding=" << to_string(encoding);
+  out << ", " << "is_sorted=";
   (__isset.is_sorted ? (out << to_string(is_sorted)) : (out << "<null>"));
   out << ")";
 }
@@ -3384,7 +3289,7 @@ uint32_t DataPageHeaderV2::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast53;
           xfer += iprot->readI32(ecast53);
-          this->encoding = (Encoding::type)ecast53;
+          this->encoding = static_cast<Encoding::type>(ecast53);
           isset_encoding = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -3469,7 +3374,7 @@ uint32_t DataPageHeaderV2::write(
 
   xfer +=
       oprot->writeFieldBegin("encoding", ::apache::thrift::protocol::T_I32, 4);
-  xfer += oprot->writeI32((int32_t)this->encoding);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->encoding));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin(
@@ -3539,24 +3444,17 @@ void DataPageHeaderV2::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "DataPageHeaderV2(";
   out << "num_values=" << to_string(num_values);
-  out << ", "
-      << "num_nulls=" << to_string(num_nulls);
-  out << ", "
-      << "num_rows=" << to_string(num_rows);
-  out << ", "
-      << "encoding=" << to_string(encoding);
-  out << ", "
-      << "definition_levels_byte_length="
+  out << ", " << "num_nulls=" << to_string(num_nulls);
+  out << ", " << "num_rows=" << to_string(num_rows);
+  out << ", " << "encoding=" << to_string(encoding);
+  out << ", " << "definition_levels_byte_length="
       << to_string(definition_levels_byte_length);
-  out << ", "
-      << "repetition_levels_byte_length="
+  out << ", " << "repetition_levels_byte_length="
       << to_string(repetition_levels_byte_length);
-  out << ", "
-      << "is_compressed=";
+  out << ", " << "is_compressed=";
   (__isset.is_compressed ? (out << to_string(is_compressed))
                          : (out << "<null>"));
-  out << ", "
-      << "statistics=";
+  out << ", " << "statistics=";
   (__isset.statistics ? (out << to_string(statistics)) : (out << "<null>"));
   out << ")";
 }
@@ -3605,20 +3503,16 @@ uint32_t SplitBlockAlgorithm::write(
   return xfer;
 }
 
-void swap(SplitBlockAlgorithm& a, SplitBlockAlgorithm& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(SplitBlockAlgorithm& /*a*/, SplitBlockAlgorithm& /*b*/) {}
 
-SplitBlockAlgorithm::SplitBlockAlgorithm(const SplitBlockAlgorithm& other56) {
-  (void)other56;
-}
+SplitBlockAlgorithm::SplitBlockAlgorithm(
+    const SplitBlockAlgorithm& /*other56*/) {}
+
 SplitBlockAlgorithm& SplitBlockAlgorithm::operator=(
-    const SplitBlockAlgorithm& other57) {
-  (void)other57;
+    const SplitBlockAlgorithm& /*other57*/) {
   return *this;
 }
+
 void SplitBlockAlgorithm::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "SplitBlockAlgorithm(";
@@ -3758,19 +3652,14 @@ uint32_t XxHash::write(::apache::thrift::protocol::TProtocol* oprot) const {
   return xfer;
 }
 
-void swap(XxHash& a, XxHash& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(XxHash& /*a*/, XxHash& /*b*/) {}
 
-XxHash::XxHash(const XxHash& other60) {
-  (void)other60;
-}
-XxHash& XxHash::operator=(const XxHash& other61) {
-  (void)other61;
+XxHash::XxHash(const XxHash& /*other60*/) {}
+
+XxHash& XxHash::operator=(const XxHash& /*other61*/) {
   return *this;
 }
+
 void XxHash::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "XxHash(";
@@ -3908,19 +3797,14 @@ uint32_t Uncompressed::write(
   return xfer;
 }
 
-void swap(Uncompressed& a, Uncompressed& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(Uncompressed& /*a*/, Uncompressed& /*b*/) {}
 
-Uncompressed::Uncompressed(const Uncompressed& other64) {
-  (void)other64;
-}
-Uncompressed& Uncompressed::operator=(const Uncompressed& other65) {
-  (void)other65;
+Uncompressed::Uncompressed(const Uncompressed& /*other64*/) {}
+
+Uncompressed& Uncompressed::operator=(const Uncompressed& /*other65*/) {
   return *this;
 }
+
 void Uncompressed::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "Uncompressed(";
@@ -4171,12 +4055,9 @@ void BloomFilterHeader::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "BloomFilterHeader(";
   out << "numBytes=" << to_string(numBytes);
-  out << ", "
-      << "algorithm=" << to_string(algorithm);
-  out << ", "
-      << "hash=" << to_string(hash);
-  out << ", "
-      << "compression=" << to_string(compression);
+  out << ", " << "algorithm=" << to_string(algorithm);
+  out << ", " << "hash=" << to_string(hash);
+  out << ", " << "compression=" << to_string(compression);
   out << ")";
 }
 
@@ -4248,7 +4129,7 @@ uint32_t PageHeader::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast70;
           xfer += iprot->readI32(ecast70);
-          this->type = (PageType::type)ecast70;
+          this->type = static_cast<PageType::type>(ecast70);
           isset_type = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -4334,7 +4215,7 @@ uint32_t PageHeader::write(::apache::thrift::protocol::TProtocol* oprot) const {
   xfer += oprot->writeStructBegin("PageHeader");
 
   xfer += oprot->writeFieldBegin("type", ::apache::thrift::protocol::T_I32, 1);
-  xfer += oprot->writeI32((int32_t)this->type);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->type));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin(
@@ -4421,27 +4302,20 @@ void PageHeader::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "PageHeader(";
   out << "type=" << to_string(type);
-  out << ", "
-      << "uncompressed_page_size=" << to_string(uncompressed_page_size);
-  out << ", "
-      << "compressed_page_size=" << to_string(compressed_page_size);
-  out << ", "
-      << "crc=";
+  out << ", " << "uncompressed_page_size=" << to_string(uncompressed_page_size);
+  out << ", " << "compressed_page_size=" << to_string(compressed_page_size);
+  out << ", " << "crc=";
   (__isset.crc ? (out << to_string(crc)) : (out << "<null>"));
-  out << ", "
-      << "data_page_header=";
+  out << ", " << "data_page_header=";
   (__isset.data_page_header ? (out << to_string(data_page_header))
                             : (out << "<null>"));
-  out << ", "
-      << "index_page_header=";
+  out << ", " << "index_page_header=";
   (__isset.index_page_header ? (out << to_string(index_page_header))
                              : (out << "<null>"));
-  out << ", "
-      << "dictionary_page_header=";
+  out << ", " << "dictionary_page_header=";
   (__isset.dictionary_page_header ? (out << to_string(dictionary_page_header))
                                   : (out << "<null>"));
-  out << ", "
-      << "data_page_header_v2=";
+  out << ", " << "data_page_header_v2=";
   (__isset.data_page_header_v2 ? (out << to_string(data_page_header_v2))
                                : (out << "<null>"));
   out << ")";
@@ -4554,8 +4428,7 @@ void KeyValue::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "KeyValue(";
   out << "key=" << to_string(key);
-  out << ", "
-      << "value=";
+  out << ", " << "value=";
   (__isset.value ? (out << to_string(value)) : (out << "<null>"));
   out << ")";
 }
@@ -4689,10 +4562,8 @@ void SortingColumn::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "SortingColumn(";
   out << "column_idx=" << to_string(column_idx);
-  out << ", "
-      << "descending=" << to_string(descending);
-  out << ", "
-      << "nulls_first=" << to_string(nulls_first);
+  out << ", " << "descending=" << to_string(descending);
+  out << ", " << "nulls_first=" << to_string(nulls_first);
   out << ")";
 }
 
@@ -4739,7 +4610,7 @@ uint32_t PageEncodingStats::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast77;
           xfer += iprot->readI32(ecast77);
-          this->page_type = (PageType::type)ecast77;
+          this->page_type = static_cast<PageType::type>(ecast77);
           isset_page_type = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -4749,7 +4620,7 @@ uint32_t PageEncodingStats::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast78;
           xfer += iprot->readI32(ecast78);
-          this->encoding = (Encoding::type)ecast78;
+          this->encoding = static_cast<Encoding::type>(ecast78);
           isset_encoding = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -4789,12 +4660,12 @@ uint32_t PageEncodingStats::write(
 
   xfer +=
       oprot->writeFieldBegin("page_type", ::apache::thrift::protocol::T_I32, 1);
-  xfer += oprot->writeI32((int32_t)this->page_type);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->page_type));
   xfer += oprot->writeFieldEnd();
 
   xfer +=
       oprot->writeFieldBegin("encoding", ::apache::thrift::protocol::T_I32, 2);
-  xfer += oprot->writeI32((int32_t)this->encoding);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->encoding));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin("count", ::apache::thrift::protocol::T_I32, 3);
@@ -4829,10 +4700,8 @@ void PageEncodingStats::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "PageEncodingStats(";
   out << "page_type=" << to_string(page_type);
-  out << ", "
-      << "encoding=" << to_string(encoding);
-  out << ", "
-      << "count=" << to_string(count);
+  out << ", " << "encoding=" << to_string(encoding);
+  out << ", " << "count=" << to_string(count);
   out << ")";
 }
 
@@ -4936,7 +4805,7 @@ uint32_t ColumnMetaData::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast81;
           xfer += iprot->readI32(ecast81);
-          this->type = (Type::type)ecast81;
+          this->type = static_cast<Type::type>(ecast81);
           isset_type = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -4954,7 +4823,7 @@ uint32_t ColumnMetaData::read(::apache::thrift::protocol::TProtocol* iprot) {
             for (_i86 = 0; _i86 < _size82; ++_i86) {
               int32_t ecast87;
               xfer += iprot->readI32(ecast87);
-              this->encodings[_i86] = (Encoding::type)ecast87;
+              this->encodings[_i86] = static_cast<Encoding::type>(ecast87);
             }
             xfer += iprot->readListEnd();
           }
@@ -4986,7 +4855,7 @@ uint32_t ColumnMetaData::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast93;
           xfer += iprot->readI32(ecast93);
-          this->codec = (CompressionCodec::type)ecast93;
+          this->codec = static_cast<CompressionCodec::type>(ecast93);
           isset_codec = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -5129,7 +4998,7 @@ uint32_t ColumnMetaData::write(
   xfer += oprot->writeStructBegin("ColumnMetaData");
 
   xfer += oprot->writeFieldBegin("type", ::apache::thrift::protocol::T_I32, 1);
-  xfer += oprot->writeI32((int32_t)this->type);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->type));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin(
@@ -5141,7 +5010,7 @@ uint32_t ColumnMetaData::write(
     std::vector<Encoding::type>::const_iterator _iter104;
     for (_iter104 = this->encodings.begin(); _iter104 != this->encodings.end();
          ++_iter104) {
-      xfer += oprot->writeI32((int32_t)(*_iter104));
+      xfer += oprot->writeI32(static_cast<int32_t>(*_iter104));
     }
     xfer += oprot->writeListEnd();
   }
@@ -5164,7 +5033,7 @@ uint32_t ColumnMetaData::write(
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin("codec", ::apache::thrift::protocol::T_I32, 4);
-  xfer += oprot->writeI32((int32_t)this->codec);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->codec));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldBegin(
@@ -5308,41 +5177,29 @@ void ColumnMetaData::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "ColumnMetaData(";
   out << "type=" << to_string(type);
-  out << ", "
-      << "encodings=" << to_string(encodings);
-  out << ", "
-      << "path_in_schema=" << to_string(path_in_schema);
-  out << ", "
-      << "codec=" << to_string(codec);
-  out << ", "
-      << "num_values=" << to_string(num_values);
+  out << ", " << "encodings=" << to_string(encodings);
+  out << ", " << "path_in_schema=" << to_string(path_in_schema);
+  out << ", " << "codec=" << to_string(codec);
+  out << ", " << "num_values=" << to_string(num_values);
   out << ", "
       << "total_uncompressed_size=" << to_string(total_uncompressed_size);
-  out << ", "
-      << "total_compressed_size=" << to_string(total_compressed_size);
-  out << ", "
-      << "key_value_metadata=";
+  out << ", " << "total_compressed_size=" << to_string(total_compressed_size);
+  out << ", " << "key_value_metadata=";
   (__isset.key_value_metadata ? (out << to_string(key_value_metadata))
                               : (out << "<null>"));
-  out << ", "
-      << "data_page_offset=" << to_string(data_page_offset);
-  out << ", "
-      << "index_page_offset=";
+  out << ", " << "data_page_offset=" << to_string(data_page_offset);
+  out << ", " << "index_page_offset=";
   (__isset.index_page_offset ? (out << to_string(index_page_offset))
                              : (out << "<null>"));
-  out << ", "
-      << "dictionary_page_offset=";
+  out << ", " << "dictionary_page_offset=";
   (__isset.dictionary_page_offset ? (out << to_string(dictionary_page_offset))
                                   : (out << "<null>"));
-  out << ", "
-      << "statistics=";
+  out << ", " << "statistics=";
   (__isset.statistics ? (out << to_string(statistics)) : (out << "<null>"));
-  out << ", "
-      << "encoding_stats=";
+  out << ", " << "encoding_stats=";
   (__isset.encoding_stats ? (out << to_string(encoding_stats))
                           : (out << "<null>"));
-  out << ", "
-      << "bloom_filter_offset=";
+  out << ", " << "bloom_filter_offset=";
   (__isset.bloom_filter_offset ? (out << to_string(bloom_filter_offset))
                                : (out << "<null>"));
   out << ")";
@@ -5394,21 +5251,16 @@ uint32_t EncryptionWithFooterKey::write(
   return xfer;
 }
 
-void swap(EncryptionWithFooterKey& a, EncryptionWithFooterKey& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(EncryptionWithFooterKey& /*a*/, EncryptionWithFooterKey& /*b*/) {}
 
 EncryptionWithFooterKey::EncryptionWithFooterKey(
-    const EncryptionWithFooterKey& other110) {
-  (void)other110;
-}
+    const EncryptionWithFooterKey& /*other110*/) {}
+
 EncryptionWithFooterKey& EncryptionWithFooterKey::operator=(
-    const EncryptionWithFooterKey& other111) {
-  (void)other111;
+    const EncryptionWithFooterKey& /*other111*/) {
   return *this;
 }
+
 void EncryptionWithFooterKey::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "EncryptionWithFooterKey(";
@@ -5551,8 +5403,7 @@ void EncryptionWithColumnKey::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "EncryptionWithColumnKey(";
   out << "path_in_schema=" << to_string(path_in_schema);
-  out << ", "
-      << "key_metadata=";
+  out << ", " << "key_metadata=";
   (__isset.key_metadata ? (out << to_string(key_metadata)) : (out << "<null>"));
   out << ")";
 }
@@ -5671,8 +5522,7 @@ void ColumnCryptoMetaData::printTo(std::ostream& out) const {
   (__isset.ENCRYPTION_WITH_FOOTER_KEY
        ? (out << to_string(ENCRYPTION_WITH_FOOTER_KEY))
        : (out << "<null>"));
-  out << ", "
-      << "ENCRYPTION_WITH_COLUMN_KEY=";
+  out << ", " << "ENCRYPTION_WITH_COLUMN_KEY=";
   (__isset.ENCRYPTION_WITH_COLUMN_KEY
        ? (out << to_string(ENCRYPTION_WITH_COLUMN_KEY))
        : (out << "<null>"));
@@ -5942,33 +5792,25 @@ void ColumnChunk::printTo(std::ostream& out) const {
   out << "ColumnChunk(";
   out << "file_path=";
   (__isset.file_path ? (out << to_string(file_path)) : (out << "<null>"));
-  out << ", "
-      << "file_offset=" << to_string(file_offset);
-  out << ", "
-      << "meta_data=";
+  out << ", " << "file_offset=" << to_string(file_offset);
+  out << ", " << "meta_data=";
   (__isset.meta_data ? (out << to_string(meta_data)) : (out << "<null>"));
-  out << ", "
-      << "offset_index_offset=";
+  out << ", " << "offset_index_offset=";
   (__isset.offset_index_offset ? (out << to_string(offset_index_offset))
                                : (out << "<null>"));
-  out << ", "
-      << "offset_index_length=";
+  out << ", " << "offset_index_length=";
   (__isset.offset_index_length ? (out << to_string(offset_index_length))
                                : (out << "<null>"));
-  out << ", "
-      << "column_index_offset=";
+  out << ", " << "column_index_offset=";
   (__isset.column_index_offset ? (out << to_string(column_index_offset))
                                : (out << "<null>"));
-  out << ", "
-      << "column_index_length=";
+  out << ", " << "column_index_length=";
   (__isset.column_index_length ? (out << to_string(column_index_length))
                                : (out << "<null>"));
-  out << ", "
-      << "crypto_metadata=";
+  out << ", " << "crypto_metadata=";
   (__isset.crypto_metadata ? (out << to_string(crypto_metadata))
                            : (out << "<null>"));
-  out << ", "
-      << "encrypted_column_metadata=";
+  out << ", " << "encrypted_column_metadata=";
   (__isset.encrypted_column_metadata
        ? (out << to_string(encrypted_column_metadata))
        : (out << "<null>"));
@@ -6237,23 +6079,17 @@ void RowGroup::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "RowGroup(";
   out << "columns=" << to_string(columns);
-  out << ", "
-      << "total_byte_size=" << to_string(total_byte_size);
-  out << ", "
-      << "num_rows=" << to_string(num_rows);
-  out << ", "
-      << "sorting_columns=";
+  out << ", " << "total_byte_size=" << to_string(total_byte_size);
+  out << ", " << "num_rows=" << to_string(num_rows);
+  out << ", " << "sorting_columns=";
   (__isset.sorting_columns ? (out << to_string(sorting_columns))
                            : (out << "<null>"));
-  out << ", "
-      << "file_offset=";
+  out << ", " << "file_offset=";
   (__isset.file_offset ? (out << to_string(file_offset)) : (out << "<null>"));
-  out << ", "
-      << "total_compressed_size=";
+  out << ", " << "total_compressed_size=";
   (__isset.total_compressed_size ? (out << to_string(total_compressed_size))
                                  : (out << "<null>"));
-  out << ", "
-      << "ordinal=";
+  out << ", " << "ordinal=";
   (__isset.ordinal ? (out << to_string(ordinal)) : (out << "<null>"));
   out << ")";
 }
@@ -6301,20 +6137,15 @@ uint32_t TypeDefinedOrder::write(
   return xfer;
 }
 
-void swap(TypeDefinedOrder& a, TypeDefinedOrder& b) {
-  using ::std::swap;
-  (void)a;
-  (void)b;
-}
+void swap(TypeDefinedOrder& /*a*/, TypeDefinedOrder& /*b*/) {}
 
-TypeDefinedOrder::TypeDefinedOrder(const TypeDefinedOrder& other138) {
-  (void)other138;
-}
+TypeDefinedOrder::TypeDefinedOrder(const TypeDefinedOrder& /*other138*/) {}
+
 TypeDefinedOrder& TypeDefinedOrder::operator=(
-    const TypeDefinedOrder& other139) {
-  (void)other139;
+    const TypeDefinedOrder& /*other139*/) {
   return *this;
 }
+
 void TypeDefinedOrder::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "TypeDefinedOrder(";
@@ -6538,10 +6369,8 @@ void PageLocation::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "PageLocation(";
   out << "offset=" << to_string(offset);
-  out << ", "
-      << "compressed_page_size=" << to_string(compressed_page_size);
-  out << ", "
-      << "first_row_index=" << to_string(first_row_index);
+  out << ", " << "compressed_page_size=" << to_string(compressed_page_size);
+  out << ", " << "first_row_index=" << to_string(first_row_index);
   out << ")";
 }
 
@@ -6763,7 +6592,7 @@ uint32_t ColumnIndex::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_I32) {
           int32_t ecast167;
           xfer += iprot->readI32(ecast167);
-          this->boundary_order = (BoundaryOrder::type)ecast167;
+          this->boundary_order = static_cast<BoundaryOrder::type>(ecast167);
           isset_boundary_order = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -6864,7 +6693,7 @@ uint32_t ColumnIndex::write(
 
   xfer += oprot->writeFieldBegin(
       "boundary_order", ::apache::thrift::protocol::T_I32, 4);
-  xfer += oprot->writeI32((int32_t)this->boundary_order);
+  xfer += oprot->writeI32(static_cast<int32_t>(this->boundary_order));
   xfer += oprot->writeFieldEnd();
 
   if (this->__isset.null_counts) {
@@ -6920,14 +6749,10 @@ void ColumnIndex::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "ColumnIndex(";
   out << "null_pages=" << to_string(null_pages);
-  out << ", "
-      << "min_values=" << to_string(min_values);
-  out << ", "
-      << "max_values=" << to_string(max_values);
-  out << ", "
-      << "boundary_order=" << to_string(boundary_order);
-  out << ", "
-      << "null_counts=";
+  out << ", " << "min_values=" << to_string(min_values);
+  out << ", " << "max_values=" << to_string(max_values);
+  out << ", " << "boundary_order=" << to_string(boundary_order);
+  out << ", " << "null_counts=";
   (__isset.null_counts ? (out << to_string(null_counts)) : (out << "<null>"));
   out << ")";
 }
@@ -7060,12 +6885,10 @@ void AesGcmV1::printTo(std::ostream& out) const {
   out << "AesGcmV1(";
   out << "aad_prefix=";
   (__isset.aad_prefix ? (out << to_string(aad_prefix)) : (out << "<null>"));
-  out << ", "
-      << "aad_file_unique=";
+  out << ", " << "aad_file_unique=";
   (__isset.aad_file_unique ? (out << to_string(aad_file_unique))
                            : (out << "<null>"));
-  out << ", "
-      << "supply_aad_prefix=";
+  out << ", " << "supply_aad_prefix=";
   (__isset.supply_aad_prefix ? (out << to_string(supply_aad_prefix))
                              : (out << "<null>"));
   out << ")";
@@ -7200,12 +7023,10 @@ void AesGcmCtrV1::printTo(std::ostream& out) const {
   out << "AesGcmCtrV1(";
   out << "aad_prefix=";
   (__isset.aad_prefix ? (out << to_string(aad_prefix)) : (out << "<null>"));
-  out << ", "
-      << "aad_file_unique=";
+  out << ", " << "aad_file_unique=";
   (__isset.aad_file_unique ? (out << to_string(aad_file_unique))
                            : (out << "<null>"));
-  out << ", "
-      << "supply_aad_prefix=";
+  out << ", " << "supply_aad_prefix=";
   (__isset.supply_aad_prefix ? (out << to_string(supply_aad_prefix))
                              : (out << "<null>"));
   out << ")";
@@ -7320,8 +7141,7 @@ void EncryptionAlgorithm::printTo(std::ostream& out) const {
   out << "EncryptionAlgorithm(";
   out << "AES_GCM_V1=";
   (__isset.AES_GCM_V1 ? (out << to_string(AES_GCM_V1)) : (out << "<null>"));
-  out << ", "
-      << "AES_GCM_CTR_V1=";
+  out << ", " << "AES_GCM_CTR_V1=";
   (__isset.AES_GCM_CTR_V1 ? (out << to_string(AES_GCM_CTR_V1))
                           : (out << "<null>"));
   out << ")";
@@ -7679,29 +7499,21 @@ void FileMetaData::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "FileMetaData(";
   out << "version=" << to_string(version);
-  out << ", "
-      << "schema=" << to_string(schema);
-  out << ", "
-      << "num_rows=" << to_string(num_rows);
-  out << ", "
-      << "row_groups=" << to_string(row_groups);
-  out << ", "
-      << "key_value_metadata=";
+  out << ", " << "schema=" << to_string(schema);
+  out << ", " << "num_rows=" << to_string(num_rows);
+  out << ", " << "row_groups=" << to_string(row_groups);
+  out << ", " << "key_value_metadata=";
   (__isset.key_value_metadata ? (out << to_string(key_value_metadata))
                               : (out << "<null>"));
-  out << ", "
-      << "created_by=";
+  out << ", " << "created_by=";
   (__isset.created_by ? (out << to_string(created_by)) : (out << "<null>"));
-  out << ", "
-      << "column_orders=";
+  out << ", " << "column_orders=";
   (__isset.column_orders ? (out << to_string(column_orders))
                          : (out << "<null>"));
-  out << ", "
-      << "encryption_algorithm=";
+  out << ", " << "encryption_algorithm=";
   (__isset.encryption_algorithm ? (out << to_string(encryption_algorithm))
                                 : (out << "<null>"));
-  out << ", "
-      << "footer_signing_key_metadata=";
+  out << ", " << "footer_signing_key_metadata=";
   (__isset.footer_signing_key_metadata
        ? (out << to_string(footer_signing_key_metadata))
        : (out << "<null>"));
@@ -7819,8 +7631,7 @@ void FileCryptoMetaData::printTo(std::ostream& out) const {
   using ::apache::thrift::to_string;
   out << "FileCryptoMetaData(";
   out << "encryption_algorithm=" << to_string(encryption_algorithm);
-  out << ", "
-      << "key_metadata=";
+  out << ", " << "key_metadata=";
   (__isset.key_metadata ? (out << to_string(key_metadata)) : (out << "<null>"));
   out << ")";
 }

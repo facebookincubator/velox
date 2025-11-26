@@ -17,13 +17,17 @@
 #include <gtest/gtest.h>
 #include <optional>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/Comparisons.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace {
 
 using namespace facebook::velox;
+using namespace facebook::velox::functions;
+using namespace facebook::velox::test;
 
 DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
   SelectivityVector rows(vector.size());
@@ -145,6 +149,201 @@ class RowViewTest : public functions::test::FunctionBaseTest {
       }
     }
   }
+
+  void compareTest() {
+    auto rowVector1 = makeRowVector(
+        {makeNullableFlatVector<int32_t>({std::nullopt}),
+         makeNullableFlatVector<float>({1.0})});
+    auto rowVector2 = makeRowVector(
+        {makeNullableFlatVector<int32_t>({std::nullopt}),
+         makeNullableFlatVector<float>({2.0})});
+    {
+      DecodedVector decoded1;
+      DecodedVector decoded2;
+
+      exec::VectorReader<Row<int32_t, float>> reader1(
+          decode(decoded1, *rowVector1));
+      exec::VectorReader<Row<int32_t, float>> reader2(
+          decode(decoded2, *rowVector2));
+
+      ASSERT_TRUE(reader1.isSet(0));
+      ASSERT_TRUE(reader2.isSet(0));
+      auto l = read(reader1, 0);
+      auto r = read(reader2, 0);
+      // Default flag for all operators other than `==` is
+      // kNullAsIndeterminate
+      VELOX_ASSERT_THROW(r < l, "Ordering nulls is not supported");
+      VELOX_ASSERT_THROW(r <= l, "Ordering nulls is not supported");
+      VELOX_ASSERT_THROW(r > l, "Ordering nulls is not supported");
+      VELOX_ASSERT_THROW(r >= l, "Ordering nulls is not supported");
+
+      // Default flag for `==` is kNullAsValue
+      ASSERT_FALSE(r == l);
+
+      // Test we can pass in a flag to change the behavior for compare
+      ASSERT_LT(
+          l.compare(
+              r,
+              CompareFlags::equality(
+                  CompareFlags::NullHandlingMode::kNullAsValue)),
+          0);
+    }
+
+    // Test indeterminate ROW<integer, float> = [null, 2.0] against
+    // [null, 2.0] is indeterminate
+    {
+      auto rowVector = vectorMaker_.rowVector(
+          {BaseVector::createNullConstant(
+               ROW({{"a", INTEGER()}}), 1, pool_.get()),
+           makeNullableFlatVector<float>({1.0})});
+
+      DecodedVector decoded1;
+      exec::VectorReader<Row<int32_t, float>> reader1(
+          decode(decoded1, *rowVector1));
+      ASSERT_TRUE(reader1.isSet(0));
+      auto l = read(reader1, 0);
+      auto flags = CompareFlags::equality(
+          CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+      ASSERT_EQ(l.compare(l, flags), kIndeterminate);
+    }
+
+    // Test a layer of indirection with by wrapping the vector in a dictionary
+    {
+      vector_size_t size = 2;
+      auto field1Vector =
+          makeFlatVector<int32_t>(size, [](vector_size_t row) { return row; });
+      auto field2Vector =
+          makeFlatVector<float>(size, [](vector_size_t row) { return row; });
+      auto baseVector = makeRowVector(
+          {field1Vector, field2Vector}, [](vector_size_t idx) { return idx; });
+      BufferPtr indices =
+          AlignedBuffer::allocate<vector_size_t>(size, execCtx_.pool());
+      auto rawIndices = indices->asMutable<vector_size_t>();
+      for (auto i = 0; i < size; ++i) {
+        rawIndices[i] = i;
+      }
+      auto rowVector = wrapInDictionary(
+          indices, size, wrapInDictionary(indices, size, baseVector));
+      DecodedVector decoded;
+      exec::VectorReader<Row<int32_t, float>> reader(
+          decode(decoded, *rowVector.get()));
+
+      // Test the equals case so that we are traversing all of the tuples and
+      // ensuring correct index accessing.
+      auto l = read(reader, 0);
+      auto r = read(reader, 0);
+      ASSERT_TRUE(l == r);
+    }
+
+    {
+      auto vector1 = makeRowVector(
+          {makeNullableFlatVector<int32_t>({666666666666666, 4, 7}),
+           makeNullableFlatVector<float>({3.0, 1.0, 1.0})});
+      auto vector2 = makeRowVector(
+          {makeNullableFlatVector<int32_t>({3, 123, 5}),
+           makeNullableFlatVector<float>({3.0, 0.5, 0.1})});
+      vector_size_t size = vector1->size();
+      BufferPtr indices =
+          AlignedBuffer::allocate<vector_size_t>(size, execCtx_.pool());
+      auto rawIndices = indices->asMutable<vector_size_t>();
+      for (auto i = 0; i < size; ++i) {
+        rawIndices[i] = size - i - 1;
+      }
+      BufferPtr indices1 =
+          AlignedBuffer::allocate<vector_size_t>(size, execCtx_.pool());
+      auto rawIndices1 = indices1->asMutable<vector_size_t>();
+      for (auto i = 0; i < size; ++i) {
+        rawIndices1[i] = i;
+      }
+
+      DecodedVector decoded1;
+      DecodedVector decoded2;
+      auto wrappedRowVector1 =
+          wrapInDictionary(indices, (vector1->size()), vector1);
+      auto wrappedRowVector2 =
+          wrapInDictionary(indices1, (vector2->size()), vector2);
+      exec::VectorReader<Row<int32_t, float>> reader1(
+          decode(decoded1, *wrappedRowVector1));
+      exec::VectorReader<Row<int32_t, float>> reader2(
+          decode(decoded2, *wrappedRowVector2));
+
+      ASSERT_TRUE(reader1.isSet(0));
+      ASSERT_TRUE(reader2.isSet(0));
+      auto l = read(reader1, 0);
+      auto r = read(reader2, 0);
+      ASSERT_TRUE(l > r);
+    }
+  }
+
+  void e2eComparisonTest() {
+    auto lhs = makeRowVector(
+        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+         makeFlatVector<float>({1.0, 2.0, 3.0, 4.0, 6.0, 0.0})});
+    auto rhs = makeRowVector(
+        {makeNullableFlatVector<int32_t>({5, 4, 3, 4, 5, 6}),
+         makeFlatVector<float>({2.0, 2.0, 3.0, 4.0, 6.0, 1.1})});
+
+    registerFunction<
+        EqFunction,
+        bool,
+        Row<int32_t, float>,
+        Row<int32_t, float>>({"row_eq"});
+    auto result =
+        evaluate<FlatVector<bool>>("row_eq(c0, c1)", makeRowVector({lhs, rhs}));
+    assertEqualVectors(
+        makeFlatVector<bool>({false, false, true, true, true, false}), result);
+
+    registerFunction<
+        NeqFunction,
+        bool,
+        Row<int32_t, float>,
+        Row<int32_t, float>>({"row_neq"});
+    result = evaluate<FlatVector<bool>>(
+        "row_neq(c0, c1)", makeRowVector({lhs, rhs}));
+    assertEqualVectors(
+        makeFlatVector<bool>({true, true, false, false, false, true}), result);
+
+    registerFunction<
+        LtFunction,
+        bool,
+        Row<int32_t, float>,
+        Row<int32_t, float>>({"row_lt"});
+    result =
+        evaluate<FlatVector<bool>>("row_lt(c0, c1)", makeRowVector({lhs, rhs}));
+    assertEqualVectors(
+        makeFlatVector<bool>({true, true, false, false, false, true}), result);
+
+    registerFunction<
+        GtFunction,
+        bool,
+        Row<int32_t, float>,
+        Row<int32_t, float>>({"row_gt"});
+    result =
+        evaluate<FlatVector<bool>>("row_gt(c0, c1)", makeRowVector({lhs, rhs}));
+    assertEqualVectors(
+        makeFlatVector<bool>({false, false, false, false, false, false}),
+        result);
+
+    registerFunction<
+        LteFunction,
+        bool,
+        Row<int32_t, float>,
+        Row<int32_t, float>>({"row_lte"});
+    result = evaluate<FlatVector<bool>>(
+        "row_lte(c0, c1)", makeRowVector({lhs, rhs}));
+    assertEqualVectors(
+        makeFlatVector<bool>({true, true, true, true, true, true}), result);
+
+    registerFunction<
+        GteFunction,
+        bool,
+        Row<int32_t, float>,
+        Row<int32_t, float>>({"row_gte"});
+    result = evaluate<FlatVector<bool>>(
+        "row_gte(c0, c1)", makeRowVector({lhs, rhs}));
+    assertEqualVectors(
+        makeFlatVector<bool>({false, false, true, true, true, false}), result);
+  }
 };
 
 class NullableRowViewTest : public RowViewTest<true> {};
@@ -187,6 +386,13 @@ TEST_F(NullFreeRowViewTest, materialize) {
   std::tuple<int64_t, std::string, std::vector<int64_t>> expected{
       1, "hi", {1, 2, 3}};
   ASSERT_EQ(reader.readNullFree(0).materialize(), expected);
+}
+TEST_F(NullFreeRowViewTest, compare) {
+  compareTest();
+}
+
+TEST_F(NullFreeRowViewTest, e2eCompare) {
+  e2eComparisonTest();
 }
 
 TEST_F(NullableRowViewTest, materialize) {
@@ -299,16 +505,16 @@ TEST_F(DynamicRowViewTest, castToDynamicRowInFunction) {
 
     // Input is not struct.
     auto result = evaluate("struct_width(c0)", makeRowVector({flatVector}));
-    test::assertEqualVectors(makeFlatVector<int64_t>({0, 0}), result);
+    assertEqualVectors(makeFlatVector<int64_t>({0, 0}), result);
 
     result = evaluate(
         "struct_width(c0)", makeRowVector({makeRowVector({flatVector})}));
-    test::assertEqualVectors(makeFlatVector<int64_t>({1, 1}), result);
+    assertEqualVectors(makeFlatVector<int64_t>({1, 1}), result);
 
     result = evaluate(
         "struct_width(c0)",
         makeRowVector({makeRowVector({flatVector, flatVector})}));
-    test::assertEqualVectors(makeFlatVector<int64_t>({2, 2}), result);
+    assertEqualVectors(makeFlatVector<int64_t>({2, 2}), result);
   }
 }
 } // namespace

@@ -16,7 +16,8 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -29,7 +30,6 @@ class CountAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   RowTypePtr rowType_{
@@ -154,12 +154,17 @@ TEST_F(CountAggregationTest, mask) {
 }
 
 TEST_F(CountAggregationTest, distinct) {
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
   auto data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),
       makeFlatVector<int32_t>({1, 1, 1, 2, 1, 1, 1, 2}),
       makeNullableFlatVector<int64_t>(
           {std::nullopt, 1, std::nullopt, 2, std::nullopt, 1, std::nullopt, 1}),
       makeNullConstant(TypeKind::DOUBLE, 8),
+      makeFlatVector<int128_t>({1, 2, 1, 2, 1, 2, 1, 1}, DECIMAL(38, 8)),
+      // Test for NaN equivalence
+      makeFlatVector<double>({kNaN, kNaN, kSNaN, kSNaN, 1, 1, 1, 2}),
   });
   createDuckDbTable({data});
 
@@ -178,6 +183,7 @@ TEST_F(CountAggregationTest, distinct) {
   testGlobal("c1");
   testGlobal("c2");
   testGlobal("c3");
+  testGlobal("c4");
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -207,13 +213,15 @@ TEST_F(CountAggregationTest, distinct) {
                         {"c0"}, {fmt::format("count(distinct {})", input)})
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .assertResults(fmt::format(
-            "SELECT c0, count(distinct {}) FROM tmp GROUP BY 1", input));
+        .assertResults(
+            fmt::format(
+                "SELECT c0, count(distinct {}) FROM tmp GROUP BY 1", input));
   };
 
   testGroupBy("c1");
   testGroupBy("c2");
   testGroupBy("c3");
+  testGroupBy("c4");
 
   plan = PlanBuilder()
              .values({data})
@@ -262,6 +270,126 @@ TEST_F(CountAggregationTest, distinctMask) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
           "SELECT c0, count(distinct c2) FILTER (WHERE c1) FROM tmp GROUP BY 1");
+}
+
+void testGlobalAggregation(
+    const std::string& col,
+    const RowVectorPtr& input,
+    const RowVectorPtr& expected) {
+  auto globalAggPlan =
+      PlanBuilder()
+          .values({input})
+          .singleAggregation({}, {fmt::format("count(distinct {})", col)})
+          .planNode();
+  AssertQueryBuilder(globalAggPlan).assertResults(expected);
+}
+
+void testSingleAggregation(
+    const std::vector<std::string>& keys,
+    const std::string& col,
+    const RowVectorPtr& input,
+    const RowVectorPtr& expected) {
+  auto groupByPlan =
+      PlanBuilder()
+          .values({input})
+          .singleAggregation(keys, {fmt::format("count(distinct {})", col)})
+          .planNode();
+  AssertQueryBuilder(groupByPlan).assertResults(expected);
+}
+
+TEST_F(CountAggregationTest, nans) {
+  // Verify that NaNs with different binary representations are considered
+  // equal.
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+  auto data = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),
+       // Column to verify with primitive type input
+       makeFlatVector<double>({kNaN, kNaN, kSNaN, kSNaN, 1, 1, 1, 2}),
+       // Column to verify with complex type input
+       makeRowVector(
+           {makeFlatVector<double>({kNaN, kNaN, kSNaN, kSNaN, 1, 1, 1, 2}),
+            makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 1})})});
+
+  // Global aggregation.
+  RowVectorPtr expected = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>({3})),
+  });
+  testGlobalAggregation("c1", data, expected);
+  testGlobalAggregation("c2", data, expected);
+
+  // Group by.
+  expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeFlatVector<int64_t>({2, 3}),
+  });
+  testSingleAggregation({"c0"}, "c1", data, expected);
+  testSingleAggregation({"c0"}, "c2", data, expected);
+}
+
+TEST_F(CountAggregationTest, timestampWithTimeZone) {
+  // Verify that Timestamps with Time Zones with the same timestamp but
+  // different time zones are considered equal.
+  auto data = makeRowVector(
+      {// Keys non-global for aggregations.
+       makeFlatVector<int16_t>({1, 1, 2, 1, 2, 1, 2, 1}),
+       // Column to validate aggregating as a stand alone value.
+       makeFlatVector<int64_t>(
+           {pack(0, 0),
+            pack(1, 0),
+            pack(2, 0),
+            pack(0, 1),
+            pack(1, 1),
+            pack(1, 2),
+            pack(2, 2),
+            pack(3, 3)},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       // Column to validate aggregating as part of a complex value.
+       makeRowVector(
+           {makeFlatVector<int64_t>(
+                {pack(0, 0),
+                 pack(1, 0),
+                 pack(2, 0),
+                 pack(0, 1),
+                 pack(1, 1),
+                 pack(1, 2),
+                 pack(2, 2),
+                 pack(3, 3)},
+                TIMESTAMP_WITH_TIME_ZONE()),
+            makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 1})})});
+
+  // Global aggregation.
+  RowVectorPtr expected = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>({4})),
+  });
+  testGlobalAggregation("c1", data, expected);
+  testGlobalAggregation("c2", data, expected);
+
+  // Group by.
+  expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeFlatVector<int64_t>({3, 2}),
+  });
+  testSingleAggregation({"c0"}, "c1", data, expected);
+  testSingleAggregation({"c0"}, "c2", data, expected);
+}
+
+TEST_F(CountAggregationTest, unknownType) {
+  constexpr int kSize = 10;
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(kSize, [](auto i) { return i % 2; }),
+      makeAllNullFlatVector<UnknownValue>(kSize),
+  });
+  testGlobalAggregation(
+      "c1", input, makeRowVector({makeConstant<int64_t>(0, 1)}));
+  testSingleAggregation(
+      {"c0"},
+      "c1",
+      input,
+      makeRowVector({
+          makeFlatVector<int32_t>({0, 1}),
+          makeFlatVector<int64_t>({0, 0}),
+      }));
 }
 
 } // namespace

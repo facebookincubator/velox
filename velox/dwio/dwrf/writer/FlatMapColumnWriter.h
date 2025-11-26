@@ -53,14 +53,15 @@ class ValueStatisticsBuilder {
   }
 
   uint64_t writeFileStats(
-      std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const {
-    auto& stats = statsFactory(id_);
+      std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory)
+      const {
+    auto stats = statsFactory(id_);
     statisticsBuilder_->toProto(stats);
     uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
     for (int32_t i = 0; i < children_.size(); ++i) {
       children_[i]->writeFileStats(statsFactory);
     }
-    stats.set_size(size);
+    stats.setSize(size);
     return size;
   }
 
@@ -69,7 +70,7 @@ class ValueStatisticsBuilder {
       WriterContext& context,
       const dwio::common::TypeWithId& type,
       const StatisticsBuilderOptions& options) {
-    auto builder = StatisticsBuilder::create(*type.type, options);
+    auto builder = StatisticsBuilder::create(*type.type(), options);
 
     std::vector<std::unique_ptr<ValueStatisticsBuilder>> children{};
     for (size_t i = 0; i < type.size(); ++i) {
@@ -77,7 +78,7 @@ class ValueStatisticsBuilder {
     }
 
     return std::make_unique<ValueStatisticsBuilder>(
-        context, type.id, std::move(builder), std::move(children));
+        context, type.id(), std::move(builder), std::move(children));
   }
 
   WriterContext& context_;
@@ -101,7 +102,10 @@ class ValueWriter {
       : sequence_{sequence},
         keyInfo_{keyInfo},
         inMap_{createBooleanRleEncoder(context.newStream(
-            {type.id, sequence, type.column, StreamKind::StreamKind_IN_MAP}))},
+            {type.id(),
+             sequence,
+             type.column(),
+             StreamKind::StreamKind_IN_MAP}))},
         columnWriter_{BaseColumnWriter::create(
             context,
             type,
@@ -117,7 +121,13 @@ class ValueWriter {
 
   void addOffset(uint64_t offset, uint64_t inMapIndex) {
     if (UNLIKELY(inMapBuffer_[inMapIndex])) {
-      DWIO_RAISE("Duplicate key in map");
+      std::string duplicatedKey = "<unknown>";
+      if (keyInfo_.has_byteskey()) {
+        duplicatedKey = keyInfo_.byteskey();
+      } else if (keyInfo_.has_intkey()) {
+        duplicatedKey = std::to_string(keyInfo_.intkey());
+      }
+      DWIO_RAISE("Duplicated key in map: ", duplicatedKey);
     }
 
     ranges_.add(offset, offset + 1);
@@ -128,6 +138,7 @@ class ValueWriter {
     if (mapCount) {
       inMap_->add(
           inMapBuffer_.data(), common::Ranges::of(0, mapCount), nullptr);
+      writtenValues_ += mapCount;
     }
 
     if (values) {
@@ -137,7 +148,7 @@ class ValueWriter {
   }
 
   // used for struct encoding writer
-  uint64_t writeBuffers(
+  void writeBuffers(
       const VectorPtr& values,
       const common::Ranges& nonNullRanges,
       const BufferPtr& inMapBuffer /* all 1 */) {
@@ -146,12 +157,28 @@ class ValueWriter {
           inMapBuffer->as<char>(),
           common::Ranges::of(0, nonNullRanges.size()),
           nullptr);
+      writtenValues_ += nonNullRanges.size();
     }
 
     if (values) {
-      return columnWriter_->write(values, nonNullRanges);
+      columnWriter_->write(values, nonNullRanges);
     }
-    return 0;
+  }
+
+  // used for flat map encoding writer
+  void writeBuffers(
+      const common::Ranges& valuesRanges,
+      const VectorPtr& values,
+      const common::Ranges& inMapRanges,
+      const uint64_t* inMapBuffer) {
+    if (inMapRanges.size()) {
+      inMap_->addBits(inMapBuffer, inMapRanges, nullptr, false);
+      writtenValues_ += inMapRanges.size();
+    }
+
+    if (valuesRanges.size()) {
+      columnWriter_->write(values, valuesRanges);
+    }
   }
 
   void backfill(uint32_t count) {
@@ -162,6 +189,7 @@ class ValueWriter {
     inMapBuffer_.reserve(count);
     std::memset(inMapBuffer_.data(), 0, count);
     inMap_->add(inMapBuffer_.data(), common::Ranges::of(0, count), nullptr);
+    writtenValues_ += count;
   }
 
   uint32_t getSequence() const {
@@ -182,21 +210,27 @@ class ValueWriter {
     columnWriter_->createIndexEntry();
   }
 
-  void flush(std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory) {
+  void flush(
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory) {
     inMap_->flush();
-    columnWriter_->flush(encodingFactory, [&](auto& encoding) {
-      *encoding.mutable_key() = keyInfo_;
+    columnWriter_->flush(encodingFactory, [&](auto encoding) {
+      *encoding.mutableKey() = keyInfo_;
     });
   }
 
   void reset() {
     columnWriter_->reset();
+    writtenValues_ = 0;
   }
 
   void resizeBuffers(size_t inMap) {
     inMapBuffer_.reserve(inMap);
     std::memset(inMapBuffer_.data(), 0, inMap);
     ranges_.clear();
+  }
+
+  size_t writtenValues() const {
+    return writtenValues_;
   }
 
  private:
@@ -207,6 +241,7 @@ class ValueWriter {
   dwio::common::DataBuffer<char> inMapBuffer_;
   common::Ranges ranges_;
   const bool collectMapStats_;
+  size_t writtenValues_{0};
 };
 
 namespace {
@@ -257,25 +292,29 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override;
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override;
 
   void createIndexEntry() override;
 
   void reset() override;
 
-  uint64_t writeFileStats(std::function<proto::ColumnStatistics&(uint32_t)>
-                              statsFactory) const override;
+  uint64_t writeFileStats(
+      std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory)
+      const override;
 
  private:
   using KeyType = typename TypeTraits<K>::NativeType;
 
-  void setEncoding(proto::ColumnEncoding& encoding) const override;
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override;
 
   ValueWriter& getValueWriter(KeyType key, uint32_t inMapSize);
 
-  // write() calls writeMap() or writeRow() depending on input type
+  // write() calls writeMap(), writeFlatMap(), or writeRow() depending on input
+  // type and encoding
   uint64_t writeMap(const VectorPtr& slice, const common::Ranges& ranges);
+  uint64_t writeFlatMap(const VectorPtr& slice, const common::Ranges& ranges);
   uint64_t writeRow(const VectorPtr& slice, const common::Ranges& ranges);
 
   void clearNodes();
@@ -290,6 +329,10 @@ class FlatMapColumnWriter : public BaseColumnWriter {
 
   // Captures current row count for current (incomplete) stride
   size_t rowsInCurrentStride_{0};
+
+  // Captures current row count for current stripe (sum of rowsInStrides_ +
+  // rowsInCurrentStride_)
+  size_t totalRows_{0};
 
   // Remember key and value types. Needed for constructing value writers
   const dwio::common::TypeWithId& keyType_;
@@ -316,7 +359,7 @@ class FlatMapColumnWriter<TypeKind::INVALID> {
       const uint32_t sequence) {
     DWIO_ENSURE_EQ(type.size(), 2, "Map should have exactly two children");
 
-    auto kind = type.childAt(0)->type->kind();
+    const auto kind = type.childAt(0)->type()->kind();
     switch (kind) {
       case TypeKind::TINYINT:
         return std::make_unique<FlatMapColumnWriter<TypeKind::TINYINT>>(

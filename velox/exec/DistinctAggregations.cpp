@@ -20,19 +20,22 @@ namespace facebook::velox::exec {
 
 namespace {
 
-template <typename T>
+template <
+    typename T,
+    typename AccumulatorType = aggregate::prestosql::SetAccumulator<T>>
 class TypedDistinctAggregations : public DistinctAggregations {
  public:
   TypedDistinctAggregations(
       std::vector<AggregateInfo*> aggregates,
       const RowTypePtr& inputType,
       memory::MemoryPool* pool)
-      : aggregates_{std::move(aggregates)},
-        input_{aggregates_[0]->inputs[0]},
-        inputType_{inputType->childAt(input_)},
-        pool_{pool} {}
-
-  using AccumulatorType = aggregate::prestosql::SetAccumulator<T>;
+      : pool_{pool},
+        aggregates_{std::move(aggregates)},
+        inputs_{aggregates_[0]->inputs},
+        inputType_(
+            TypedDistinctAggregations::makeInputTypeForAccumulator(
+                inputType,
+                inputs_)) {}
 
   /// Returns metadata about the accumulator used to store unique inputs.
   Accumulator accumulator() const override {
@@ -41,8 +44,15 @@ class TypedDistinctAggregations : public DistinctAggregations {
         sizeof(AccumulatorType),
         false, // usesExternalMemory
         1, // alignment
+        nullptr,
+        [](folly::Range<char**> /*groups*/, VectorPtr& /*result*/) {
+          VELOX_UNREACHABLE();
+        },
         [this](folly::Range<char**> groups) {
           for (auto* group : groups) {
+            if (!isInitialized(group)) {
+              continue;
+            }
             auto* accumulator =
                 reinterpret_cast<AccumulatorType*>(group + offset_);
             accumulator->free(*allocator_);
@@ -50,25 +60,11 @@ class TypedDistinctAggregations : public DistinctAggregations {
         }};
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto i : indices) {
-      groups[i][nullByte_] |= nullMask_;
-      new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);
-    }
-
-    for (auto i = 0; i < aggregates_.size(); ++i) {
-      const auto& aggregate = *aggregates_[i];
-      aggregate.function->initializeNewGroups(groups, indices);
-    }
-  }
-
   void addInput(
       char** groups,
       const RowVectorPtr& input,
       const SelectivityVector& rows) override {
-    decodedInput_.decode(*input->childAt(input_), rows);
+    decodeInput(input, rows);
 
     rows.applyToSelected([&](vector_size_t i) {
       auto* group = groups[i];
@@ -78,19 +74,23 @@ class TypedDistinctAggregations : public DistinctAggregations {
           group[rowSizeOffset_], *allocator_);
       accumulator->addValue(decodedInput_, i, allocator_);
     });
+
+    inputForAccumulator_.reset();
   }
 
   void addSingleGroupInput(
       char* group,
       const RowVectorPtr& input,
       const SelectivityVector& rows) override {
-    decodedInput_.decode(*input->childAt(input_), rows);
+    decodeInput(input, rows);
 
     auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
     RowSizeTracker<char, uint32_t> tracker(group[rowSizeOffset_], *allocator_);
     rows.applyToSelected([&](vector_size_t i) {
       accumulator->addValue(decodedInput_, i, allocator_);
     });
+
+    inputForAccumulator_.reset();
   }
 
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result)
@@ -112,8 +112,13 @@ class TypedDistinctAggregations : public DistinctAggregations {
           accumulator->extractValues(*(data->template as<FlatVector<T>>()), 0);
         }
 
-        rows.resize(data->size());
-        aggregate.function->addSingleGroupRawInput(group, rows, {data}, false);
+        if (data->size() > 0) {
+          rows.resize(data->size());
+          std::vector<VectorPtr> inputForAggregation =
+              makeInputForAggregation(data);
+          aggregate.function->addSingleGroupRawInput(
+              group, rows, inputForAggregation, false);
+        }
       }
 
       aggregate.function->extractValues(
@@ -122,18 +127,99 @@ class TypedDistinctAggregations : public DistinctAggregations {
       // Release memory back to HashStringAllocator to allow next
       // aggregate to re-use it.
       aggregate.function->destroy(groups);
+
+      // Overwrite empty groups over the destructed groups to keep the container
+      // in a well formed state.
+      raw_vector<int32_t> indices(pool_);
+      aggregate.function->initializeNewGroups(
+          groups.data(),
+          folly::Range<const int32_t*>(
+              iota(groups.size(), indices), groups.size()));
+    }
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto i : indices) {
+      groups[i][nullByte_] |= nullMask_;
+      new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);
+    }
+
+    for (auto i = 0; i < aggregates_.size(); ++i) {
+      const auto& aggregate = *aggregates_[i];
+      aggregate.function->initializeNewGroups(groups, indices);
     }
   }
 
  private:
-  const std::vector<AggregateInfo*> aggregates_;
-  const column_index_t input_;
-  const TypePtr inputType_;
+  bool isSingleInputAggregate() const {
+    return aggregates_[0]->inputs.size() == 1;
+  }
+
+  void decodeInput(const RowVectorPtr& input, const SelectivityVector& rows) {
+    inputForAccumulator_ = makeInputForAccumulator(input);
+    decodedInput_.decode(*inputForAccumulator_, rows);
+  }
+
+  static TypePtr makeInputTypeForAccumulator(
+      const RowTypePtr& rowType,
+      const std::vector<column_index_t>& inputs) {
+    if (inputs.size() == 1) {
+      return rowType->childAt(inputs[0]);
+    }
+
+    // Otherwise, synthesize a ROW(distinct_channels[0..N])
+    std::vector<TypePtr> types;
+    std::vector<std::string> names;
+    for (column_index_t channelIndex : inputs) {
+      names.emplace_back(rowType->nameOf(channelIndex));
+      types.emplace_back(rowType->childAt(channelIndex));
+    }
+    return ROW(std::move(names), std::move(types));
+  }
+
+  VectorPtr makeInputForAccumulator(const RowVectorPtr& input) const {
+    if (isSingleInputAggregate()) {
+      return input->childAt(inputs_[0]);
+    }
+
+    std::vector<VectorPtr> newChildren(inputs_.size());
+    for (int i = 0; i < inputs_.size(); ++i) {
+      newChildren[i] = input->childAt(inputs_[i]);
+    }
+    return std::make_shared<RowVector>(
+        pool_, inputType_, nullptr, input->size(), newChildren);
+  }
+
+  std::vector<VectorPtr> makeInputForAggregation(const VectorPtr& input) const {
+    if (isSingleInputAggregate()) {
+      return {std::move(input)};
+    }
+    return input->template asUnchecked<RowVector>()->children();
+  }
+
   memory::MemoryPool* const pool_;
+  const std::vector<AggregateInfo*> aggregates_;
+  const std::vector<column_index_t> inputs_;
+  const TypePtr inputType_;
 
   DecodedVector decodedInput_;
+  VectorPtr inputForAccumulator_;
 };
 
+template <TypeKind Kind>
+std::unique_ptr<DistinctAggregations>
+createDistinctAggregationsWithCustomCompare(
+    std::vector<AggregateInfo*> aggregates,
+    const RowTypePtr& inputType,
+    memory::MemoryPool* pool) {
+  return std::make_unique<TypedDistinctAggregations<
+      typename TypeTraits<Kind>::NativeType,
+      aggregate::prestosql::CustomComparisonSetAccumulator<Kind>>>(
+      aggregates, inputType, pool);
+}
 } // namespace
 
 // static
@@ -141,20 +227,25 @@ std::unique_ptr<DistinctAggregations> DistinctAggregations::create(
     std::vector<AggregateInfo*> aggregates,
     const RowTypePtr& inputType,
     memory::MemoryPool* pool) {
-  column_index_t input;
+  VELOX_CHECK_EQ(aggregates.size(), 1);
+  VELOX_CHECK(!aggregates[0]->inputs.empty());
 
-  VELOX_CHECK(!aggregates.empty());
-  for (auto i = 0; i < aggregates.size(); ++i) {
-    auto* aggregate = aggregates[i];
-    VELOX_USER_CHECK_EQ(aggregate->inputs.size(), 1);
-    if (i == 0) {
-      input = aggregate->inputs[0];
-    } else {
-      VELOX_CHECK_EQ(input, aggregate->inputs[0]);
-    }
+  const bool isSingleInput = aggregates[0]->inputs.size() == 1;
+  if (!isSingleInput) {
+    return std::make_unique<TypedDistinctAggregations<ComplexType>>(
+        aggregates, inputType, pool);
   }
 
-  const auto type = inputType->childAt(input);
+  const auto type = inputType->childAt(aggregates[0]->inputs[0]);
+
+  if (type->providesCustomComparison()) {
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        createDistinctAggregationsWithCustomCompare,
+        type->kind(),
+        aggregates,
+        inputType,
+        pool);
+  }
 
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
@@ -172,6 +263,9 @@ std::unique_ptr<DistinctAggregations> DistinctAggregations::create(
     case TypeKind::BIGINT:
       return std::make_unique<TypedDistinctAggregations<int64_t>>(
           aggregates, inputType, pool);
+    case TypeKind::HUGEINT:
+      return std::make_unique<TypedDistinctAggregations<int128_t>>(
+          aggregates, inputType, pool);
     case TypeKind::REAL:
       return std::make_unique<TypedDistinctAggregations<float>>(
           aggregates, inputType, pool);
@@ -181,6 +275,8 @@ std::unique_ptr<DistinctAggregations> DistinctAggregations::create(
     case TypeKind::TIMESTAMP:
       return std::make_unique<TypedDistinctAggregations<Timestamp>>(
           aggregates, inputType, pool);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       return std::make_unique<TypedDistinctAggregations<StringView>>(
           aggregates, inputType, pool);
@@ -188,6 +284,9 @@ std::unique_ptr<DistinctAggregations> DistinctAggregations::create(
     case TypeKind::MAP:
     case TypeKind::ROW:
       return std::make_unique<TypedDistinctAggregations<ComplexType>>(
+          aggregates, inputType, pool);
+    case TypeKind::UNKNOWN:
+      return std::make_unique<TypedDistinctAggregations<UnknownValue>>(
           aggregates, inputType, pool);
     default:
       VELOX_UNREACHABLE("Unexpected type {}", type->toString());

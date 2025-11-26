@@ -91,7 +91,7 @@ FilterTypePtr ColumnSelector::buildNode(
   // column selector filter tree
   nodes_.reserve(nodes_.size() + type->size());
   if (node.node == 0) {
-    auto rowType = type->asRow();
+    auto& rowType = type->asRow();
     for (size_t i = 0, size = type->size(); i < size; ++i) {
       bool inData = contentType && i < contentType->size();
       current->addChild(buildNode(
@@ -163,20 +163,17 @@ void ColumnSelector::copy(
   }
 }
 
-/**
- * Copy the selector tree and apply file schema to handle schema mismatch
- */
 ColumnSelector ColumnSelector::apply(
     const std::shared_ptr<ColumnSelector>& origin,
     const std::shared_ptr<const RowType>& fileSchema) {
-  // current instance maybe null
+  // current instance maybe null.
   if (origin == nullptr) {
     return ColumnSelector(fileSchema);
   }
 
   // if selector has no schema, we just build a new tree with file schema
   // selector.getProjection will carry all logic information including nodes
-  auto onlyFilter = !origin->hasSchema();
+  const bool onlyFilter = !origin->hasSchema();
   ColumnSelector cs(
       onlyFilter ? fileSchema : origin->getSchema(),
       origin->getNodeFilter(),
@@ -298,10 +295,9 @@ const FilterTypePtr& ColumnSelector::process(const std::string& column, bool) {
     // when seeing this type of column, we require it has to exist
     const auto& node = findNode(pair.first);
     if (node->valid()) {
-      DWIO_ENSURE_EQ(
-          node->getKind(),
-          TypeKind::MAP,
-          "only support expression for map type currently: ",
+      DWIO_ENSURE(
+          node->getKind() == TypeKind::MAP || node->getKind() == TypeKind::ROW,
+          "only support expression for map or row type currently: ",
           column);
 
       // set expression for this node
@@ -318,15 +314,15 @@ const FilterTypePtr& ColumnSelector::process(const std::string& column, bool) {
 std::pair<std::string_view, std::string_view> extractColumnName(
     const std::string_view& name) {
   // right now this is the only supported expression for MAP key filter
-  auto pos = name.find('#');
-  if (pos != std::string::npos) {
-    // special map column handling
-    auto colName = name.substr(0, pos);
-    auto expr = name.substr(pos + 1);
-    return std::make_pair(colName, expr);
+  const auto pos = name.find('#');
+  if (pos == std::string::npos) {
+    return std::make_pair(name, "");
   }
 
-  return std::make_pair(name, "");
+  // Special map column handling.
+  const auto colName = name.substr(0, pos);
+  const auto expr = name.substr(pos + 1);
+  return std::make_pair(colName, expr);
 }
 
 void ColumnSelector::logFilter() const {
@@ -340,6 +336,42 @@ void ColumnSelector::logFilter() const {
 
   // log it out
   getLog()->logColumnFilter(filter_, numColumns, numNodes, hasSchema());
+}
+
+std::shared_ptr<ColumnSelector> ColumnSelector::fromScanSpec(
+    const velox::common::ScanSpec& spec,
+    const RowTypePtr& rowType) {
+  std::vector<std::string> columnNames;
+  for (auto& child : spec.children()) {
+    if (!child->readFromFile()) {
+      continue;
+    }
+    std::string name = child->fieldName();
+    if (!child->flatMapFeatureSelection().empty()) {
+      const auto& featureIds = child->flatMapFeatureSelection();
+      const auto& type = rowType->findChild(name);
+      VELOX_CHECK(type->isMap());
+      const bool isVarchar = type->asMap().keyType()->isVarchar();
+      name += "#[";
+      for (int i = 0; i < featureIds.size(); ++i) {
+        if (i > 0) {
+          name += ',';
+        }
+        if (isVarchar) {
+          folly::json::escapeString(featureIds[i], name, {});
+        } else {
+          name += featureIds[i];
+        }
+      }
+      name += ']';
+    }
+    columnNames.push_back(std::move(name));
+  }
+  if (columnNames.empty()) {
+    static const RowTypePtr kEmpty{ROW({}, {})};
+    return std::make_shared<ColumnSelector>(kEmpty);
+  }
+  return std::make_shared<ColumnSelector>(rowType, columnNames);
 }
 
 } // namespace facebook::velox::dwio::common

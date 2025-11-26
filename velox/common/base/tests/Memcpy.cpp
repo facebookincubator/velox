@@ -41,10 +41,10 @@ uint64_t sum(uint64_t* data, int32_t size) {
 }
 
 struct CopyCallable {
-  void* FOLLY_NULLABLE source;
-  void* FOLLY_NULLABLE destination;
+  void* source;
+  void* destination;
   int64_t size;
-  Semaphore* FOLLY_NULLABLE sem;
+  Semaphore* sem;
 
   void operator()() {
     if (FLAGS_system_memcpy) {
@@ -58,7 +58,7 @@ struct CopyCallable {
 
 int main(int argc, char** argv) {
   constexpr int32_t kAlignment = folly::hardware_destructive_interference_size;
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   auto chunk = bits::roundUp(
       std::max<int64_t>(FLAGS_bytes / FLAGS_threads, kAlignment), kAlignment);
   int64_t bytes = chunk * FLAGS_threads;
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
   Semaphore sem(0);
   std::vector<CopyCallable> ops;
   ops.resize(FLAGS_threads);
-  volatile uint64_t totalSum = 0;
+  uint64_t totalSum = 0;
   uint64_t totalUsec = 0;
   for (auto repeat = 0; repeat < FLAGS_repeats; ++repeat) {
     // Read once through 'other' to clear cache effects.

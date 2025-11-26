@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cmath>
+#include <limits>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -83,29 +85,50 @@ TEST_F(GreatestLeastTest, leastReal) {
       {0, -100, -1.1});
 }
 
-TEST_F(GreatestLeastTest, nanInput) {
-  // Presto rejects NaN inputs of type DOUBLE, but allows NaN inputs of type
-  // REAL.
-  std::vector<double> input{0, 1.1, std::nan("1")};
-  VELOX_ASSERT_THROW(
-      runTest<double>("least(c0)", {{0.0 / 0.0}}, {0}),
-      "Invalid argument to least(): NaN");
-  runTest<double>("try(least(c0, 1.0))", {input}, {0, 1.0, std::nullopt});
+TEST_F(GreatestLeastTest, greatestNanInput) {
+  auto constexpr kInf32 = std::numeric_limits<float>::infinity();
+  auto constexpr kInf64 = std::numeric_limits<double>::infinity();
 
-  VELOX_ASSERT_THROW(
-      runTest<double>("greatest(c0)", {1, {0.0 / 0.0}}, {1, 0}),
-      "Invalid argument to greatest(): NaN");
-  runTest<double>("try(greatest(c0, 1.0))", {input}, {1.0, 1.1, std::nullopt});
+  auto greatestFloat = [&](float a, float b, float c) {
+    return evaluateOnce<float, float, float, float>(
+               "greatest(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
 
-  auto result = evaluateOnce<bool, float, float>(
-      "is_nan(least(c0))", std::nanf("1"), 1.2);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result.value());
+  auto greatestDouble = [&](double a, double b, double c) {
+    return evaluateOnce<double, double, double, double>(
+               "greatest(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
 
-  result = evaluateOnce<bool, float, float>(
-      "is_nan(greatest(c0))", std::nanf("1"), 1.2);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result.value());
+  EXPECT_TRUE(std::isnan(greatestFloat(1.0, std::nanf("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestFloat(std::nanf("1"), 1.0, kInf32)));
+
+  EXPECT_TRUE(std::isnan(greatestDouble(1.0, std::nan("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestDouble(std::nan("1"), 1.0, kInf64)));
+}
+
+TEST_F(GreatestLeastTest, leastNanInput) {
+  auto constexpr kInf32 = std::numeric_limits<float>::infinity();
+  auto constexpr kInf64 = std::numeric_limits<double>::infinity();
+
+  auto leastFloat = [&](float a, float b, float c) {
+    return evaluateOnce<float, float, float, float>(
+               "least(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
+
+  auto leastDouble = [&](double a, double b, double c) {
+    return evaluateOnce<double, double, double, double>(
+               "least(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
+
+  EXPECT_EQ(leastFloat(1.0, std::nanf("1"), 0.5), 0.5);
+  EXPECT_EQ(leastFloat(std::nanf("1"), 1.0, -kInf32), -kInf32);
+
+  EXPECT_EQ(leastDouble(1.0, std::nan("1"), 0.5), 0.5);
+  EXPECT_EQ(leastDouble(std::nan("1"), 1.0, -kInf64), -kInf64);
 }
 
 TEST_F(GreatestLeastTest, greatestDouble) {
@@ -202,6 +225,43 @@ TEST_F(GreatestLeastTest, leastTimeStamp) {
       {Timestamp(0, 0), Timestamp(10, 1), Timestamp(1, 10)});
 }
 
+TEST_F(GreatestLeastTest, greatestTimestampWithTimezone) {
+  auto greatest = [&](const std::string& a,
+                      const std::string& b,
+                      const std::string& c) {
+    auto result = evaluateOnce<std::string>(
+        "cast(greatest(cast(c0 as timestamp with time zone), cast(c1 as timestamp with time zone), cast(c2 as timestamp with time zone)) as varchar)",
+        std::optional(a),
+        std::optional(b),
+        std::optional(c));
+    return result.value();
+  };
+
+  auto least = [&](const std::string& a,
+                   const std::string& b,
+                   const std::string& c) {
+    auto result = evaluateOnce<std::string>(
+        "cast(least(cast(c0 as timestamp with time zone), cast(c1 as timestamp with time zone), cast(c2 as timestamp with time zone)) as varchar)",
+        std::optional(a),
+        std::optional(b),
+        std::optional(c));
+    return result.value();
+  };
+
+  EXPECT_EQ(
+      "2024-04-10 08:11:22.010 America/Los_Angeles",
+      greatest(
+          "2024-04-10 10:11:22.01 America/New_York",
+          "2024-02-10 10:11:22.01 America/New_York",
+          "2024-04-10 08:11:22.01 America/Los_Angeles"));
+  EXPECT_EQ(
+      "2024-02-10 10:11:22.010 America/New_York",
+      least(
+          "2024-04-10 10:11:22.01 America/New_York",
+          "2024-02-10 10:11:22.01 America/New_York",
+          "2024-04-10 08:11:22.01 America/Los_Angeles"));
+}
+
 TEST_F(GreatestLeastTest, greatestDate) {
   runTest<int32_t>(
       "greatest(c0, c1, c2)",
@@ -224,6 +284,46 @@ TEST_F(GreatestLeastTest, leastDate) {
       std::nullopt,
       DATE(),
       DATE());
+}
+
+TEST_F(GreatestLeastTest, greatestLeastIpAddress) {
+  auto greatest = [&](const std::optional<std::string>& a,
+                      const std::optional<std::string>& b,
+                      const std::optional<std::string>& c) {
+    return evaluateOnce<std::string>(
+        "cast(greatest(cast(c0 as ipaddress), cast(c1 as ipaddress), cast(c2 as ipaddress)) as varchar)",
+        a,
+        b,
+        c);
+  };
+
+  auto least = [&](const std::optional<std::string>& a,
+                   const std::optional<std::string>& b,
+                   const std::optional<std::string>& c) {
+    return evaluateOnce<std::string>(
+        "cast(least(cast(c0 as ipaddress), cast(c1 as ipaddress), cast(c2 as ipaddress)) as varchar)",
+        a,
+        b,
+        c);
+  };
+
+  auto greatestValue = greatest(
+      "1.1.1.1", "255.255.255.255", "2001:0db8:0000:0000:0000:ff00:0042:832");
+  EXPECT_EQ("2001:db8::ff00:42:832", greatestValue.value());
+
+  auto leastValue = least(
+      "1.1.1.1", "255.255.255.255", "2001:0db8:0000:0000:0000:ff00:0042:832");
+  EXPECT_EQ("1.1.1.1", leastValue.value());
+
+  auto greatestValueWithNulls =
+      greatest("1.1.1.1", "255.255.255.255", std::nullopt);
+  EXPECT_FALSE(greatestValueWithNulls.has_value());
+
+  auto leastValueWithNulls = least(
+      std::nullopt,
+      "255.255.255.255",
+      "2001:0db8:0000:0000:0000:ff00:0042:832");
+  EXPECT_FALSE(leastValueWithNulls.has_value());
 }
 
 TEST_F(GreatestLeastTest, stringBuffersMoved) {
@@ -320,4 +420,22 @@ TEST_F(GreatestLeastTest, longDecimal) {
        std::nullopt},
       type);
   runDecimalTest("greatest(c0, c1)", {a, b}, expected);
+}
+
+TEST_F(GreatestLeastTest, boolean) {
+  auto data = makeRowVector({
+      makeFlatVector<bool>({true, true, false, false, true, false}),
+      makeNullableFlatVector<bool>(
+          {true, false, true, false, std::nullopt, std::nullopt}),
+  });
+
+  auto result = evaluate("least(c0, c1)", data);
+  auto expected = makeNullableFlatVector<bool>(
+      {true, false, false, false, std::nullopt, std::nullopt});
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("greatest(c0, c1)", data);
+  expected = makeNullableFlatVector<bool>(
+      {true, true, true, false, std::nullopt, std::nullopt});
+  test::assertEqualVectors(expected, result);
 }

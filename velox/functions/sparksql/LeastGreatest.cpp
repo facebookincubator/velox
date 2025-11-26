@@ -27,10 +27,6 @@ template <typename Cmp, TypeKind kind>
 class LeastGreatestFunction final : public exec::VectorFunction {
   using T = typename TypeTraits<kind>::NativeType;
 
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -56,7 +52,7 @@ class LeastGreatestFunction final : public exec::VectorFunction {
 
       // Only compare with non-null elements of each argument
       *cmpRows = rows;
-      if (auto* rawNulls = decodedVectorHolder->nulls()) {
+      if (auto* rawNulls = decodedVectorHolder->nulls(&rows)) {
         cmpRows->deselectNulls(rawNulls, 0, nrows);
       }
 
@@ -113,6 +109,7 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     SCALAR_CASE(SMALLINT)
     SCALAR_CASE(INTEGER)
     SCALAR_CASE(BIGINT)
+    SCALAR_CASE(HUGEINT)
     SCALAR_CASE(REAL)
     SCALAR_CASE(DOUBLE)
     SCALAR_CASE(VARCHAR)
@@ -152,13 +149,21 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> leastSignatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
 
   for (const auto& type : types) {
-    signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                .returnType(type)
-                                .argumentType(type)
-                                .argumentType(type)
-                                .variableArity()
-                                .build());
+    signatures.emplace_back(
+        exec::FunctionSignatureBuilder()
+            .returnType(type)
+            .argumentType(type)
+            .variableArity(type)
+            .build());
   }
+  signatures.emplace_back(
+      exec::FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .variableArity("decimal(p,s)")
+          .build());
   return signatures;
 }
 

@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
 #include <re2/re2.h>
-
-DECLARE_int32(split_preload_per_driver);
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -48,21 +48,35 @@ void compareOutputs(
   for (; std::getline(iss, line);) {
     lineCount++;
     std::vector<std::string> potentialLines;
+    if (expectedLineIndex >= expectedRegex.size()) {
+      ASSERT_FALSE(true) << "Output has more lines than expected."
+                         << "\n  Source: " << testName
+                         << "\n  Line number: " << lineCount
+                         << "\n  Unexpected Line: " << line;
+    }
     auto expectedLine = expectedRegex.at(expectedLineIndex++);
     while (!RE2::FullMatch(line, expectedLine.line)) {
       potentialLines.push_back(expectedLine.line);
       if (!expectedLine.optional) {
-        ASSERT_FALSE(true) << "Output did not match "
-                           << "Source:" << testName
-                           << ", Line number:" << lineCount
-                           << ", Line: " << line << ", Expected Line one of: "
+        ASSERT_FALSE(true) << "Output did not match."
+                           << "\n  Source: " << testName
+                           << "\n  Line number: " << lineCount
+                           << "\n  Line: " << line
+                           << "\n  Expected Line one of: "
                            << folly::join(",", potentialLines);
+      }
+      if (expectedLineIndex >= expectedRegex.size()) {
+        ASSERT_FALSE(true)
+            << "Output did not match and no more patterns to check."
+            << "\n  Source: " << testName << "\n  Line number: " << lineCount
+            << "\n  Line: " << line
+            << "\n  Expected Line one of: " << folly::join(",", potentialLines);
       }
       expectedLine = expectedRegex.at(expectedLineIndex++);
     }
   }
   for (int i = expectedLineIndex; i < expectedRegex.size(); i++) {
-    ASSERT_TRUE(expectedRegex[expectedLineIndex].optional);
+    ASSERT_TRUE(expectedRegex[i].optional);
   }
 }
 
@@ -91,7 +105,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
         makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
     });
     leftVectors.push_back(rowVector);
-    writeToFile(leftFiles[i]->path, rowVector);
+    writeToFile(leftFiles[i]->getPath(), rowVector);
   }
   auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
 
@@ -133,90 +147,105 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
   ensureTaskCompletion(task.get());
   compareOutputs(
       ::testing::UnitTest::GetInstance()->current_test_info()->name(),
-      printPlanWithStats(*op, task->taskStats()),
-      {{"-- Project\\[expressions: \\(c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(p1:BIGINT, plus\\(ROW\\[\"c1\"\\],1\\)\\), \\(p2:BIGINT, plus\\(ROW\\[\"c1\"\\],ROW\\[\"u_c1\"\\]\\)\\)\\] -> c0:INTEGER, p1:BIGINT, p2:BIGINT"},
-       {"   Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
-       {"  -- HashJoin\\[INNER c0=u_c0\\] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT"},
-       {"     Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+"},
-       {"     HashBuild: Input: 100 rows \\(.+\\), Output: 0 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+ Memory allocations: .+, Threads: 1"},
-       {"     HashProbe: Input: 2000 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
-       {"    -- TableScan\\[table: hive_table\\] -> c0:INTEGER, c1:BIGINT"},
-       {"       Input: 2000 rows \\(.+\\), Raw Input: 20480 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 20"},
-       {"    -- Project\\[expressions: \\(u_c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(u_c1:BIGINT, ROW\\[\"c1\"\\]\\)\\] -> u_c0:INTEGER, u_c1:BIGINT"},
-       {"       Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1"},
-       {"      -- Values\\[100 rows in 1 vectors\\] -> c0:INTEGER, c1:BIGINT"},
-       {"         Input: 0 rows \\(.+\\), Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1"}});
+      task->printPlanWithStats(),
+      {{"-- Project\\[4\\]\\[expressions: \\(c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(p1:BIGINT, plus\\(ROW\\[\"c1\"\\],1\\)\\), \\(p2:BIGINT, plus\\(ROW\\[\"c1\"\\],ROW\\[\"u_c1\"\\]\\)\\)\\] -> c0:INTEGER, p1:BIGINT, p2:BIGINT"},
+       {"   Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"  -- HashJoin\\[3\\]\\[INNER c0=u_c0\\] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT"},
+       {"     Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"     HashBuild: Input: 100 rows \\(.+\\), Output: 0 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+ Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"     HashProbe: Input: 2000 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"    -- TableScan\\[2\\]\\[table: hive_table\\] -> c0:INTEGER, c1:BIGINT"},
+       {"       Input: 2000 rows \\(.+\\), Raw Input: 20480 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"    -- Project\\[1\\]\\[expressions: \\(u_c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(u_c1:BIGINT, ROW\\[\"c1\"\\]\\)\\] -> u_c0:INTEGER, u_c1:BIGINT"},
+       {"       Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"      -- Values\\[0\\]\\[100 rows in 1 vectors\\] -> c0:INTEGER, c1:BIGINT"},
+       {"         Input: 0 rows \\(.+\\), Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"}});
 
   // with custom stats
   compareOutputs(
       ::testing::UnitTest::GetInstance()->current_test_info()->name(),
       printPlanWithStats(*op, task->taskStats(), true),
-      {{"-- Project\\[expressions: \\(c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(p1:BIGINT, plus\\(ROW\\[\"c1\"\\],1\\)\\), \\(p2:BIGINT, plus\\(ROW\\[\"c1\"\\],ROW\\[\"u_c1\"\\]\\)\\)\\] -> c0:INTEGER, p1:BIGINT, p2:BIGINT"},
-       {"   Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
+      {{"-- Project\\[4\\]\\[expressions: \\(c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(p1:BIGINT, plus\\(ROW\\[\"c1\"\\],1\\)\\), \\(p2:BIGINT, plus\\(ROW\\[\"c1\"\\],ROW\\[\"u_c1\"\\]\\)\\)\\] -> c0:INTEGER, p1:BIGINT, p2:BIGINT"},
+       {"   Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"      dataSourceLazyCpuNanos[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"      dataSourceLazyInputBytes[ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"      dataSourceLazyWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"      driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"  -- HashJoin\\[INNER c0=u_c0\\] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT"},
-       {"     Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+"},
-       {"     HashBuild: Input: 100 rows \\(.+\\), Output: 0 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
-       {"        distinctKey0\\s+sum: 101, count: 1, min: 101, max: 101"},
-       {"        hashtable.capacity\\s+sum: 200, count: 1, min: 200, max: 200"},
-       {"        hashtable.numDistinct\\s+sum: 100, count: 1, min: 100, max: 100"},
-       {"        hashtable.numRehashes\\s+sum: 1, count: 1, min: 1, max: 1"},
+       {"  -- HashJoin\\[3\\]\\[INNER c0=u_c0\\] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT"},
+       {"     Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"     HashBuild: Input: 100 rows \\(.+\\), Output: 0 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"        distinctKey0\\s+sum: 101, count: 1, min: 101, max: 101, avg: 101"},
+       {"        driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        hashtable.buildWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        hashtable.capacity\\s+sum: 200, count: 1, min: 200, max: 200, avg: 200"},
+       {"        hashtable.numDistinct\\s+sum: 100, count: 1, min: 100, max: 100, avg: 100"},
+       {"        hashtable.numRehashes\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1"},
        {"        queuedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"        rangeKey0\\s+sum: 200, count: 1, min: 200, max: 200"},
+       {"        rangeKey0\\s+sum: 200, count: 1, min: 200, max: 200, avg: 200"},
        {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"     HashProbe: Input: 2000 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
+       {"     HashProbe: Input: 2000 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        // These lines may or may not appear depending on whether the operator
        // gets blocked during a run.
-       {"        blockedWaitForJoinBuildTimes        sum: 1, count: 1, min: 1, max: 1",
+       {"        blockedWaitForJoinBuildTimes\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1",
         true},
        {"        blockedWaitForJoinBuildWallNanos\\s+sum: .+, count: 1, min: .+, max: .+",
         true},
-       {"        dynamicFiltersProduced\\s+sum: 1, count: 1, min: 1, max: 1"},
-       {"        queuedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+",
-        true}, // This line may or may not appear depending on how the threads
-               // running the Drivers are executed, this only appears if the
-               // HashProbe has to wait for the HashBuild construction.
+       {"        driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+",
+        true},
+       {"        dynamicFiltersProduced\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1",
+        true},
+       {"        queuedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+", true},
+       // This line may or may not appear depending on how the threads
+       // running the Drivers are executed, this only appears if the
+       // HashProbe has to wait for the HashBuild construction.
        {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"    -- TableScan\\[table: hive_table\\] -> c0:INTEGER, c1:BIGINT"},
-       {"       Input: 2000 rows \\(.+\\), Raw Input: 20480 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 20"},
-       {"          dataSourceWallNanos [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"          dynamicFiltersAccepted[ ]* sum: 1, count: 1, min: 1, max: 1"},
-       {"          ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
-       {"          localReadBytes      [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
-       {"          numLocalRead        [ ]* sum: 0, count: 1, min: 0, max: 0"},
+       {"    -- TableScan\\[2\\]\\[table: hive_table\\] -> c0:INTEGER, c1:BIGINT"},
+       {"       Input: 2000 rows \\(.+\\), Raw Input: 20480 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"          connectorSplitSize[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          dataSourceReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"          dynamicFiltersAccepted[ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"          footerBufferOverread[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          ioWaitWallNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
        {"          numPrefetch         [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"          numRamRead          [ ]* sum: 40, count: 1, min: 40, max: 40"},
-       {"          numStorageRead      [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"          overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
-       {"          prefetchBytes       [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          numRamRead          [ ]* sum: 60, count: 1, min: 60, max: 60, avg: 60"},
+       {"          numStripes[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
+       {"          prefetchBytes       [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          preloadSplitPrepareTimeNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
        {"          preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
         true},
-       {"          queryThreadIoLatency[ ]* sum: .+, count: .+ min: .+, max: .+"},
-       {"          ramReadBytes        [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          processedSplits[ ]+sum: 20, count: 1, min: 20, max: 20, avg: 20"},
+       {"          processedStrides[ ]+sum: 20, count: 1, min: 20, max: 20, avg: 20"},
+       {"          processedUnits      [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          ramReadBytes        [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"          readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
         true},
        {"          runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"          skippedSplitBytes   [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
-       {"          skippedSplits       [ ]* sum: 0, count: 1, min: 0, max: 0"},
-       {"          skippedStrides      [ ]* sum: 0, count: 1, min: 0, max: 0"},
-       {"          storageReadBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          storageReadBytes    [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"          totalScanTime       [ ]* sum: .+, count: .+, min: .+, max: .+"},
-       {"    -- Project\\[expressions: \\(u_c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(u_c1:BIGINT, ROW\\[\"c1\"\\]\\)\\] -> u_c0:INTEGER, u_c1:BIGINT"},
-       {"       Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1"},
+       {"          unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
+       {"          waitForPreloadSplitNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
+       {"    -- Project\\[1\\]\\[expressions: \\(u_c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(u_c1:BIGINT, ROW\\[\"c1\"\\]\\)\\] -> u_c0:INTEGER, u_c1:BIGINT"},
+       {"       Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"          driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"      -- Values\\[100 rows in 1 vectors\\] -> c0:INTEGER, c1:BIGINT"},
-       {"         Input: 0 rows \\(.+\\), Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1"},
+       {"      -- Values\\[0\\]\\[100 rows in 1 vectors\\] -> c0:INTEGER, c1:BIGINT"},
+       {"         Input: 0 rows \\(.+\\), Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"            driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"            runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"            runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"            runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"}});
@@ -233,9 +262,8 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
-    FLAGS_split_preload_per_driver = numPrefetchSplit;
     auto filePath = TempFilePath::create();
-    writeToFile(filePath->path, vectors);
+    writeToFile(filePath->getPath(), vectors);
 
     auto op =
         PlanBuilder()
@@ -244,60 +272,183 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
                 {"c5"}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
             .planNode();
 
-    auto task = assertQuery(
-        op,
-        {filePath},
-        "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
-
+    auto task =
+        AssertQueryBuilder(op, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver,
+                std::to_string(numPrefetchSplit))
+            .splits(makeHiveConnectorSplits({filePath}))
+            .assertResults(
+                "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
     ensureTaskCompletion(task.get());
     compareOutputs(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
         printPlanWithStats(*op, task->taskStats()),
-        {{"-- Aggregation\\[PARTIAL \\[c5\\] a0 := max\\(ROW\\[\"c0\"\\]\\), a1 := sum\\(ROW\\[\"c1\"\\]\\), a2 := sum\\(ROW\\[\"c2\"\\]\\), a3 := sum\\(ROW\\[\"c3\"\\]\\), a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
-         {"   Output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
-         {"  -- TableScan\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
-         {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1"}});
+        {{"-- Aggregation\\[1\\]\\[PARTIAL \\[c5\\] a0 := max\\(ROW\\[\"c0\"\\]\\), a1 := sum\\(ROW\\[\"c1\"\\]\\), a2 := sum\\(ROW\\[\"c2\"\\]\\), a3 := sum\\(ROW\\[\"c3\"\\]\\), a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
+         {"   Output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+         {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
+         {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"}});
 
     compareOutputs(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
         printPlanWithStats(*op, task->taskStats(), true),
-        {{"-- Aggregation\\[PARTIAL \\[c5\\] a0 := max\\(ROW\\[\"c0\"\\]\\), a1 := sum\\(ROW\\[\"c1\"\\]\\), a2 := sum\\(ROW\\[\"c2\"\\]\\), a3 := sum\\(ROW\\[\"c3\"\\]\\), a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
-         {"   Output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1"},
-         {"      dataSourceLazyWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+        {{"-- Aggregation\\[1\\]\\[PARTIAL \\[c5\\] a0 := max\\(ROW\\[\"c0\"\\]\\), a1 := sum\\(ROW\\[\"c1\"\\]\\), a2 := sum\\(ROW\\[\"c2\"\\]\\), a3 := sum\\(ROW\\[\"c3\"\\]\\), a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
+         {"   Output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+         {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+         {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
+         {"      dataSourceLazyWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
          {"      distinctKey0\\s+sum: .+, count: 1, min: .+, max: .+"},
-         {"      hashtable.capacity\\s+sum: 1252, count: 1, min: 1252, max: 1252"},
-         {"      hashtable.numDistinct\\s+sum: 835, count: 1, min: 835, max: 835"},
-         {"      hashtable.numRehashes\\s+sum: 1, count: 1, min: 1, max: 1"},
-         {"      hashtable.numTombstones\\s+sum: 0, count: 1, min: 0, max: 0"},
-         {"      loadedToValueHook\\s+sum: 50000, count: 5, min: 10000, max: 10000"},
+         {"      driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+         {"      hashtable.capacity\\s+sum: (?:1273|1252), count: 1, min: (?:1273|1252), max: (?:1273|1252), avg: (?:1273|1252)"},
+         {"      hashtable.numDistinct\\s+sum: (?:849|835), count: 1, min: (?:849|835), max: (?:849|835), avg: (?:849|835)"},
+         {"      hashtable.numRehashes\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+         {"      hashtable.numTombstones\\s+sum: 0, count: 1, min: 0, max: 0, avg: 0"},
+         {"      loadedToValueHook\\s+sum: 50000, count: 5, min: 10000, max: 10000, avg: 10000"},
          {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-         {"  -- TableScan\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
-         {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1"},
-         {"        dataSourceWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
-         {"        ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
-         {"        localReadBytes   [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
-         {"        numLocalRead     [ ]* sum: 0, count: 1, min: 0, max: 0"},
+         {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
+         {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+         {"        connectorSplitSize[ ]* sum: .+, count: .+, min: .+, max: .+"},
+         {"        dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        dataSourceReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+"},
+         {"        driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+         {"        footerBufferOverread[ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        ioWaitWallNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
          {"        numPrefetch      [ ]* sum: .+, count: .+, min: .+, max: .+"},
-         {"        numRamRead       [ ]* sum: 6, count: 1, min: 6, max: 6"},
-         {"        numStorageRead   [ ]* sum: .+, count: 1, min: .+, max: .+"},
-         {"        overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
+         {"        numRamRead       [ ]* sum: 7, count: 1, min: 7, max: 7, avg: 7"},
+         {"        numStripes[ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
 
          {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+         {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+         {"        processedUnits   [ ]* sum: .+, count: .+, min: .+, max: .+"},
          {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
           true},
-         {"        queryThreadIoLatency[ ]* sum: .+, count: .+ min: .+, max: .+"},
-         {"        ramReadBytes     [ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        ramReadBytes     [ ]* sum: .+, count: .+, min: .+, max: .+"},
          {"        readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
           true},
          {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-         {"        skippedSplitBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
-         {"        skippedSplits    [ ]* sum: 0, count: 1, min: 0, max: 0"},
-         {"        skippedStrides   [ ]* sum: 0, count: 1, min: 0, max: 0"},
-         {"        storageReadBytes [ ]* sum: .+, count: 1, min: .+, max: .+"},
-         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"}});
+         {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
+         {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
+         {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"}});
   }
+}
+
+TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
+  RowTypePtr rowType{
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
+          {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
+  auto vectors = makeVectors(rowType, 10, 10);
+
+  const auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  const auto writeDir = TempDirectoryPath::create();
+
+  auto writePlan = PlanBuilder()
+                       .tableScan(rowType)
+                       .tableWrite(writeDir->getPath())
+                       .planNode();
+
+  std::shared_ptr<exec::Task> task;
+  AssertQueryBuilder(writePlan)
+      .splits(makeHiveConnectorSplits({filePath}))
+      .copyResults(pool(), task);
+  ensureTaskCompletion(task.get());
+  compareOutputs(
+      ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      printPlanWithStats(*writePlan, task->taskStats()),
+      {{R"(-- TableWrite\[1\]\[.+InsertTableHandle .+)"},
+       {"   Output: .+, Physical written output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
+       {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"}});
+
+  compareOutputs(
+      ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      printPlanWithStats(*writePlan, task->taskStats(), true),
+      {{R"(-- TableWrite\[1\]\[.+InsertTableHandle .+)"},
+       {"   Output: .+, Physical written output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      dataSourceLazyWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      dwrfWriterCount\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      numWrittenFiles\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
+       {"      stripeSize\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      writeIOWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
+       {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
+       {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"},
+       {"        connectorSplitSize[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        dataSourceReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        footerBufferOverread[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        ioWaitWallNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
+       {"        numPrefetch      [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        numRamRead       [ ]* sum: 7, count: 1, min: 7, max: 7, avg: 7"},
+       {"        numStripes[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
+
+       {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        processedUnits   [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
+        true},
+       {"        ramReadBytes     [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
+        true},
+       {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"}});
+}
+
+TEST_F(PrintPlanWithStatsTest, taskAPI) {
+  // Test various task states.
+  auto checkOutput = [](exec::Task* task) {
+    compareOutputs(
+        ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+        task->printPlanWithStats(),
+        {{"-- Aggregation\\[1\\]\\[SINGLE \\[c0\\] a0 := sum\\(ROW\\[\"c1\"\\]\\)\\] -> c0:BIGINT, a0:BIGINT"},
+         {"   Output: .+, Cpu time: .+, Wall time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+         {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:BIGINT"},
+         {"     Input: .+, Output: .+, Cpu time: .+, Wall time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"}});
+  };
+
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatVector<int64_t>(50, folly::identity),
+  });
+
+  const auto plan = PlanBuilder()
+                        .tableScan(asRowType(data->type()))
+                        .singleAggregation({"c0"}, {"sum(c1)"}, {})
+                        .planFragment();
+
+  auto task = exec::Task::create(
+      "task",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  checkOutput(task.get());
+
+  task->start(4, 1);
+  checkOutput(task.get());
+
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  checkOutput(task.get());
 }

@@ -14,15 +14,10 @@
  * limitations under the License.
  */
 
-#include <limits>
 #include "folly/Benchmark.h"
-#include "folly/Portability.h"
 #include "folly/Random.h"
-#include "folly/Varint.h"
 #include "folly/init/Init.h"
-#include "folly/lang/Bits.h"
-#include "velox/dwio/common/exception/Exception.h"
-
+#include "velox/common/base/SimdUtil.h"
 #include "velox/type/Filter.h"
 
 using namespace facebook::velox;
@@ -70,7 +65,7 @@ BENCHMARK_RELATIVE(simdSparse) {
 int32_t main(int32_t argc, char* argv[]) {
   constexpr int32_t kNumValues = 1000000;
   constexpr int32_t kFilterValues = 1000;
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   std::vector<int64_t> filterValues;
   filterValues.reserve(kFilterValues);

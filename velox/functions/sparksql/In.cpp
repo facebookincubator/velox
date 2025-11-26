@@ -30,6 +30,18 @@ template <typename T>
 class Set : public folly::F14FastSet<T, folly::hasher<T>, Equal<T>> {};
 
 template <>
+class Set<float> : public folly::F14FastSet<
+                       float,
+                       util::floating_point::NaNAwareHash<float>,
+                       util::floating_point::NaNAwareEquals<float>> {};
+
+template <>
+class Set<double> : public folly::F14FastSet<
+                        double,
+                        util::floating_point::NaNAwareHash<double>,
+                        util::floating_point::NaNAwareEquals<double>> {};
+
+template <>
 class Set<StringView> {
  public:
   using value_type = std::string_view;
@@ -62,6 +74,39 @@ class Set<StringView> {
   folly::F14FastSet<std::string_view> set_;
 };
 
+// Specialization for Timestamp to store micros.
+template <>
+class Set<Timestamp> {
+ public:
+  using value_type = int64_t;
+
+  void emplace(const Timestamp& ts) {
+    const value_type micros = ts.toMicros();
+    if (!set_.contains(micros)) {
+      set_.emplace(micros);
+    }
+  }
+
+  bool contains(const Timestamp& ts) const {
+    return set_.contains(ts.toMicros());
+  }
+
+  void reserve(size_t size) {
+    set_.reserve(size);
+  }
+
+  size_t size() const {
+    return set_.size();
+  }
+
+  auto begin() const {
+    return set_.begin();
+  }
+
+ private:
+  folly::F14FastSet<value_type> set_;
+};
+
 template <typename TInput>
 struct InFunctionOuter {
   template <typename TExecCtx>
@@ -69,6 +114,7 @@ struct InFunctionOuter {
     VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
 
     FOLLY_ALWAYS_INLINE void initialize(
+        const std::vector<TypePtr>& /*inputTypes*/,
         const core::QueryConfig& /*config*/,
         const arg_type<TInput>* /*searchTerm*/,
         const arg_type<velox::Array<TInput>>* searchElements) {
@@ -130,6 +176,8 @@ void registerIn(const std::string& prefix) {
   registerInFn<Varchar>(prefix);
   registerInFn<Timestamp>(prefix);
   registerInFn<Date>(prefix);
+  registerInFn<ShortDecimal<P1, S1>>(prefix);
+  registerInFn<LongDecimal<P1, S1>>(prefix);
 }
 
 } // namespace facebook::velox::functions::sparksql

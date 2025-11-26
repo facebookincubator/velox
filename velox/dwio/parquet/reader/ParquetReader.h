@@ -16,12 +16,17 @@
 
 #pragma once
 
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/common/SelectiveColumnReader.h"
-#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
+
+namespace facebook::velox::dwio::common {
+
+class SelectiveColumnReader;
+class BufferedInput;
+
+} // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::parquet {
 
@@ -29,98 +34,7 @@ enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 
 class StructColumnReader;
 
-/// Metadata and options for reading Parquet.
-class ReaderBase {
- public:
-  ReaderBase(
-      std::unique_ptr<dwio::common::BufferedInput>,
-      const dwio::common::ReaderOptions& options);
-
-  virtual ~ReaderBase() = default;
-
-  memory::MemoryPool& getMemoryPool() const {
-    return pool_;
-  }
-
-  dwio::common::BufferedInput& bufferedInput() const {
-    return *input_;
-  }
-
-  uint64_t fileLength() const {
-    return fileLength_;
-  }
-
-  uint64_t fileNumRows() const {
-    return fileMetaData_->num_rows;
-  }
-
-  const thrift::FileMetaData& fileMetaData() const {
-    return *fileMetaData_;
-  }
-
-  const std::shared_ptr<const RowType>& schema() const {
-    return schema_;
-  }
-
-  const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
-    return schemaWithId_;
-  }
-
-  bool isFileColumnNamesReadAsLowerCase() const {
-    return options_.isFileColumnNamesReadAsLowerCase();
-  }
-
-  /// Ensures that streams are enqueued and loading for the row group at
-  /// 'currentGroup'. May start loading one or more subsequent groups.
-  void scheduleRowGroups(
-      const std::vector<uint32_t>& groups,
-      int32_t currentGroup,
-      StructColumnReader& reader);
-
-  /// Returns the uncompressed size for columns in 'type' and its children in
-  /// row
-  /// group.
-  int64_t rowGroupUncompressedSize(
-      int32_t rowGroupIndex,
-      const dwio::common::TypeWithId& type) const;
-
- private:
-  // Reads and parses file footer.
-  void loadFileMetaData();
-
-  void initializeSchema();
-
-  std::shared_ptr<const ParquetTypeWithId> getParquetColumnInfo(
-      uint32_t maxSchemaElementIdx,
-      uint32_t maxRepeat,
-      uint32_t maxDefine,
-      uint32_t& schemaIdx,
-      uint32_t& columnIdx) const;
-
-  TypePtr convertType(const thrift::SchemaElement& schemaElement) const;
-
-  static std::shared_ptr<const RowType> createRowType(
-      std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>
-          children,
-      bool fileColumnNamesReadAsLowerCase);
-
-  memory::MemoryPool& pool_;
-  const uint64_t directorySizeGuess_;
-  const uint64_t filePreloadThreshold_;
-  // Copy of options. Must be owned by 'this'.
-  const dwio::common::ReaderOptions options_;
-  std::unique_ptr<velox::dwio::common::BufferedInput> input_;
-  uint64_t fileLength_;
-  std::unique_ptr<thrift::FileMetaData> fileMetaData_;
-  RowTypePtr schema_;
-  std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
-
-  const bool binaryAsString = false;
-
-  // Map from row group index to pre-created loading BufferedInput.
-  std::unordered_map<uint32_t, std::unique_ptr<dwio::common::BufferedInput>>
-      inputs_;
-};
+class ReaderBase;
 
 /// Implements the RowReader interface for Parquet.
 class ParquetRowReader : public dwio::common::RowReader {
@@ -146,45 +60,24 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   std::optional<size_t> estimatedRowSize() const override;
 
-  const dwio::common::RowReaderOptions& getOptions() {
-    return options_;
-  }
-
   bool allPrefetchIssued() const override {
     //  Allow opening the next split while this is reading.
     return true;
   }
+
+  // Checks if the specific row group is buffered.
+  // Returns false if the row group is not loaded into buffer
+  // or the buffered data has been evicted.
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
  private:
   // Compares row group  metadata to filters in ScanSpec in options of
   // ReaderBase and determines the set of row groups to scan.
   void filterRowGroups();
 
-  // Positions the reader tre at the start of the next row group, as determined
-  // by filterRowGroups().
-  bool advanceToNextRowGroup();
-
-  memory::MemoryPool& pool_;
-  const std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::RowReaderOptions options_;
-
-  // All row groups from file metadata.
-  const std::vector<thrift::RowGroup>& rowGroups_;
-
-  // Indices of row groups where stats match filters.
-  std::vector<uint32_t> rowGroupIds_;
-  std::vector<uint64_t> firstRowOfRowGroup_;
-  uint32_t nextRowGroupIdsIdx_;
-  const thrift::RowGroup* FOLLY_NULLABLE currentRowGroupPtr_{nullptr};
-  uint64_t rowsInCurrentRowGroup_;
-  uint64_t currentRowInGroup_;
-
-  // Number of row groups skipped based on stats.
-  int32_t skippedRowGroups_{0};
-
-  std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
-
-  RowTypePtr requestedType_;
+ protected:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 /// Implements the reader interface for Parquet.
@@ -196,26 +89,22 @@ class ParquetReader : public dwio::common::Reader {
 
   ~ParquetReader() override = default;
 
-  std::optional<uint64_t> numberOfRows() const override {
-    return readerBase_->fileNumRows();
-  }
+  std::optional<uint64_t> numberOfRows() const override;
 
   std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
       uint32_t index) const override {
     return nullptr;
   }
 
-  const velox::RowTypePtr& rowType() const override {
-    return readerBase_->schema();
-  }
+  const velox::RowTypePtr& rowType() const override;
 
   const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
-      const override {
-    return readerBase_->schemaWithId();
-  }
+      const override;
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
       const dwio::common::RowReaderOptions& options = {}) const override;
+
+  FileMetaDataPtr fileMetaData() const;
 
  private:
   std::shared_ptr<ReaderBase> readerBase_;

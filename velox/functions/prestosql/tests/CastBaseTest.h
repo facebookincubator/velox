@@ -33,7 +33,10 @@ class CastBaseTest : public FunctionBaseTest {
     exec::registerVectorFunction(
         "testing_dictionary",
         test::TestingDictionaryFunction::signatures(),
-        std::make_unique<test::TestingDictionaryFunction>());
+        std::make_unique<test::TestingDictionaryFunction>(),
+        exec::VectorFunctionMetadataBuilder()
+            .defaultNullBehavior(false)
+            .build());
   }
 
   // Build an ITypedExpr for cast(fromType as toType).
@@ -44,35 +47,35 @@ class CastBaseTest : public FunctionBaseTest {
     core::TypedExprPtr inputField =
         std::make_shared<const core::FieldAccessTypedExpr>(fromType, "c0");
     return std::make_shared<const core::CastTypedExpr>(
-        toType, std::vector<core::TypedExprPtr>{inputField}, isTryCast);
+        toType, inputField, isTryCast);
   }
 
   // Evaluate cast(fromType as toType) and return the result vector.
-  template <typename TTo>
   VectorPtr evaluateCast(
       const TypePtr& fromType,
       const TypePtr& toType,
       const RowVectorPtr& input,
       bool isTryCast = false) {
     auto castExpr = buildCastExpr(fromType, toType, isTryCast);
+    exec::ExprSet exprSet({castExpr}, &execCtx_);
+    exec::EvalCtx context(&execCtx_, &exprSet, input.get());
 
-    if constexpr (std::is_same_v<TTo, ComplexType>) {
-      return evaluate(castExpr, input);
-    } else {
-      return evaluate<SimpleVector<EvalType<TTo>>>(castExpr, input);
-    }
+    std::vector<VectorPtr> result(1);
+    SelectivityVector rows(input->size());
+    exprSet.eval(rows, context, result);
+    EXPECT_FALSE(context.errors());
+    return result[0];
   }
 
   // Evaluate cast(fromType as toType) and verify the result matches the
   // expected one.
-  template <typename TTo>
   void evaluateAndVerify(
       const TypePtr& fromType,
       const TypePtr& toType,
       const RowVectorPtr& input,
       const VectorPtr& expected,
       bool isTryCast = false) {
-    auto result = evaluateCast<TTo>(fromType, toType, input, isTryCast);
+    auto result = evaluateCast(fromType, toType, input, isTryCast);
     assertEqualVectors(expected, result);
   }
 
@@ -83,18 +86,21 @@ class CastBaseTest : public FunctionBaseTest {
       bool isTryCast) {
     core::TypedExprPtr inputField =
         std::make_shared<const core::FieldAccessTypedExpr>(fromType, "c0");
+
+    // It is not sufficient to wrap input in a dictionary as it will be peeled
+    // off before calling "cast". Apply testing_dictionary function to input to
+    // ensure that "cast" receives dictionary input.
     core::TypedExprPtr callExpr = std::make_shared<const core::CallTypedExpr>(
         fromType,
         std::vector<core::TypedExprPtr>{inputField},
         "testing_dictionary");
     return std::make_shared<const core::CastTypedExpr>(
-        toType, std::vector<core::TypedExprPtr>{callExpr}, isTryCast);
+        toType, callExpr, isTryCast);
   }
 
   // Evaluate cast(testing_dictionary(fromType) as toType) and verify the result
   // matches the expected one. Values in expected should correspond to values in
   // input at the same rows.
-  template <typename TTo>
   void evaluateAndVerifyDictEncoding(
       const TypePtr& fromType,
       const TypePtr& toType,
@@ -105,11 +111,7 @@ class CastBaseTest : public FunctionBaseTest {
         buildCastExprWithDictionaryInput(fromType, toType, isTryCast);
 
     VectorPtr result;
-    if constexpr (std::is_same_v<TTo, ComplexType>) {
-      result = evaluate(castExpr, input);
-    } else {
-      result = evaluate<SimpleVector<EvalType<TTo>>>(castExpr, input);
-    }
+    result = evaluate(castExpr, input);
 
     auto indices = test::makeIndicesInReverse(expected->size(), pool());
     assertEqualVectors(wrapInDictionary(indices, expected), result);
@@ -132,42 +134,145 @@ class CastBaseTest : public FunctionBaseTest {
     assertEqualVectors(wrapInDictionary(indices, expected), result);
   }
 
-  template <typename TTo>
+  /**
+   * @tparam From Source type for cast.
+   * @tparam To Destination type for cast.
+   * @param typeString Cast type in string.
+   * @param input Input vector of type From.
+   * @param expectedResult Expected output vector of type To.
+   */
+  template <typename TFrom, typename TTo>
   void testCast(
-      const TypePtr& fromType,
-      const TypePtr& toType,
+      const std::string& typeString,
+      const std::vector<std::optional<TFrom>>& input,
+      const std::vector<std::optional<TTo>>& expectedResult,
+      const TypePtr& fromType = CppToType<TFrom>::create(),
+      const TypePtr& toType = CppToType<TTo>::create()) {
+    auto result = evaluate(
+        fmt::format("cast(c0 as {})", typeString),
+        makeRowVector({makeNullableFlatVector(input, fromType)}));
+    auto expected = makeNullableFlatVector<TTo>(expectedResult, toType);
+    assertEqualVectors(expected, result);
+  }
+
+  /**
+   * @tparam From Source type for cast.
+   * @tparam To Destination type for cast.
+   * @param typeString Cast type in string.
+   * @param input Input vector of type From.
+   * @param expectedResult Expected output vector of type To.
+   */
+  template <typename TFrom, typename TTo>
+  void testTryCast(
+      const std::string& typeString,
+      const std::vector<std::optional<TFrom>>& input,
+      const std::vector<std::optional<TTo>>& expectedResult,
+      const TypePtr& fromType = CppToType<TFrom>::create(),
+      const TypePtr& toType = CppToType<TTo>::create()) {
+    auto result = evaluate(
+        fmt::format("try_cast(c0 as {})", typeString),
+        makeRowVector({makeNullableFlatVector(input, fromType)}));
+    auto expected = makeNullableFlatVector<TTo>(expectedResult, toType);
+    assertEqualVectors(expected, result);
+  }
+
+  /**
+   * @tparam From Source type for cast.
+   * @param typeString Cast type in string.
+   * @param input Input vector of type From.
+   */
+  template <typename TFrom>
+  void testInvalidCast(
+      const std::string& typeString,
+      const std::vector<std::optional<TFrom>>& input,
+      const std::string& expectedErrorMessage,
+      const TypePtr& fromType = CppToType<TFrom>::create(),
+      const bool isRunTimeThrow = false) {
+    if (!isRunTimeThrow) {
+      VELOX_ASSERT_USER_THROW(
+          evaluate(
+              fmt::format("cast(c0 as {})", typeString),
+              makeRowVector({makeNullableFlatVector(input, fromType)})),
+          expectedErrorMessage);
+    } else {
+      VELOX_ASSERT_RUNTIME_THROW(
+          evaluate(
+              fmt::format("cast(c0 as {})", typeString),
+              makeRowVector({makeNullableFlatVector(input, fromType)})),
+          expectedErrorMessage);
+    }
+  }
+
+  void testCast(
       const VectorPtr& input,
-      const VectorPtr& expected) {
-    SCOPED_TRACE(fmt::format(
-        "Cast from {} to {}", fromType->toString(), toType->toString()));
+      const VectorPtr& expected,
+      std::optional<bool> isTryCast = std::nullopt) {
+    const auto& fromType = input->type();
+    const auto& toType = expected->type();
+    SCOPED_TRACE(
+        fmt::format(
+            "Cast from {} to {}", fromType->toString(), toType->toString()));
+    const auto copy = createCopy(input);
     // Test with flat encoding.
     {
       SCOPED_TRACE("Flat encoding");
-      evaluateAndVerify<TTo>(
-          fromType, toType, makeRowVector({input}), expected);
-      evaluateAndVerify<TTo>(
-          fromType, toType, makeRowVector({input}), expected, true);
+      if (isTryCast.has_value()) {
+        evaluateAndVerify(
+            fromType,
+            toType,
+            makeRowVector({input}),
+            expected,
+            isTryCast.value());
+      } else {
+        evaluateAndVerify(fromType, toType, makeRowVector({input}), expected);
+        evaluateAndVerify(
+            fromType, toType, makeRowVector({input}), expected, true);
+      }
+
+      // Make sure the input vector does not change.
+      assertEqualVectors(input, copy);
     }
 
     // Test with constant encoding that repeats the first element five times.
     {
       SCOPED_TRACE("Constant encoding");
-      auto constInput = BaseVector::wrapInConstant(5, 0, input);
-      auto constExpected = BaseVector::wrapInConstant(5, 0, expected);
+      const auto constantRow =
+          makeRowVector({BaseVector::wrapInConstant(5, 0, input)});
+      const auto localCopy = createCopy(constantRow);
+      const auto constExpected = BaseVector::wrapInConstant(5, 0, expected);
 
-      evaluateAndVerify<TTo>(
-          fromType, toType, makeRowVector({constInput}), constExpected);
-      evaluateAndVerify<TTo>(
-          fromType, toType, makeRowVector({constInput}), constExpected, true);
+      if (isTryCast.has_value()) {
+        evaluateAndVerify(
+            fromType, toType, constantRow, constExpected, isTryCast.value());
+      } else {
+        evaluateAndVerify(fromType, toType, constantRow, constExpected);
+        evaluateAndVerify(fromType, toType, constantRow, constExpected, true);
+      }
+
+      // Make sure the input vector does not change.
+      assertEqualVectors(constantRow, localCopy);
+      assertEqualVectors(input, copy);
     }
 
     // Test with dictionary encoding that reverses the indices.
     {
       SCOPED_TRACE("Dictionary encoding");
-      evaluateAndVerifyDictEncoding<TTo>(
-          fromType, toType, makeRowVector({input}), expected);
-      evaluateAndVerifyDictEncoding<TTo>(
-          fromType, toType, makeRowVector({input}), expected, true);
+      if (isTryCast.has_value()) {
+        evaluateAndVerifyDictEncoding(
+            fromType,
+            toType,
+            makeRowVector({input}),
+            expected,
+            isTryCast.value());
+      } else {
+        evaluateAndVerifyDictEncoding(
+            fromType, toType, makeRowVector({input}), expected);
+        evaluateAndVerifyDictEncoding(
+            fromType, toType, makeRowVector({input}), expected, true);
+      }
+
+      // Make sure the input vector does not change.
+      assertEqualVectors(input, copy);
     }
   }
 
@@ -180,22 +285,41 @@ class CastBaseTest : public FunctionBaseTest {
     auto inputVector = makeNullableFlatVector<TFrom>(input, fromType);
     auto expectedVector = makeNullableFlatVector<TTo>(expected, toType);
 
-    testCast<TTo>(fromType, toType, inputVector, expectedVector);
+    testCast(inputVector, expectedVector);
   }
 
-  template <typename TFrom, typename TTo>
+  template <typename TFrom>
   void testThrow(
       const TypePtr& fromType,
       const TypePtr& toType,
       const std::vector<std::optional<TFrom>>& input,
       const std::string& expectedErrorMessage) {
     VELOX_ASSERT_THROW(
-        evaluateCast<TTo>(
+        evaluateCast(
             fromType,
             toType,
             makeRowVector({makeNullableFlatVector<TFrom>(input, fromType)})),
         expectedErrorMessage);
   }
+
+  VectorPtr createCopy(const VectorPtr& input) {
+    VectorPtr result;
+    SelectivityVector rows(input->size());
+    BaseVector::ensureWritable(rows, input->type(), input->pool(), result);
+    result->copy(input.get(), rows, nullptr);
+    return result;
+  }
+
+  std::shared_ptr<core::CastTypedExpr> makeCastExpr(
+      const core::TypedExprPtr& input,
+      const TypePtr& toType,
+      bool isTryCast) {
+    std::vector<core::TypedExprPtr> inputs = {input};
+    return std::make_shared<core::CastTypedExpr>(toType, inputs, isTryCast);
+  }
+
+  const float kInf = std::numeric_limits<float>::infinity();
+  const float kNan = std::numeric_limits<float>::quiet_NaN();
 };
 
 } // namespace facebook::velox::functions::test

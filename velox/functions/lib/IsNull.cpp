@@ -23,10 +23,6 @@ namespace {
 template <bool IsNotNULL>
 class IsNullFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -61,7 +57,7 @@ class IsNullFunction : public exec::VectorFunction {
             isNull->asMutable<int64_t>(),
             arg->rawNulls(),
             bits::nbytes(rows.end()));
-        bits::negate(isNull->asMutable<char>(), rows.end());
+        bits::negate(isNull->asMutable<uint64_t>(), rows.end());
       }
     } else {
       exec::DecodedArgs decodedArgs(rows, args, context);
@@ -69,11 +65,11 @@ class IsNullFunction : public exec::VectorFunction {
       isNull = AlignedBuffer::allocate<bool>(rows.end(), pool);
       memcpy(
           isNull->asMutable<int64_t>(),
-          decodedArgs.at(0)->nulls(),
+          decodedArgs.at(0)->nulls(&rows),
           bits::nbytes(rows.end()));
 
       if (!IsNotNULL) {
-        bits::negate(isNull->asMutable<char>(), rows.end());
+        bits::negate(isNull->asMutable<uint64_t>(), rows.end());
       }
     }
 
@@ -93,18 +89,20 @@ class IsNullFunction : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_is_null,
     IsNullFunction<false>::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<IsNullFunction</*IsNotNUll=*/false>>());
 
 void registerIsNullFunction(const std::string& name) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_is_null, name);
 }
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_is_not_null,
     IsNullFunction<true>::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<IsNullFunction</*IsNotNUll=*/true>>());
 
 void registerIsNotNullFunction(const std::string& name) {

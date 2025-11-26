@@ -19,14 +19,15 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
-#pragma GCC diagnostic pop
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/lib/ToHex.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions {
 
@@ -44,16 +45,20 @@ struct CRC32Function {
 };
 
 /// xxhash64(varbinary) → varbinary
-/// Return an 8-byte binary to hash64 of input (varbinary such as string)
+/// Return an 8-byte binary to hash64 of input (varbinary such as string) with
+/// optional seed
 template <typename T>
 struct XxHash64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE
-  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
-    // Seed is set to 0.
-    int64_t hash = folly::Endian::swap64(XXH64(input.data(), input.size(), 0));
-    static const auto kLen = sizeof(int64_t);
+  void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varbinary>& input,
+      const arg_type<int64_t>& seed = 0) {
+    int64_t hash =
+        folly::Endian::swap64(XXH64(input.data(), input.size(), seed));
+    static constexpr auto kLen = sizeof(int64_t);
 
     // Resizing output and copy
     result.resize(kLen);
@@ -160,6 +165,7 @@ struct HmacSha1Function {
   template <typename TOutput, typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(TOutput& result, const TInput& data, const TInput& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(20);
     folly::ssl::OpenSSLHash::hmac_sha1(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -176,6 +182,7 @@ struct HmacSha256Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(32);
     folly::ssl::OpenSSLHash::hmac_sha256(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -192,6 +199,7 @@ struct HmacSha512Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(64);
     folly::ssl::OpenSSLHash::hmac_sha512(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -209,6 +217,7 @@ struct HmacMd5Function {
       out_type<Varbinary>& result,
       const arg_type<Varbinary>& data,
       const arg_type<Varbinary>& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(16);
     folly::ssl::OpenSSLHash::hmac(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -218,10 +227,6 @@ struct HmacMd5Function {
   }
 };
 
-FOLLY_ALWAYS_INLINE unsigned char toHex(unsigned char c) {
-  return c < 10 ? (c + '0') : (c + 'A' - 10);
-}
-
 template <typename T>
 struct ToHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -229,27 +234,7 @@ struct ToHexFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input) {
-    static const char* const kHexTable =
-        "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-        "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-        "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-        "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-        "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-        "C0C1C2C3C4C5C6C7C8C9CACBCCCDCECFD0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF"
-        "E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEFF0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF";
-
-    const auto inputSize = input.size();
-    result.resize(inputSize * 2);
-
-    const unsigned char* inputBuffer =
-        reinterpret_cast<const unsigned char*>(input.data());
-    char* resultBuffer = result.data();
-
-    for (auto i = 0; i < inputSize; ++i) {
-      resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
-      resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
-    }
+    ToHexUtil::toHex(input, result);
   }
 };
 
@@ -273,9 +258,10 @@ template <typename T>
 struct FromHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
+      const TInput& input) {
     VELOX_USER_CHECK_EQ(
         input.size() % 2,
         0,
@@ -307,21 +293,43 @@ struct ToBase64Function {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct FromBase64Function {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varbinary>& result,
-      const arg_type<Varchar>& input) {
-    try {
-      auto inputSize = input.size();
-      result.resize(
-          encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-      encoding::Base64::decode(input.data(), input.size(), result.data());
-    } catch (const encoding::Base64Exception& e) {
-      VELOX_USER_FAIL(e.what());
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    auto inputSize = input.size();
+    auto decodedSize =
+        encoding::Base64::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
     }
+    result.resize(decodedSize.value());
+    return encoding::Base64::decode(
+        input.data(), inputSize, result.data(), result.size());
+  }
+};
+
+template <typename TExec>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    auto inputSize = input.size();
+    auto decodedSize =
+        encoding::Base32::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base32::decode(
+        input.data(), inputSize, result.data(), result.size());
   }
 };
 
@@ -329,18 +337,18 @@ template <typename T>
 struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varbinary>& result,
-      const arg_type<Varchar>& input) {
-    auto inputData = input.data();
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varbinary>& result, const TInput& input) {
     auto inputSize = input.size();
-    bool hasPad =
-        inputSize > 0 && (*(input.end() - 1) == encoding::Base64::kBase64Pad);
-    result.resize(
-        encoding::Base64::calculateDecodedSize(inputData, inputSize, hasPad));
-    hasPad = false; // calculateDecodedSize() updated inputSize to exclude pad.
-    encoding::Base64::decodeUrl(
-        inputData, inputSize, result.data(), result.size(), hasPad);
+    auto decodedSize =
+        encoding::Base64::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base64::decodeUrl(
+        input.data(), inputSize, result.data(), result.size());
   }
 };
 
@@ -415,9 +423,104 @@ struct ToIEEE754Bits64 {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<double>& input) {
-    result.resize(64);
-    bits::toString((const uint64_t*)&input, 0, 64, result.data());
-    std::reverse(result.data(), result.data() + 64);
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    // Since we consider NaNs with different binary representation as equal, we
+    // normalize them to a single value to ensure the output is equal too.
+    auto value = std::isnan(input)
+        ? folly::Endian::big(std::numeric_limits<double>::quiet_NaN())
+        : folly::Endian::big(input);
+    result.setNoCopy(
+        StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct FromIEEE754Bits64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    VELOX_USER_CHECK_EQ(input.size(), kTypeLength, "Expected 8-byte input");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
+  }
+};
+
+template <typename T>
+struct ToIEEE754Bits32 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<float>& input) {
+    static constexpr auto kTypeLength = sizeof(int32_t);
+    // Since we consider NaNs with different binary representation as equal, we
+    // normalize them to a single value to ensure the output is equal too.
+    auto value = std::isnan(input)
+        ? folly::Endian::big(std::numeric_limits<float>::quiet_NaN())
+        : folly::Endian::big(input);
+    result.setNoCopy(
+        StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct FromIEEE754Bits32 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<float>& result,
+      const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int32_t);
+    VELOX_USER_CHECK_EQ(
+        input.size(),
+        kTypeLength,
+        "Input floating-point value must be exactly 4 bytes long");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
+  }
+};
+
+/// lpad(binary, size, padbinary) -> varbinary
+///     Left pads input to size characters with padding.  If size is
+///     less than the length of input, the result is truncated to size
+///     characters.  size must not be negative and padding must be non-empty.
+/// rpad(binary, size, padbinary) -> varbinary
+///     Right pads input to size characters with padding.  If size is
+///     less than the length of input, the result is truncated to size
+///     characters.  size must not be negative and padding must be non-empty.
+template <typename T, bool lpad>
+struct PadFunctionVarbinaryBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varbinary>& binary,
+      const arg_type<int64_t>& size,
+      const arg_type<Varbinary>& padbinary) {
+    stringImpl::pad<lpad, false /*isAscii*/>(result, binary, size, padbinary);
+  }
+};
+
+template <typename T>
+struct LPadVarbinaryFunction : public PadFunctionVarbinaryBase<T, true> {};
+
+template <typename T>
+struct RPadVarbinaryFunction : public PadFunctionVarbinaryBase<T, false> {};
+
+// Implement murmur3_x64_128 function murmur3_x64_128(varbinary) -> varbinary
+// This function is used to generate a 128-bit hash value for a given input
+template <typename T>
+struct Murmur3X64_128Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+    result.resize(16);
+    common::hll::Murmur3Hash128::hash(
+        input.data(), input.size(), 0, result.data());
   }
 };
 

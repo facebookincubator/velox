@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -105,6 +106,8 @@ class ArrayDistinctTest : public FunctionBaseTest {
         {0.0, -10.0},
         {std::numeric_limits<T>::quiet_NaN(),
          std::numeric_limits<T>::quiet_NaN()},
+        {std::numeric_limits<T>::quiet_NaN(),
+         std::numeric_limits<T>::signaling_NaN()},
         {std::numeric_limits<T>::signaling_NaN(),
          std::numeric_limits<T>::signaling_NaN()},
         {std::numeric_limits<T>::lowest(), std::numeric_limits<T>::lowest()},
@@ -134,10 +137,10 @@ class ArrayDistinctTest : public FunctionBaseTest {
         {0.0},
         {0.0, 10.0},
         {0.0, -10.0},
-        {std::numeric_limits<T>::quiet_NaN(),
-         std::numeric_limits<T>::quiet_NaN()},
-        {std::numeric_limits<T>::signaling_NaN(),
-         std::numeric_limits<T>::signaling_NaN()},
+        {std::numeric_limits<T>::quiet_NaN()},
+        // quiet NaN and signaling NaN are treated equal
+        {std::numeric_limits<T>::quiet_NaN()},
+        {std::numeric_limits<T>::signaling_NaN()},
         {std::numeric_limits<T>::lowest()},
         {std::nullopt},
         {1.0001, -2.0, 3.03, std::nullopt, 4.00004},
@@ -277,6 +280,23 @@ TEST_F(ArrayDistinctTest, stringArrays) {
   testExpr(expected, "array_distinct(C0)", {array});
 }
 
+TEST_F(ArrayDistinctTest, complexTypeArrays) {
+  auto input = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3], [1, 2], [1, 2, 3], [], [1, 2, 3], [1], [1, 2, 3], [2], []]",
+      "[[null, 2, 3], [1, 2], [1, 2, 3], [], [null, 2, 3], [1], [1, 2, 3], [2], null]",
+      "[[1, null, 3], [1, null, 3], [1, null, 3], null, [1, null, 3], [1, null, 3]]",
+  });
+
+  auto result = evaluate("array_distinct(c0)", makeRowVector({input}));
+  auto expected = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3], [1, 2], [], [1], [2]]",
+      "[[null, 2, 3], [1, 2], [1, 2, 3], [], [1], [2], null]",
+      "[[1, null, 3], null]",
+  });
+
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(ArrayDistinctTest, nonContiguousRows) {
   auto c0 = makeFlatVector<int32_t>(4, [](auto row) { return row; });
   auto c1 = makeArrayVector<int32_t>({
@@ -328,4 +348,127 @@ TEST_F(ArrayDistinctTest, constant) {
   result = evaluateConstant(2, data);
   expected = makeConstantArray<int64_t>(size, {6});
   assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayDistinctTest, unknownType) {
+  // array_distinct(ARRAY[]) -> []
+  auto emptyArrayVector = makeArrayVector<UnknownValue>({{}});
+  auto result =
+      evaluate("array_distinct(c0)", makeRowVector({emptyArrayVector}));
+  assertEqualVectors(emptyArrayVector, result);
+
+  // array_distinct(ARRAY[null, null, null]) -> [null]
+  // array_distinct(ARRAY[]) -> []
+  // array_distinct(ARRAY[null]) -> [null]
+  auto nullArrayVector = makeArrayVector(
+      {0, 3, 3},
+      makeNullableFlatVector<UnknownValue>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt}));
+  auto expected = makeArrayVector(
+      {0, 1, 1},
+      makeNullableFlatVector<UnknownValue>({std::nullopt, std::nullopt}));
+  result = evaluate("array_distinct(c0)", makeRowVector({nullArrayVector}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayDistinctTest, timestampWithTimezone) {
+  const auto testArrayDistinct =
+      [this](
+          const std::vector<std::optional<int64_t>>& inputArray,
+          const std::vector<std::optional<int64_t>>& expectedArray) {
+        const auto input = makeRowVector({makeArrayVector(
+            {0},
+            makeNullableFlatVector(inputArray, TIMESTAMP_WITH_TIME_ZONE()))});
+        const auto expected = makeArrayVector(
+            {0},
+            makeNullableFlatVector(expectedArray, TIMESTAMP_WITH_TIME_ZONE()));
+
+        assertEqualVectors(expected, evaluate("array_distinct(c0)", input));
+      };
+
+  testArrayDistinct({}, {});
+  testArrayDistinct({pack(0, 0)}, {pack(0, 0)});
+  testArrayDistinct({pack(1, 0)}, {pack(1, 0)});
+  testArrayDistinct({pack(kMinMillisUtc, 0)}, {pack(kMinMillisUtc, 0)});
+  testArrayDistinct({pack(kMaxMillisUtc, 0)}, {pack(kMaxMillisUtc, 0)});
+  testArrayDistinct({std::nullopt}, {std::nullopt});
+  testArrayDistinct({pack(-1, 0)}, {pack(-1, 0)});
+  testArrayDistinct(
+      {pack(1, 3), pack(2, 2), pack(3, 1)},
+      {pack(1, 3), pack(2, 2), pack(3, 1)});
+  testArrayDistinct(
+      {pack(1, 0), pack(2, 1), pack(1, 2)}, {pack(1, 0), pack(2, 1)});
+  testArrayDistinct({pack(1, 0), pack(1, 1), pack(1, 2)}, {pack(1, 0)});
+  testArrayDistinct(
+      {pack(-1, 0), pack(-2, 1), pack(-3, 2)},
+      {pack(-1, 0), pack(-2, 1), pack(-3, 2)});
+  testArrayDistinct(
+      {pack(-1, 0), pack(-2, 1), pack(-1, 2)}, {pack(-1, 0), pack(-2, 1)});
+  testArrayDistinct({pack(-1, 0), pack(-1, 1), pack(-1, 2)}, {pack(-1, 0)});
+  testArrayDistinct({std::nullopt, std::nullopt, std::nullopt}, {std::nullopt});
+  testArrayDistinct(
+      {pack(1, 0), pack(2, 1), pack(-2, 2), pack(1, 3)},
+      {pack(1, 0), pack(2, 1), pack(-2, 2)});
+  testArrayDistinct(
+      {pack(1, 0),
+       pack(1, 1),
+       pack(-2, 2),
+       pack(-2, 3),
+       pack(-2, 4),
+       pack(4, 5),
+       pack(8, 6)},
+      {pack(1, 0), pack(-2, 2), pack(4, 5), pack(8, 6)});
+  testArrayDistinct(
+      {pack(3, 0), pack(8, 1), std::nullopt},
+      {pack(3, 0), pack(8, 1), std::nullopt});
+  testArrayDistinct(
+      {pack(1, 0),
+       pack(2, 1),
+       pack(3, 2),
+       std::nullopt,
+       pack(4, 3),
+       pack(1, 4),
+       pack(2, 5),
+       std::nullopt},
+      {pack(1, 0), pack(2, 1), pack(3, 2), std::nullopt, pack(4, 3)});
+}
+
+TEST_F(ArrayDistinctTest, overlappingRanges) {
+  auto size = 4;
+  auto elements = makeFlatVector<int64_t>({0, 1, 2, 1, 2, 1, 2, 3});
+
+  // Allocate some overlapping arrays.
+  BufferPtr offsetsBuffer = allocateOffsets(size, pool());
+  BufferPtr sizesBuffer = allocateSizes(size, pool());
+  auto rawOffsets = offsetsBuffer->asMutable<vector_size_t>();
+  auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
+
+  // [0, 1, 2, 1, 2]
+  rawOffsets[0] = 0;
+  rawSizes[0] = 5;
+
+  // [1, 2, 1, 2]
+  rawOffsets[1] = 1;
+  rawSizes[1] = 4;
+
+  // [2, 1, 2]
+  rawOffsets[2] = 4;
+  rawSizes[2] = 3;
+
+  // [1, 2, 3]
+  rawOffsets[3] = 5;
+  rawSizes[3] = 3;
+
+  auto array = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(BIGINT()),
+      nullptr,
+      size,
+      offsetsBuffer,
+      sizesBuffer,
+      elements);
+
+  assertEqualVectors(
+      makeArrayVector<int64_t>({{0, 1, 2}, {1, 2}, {2, 1}, {1, 2, 3}}),
+      evaluate("array_distinct(c0)", makeRowVector({array})));
 }

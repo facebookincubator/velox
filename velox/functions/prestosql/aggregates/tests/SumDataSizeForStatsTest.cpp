@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -27,7 +27,6 @@ class SumDataSizeForStatsTest : public AggregationTestBase {
  public:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 };
 
@@ -96,16 +95,18 @@ Timestamp generator<Timestamp>(vector_size_t i) {
   return Timestamp(i, i);
 }
 TEST_F(SumDataSizeForStatsTest, allScalarTypes) {
+  // Make input size at least 8 to ensure drivers get 2 input batches for
+  // spilling when tested with data read from files.
   auto vectors = {makeRowVector(
-      {makeFlatVector<int64_t>({1, 2, 1, 2}),
-       makeFlatVector<int8_t>(4, generator<int8_t>),
-       makeFlatVector<int16_t>(4, generator<int16_t>),
-       makeFlatVector<int32_t>(4, generator<int32_t>),
-       makeFlatVector<int64_t>(4, generator<int64_t>),
-       makeFlatVector<float>(4, generator<float>),
-       makeFlatVector<double>(4, generator<double>),
-       makeFlatVector<bool>(4, generator<bool>),
-       makeFlatVector<Timestamp>(4, generator<Timestamp>)})};
+      {makeFlatVector<int64_t>({1, 2, 1, 2, 1, 2, 1, 2}),
+       makeFlatVector<int8_t>(8, generator<int8_t>),
+       makeFlatVector<int16_t>(8, generator<int16_t>),
+       makeFlatVector<int32_t>(8, generator<int32_t>),
+       makeFlatVector<int64_t>(8, generator<int64_t>),
+       makeFlatVector<float>(8, generator<float>),
+       makeFlatVector<double>(8, generator<double>),
+       makeFlatVector<bool>(8, generator<bool>),
+       makeFlatVector<Timestamp>(8, generator<Timestamp>)})};
 
   // With grouping keys.
   testAggregations(
@@ -120,7 +121,7 @@ TEST_F(SumDataSizeForStatsTest, allScalarTypes) {
        "sum_data_size_for_stats(c7)",
        "sum_data_size_for_stats(c8)"},
       // result for group 1 and 2
-      "VALUES (1,2,4,8,16,8,16,2,32),(2,2,4,8,16,8,16,2,32)");
+      "VALUES (1,4,8,16,32,16,32,4,64),(2,4,8,16,32,16,32,4,64)");
 
   // Without grouping keys.
   testAggregations(
@@ -134,7 +135,7 @@ TEST_F(SumDataSizeForStatsTest, allScalarTypes) {
        "sum_data_size_for_stats(c6)",
        "sum_data_size_for_stats(c7)",
        "sum_data_size_for_stats(c8)"},
-      "VALUES (4,8,16,32,16,32,4,64)");
+      "VALUES (8,16,32,64,32,64,8,128)");
 }
 
 TEST_F(SumDataSizeForStatsTest, arrayGlobalAggregate) {
@@ -210,12 +211,12 @@ TEST_F(SumDataSizeForStatsTest, complexRecursiveGlobalAggregate) {
           createMapOfArraysVector<int8_t, int64_t>({
               {{1, std::nullopt}},
               {{2, {{4, 5, std::nullopt}}}},
-              {{std::nullopt, {{7, 8, 9}}}},
+              {{3, {{7, 8, 9}}}},
           }),
       }),
   })};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 118");
+  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 115");
 }
 
 TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
@@ -254,7 +255,7 @@ TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
       createMapOfArraysVector<int8_t, int64_t>({
           {{1, std::nullopt}},
           {{2, {{4, 5, std::nullopt}}}},
-          {{std::nullopt, {{7, 8, 9}}}},
+          {{3, {{7, 8, 9}}}},
       }),
   });
   vector_size_t size = 3;
@@ -267,10 +268,10 @@ TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
       BaseVector::wrapInDictionary(nullptr, indices, size, columnTwo);
   auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 118");
+  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 115");
 
   testAggregations(
-      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,82),(2,36)");
+      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,79),(2,36)");
 }
 
 TEST_F(SumDataSizeForStatsTest, mask) {

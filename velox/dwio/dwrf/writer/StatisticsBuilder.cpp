@@ -93,29 +93,47 @@ void StatisticsBuilder::merge(
     // Merge size
     mergeCount(size_, other.getSize());
   }
+  if (hll_) {
+    auto* otherBuilder = dynamic_cast<const StatisticsBuilder*>(&other);
+    VELOX_CHECK_NOT_NULL(otherBuilder);
+    VELOX_CHECK_NOT_NULL(otherBuilder->hll_);
+    hll_->mergeWith(*otherBuilder->hll_);
+  }
 }
 
-void StatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void StatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
   if (hasNull_.has_value()) {
-    stats.set_hasnull(hasNull_.value());
+    stats.setHasNull(hasNull_.value());
   }
   if (valueCount_.has_value()) {
-    stats.set_numberofvalues(valueCount_.value());
+    stats.setNumberOfValues(valueCount_.value());
   }
   if (rawSize_.has_value()) {
-    stats.set_rawsize(rawSize_.value());
+    stats.setRawSize(rawSize_.value());
   }
   if (size_.has_value()) {
-    stats.set_size(size_.value());
+    stats.setSize(size_.value());
   }
 }
 
 std::unique_ptr<dwio::common::ColumnStatistics> StatisticsBuilder::build()
     const {
-  proto::ColumnStatistics stats;
+  auto columnStatistics =
+      google::protobuf::Arena::CreateMessage<proto::ColumnStatistics>(
+          arena_.get());
+  auto stats = ColumnStatisticsWriteWrapper(columnStatistics);
   toProto(stats);
+
   StatsContext context{WriterVersion_CURRENT};
-  return buildColumnStatisticsFromProto(stats, context);
+  auto result = buildColumnStatisticsFromProto(
+      ColumnStatisticsWrapper(columnStatistics), context);
+  // We do not alter the proto since this is part of the file format
+  // and the file format. The distinct count does not exist in the
+  // file format but is added here for use in on demand sampling.
+  if (hll_) {
+    result->setNumDistinct(hll_->cardinality());
+  }
+  return result;
 }
 
 std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
@@ -216,13 +234,14 @@ void BooleanStatisticsBuilder::merge(
   mergeCount(trueCount_, stats->getTrueCount());
 }
 
-void BooleanStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void BooleanStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
   // Serialize type specific stats only if there is non-null values
   if (!isEmpty(*this) && trueCount_.has_value()) {
-    auto bStats = stats.mutable_bucketstatistics();
-    DWIO_ENSURE_EQ(bStats->count_size(), 0);
-    bStats->add_count(trueCount_.value());
+    auto bStats = stats.mutableBucketStatistics();
+    DWIO_ENSURE_EQ(bStats.countSize(), 0);
+    bStats.addCount(trueCount_.value());
   }
 }
 
@@ -249,20 +268,21 @@ void IntegerStatisticsBuilder::merge(
   mergeWithOverflowCheck(sum_, stats->getSum());
 }
 
-void IntegerStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void IntegerStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
   // Serialize type specific stats only if there is non-null values
   if (!isEmpty(*this) &&
       (min_.has_value() || max_.has_value() || sum_.has_value())) {
-    auto iStats = stats.mutable_intstatistics();
+    auto iStats = stats.mutableIntegerStatistics();
     if (min_.has_value()) {
-      iStats->set_minimum(min_.value());
+      iStats.setMinimum(min_.value());
     }
     if (max_.has_value()) {
-      iStats->set_maximum(max_.value());
+      iStats.setMaximum(max_.value());
     }
     if (sum_.has_value()) {
-      iStats->set_sum(sum_.value());
+      iStats.setSum(sum_.value());
     }
   }
 }
@@ -291,20 +311,21 @@ void DoubleStatisticsBuilder::merge(
   }
 }
 
-void DoubleStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void DoubleStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
   // Serialize type specific stats only if there is non-null values
   if (!isEmpty(*this) &&
       (min_.has_value() || max_.has_value() || sum_.has_value())) {
-    auto dStats = stats.mutable_doublestatistics();
+    auto dStats = stats.mutableDoubleStatistics();
     if (min_.has_value()) {
-      dStats->set_minimum(min_.value());
+      dStats.setMinimum(min_.value());
     }
     if (max_.has_value()) {
-      dStats->set_maximum(max_.value());
+      dStats.setMaximum(max_.value());
     }
     if (sum_.has_value()) {
-      dStats->set_sum(sum_.value());
+      dStats.setSum(sum_.value());
     }
   }
 }
@@ -347,22 +368,23 @@ void StringStatisticsBuilder::merge(
   mergeWithOverflowCheck(length_, stats->getTotalLength());
 }
 
-void StringStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void StringStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
   // If string value is too long, drop it and fall back to basic stats
   if (!isEmpty(*this) &&
       (shouldKeep(min_) || shouldKeep(max_) || isValidLength(length_))) {
-    auto dStats = stats.mutable_stringstatistics();
+    auto dStats = stats.mutableStringStatistics();
     if (isValidLength(length_)) {
-      dStats->set_sum(length_.value());
+      dStats.setSum(length_.value());
     }
 
     if (shouldKeep(min_)) {
-      dStats->set_minimum(min_.value());
+      dStats.setMinimum(min_.value());
     }
 
     if (shouldKeep(max_)) {
-      dStats->set_maximum(max_.value());
+      dStats.setMaximum(max_.value());
     }
   }
 }
@@ -385,12 +407,13 @@ void BinaryStatisticsBuilder::merge(
   mergeWithOverflowCheck(length_, stats->getTotalLength());
 }
 
-void BinaryStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void BinaryStatisticsBuilder::toProto(
+    ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
   // Serialize type specific stats only if there is non-null values
   if (!isEmpty(*this) && isValidLength(length_)) {
-    auto bStats = stats.mutable_binarystatistics();
-    bStats->set_sum(length_.value());
+    auto bStats = stats.mutableBinaryStatistics();
+    bStats.setSum(length_.value());
   }
 }
 
@@ -413,10 +436,10 @@ void MapStatisticsBuilder::merge(
   }
 }
 
-void MapStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+void MapStatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
   if (!isEmpty(*this) && !entryStatistics_.empty()) {
-    auto mapStats = stats.mutable_mapstatistics();
+    auto mapStats = stats.mutableMapStatistics();
     for (const auto& entry : entryStatistics_) {
       auto entryStatistics = mapStats->add_stats();
       const auto& key = entry.first;
@@ -426,8 +449,8 @@ void MapStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
       } else if (key.bytesKey.has_value()) {
         entryStatistics->mutable_key()->set_byteskey(key.bytesKey.value());
       }
-      dynamic_cast<const StatisticsBuilder&>(*entry.second)
-          .toProto(*entryStatistics->mutable_stats());
+      auto c = ColumnStatisticsWriteWrapper(entryStatistics->mutable_stats());
+      dynamic_cast<const StatisticsBuilder&>(*entry.second).toProto(c);
     }
   }
 }

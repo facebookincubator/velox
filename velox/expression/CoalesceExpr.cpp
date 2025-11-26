@@ -15,6 +15,8 @@
  */
 #include "velox/expression/CoalesceExpr.h"
 
+#include "velox/expression/ExprConstants.h"
+
 namespace facebook::velox::exec {
 
 CoalesceExpr::CoalesceExpr(
@@ -22,9 +24,10 @@ CoalesceExpr::CoalesceExpr(
     std::vector<ExprPtr>&& inputs,
     bool inputsSupportFlatNoNullsFastPath)
     : SpecialForm(
+          SpecialFormKind::kCoalesce,
           std::move(type),
           std::move(inputs),
-          kCoalesce,
+          expression::kCoalesce,
           inputsSupportFlatNoNullsFastPath,
           false /* trackCpuUsage */) {
   std::vector<TypePtr> inputTypes;
@@ -36,7 +39,12 @@ CoalesceExpr::CoalesceExpr(
       [](const ExprPtr& expr) { return expr->type(); });
 
   // Apply type checks.
-  resolveType(inputTypes);
+  auto expectedType = resolveType(inputTypes);
+  VELOX_CHECK(
+      *expectedType == *this->type(),
+      "Coalesce expression type different than its inputs. Expected {}, but got {}.",
+      expectedType->toString(),
+      this->type()->toString());
 }
 
 void CoalesceExpr::evalSpecialForm(
@@ -66,7 +74,7 @@ void CoalesceExpr::evalSpecialForm(
     }
 
     decodedVector.get()->decode(*result, *activeRows);
-    const uint64_t* rawNulls = decodedVector->nulls();
+    const uint64_t* rawNulls = decodedVector->nulls(activeRows);
     if (!rawNulls) {
       // No nulls left.
       return;
@@ -88,7 +96,7 @@ TypePtr CoalesceExpr::resolveType(const std::vector<TypePtr>& argTypes) {
       "COALESCE statements expect to receive at least 1 argument, but did not receive any.");
   for (auto i = 1; i < argTypes.size(); i++) {
     VELOX_USER_CHECK(
-        argTypes[0]->equivalent(*argTypes[i]),
+        *argTypes[0] == *argTypes[i],
         "Inputs to coalesce must have the same type. Expected {}, but got {}.",
         argTypes[0]->toString(),
         argTypes[i]->toString());
@@ -105,7 +113,8 @@ TypePtr CoalesceCallToSpecialForm::resolveType(
 ExprPtr CoalesceCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
-    bool /* trackCpuUsage */) {
+    bool /* trackCpuUsage */,
+    const core::QueryConfig& /*config*/) {
   bool inputsSupportFlatNoNullsFastPath =
       Expr::allSupportFlatNoNullsFastPath(compiledChildren);
   return std::make_shared<CoalesceExpr>(

@@ -8,11 +8,30 @@ Binary Functions
 
 .. function:: from_base64(string) -> varbinary
 
-    Decodes binary data from the base64 encoded ``string``.
+    Decodes a Base64-encoded ``string`` back into its original binary form.
+    This function is capable of handling both fully padded and non-padded Base64 encoded strings.
+    Partially padded Base64 strings are not supported and will result in a "UserError" status being returned.
+
+    Examples
+    --------
+    Query with padded Base64 string:
+    ::
+    SELECT from_base64('SGVsbG8gV29ybGQ='); -- [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+
+    Query with non-padded Base64 string:
+    ::
+    SELECT from_base64('SGVsbG8gV29ybGQ'); -- [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+
+    Query with partial-padded Base64 string:
+    ::
+    SELECT from_base64('SGVsbG8gV29ybGQgZm9yIHZlbG94IQ='); -- UserError: Base64::decode() - invalid input string: string length is not a multiple of 4.
+
+    In the above examples, both the fully padded and non-padded Base64 strings ('SGVsbG8gV29ybGQ=' and 'SGVsbG8gV29ybGQ') decode to the binary representation of the text 'Hello World'.
+    A partial-padded Base64 string 'SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=' will result in a "UserError" status indicating the Base64 string is invalid.
 
 .. function:: from_base64url(string) -> varbinary
 
-    Decodes ``string`` data from the base64 encoded representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_ into a varbinary. 
+    Decodes ``string`` data from the base64 encoded representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_ into a varbinary.
 
 .. function:: from_big_endian_32(varbinary) -> integer
 
@@ -25,6 +44,16 @@ Binary Functions
 .. function:: from_hex(string) -> varbinary
 
     Decodes binary data from the hex encoded ``string``.
+
+.. function:: from_ieee754_32(binary) -> real
+
+    Decodes the 32-bit big-endian ``binary`` in IEEE 754 single-precision floating-point format.
+    Throws a user error if input size is shorter / longer than 32 bits.
+
+.. function:: from_ieee754_64(binary) -> double
+
+    Decodes the 64-bit big-endian ``binary`` in IEEE 754 double-precision floating-point format.
+    Throws a user error if input size is shorter / longer than 64 bits.
 
 .. function:: hmac_md5(binary, key) -> varbinary
 
@@ -42,9 +71,33 @@ Binary Functions
 
     Computes the HMAC with sha512 of ``binary`` with the given ``key``.
 
+.. function:: length(binary) -> bigint
+
+    Returns the length of ``binary`` in bytes.
+
+.. function:: lpad(binary, size, padbinary) -> varbinary
+    :noindex:
+
+    Left pads ``binary`` to ``size`` bytes with ``padbinary``.
+    If ``size`` is less than the length of ``binary``, the result is
+    truncated to ``size`` characters. ``size`` must not be negative
+    and ``padbinary`` must be non-empty. ``size`` has a maximum value of 1 MiB.
+    In the case of ``size`` being smaller than the length of ``binary``,
+    ``binary`` will be truncated from the right to fit the ``size``.
+
 .. function:: md5(binary) -> varbinary
 
     Computes the md5 hash of ``binary``.
+
+.. function:: rpad(binary, size, padbinary) -> varbinary
+    :noindex:
+
+    Right pads ``binary`` to ``size`` bytes with ``padbinary``.
+    If ``size`` is less than the length of ``binary``, the result is
+    truncated to ``size`` characters. ``size`` must not be negative
+    and ``padbinary`` must be non-empty. ``size`` has a maximum value of 1 MiB.
+    In the case of ``size`` being smaller than the length of ``binary``,
+    ``binary`` will be truncated from the right to fit the ``size``.
 
 .. function:: sha1(binary) -> varbinary
 
@@ -86,6 +139,10 @@ Binary Functions
 
     Encodes ``binary`` into a hex string representation.
 
+.. function:: to_ieee754_32(real) -> varbinary
+
+    Encodes ``real`` in a 32-bit big-endian binary according to IEEE 754 single-precision floating-point format.
+
 .. function:: to_ieee754_64(double) -> varbinary
 
     Encodes ``double`` in a 64-bit big-endian binary according to IEEE 754 double-precision floating-point format.
@@ -94,6 +151,10 @@ Binary Functions
 
     Computes the xxhash64 hash of ``binary``.
 
+.. function:: xxhash64(binary, bigint) -> varbinary
+
+    Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.
+    
 .. function:: fnv1_32(binary) -> bigint
 
     Computes the 32-bit FNV-1 hash of ``binary``.

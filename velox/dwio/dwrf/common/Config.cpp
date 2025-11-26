@@ -25,9 +25,9 @@ Config::Entry<WriterVersion> Config::WRITER_VERSION(
     "orc.writer.version",
     WriterVersion_CURRENT);
 
-Config::Entry<dwio::common::CompressionKind> Config::COMPRESSION(
+Config::Entry<common::CompressionKind> Config::COMPRESSION(
     "hive.exec.orc.compress",
-    dwio::common::CompressionKind::CompressionKind_ZSTD);
+    common::CompressionKind::CompressionKind_ZSTD);
 
 Config::Entry<int32_t> Config::ZLIB_COMPRESSION_LEVEL(
     "hive.exec.orc.compress.zlib.level",
@@ -57,7 +57,7 @@ Config::Entry<bool> Config::CREATE_INDEX{"hive.exec.orc.create.index", true};
 
 Config::Entry<uint32_t> Config::ROW_INDEX_STRIDE{
     "hive.exec.orc.row.index.stride",
-    10000};
+    10'000};
 
 Config::Entry<proto::ChecksumAlgorithm> Config::CHECKSUM_ALGORITHM{
     "orc.checksum.algorithm",
@@ -130,9 +130,9 @@ Config::Entry<const std::vector<uint32_t>> Config::MAP_FLAT_COLS(
     [](const std::string& /* key */, const std::string& val) {
       std::vector<uint32_t> result;
       if (!val.empty()) {
-        std::vector<folly::StringPiece> pieces;
+        std::vector<std::string_view> pieces;
         folly::split(',', val, pieces, true);
-        for (auto& p : pieces) {
+        for (const auto& p : pieces) {
           const auto& trimmedCol = folly::trimWhitespace(p);
           if (!trimmedCol.empty()) {
             result.push_back(folly::to<uint32_t>(trimmedCol));
@@ -182,15 +182,27 @@ Config::Entry<const std::vector<std::vector<std::string>>>
 
 Config::Entry<uint32_t> Config::MAP_FLAT_MAX_KEYS(
     "orc.map.flat.max.keys",
-    20000);
+    30000);
 
 Config::Entry<uint64_t> Config::MAX_DICTIONARY_SIZE(
     "hive.exec.orc.max.dictionary.size",
     80L * 1024L * 1024L);
 
+Config::Entry<bool> Config::INTEGER_DICTIONARY_ENCODING_ENABLED(
+    "hive.exec.orc.integer.dictionary.encoding.enabled",
+    true);
+
+Config::Entry<bool> Config::STRING_DICTIONARY_ENCODING_ENABLED(
+    "hive.exec.orc.string.dictionary.encoding.enabled",
+    true);
+
 Config::Entry<uint64_t> Config::STRIPE_SIZE(
     "hive.exec.orc.stripe.size",
     256L * 1024L * 1024L);
+
+Config::Entry<bool> Config::LINEAR_STRIPE_SIZE_HEURISTICS(
+    "hive.exec.orc.linear.stripe.size.heuristics",
+    true);
 
 Config::Entry<bool> Config::FORCE_LOW_MEMORY_MODE(
     "hive.exec.orc.low.memory",

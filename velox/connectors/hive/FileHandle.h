@@ -25,18 +25,15 @@
 
 #pragma once
 
-#include <cstdint>
-#include <memory>
-#include <string>
-
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/caching/CachedFactory.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
-#include "velox/dwio/common/InputStream.h"
+#include "velox/common/file/TokenProvider.h"
+#include "velox/connectors/hive/FileProperties.h"
 
 namespace facebook::velox {
-
-class Config;
 
 // See the file comment.
 struct FileHandle {
@@ -59,24 +56,74 @@ struct FileHandle {
   // first diff we'll not include the map.
 };
 
-using FileHandleCache = SimpleLRUCache<std::string, FileHandle>;
+/// Estimates the memory usage of a FileHandle object.
+struct FileHandleSizer {
+  uint64_t operator()(const FileHandle& a);
+};
+
+struct FileHandleKey {
+  std::string filename;
+  std::shared_ptr<filesystems::TokenProvider> tokenProvider{nullptr};
+
+  bool operator==(const FileHandleKey& other) const {
+    if (filename != other.filename) {
+      return false;
+    }
+
+    if (tokenProvider == other.tokenProvider) {
+      return true;
+    }
+
+    if (!tokenProvider || !other.tokenProvider) {
+      return false;
+    }
+
+    return tokenProvider->equals(*other.tokenProvider);
+  }
+};
+
+} // namespace facebook::velox
+
+namespace std {
+template <>
+struct hash<facebook::velox::FileHandleKey> {
+  size_t operator()(const facebook::velox::FileHandleKey& key) const noexcept {
+    size_t filenameHash = std::hash<std::string>()(key.filename);
+    return key.tokenProvider ? facebook::velox::bits::hashMix(
+                                   filenameHash, key.tokenProvider->hash())
+                             : filenameHash;
+  }
+};
+} // namespace std
+
+namespace facebook::velox {
+using FileHandleCache =
+    SimpleLRUCache<facebook::velox::FileHandleKey, FileHandle>;
 
 // Creates FileHandles via the Generator interface the CachedFactory requires.
 class FileHandleGenerator {
  public:
   FileHandleGenerator() {}
-  FileHandleGenerator(std::shared_ptr<const Config> properties)
+  FileHandleGenerator(std::shared_ptr<const config::ConfigBase> properties)
       : properties_(std::move(properties)) {}
-  std::shared_ptr<FileHandle> operator()(const std::string& filename);
+  std::unique_ptr<FileHandle> operator()(
+      const FileHandleKey& filename,
+      const FileProperties* properties,
+      filesystems::File::IoStats* stats);
 
  private:
-  const std::shared_ptr<const Config> properties_;
+  const std::shared_ptr<const config::ConfigBase> properties_;
 };
 
 using FileHandleFactory = CachedFactory<
-    std::string,
-    std::shared_ptr<FileHandle>,
-    FileHandleGenerator>;
+    FileHandleKey,
+    FileHandle,
+    FileHandleGenerator,
+    FileProperties,
+    filesystems::File::IoStats,
+    FileHandleSizer>;
+
+using FileHandleCachedPtr = CachedPtr<FileHandleKey, FileHandle>;
 
 using FileHandleCacheStats = SimpleLRUCacheStats;
 

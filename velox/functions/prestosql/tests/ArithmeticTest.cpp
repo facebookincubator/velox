@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <cmath>
+#include <limits>
 #include <optional>
 
 #include <gmock/gmock.h>
@@ -61,6 +62,15 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
     }
   }
 
+  void assertExpression(
+      const std::string& expression,
+      const VectorPtr& arg0,
+      const VectorPtr& arg1,
+      const VectorPtr& expected) {
+    auto result = evaluate(expression, makeRowVector({arg0, arg1}));
+    test::assertEqualVectors(expected, result);
+  }
+
   template <typename T, typename U = T, typename V = T>
   void assertError(
       const std::string& expression,
@@ -78,7 +88,116 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
           std::string(e.what()).find(errorMessage) != std::string::npos);
     }
   }
+
+  template <typename T>
+  void testIntervalPlus(const TypePtr& intervalType) {
+    T max = std::numeric_limits<T>::max();
+    T min = std::numeric_limits<T>::min();
+    auto op1 = makeNullableFlatVector<T>(
+        {-1, 2, -3, 4, max, -1, std::nullopt, 0}, intervalType);
+    auto op2 = makeNullableFlatVector<T>(
+        {2, -3, -1, 1, 1, min, 0, std::nullopt}, intervalType);
+    auto expected = makeNullableFlatVector<T>(
+        {1, -1, -4, 5, min, max, std::nullopt, std::nullopt}, intervalType);
+    assertExpression("c0 + c1", op1, op2, expected);
+  }
+
+  template <typename T>
+  void testIntervalMinus(const TypePtr& intervalType) {
+    T max = std::numeric_limits<T>::max();
+    T min = std::numeric_limits<T>::min();
+    auto op1 = makeNullableFlatVector<T>(
+        {-1, 2, -3, 4, min, -1, std::nullopt, 0}, intervalType);
+    auto op2 = makeNullableFlatVector<T>(
+        {2, 3, -4, 1, 1, max, 0, std::nullopt}, intervalType);
+    auto expected = makeNullableFlatVector<T>(
+        {-3, -1, 1, 3, max, min, std::nullopt, std::nullopt}, intervalType);
+    assertExpression("c0 - c1", op1, op2, expected);
+  }
+
+  template <typename T>
+  void testIntervalDivide(const TypePtr& intervalType) {
+    auto op1 = makeNullableFlatVector<T>(
+        {3, 6, 9, std::nullopt, 12, 15, 18, 21, 0, 0, 1}, intervalType);
+    auto op2 = makeNullableFlatVector<double>(
+        {0.5,
+         -2.0,
+         5.0,
+         1.0,
+         std::nullopt,
+         kNan,
+         kInf,
+         -kInf,
+         0.0,
+         -0.0,
+         0.00000001});
+    auto expected = makeNullableFlatVector<T>(
+        {6, -3, 1, std::nullopt, std::nullopt, 0, 0, 0, 0, 0, 100000000},
+        intervalType);
+    assertExpression("c0 / c1", op1, op2, expected);
+
+    T max = std::numeric_limits<T>::max();
+    T min = std::numeric_limits<T>::min();
+    op1 = makeFlatVector<T>({1, 1, 1, 1, max, min, max, min}, intervalType);
+    op2 = makeFlatVector<double>(
+        {0.0, -0.0, 4.9e-324, -4.9e-324, 0.1, 0.1, -0.1, -0.1});
+    expected = makeFlatVector<T>(
+        {max, min, max, min, max, min, min, max}, intervalType);
+    assertExpression("c0 / c1", op1, op2, expected);
+  }
+
+  template <typename T>
+  void testIntervalMultiply(const TypePtr& intervalType) {
+    T max = std::numeric_limits<T>::max();
+    T min = std::numeric_limits<T>::min();
+    auto op1 = makeNullableFlatVector<T>(
+        {1, 2, 3, std::nullopt, 10, 20}, intervalType);
+    auto op2 = makeNullableFlatVector<T>(
+        {1, std::nullopt, 3, 4, max, min}, CppToType<T>::create());
+    auto expected = makeNullableFlatVector<T>(
+        {1, std::nullopt, 9, std::nullopt, -10, 0}, intervalType);
+    assertExpression("c0 * c1", op1, op2, expected);
+    assertExpression("c1 * c0", op1, op2, expected);
+
+    op1 = makeNullableFlatVector<T>(
+        {1, 2, 3, std::nullopt, 10, 20, 30, 40, 1000, 1000, 1000, 1000},
+        intervalType);
+    auto doubleOp = makeNullableFlatVector<double>(
+        {-1.8,
+         2.1,
+         kNan,
+         4.2,
+         0.0,
+         -0.0,
+         kInf,
+         -kInf,
+         9223372036854775807.01,
+         -9223372036854775808.01,
+         1.7e308,
+         -1.7e308});
+    expected = makeNullableFlatVector<T>(
+        {-1, 4, 0, std::nullopt, 0, 0, max, min, max, min, max, min},
+        intervalType);
+    assertExpression("c0 * c1", op1, doubleOp, expected);
+    assertExpression("c1 * c0", op1, doubleOp, expected);
+  }
+
+  template <typename T>
+  std::optional<T> getAbs(const T& input) {
+    const auto a = std::make_optional<T>(input);
+    return evaluateOnce<T>("abs(c0)", a);
+  }
 };
+
+TEST_F(ArithmeticTest, plus) {
+  testIntervalPlus<int64_t>(INTERVAL_DAY_TIME());
+  testIntervalPlus<int32_t>(INTERVAL_YEAR_MONTH());
+}
+
+TEST_F(ArithmeticTest, minus) {
+  testIntervalMinus<int64_t>(INTERVAL_DAY_TIME());
+  testIntervalMinus<int32_t>(INTERVAL_YEAR_MONTH());
+}
 
 TEST_F(ArithmeticTest, divide)
 #if defined(__has_feature)
@@ -107,6 +226,10 @@ __attribute__((__no_sanitize__("float-divide-by-zero")))
       {5.25, kInfF, kNanF, 0.0});
   assertExpression<double>(
       "c0 / c1", {10.5, 9.2, 0.0, 0.0}, {2, 0, 0, -1}, {5.25, kInf, kNan, 0.0});
+
+  // Test interval day time and interval year month types divided by double.
+  testIntervalDivide<int64_t>(INTERVAL_DAY_TIME());
+  testIntervalDivide<int32_t>(INTERVAL_YEAR_MONTH());
 }
 
 TEST_F(ArithmeticTest, multiply) {
@@ -115,6 +238,12 @@ TEST_F(ArithmeticTest, multiply) {
       {std::numeric_limits<int32_t>::min()},
       {-1},
       "integer overflow: -2147483648 * -1");
+
+  // Test multiplication of interval day time type with bigint and double.
+  testIntervalMultiply<int64_t>(INTERVAL_DAY_TIME());
+
+  // Test multiplication of interval year month type with integer and double.
+  testIntervalMultiply<int32_t>(INTERVAL_YEAR_MONTH());
 }
 
 TEST_F(ArithmeticTest, mod) {
@@ -145,15 +274,48 @@ TEST_F(ArithmeticTest, modInt) {
 
 TEST_F(ArithmeticTest, power) {
   std::vector<double> baseDouble = {
-      0, 0, 0, -1, -1, -1, -9, 9.1, 10.1, 11.1, -11.1, 0, kInf, kInf};
+      0, 0, 0, -1, -1, -1, -9, 9.1, 10.1, 11.1, -11.1};
   std::vector<double> exponentDouble = {
-      0, 1, -1, 0, 1, -1, -3.3, 123456.432, -99.9, 0, 100000, kInf, 0, kInf};
+      0, 1, -1, 0, 1, -1, -3.3, 123456.432, -99.9, 0, 100000};
   std::vector<double> expectedDouble;
   expectedDouble.reserve(baseDouble.size());
 
   for (size_t i = 0; i < baseDouble.size(); i++) {
     expectedDouble.emplace_back(pow(baseDouble[i], exponentDouble[i]));
   }
+
+  // Check using function name and alias.
+  assertExpression<double>(
+      "power(c0, c1)", baseDouble, exponentDouble, expectedDouble);
+  assertExpression<double>(
+      "pow(c0, c1)", baseDouble, exponentDouble, expectedDouble);
+}
+
+TEST_F(ArithmeticTest, powerNan) {
+  std::vector<double> baseDouble = {1, kNan, kNan, kNan};
+  std::vector<double> exponentDouble = {kNan, 1, kInf, 0};
+  std::vector<double> expectedDouble = {kNan, kNan, kNan, 1};
+
+  // Check using function name and alias.
+  assertExpression<double>(
+      "power(c0, c1)", baseDouble, exponentDouble, expectedDouble);
+  assertExpression<double>(
+      "pow(c0, c1)", baseDouble, exponentDouble, expectedDouble);
+}
+
+TEST_F(ArithmeticTest, powerInf) {
+  // base | exp | result
+  //----------------------
+  //   1    Inf     1
+  //   1   -Inf     1
+  //   2    Inf    Inf
+  //   2   -Inf     0
+  //  Inf    1     Inf
+  //  Inf    0      1
+  //  Inf   NaN    NaN
+  std::vector<double> baseDouble = {1, 1, 2, 2, kInf, kInf, kInf};
+  std::vector<double> exponentDouble = {kInf, -kInf, kInf, -kInf, 1, 0, kNan};
+  std::vector<double> expectedDouble = {1, 1, kInf, 0, kInf, 1, kNan};
 
   // Check using function name and alias.
   assertExpression<double>(
@@ -482,6 +644,7 @@ TEST_F(ArithmeticTest, isFinite) {
   EXPECT_EQ(false, isFinite(-kInf));
   EXPECT_EQ(false, isFinite(1.0 / 0.0));
   EXPECT_EQ(false, isFinite(-1.0 / 0.0));
+  EXPECT_EQ(false, isFinite(kNan));
 }
 
 TEST_F(ArithmeticTest, isInfinite) {
@@ -490,6 +653,7 @@ TEST_F(ArithmeticTest, isInfinite) {
   };
 
   EXPECT_EQ(false, isInfinite(0.0));
+  EXPECT_EQ(false, isInfinite(kNan));
   EXPECT_EQ(true, isInfinite(kInf));
   EXPECT_EQ(true, isInfinite(-kInf));
   EXPECT_EQ(true, isInfinite(1.0 / 0.0));
@@ -603,6 +767,12 @@ TEST_F(ArithmeticTest, toBase) {
   EXPECT_EQ("20a2", to_base(3578, 12));
   EXPECT_EQ("-20a2", to_base(-3578, 12));
 
+  EXPECT_EQ(
+      "-1104332401304422434310311213",
+      to_base(std::numeric_limits<int64_t>::min(), 5));
+  EXPECT_EQ(
+      "1104332401304422434310311212",
+      to_base(std::numeric_limits<int64_t>::max(), 5));
   ASSERT_THROW(to_base(1, 37), velox::VeloxUserError);
 }
 
@@ -653,10 +823,24 @@ TEST_F(ArithmeticTest, clamp) {
   EXPECT_EQ(clamp(123456, 1, -1), -1);
 }
 
-TEST_F(ArithmeticTest, truncate) {
-  const auto truncate = [&](std::optional<double> a,
-                            std::optional<int32_t> n = 0) {
-    return evaluateOnce<double>("truncate(c0,c1)", a, n);
+TEST_F(ArithmeticTest, truncateDouble) {
+  const auto truncate = [&](std::optional<double> d) {
+    const auto r = evaluateOnce<double>("truncate(c0)", d);
+
+    // truncate(d) == truncate(d, 0)
+    if (d.has_value() && std::isfinite(d.value())) {
+      const auto otherResult =
+          evaluateOnce<double>("truncate(c0, 0::integer)", d);
+
+      VELOX_CHECK_EQ(r.value(), otherResult.value());
+    }
+
+    return r;
+  };
+
+  const auto truncateN = [&](std::optional<double> d,
+                             std::optional<int32_t> n) {
+    return evaluateOnce<double>("truncate(c0, c1)", d, n);
   };
 
   EXPECT_EQ(truncate(0), 0);
@@ -666,37 +850,221 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_THAT(truncate(kNan), IsNan());
   EXPECT_THAT(truncate(kInf), IsInf());
 
-  EXPECT_EQ(truncate(0, 0), 0);
-  EXPECT_EQ(truncate(1.5, 0), 1);
-  EXPECT_EQ(truncate(-1.5, 0), -1);
-  EXPECT_EQ(truncate(std::nullopt, 0), std::nullopt);
-  EXPECT_EQ(truncate(1.5, std::nullopt), std::nullopt);
-  EXPECT_THAT(truncate(kNan, 0), IsNan());
-  EXPECT_THAT(truncate(kNan, 1), IsNan());
-  EXPECT_THAT(truncate(kInf, 0), IsInf());
-  EXPECT_THAT(truncate(kInf, 1), IsInf());
+  EXPECT_EQ(truncate(0), 0);
+  EXPECT_EQ(truncate(1.5), 1);
+  EXPECT_EQ(truncate(-1.5), -1);
+  EXPECT_EQ(truncate(std::nullopt), std::nullopt);
+  EXPECT_THAT(truncate(kNan), IsNan());
+  EXPECT_THAT(truncate(kInf), IsInf());
 
-  EXPECT_DOUBLE_EQ(truncate(1.5678, 2).value(), 1.56);
-  EXPECT_DOUBLE_EQ(truncate(-1.5678, 2).value(), -1.56);
-  EXPECT_DOUBLE_EQ(truncate(1.333, -1).value(), 0);
-  EXPECT_DOUBLE_EQ(truncate(3.54555, 2).value(), 3.54);
-  EXPECT_DOUBLE_EQ(truncate(1234, 1).value(), 1234);
-  EXPECT_DOUBLE_EQ(truncate(1234, -1).value(), 1230);
-  EXPECT_DOUBLE_EQ(truncate(1234.56, 1).value(), 1234.5);
-  EXPECT_DOUBLE_EQ(truncate(1234.56, -1).value(), 1230.0);
-  EXPECT_DOUBLE_EQ(truncate(1239.999, 2).value(), 1239.99);
-  EXPECT_DOUBLE_EQ(truncate(1239.999, -2).value(), 1200.0);
+  EXPECT_EQ(truncateN(1.5, std::nullopt), std::nullopt);
+  EXPECT_THAT(truncateN(kNan, 1), IsNan());
+  EXPECT_THAT(truncateN(kInf, 1), IsInf());
+
+  EXPECT_DOUBLE_EQ(truncateN(1.5678, 2).value(), 1.56);
+  EXPECT_DOUBLE_EQ(truncateN(-1.5678, 2).value(), -1.56);
+  EXPECT_DOUBLE_EQ(truncateN(1.333, -1).value(), 0);
+  EXPECT_DOUBLE_EQ(truncateN(3.54555, 2).value(), 3.54);
+  EXPECT_DOUBLE_EQ(truncateN(1234, 1).value(), 1234);
+  EXPECT_DOUBLE_EQ(truncateN(1234, -1).value(), 1230);
+  EXPECT_DOUBLE_EQ(truncateN(1234.56, 1).value(), 1234.5);
+  EXPECT_DOUBLE_EQ(truncateN(1234.56, -1).value(), 1230.0);
+  EXPECT_DOUBLE_EQ(truncateN(1239.999, 2).value(), 1239.99);
+  EXPECT_DOUBLE_EQ(truncateN(1239.999, -2).value(), 1200.0);
   EXPECT_DOUBLE_EQ(
-      truncate(123456789012345678901.23, 3).value(), 123456789012345678901.23);
+      truncateN(123456789012345678901.23, 3).value(), 123456789012345678901.23);
   EXPECT_DOUBLE_EQ(
-      truncate(-123456789012345678901.23, 3).value(),
+      truncateN(-123456789012345678901.23, 3).value(),
       -123456789012345678901.23);
   EXPECT_DOUBLE_EQ(
-      truncate(123456789123456.999, 2).value(), 123456789123456.99);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.0, -21).value(), 0.0);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.0, -21).value(), 0.0);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
+      truncateN(123456789123456.999, 2).value(), 123456789123456.99);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.0, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.23, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.0, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.23, -21).value(), 0.0);
+}
+
+TEST_F(ArithmeticTest, truncateReal) {
+  const auto truncate = [&](std::optional<float> d) {
+    const auto r = evaluateOnce<float>("truncate(c0)", d);
+
+    // truncate(d) == truncate(d, 0)
+    if (d.has_value() && std::isfinite(d.value())) {
+      const auto otherResult =
+          evaluateOnce<float>("truncate(c0, 0::integer)", d);
+
+      VELOX_CHECK_EQ(r.value(), otherResult.value());
+    }
+
+    return r;
+  };
+
+  const auto truncateN = [&](std::optional<float> d, std::optional<int32_t> n) {
+    return evaluateOnce<float>("truncate(c0, c1)", d, n);
+  };
+
+  EXPECT_EQ(truncate(0), 0);
+  EXPECT_EQ(truncate(1.5), 1);
+  EXPECT_EQ(truncate(-1.5), -1);
+
+  EXPECT_EQ(truncate(std::nullopt), std::nullopt);
+  EXPECT_THAT(truncate(kNan), IsNan());
+  EXPECT_THAT(truncate(kInf), IsInf());
+
+  EXPECT_FLOAT_EQ(truncateN(123.456, 0).value(), 123);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 1).value(), 123.4);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 2).value(), 123.45);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 3).value(), 123.456);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 4).value(), 123.456);
+
+  EXPECT_FLOAT_EQ(truncateN(123.456, -1).value(), 120);
+  EXPECT_FLOAT_EQ(truncateN(123.456, -2).value(), 100);
+  EXPECT_FLOAT_EQ(truncateN(123.456, -3).value(), 0);
+
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 0).value(), -123);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 1).value(), -123.4);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 2).value(), -123.45);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 3).value(), -123.456);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 4).value(), -123.456);
+
+  EXPECT_FLOAT_EQ(truncateN(-123.456, -1).value(), -120);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, -2).value(), -100);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, -3).value(), 0);
+}
+
+TEST_F(ArithmeticTest, wilsonIntervalLower) {
+  const auto wilsonIntervalLower = [&](std::optional<int64_t> s,
+                                       std::optional<int64_t> n,
+                                       std::optional<double> z) {
+    return evaluateOnce<double>("wilson_interval_lower(c0,c1,c2)", s, n, z);
+  };
+
+  // Verify that bounds checking is working.
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(-1, -1, -1),
+      "number of successes must not be negative");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(0, -1, -1), "number of trials must be positive");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(0, 0, -1), "number of trials must be positive");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(0, 1, -1), "z-score must not be negative");
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(0, 1, 0).value(), 0.0);
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(2, 1, 0),
+      "number of successes must not be larger than number of trials")
+
+  // Verify correctness on simple inputs.
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(3, 5, 0.5).value(), 0.48822759497978935);
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(2, 10, 1).value(), 0.10362299537513234);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(7, 14, 1.6).value(), 0.30341072512680384);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(1250, 1310, 1.96).value(), 0.9414883725395894);
+
+  // Verify correctness on extreme inputs.
+  constexpr int64_t max64 = std::numeric_limits<int64_t>::max();
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(max64, max64, 1.6).value(), 1.0);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(max64 / 10, max64, 0.4).value(), 0.09999999996048733);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(max64 / 10, max64, 1e10).value(),
+      9.065125579912648e-4);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(max64 / 10, max64, 1e150).value(),
+      9.223372036854775e-284);
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(max64 / 10, max64, 1e300).value(), 0.0);
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(max64 / 10, max64, 1e-10).value(), 0.1);
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(max64 / 10, max64, 0).value(), 0.1);
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(0, max64, 1.2).value(), 0.0);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(3, max64, 0.02).value(), 3.2152648669633817e-19);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(3, max64, 10.2).value(), 8.874121192596711e-21);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalLower(3, 3, 10.2).value(), 0.028026905829596414);
+
+  // Verify correctness on nan, inf.
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(1, 3, kNan), "z-score must not be negative");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalLower(1, 3, -kInf), "z-score must not be negative");
+  EXPECT_DOUBLE_EQ(wilsonIntervalLower(1, 3, kInf).value(), 0.0);
+}
+
+TEST_F(ArithmeticTest, wilsonIntervalUpper) {
+  const auto wilsonIntervalUpper = [&](std::optional<int64_t> s,
+                                       std::optional<int64_t> n,
+                                       std::optional<double> z) {
+    return evaluateOnce<double>("wilson_interval_upper(c0,c1,c2)", s, n, z);
+  };
+
+  // Verify that bounds checking is working.
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(-1, -1, -1),
+      "number of successes must not be negative");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(0, -1, -1), "number of trials must be positive");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(0, 0, -1), "number of trials must be positive");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(0, 1, -1), "z-score must not be negative");
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(0, 1, 0).value(), 0.0);
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(2, 1, 0),
+      "number of successes must not be larger than number of trials")
+
+  // Verify correctness on simple inputs.
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(3, 5, 0.5).value(), 0.7022485954964011);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(2, 10, 1).value(), 0.3509224591703222);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(7, 14, 1.6).value(), 0.6965892748731962);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalUpper(1250, 1310, 1.96).value(), 0.9642524717143908);
+
+  // Verify correctness on extreme inputs.
+  constexpr int64_t max64 = std::numeric_limits<int64_t>::max();
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(max64, max64, 1.6).value(), 1.0);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalUpper(max64 / 10, max64, 0.4).value(), 0.10000000003951268);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalUpper(max64 / 10, max64, 1e10).value(), 0.931537455322857);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(max64 / 10, max64, 1e150).value(), 1.0);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(max64 / 10, max64, 1e300).value(), 1.0);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(max64 / 10, max64, 1e-10).value(), 0.1);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(max64 / 10, max64, 0).value(), 0.1);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalUpper(0, max64, 1.2).value(), 1.5612511283791263e-19);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalUpper(3, max64, 0.02).value(), 3.290381848818639e-19);
+  EXPECT_DOUBLE_EQ(
+      wilsonIntervalUpper(3, max64, 10.2).value(), 1.1921686584837893e-17);
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(3, 3, 10.2).value(), 1.0);
+
+  // Verify correctness on nan, inf.
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(1, 3, kNan), "z-score must not be negative");
+  VELOX_ASSERT_THROW(
+      wilsonIntervalUpper(1, 3, -kInf), "z-score must not be negative");
+  EXPECT_DOUBLE_EQ(wilsonIntervalUpper(1, 3, kInf).value(), 1.0);
+}
+
+TEST_F(ArithmeticTest, abs) {
+  ASSERT_EQ(getAbs<int8_t>(-127), 127);
+  VELOX_ASSERT_THROW(
+      getAbs<int8_t>(std::numeric_limits<int8_t>::min()),
+      "Value -128 is out of range for abs(TINYINT)");
+  ASSERT_EQ(getAbs<int16_t>(-32767), 32767);
+  VELOX_ASSERT_THROW(
+      getAbs<int16_t>(std::numeric_limits<int16_t>::min()),
+      "Value -32768 is out of range for abs(SMALLINT)");
+  ASSERT_EQ(getAbs<int32_t>(-2147483647), 2147483647);
+  VELOX_ASSERT_THROW(
+      getAbs<int32_t>(std::numeric_limits<int32_t>::min()),
+      "Value -2147483648 is out of range for abs(INTEGER)");
+  ASSERT_EQ(getAbs<int64_t>(-9223372036854775807), 9223372036854775807);
+  VELOX_ASSERT_THROW(
+      getAbs<int64_t>(std::numeric_limits<int64_t>::min()),
+      "Value -9223372036854775808 is out of range for abs(BIGINT)");
 }
 
 } // namespace

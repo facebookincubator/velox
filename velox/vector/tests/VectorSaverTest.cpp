@@ -19,8 +19,13 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TDigestRegistration.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -29,10 +34,15 @@ namespace facebook::velox::test {
 
 class VectorSaverTest : public testing::Test, public VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   VectorSaverTest() {
     registerJsonType();
     registerHyperLogLogType();
     registerTimestampWithTimeZoneType();
+    registerTDigestType();
   }
 
   void SetUp() override {
@@ -50,6 +60,12 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
     // are the same.
     switch (expected->encoding()) {
       case VectorEncoding::Simple::CONSTANT:
+        if (expected->isNullAt(0)) {
+          // No need to compare value vector as deserialized RowVector can have
+          // different values in its flat children of size 1.
+          break;
+        }
+        [[fallthrough]];
       case VectorEncoding::Simple::DICTIONARY:
         if (expected->valueVector()) {
           ASSERT_TRUE(actual->valueVector() != nullptr);
@@ -110,11 +126,11 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
   VectorPtr takeRoundTrip(const VectorPtr& vector) {
     auto path = exec::test::TempFilePath::create();
 
-    std::ofstream outputFile(path->path, std::ofstream::binary);
+    std::ofstream outputFile(path->getPath(), std::ofstream::binary);
     saveVector(*vector, outputFile);
     outputFile.close();
 
-    std::ifstream inputFile(path->path, std::ifstream::binary);
+    std::ifstream inputFile(path->getPath(), std::ifstream::binary);
     auto copy = restoreVector(inputFile, pool());
     inputFile.close();
     return copy;
@@ -129,11 +145,11 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
   void testTypeRoundTrip(const TypePtr& type) {
     auto path = exec::test::TempFilePath::create();
 
-    std::ofstream outputFile(path->path, std::ofstream::binary);
+    std::ofstream outputFile(path->getPath(), std::ofstream::binary);
     saveType(type, outputFile);
     outputFile.close();
 
-    std::ifstream inputFile(path->path, std::ifstream::binary);
+    std::ifstream inputFile(path->getPath(), std::ifstream::binary);
     auto copy = restoreType(inputFile);
     inputFile.close();
 
@@ -166,8 +182,8 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
     testRoundTrip(makeFlatVector<T>(10'000, [](auto row) { return row; }));
 
     // Long vector with nulls.
-    testRoundTrip(makeFlatVector<T>(
-        10'000, [](auto row) { return row; }, nullEvery(17)));
+    testRoundTrip(
+        makeFlatVector<T>(10'000, [](auto row) { return row; }, nullEvery(17)));
   }
 
   // Verifies that the lazy vectors have the right internal state and loaded
@@ -255,6 +271,7 @@ TEST_F(VectorSaverTest, types) {
   testTypeRoundTrip(JSON());
   testTypeRoundTrip(HYPERLOGLOG());
   testTypeRoundTrip(TIMESTAMP_WITH_TIME_ZONE());
+  testTypeRoundTrip(TDIGEST(DOUBLE()));
 }
 
 TEST_F(VectorSaverTest, selectivityVector) {
@@ -335,8 +352,9 @@ TEST_F(VectorSaverTest, flatBoolean) {
   testRoundTrip(makeFlatVector<bool>({true, false, true, true, false}));
 
   // Some nulls.
-  testRoundTrip(makeNullableFlatVector<bool>(
-      {true, std::nullopt, true, std::nullopt, false}));
+  testRoundTrip(
+      makeNullableFlatVector<bool>(
+          {true, std::nullopt, true, std::nullopt, false}));
 
   // Empty vector.
   testRoundTrip(BaseVector::create(BOOLEAN(), 0, pool()));
@@ -346,8 +364,9 @@ TEST_F(VectorSaverTest, flatBoolean) {
       makeFlatVector<bool>(10'000, [](auto row) { return row % 7 == 2; }));
 
   // Long vector with nulls.
-  testRoundTrip(makeFlatVector<bool>(
-      10'000, [](auto row) { return row % 2 == 1; }, nullEvery(17)));
+  testRoundTrip(
+      makeFlatVector<bool>(
+          10'000, [](auto row) { return row % 2 == 1; }, nullEvery(17)));
 }
 
 TEST_F(VectorSaverTest, flatVarchar) {
@@ -360,8 +379,9 @@ TEST_F(VectorSaverTest, flatVarchar) {
   testRoundTrip(opts, VARCHAR());
 
   // Make short strings only.
-  opts.stringLength = 6;
-  opts.vectorSize = 1024;
+  opts.containerVariableLength = true;
+  opts.stringLength = 100000;
+  opts.vectorSize = 10000;
   testRoundTrip(opts, VARCHAR());
 }
 
@@ -548,14 +568,15 @@ TEST_F(VectorSaverTest, dictionaryArray) {
   auto offsets = makeEvenIndices(64);
   auto sizes = makeIndices(64, [](auto /* row */) { return 2; });
 
-  testRoundTrip(std::make_shared<ArrayVector>(
-      pool(),
-      ARRAY(INTEGER()),
-      makeNulls(64, nullEvery(7)),
-      64,
-      offsets,
-      sizes,
-      elementsVector));
+  testRoundTrip(
+      std::make_shared<ArrayVector>(
+          pool(),
+          ARRAY(INTEGER()),
+          makeNulls(64, nullEvery(7)),
+          64,
+          offsets,
+          sizes,
+          elementsVector));
 }
 
 TEST_F(VectorSaverTest, dictionaryMap) {
@@ -612,14 +633,6 @@ TEST_F(VectorSaverTest, LazyVector) {
       fuzzer);
 }
 
-TEST_F(VectorSaverTest, stdVector) {
-  std::vector<column_index_t> intVector = {1, 2, 3, 4, 5};
-  auto path = exec::test::TempFilePath::create();
-  saveStdVectorToFile<column_index_t>(intVector, path->path.c_str());
-  auto copy = restoreStdVectorFromFile<column_index_t>(path->path.c_str());
-  ASSERT_EQ(intVector, copy);
-}
-
 namespace {
 struct VectorSaverInfo {
   // Path to directory where to store the vector.
@@ -651,7 +664,8 @@ TEST_F(VectorSaverTest, exceptionContext) {
   };
 
   VectorPtr data = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
-  VectorSaverInfo info{tempDirectory.get()->path.c_str(), data.get()};
+  const auto path = tempDirectory->getPath();
+  VectorSaverInfo info{path.c_str(), data.get()};
   {
     ExceptionContextSetter context({messageFunction, &info});
     try {

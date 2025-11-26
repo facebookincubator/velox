@@ -15,32 +15,24 @@
  */
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/PartitionStreamingWindowBuild.h"
+#include "velox/exec/RowsStreamingWindowBuild.h"
+#include "velox/exec/SortWindowBuild.h"
+#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
 
 namespace {
-void initKeyInfo(
-    const RowTypePtr& type,
-    const std::vector<core::FieldAccessTypedExprPtr>& keys,
-    const std::vector<core::SortOrder>& orders,
-    std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo) {
-  const core::SortOrder defaultPartitionSortOrder(true, true);
-
-  keyInfo.reserve(keys.size());
-  for (auto i = 0; i < keys.size(); ++i) {
-    auto channel = exprToChannel(keys[i].get(), type);
-    VELOX_CHECK(
-        channel != kConstantChannel,
-        "Window doesn't allow constant partition or sort keys");
-    if (i < orders.size()) {
-      keyInfo.push_back(std::make_pair(channel, orders[i]));
-    } else {
-      keyInfo.push_back(std::make_pair(channel, defaultPartitionSortOrder));
-    }
-  }
+common::PrefixSortConfig makePrefixSortConfig(
+    const core::QueryConfig& queryConfig) {
+  return common::PrefixSortConfig{
+      queryConfig.prefixSortNormalizedKeyMaxBytes(),
+      queryConfig.prefixSortMinRows(),
+      queryConfig.prefixSortMaxStringPrefixLength()};
 }
-}; // namespace
+
+} // namespace
 
 Window::Window(
     int32_t operatorId,
@@ -51,55 +43,127 @@ Window::Window(
           windowNode->outputType(),
           operatorId,
           windowNode->id(),
-          "Window"),
-      numInputColumns_(windowNode->sources()[0]->outputType()->size()),
-      data_(std::make_unique<RowContainer>(
-          windowNode->sources()[0]->outputType()->children(),
-          pool())),
-      decodedInputVectors_(numInputColumns_),
+          "Window",
+          windowNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
+      numInputColumns_(windowNode->inputType()->size()),
+      windowNode_(windowNode),
+      currentPartition_(nullptr),
       stringAllocator_(pool()) {
-  auto inputType = windowNode->sources()[0]->outputType();
-  initKeyInfo(inputType, windowNode->partitionKeys(), {}, partitionKeyInfo_);
-  initKeyInfo(
-      inputType,
-      windowNode->sortingKeys(),
-      windowNode->sortingOrders(),
-      sortKeyInfo_);
-  allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
-  allKeyInfo_.insert(
-      allKeyInfo_.cend(), partitionKeyInfo_.begin(), partitionKeyInfo_.end());
-  allKeyInfo_.insert(
-      allKeyInfo_.cend(), sortKeyInfo_.begin(), sortKeyInfo_.end());
-
-  std::vector<exec::RowColumn> inputColumns;
-  for (int i = 0; i < inputType->children().size(); i++) {
-    inputColumns.push_back(data_->columnAt(i));
+  auto* spillConfig =
+      spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
+  if (spillConfig == nullptr &&
+      operatorCtx_->driverCtx()->queryConfig().windowSpillEnabled()) {
+    auto lockedStats = stats_.wlock();
+    lockedStats->runtimeStats.emplace(kSpillNotSupported, RuntimeMetric(1));
   }
-  // The WindowPartition is structured over all the input columns data.
-  // Individual functions access its input argument column values from it.
-  // The RowColumns are copied by the WindowPartition, so its fine to use
-  // a local variable here.
-  windowPartition_ =
-      std::make_unique<WindowPartition>(inputColumns, inputType->children());
-
-  createWindowFunctions(windowNode, inputType, driverCtx->queryConfig());
+  if (windowNode->inputsSorted()) {
+    if (supportRowsStreaming()) {
+      windowBuild_ = std::make_unique<RowsStreamingWindowBuild>(
+          windowNode_, pool(), spillConfig, &nonReclaimableSection_);
+    } else {
+      windowBuild_ = std::make_unique<PartitionStreamingWindowBuild>(
+          windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    }
+  } else {
+    if (auto numSubPartitions =
+            operatorCtx_->driverCtx()->queryConfig().windowNumSubPartitions();
+        numSubPartitions > 1) {
+      windowBuild_ = std::make_unique<SubPartitionedSortWindowBuild>(
+          windowNode,
+          numSubPartitions,
+          pool(),
+          makePrefixSortConfig(driverCtx->queryConfig()),
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    } else {
+      windowBuild_ = std::make_unique<SortWindowBuild>(
+          windowNode,
+          pool(),
+          makePrefixSortConfig(driverCtx->queryConfig()),
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    }
+  }
 }
 
+void Window::initialize() {
+  Operator::initialize();
+  VELOX_CHECK_NOT_NULL(windowNode_);
+  createWindowFunctions();
+  createPeerAndFrameBuffers();
+  windowBuild_->setNumRowsPerOutput(numRowsPerOutput_);
+  windowNode_.reset();
+}
+
+namespace {
+void checkRowFrameBounds(const core::WindowNode::Frame& frame) {
+  auto frameBoundCheck = [&](const core::TypedExprPtr& frameValue) -> void {
+    if (frameValue == nullptr) {
+      return;
+    }
+
+    VELOX_USER_CHECK(
+        frameValue->type() == INTEGER() || frameValue->type() == BIGINT(),
+        "k frame bound must be INTEGER or BIGINT type");
+  };
+  frameBoundCheck(frame.startValue);
+  frameBoundCheck(frame.endValue);
+}
+
+void checkKRangeFrameBounds(
+    const std::shared_ptr<const core::WindowNode>& windowNode,
+    const core::WindowNode::Frame& frame,
+    const RowTypePtr& inputType) {
+  // For k Range frame bound:
+  // i) The order by needs to be a single column for bound comparisons
+  // (Checked in WindowNode constructor).
+  // ii) The bounds values are pre-computed in the start(end)Value bound
+  // fields. So, start(end)Value bounds cannot be constants.
+  // iii) The frame bound column and the ORDER BY column must have
+  // the same type for correct comparisons.
+  const auto& orderByType = windowNode->sortingKeys()[0]->type();
+  const auto frameBoundCheck =
+      [&](const core::TypedExprPtr& frameValue) -> void {
+    if (frameValue == nullptr) {
+      return;
+    }
+
+    auto frameChannel = exprToChannel(frameValue.get(), inputType);
+    VELOX_USER_CHECK_NE(
+        frameChannel,
+        kConstantChannel,
+        "Window frame of type RANGE does not support constant arguments");
+
+    auto frameType = inputType->childAt(frameChannel);
+    VELOX_USER_CHECK(
+        *frameType == *orderByType,
+        "Window frame of type RANGE does not match types of the ORDER BY"
+        " and frame column");
+  };
+
+  frameBoundCheck(frame.startValue);
+  frameBoundCheck(frame.endValue);
+}
+
+} // namespace
+
 Window::WindowFrame Window::createWindowFrame(
-    core::WindowNode::Frame frame,
+    const std::shared_ptr<const core::WindowNode>& windowNode,
+    const core::WindowNode::Frame& frame,
     const RowTypePtr& inputType) {
   if (frame.type == core::WindowNode::WindowType::kRows) {
-    auto frameBoundCheck = [&](const core::TypedExprPtr& frame) -> void {
-      if (frame == nullptr) {
-        return;
-      }
+    checkRowFrameBounds(frame);
+  }
 
-      VELOX_USER_CHECK(
-          frame->type() == INTEGER() || frame->type() == BIGINT(),
-          "k frame bound must be INTEGER or BIGINT type");
-    };
-    frameBoundCheck(frame.startValue);
-    frameBoundCheck(frame.endValue);
+  if (frame.type == core::WindowNode::WindowType::kRange &&
+      (frame.startValue || frame.endValue)) {
+    checkKRangeFrameBounds(windowNode, frame, inputType);
   }
 
   auto createFrameChannelArg =
@@ -110,9 +174,7 @@ Window::WindowFrame Window::createWindowFrame(
     }
     auto frameChannel = exprToChannel(frame.get(), inputType);
     if (frameChannel == kConstantChannel) {
-      auto constant =
-          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(frame)
-              ->value();
+      auto constant = core::TypedExprs::asConstant(frame)->value();
       VELOX_CHECK(!constant.isNull(), "Window frame offset must not be null");
       auto value = VariantConverter::convert(constant, TypeKind::BIGINT)
                        .value<int64_t>();
@@ -121,36 +183,37 @@ Window::WindowFrame Window::createWindowFrame(
       return std::make_optional(
           FrameChannelArg{kConstantChannel, nullptr, value});
     } else {
-      return std::make_optional(FrameChannelArg{
-          frameChannel,
-          BaseVector::create(frame->type(), 0, pool()),
-          std::nullopt});
+      return std::make_optional(
+          FrameChannelArg{
+              frameChannel,
+              BaseVector::create(frame->type(), 0, pool()),
+              std::nullopt});
     }
   };
 
+  auto startFrameArg = createFrameChannelArg(frame.startValue);
+  auto endFrameArg = createFrameChannelArg(frame.endValue);
   return WindowFrame(
       {frame.type,
        frame.startType,
        frame.endType,
-       createFrameChannelArg(frame.startValue),
-       createFrameChannelArg(frame.endValue)});
+       std::move(startFrameArg),
+       std::move(endFrameArg)});
 }
 
-void Window::createWindowFunctions(
-    const std::shared_ptr<const core::WindowNode>& windowNode,
-    const RowTypePtr& inputType,
-    const core::QueryConfig& config) {
-  for (const auto& windowNodeFunction : windowNode->windowFunctions()) {
-    VELOX_USER_CHECK(
-        !windowNodeFunction.ignoreNulls,
-        "Ignore nulls for window functions is not supported yet");
+void Window::createWindowFunctions() {
+  VELOX_CHECK_NOT_NULL(windowNode_);
+  VELOX_CHECK(windowFunctions_.empty());
+  VELOX_CHECK(windowFrames_.empty());
+
+  const auto& inputType = windowNode_->sources()[0]->outputType();
+  for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
     std::vector<WindowFunctionArg> functionArgs;
     functionArgs.reserve(windowNodeFunction.functionCall->inputs().size());
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
-      auto channel = exprToChannel(arg.get(), inputType);
+      const auto channel = exprToChannel(arg.get(), inputType);
       if (channel == kConstantChannel) {
-        auto constantArg =
-            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(arg);
+        const auto constantArg = core::TypedExprs::asConstant(arg);
         functionArgs.push_back(
             {arg->type(), constantArg->toConstantVector(pool()), std::nullopt});
       } else {
@@ -158,65 +221,81 @@ void Window::createWindowFunctions(
       }
     }
 
-    windowFunctions_.push_back(WindowFunction::create(
-        windowNodeFunction.functionCall->name(),
-        functionArgs,
-        windowNodeFunction.functionCall->type(),
-        operatorCtx_->pool(),
-        &stringAllocator_,
-        config));
+    windowFunctions_.push_back(
+        WindowFunction::create(
+            windowNodeFunction.functionCall->name(),
+            functionArgs,
+            windowNodeFunction.functionCall->type(),
+            windowNodeFunction.ignoreNulls,
+            operatorCtx_->pool(),
+            &stringAllocator_,
+            operatorCtx_->driverCtx()->queryConfig()));
 
     windowFrames_.push_back(
-        createWindowFrame(windowNodeFunction.frame, inputType));
+        createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
   }
+}
+
+bool Window::supportRowsStreaming() {
+  for (const auto& windowFunction : windowNode_->windowFunctions()) {
+    const auto& functionName = windowFunction.functionCall->name();
+    const auto windowFunctionMetadata =
+        exec::getWindowFunctionMetadata(functionName);
+
+    if (windowFunctionMetadata.processMode !=
+        exec::WindowFunction::ProcessMode::kRows) {
+      return false;
+    }
+
+    const auto& frame = windowFunction.frame;
+    // The default frame spans from the start of the partition to current row.
+    const bool isDefaultFrame =
+        (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
+         frame.endType == core::WindowNode::BoundType::kCurrentRow);
+
+    if (windowFunctionMetadata.isAggregate && !isDefaultFrame) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void Window::addInput(RowVectorPtr input) {
-  for (auto col = 0; col < input->childrenSize(); ++col) {
-    decodedInputVectors_[col].decode(*input->childAt(col));
-  }
-
-  // Add all the rows into the RowContainer.
-  for (auto row = 0; row < input->size(); ++row) {
-    char* newRow = data_->newRow();
-
-    for (auto col = 0; col < input->childrenSize(); ++col) {
-      data_->store(decodedInputVectors_[col], row, newRow, col);
-    }
-  }
+  windowBuild_->addInput(input);
   numRows_ += input->size();
 }
 
-inline bool Window::compareRowsWithKeys(
-    const char* lhs,
-    const char* rhs,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& keys) {
-  if (lhs == rhs) {
-    return false;
+void Window::reclaim(
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
+  VELOX_CHECK(canReclaim());
+  VELOX_CHECK(!nonReclaimableSection_);
+
+  if (noMoreInput_) {
+    ++stats.numNonReclaimableAttempts;
+    // TODO Add support for spilling after noMoreInput().
+    LOG(WARNING)
+        << "Can't reclaim from window operator which has started producing output: "
+        << pool()->name() << ", usage: " << succinctBytes(pool()->usedBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes());
+    return;
   }
-  for (auto& key : keys) {
-    if (auto result = data_->compare(
-            lhs,
-            rhs,
-            key.first,
-            {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-      return result < 0;
-    }
-  }
-  return false;
+
+  windowBuild_->spill();
 }
 
 void Window::createPeerAndFrameBuffers() {
   // TODO: This computation needs to be revised. It only takes into account
   // the input columns size. We need to also account for the output columns.
-  numRowsPerOutput_ = outputBatchRows(data_->estimateRowSize());
+  numRowsPerOutput_ = outputBatchRows(windowBuild_->estimateRowSize());
 
   peerStartBuffer_ = AlignedBuffer::allocate<vector_size_t>(
       numRowsPerOutput_, operatorCtx_->pool());
   peerEndBuffer_ = AlignedBuffer::allocate<vector_size_t>(
       numRowsPerOutput_, operatorCtx_->pool());
 
-  auto numFuncs = windowFunctions_.size();
+  const auto numFuncs = windowFunctions_.size();
   frameStartBuffers_.reserve(numFuncs);
   frameEndBuffers_.reserve(numFuncs);
   validFrames_.reserve(numFuncs);
@@ -232,79 +311,21 @@ void Window::createPeerAndFrameBuffers() {
   }
 }
 
-void Window::computePartitionStartRows() {
-  // Randomly assuming that max 10000 partitions are in the data.
-  partitionStartRows_.reserve(numRows_);
-  auto partitionCompare = [&](const char* lhs, const char* rhs) -> bool {
-    return compareRowsWithKeys(lhs, rhs, partitionKeyInfo_);
-  };
-
-  // Using a sequential traversal to find changing partitions.
-  // This algorithm is inefficient and can be changed
-  // i) Use a binary search kind of strategy.
-  // ii) If we use a Hashtable instead of a full sort then the count
-  // of rows in the partition can be directly used.
-  partitionStartRows_.push_back(0);
-
-  VELOX_CHECK_GT(sortedRows_.size(), 0);
-  for (auto i = 1; i < sortedRows_.size(); i++) {
-    if (partitionCompare(sortedRows_[i - 1], sortedRows_[i])) {
-      partitionStartRows_.push_back(i);
-    }
-  }
-
-  // Setting the startRow of the (last + 1) partition to be returningRows.size()
-  // to help for last partition related calculations.
-  partitionStartRows_.push_back(sortedRows_.size());
-}
-
-void Window::sortPartitions() {
-  // This is a very inefficient but easy implementation to order the input rows
-  // by partition keys + sort keys.
-  // Sort the pointers to the rows in RowContainer (data_) instead of sorting
-  // the rows.
-  sortedRows_.resize(numRows_);
-  RowContainerIterator iter;
-  data_->listRows(&iter, numRows_, sortedRows_.data());
-
-  std::sort(
-      sortedRows_.begin(),
-      sortedRows_.end(),
-      [this](const char* leftRow, const char* rightRow) {
-        return compareRowsWithKeys(leftRow, rightRow, allKeyInfo_);
-      });
-
-  computePartitionStartRows();
-
-  currentPartition_ = 0;
-}
-
 void Window::noMoreInput() {
   Operator::noMoreInput();
-  // No data.
-  if (numRows_ == 0) {
-    finished_ = true;
-    return;
-  }
-
-  // At this point we have seen all the input rows. We can start
-  // outputting rows now.
-  // However, some preparation is needed. The rows should be
-  // separated into partitions and sort by ORDER BY keys within
-  // the partition. This will order the rows for getOutput().
-  sortPartitions();
-  createPeerAndFrameBuffers();
+  windowBuild_->noMoreInput();
 }
 
-void Window::callResetPartition(vector_size_t partitionNumber) {
+void Window::callResetPartition() {
   partitionOffset_ = 0;
-  auto partitionSize = partitionStartRows_[partitionNumber + 1] -
-      partitionStartRows_[partitionNumber];
-  auto partition = folly::Range(
-      sortedRows_.data() + partitionStartRows_[partitionNumber], partitionSize);
-  windowPartition_->resetPartition(partition);
-  for (int i = 0; i < windowFunctions_.size(); i++) {
-    windowFunctions_[i]->resetPartition(windowPartition_.get());
+  peerStartRow_ = 0;
+  peerEndRow_ = 0;
+  currentPartition_ = nullptr;
+  if (windowBuild_->hasNextPartition()) {
+    currentPartition_ = windowBuild_->nextPartition();
+    for (int i = 0; i < windowFunctions_.size(); ++i) {
+      windowFunctions_[i]->resetPartition(currentPartition_.get());
+    }
   }
 }
 
@@ -314,12 +335,11 @@ template <typename T>
 void updateKRowsOffsetsColumn(
     bool isKPreceding,
     const VectorPtr& value,
-    vector_size_t firstPartitionRow,
     vector_size_t startRow,
     vector_size_t numRows,
     vector_size_t* rawFrameBounds) {
-  auto offsets = value->values()->as<T>();
-  for (auto i = 0; i < numRows; i++) {
+  auto* offsets = value->values()->as<T>();
+  for (auto i = 0; i < numRows; ++i) {
     VELOX_USER_CHECK(
         !value->isNullAt(i), "Window frame offset must not be null");
     VELOX_USER_CHECK_GE(
@@ -331,14 +351,25 @@ void updateKRowsOffsetsColumn(
 
   // Preceding involves subtracting from the current position, while following
   // moves ahead.
-  int precedingFactor = isKPreceding ? -1 : 1;
-  for (auto i = 0; i < numRows; i++) {
-    rawFrameBounds[i] = (startRow + i) +
-        vector_size_t(precedingFactor * offsets[i]) - firstPartitionRow;
+  const int precedingFactor = isKPreceding ? -1 : 1;
+  for (auto i = 0; i < numRows; ++i) {
+    const auto startValue =
+        static_cast<int64_t>(startRow + i) + precedingFactor * offsets[i];
+    if (startValue < INT32_MIN) {
+      // Same as the handling of startValue < INT32_MIN in
+      // updateKRowsFrameBounds.
+      rawFrameBounds[i] = -1;
+    } else if (startValue > INT32_MAX) {
+      // computeValidFrames will replace INT32_MAX set here
+      // with partition's final row index.
+      rawFrameBounds[i] = INT32_MAX;
+    } else {
+      rawFrameBounds[i] = startValue;
+    }
   }
 }
 
-}; // namespace
+} // namespace
 
 void Window::updateKRowsFrameBounds(
     bool isKPreceding,
@@ -346,32 +377,54 @@ void Window::updateKRowsFrameBounds(
     vector_size_t startRow,
     vector_size_t numRows,
     vector_size_t* rawFrameBounds) {
-  auto firstPartitionRow = partitionStartRows_[currentPartition_];
-
   if (frameArg.index == kConstantChannel) {
-    auto constantOffset = frameArg.constant.value();
-    auto startValue = startRow +
-        (isKPreceding ? -constantOffset : constantOffset) - firstPartitionRow;
+    const auto constantOffset = frameArg.constant.value();
+    const auto startValue = static_cast<int64_t>(startRow) +
+        (isKPreceding ? -constantOffset : constantOffset);
+
+    if (isKPreceding) {
+      if (startValue < INT32_MIN) {
+        // For overflow in kPreceding frames, i.e., k < INT32_MIN, we set the
+        // frame bound to -1. For frames whose original frame start is below
+        // INT32_MIN, the new frame start becomes -1 and will be corrected to 0
+        // by the subsequent computeValidFrames call. For frames whose original
+        // frame end is below INT32_MIN, the new frame end becomes -1 and will
+        // be marked invalid by the subsequent computeValidFrames call. This is
+        // expected because the max number of rows in a partition is INT32_MAX,
+        // so a frame end below INT32_MIN always results in an empty frame.
+        std::fill_n(rawFrameBounds, numRows, -1);
+        return;
+      }
+      std::iota(rawFrameBounds, rawFrameBounds + numRows, startValue);
+      return;
+    }
+
+    // KFollowing.
+    // The start index that overflow happens.
+    int32_t overflowStart;
+    if (startValue > static_cast<int64_t>(INT32_MAX)) {
+      overflowStart = 0;
+    } else {
+      overflowStart = INT32_MAX - startValue + 1;
+    }
+    if (overflowStart >= 0 && overflowStart < numRows) {
+      std::iota(rawFrameBounds, rawFrameBounds + overflowStart, startValue);
+      // For remaining rows that overflow happens, use INT32_MAX.
+      // computeValidFrames will replace it with partition's final row index.
+      std::fill_n(
+          rawFrameBounds + overflowStart, numRows - overflowStart, INT32_MAX);
+      return;
+    }
     std::iota(rawFrameBounds, rawFrameBounds + numRows, startValue);
   } else {
-    windowPartition_->extractColumn(
+    currentPartition_->extractColumn(
         frameArg.index, partitionOffset_, numRows, 0, frameArg.value);
     if (frameArg.value->typeKind() == TypeKind::INTEGER) {
       updateKRowsOffsetsColumn<int32_t>(
-          isKPreceding,
-          frameArg.value,
-          firstPartitionRow,
-          startRow,
-          numRows,
-          rawFrameBounds);
+          isKPreceding, frameArg.value, startRow, numRows, rawFrameBounds);
     } else {
       updateKRowsOffsetsColumn<int64_t>(
-          isKPreceding,
-          frameArg.value,
-          firstPartitionRow,
-          startRow,
-          numRows,
-          rawFrameBounds);
+          isKPreceding, frameArg.value, startRow, numRows, rawFrameBounds);
     }
   }
 }
@@ -383,35 +436,30 @@ void Window::updateFrameBounds(
     const vector_size_t numRows,
     const vector_size_t* rawPeerStarts,
     const vector_size_t* rawPeerEnds,
-    vector_size_t* rawFrameBounds) {
-  auto firstPartitionRow = partitionStartRows_[currentPartition_];
-  auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
-  auto windowType = windowFrame.type;
-  auto boundType = isStartBound ? windowFrame.startType : windowFrame.endType;
-  auto frameArg = isStartBound ? windowFrame.start : windowFrame.end;
+    vector_size_t* rawFrameBounds,
+    SelectivityVector& validFrames) {
+  const auto windowType = windowFrame.type;
+  const auto boundType =
+      isStartBound ? windowFrame.startType : windowFrame.endType;
+  const auto frameArg = isStartBound ? windowFrame.start : windowFrame.end;
 
+  const vector_size_t* rawPeerBuffer =
+      isStartBound ? rawPeerStarts : rawPeerEnds;
   switch (boundType) {
     case core::WindowNode::BoundType::kUnboundedPreceding:
       std::fill_n(rawFrameBounds, numRows, 0);
       break;
     case core::WindowNode::BoundType::kUnboundedFollowing:
-      std::fill_n(
-          rawFrameBounds, numRows, lastPartitionRow - firstPartitionRow);
+      std::fill_n(rawFrameBounds, numRows, currentPartition_->numRows() - 1);
       break;
     case core::WindowNode::BoundType::kCurrentRow: {
       if (windowType == core::WindowNode::WindowType::kRange) {
-        const vector_size_t* rawPeerBuffer =
-            isStartBound ? rawPeerStarts : rawPeerEnds;
         std::copy(rawPeerBuffer, rawPeerBuffer + numRows, rawFrameBounds);
       } else {
         // Fills the frameBound buffer with increasing value of row indices
         // (corresponding to CURRENT ROW) from the startRow of the current
-        // output buffer. The startRow has to be adjusted relative to the
-        // partition start row.
-        std::iota(
-            rawFrameBounds,
-            rawFrameBounds + numRows,
-            startRow - firstPartitionRow);
+        // output buffer.
+        std::iota(rawFrameBounds, rawFrameBounds + numRows, startRow);
       }
       break;
     }
@@ -420,7 +468,15 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             true, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        VELOX_NYI("k preceding frame is only supported in ROWS mode");
+        currentPartition_->computeKRangeFrameBounds(
+            isStartBound,
+            true,
+            frameArg.value().index,
+            startRow,
+            numRows,
+            rawPeerBuffer,
+            rawFrameBounds,
+            validFrames);
       }
       break;
     }
@@ -429,7 +485,15 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             false, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        VELOX_NYI("k following frame is only supported in ROWS mode");
+        currentPartition_->computeKRangeFrameBounds(
+            isStartBound,
+            false,
+            frameArg.value().index,
+            startRow,
+            numRows,
+            rawPeerBuffer,
+            rawFrameBounds,
+            validFrames);
       }
       break;
     }
@@ -451,12 +515,12 @@ void computeValidFrames(
     vector_size_t* rawFrameStarts,
     vector_size_t* rawFrameEnds,
     SelectivityVector& validFrames) {
-  auto frameStart = 0;
-  auto frameEnd = 0;
-
-  for (auto i = 0; i < numRows; i++) {
-    frameStart = rawFrameStarts[i];
-    frameEnd = rawFrameEnds[i];
+  for (auto i = 0; i < numRows; ++i) {
+    if (!validFrames.isValid(i)) {
+      continue;
+    }
+    const vector_size_t frameStart = rawFrameStarts[i];
+    const vector_size_t frameEnd = rawFrameEnds[i];
     // All valid frames require frameStart <= frameEnd to define the frame rows.
     // Also, frameEnd >= 0, so that the frameEnd doesn't fall before the
     // partition. And frameStart <= lastRow so that the frameStart doesn't fall
@@ -470,77 +534,39 @@ void computeValidFrames(
   }
   validFrames.updateBounds();
 }
+} // namespace
 
-}; // namespace
-
-void Window::callApplyForPartitionRows(
+void Window::computePeerAndFrameBuffers(
     vector_size_t startRow,
-    vector_size_t endRow,
-    const std::vector<VectorPtr>& result,
-    vector_size_t resultOffset) {
-  if (partitionStartRows_[currentPartition_] == startRow) {
-    callResetPartition(currentPartition_);
-  }
-
-  vector_size_t numRows = endRow - startRow;
-  vector_size_t numFuncs = windowFunctions_.size();
+    vector_size_t endRow) {
+  const vector_size_t numRows = endRow - startRow;
+  const vector_size_t numFuncs = windowFunctions_.size();
 
   // Size buffers for the call to WindowFunction::apply.
-  auto bufferSize = numRows * sizeof(vector_size_t);
+  const auto bufferSize = numRows * sizeof(vector_size_t);
   peerStartBuffer_->setSize(bufferSize);
   peerEndBuffer_->setSize(bufferSize);
-  auto rawPeerStarts = peerStartBuffer_->asMutable<vector_size_t>();
-  auto rawPeerEnds = peerEndBuffer_->asMutable<vector_size_t>();
+  auto* rawPeerStarts = peerStartBuffer_->asMutable<vector_size_t>();
+  auto* rawPeerEnds = peerEndBuffer_->asMutable<vector_size_t>();
 
   std::vector<vector_size_t*> rawFrameStarts;
   std::vector<vector_size_t*> rawFrameEnds;
   rawFrameStarts.reserve(numFuncs);
   rawFrameEnds.reserve(numFuncs);
-  for (auto w = 0; w < numFuncs; w++) {
-    frameStartBuffers_[w]->setSize(bufferSize);
-    frameEndBuffers_[w]->setSize(bufferSize);
+  for (auto i = 0; i < numFuncs; ++i) {
+    frameStartBuffers_[i]->setSize(bufferSize);
+    frameEndBuffers_[i]->setSize(bufferSize);
 
-    auto rawFrameStart = frameStartBuffers_[w]->asMutable<vector_size_t>();
-    auto rawFrameEnd = frameEndBuffers_[w]->asMutable<vector_size_t>();
+    auto* rawFrameStart = frameStartBuffers_[i]->asMutable<vector_size_t>();
+    auto* rawFrameEnd = frameEndBuffers_[i]->asMutable<vector_size_t>();
     rawFrameStarts.push_back(rawFrameStart);
     rawFrameEnds.push_back(rawFrameEnd);
   }
 
-  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
-    return compareRowsWithKeys(lhs, rhs, sortKeyInfo_);
-  };
-  auto firstPartitionRow = partitionStartRows_[currentPartition_];
-  auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
-  for (auto i = startRow, j = 0; i < endRow; i++, j++) {
-    // When traversing input partition rows, the peers are the rows
-    // with the same values for the ORDER BY clause. These rows
-    // are equal in some ways and affect the results of ranking functions.
-    // This logic exploits the fact that all rows between the peerStartRow_
-    // and peerEndRow_ have the same values for peerStartRow_ and peerEndRow_.
-    // So we can compute them just once and reuse across the rows in that peer
-    // interval. Note: peerStartRow_ and peerEndRow_ can be maintained across
-    // getOutput calls.
+  std::tie(peerStartRow_, peerEndRow_) = currentPartition_->computePeerBuffers(
+      startRow, endRow, peerStartRow_, peerEndRow_, rawPeerStarts, rawPeerEnds);
 
-    // Compute peerStart and peerEnd rows for the first row of the partition or
-    // when past the previous peerGroup.
-    if (i == firstPartitionRow || i >= peerEndRow_) {
-      peerStartRow_ = i;
-      peerEndRow_ = i;
-      while (peerEndRow_ <= lastPartitionRow) {
-        if (peerCompare(sortedRows_[peerStartRow_], sortedRows_[peerEndRow_])) {
-          break;
-        }
-        peerEndRow_++;
-      }
-    }
-
-    // Peer buffer values should be offsets from the start of the partition
-    // as WindowFunction only sees one partition at a time.
-    rawPeerStarts[j] = peerStartRow_ - firstPartitionRow;
-    rawPeerEnds[j] = peerEndRow_ - 1 - firstPartitionRow;
-  }
-
-  for (auto i = 0; i < numFuncs; i++) {
+  for (auto i = 0; i < numFuncs; ++i) {
     const auto& windowFrame = windowFrames_[i];
     // Default all rows to have validFrames. The invalidity of frames is only
     // computed for k rows/range frames at a later point.
@@ -552,7 +578,8 @@ void Window::callApplyForPartitionRows(
         numRows,
         rawPeerStarts,
         rawPeerEnds,
-        rawFrameStarts[i]);
+        rawFrameStarts[i],
+        validFrames_[i]);
     updateFrameBounds(
         windowFrame,
         false,
@@ -560,115 +587,159 @@ void Window::callApplyForPartitionRows(
         numRows,
         rawPeerStarts,
         rawPeerEnds,
-        rawFrameEnds[i]);
+        rawFrameEnds[i],
+        validFrames_[i]);
     if (windowFrames_[i].start || windowFrames_[i].end) {
-      // k preceding and k following bounds can be problematic. They can
-      // go over the partition limits or result in empty frames. Fix the
-      // frame boundaries and compute the validFrames SelectivityVector
-      // for these cases. Not all functions care about validFrames viz.
-      // Ranking functions do not care about frames. So the function decides
-      // further what to do with empty frames.
+      // k preceding and k following bounds can be problematic. They can go over
+      // the partition limits or result in empty frames. Fix the frame
+      // boundaries and compute the validFrames SelectivityVector for these
+      // cases. Not all functions care about validFrames viz. Ranking functions
+      // do not care about frames. So the function decides further what to do
+      // with empty frames.
       computeValidFrames(
-          lastPartitionRow - firstPartitionRow,
+          currentPartition_->numRows() - 1,
           numRows,
           rawFrameStarts[i],
           rawFrameEnds[i],
           validFrames_[i]);
     }
   }
+}
 
-  // Invoke the apply method for the WindowFunctions.
-  for (auto w = 0; w < numFuncs; w++) {
-    windowFunctions_[w]->apply(
-        peerStartBuffer_,
-        peerEndBuffer_,
-        frameStartBuffers_[w],
-        frameEndBuffers_[w],
-        validFrames_[w],
-        resultOffset,
-        result[w]);
-  }
-
-  numProcessedRows_ += numRows;
-  partitionOffset_ += numRows;
-  if (endRow == partitionStartRows_[currentPartition_ + 1]) {
-    currentPartition_++;
+void Window::getInputColumns(
+    vector_size_t startRow,
+    vector_size_t endRow,
+    vector_size_t resultOffset,
+    const RowVectorPtr& result) {
+  const auto numRows = endRow - startRow;
+  for (int i = 0; i < numInputColumns_; ++i) {
+    currentPartition_->extractColumn(
+        i, partitionOffset_, numRows, resultOffset, result->childAt(i));
   }
 }
 
-void Window::callApplyLoop(
+void Window::callApplyForPartitionRows(
+    vector_size_t startRow,
+    vector_size_t endRow,
+    vector_size_t resultOffset,
+    const RowVectorPtr& result) {
+  // NOTE: for a partial window partition, the last row of the previously
+  // processed rows (used for peer group comparison) will be deleted by
+  // computePeerAndFrameBuffers after peer group comparison. Hence we need to
+  // call getInputColumns after computePeerAndFrameBuffers.
+  computePeerAndFrameBuffers(startRow, endRow);
+
+  getInputColumns(startRow, endRow, resultOffset, result);
+  vector_size_t numFuncs = windowFunctions_.size();
+  for (auto i = 0; i < numFuncs; ++i) {
+    windowFunctions_[i]->apply(
+        peerStartBuffer_,
+        peerEndBuffer_,
+        frameStartBuffers_[i],
+        frameEndBuffers_[i],
+        validFrames_[i],
+        resultOffset,
+        result->childAt(numInputColumns_ + i));
+  }
+
+  const vector_size_t numRows = endRow - startRow;
+  numProcessedRows_ += numRows;
+  partitionOffset_ += numRows;
+
+  if (currentPartition_->partial()) {
+    currentPartition_->removeProcessedRows(numRows);
+  }
+}
+
+vector_size_t Window::callApplyLoop(
     vector_size_t numOutputRows,
-    const std::vector<VectorPtr>& windowOutputs) {
+    const RowVectorPtr& result) {
   // Compute outputs by traversing as many partitions as possible. This
   // logic takes care of partial partitions output also.
-
   vector_size_t resultIndex = 0;
   vector_size_t numOutputRowsLeft = numOutputRows;
+
+  // This function requires that the currentPartition_ is available for output.
+  VELOX_DCHECK_NOT_NULL(currentPartition_);
   while (numOutputRowsLeft > 0) {
-    auto rowsForCurrentPartition =
-        partitionStartRows_[currentPartition_ + 1] - numProcessedRows_;
-    if (rowsForCurrentPartition <= numOutputRowsLeft) {
+    const auto numPartitionRows =
+        currentPartition_->numRowsForProcessing(partitionOffset_);
+    if (numPartitionRows <= numOutputRowsLeft) {
       // Current partition can fit completely in the output buffer.
       // So output all its rows.
       callApplyForPartitionRows(
-          numProcessedRows_,
-          numProcessedRows_ + rowsForCurrentPartition,
-          windowOutputs,
-          resultIndex);
-      resultIndex += rowsForCurrentPartition;
-      numOutputRowsLeft -= rowsForCurrentPartition;
+          partitionOffset_,
+          partitionOffset_ + numPartitionRows,
+          resultIndex,
+          result);
+      resultIndex += numPartitionRows;
+      numOutputRowsLeft -= numPartitionRows;
+
+      if (!currentPartition_->complete()) {
+        // There are more data need to process for a partial partition.
+        VELOX_CHECK(currentPartition_->partial());
+        break;
+      }
+
+      callResetPartition();
+      if (currentPartition_ == nullptr) {
+        // The WindowBuild doesn't have any more partitions to process right
+        // now. So break until the next getOutput call.
+        break;
+      }
     } else {
       // Current partition can fit only partially in the output buffer.
       // Call apply for the rows that can fit in the buffer and break from
       // outputting.
       callApplyForPartitionRows(
-          numProcessedRows_,
-          numProcessedRows_ + numOutputRowsLeft,
-          windowOutputs,
-          resultIndex);
+          partitionOffset_,
+          partitionOffset_ + numOutputRowsLeft,
+          resultIndex,
+          result);
       numOutputRowsLeft = 0;
       break;
     }
   }
+
+  // Return the number of processed rows.
+  return numOutputRows - numOutputRowsLeft;
 }
 
 RowVectorPtr Window::getOutput() {
-  if (finished_ || !noMoreInput_) {
+  if (numRows_ == 0) {
     return nullptr;
   }
 
-  auto numRowsLeft = numRows_ - numProcessedRows_;
-  auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
-  auto result = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::create(outputType_, numOutputRows, operatorCtx_->pool()));
-
-  // Set all passthrough input columns.
-  for (int i = 0; i < numInputColumns_; ++i) {
-    data_->extractColumn(
-        sortedRows_.data() + numProcessedRows_,
-        numOutputRows,
-        i,
-        result->childAt(i));
+  const auto numRowsLeft = numRows_ - numProcessedRows_;
+  if (numRowsLeft == 0) {
+    if (windowBuild_ != nullptr) {
+      windowBuild_->release();
+    }
+    return nullptr;
   }
 
-  // Construct vectors for the window function output columns.
-  std::vector<VectorPtr> windowOutputs;
-  windowOutputs.reserve(windowFunctions_.size());
-  for (int i = numInputColumns_; i < outputType_->size(); i++) {
-    auto output = BaseVector::create(
-        outputType_->childAt(i), numOutputRows, operatorCtx_->pool());
-    windowOutputs.emplace_back(std::move(output));
+  if (currentPartition_ == nullptr) {
+    callResetPartition();
+    if (currentPartition_ == nullptr) {
+      // WindowBuild doesn't have a partition to output.
+      return nullptr;
+    }
   }
+
+  if (!currentPartition_->complete() &&
+      (currentPartition_->numRowsForProcessing(partitionOffset_) == 0)) {
+    return nullptr;
+  }
+
+  const auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
+  auto result = BaseVector::create<RowVector>(
+      outputType_, numOutputRows, operatorCtx_->pool());
 
   // Compute the output values of window functions.
-  callApplyLoop(numOutputRows, windowOutputs);
-
-  for (int j = numInputColumns_; j < outputType_->size(); j++) {
-    result->childAt(j) = windowOutputs[j - numInputColumns_];
-  }
-
-  finished_ = (numProcessedRows_ == sortedRows_.size());
-  return result;
+  auto numResultRows = callApplyLoop(numOutputRows, result);
+  return numResultRows < numOutputRows
+      ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
+      : result;
 }
 
 } // namespace facebook::velox::exec

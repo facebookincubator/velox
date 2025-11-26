@@ -15,15 +15,14 @@
  */
 
 #include "velox/tpch/gen/TpchGen.h"
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dbgen_gunk.hpp"
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dss.h"
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dsstypes.h"
+#include <velox/tpch/gen/dbgen/include/tpch_constants.hpp>
 #include "velox/tpch/gen/DBGenIterator.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::tpch {
-
 namespace {
+
+using namespace dbgen;
 
 // The cardinality of the LINEITEM table is not a strict multiple of SF since
 // the number of lineitems in an order is chosen at random with an average of
@@ -79,7 +78,7 @@ std::vector<VectorPtr> allocateVectors(
 }
 
 double decimalToDouble(int64_t value) {
-  return (double)value * 0.01;
+  return static_cast<double>(value) * 0.01;
 }
 
 int32_t toDate(std::string_view stringDate) {
@@ -455,7 +454,7 @@ RowVectorPtr genTpchLineItem(
 
       lineNumberVector->set(lineItemCount + l, line.lcnt);
 
-      quantityVector->set(lineItemCount + l, decimalToDouble(line.quantity));
+      quantityVector->set(lineItemCount + l, line.quantity);
       extendedPriceVector->set(lineItemCount + l, decimalToDouble(line.eprice));
       discountVector->set(lineItemCount + l, decimalToDouble(line.discount));
       taxVector->set(lineItemCount + l, decimalToDouble(line.tax));
@@ -749,6 +748,19 @@ RowVectorPtr genTpchRegion(
   }
   return std::make_shared<RowVector>(
       pool, regionRowType, BufferPtr(nullptr), vectorSize, std::move(children));
+}
+
+std::string getQuery(int query) {
+  if (query <= 0 || query > TPCH_QUERIES_COUNT) {
+    VELOX_FAIL("Out of range TPC-H query number {}", query);
+  }
+
+  auto queryString = std::string(TPCH_QUERIES[query - 1]);
+  // Output of GetQuery() has a new line and a semi-colon. These need to be
+  // removed in order to use the query string in a subquery
+  queryString.pop_back(); // remove new line
+  queryString.pop_back(); // remove semi-colon
+  return queryString;
 }
 
 } // namespace facebook::velox::tpch

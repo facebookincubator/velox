@@ -15,10 +15,13 @@
  */
 
 #include "FileUtils.h"
-#include <fmt/core.h>
+
 #include <bitset>
-#include "folly/container/Array.h"
-#include "velox/dwio/common/exception/Exception.h"
+
+#include <fmt/core.h>
+#include <folly/container/Array.h>
+
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook {
 namespace velox {
@@ -28,8 +31,9 @@ namespace fbhive {
 
 namespace {
 
+constexpr auto kUriEscapeMode = folly::UriEscapeMode::ALL;
+
 constexpr size_t HEX_WIDTH = 2;
-const std::string DEFAULT_PARTITION_VALUE{"__HIVE_DEFAULT_PARTITION__"};
 
 constexpr auto charsToEscape = folly::make_array(
     '"',
@@ -94,7 +98,7 @@ std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
     parserFunc(part, entries);
   }
   return entries;
-};
+}
 
 // Strong assumption that all expressions in the form of a=b means a partition
 // key value pair in '/' separated tokens. We could have stricter validation
@@ -108,9 +112,10 @@ std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
         std::vector<std::string> tokens;
         folly::split('=', partitionPart, tokens);
         if (tokens.size() == 2) {
-          parsedParts.emplace_back(std::make_pair(
-              FileUtils::unescapePathName(tokens[0]),
-              FileUtils::unescapePathName(tokens[1])));
+          parsedParts.emplace_back(
+              std::make_pair(
+                  FileUtils::unescapePathName(tokens[0]),
+                  FileUtils::unescapePathName(tokens[1])));
         }
       });
 }
@@ -141,57 +146,41 @@ std::string FileUtils::escapePathName(const std::string& data) {
 }
 
 std::string FileUtils::unescapePathName(const std::string& data) {
-  std::string ret;
-  ret.reserve(data.size());
-  for (size_t i = 0; i < data.size(); ++i) {
-    char c = data[i];
-    if (c == '%' && i + HEX_WIDTH < data.size()) {
-      std::string tmp{data.data() + i + 1, HEX_WIDTH};
-      char* end;
-      c = static_cast<char>(std::strtol(tmp.c_str(), &end, 16));
-      DWIO_ENSURE(errno != ERANGE && end == tmp.data() + HEX_WIDTH);
-      i += HEX_WIDTH;
-    }
-    ret.append(1, c);
+  std::string out;
+  bool success = folly::tryUriUnescape<std::string>(data, out, kUriEscapeMode);
+  if (!success) {
+    VELOX_FAIL(
+        "Due to incomplete percent encode sequence, failed to unescape malformed path name: {}",
+        data);
   }
-  return ret;
+  return out;
 }
 
 std::string FileUtils::makePartName(
-    const std::vector<std::pair<std::string, std::string>>& entries) {
-  size_t size = 0;
-  size_t escapeCount = 0;
-  std::for_each(entries.begin(), entries.end(), [&](auto& pair) {
-    auto keySize = pair.first.size();
-    DWIO_ENSURE_GT(keySize, 0);
-    size += keySize;
-    escapeCount += countEscape(pair.first);
-    auto valSize = pair.second.size();
-    if (valSize == 0) {
-      size += DEFAULT_PARTITION_VALUE.size();
+    const std::vector<std::pair<std::string, std::string>>& entries,
+    bool partitionPathAsLowerCase,
+    bool useDefaultPartitionValue,
+    const EncodeFunction& encodeFunc) {
+  VELOX_CHECK(!entries.empty());
+  std::ostringstream out;
+
+  for (const auto& [key, value] : entries) {
+    VELOX_CHECK(!key.empty());
+    if (out.tellp() > 0) {
+      out << '/';
+    }
+
+    std::string keyToEncode = partitionPathAsLowerCase ? toLower(key) : key;
+    out << encodeFunc(keyToEncode) << '=';
+
+    if (value.empty() && useDefaultPartitionValue) {
+      out << kDefaultPartitionValue;
     } else {
-      size += valSize;
-      escapeCount += countEscape(pair.second);
+      out << encodeFunc(value);
     }
-  });
+  }
 
-  std::string ret;
-  ret.reserve(size + escapeCount * HEX_WIDTH + entries.size() - 1);
-
-  std::for_each(entries.begin(), entries.end(), [&](auto& pair) {
-    if (ret.size() > 0) {
-      ret += "/";
-    }
-    ret += escapePathName(toLower(pair.first));
-    ret += "=";
-    if (pair.second.size() == 0) {
-      ret += DEFAULT_PARTITION_VALUE;
-    } else {
-      ret += escapePathName(pair.second);
-    }
-  });
-
-  return ret;
+  return out.str();
 }
 
 std::vector<std::pair<std::string, std::string>> FileUtils::parsePartKeyValues(
@@ -203,7 +192,7 @@ std::vector<std::pair<std::string, std::string>> FileUtils::parsePartKeyValues(
   std::for_each(parts.begin(), parts.end(), [&](auto& part) {
     std::vector<std::string> kv;
     folly::split('=', part, kv);
-    DWIO_ENSURE_EQ(kv.size(), 2);
+    VELOX_CHECK_EQ(kv.size(), 2);
     ret.push_back({unescapePathName(kv[0]), unescapePathName(kv[1])});
   });
   return ret;
@@ -211,7 +200,7 @@ std::vector<std::pair<std::string, std::string>> FileUtils::parsePartKeyValues(
 
 std::string FileUtils::extractPartitionName(const std::string& filePath) {
   const auto& partitionParts = extractPartitionKeyValues(filePath);
-  return partitionParts.empty() ? "" : makePartName(partitionParts);
+  return partitionParts.empty() ? "" : makePartName(partitionParts, false);
 }
 
 } // namespace fbhive

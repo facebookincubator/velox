@@ -18,7 +18,7 @@
 #include <folly/container/F14Set.h>
 
 #include <velox/type/Filter.h>
-#include "velox/common/base/RawVector.h"
+#include "velox/common/memory/RawVector.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -131,8 +131,15 @@ class VectorHasher {
   static constexpr int32_t kNoLimit = -1;
 
   VectorHasher(TypePtr type, column_index_t channel)
-      : channel_(channel), type_(std::move(type)), typeKind_(type_->kind()) {
-    if (typeKind_ == TypeKind::BOOLEAN) {
+      : channel_(channel),
+        type_(std::move(type)),
+        typeKind_(type_->kind()),
+        typeProvidesCustomComparison_(type_->providesCustomComparison()) {
+    if (!typeSupportsValueIds()) {
+      // Ensure any range or unique value based hashing is disabled.
+      setRangeOverflow();
+      setDistinctOverflow();
+    } else if (typeKind_ == TypeKind::BOOLEAN) {
       // We do not need samples to know the cardinality or limits of a bool
       // vector.
       hasRange_ = true;
@@ -227,18 +234,18 @@ class VectorHasher {
   // have a miss if any of the keys has a value that is not represented.
   //
   // This method can be called concurrently from multiple threads. To allow for
-  // that the caller must provide 'scratchMemory'. 'noNulls' means that the
-  // positions in 'rows' are not checked for null values.
+  // that the caller must provide 'scratchMemory'. Values in 'rows' are
+  // expected to have no nulls.
   void lookupValueIds(
       const BaseVector& values,
       SelectivityVector& rows,
       ScratchMemory& scratchMemory,
-      raw_vector<uint64_t>& result,
-      bool noNulls = true) const;
+      raw_vector<uint64_t>& result) const;
 
-  // Returns true if either range or distinct values have not overflowed.
+  // Returns true if either range or distinct values have not overflowed and the
+  // type doesn't support custom comparison.
   bool mayUseValueIds() const {
-    return hasRange_ || !distinctOverflow_;
+    return typeSupportsValueIds() && (hasRange_ || !distinctOverflow_);
   }
 
   // Returns an instance of the filter corresponding to a set of unique values.
@@ -285,8 +292,12 @@ class VectorHasher {
     return isRange_;
   }
 
-  static bool typeKindSupportsValueIds(TypeKind kind) {
-    switch (kind) {
+  bool typeSupportsValueIds() const {
+    if (typeProvidesCustomComparison_) {
+      return false;
+    }
+
+    switch (typeKind_) {
       case TypeKind::BOOLEAN:
       case TypeKind::TINYINT:
       case TypeKind::SMALLINT:
@@ -294,6 +305,7 @@ class VectorHasher {
       case TypeKind::BIGINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
+      case TypeKind::TIMESTAMP:
         return true;
       default:
         return false;
@@ -310,6 +322,10 @@ class VectorHasher {
   }
 
   std::string toString() const;
+
+  size_t numUniqueValues() const {
+    return uniqueValues_.size();
+  }
 
  private:
   static constexpr uint32_t kStringASRangeMaxSize = 7;
@@ -329,11 +345,24 @@ class VectorHasher {
     return value;
   }
 
+  inline int64_t toInt64(Timestamp timestamp) const {
+    return timestamp.toMillis();
+  }
+
   // Sets the data statistics from 'other'. Does not set the mapping mode.
   void copyStatsFrom(const VectorHasher& other);
 
   template <TypeKind Kind>
   bool makeValueIds(const SelectivityVector& rows, uint64_t* result);
+
+  template <typename T, bool mayHaveNulls>
+  FOLLY_ALWAYS_INLINE void makeValueIdForOneRow(
+      const uint64_t* nulls,
+      vector_size_t row,
+      const T* values,
+      vector_size_t valueRow,
+      uint64_t* result,
+      bool& success);
 
   template <typename T>
   bool makeValueIdsFlatNoNulls(const SelectivityVector& rows, uint64_t* result);
@@ -377,8 +406,7 @@ class VectorHasher {
       const DecodedVector& decoded,
       SelectivityVector& rows,
       raw_vector<uint64_t>& hashes,
-      uint64_t* result,
-      bool noNulls) const;
+      uint64_t* result) const;
 
   // Fast path for range mapping of int64/int32 keys.
   template <typename T>
@@ -415,7 +443,7 @@ class VectorHasher {
       unique.setId(uniqueValues_.size() + 1);
       if (uniqueValues_.insert(unique).second) {
         if (uniqueValues_.size() > kMaxDistinct) {
-          distinctOverflow_ = true;
+          setDistinctOverflow();
         }
       }
     }
@@ -446,7 +474,7 @@ class VectorHasher {
     }
 
     bool inRange = true;
-    rows.template testSelected([&](vector_size_t row) {
+    rows.testSelected([&](vector_size_t row) {
       auto int64Value = toInt64(values[row]);
       if (int64Value > max_ || int64Value < min_) {
         inRange = false;
@@ -515,6 +543,17 @@ class VectorHasher {
 
   void copyStringToLocal(const UniqueValue* unique);
 
+  void setDistinctOverflow();
+
+  void setRangeOverflow();
+
+  inline void checkTypeSupportsValueIds() const {
+    VELOX_DCHECK(
+        typeSupportsValueIds(),
+        "Value IDs cannot be used, the type {} is not supported.",
+        type_->toString());
+  }
+
   static inline bool
   isNullAt(const char* group, int32_t nullByte, uint8_t nullMask) {
     return (group[nullByte] & nullMask) != 0;
@@ -525,12 +564,13 @@ class VectorHasher {
     return *reinterpret_cast<const T*>(group + offset);
   }
 
-  template <TypeKind Kind>
+  template <bool typeProvidesCustomComparison, TypeKind Kind>
   void hashValues(const SelectivityVector& rows, bool mix, uint64_t* result);
 
   const column_index_t channel_;
   const TypePtr type_;
   const TypeKind typeKind_;
+  const bool typeProvidesCustomComparison_;
 
   DecodedVector decoded_;
   raw_vector<uint64_t> cachedHashes_;
@@ -613,7 +653,7 @@ inline uint64_t VectorHasher::valueId(StringView value) {
   copyStringToLocal(&*pair.first);
   if (!rangeOverflow_) {
     if (size > kStringASRangeMaxSize) {
-      rangeOverflow_ = true;
+      setRangeOverflow();
     } else {
       updateRange(stringAsNumber(data, size));
     }
@@ -647,8 +687,27 @@ inline uint64_t VectorHasher::lookupValueId(StringView value) const {
 }
 
 template <>
+inline uint64_t VectorHasher::lookupValueId(Timestamp timestamp) const {
+  return timestamp.getNanos() % 1'000'000 != 0
+      ? kUnmappable
+      : lookupValueId(timestamp.toMillis());
+}
+
+template <>
 inline uint64_t VectorHasher::valueId(bool value) {
   return value ? 2 : 1;
+}
+template <>
+inline uint64_t VectorHasher::valueId(Timestamp value) {
+  if (FOLLY_UNLIKELY(
+          value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
+    // The timestamp is in nanosecond or microsecond precision. The values are
+    // not mappable to milliseconds without precision loss.
+    setRangeOverflow();
+    setDistinctOverflow();
+    return kUnmappable;
+  }
+  return valueId(value.toMillis());
 }
 
 template <>
@@ -656,7 +715,7 @@ inline bool VectorHasher::tryMapToRange(
     const bool* values,
     const SelectivityVector& rows,
     uint64_t* result) {
-  rows.template applyToSelected([&](vector_size_t row) {
+  rows.applyToSelected([&](vector_size_t row) {
     auto hash = valueId(values[row]);
     result[row] = multiplier_ == 1 ? hash : result[row] + multiplier_ * hash;
   });
@@ -693,6 +752,10 @@ bool VectorHasher::makeValueIdsDecoded<bool, false>(
 std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
     const RowTypePtr& rowType,
     const std::vector<core::FieldAccessTypedExprPtr>& keys);
+
+std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+    const RowTypePtr& rowType,
+    const std::vector<column_index_t>& keyChannels);
 
 } // namespace facebook::velox::exec
 

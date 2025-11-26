@@ -22,13 +22,13 @@
 #include <type_traits>
 
 #include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
 // Miscellaneous utilities regarding type, to avoid duplication
 // and improve readability in places that have to reason about types.
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 /**
  * @return true iff the type T can be used in a biased vector
@@ -53,8 +53,9 @@ constexpr bool isIntegral() {
  */
 template <typename T>
 constexpr bool admitsDictionary() {
-  return std::is_same_v<T, int64_t> || std::is_same_v<T, double> ||
-      std::is_same_v<T, StringView>;
+  return std::is_same_v<T, int128_t> || std::is_same_v<T, int64_t> ||
+      std::is_same_v<T, double> || std::is_same_v<T, StringView> ||
+      std::is_same_v<T, velox::Timestamp>;
 }
 
 /**
@@ -95,5 +96,4 @@ inline bool deltaAllowsBias<int16_t>(uint64_t delta) {
   return delta <= std::numeric_limits<uint8_t>::max();
 }
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

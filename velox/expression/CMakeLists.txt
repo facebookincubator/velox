@@ -12,40 +12,74 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_expression_functions FunctionSignature.cpp SignatureBinder.cpp
-                             ReverseSignatureBinder.cpp)
+velox_add_library(velox_type_signature OBJECT TypeSignature.cpp)
 
-target_link_libraries(velox_expression_functions velox_common_base
-                      velox_type_calculation)
+velox_link_libraries(velox_type_signature velox_common_base)
 
-add_library(
+velox_add_library(
+  velox_expression_functions
+  FunctionSignature.cpp
+  SignatureBinder.cpp
+  ReverseSignatureBinder.cpp
+)
+
+velox_link_libraries(
+  velox_expression_functions
+  velox_common_base
+  velox_type_calculation
+  velox_type_signature
+  velox_signature_parser
+)
+
+velox_add_library(
   velox_expression
   BooleanMix.cpp
   CastExpr.cpp
+  CastHooks.cpp
   CoalesceExpr.cpp
   ConjunctExpr.cpp
   ConstantExpr.cpp
   EvalCtx.cpp
   Expr.cpp
   ExprCompiler.cpp
+  ExprRewriteRegistry.cpp
+  ExprOptimizer.cpp
   ExprToSubfieldFilter.cpp
+  ExprUtils.cpp
   FieldReference.cpp
   FunctionCallToSpecialForm.cpp
-  LambdaExpr.cpp
-  VectorFunction.cpp
-  SimpleFunctionRegistry.cpp
-  SwitchExpr.cpp
-  TryExpr.cpp
   GenericWriter.cpp
-  PeeledEncoding.cpp)
+  LambdaExpr.cpp
+  PeeledEncoding.cpp
+  PrestoCastHooks.cpp
+  RegisterSpecialForm.cpp
+  RowConstructor.cpp
+  SimpleFunctionRegistry.cpp
+  SpecialFormRegistry.cpp
+  CoalesceRewrite.cpp
+  ConjunctRewrite.cpp
+  SwitchExpr.cpp
+  SwitchRewrite.cpp
+  TryExpr.cpp
+  VectorFunction.cpp
+)
 
-target_link_libraries(
-  velox_expression velox_core velox_vector velox_common_base
-  velox_expression_functions velox_functions_util)
+velox_link_libraries(
+  velox_expression
+  velox_core
+  velox_vector
+  velox_common_base
+  velox_expression_functions
+  velox_functions_util
+  velox_type_tz
+  double-conversion::double-conversion
+  Folly::folly
+)
 
 add_subdirectory(type_calculation)
+add_subdirectory(signature_parser)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+  add_subdirectory(fuzzer)
 endif()

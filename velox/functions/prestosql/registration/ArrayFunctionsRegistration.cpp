@@ -14,13 +14,25 @@
  * limitations under the License.
  */
 
+#include <string>
+
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/ArrayRemoveNullFunction.h"
+#include "velox/functions/lib/ArrayShuffle.h"
+#include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
+#include "velox/functions/prestosql/ArraySubset.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 
 namespace facebook::velox::functions {
+extern void registerArrayConcatFunctions(const std::string& prefix);
+extern void registerArrayNGramsFunctions(const std::string& prefix);
+
 template <typename T>
 inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerFunction<ArrayMinFunction, T, Array<T>>({prefix + "array_min"});
@@ -49,7 +61,13 @@ inline void registerArrayCombinationsFunctions(const std::string& prefix) {
       ParameterBinder<CombinationsFunction, T>,
       Array<Array<T>>,
       Array<T>,
-      int64_t>({prefix + "combinations"});
+      int32_t>({prefix + "combinations"});
+}
+
+template <typename T>
+inline void registerArrayCumSumFunction(const std::string& prefix) {
+  registerFunction<ParameterBinder<ArrayCumSumFunction, T>, Array<T>, Array<T>>(
+      {prefix + "array_cum_sum"});
 }
 
 template <typename T>
@@ -84,16 +102,55 @@ inline void registerArrayTrimFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayTopNFunction(const std::string& prefix) {
+  registerFunction<ArrayTopNFunction, Array<T>, Array<T>, int32_t>(
+      {prefix + "array_top_n"});
+}
+
+template <typename T>
+inline void registerArrayRemoveNullFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
+      {prefix + "remove_nulls"});
+}
+
+template <typename T>
 inline void registerArrayUnionFunctions(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
 }
 
+template <typename T>
+inline void registerArrayRemoveFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
+      {prefix + "array_remove"});
+}
+
+template <typename T>
+inline void registerArraySubsetFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArraySubsetFunction, T>,
+      Array<T>,
+      Array<T>,
+      Array<int32_t>>({prefix + "array_subset"});
+}
+
+void registerInternalArrayFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_$internal$canonicalize, "$internal$canonicalize");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_$internal$contains, "$internal$contains");
+}
+
 void registerArrayFunctions(const std::string& prefix) {
+  registerJsonType();
   registerArrayConstructor(prefix + "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "any_match");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_none_match, prefix + "none_match");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_find_first, prefix + "find_first");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_find_first_index, prefix + "find_first_index");
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_duplicates, prefix + "array_duplicates");
@@ -102,22 +159,36 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "contains");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, prefix + "arrays_overlap");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_slice, prefix + "slice");
+  registerBigintSliceFunction(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_shuffle, prefix + "shuffle");
+  exec::registerStatefulVectorFunction(
+      prefix + "shuffle",
+      arrayShuffleSignatures(),
+      makeArrayShuffle,
+      getMetadataForArrayShuffle());
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sort, prefix + "array_sort");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_array_sort_desc, prefix + "array_sort_desc");
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort", arraySortSignatures(true), makeArraySortAsc);
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort_desc",
+      arraySortSignatures(false),
+      makeArraySortDesc);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
 
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
-    return rewriteArraySortCall(prefix, expr);
-  });
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_flatten, prefix + "flatten");
+
+  auto checker = std::make_shared<SimpleComparisonChecker>();
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [prefix, checker](const auto& expr) {
+        return rewriteArraySortCall(prefix, expr, checker);
+      });
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, prefix + "array_sum");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_repeat, prefix + "repeat");
+  exec::registerStatefulVectorFunction(
+      prefix + "repeat", repeatSignatures(), makeRepeat, repeatMetadata());
   VELOX_REGISTER_VECTOR_FUNCTION(udf_sequence, prefix + "sequence");
 
   exec::registerStatefulVectorFunction(
@@ -136,6 +207,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<Varchar>(prefix);
   registerArrayMinMaxFunctions<Timestamp>(prefix);
   registerArrayMinMaxFunctions<Date>(prefix);
+  registerArrayMinMaxFunctions<Orderable<T1>>(prefix);
 
   registerArrayJoinFunctions<int8_t>(prefix);
   registerArrayJoinFunctions<int16_t>(prefix);
@@ -148,29 +220,32 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<Varchar>(prefix);
   registerArrayJoinFunctions<Timestamp>(prefix);
   registerArrayJoinFunctions<Date>(prefix);
+  registerArrayJoinFunctions<Json>(prefix);
+  registerArrayJoinFunctions<UnknownValue>(prefix);
 
   registerFunction<ArrayAverageFunction, double, Array<double>>(
       {prefix + "array_average"});
 
-  registerFunction<
-      ArrayConcatFunction,
-      Array<Generic<T1>>,
-      Array<Generic<T1>>,
-      Generic<T1>>({prefix + "concat"});
-  registerFunction<
-      ArrayConcatFunction,
-      Array<Generic<T1>>,
-      Generic<T1>,
-      Array<Generic<T1>>>({prefix + "concat"});
-  registerFunction<
-      ArrayConcatFunction,
-      Array<Generic<T1>>,
-      Variadic<Array<Generic<T1>>>>({prefix + "concat"});
+  registerArrayConcatFunctions(prefix);
+  registerArrayNGramsFunctions(prefix);
 
+  registerArrayRemoveFunctions<int8_t>(prefix);
+  registerArrayRemoveFunctions<int16_t>(prefix);
+  registerArrayRemoveFunctions<int32_t>(prefix);
+  registerArrayRemoveFunctions<int64_t>(prefix);
+  registerArrayRemoveFunctions<int128_t>(prefix);
+  registerArrayRemoveFunctions<float>(prefix);
+  registerArrayRemoveFunctions<double>(prefix);
+  registerArrayRemoveFunctions<bool>(prefix);
+  registerArrayRemoveFunctions<Timestamp>(prefix);
+  registerArrayRemoveFunctions<Date>(prefix);
+  registerArrayRemoveFunctions<Varbinary>(prefix);
+  registerArrayRemoveFunctions<Generic<T1>>(prefix);
   registerFunction<
-      ArrayFlattenFunction,
-      Array<Generic<T1>>,
-      Array<Array<Generic<T1>>>>({prefix + "flatten"});
+      ArrayRemoveFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Varchar>({prefix + "array_remove"});
 
   registerArrayTrimFunctions<int8_t>(prefix);
   registerArrayTrimFunctions<int16_t>(prefix);
@@ -183,22 +258,43 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayTrimFunctions<Timestamp>(prefix);
   registerArrayTrimFunctions<Date>(prefix);
   registerArrayTrimFunctions<Varbinary>(prefix);
+  registerArrayTrimFunctions<Generic<T1>>(prefix);
   registerFunction<
       ArrayTrimFunctionString,
       Array<Varchar>,
       Array<Varchar>,
       int64_t>({prefix + "trim_array"});
-  registerFunction<
-      ArrayTrimFunction,
-      Array<Generic<T1>>,
-      Array<Generic<T1>>,
-      int64_t>({prefix + "trim_array"});
 
+  registerArrayTopNFunction<int8_t>(prefix);
+  registerArrayTopNFunction<int16_t>(prefix);
+  registerArrayTopNFunction<int32_t>(prefix);
+  registerArrayTopNFunction<int64_t>(prefix);
+  registerArrayTopNFunction<int128_t>(prefix);
+  registerArrayTopNFunction<float>(prefix);
+  registerArrayTopNFunction<double>(prefix);
+  registerArrayTopNFunction<Varchar>(prefix);
+  registerArrayTopNFunction<Timestamp>(prefix);
+  registerArrayTopNFunction<Date>(prefix);
+  registerArrayTopNFunction<Varbinary>(prefix);
+  registerArrayTopNFunction<Orderable<T1>>(prefix);
+
+  registerArrayRemoveNullFunctions<int8_t>(prefix);
+  registerArrayRemoveNullFunctions<int16_t>(prefix);
+  registerArrayRemoveNullFunctions<int32_t>(prefix);
+  registerArrayRemoveNullFunctions<int64_t>(prefix);
+  registerArrayRemoveNullFunctions<int128_t>(prefix);
+  registerArrayRemoveNullFunctions<float>(prefix);
+  registerArrayRemoveNullFunctions<double>(prefix);
+  registerArrayRemoveNullFunctions<bool>(prefix);
+  registerArrayRemoveNullFunctions<Timestamp>(prefix);
+  registerArrayRemoveNullFunctions<Date>(prefix);
+  registerArrayRemoveNullFunctions<Varbinary>(prefix);
+  registerArrayRemoveNullFunctions<Generic<T1>>(prefix);
   registerFunction<
-      ArrayUnionFunctionString,
+      ArrayRemoveNullFunctionString,
       Array<Varchar>,
-      Array<Varchar>,
-      Array<Varchar>>({prefix + "array_union"});
+      Array<Varchar>>({prefix + "remove_nulls"});
+
   registerArrayUnionFunctions<int8_t>(prefix);
   registerArrayUnionFunctions<int16_t>(prefix);
   registerArrayUnionFunctions<int32_t>(prefix);
@@ -223,6 +319,17 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayCombinationsFunctions<Varchar>(prefix);
   registerArrayCombinationsFunctions<Timestamp>(prefix);
   registerArrayCombinationsFunctions<Date>(prefix);
+  registerArrayCombinationsFunctions<Generic<T1>>(prefix);
+
+  registerArrayCumSumFunction<int8_t>(prefix);
+  registerArrayCumSumFunction<int16_t>(prefix);
+  registerArrayCumSumFunction<int32_t>(prefix);
+  registerArrayCumSumFunction<int64_t>(prefix);
+  registerArrayCumSumFunction<int128_t>(prefix);
+  registerArrayCumSumFunction<float>(prefix);
+  registerArrayCumSumFunction<double>(prefix);
+  registerArrayCumSumFunction<LongDecimal<P1, S1>>(prefix);
+  registerArrayCumSumFunction<ShortDecimal<P1, S1>>(prefix);
 
   registerArrayHasDuplicatesFunctions<int8_t>(prefix);
   registerArrayHasDuplicatesFunctions<int16_t>(prefix);
@@ -230,12 +337,48 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayHasDuplicatesFunctions<int64_t>(prefix);
   registerArrayHasDuplicatesFunctions<int128_t>(prefix);
   registerArrayHasDuplicatesFunctions<Varchar>(prefix);
+  registerArrayHasDuplicatesFunctions<Json>(prefix);
 
+  registerArrayFrequencyFunctions<bool>(prefix);
+  registerArrayFrequencyFunctions<int8_t>(prefix);
+  registerArrayFrequencyFunctions<int16_t>(prefix);
+  registerArrayFrequencyFunctions<int32_t>(prefix);
   registerArrayFrequencyFunctions<int64_t>(prefix);
   registerArrayFrequencyFunctions<int128_t>(prefix);
+  registerArrayFrequencyFunctions<float>(prefix);
+  registerArrayFrequencyFunctions<double>(prefix);
+  registerArrayFrequencyFunctions<Timestamp>(prefix);
+  registerArrayFrequencyFunctions<Date>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
 
+  registerArrayNormalizeFunctions<int8_t>(prefix);
+  registerArrayNormalizeFunctions<int16_t>(prefix);
+  registerArrayNormalizeFunctions<int32_t>(prefix);
+  registerArrayNormalizeFunctions<int64_t>(prefix);
   registerArrayNormalizeFunctions<float>(prefix);
   registerArrayNormalizeFunctions<double>(prefix);
+
+  registerArraySubsetFunctions<int8_t>(prefix);
+  registerArraySubsetFunctions<int16_t>(prefix);
+  registerArraySubsetFunctions<int32_t>(prefix);
+  registerArraySubsetFunctions<int64_t>(prefix);
+  registerArraySubsetFunctions<int128_t>(prefix);
+  registerArraySubsetFunctions<float>(prefix);
+  registerArraySubsetFunctions<double>(prefix);
+  registerArraySubsetFunctions<bool>(prefix);
+  registerArraySubsetFunctions<Timestamp>(prefix);
+  registerArraySubsetFunctions<Date>(prefix);
+  registerArraySubsetFunctions<Varbinary>(prefix);
+  registerArraySubsetFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArraySubsetVarcharFunction,
+      Array<Varchar>,
+      Array<Varchar>,
+      Array<int32_t>>({prefix + "array_subset"});
+  registerFunction<
+      ArraySubsetGenericFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Array<int32_t>>({prefix + "array_subset"});
 }
-}; // namespace facebook::velox::functions
+} // namespace facebook::velox::functions

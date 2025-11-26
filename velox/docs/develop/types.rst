@@ -64,13 +64,41 @@ unsigned integer for nanoseconds. Nanoseconds represent the high-precision part 
 the timestamp, which is less than 1 second. Valid range of nanoseconds is [0, 10^9).
 Timestamps before the epoch are specified using negative values for the seconds.
 Examples:
-* Timestamp(0, 0) represents 1970-01-0 T00:00:00 (epoch).
+
+* Timestamp(0, 0) represents 1970-01-01 T00:00:00 (epoch).
 * Timestamp(10*24*60*60 + 125, 0) represents 1970-01-11 00:02:05 (10 days 125 seconds after epoch).
 * Timestamp(19524*24*60*60 + 500, 38726411) represents 2023-06-16 08:08:20.038726411
   (19524 days 500 seconds 38726411 nanoseconds after epoch).
 * Timestamp(-10*24*60*60 - 125, 0) represents 1969-12-21 23:57:55 (10 days 125 seconds before epoch).
 * Timestamp(-5000*24*60*60 - 1000, 123456) represents 1956-04-24 07:43:20.000123456
   (5000 days 1000 seconds before epoch plus 123456 nanoseconds).
+
+Floating point types (REAL, DOUBLE) have special values negative infinity, positive infinity, and
+not-a-number (NaN).
+
+For NaN the semantics are different than the C++ standard floating point semantics:
+
+* The different types of NaN (+/-, signaling/quiet) are treated as canonical NaN (+, quiet).
+* `NaN = NaN` returns true.
+* NaN is treated as a normal numerical value in join and group-by keys.
+* When sorting, NaN values are considered larger than any other value. When sorting in ascending order, NaN values appear last. When sorting in descending order, NaN values appear first.
+* For a number N: `N > NaN` is false and `NaN > N` is true.
+
+For negative infinity and positive infinity the following C++ standard floating point semantics apply:
+
+Given N is a positive finite number.
+
+* +inf * N = +inf
+* -inf * N = -inf
+* +inf * -N = -inf
+* -inf * -N = +inf
+* +inf * 0 = NaN
+* -inf * 0 = NaN
+* +inf = +inf returns true.
+* -inf = -inf returns true.
+* Positive infinity and negative infinity are treated as normal numerical values in join and group-by keys.
+* Positive infinity sorts lower than NaN and higher than any other value.
+* Negative infinity sorts lower than any other value.
 
 Logical Types
 ~~~~~~~~~~~~~
@@ -87,6 +115,7 @@ DATE                    INTEGER
 DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
 INTERVAL DAY TO SECOND  BIGINT
 INTERVAL YEAR TO MONTH  INTEGER
+TIME                    BIGINT
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -96,11 +125,14 @@ point in a number. For example, the number `123.45` has a precision of `5` and a
 scale of `2`. DECIMAL types are backed by `BIGINT` and `HUGEINT` physical types,
 which store the unscaled value. For example, the unscaled value of decimal
 `123.45` is `12345`. `BIGINT` is used upto 18 precision, and has a range of
-[:math:`-10^{18} + 1, +10^{18} - 1`]. `HUGEINT` is used starting from 19 precision
-upto 38 precision, with a range of [:math:`-10^{38} + 1, +10^{38} - 1`].
+:math:`[-10^{18} + 1, +10^{18} - 1]`. `HUGEINT` is used starting from 19 precision
+upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
+
+TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
+TIME type is backed by BIGINT physical type.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -108,6 +140,14 @@ Most custom types can be represented as logical types and can be built by extend
 the existing physical types. For example, Presto Types described below are implemented
 by extending the physical types.
 An OPAQUE type must be used when there is no physical type available to back the logical type.
+
+When extending an existing physical type, if different compare and/or hash semantics are
+needed instead of those provided by the underlying native C++ type, this can be achieved by
+doing the following:
+* Pass `true` for the `providesCustomComparison` argument in the custom type's base class's constructor.
+* Override the `compare` and `hash` functions inherited from the `TypeBase` class (you must implement both).
+Note that this is currently only supported for custom types that extend physical types that
+are primitive and fixed width.
 
 Complex Types
 ~~~~~~~~~~~~~
@@ -133,10 +173,133 @@ Presto Type               Physical Type
 ========================  =====================
 HYPERLOGLOG               VARBINARY
 JSON                      VARCHAR
-TIMESTAMP WITH TIME ZONE  ROW<BIGINT, SMALLINT>
+TIMESTAMP WITH TIME ZONE  BIGINT
+UUID                      HUGEINT
+IPADDRESS                 HUGEINT
+IPPREFIX                  ROW(HUGEINT,TINYINT)
+BINGTILE                  BIGINT
+GEOMETRY                  VARBINARY
+SPHERICALGEOGRAPHY        VARBINARY
+TDIGEST                   VARBINARY
+QDIGEST                   VARBINARY
+BIGINT_ENUM               BIGINT
+VARCHAR_ENUM              VARCHAR
+TIME WITH TIME ZONE       BIGINT
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
-from UNIX epoch with timezone information. Its physical type contains one 64-bit
-signed integer for milliseconds and another 16-bit signed integer for timezone ID.
-Valid range of timezone ID is [1, 1680], its definition can be found in ``TimeZoneDatabase.cpp``.
+from UNIX epoch with timezone information. Its physical type is BIGINT.
+The high 52 bits of bigint store signed integer for milliseconds in UTC.
+Supported range of milliseconds is [0xFFF8000000000000L, 0x7FFFFFFFFFFFF]
+(or [-69387-04-22T03:45:14.752, 73326-09-11T20:14:45.247]). The low 12 bits
+store timezone ID. Supported range of timezone ID is [1, 1680].
+The definition of timezone IDs can be found in ``TimeZoneDatabase.cpp``.
+
+IPADDRESS represents an IPv6 or IPv4 formatted IPv6 address. Its physical
+type is HUGEINT. The format that the address is stored in is defined as part of `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+As Velox is run on Little Endian systems and the standard is network byte(Big Endian)
+order, we reverse the bytes to allow for masking and other bit operations
+used in IPADDRESS/IPPREFIX related functions. This type can be used to
+create IPPREFIX networks as well as to check IPADDRESS validity within
+IPPREFIX networks.
+
+IPPREFIX represents an IPv6 or IPv4 formatted IPv6 address along with a one byte
+prefix length. Its physical type is ROW(HUGEINT, TINYINT). The IPADDRESS is stored in
+the HUGEINT and is in the form defined in `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+The prefix length is stored in the TINYINT.
+The IP address stored is the canonical(smallest) IP address in the
+subnet range. This type can be used in IP subnet functions.
+
+Example:
+
+In this example the first 32 bits(*FFFF:FFFF*) represents the network prefix.
+As a result the IPPREFIX object stores *FFFF:FFFF::* and the length 32 for both of these IPPREFIX objects.
+
+::
+
+   IPPREFIX 'FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+   IPPREFIX 'FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+
+TDIGEST(DOUBLE) is a data sketch for estimating rank-based metrics.
+T-digests may be merged without losing precision, and for storage and retrieval
+they may be cast to/from VARBINARY. The T-digest accepts a parameter of type
+DOUBLE which represents the set of numbers to be ingested by the T-digest.
+
+QDIGEST(BIGINT), QDIGEST(REAL), QDIGEST(DOUBLE) are data sketches for
+estimating rank-based metrics. A quantile digest captures the approximate distribution of
+data for a given input set, and can be queried to retrieve approximate quantile values from the
+distribution. They may be merged without losing precision, and for storage and retrieval they may
+be cast to/from VARBINARY. The parameter type (BIGINT, REAL, or DOUBLE) represents
+the set of numbers that may be ingested by the quantile digest.
+
+BIGINT_ENUM(LongEnumParameter) type represents an enumerated value where the physical type is BIGINT.
+It takes one LongEnumParameter as parameter, which consists of a string name and a mapping of
+string keys to BIGINT values.
+There is a static cache which stores instances of different BIGINT_ENUM types. This is to treat each
+different enum type as a singleton. The LongEnumParameter is used as the key to retrieve the cached instance,
+and a new instance is only created if it has not been created with the given LongEnumParameter.
+Casting is permitted from any integer type to an enum type. Casting is only permitted from an enum type
+to a BIGINT type. Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
+VARCHAR_ENUM(VarcharEnumParameter) type represents an enumerated value where the physical type is VARCHAR.
+It takes one VarcharEnumParameter as parameter, which consists of a string name and a mapping of
+string keys to VARCHAR values.
+Similar to BIGINT_ENUM, there is a static cache which stores instances of different VARCHAR_ENUM types, with the
+VarcharEnumParameter as the key.
+Casting is only permitted to and from VARCHAR type, and is case-sensitive. Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
+TIME WITH TIME ZONE represents time from midnight in milliseconds precision at a particular timezone.
+Its physical type is BIGINT. The high 52 bits of bigint store signed integer for milliseconds in UTC.
+The lower 12 bits store the time zone offsets minutes. This allows the time to be converted at any point of
+time without ambiguity of daylight savings time. Time zone offsets range from -14:00 hours to +14:00 hours.
+
+BINGTILE represents a `Bing tile <https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system>`_.
+It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixels. Its physical type is BIGINT.
+
+GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
+Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
+are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+
+SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
+way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
+as opposed to the units of the coordinate space.
+
+Spark Types
+~~~~~~~~~~~~
+The `data types <https://spark.apache.org/docs/latest/sql-ref-datatypes.html>`_ in Spark have some semantic differences compared to those in
+Presto. These differences require us to implement the same functions
+separately for each system in Velox, such as min, max and collect_set. The
+key differences are listed below.
+
+* Spark operates on timestamps with "microsecond" precision while Presto with
+  "millisecond" precision.
+  Example::
+
+      SELECT min(ts)
+      FROM (
+          VALUES
+              (cast('2014-03-08 09:00:00.123456789' as timestamp)),
+              (cast('2014-03-08 09:00:00.012345678' as timestamp))
+      ) AS t(ts);
+      -- 2014-03-08 09:00:00.012345
+
+* In function comparisons, nested null values are handled as values.
+  Example::
+
+      SELECT equalto(ARRAY[1, null], ARRAY[1, null]); -- true
+
+      SELECT min(a)
+      FROM (
+          VALUES
+              (ARRAY[1, 2]),
+              (ARRAY[1, null])
+      ) AS t(a);
+      -- ARRAY[1, null]
+
+* MAP type is not comparable and not orderable in Spark. In Presto, MAP type is
+  also not orderable, but it is comparable if both key and value types are
+  comparable. The implication is that MAP type cannot be used as a join, group
+  by or order by key in Spark.

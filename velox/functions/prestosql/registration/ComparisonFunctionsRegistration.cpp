@@ -14,16 +14,40 @@
  * limitations under the License.
  */
 #include "velox/functions/Registerer.h"
-#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Comparisons.h"
-#include "velox/type/Type.h"
+#include "velox/functions/prestosql/types/IPAddressRegistration.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixRegistration.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::functions {
+namespace {
+
+template <template <class> class T, typename TReturn>
+void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
+  registerFunction<T, TReturn, Varchar, Varchar>(aliases);
+  registerFunction<T, TReturn, Varbinary, Varbinary>(aliases);
+  registerFunction<T, TReturn, bool, bool>(aliases);
+  registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
+  registerFunction<T, TReturn, TimestampWithTimezone, TimestampWithTimezone>(
+      aliases);
+  registerFunction<T, TReturn, Time, Time>(aliases);
+  registerFunction<T, TReturn, TimeWithTimezone, TimeWithTimezone>(aliases);
+  registerFunction<T, TReturn, IPAddress, IPAddress>(aliases);
+}
+} // namespace
 
 void registerComparisonFunctions(const std::string& prefix) {
   // Comparison functions also need TimestampWithTimezoneType,
   // independent of DateTimeFunctions
   registerTimestampWithTimeZoneType();
+  registerTimeWithTimezoneType();
+  registerIPAddressType();
+  registerIPPrefixType();
 
   registerNonSimdizableScalar<EqFunction, bool>({prefix + "eq"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_eq, prefix + "eq");
@@ -36,17 +60,26 @@ void registerComparisonFunctions(const std::string& prefix) {
 
   registerNonSimdizableScalar<LtFunction, bool>({prefix + "lt"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lt, prefix + "lt");
+  registerFunction<LtFunction, bool, Orderable<T1>, Orderable<T1>>(
+      {prefix + "lt"});
 
   registerNonSimdizableScalar<GtFunction, bool>({prefix + "gt"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gt, prefix + "gt");
+  registerFunction<GtFunction, bool, Orderable<T1>, Orderable<T1>>(
+      {prefix + "gt"});
 
   registerNonSimdizableScalar<LteFunction, bool>({prefix + "lte"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lte, prefix + "lte");
+  registerFunction<LteFunction, bool, Orderable<T1>, Orderable<T1>>(
+      {prefix + "lte"});
 
   registerNonSimdizableScalar<GteFunction, bool>({prefix + "gte"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gte, prefix + "gte");
+  registerFunction<GteFunction, bool, Orderable<T1>, Orderable<T1>>(
+      {prefix + "gte"});
 
-  registerBinaryScalar<DistinctFromFunction, bool>({prefix + "distinct_from"});
+  registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
+      {prefix + "distinct_from"});
 
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});
@@ -66,8 +99,48 @@ void registerComparisonFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, Timestamp, Timestamp, Timestamp>(
       {prefix + "between"});
-
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_between, prefix + "between");
+  registerFunction<BetweenFunction, bool, Time, Time, Time>(
+      {prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      TimeWithTimezone>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      LongDecimal<P1, S1>,
+      LongDecimal<P1, S1>,
+      LongDecimal<P1, S1>>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P1, S1>>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "between"});
+  registerFunction<BetweenFunction, bool, IPAddress, IPAddress, IPAddress>(
+      {prefix + "between"});
+  registerFunction<BetweenFunction, bool, IPPrefix, IPPrefix, IPPrefix>(
+      {prefix + "between"});
 }
 
 } // namespace facebook::velox::functions

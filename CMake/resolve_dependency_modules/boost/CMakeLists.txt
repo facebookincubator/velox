@@ -21,16 +21,20 @@ add_compile_options(-w)
 # We need to use boost > 1.70 to build it with CMake 1.81 was the first to be
 # released as a github release INCLUDING the cmake files (which are not in the
 # officale releases for some reason)
-set(VELOX_BOOST_BUILD_VERSION 1.81.0)
+set(VELOX_BOOST_BUILD_VERSION 1.84.0)
 string(
-  CONCAT VELOX_BOOST_SOURCE_URL
-         "https://github.com/boostorg/boost/releases/download/"
-         "boost-${VELOX_BOOST_BUILD_VERSION}/"
-         "boost-${VELOX_BOOST_BUILD_VERSION}.tar.gz")
-set(VELOX_BOOST_BUILD_SHA256_CHECKSUM
-    121da556b718fd7bd700b5f2e734f8004f1cfa78b7d30145471c526ba75a151c)
+  CONCAT
+  VELOX_BOOST_SOURCE_URL
+  "https://github.com/boostorg/boost/releases/download/"
+  "boost-${VELOX_BOOST_BUILD_VERSION}/"
+  "boost-${VELOX_BOOST_BUILD_VERSION}.tar.gz"
+)
+set(
+  VELOX_BOOST_BUILD_SHA256_CHECKSUM
+  4d27e9efed0f6f152dc28db6430b9d3dfb40c0345da7342eaa5a987dde57bd95
+)
 
-resolve_dependency_url(BOOST)
+velox_resolve_dependency_url(BOOST)
 message(STATUS "Building boost from source")
 
 # required for Boost::thread
@@ -42,30 +46,35 @@ endif()
 FetchContent_Declare(
   Boost
   URL ${VELOX_BOOST_SOURCE_URL}
-  URL_HASH ${VELOX_BOOST_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_BOOST_BUILD_SHA256_CHECKSUM}
+)
 
 # Configure the file before adding the header only libs
-configure_file(${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake.in
-               ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake @ONLY)
+configure_file(
+  ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake.in
+  ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake
+  @ONLY
+)
 
-set(BOOST_HEADER_ONLY
-    crc
-    circular_buffer
-    math
-    multi_index
-    numeric_conversion
-    random
-    uuid
-    variant)
+set(
+  BOOST_HEADER_ONLY
+  crc
+  circular_buffer
+  math
+  multi_index
+  multiprecision
+  numeric_conversion
+  random
+  uuid
+  variant
+)
 list(APPEND BOOST_INCLUDE_LIBRARIES ${BOOST_HEADER_ONLY})
 
 # The `headers` target is not created by Boost cmake and leads to a warning
 list(REMOVE_ITEM BOOST_INCLUDE_LIBRARIES headers)
-set(BUILD_SHARED_LIBS ON)
+set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(Boost)
 
-# To aling with Boost system install we create Boost::headers target
-add_library(boost_headers INTERFACE)
-add_library(Boost::headers ALIAS boost_headers)
 list(TRANSFORM BOOST_HEADER_ONLY PREPEND Boost::)
 target_link_libraries(boost_headers INTERFACE ${BOOST_HEADER_ONLY})
+add_library(Boost::headers ALIAS boost_headers)

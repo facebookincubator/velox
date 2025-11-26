@@ -121,7 +121,7 @@ DEFINE_BENCHMARKS(100, 1000)
 DEFINE_BENCHMARKS(100, 10000)
 
 int32_t main(int32_t argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   constexpr int32_t k_num_values = 1000000;
   constexpr int32_t k_string_pool_size = 20000;
   const std::vector<int32_t> string_lengths = {1, 2, 5, 10, 100};
@@ -167,18 +167,22 @@ int32_t main(int32_t argc, char* argv[]) {
       std::vector<std::unique_ptr<common::Filter>> range_filters;
       auto front = ++(reject_vector.begin());
       auto back = reject_vector.begin();
-      range_filters.emplace_back(std::make_unique<common::BytesRange>(
-          "", true, true, *back, false, true, false));
+      range_filters.emplace_back(
+          std::make_unique<common::BytesRange>(
+              "", true, true, *back, false, true, false));
       while (front != reject_vector.end()) {
-        range_filters.emplace_back(std::make_unique<common::BytesRange>(
-            *back, false, true, *front, false, true, false));
+        range_filters.emplace_back(
+            std::make_unique<common::BytesRange>(
+                *back, false, true, *front, false, true, false));
         ++front;
         ++back;
       }
-      range_filters.emplace_back(std::make_unique<common::BytesRange>(
-          *back, false, true, "", true, true, false));
-      multi_ranges.emplace_back(std::make_unique<common::MultiRange>(
-          std::move(range_filters), false, false));
+      range_filters.emplace_back(
+          std::make_unique<common::BytesRange>(
+              *back, false, true, "", true, true, false));
+      multi_ranges.emplace_back(
+          std::make_unique<common::MultiRange>(
+              std::move(range_filters), false));
 
       LOG(INFO) << "Generated filter for length " << len << " with size "
                 << size;

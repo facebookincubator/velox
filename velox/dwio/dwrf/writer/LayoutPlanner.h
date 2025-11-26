@@ -18,7 +18,6 @@
 
 #include <folly/container/F14Map.h>
 #include "velox/common/base/GTestMacros.h"
-#include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -49,7 +48,6 @@ class EncodingIter {
   EncodingIter& operator++();
   EncodingIter operator++(int);
   bool operator==(const EncodingIter& other) const;
-  bool operator!=(const EncodingIter& other) const;
   reference operator*() const;
   pointer operator->() const;
 
@@ -91,11 +89,11 @@ class EncodingManager : public EncodingContainer {
       const encryption::EncryptionHandler& encryptionHandler);
   virtual ~EncodingManager() override = default;
 
-  proto::ColumnEncoding& addEncodingToFooter(uint32_t nodeId);
-  proto::Stream* addStreamToFooter(uint32_t nodeId, uint32_t& currentIndex);
+  ColumnEncodingWriteWrapper addEncodingToFooter(uint32_t nodeId);
+  StreamWriteWrapper addStreamToFooter(uint32_t nodeId, uint32_t& currentIndex);
   std::string* addEncryptionGroupToFooter();
   proto::StripeEncryptionGroup getEncryptionGroup(uint32_t i);
-  const proto::StripeFooter& getFooter() const;
+  const StripeFooterWriteWrapper& getFooter() const;
 
   EncodingIter begin() const override;
   EncodingIter end() const override;
@@ -104,7 +102,8 @@ class EncodingManager : public EncodingContainer {
   void initEncryptionGroups();
 
   const encryption::EncryptionHandler& encryptionHandler_;
-  proto::StripeFooter footer_;
+  std::unique_ptr<StripeFooterWriteWrapper> footer_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
   std::vector<proto::StripeEncryptionGroup> encryptionGroups_;
 };
 
@@ -122,8 +121,8 @@ class LayoutResult {
           consumer) const;
 
  private:
-  StreamList streams_;
-  size_t indexCount_;
+  const StreamList streams_;
+  const size_t indexCount_;
 };
 
 class LayoutPlanner {

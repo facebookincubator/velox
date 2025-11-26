@@ -27,8 +27,8 @@ using namespace facebook::velox;
 TEST(FileHandleTest, localFile) {
   filesystems::registerLocalFileSystem();
 
-  auto tempFile = ::exec::test::TempFilePath::create();
-  const auto& filename = tempFile->path;
+  auto tempFile = exec::test::TempFilePath::create();
+  const auto& filename = tempFile->getPath();
   remove(filename.c_str());
 
   {
@@ -37,10 +37,38 @@ TEST(FileHandleTest, localFile) {
   }
 
   FileHandleFactory factory(
-      std::make_unique<
-          SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1000),
+      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(1000),
       std::make_unique<FileHandleGenerator>());
-  auto fileHandle = factory.generate(filename).second;
+  FileHandleKey key{filename};
+  auto fileHandle = factory.generate(key);
+  ASSERT_EQ(fileHandle->file->size(), 3);
+  char buffer[3];
+  ASSERT_EQ(fileHandle->file->pread(0, 3, &buffer), "foo");
+
+  // Clean up
+  remove(filename.c_str());
+}
+
+TEST(FileHandleTest, localFileWithProperties) {
+  filesystems::registerLocalFileSystem();
+
+  auto tempFile = exec::test::TempFilePath::create();
+  const auto& filename = tempFile->getPath();
+  remove(filename.c_str());
+
+  {
+    LocalWriteFile writeFile(filename);
+    writeFile.append("foo");
+  }
+
+  FileHandleFactory factory(
+      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(1000),
+      std::make_unique<FileHandleGenerator>());
+  FileProperties properties = {
+      .fileSize = tempFile->fileSize(),
+      .modificationTime = tempFile->fileModifiedTime()};
+  FileHandleKey key{filename};
+  auto fileHandle = factory.generate(key, &properties);
   ASSERT_EQ(fileHandle->file->size(), 3);
   char buffer[3];
   ASSERT_EQ(fileHandle->file->pread(0, 3, &buffer), "foo");

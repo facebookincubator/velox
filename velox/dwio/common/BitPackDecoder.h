@@ -21,7 +21,7 @@
 #include "velox/vector/TypeAliases.h"
 
 #include <folly/Range.h>
-#include <xsimd/config/xsimd_config.hpp> // @manual
+#include <xsimd/config/xsimd_config.hpp>
 
 namespace facebook::velox::dwio::common {
 
@@ -90,13 +90,13 @@ static const uint32_t BITPACK_MASKS[] = {
 /// stay under 'bufferEnd'.
 template <typename T>
 void unpack(
-    const uint64_t* FOLLY_NULLABLE bits,
+    const uint64_t* bits,
     int32_t bitOffset,
     RowSet rows,
     int32_t rowBias,
     uint8_t bitWidth,
-    const char* FOLLY_NULLABLE bufferEnd,
-    T* FOLLY_NONNULL result);
+    const char* bufferEnd,
+    T* result);
 
 /// Unpack numValues number of input values from inputBuffer. The results
 /// will be written to result. numValues must be a multiple of 8. The
@@ -109,7 +109,7 @@ static inline uint32_t unpackNaive(
     uint64_t inputBufferLen,
     uint64_t numValues,
     uint8_t bitWidth,
-    T* FOLLY_NONNULL& result);
+    T * FOLLY_NONNULL & result);
 
 /// Unpack numValues number of input values from inputBuffer. The results
 /// will be written to result. numValues must be a multiple of 8. The
@@ -122,7 +122,7 @@ inline void unpack(
     uint64_t inputBufferLen,
     uint64_t numValues,
     uint8_t bitWidth,
-    T* FOLLY_NONNULL& result) {
+    T * FOLLY_NONNULL & result) {
   unpackNaive<T>(inputBits, inputBufferLen, numValues, bitWidth, result);
 }
 
@@ -159,7 +159,7 @@ static inline uint32_t unpackNaive(
     uint64_t inputBufferLen,
     uint64_t numValues,
     uint8_t bitWidth,
-    T* FOLLY_NONNULL& result) {
+    T * FOLLY_NONNULL & result) {
   VELOX_CHECK(bitWidth >= 1 && bitWidth <= sizeof(T) * 8);
   VELOX_CHECK(inputBufferLen * 8 >= bitWidth * numValues);
 
@@ -793,17 +793,17 @@ inline void unpack<uint32_t>(
 // sure not to access bytes past lastSafeWord + 7. The definition is put here
 // because it's inlined.
 inline uint64_t safeLoadBits(
-    const char* FOLLY_NONNULL ptr,
+    const char* ptr,
     int32_t bitOffset,
     uint8_t bitWidth,
-    const char* FOLLY_NONNULL lastSafeWord) {
+    const char* lastSafeWord) {
   VELOX_DCHECK_GE(7, bitOffset);
   VELOX_DCHECK_GE(56, bitWidth);
   if (ptr < lastSafeWord) {
     return *reinterpret_cast<const uint64_t*>(ptr) >> bitOffset;
   }
   int32_t byteWidth =
-      facebook::velox::bits::roundUp(bitOffset + bitWidth, 8) / 8;
+      facebook::velox::bits::divRoundUp(bitOffset + bitWidth, 8);
   return facebook::velox::bits::loadPartialWord(
              reinterpret_cast<const uint8_t*>(ptr), byteWidth) >>
       bitOffset;

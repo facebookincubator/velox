@@ -25,22 +25,24 @@
 extern "C" {
 #endif
 
-// Add a definition check here to avoid duplication with the definition
-// included from velox/external/duckdb/duckdb.hpp.
-#ifndef ARROW_FLAG_DICTIONARY_ORDERED
+// These macros prevent re-definition in case multiple headers try to define
+// them.
+#ifndef ARROW_C_DATA_INTERFACE
+#define ARROW_C_DATA_INTERFACE
+
 #define ARROW_FLAG_DICTIONARY_ORDERED 1
 #define ARROW_FLAG_NULLABLE 2
 #define ARROW_FLAG_MAP_KEYS_SORTED 4
 
 struct ArrowSchema {
   // Array type description
-  const char* format;
-  const char* name;
-  const char* metadata;
-  int64_t flags;
-  int64_t n_children;
-  struct ArrowSchema** children;
-  struct ArrowSchema* dictionary;
+  const char* format{nullptr};
+  const char* name{nullptr};
+  const char* metadata{nullptr};
+  int64_t flags{0};
+  int64_t n_children{0};
+  struct ArrowSchema** children{nullptr};
+  struct ArrowSchema* dictionary{nullptr};
 
   // Release callback
   void (*release)(struct ArrowSchema*);
@@ -50,14 +52,14 @@ struct ArrowSchema {
 
 struct ArrowArray {
   // Array data description
-  int64_t length;
-  int64_t null_count;
-  int64_t offset;
-  int64_t n_buffers;
-  int64_t n_children;
-  const void** buffers;
-  struct ArrowArray** children;
-  struct ArrowArray* dictionary;
+  int64_t length{0};
+  int64_t null_count{0};
+  int64_t offset{0};
+  int64_t n_buffers{0};
+  int64_t n_children{0};
+  const void** buffers{nullptr};
+  struct ArrowArray** children{nullptr};
+  struct ArrowArray* dictionary{nullptr};
 
   // Release callback
   void (*release)(struct ArrowArray*);
@@ -65,7 +67,12 @@ struct ArrowArray {
   void* private_data;
 };
 
+#endif // ARROW_C_DATA_INTERFACE
+
 // EXPERIMENTAL: C stream interface
+
+#ifndef ARROW_C_STREAM_INTERFACE
+#define ARROW_C_STREAM_INTERFACE
 
 struct ArrowArrayStream {
   // Callback to get the stream type
@@ -105,7 +112,7 @@ struct ArrowArrayStream {
   void* private_data;
 };
 
-#endif
+#endif // ARROW_C_STREAM_INTERFACE
 
 #ifdef __cplusplus
 }

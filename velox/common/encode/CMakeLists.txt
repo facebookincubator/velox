@@ -12,5 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_encode Base64.cpp)
-target_link_libraries(velox_encode Folly::folly)
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
+
+velox_add_library(velox_encode Base64.cpp Base32.cpp)
+velox_link_libraries(velox_encode PUBLIC velox_status Folly::folly)

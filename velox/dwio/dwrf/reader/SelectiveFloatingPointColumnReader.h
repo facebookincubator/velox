@@ -21,23 +21,23 @@
 
 namespace facebook::velox::dwrf {
 
-template <typename TData, typename TRequested>
+template <typename TFile, typename TRequested>
 class SelectiveFloatingPointColumnReader
     : public dwio::common::
-          SelectiveFloatingPointColumnReader<TData, TRequested> {
+          SelectiveFloatingPointColumnReader<TFile, TRequested> {
  public:
   using ValueType = TRequested;
 
   using base =
-      dwio::common::SelectiveFloatingPointColumnReader<TData, TRequested>;
+      dwio::common::SelectiveFloatingPointColumnReader<TFile, TRequested>;
 
   SelectiveFloatingPointColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-      const TypePtr& dataType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     base::seekToRowGroup(index);
     auto positionsProvider = this->formatData_->seekToRowGroup(index);
     decoder_.seekToRowGroup(positionsProvider);
@@ -46,57 +46,61 @@ class SelectiveFloatingPointColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
-    using T = SelectiveFloatingPointColumnReader<TData, TRequested>;
-    this->template readCommon<T>(offset, rows, incomingNulls);
+    using T = SelectiveFloatingPointColumnReader<TFile, TRequested>;
+    this->template readCommon<T, true>(offset, rows, incomingNulls);
+    this->readOffset_ += rows.back() + 1;
   }
 
   template <typename TVisitor>
-  void readWithVisitor(RowSet rows, TVisitor visitor);
+  void readWithVisitor(const RowSet& rows, TVisitor visitor);
 
-  FloatingPointDecoder<TData, TRequested> decoder_;
+  FloatingPointDecoder<TFile, TRequested> decoder_;
 };
 
-template <typename TData, typename TRequested>
-SelectiveFloatingPointColumnReader<TData, TRequested>::
+template <typename TFile, typename TRequested>
+SelectiveFloatingPointColumnReader<TFile, TRequested>::
     SelectiveFloatingPointColumnReader(
-        std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-        const TypePtr& dataType,
+        const TypePtr& requestedType,
+        std::shared_ptr<const dwio::common::TypeWithId> fileType,
         DwrfParams& params,
         common::ScanSpec& scanSpec)
-    : dwio::common::SelectiveFloatingPointColumnReader<TData, TRequested>(
-          std::move(requestedType),
-          dataType,
+    : dwio::common::SelectiveFloatingPointColumnReader<TFile, TRequested>(
+          requestedType,
+          std::move(fileType),
           params,
           scanSpec),
       decoder_(params.stripeStreams().getStream(
-          EncodingKey{this->nodeType_->id, params.flatMapContext().sequence}
-              .forKind(proto::Stream_Kind_DATA),
+          StripeStreamsUtil::getStreamForKind(
+              params.stripeStreams(),
+              EncodingKey{
+                  this->fileType_->id(),
+                  params.flatMapContext().sequence},
+              proto::Stream_Kind_DATA,
+              proto::orc::Stream_Kind_DATA),
           params.streamLabels().label(),
           true)) {}
 
-template <typename TData, typename TRequested>
-uint64_t SelectiveFloatingPointColumnReader<TData, TRequested>::skip(
+template <typename TFile, typename TRequested>
+uint64_t SelectiveFloatingPointColumnReader<TFile, TRequested>::skip(
     uint64_t numValues) {
   numValues = this->formatData_->skipNulls(numValues);
   decoder_.skip(numValues);
   return numValues;
 }
 
-template <typename TData, typename TRequested>
+template <typename TFile, typename TRequested>
 template <typename TVisitor>
-void SelectiveFloatingPointColumnReader<TData, TRequested>::readWithVisitor(
-    RowSet rows,
+void SelectiveFloatingPointColumnReader<TFile, TRequested>::readWithVisitor(
+    const RowSet& /*rows*/,
     TVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
   if (this->nullsInReadRange_) {
     decoder_.template readWithVisitor<true, TVisitor>(
         this->nullsInReadRange_->template as<uint64_t>(), visitor);
   } else {
     decoder_.template readWithVisitor<false, TVisitor>(nullptr, visitor);
   }
-  this->readOffset_ += numRows;
 }
 
 } // namespace facebook::velox::dwrf

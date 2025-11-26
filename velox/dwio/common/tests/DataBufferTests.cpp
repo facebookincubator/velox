@@ -17,21 +17,28 @@
 #include <glog/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/DataBuffer.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
+
 using namespace facebook::velox::memory;
 using namespace testing;
 using MemoryPool = facebook::velox::memory::MemoryPool;
 
-TEST(DataBuffer, ZeroOut) {
+class DataBufferTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance(MemoryManager::Options{});
+  }
+
+  const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+};
+
+TEST_F(DataBufferTest, ZeroOut) {
   const uint8_t VALUE = 13;
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-  DataBuffer<uint8_t> buffer(*pool, 16);
+  DataBuffer<uint8_t> buffer(*pool_, 16);
   for (auto i = 0; i < buffer.size(); i++) {
     auto data = buffer.data();
     ASSERT_EQ(data[i], 0);
@@ -57,10 +64,8 @@ TEST(DataBuffer, ZeroOut) {
   }
 }
 
-TEST(DataBuffer, At) {
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-
-  DataBuffer<uint8_t> buffer{*pool};
+TEST_F(DataBufferTest, At) {
+  DataBuffer<uint8_t> buffer{*pool_};
   for (auto i = 0; i != 15; ++i) {
     buffer.append(i);
   }
@@ -75,14 +80,12 @@ TEST(DataBuffer, At) {
     EXPECT_EQ(i, buffer.at(i));
   }
   for (auto i = 8; i != 42; ++i) {
-    EXPECT_THROW(buffer.at(i), exception::LoggedException);
+    VELOX_ASSERT_THROW(buffer.at(i), "Accessing index out of range");
   }
 }
 
-TEST(DataBuffer, Reset) {
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-
-  DataBuffer<uint8_t> buffer{*pool};
+TEST_F(DataBufferTest, Reset) {
+  DataBuffer<uint8_t> buffer{*pool_};
   buffer.reserve(16);
   for (auto i = 0; i != 15; ++i) {
     buffer.append(i);
@@ -135,10 +138,9 @@ TEST(DataBuffer, Reset) {
   }
 }
 
-TEST(DataBuffer, Wrap) {
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+TEST_F(DataBufferTest, Wrap) {
   auto size = 26;
-  auto buffer = velox::AlignedBuffer::allocate<char>(size, pool.get());
+  auto buffer = velox::AlignedBuffer::allocate<char>(size, pool_.get());
   auto raw = buffer->asMutable<char>();
   for (size_t i = 0; i < size; ++i) {
     raw[i] = 'a' + i;
@@ -152,27 +154,24 @@ TEST(DataBuffer, Wrap) {
   }
 }
 
-TEST(DataBuffer, Move) {
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+TEST_F(DataBufferTest, Move) {
   {
-    DataBuffer<uint8_t> buffer{*pool};
+    DataBuffer<uint8_t> buffer{*pool_};
     buffer.reserve(16);
     for (auto i = 0; i != 15; ++i) {
       buffer.append(i);
     }
     ASSERT_EQ(15, buffer.size());
     ASSERT_EQ(16, buffer.capacity());
-    const auto usedBytes = pool->currentBytes();
+    const auto usedBytes = pool_->usedBytes();
 
     // Expect no double freeing from memory pool.
     DataBuffer<uint8_t> newBuffer{std::move(buffer)};
     ASSERT_EQ(15, newBuffer.size());
     ASSERT_EQ(16, newBuffer.capacity());
-    ASSERT_EQ(usedBytes, pool->currentBytes());
+    ASSERT_EQ(usedBytes, pool_->usedBytes());
   }
-  ASSERT_EQ(0, pool->currentBytes());
+  ASSERT_EQ(0, pool_->usedBytes());
 }
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox::dwio::common

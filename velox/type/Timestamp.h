@@ -24,17 +24,72 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/type/StringView.h"
 
-namespace date {
-class time_zone;
+namespace facebook::velox {
+
+namespace tz {
+class TimeZone;
 }
 
-namespace facebook::velox {
+enum class TimestampPrecision : int8_t {
+  kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
+  kMicroseconds = 6, // 10^6 microseconds are equal to one second.
+  kNanoseconds = 9, // 10^9 nanoseconds are equal to one second.
+};
+
+struct TimestampToStringOptions {
+  using Precision = TimestampPrecision;
+
+  Precision precision = Precision::kNanoseconds;
+
+  // Whether to add a leading '+' when year is greater than 9999.
+  bool leadingPositiveSign = false;
+
+  /// Whether to skip trailing zeros of fractional part. E.g. when true,
+  /// '2000-01-01 12:21:56.129000' becomes '2000-01-01 12:21:56.129'.
+  bool skipTrailingZeros = false;
+
+  /// Whether padding zeros are added when the digits of year is less than 4.
+  /// E.g. when true, '1-01-01 05:17:32.000' becomes '0001-01-01 05:17:32.000',
+  /// '-03-24 13:20:00.000' becomes '0000-03-24 13:20:00.000', and '-1-11-29
+  /// 19:33:20.000' becomes '-0001-11-29 19:33:20.000'.
+  bool zeroPaddingYear = false;
+
+  // The separator of date and time.
+  char dateTimeSeparator = 'T';
+
+  enum class Mode : int8_t {
+    /// ISO 8601 timestamp format: %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds
+    /// precision; %Y-%m-%dT%H:%M:%S.nnn for milliseconds precision.
+    kFull,
+    /// ISO 8601 date format: %Y-%m-%d.
+    kDateOnly,
+    /// ISO 8601 time format: %H:%M:%S.nnnnnnnnn for nanoseconds precision,
+    /// or %H:%M:%S.nnn for milliseconds precision.
+    kTimeOnly,
+  };
+
+  Mode mode = Mode::kFull;
+
+  const tz::TimeZone* timeZone = nullptr;
+};
+
+/// Returns the max length of a converted string from timestamp.
+std::string::size_type getMaxStringLength(
+    const TimestampToStringOptions& options);
 
 struct Timestamp {
  public:
-  enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   static constexpr int64_t kMillisecondsInSecond = 1'000;
+  static constexpr int64_t kMicrosecondsInMillisecond = 1'000;
+  static constexpr int64_t kMicrosecondsInSecond =
+      kMicrosecondsInMillisecond * kMillisecondsInSecond;
+  static constexpr int64_t kNanosecondsInMicrosecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
+  static constexpr int64_t kNanosInSecond =
+      kNanosecondsInMillisecond * kMillisecondsInSecond;
+  // The number of days between the Julian epoch and the Unix epoch.
+  static constexpr int64_t kJulianToUnixEpochDays = 2440588LL;
+  static constexpr int64_t kSecondsInDay = 86400LL;
 
   // Limit the range of seconds to avoid some problems. Seconds should be
   // in the range [INT64_MIN/1000 - 1, INT64_MAX/1000].
@@ -60,8 +115,21 @@ struct Timestamp {
     VELOX_USER_DCHECK_LE(nanos, kMaxNanos, "Timestamp nanos out of range");
   }
 
+  /// Creates a timestamp from the number of days since the Julian epoch
+  /// and the number of nanoseconds.
+  static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
+
+  // date is the number of days since unix epoch.
+  static Timestamp fromDate(int32_t date);
+
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
+
+  static Timestamp create(const folly::dynamic& obj) {
+    auto seconds = obj["seconds"].asInt();
+    auto nanos = obj["nanos"].asInt();
+    return Timestamp(seconds, nanos);
+  }
 
   int64_t getSeconds() const {
     return seconds_;
@@ -71,6 +139,7 @@ struct Timestamp {
     return nanos_;
   }
 
+  // Keep it in header for getting inlined.
   int64_t toNanos() const {
     // int64 can store around 292 years in nanos ~ till 2262-04-12.
     // When an integer overflow occurs in the calculation,
@@ -87,37 +156,77 @@ struct Timestamp {
     }
   }
 
+  // Keep it in header for getting inlined.
   int64_t toMillis() const {
-    // When an integer overflow occurs in the calculation,
-    // an exception will be thrown.
-    try {
-      return checkedPlus(
-          checkedMultiply(seconds_, (int64_t)1'000),
-          (int64_t)(nanos_ / 1'000'000));
-    } catch (const std::exception& e) {
+    // We use int128_t to make sure the computation does not overflow since
+    // there are cases such that seconds*1000 does not fit in int64_t,
+    // but seconds*1000 + nanos does, an example is Timestamp::minMillis().
+
+    // If the final result does not fit in int64_t we throw.
+    __int128_t result =
+        (__int128_t)seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
+    if (result < INT64_MIN || result > INT64_MAX) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}",
+          "Could not convert Timestamp({}, {}) to milliseconds",
           seconds_,
-          nanos_,
-          e.what());
+          nanos_);
     }
+    return result;
   }
 
-  int64_t toMicros() const {
-    // When an integer overflow occurs in the calculation,
-    // an exception will be thrown.
-    try {
-      return checkedPlus(
-          checkedMultiply(seconds_, (int64_t)1'000'000),
-          (int64_t)(nanos_ / 1'000));
-    } catch (const std::exception& e) {
-      VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}",
-          seconds_,
-          nanos_,
-          e.what());
-    }
+  // Keep it in header for getting inlined.
+  int64_t toMillisAllowOverflow() const {
+    // Similar to the above toMillis() except that overflowed integer is allowed
+    // as result.
+    auto result = seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
+    return result;
   }
+
+  // Keep it in header for getting inlined.
+  int64_t toMicros() const {
+    // We use int128_t to make sure the computation does not overflows since
+    // there are cases such that a negative seconds*1000000 does not fit in
+    // int64_t, but seconds*1000000 + nanos does. An example is
+    // Timestamp(-9223372036855, 224'192'000).
+
+    // If the final result does not fit in int64_t we throw.
+    __int128_t result = static_cast<__int128_t>(seconds_) * 1'000'000 +
+        static_cast<int64_t>(nanos_ / 1'000);
+    if (result < INT64_MIN || result > INT64_MAX) {
+      VELOX_USER_FAIL(
+          "Could not convert Timestamp({}, {}) to microseconds",
+          seconds_,
+          nanos_);
+    }
+    return result;
+  }
+
+  Timestamp toPrecision(const TimestampPrecision& precision) const {
+    uint64_t nanos = nanos_;
+    switch (precision) {
+      case TimestampPrecision::kMilliseconds:
+        nanos = nanos / 1'000'000 * 1'000'000;
+        break;
+      case TimestampPrecision::kMicroseconds:
+        nanos = nanos / 1'000 * 1'000;
+        break;
+      case TimestampPrecision::kNanoseconds:
+        break;
+    }
+    return Timestamp(seconds_, nanos);
+  }
+
+  /// Exports the current timestamp as a std::chrono::time_point of millisecond
+  /// precision. Note that the conversion may overflow since the internal
+  /// `seconds_` value will need to be multiplied by 1000.
+  ///
+  /// If `allowOverflow` is true, integer overflow is allowed in converting
+  /// to milliseconds.
+  ///
+  /// Due to the limit of velox/external/date, throws if timestamp is outside of
+  /// [-32767-01-01, 32767-12-31] range.
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
+  toTimePointMs(bool allowOverflow = false) const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
@@ -128,7 +237,37 @@ struct Timestamp {
     return Timestamp(second, nano);
   }
 
+  static Timestamp fromMillisNoError(int64_t millis)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
+    if (millis >= 0 || millis % 1'000 == 0) {
+      return Timestamp(millis / 1'000, (millis % 1'000) * 1'000'000);
+    }
+    auto second = millis / 1'000 - 1;
+    auto nano = ((millis - second * 1'000) % 1'000) * 1'000'000;
+    return Timestamp(second, nano);
+  }
+
   static Timestamp fromMicros(int64_t micros) {
+    if (micros >= 0 || micros % 1'000'000 == 0) {
+      return Timestamp(micros / 1'000'000, (micros % 1'000'000) * 1'000);
+    }
+    auto second = micros / 1'000'000 - 1;
+    auto nano = ((micros - second * 1'000'000) % 1'000'000) * 1'000;
+    return Timestamp(second, nano);
+  }
+
+  static Timestamp fromMicrosNoError(int64_t micros)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
     if (micros >= 0 || micros % 1'000'000 == 0) {
       return Timestamp(micros / 1'000'000, (micros % 1'000'000) * 1'000);
     }
@@ -172,88 +311,117 @@ struct Timestamp {
     return Timestamp(kMaxSeconds, kMaxNanos);
   }
 
-  // Assuming the timestamp represents a time at zone, converts it to the GMT
-  // time at the same moment.
-  // Example: Timestamp ts{0, 0};
-  // ts.Timezone("America/Los_Angeles");
-  // ts.toString() returns January 1, 1970 08:00:00
-  void toGMT(const date::time_zone& zone);
+  /// Our own version of gmtime_r to avoid expensive calls to __tz_convert.
+  /// This might not be very significant in micro benchmark, but is causing
+  /// significant context switching cost in real world queries with higher
+  /// concurrency (71% of time is on __tz_convert for some queries).
+  ///
+  /// Return whether the epoch second can be converted to a valid std::tm.
+  static bool epochToCalendarUtc(int64_t seconds, std::tm& out);
 
-  // Same as above, but accepts PrestoDB time zone ID.
-  void toGMT(int16_t tzID);
+  /// Our own version of timegm to avoid expensive calls to __tz_convert.
+  ///
+  /// This function is guaranteed to give same result as std::timegm when it is
+  /// successful.
+  static int64_t calendarUtcToEpoch(const std::tm& tm);
 
-  // Assuming the timestamp represents a GMT time, converts it to the time at
-  // the same moment at zone.
-  // Example: Timestamp ts{0, 0};
-  // ts.Timezone("America/Los_Angeles");
-  // ts.toString() returns December 31, 1969 16:00:00
-  void toTimezone(const date::time_zone& zone);
-
-  // Same as above, but accepts PrestoDB time zone ID.
-  void toTimezone(int16_t tzID);
-
-  bool operator==(const Timestamp& b) const {
-    return seconds_ == b.seconds_ && nanos_ == b.nanos_;
+  /// Truncates a Timestamp value to the specified precision.
+  static Timestamp truncate(Timestamp ts, TimestampPrecision precision) {
+    switch (precision) {
+      case TimestampPrecision::kMilliseconds:
+        return Timestamp::fromMillis(ts.toMillis());
+      case TimestampPrecision::kMicroseconds:
+        return Timestamp::fromMicros(ts.toMicros());
+      case TimestampPrecision::kNanoseconds:
+        return ts;
+      default:
+        VELOX_UNREACHABLE();
+    }
   }
 
-  bool operator!=(const Timestamp& b) const {
-    return seconds_ != b.seconds_ || nanos_ != b.nanos_;
+  /// Converts a std::tm to a time/date/timestamp string in ISO 8601 format
+  /// according to TimestampToStringOptions.
+  /// @param startPosition the start position of pre-allocated memory to write
+  /// string to.
+  static StringView tmToStringView(
+      const std::tm& tmValue,
+      uint64_t nanos,
+      const TimestampToStringOptions& options,
+      char* const startPosition);
+
+  /// Converts a timestamp to a time/date/timestamp string in ISO 8601 format
+  /// according to TimestampToStringOptions.
+  /// @param startPosition the start position of pre-allocated memory to write
+  /// string to.
+  static StringView tsToStringView(
+      const Timestamp& ts,
+      const TimestampToStringOptions& options,
+      char* const startPosition);
+
+  /// Assuming the timestamp represents a time at zone, converts it to the GMT
+  /// time at the same moment. For example:
+  ///
+  ///  Timestamp ts{0, 0};
+  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toString(); // returns January 1, 1970 08:00:00
+  void toGMT(const tz::TimeZone& zone);
+
+  /// Assuming the timestamp represents a GMT time, converts it to the time at
+  /// the same moment at zone. For example:
+  ///
+  ///  Timestamp ts{0, 0};
+  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toString(); // returns December 31, 1969 16:00:00
+  void toTimezone(const tz::TimeZone& zone);
+
+  /// A default time zone that is same across the process.
+  static const tz::TimeZone& defaultTimezone();
+
+  bool operator==(const Timestamp& b) const = default;
+  auto operator<=>(const Timestamp& b) const = default;
+
+  void operator++() {
+    if (nanos_ < kMaxNanos) {
+      nanos_++;
+      return;
+    }
+    if (seconds_ < kMaxSeconds) {
+      seconds_++;
+      nanos_ = 0;
+      return;
+    }
+    VELOX_USER_FAIL("Timestamp nanos out of range");
   }
 
-  bool operator<(const Timestamp& b) const {
-    return seconds_ < b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ < b.nanos_);
-  }
-
-  bool operator<=(const Timestamp& b) const {
-    return seconds_ < b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ <= b.nanos_);
-  }
-
-  bool operator>(const Timestamp& b) const {
-    return seconds_ > b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ > b.nanos_);
-  }
-
-  bool operator>=(const Timestamp& b) const {
-    return seconds_ > b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ >= b.nanos_);
+  void operator--() {
+    if (nanos_ > 0) {
+      nanos_--;
+      return;
+    }
+    if (seconds_ > kMinSeconds) {
+      seconds_--;
+      nanos_ = kMaxNanos;
+      return;
+    }
+    VELOX_USER_FAIL("Timestamp nanos out of range");
   }
 
   // Needed for serialization of FlatVector<Timestamp>
   operator StringView() const {
     return StringView("TODO: Implement");
-  };
+  }
 
-  std::string toString(
-      const Precision& precision = Precision::kNanoseconds) const {
-    // mbasmanova: error: no matching function for call to 'gmtime_r'
-    // mbasmanova: time_t is long not long long
-    // struct tm tmValue;
-    // auto bt = gmtime_r(&seconds_, &tmValue);
-    auto bt = gmtime((const time_t*)&seconds_);
-    if (!bt) {
-      const auto& error_message = folly::to<std::string>(
-          "Can't convert Seconds to time: ", folly::to<std::string>(seconds_));
-      throw std::runtime_error{error_message};
-    }
-
-    // return ISO 8601 time format.
-    // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-    // T - literal T
-    // %T - equivalent to "%H:%M:%S" (the ISO 8601 time format)
-    // so this return time in the format
-    // %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds precision, or
-    // %Y-%m-%dT%H:%M:%S.nnn for milliseconds precision
-    // Note there is no Z suffix, which denotes UTC timestamp.
-    auto width = static_cast<int>(precision);
-    auto value =
-        precision == Precision::kMilliseconds ? nanos_ / 1'000'000 : nanos_;
-    std::ostringstream oss;
-    oss << std::put_time(bt, "%FT%T");
-    oss << '.' << std::setfill('0') << std::setw(width) << value;
-
-    return oss.str();
+  std::string toString(const TimestampToStringOptions& options = {}) const {
+    std::tm tm;
+    VELOX_USER_CHECK(
+        epochToCalendarUtc(seconds_, tm),
+        "Can't convert seconds to time: {}",
+        seconds_);
+    std::string result;
+    result.resize(getMaxStringLength(options));
+    const auto view = tmToStringView(tm, nanos_, options, result.data());
+    result.resize(view.size());
+    return result;
   }
 
   operator std::string() const {
@@ -264,12 +432,22 @@ struct Timestamp {
     return folly::dynamic(seconds_);
   }
 
+  folly::dynamic serialize() const {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["seconds"] = seconds_;
+    obj["nanos"] = nanos_;
+    return obj;
+  }
+
+  // Pretty printer for gtest.
+  friend void PrintTo(const Timestamp& timestamp, std::ostream* os) {
+    *os << "sec: " << timestamp.seconds_ << ", ns: " << timestamp.nanos_;
+  }
+
  private:
   int64_t seconds_;
   uint64_t nanos_;
 };
-
-void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Timestamp& value, T* result) {
@@ -314,3 +492,24 @@ struct hasher<::facebook::velox::Timestamp> {
 };
 
 } // namespace folly
+
+namespace fmt {
+template <>
+struct formatter<facebook::velox::TimestampToStringOptions::Precision>
+    : formatter<int> {
+  auto format(
+      facebook::velox::TimestampToStringOptions::Precision s,
+      format_context& ctx) const {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+template <>
+struct formatter<facebook::velox::TimestampToStringOptions::Mode>
+    : formatter<int> {
+  auto format(
+      facebook::velox::TimestampToStringOptions::Mode s,
+      format_context& ctx) const {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+} // namespace fmt

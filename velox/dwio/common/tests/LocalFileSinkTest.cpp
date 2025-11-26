@@ -15,7 +15,9 @@
  */
 
 #include "velox/common/base/Fs.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
@@ -25,28 +27,56 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::dwio::common {
 
-void runTest() {
-  auto root = TempDirectoryPath::create();
-  auto filePath = fs::path(root->path) / "xxx/yyy/zzz/test_file.ext";
+class LocalFileSinkTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    velox::filesystems::registerLocalFileSystem();
+  }
 
-  ASSERT_FALSE(fs::exists(filePath.string()));
+  void runTest() {
+    const auto root = TempDirectoryPath::create();
+    const auto filePath =
+        fs::path(root->getPath()) / "xxx/yyy/zzz/test_file.ext";
 
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-  auto localFileSink =
-      DataSink::create(fmt::format("file:{}", filePath.string()), pool.get());
-  localFileSink->close();
+    ASSERT_FALSE(fs::exists(filePath.string()));
 
-  EXPECT_TRUE(fs::exists(filePath.string()));
+    auto localFileSink = FileSink::create(
+        fmt::format("file:{}", filePath.string()), {.pool = pool_.get()});
+    ASSERT_TRUE(localFileSink->isBuffered());
+    localFileSink->close();
+
+    EXPECT_TRUE(fs::exists(filePath.string()));
+  }
+
+  std::shared_ptr<velox::memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+};
+
+TEST_F(LocalFileSinkTest, missingRegistration) {
+  VELOX_ASSERT_THROW(runTest(), "FileSink is not registered for file:");
 }
 
-TEST(LocalFileSinkTest, create) {
+TEST_F(LocalFileSinkTest, create) {
   LocalFileSink::registerFactory();
   runTest();
 }
 
-TEST(LocalFileSinkTest, writeFileSink) {
-  WriteFileDataSink::registerLocalFileFactory();
-  runTest();
+TEST_F(LocalFileSinkTest, existFileCheck) {
+  LocalFileSink::registerFactory();
+  auto root = TempDirectoryPath::create();
+  auto filePath = fs::path(root->getPath()) / "xxx/yyy/zzz/test_file.ext";
+
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()), {.pool = pool_.get()});
+  ASSERT_TRUE(localFileSink->isBuffered());
+  localFileSink->close();
+  EXPECT_TRUE(fs::exists(filePath.string()));
+
+  VELOX_ASSERT_THROW(
+      FileSink::create(
+          fmt::format("file:{}", filePath.string()), {.pool = pool_.get()}),
+      "File exists");
 }
 
 } // namespace facebook::velox::dwio::common

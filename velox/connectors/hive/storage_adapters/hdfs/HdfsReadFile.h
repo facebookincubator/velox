@@ -14,19 +14,36 @@
  * limitations under the License.
  */
 
-#include <hdfs/hdfs.h>
 #include "velox/common/file/File.h"
+#include "velox/external/hdfs/hdfs.h"
 
 namespace facebook::velox {
 
+namespace filesystems::arrow::io::internal {
+class LibHdfsShim;
+}
+
+/**
+ * Implementation of hdfs read file.
+ */
 class HdfsReadFile final : public ReadFile {
  public:
-  explicit HdfsReadFile(hdfsFS hdfs, std::string_view path);
+  explicit HdfsReadFile(
+      filesystems::arrow::io::internal::LibHdfsShim* driver,
+      hdfsFS hdfs,
+      std::string_view path);
+  ~HdfsReadFile() override;
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const final;
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const FileStorageContext& fileStorageContext = {}) const final;
 
-  std::string pread(uint64_t offset, uint64_t length) const final;
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      const FileStorageContext& fileStorageContext = {}) const final;
 
   uint64_t size() const final;
 
@@ -34,20 +51,17 @@ class HdfsReadFile final : public ReadFile {
 
   bool shouldCoalesce() const final;
 
-  std::string getName() const final {
-    return filePath_;
-  }
+  std::string getName() const final;
 
   uint64_t getNaturalReadSize() const final {
     return 72 << 20;
   }
 
  private:
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
-  void seekToPosition(hdfsFile file, uint64_t offset) const;
   void checkFileReadParameters(uint64_t offset, uint64_t length) const;
-  hdfsFS hdfsClient_;
-  hdfsFileInfo* fileInfo_;
-  std::string filePath_;
+
+  class Impl;
+  std::unique_ptr<Impl> pImpl;
 };
+
 } // namespace facebook::velox

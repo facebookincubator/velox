@@ -13,101 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/aggregates/CovarianceAggregates.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/aggregates/CovarianceAggregatesBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
+using namespace facebook::velox::functions::aggregate;
+
 namespace facebook::velox::aggregate::prestosql {
 
 namespace {
-// Indices into RowType representing intermediate results of covar_samp and
-// covar_pop. Columns appear in alphabetical order.
-struct CovarIndices {
-  int32_t count;
-  int32_t meanX;
-  int32_t meanY;
-  int32_t c2;
-};
-constexpr CovarIndices kCovarIndices{1, 2, 3, 0};
-
-// Indices into RowType representing intermediate results of corr. Columns
-// appear in alphabetical order.
-struct CorrIndices : public CovarIndices {
-  int32_t m2X;
-  int32_t m2Y;
-};
-constexpr CorrIndices kCorrIndices{{1, 4, 5, 0}, 2, 3};
-
 // Indices into RowType representing intermediate results of regr_slope and
 // regr_intercept.
 struct RegrIndices : public CovarIndices {
   int32_t m2X;
+  int32_t m2Y;
 };
-constexpr RegrIndices kRegrIndices{{1, 3, 4, 0}, 2};
-
-struct CovarAccumulator {
-  double count() const {
-    return count_;
-  }
-
-  double meanX() const {
-    return meanX_;
-  }
-
-  double meanY() const {
-    return meanY_;
-  }
-
-  double c2() const {
-    return c2_;
-  }
-
-  void update(double x, double y) {
-    count_ += 1;
-    double deltaX = x - meanX();
-    meanX_ += deltaX / count();
-    double deltaY = y - meanY();
-    meanY_ += deltaY / count();
-    c2_ += deltaX * (y - meanY());
-  }
-
-  void merge(
-      int64_t countOther,
-      double meanXOther,
-      double meanYOther,
-      double c2Other) {
-    if (countOther == 0) {
-      return;
-    }
-
-    int64_t newCount = countOther + count();
-    double deltaMeanX = meanXOther - meanX();
-    double deltaMeanY = meanYOther - meanY();
-    c2_ += c2Other +
-        deltaMeanX * deltaMeanY * count() * countOther / (double)newCount;
-    meanX_ += deltaMeanX * countOther / (double)newCount;
-    meanY_ += deltaMeanY * countOther / (double)newCount;
-    count_ = newCount;
-  }
-
- private:
-  int64_t count_{0};
-  double meanX_{0};
-  double meanY_{0};
-  double c2_{0};
-};
-
-struct CovarSampResultAccessor {
-  static bool hasResult(const CovarAccumulator& accumulator) {
-    return accumulator.count() > 1;
-  }
-
-  static double result(const CovarAccumulator& accumulator) {
-    return accumulator.c2() / (accumulator.count() - 1);
-  }
-};
+constexpr RegrIndices kRegrIndices{{1, 3, 4, 0}, 2, 5};
 
 struct CovarPopResultAccessor {
   static bool hasResult(const CovarAccumulator& accumulator) {
@@ -119,115 +44,14 @@ struct CovarPopResultAccessor {
   }
 };
 
-template <typename T>
-SimpleVector<T>* asSimpleVector(
-    const RowVector* rowVector,
-    int32_t childIndex) {
-  return rowVector->childAt(childIndex)->as<SimpleVector<T>>();
-}
-
-class CovarIntermediateInput {
- public:
-  explicit CovarIntermediateInput(
-      const RowVector* rowVector,
-      const CovarIndices& indices = kCovarIndices)
-      : count_{asSimpleVector<int64_t>(rowVector, indices.count)},
-        meanX_{asSimpleVector<double>(rowVector, indices.meanX)},
-        meanY_{asSimpleVector<double>(rowVector, indices.meanY)},
-        c2_{asSimpleVector<double>(rowVector, indices.c2)} {}
-
-  void mergeInto(CovarAccumulator& accumulator, vector_size_t row) {
-    accumulator.merge(
-        count_->valueAt(row),
-        meanX_->valueAt(row),
-        meanY_->valueAt(row),
-        c2_->valueAt(row));
+struct CovarSampResultAccessor {
+  static bool hasResult(const CovarAccumulator& accumulator) {
+    return accumulator.count() > 1;
   }
 
- protected:
-  SimpleVector<int64_t>* count_;
-  SimpleVector<double>* meanX_;
-  SimpleVector<double>* meanY_;
-  SimpleVector<double>* c2_;
-};
-
-template <typename T>
-T* mutableRawValues(const RowVector* rowVector, int32_t childIndex) {
-  return rowVector->childAt(childIndex)
-      ->as<FlatVector<T>>()
-      ->mutableRawValues();
-}
-
-class CovarIntermediateResult {
- public:
-  explicit CovarIntermediateResult(
-      const RowVector* rowVector,
-      const CovarIndices& indices = kCovarIndices)
-      : count_{mutableRawValues<int64_t>(rowVector, indices.count)},
-        meanX_{mutableRawValues<double>(rowVector, indices.meanX)},
-        meanY_{mutableRawValues<double>(rowVector, indices.meanY)},
-        c2_{mutableRawValues<double>(rowVector, indices.c2)} {}
-
-  static std::string type() {
-    return "row(double,bigint,double,double)";
+  static double result(const CovarAccumulator& accumulator) {
+    return accumulator.c2() / (accumulator.count() - 1);
   }
-
-  void set(vector_size_t row, const CovarAccumulator& accumulator) {
-    count_[row] = accumulator.count();
-    meanX_[row] = accumulator.meanX();
-    meanY_[row] = accumulator.meanY();
-    c2_[row] = accumulator.c2();
-  }
-
- private:
-  int64_t* count_;
-  double* meanX_;
-  double* meanY_;
-  double* c2_;
-};
-
-struct CorrAccumulator : public CovarAccumulator {
-  double m2X() const {
-    return m2X_;
-  }
-
-  double m2Y() const {
-    return m2Y_;
-  }
-
-  void update(double x, double y) {
-    double oldMeanX = meanX();
-    double oldMeanY = meanY();
-    CovarAccumulator::update(x, y);
-
-    m2X_ += (x - oldMeanX) * (x - meanX());
-    m2Y_ += (y - oldMeanY) * (y - meanY());
-  }
-
-  void merge(
-      int64_t countOther,
-      double meanXOther,
-      double meanYOther,
-      double c2Other,
-      double m2XOther,
-      double m2YOther) {
-    if (countOther == 0) {
-      return;
-    }
-
-    m2X_ += m2XOther +
-        count() * countOther * std::pow(meanX() - meanXOther, 2) /
-            (double)(count() + countOther);
-    m2Y_ += m2YOther +
-        count() * countOther * std::pow(meanY() - meanYOther, 2) /
-            (double)(count() + countOther);
-
-    CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
-  }
-
- private:
-  double m2X_{0};
-  double m2Y_{0};
 };
 
 struct CorrResultAccessor {
@@ -242,80 +66,78 @@ struct CorrResultAccessor {
   }
 };
 
-class CorrIntermediateInput : public CovarIntermediateInput {
- public:
-  explicit CorrIntermediateInput(const RowVector* rowVector)
-      : CovarIntermediateInput(rowVector, kCorrIndices),
-        m2X_{asSimpleVector<double>(rowVector, kCorrIndices.m2X)},
-        m2Y_{asSimpleVector<double>(rowVector, kCorrIndices.m2Y)} {}
-
-  void mergeInto(CorrAccumulator& accumulator, vector_size_t row) {
-    accumulator.merge(
-        count_->valueAt(row),
-        meanX_->valueAt(row),
-        meanY_->valueAt(row),
-        c2_->valueAt(row),
-        m2X_->valueAt(row),
-        m2Y_->valueAt(row));
+struct RegrCountResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count() > 0;
   }
 
- private:
-  SimpleVector<double>* m2X_;
-  SimpleVector<double>* m2Y_;
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count();
+  }
 };
 
-class CorrIntermediateResult : public CovarIntermediateResult {
- public:
-  explicit CorrIntermediateResult(const RowVector* rowVector)
-      : CovarIntermediateResult(rowVector, kCorrIndices),
-        m2X_{mutableRawValues<double>(rowVector, kCorrIndices.m2X)},
-        m2Y_{mutableRawValues<double>(rowVector, kCorrIndices.m2Y)} {}
-
-  static std::string type() {
-    return "row(double,bigint,double,double,double,double)";
+struct RegrAvgyResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count() > 0;
   }
 
-  void set(vector_size_t row, const CorrAccumulator& accumulator) {
-    CovarIntermediateResult::set(row, accumulator);
-    m2X_[row] = accumulator.m2X();
-    m2Y_[row] = accumulator.m2Y();
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.meanY();
   }
-
- private:
-  double* m2X_;
-  double* m2Y_;
 };
 
-struct RegrAccumulator : public CovarAccumulator {
-  double m2X() const {
-    return m2X_;
+struct RegrAvgxResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count() > 0;
   }
 
-  void update(double x, double y) {
-    double oldMeanX = meanX();
-    CovarAccumulator::update(x, y);
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.meanX();
+  }
+};
 
-    m2X_ += (x - oldMeanX) * (x - meanX());
+struct RegrSxyResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count() > 0;
   }
 
-  void merge(
-      int64_t countOther,
-      double meanXOther,
-      double meanYOther,
-      double c2Other,
-      double m2XOther) {
-    if (countOther == 0) {
-      return;
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.c2();
+  }
+};
+
+struct RegrR2ResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.m2X() != 0;
+  }
+
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    if (accumulator.m2X() != 0 && accumulator.m2Y() == 0) {
+      return 1;
     }
+    return std::pow(accumulator.c2(), 2) /
+        (accumulator.m2X() * accumulator.m2Y());
+  }
+};
 
-    m2X_ += m2XOther +
-        count() / (count() + countOther) * countOther *
-            std::pow(meanX() - meanXOther, 2);
-    CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
+struct RegrSyyResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count() > 0;
   }
 
- private:
-  double m2X_{0};
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.m2Y();
+  }
+};
+
+struct RegrSxxResultAccessor {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.count() > 0;
+  }
+
+  static double result(const ExtendedRegrAccumulator& accumulator) {
+    return accumulator.m2X();
+  }
 };
 
 struct RegrSlopeResultAccessor {
@@ -354,8 +176,28 @@ class RegrIntermediateInput : public CovarIntermediateInput {
         m2X_->valueAt(row));
   }
 
- private:
+ protected:
   SimpleVector<double>* m2X_;
+};
+
+class ExtendedRegrIntermediateInput : public RegrIntermediateInput {
+ public:
+  explicit ExtendedRegrIntermediateInput(const RowVector* rowVector)
+      : RegrIntermediateInput(rowVector),
+        m2Y_{asSimpleVector<double>(rowVector, kRegrIndices.m2Y)} {}
+
+  void mergeInto(ExtendedRegrAccumulator& accumulator, vector_size_t row) {
+    accumulator.merge(
+        count_->valueAt(row),
+        meanX_->valueAt(row),
+        meanY_->valueAt(row),
+        c2_->valueAt(row),
+        m2X_->valueAt(row),
+        m2Y_->valueAt(row));
+  }
+
+ private:
+  SimpleVector<double>* m2Y_;
 };
 
 class RegrIntermediateResult : public CovarIntermediateResult {
@@ -377,181 +219,23 @@ class RegrIntermediateResult : public CovarIntermediateResult {
   double* m2X_;
 };
 
-// @tparam T Type of the raw input and final result. Can be double or float.
-template <
-    typename T,
-    typename TAccumulator,
-    typename TIntermediateInput,
-    typename TIntermediateResult,
-    typename TResultAccessor>
-class CovarianceAggregate : public exec::Aggregate {
+class ExtendedRegrIntermediateResult : public RegrIntermediateResult {
  public:
-  explicit CovarianceAggregate(TypePtr resultType)
-      : exec::Aggregate(resultType) {}
+  explicit ExtendedRegrIntermediateResult(const RowVector* rowVector)
+      : RegrIntermediateResult(rowVector),
+        m2Y_{mutableRawValues<double>(rowVector, kRegrIndices.m2Y)} {}
 
-  int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(TAccumulator);
+  static std::string type() {
+    return "row(double,bigint,double,double,double,double)";
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) TAccumulator();
-    }
-  }
-
-  void addRawInput(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /* mayPushdown */) override {
-    if constexpr (std::is_same_v<TAccumulator, RegrAccumulator>) {
-      // The args order of linear regression function is (y, x), so we need to
-      // swap the order
-      decodedX_.decode(*args[1], rows);
-      decodedY_.decode(*args[0], rows);
-    } else {
-      decodedX_.decode(*args[0], rows);
-      decodedY_.decode(*args[1], rows);
-    }
-
-    rows.applyToSelected([&](auto row) {
-      if (decodedX_.isNullAt(row) || decodedY_.isNullAt(row)) {
-        return;
-      }
-      auto* group = groups[row];
-      exec::Aggregate::clearNull(group);
-      accumulator(group)->update(
-          decodedX_.valueAt<T>(row), decodedY_.valueAt<T>(row));
-    });
-  }
-
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /* mayPushdown */) override {
-    decodedPartial_.decode(*args[0], rows);
-
-    auto baseRowVector = static_cast<const RowVector*>(decodedPartial_.base());
-    TIntermediateInput input{baseRowVector};
-
-    rows.applyToSelected([&](auto row) {
-      if (decodedPartial_.isNullAt(row)) {
-        return;
-      }
-      auto decodedIndex = decodedPartial_.index(row);
-      auto* group = groups[row];
-      exec::Aggregate::clearNull(group);
-      input.mergeInto(*accumulator(group), decodedIndex);
-    });
-  }
-
-  void addSingleGroupRawInput(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /* mayPushdown */) override {
-    if constexpr (std::is_same_v<TAccumulator, RegrAccumulator>) {
-      // The args order of linear regression function is (y, x), so we need to
-      // swap the order
-      decodedX_.decode(*args[1], rows);
-      decodedY_.decode(*args[0], rows);
-    } else {
-      decodedX_.decode(*args[0], rows);
-      decodedY_.decode(*args[1], rows);
-    }
-
-    exec::Aggregate::clearNull(group);
-    auto* accumulator = this->accumulator(group);
-
-    rows.applyToSelected([&](auto row) {
-      if (decodedX_.isNullAt(row) || decodedY_.isNullAt(row)) {
-        return;
-      }
-      accumulator->update(decodedX_.valueAt<T>(row), decodedY_.valueAt<T>(row));
-    });
-  }
-
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /* mayPushdown */) override {
-    decodedPartial_.decode(*args[0], rows);
-
-    exec::Aggregate::clearNull(group);
-    auto* accumulator = this->accumulator(group);
-
-    auto baseRowVector = static_cast<const RowVector*>(decodedPartial_.base());
-    TIntermediateInput input{baseRowVector};
-
-    rows.applyToSelected([&](auto row) {
-      if (decodedPartial_.isNullAt(row)) {
-        return;
-      }
-      auto decodedIndex = decodedPartial_.index(row);
-      input.mergeInto(*accumulator, decodedIndex);
-    });
-  }
-
-  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    auto vector = (*result)->as<FlatVector<T>>();
-    VELOX_CHECK(vector);
-    vector->resize(numGroups);
-    uint64_t* rawNulls = getRawNulls(vector);
-
-    T* rawValues = vector->mutableRawValues();
-    for (auto i = 0; i < numGroups; ++i) {
-      char* group = groups[i];
-      if (isNull(group)) {
-        vector->setNull(i, true);
-      } else {
-        auto* accumulator = this->accumulator(group);
-        if (TResultAccessor::hasResult(*accumulator)) {
-          clearNull(rawNulls, i);
-          rawValues[i] = (T)TResultAccessor::result(*accumulator);
-        } else {
-          vector->setNull(i, true);
-        }
-      }
-    }
-  }
-
-  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    auto rowVector = (*result)->as<RowVector>();
-    rowVector->resize(numGroups);
-    for (auto& child : rowVector->children()) {
-      child->resize(numGroups);
-    }
-
-    uint64_t* rawNulls = getRawNulls(rowVector);
-
-    TIntermediateResult covarResult{rowVector};
-
-    for (auto i = 0; i < numGroups; ++i) {
-      char* group = groups[i];
-      if (isNull(group)) {
-        rowVector->setNull(i, true);
-      } else {
-        clearNull(rawNulls, i);
-        covarResult.set(i, *accumulator(group));
-      }
-    }
+  void set(vector_size_t row, const ExtendedRegrAccumulator& accumulator) {
+    RegrIntermediateResult::set(row, accumulator);
+    m2Y_[row] = accumulator.m2Y();
   }
 
  private:
-  inline TAccumulator* accumulator(char* group) {
-    return exec::Aggregate::value<TAccumulator>(group);
-  }
-
-  DecodedVector decodedX_;
-  DecodedVector decodedY_;
-  DecodedVector decodedPartial_;
+  double* m2Y_;
 };
 
 template <
@@ -559,7 +243,10 @@ template <
     typename TIntermediateInput,
     typename TIntermediateResult,
     typename TResultAccessor>
-exec::AggregateRegistrationResult registerCovariance(const std::string& name) {
+exec::AggregateRegistrationResult registerCovariance(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       // (double, double) -> double
       exec::AggregateFunctionSignatureBuilder()
@@ -606,39 +293,90 @@ exec::AggregateRegistrationResult registerCovariance(const std::string& name) {
           default:
             VELOX_UNSUPPORTED(
                 "Unsupported raw input type: {}. Expected DOUBLE or REAL.",
-                rawInputType->toString())
+                rawInputType->toString());
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
-void registerCovarianceAggregates(const std::string& prefix) {
+void registerCovarianceAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarPopResultAccessor>(prefix + kCovarPop);
+      CovarPopResultAccessor>(
+      prefix + kCovarPop, withCompanionFunctions, overwrite);
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarSampResultAccessor>(prefix + kCovarSamp);
+      CovarSampResultAccessor>(
+      prefix + kCovarSamp, withCompanionFunctions, overwrite);
   registerCovariance<
       CorrAccumulator,
       CorrIntermediateInput,
       CorrIntermediateResult,
-      CorrResultAccessor>(prefix + kCorr);
+      CorrResultAccessor>(prefix + kCorr, withCompanionFunctions, overwrite);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrInterceptResultAccessor>(prefix + kRegrIntercept);
+      RegrInterceptResultAccessor>(
+      prefix + kRegrIntercept, withCompanionFunctions, overwrite);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrSlopeResultAccessor>(prefix + kRegrSlop);
+      RegrSlopeResultAccessor>(
+      prefix + kRegrSlop, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrCountResultAccessor>(
+      prefix + kRegrCount, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrAvgyResultAccessor>(
+      prefix + kRegrAvgy, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrAvgxResultAccessor>(
+      prefix + kRegrAvgx, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrSxyResultAccessor>(
+      prefix + kRegrSxy, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrSxxResultAccessor>(
+      prefix + kRegrSxx, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrSyyResultAccessor>(
+      prefix + kRegrSyy, withCompanionFunctions, overwrite);
+  registerCovariance<
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
+      RegrR2ResultAccessor>(
+      prefix + kRegrR2, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

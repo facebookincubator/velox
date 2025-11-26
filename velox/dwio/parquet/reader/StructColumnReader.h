@@ -16,35 +16,50 @@
 
 #pragma once
 
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
-#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
+
+namespace facebook::velox::dwio::common {
+class BufferedInput;
+}
 
 namespace facebook::velox::parquet {
+
+enum class LevelMode;
+class PageReader;
+class ParquetParams;
 
 class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
  public:
   StructColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void seekToRowGroup(uint32_t index) override;
+  void seekToRowGroup(int64_t index) override;
 
-  /// Creates the streams for 'rowGroup in 'input'. Does not load yet.
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  /// Creates the streams for 'rowGroup'. Checks whether row 'rowGroup'
+  /// has been buffered in 'input'. If true, return the input. Or else creates
+  /// the streams in a new input and loads.
+  std::shared_ptr<dwio::common::BufferedInput> loadRowGroup(
+      uint32_t index,
+      const std::shared_ptr<dwio::common::BufferedInput>& input);
 
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
   void advanceFieldReader(
-      dwio::common::SelectiveColumnReader* FOLLY_NONNULL /*reader*/,
-      vector_size_t /*offset*/) override {}
+      dwio::common::SelectiveColumnReader* /*reader*/,
+      int64_t /*offset*/) override {}
 
   void setNullsFromRepDefs(PageReader& pageReader);
 
-  dwio::common::SelectiveColumnReader* FOLLY_NULLABLE childForRepDefs() const {
+  dwio::common::SelectiveColumnReader* childForRepDefs() const {
     return childForRepDefs_;
   }
 
@@ -65,9 +80,13 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
  private:
   dwio::common::SelectiveColumnReader* findBestLeaf();
 
+  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+
+  bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
+
   // Leaf column reader used for getting nullability information for
   // 'this'. This is nullptr for the root of a table.
-  dwio::common::SelectiveColumnReader* FOLLY_NULLABLE childForRepDefs_{nullptr};
+  dwio::common::SelectiveColumnReader* childForRepDefs_{nullptr};
 
   // Mode for getting nulls from repdefs. kStructOverLists if 'this'
   // only has list children.
@@ -75,7 +94,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   // The level information for extracting nulls for 'this' from the
   // repdefs in a leaf PageReader.
-  ::parquet::internal::LevelInfo levelInfo_;
+  LevelInfo levelInfo_;
 };
 
 } // namespace facebook::velox::parquet

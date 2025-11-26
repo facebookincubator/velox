@@ -21,7 +21,6 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/TypeUtil.h"
-
 namespace facebook::velox::dwio::common {
 
 // structs for extractValues in ColumnVisitor.
@@ -49,29 +48,32 @@ struct DropValues {
   }
 };
 
-template <typename TReader>
-struct ExtractToReader {
+class ExtractToReader {
+ public:
   using HookType = dwio::common::NoHook;
   static constexpr bool kSkipNulls = false;
-  explicit ExtractToReader(TReader* readerIn) : reader(readerIn) {}
+  explicit ExtractToReader(SelectiveColumnReader* reader) : reader_(reader) {}
 
   bool acceptsNulls() const {
     return true;
   }
 
   template <typename T>
-  void addNull(vector_size_t rowIndex);
+  void addNull(vector_size_t /*rowIndex*/) {
+    reader_->template addNull<T>();
+  }
 
   template <typename V>
   void addValue(vector_size_t /*rowIndex*/, V value) {
-    reader->addValue(value);
+    reader_->addValue(value);
   }
-
-  TReader* reader;
 
   dwio::common::NoHook& hook() {
     return noHook();
   }
+
+ private:
+  SelectiveColumnReader* const reader_;
 };
 
 template <typename THook>
@@ -94,7 +96,7 @@ class ExtractToHook {
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
-    hook_.addValue(rowIndex, &value);
+    hook_.addValueTyped(rowIndex, value);
   }
 
   auto& hook() {
@@ -123,7 +125,7 @@ class ExtractToGenericHook {
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
-    hook_->addValue(rowIndex, &value);
+    hook_->addValueTyped(rowIndex, value);
   }
 
   ValueHook& hook() {
@@ -141,7 +143,12 @@ template <typename TFilter, typename ExtractValues, bool isDense>
 class StringDictionaryColumnVisitor;
 
 // Template parameter for controlling filtering and action on a set of rows.
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath = true>
 class ColumnVisitor {
  public:
   using FilterType = TFilter;
@@ -149,9 +156,14 @@ class ColumnVisitor {
   using HookType = typename Extract::HookType;
   using DataType = T;
   static constexpr bool dense = isDense;
-  static constexpr bool kHasBulkPath = true;
+  static constexpr bool kHasBulkPath = hasBulkPath;
+  static constexpr bool kHasFilter =
+      !std::is_same_v<FilterType, velox::common::AlwaysTrue>;
+  static constexpr bool kHasHook = !std::is_same_v<HookType, NoHook>;
+  static constexpr bool kFilterOnly = std::is_same_v<Extract, DropValues>;
+
   ColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       const RowSet& rows,
       ExtractValues values)
@@ -269,7 +281,7 @@ class ColumnVisitor {
     }
     if (++rowIndex_ >= numRows_) {
       atEnd = true;
-      return rows_[numRows_ - 1] - previous;
+      return rowAt(numRows_ - 1) - previous;
     }
     if (TFilter::deterministic && isDense) {
       return 0;
@@ -301,12 +313,12 @@ class ColumnVisitor {
     if (isDense) {
       return 0;
     }
-    return currentRow() - rows_[rowIndex_ - 1] - 1;
+    return currentRow() - rowAt(rowIndex_ - 1) - 1;
   }
 
   FOLLY_ALWAYS_INLINE vector_size_t process(T value, bool& atEnd) {
     if (!TFilter::deterministic) {
-      auto previous = currentRow();
+      const auto previous = currentRow();
       if (velox::common::applyFilter(filter_, value)) {
         filterPassed(value);
       } else {
@@ -314,10 +326,11 @@ class ColumnVisitor {
       }
       if (++rowIndex_ >= numRows_) {
         atEnd = true;
-        return rows_[numRows_ - 1] - previous;
+        return rowAt(numRows_ - 1) - previous;
       }
       return currentRow() - previous - 1;
     }
+
     // The filter passes or fails and we go to the next row if any.
     if (velox::common::applyFilter(filter_, value)) {
       filterPassed(value);
@@ -331,36 +344,37 @@ class ColumnVisitor {
     if (isDense) {
       return 0;
     }
-    return currentRow() - rows_[rowIndex_ - 1] - 1;
-  }
-
-  // Returns space for 'size' items of T for a scan to fill. The scan
-  // calls addResults and related to mark which elements are part of
-  // the result.
-  inline T* mutableValues(int32_t size) {
-    return reader_->mutableValues<T>(size);
-  }
-
-  int32_t numRows() const {
-    return reader_->numRows();
+    return currentRow() - rowAt(rowIndex_ - 1) - 1;
   }
 
   SelectiveColumnReader& reader() const {
     return *reader_;
   }
 
-  inline vector_size_t rowAt(vector_size_t index) {
+  inline vector_size_t rowAt(vector_size_t index) const {
     if (isDense) {
       return index;
     }
     return rows_[index];
   }
 
-  bool atEnd() {
+  vector_size_t rowIndex() const {
+    return rowIndex_;
+  }
+
+  void setRowIndex(vector_size_t index) {
+    rowIndex_ = index;
+  }
+
+  void addRowIndex(vector_size_t size) {
+    rowIndex_ += size;
+  }
+
+  bool atEnd() const {
     return rowIndex_ >= numRows_;
   }
 
-  vector_size_t currentRow() {
+  vector_size_t currentRow() const {
     if (isDense) {
       return rowIndex_;
     }
@@ -371,7 +385,7 @@ class ColumnVisitor {
     return rows_;
   }
 
-  vector_size_t numRows() {
+  vector_size_t numRows() const {
     return numRows_;
   }
 
@@ -394,12 +408,16 @@ class ColumnVisitor {
   inline void addNull();
   inline void addOutputRow(vector_size_t row);
 
-  TFilter& filter() {
+  const TFilter& filter() {
     return filter_;
   }
 
   int32_t* outputRows(int32_t size) {
     return reader_->mutableOutputRows(size);
+  }
+
+  int32_t numValuesBias() const {
+    return numValuesBias_;
   }
 
   void setNumValuesBias(int32_t bias) {
@@ -410,6 +428,14 @@ class ColumnVisitor {
     reader_->setNumValues(numValuesBias_ + size);
     if (!std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
       reader_->setNumRows(numValuesBias_ + size);
+    }
+  }
+
+  void addNumValues(int size) {
+    auto numValues = reader_->numValues() + size;
+    reader_->setNumValues(numValues);
+    if constexpr (kHasFilter) {
+      reader_->setNumRows(numValues);
     }
   }
 
@@ -456,16 +482,16 @@ class ColumnVisitor {
   StringDictionaryColumnVisitor<TFilter, ExtractValues, isDense>
   toStringDictionaryColumnVisitor();
 
-  // Use for replacing *coall rows with non-null rows for fast path with
-  // processRun and processRle.
+  // Use for replacing all rows with non-null rows for fast path with processRun
+  // and processRle.
   void setRows(folly::Range<const int32_t*> newRows) {
     rows_ = newRows.data();
     numRows_ = newRows.size();
   }
 
  protected:
-  TFilter& filter_;
-  SelectiveColumnReader* reader_;
+  const TFilter& filter_;
+  SelectiveColumnReader* const reader_;
   const bool allowNulls_;
   const vector_size_t* rows_;
   vector_size_t numRows_;
@@ -474,11 +500,16 @@ class ColumnVisitor {
   ExtractValues values_;
 };
 
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath>
 FOLLY_ALWAYS_INLINE void
-ColumnVisitor<T, TFilter, ExtractValues, isDense>::filterFailed() {
-  auto preceding = filter_.getPrecedingPositionsToFail();
-  auto succeeding = filter_.getSucceedingPositionsToFail();
+ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::filterFailed() {
+  const auto preceding = filter_.getPrecedingPositionsToFail();
+  const auto succeeding = filter_.getSucceedingPositionsToFail();
   if (preceding) {
     reader_->dropResults(preceding);
   }
@@ -487,27 +518,39 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense>::filterFailed() {
   }
 }
 
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
-inline void ColumnVisitor<T, TFilter, ExtractValues, isDense>::addResult(
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath>
+inline void
+ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::addResult(
     T value) {
-  values_.addValue(rowIndex_, value);
+  values_.addValue(rowIndex_ + numValuesBias_, value);
 }
 
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
-inline void ColumnVisitor<T, TFilter, ExtractValues, isDense>::addNull() {
-  values_.template addNull<T>(rowIndex_);
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath>
+inline void
+ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::addNull() {
+  values_.template addNull<T>(rowIndex_ + numValuesBias_);
 }
 
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
-inline void ColumnVisitor<T, TFilter, ExtractValues, isDense>::addOutputRow(
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath>
+inline void
+ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::addOutputRow(
     vector_size_t row) {
   reader_->addOutputRow(row);
-}
-
-template <typename TReader>
-template <typename T>
-void ExtractToReader<TReader>::addNull(vector_size_t /*rowIndex*/) {
-  reader->template addNull<T>();
 }
 
 enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
@@ -680,7 +723,15 @@ inline xsimd::batch<int64_t> cvtU32toI64(
     xsimd::batch<int32_t, xsimd::sse2> values) {
   return _mm256_cvtepu32_epi64(values);
 }
-#elif XSIMD_WITH_SSE2 || XSIMD_WITH_NEON
+#elif (XSIMD_WITH_SVE && SVE_BITS == 256)
+inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch128<int32_t> values) {
+  int64_t element_1 = static_cast<uint32_t>(values.data[0]);
+  int64_t element_2 = static_cast<uint32_t>(values.data[1]);
+  int64_t element_3 = static_cast<uint32_t>(values.data[2]);
+  int64_t element_4 = static_cast<uint32_t>(values.data[3]);
+  return xsimd::batch<int64_t>(element_1, element_2, element_3, element_4);
+}
+#elif XSIMD_WITH_SSE2 || XSIMD_WITH_NEON || (XSIMD_WITH_SVE && SVE_BITS == 128)
 inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch64<int32_t> values) {
   int64_t lo = static_cast<uint32_t>(values.data[0]);
   int64_t hi = static_cast<uint32_t>(values.data[1]);
@@ -697,20 +748,20 @@ class DictionaryColumnVisitor
 
  public:
   DictionaryColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
-      RowSet rows,
+      const RowSet& rows,
       ExtractValues values)
       : ColumnVisitor<T, TFilter, ExtractValues, isDense>(
             filter,
             reader,
             rows,
             values),
-        state_(reader->scanState().rawState),
         width_(
-            reader->type()->kind() == TypeKind::BIGINT        ? 8
-                : reader->type()->kind() == TypeKind::INTEGER ? 4
-                                                              : 2) {}
+            reader->fileType().type()->kind() == TypeKind::BIGINT        ? 8
+                : reader->fileType().type()->kind() == TypeKind::INTEGER ? 4
+                                                                         : 2),
+        state_(reader->scanState().rawState) {}
 
   FOLLY_ALWAYS_INLINE bool isInDict() {
     if (inDict()) {
@@ -735,10 +786,11 @@ class DictionaryColumnVisitor
       }
       return super::process(signedValue, atEnd);
     }
-    vector_size_t previous =
+
+    const vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
-    T valueInDictionary = dict()[value];
-    if (std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
+    const T valueInDictionary = dict()[value];
+    if constexpr (!hasFilter()) {
       super::filterPassed(valueInDictionary);
     } else {
       // check the dictionary cache
@@ -763,6 +815,7 @@ class DictionaryColumnVisitor
         }
       }
     }
+
     if (++super::rowIndex_ >= super::numRows_) {
       atEnd = true;
       return (isDense && TFilter::deterministic)
@@ -793,30 +846,43 @@ class DictionaryColumnVisitor
       T* values,
       int32_t& numValues) {
     DCHECK_EQ(input, values + numValues);
-    if (!hasFilter) {
+    if constexpr (!DictionaryColumnVisitor::hasFilter()) {
       if (hasHook) {
         translateByDict(input, numInput, values);
         super::values_.hook().addValues(
             scatter ? scatterRows + super::rowIndex_
-                    : velox::iota(super::numRows_, super::innerNonNullRows()) +
+                    : velox::iota(
+                          super::numRows_,
+                          super::innerNonNullRows(),
+                          super::numValuesBias_) +
                     super::rowIndex_,
             values,
-            numInput,
-            sizeof(T));
+            numInput);
         super::rowIndex_ += numInput;
         return;
       }
-      if (inDict()) {
-        translateScatter<true, scatter>(
-            input, numInput, scatterRows, numValues, values);
+      if constexpr (std::is_same_v<TFilter, velox::common::IsNotNull>) {
+        auto* begin = (scatter ? scatterRows : super::rows_) + super::rowIndex_;
+        std::copy(begin, begin + numInput, filterHits + numValues);
+        if constexpr (!super::kFilterOnly) {
+          translateByDict(input, numInput, values + numValues);
+        }
+        numValues += numInput;
       } else {
-        translateScatter<false, scatter>(
-            input, numInput, scatterRows, numValues, values);
+        if (inDict()) {
+          translateScatter<true, scatter>(
+              input, numInput, scatterRows, numValues, values);
+        } else {
+          translateScatter<false, scatter>(
+              input, numInput, scatterRows, numValues, values);
+        }
+        numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
+                            : numValues + numInput;
       }
       super::rowIndex_ += numInput;
-      numValues = scatter ? scatterRows[super::rowIndex_ - 1] + 1
-                          : numValues + numInput;
       return;
+    } else {
+      static_assert(hasFilter);
     }
     // The filter path optionally extracts values but always sets
     // filterHits. It first loads a vector of indices. It translates
@@ -828,8 +894,7 @@ class DictionaryColumnVisitor
     // written, the passing bitmap is used to load a permute mask to
     // permute the passing values to the left of a vector register and
     // write  the whole register to the end of 'values'
-    constexpr bool kFilterOnly =
-        std::is_same_v<typename super::Extract, DropValues>;
+    constexpr bool kFilterOnly = super::kFilterOnly;
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     int32_t last = numInput & ~(kWidth - 1);
     for (auto i = 0; i < numInput; i += kWidth) {
@@ -855,10 +920,20 @@ class DictionaryColumnVisitor
           dictMask,
           reinterpret_cast<const int32_t*>(filterCache() - 3),
           indices);
-      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+#ifdef SVE_BITS
+      auto unknowns = simd::toBitMask(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
+          xsimd::batch<uint32_t>(0));
+      auto passed = simd::toBitMask(
+          (simd::reinterpretBatch<uint32_t>(cache) &
+           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
+#else
+      auto unknowns = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
+              (cache & (kUnknown << 24)) << 1)));
       auto passed = simd::toBitMask(
           xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
+#endif
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         // Ranges only over inputs that are in dictionary, the not in dictionary
@@ -1074,23 +1149,51 @@ class DictionaryColumnVisitor
     return state_.filterCache;
   }
 
-  RawScanState state_;
+  static constexpr bool hasFilter() {
+    // Dictionary values cannot be null.  See the explanation in
+    // `DictionaryValues::hasFilter'.
+    return !std::is_same_v<TFilter, velox::common::AlwaysTrue> &&
+        !std::is_same_v<TFilter, velox::common::IsNotNull>;
+  }
+
   const uint8_t width_;
+  RawScanState state_;
 };
 
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath>
 DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>
-ColumnVisitor<T, TFilter, ExtractValues, isDense>::toDictionaryColumnVisitor() {
+ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::
+    toDictionaryColumnVisitor() {
+  if constexpr (!kHasBulkPath) {
+    // Only DWRF integer dictionary is using this, which should not disable bulk
+    // path at decoder level.
+    VELOX_UNREACHABLE();
+  }
   auto result = DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>(
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
   result.numValuesBias_ = numValuesBias_;
   return result;
 }
 
-template <typename T, typename TFilter, typename ExtractValues, bool isDense>
+template <
+    typename T,
+    typename TFilter,
+    typename ExtractValues,
+    bool isDense,
+    bool hasBulkPath>
 StringDictionaryColumnVisitor<TFilter, ExtractValues, isDense>
-ColumnVisitor<T, TFilter, ExtractValues, isDense>::
+ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::
     toStringDictionaryColumnVisitor() {
+  if constexpr (!kHasBulkPath) {
+    // Only DWRF string dictionary is using this, which should not disable bulk
+    // path at decoder level.
+    VELOX_UNREACHABLE();
+  }
   auto result = StringDictionaryColumnVisitor<TFilter, ExtractValues, isDense>(
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
   result.setNumValuesBias(numValuesBias_);
@@ -1106,7 +1209,7 @@ class StringDictionaryColumnVisitor
 
  public:
   StringDictionaryColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       RowSet rows,
       ExtractValues values)
@@ -1124,7 +1227,7 @@ class StringDictionaryColumnVisitor
     }
     vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
-    if (std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
+    if constexpr (!DictSuper::hasFilter()) {
       super::filterPassed(index);
     } else {
       // check the dictionary cache
@@ -1137,7 +1240,7 @@ class StringDictionaryColumnVisitor
         super::filterFailed();
       } else {
         if (velox::common::applyFilter(
-                super::filter_, valueInDictionary(value, inStrideDict))) {
+                super::filter_, valueInDictionary(index))) {
           super::filterPassed(index);
           if (TFilter::deterministic) {
             DictSuper::filterCache()[index] = FilterResult::kSuccess;
@@ -1177,25 +1280,30 @@ class StringDictionaryColumnVisitor
       int32_t& numValues) {
     DCHECK(input == values + numValues);
     setByInDict(values + numValues, numInput);
-    if (!hasFilter) {
+    if constexpr (!DictSuper::hasFilter()) {
       if (hasHook) {
         for (auto i = 0; i < numInput; ++i) {
-          auto value = input[i];
           super::values_.addValue(
               scatterRows ? scatterRows[super::rowIndex_ + i]
                           : super::rowIndex_ + i,
-              value);
+              valueInDictionary(input[i]));
         }
       }
-      DCHECK_EQ(input, values + numValues);
-      if (scatter) {
+      if constexpr (std::is_same_v<TFilter, velox::common::IsNotNull>) {
+        auto* begin = (scatter ? scatterRows : super::rows_) + super::rowIndex_;
+        std::copy(begin, begin + numInput, filterHits + numValues);
+        numValues += numInput;
+      } else if constexpr (scatter) {
         dwio::common::scatterDense(
             input, scatterRows + super::rowIndex_, numInput, values);
+        numValues = scatterRows[super::rowIndex_ + numInput - 1] + 1;
+      } else {
+        numValues += numInput;
       }
-      numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
-                          : numValues + numInput;
       super::rowIndex_ += numInput;
       return;
+    } else {
+      static_assert(hasFilter);
     }
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
@@ -1214,25 +1322,26 @@ class StringDictionaryColumnVisitor
       } else {
         cache = simd::gather<int32_t, int32_t, 1>(base, indices);
       }
-      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+#ifdef SVE_BITS
+      auto unknowns = simd::toBitMask(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
+          xsimd::batch<uint32_t>(0));
+      auto passed = simd::toBitMask(
+          (simd::reinterpretBatch<uint32_t>(cache) &
+           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
+#else
+      auto unknowns = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
+              (cache & (kUnknown << 24)) << 1)));
       auto passed = simd::toBitMask(
           xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
+#endif
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         while (bits) {
           int index = bits::getAndClearLastSetBit(bits);
           int32_t value = input[i + index];
-          bool result;
-          if (value >= DictSuper::dictionarySize()) {
-            result = applyFilter(
-                super::filter_,
-                valueInDictionary(value - DictSuper::dictionarySize(), true));
-          } else {
-            result =
-                applyFilter(super::filter_, valueInDictionary(value, false));
-          }
-          if (result) {
+          if (applyFilter(super::filter_, valueInDictionary(value))) {
             DictSuper::filterCache()[value] = FilterResult::kSuccess;
             passed |= 1 << index;
           } else {
@@ -1312,65 +1421,15 @@ class StringDictionaryColumnVisitor
     }
   }
 
-  folly::StringPiece valueInDictionary(int64_t index, bool inStrideDict) {
-    if (inStrideDict) {
-      return folly::StringPiece(reinterpret_cast<const StringView*>(
-          DictSuper::state_.dictionary2.values)[index]);
+  StringView valueInDictionary(int64_t index) {
+    auto stripeDictSize = DictSuper::state_.dictionary.numValues;
+    if (index < stripeDictSize) {
+      return reinterpret_cast<const StringView*>(
+          DictSuper::state_.dictionary.values)[index];
     }
-    return folly::StringPiece(reinterpret_cast<const StringView*>(
-        DictSuper::state_.dictionary.values)[index]);
+    return reinterpret_cast<const StringView*>(
+        DictSuper::state_.dictionary2.values)[index - stripeDictSize];
   }
-};
-
-class ExtractStringDictionaryToGenericHook {
- public:
-  static constexpr bool kSkipNulls = true;
-  using HookType = ValueHook;
-
-  ExtractStringDictionaryToGenericHook(
-      ValueHook* hook,
-      RowSet rows,
-      RawScanState state)
-
-      : hook_(hook), rows_(rows), state_(state) {}
-
-  bool acceptsNulls() {
-    return hook_->acceptsNulls();
-  }
-
-  template <typename T>
-  void addNull(vector_size_t rowIndex) {
-    hook_->addNull(rowIndex);
-  }
-
-  void addValue(vector_size_t rowIndex, int32_t value) {
-    // We take the string from the stripe or stride dictionary
-    // according to the index. Stride dictionary indices are offset up
-    // by the stripe dict size.
-    if (value < dictionarySize()) {
-      auto view = folly::StringPiece(
-          reinterpret_cast<const StringView*>(state_.dictionary.values)[value]);
-      hook_->addValue(rowIndex, &view);
-    } else {
-      VELOX_DCHECK(state_.inDictionary);
-      auto view = folly::StringPiece(reinterpret_cast<const StringView*>(
-          state_.dictionary2.values)[value - dictionarySize()]);
-      hook_->addValue(rowIndex, &view);
-    }
-  }
-
-  ValueHook& hook() {
-    return *hook_;
-  }
-
- private:
-  int32_t dictionarySize() const {
-    return state_.dictionary.numValues;
-  }
-
-  ValueHook* const hook_;
-  RowSet const rows_;
-  RawScanState state_;
 };
 
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
@@ -1380,7 +1439,7 @@ class DirectRleColumnVisitor
 
  public:
   DirectRleColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       RowSet rows,
       ExtractValues values)
@@ -1389,13 +1448,6 @@ class DirectRleColumnVisitor
             reader,
             rows,
             values) {}
-
-  // Use for replacing all rows with non-null rows for fast path with
-  // processRun and processRle.
-  void setRows(folly::Range<const int32_t*> newRows) {
-    super::rows_ = newRows.data();
-    super::numRows_ = newRows.size();
-  }
 
   // Processes 'numInput' T's in 'input'. Sets 'values' and
   // 'numValues'' to the resulting values. 'scatterRows' may be
@@ -1477,6 +1529,120 @@ class DirectRleColumnVisitor
         values,
         numValues);
   }
+};
+
+template <bool kEncodingHasNulls, bool kDictionary>
+class StringColumnReadWithVisitorHelper {
+ public:
+  StringColumnReadWithVisitorHelper(SelectiveColumnReader& reader, RowSet rows)
+      : reader_(reader), rows_(rows) {}
+
+  template <typename F>
+  auto operator()(F&& readWithVisitor) {
+    const bool isDense = rows_.back() == rows_.size() - 1;
+    if (reader_.scanSpec()->keepValues()) {
+      if (auto* hook = reader_.scanSpec()->valueHook()) {
+        if (isDense) {
+          readHelper<velox::common::AlwaysTrue, true>(
+              &alwaysTrue(),
+              ExtractToGenericHook(hook),
+              std::forward<F>(readWithVisitor));
+        } else {
+          readHelper<velox::common::AlwaysTrue, false>(
+              &alwaysTrue(),
+              ExtractToGenericHook(hook),
+              std::forward<F>(readWithVisitor));
+        }
+      } else {
+        if (isDense) {
+          processFilter<true>(
+              ExtractToReader(&reader_), std::forward<F>(readWithVisitor));
+        } else {
+          processFilter<false>(
+              ExtractToReader(&reader_), std::forward<F>(readWithVisitor));
+        }
+      }
+    } else {
+      if (isDense) {
+        processFilter<true>(DropValues(), std::forward<F>(readWithVisitor));
+      } else {
+        processFilter<false>(DropValues(), std::forward<F>(readWithVisitor));
+      }
+    }
+  }
+
+ private:
+  template <typename TFilter, bool kIsDense, typename ExtractValues, typename F>
+  void readHelper(
+      const velox::common::Filter* filter,
+      ExtractValues extractValues,
+      F readWithVisitor) {
+    readWithVisitor(
+        ColumnVisitor<std::string_view, TFilter, ExtractValues, kIsDense>(
+            *static_cast<const TFilter*>(filter),
+            &reader_,
+            rows_,
+            extractValues));
+  }
+
+  template <bool kIsDense, typename ExtractValues, typename F>
+  void processFilter(ExtractValues extractValues, F&& readWithVisitor) {
+    using FilterValueT =
+        std::conditional_t<kDictionary, vector_size_t, StringView>;
+    auto* filter = reader_.scanSpec()->filter();
+    if (filter == nullptr) {
+      readHelper<velox::common::AlwaysTrue, kIsDense>(
+          &alwaysTrue(), extractValues, std::forward<F>(readWithVisitor));
+      return;
+    }
+    switch (filter->kind()) {
+      case velox::common::FilterKind::kAlwaysTrue:
+        readHelper<velox::common::AlwaysTrue, kIsDense>(
+            filter, extractValues, std::forward<F>(readWithVisitor));
+        break;
+      case velox::common::FilterKind::kIsNull:
+        if constexpr (kEncodingHasNulls) {
+          reader_.filterNulls<FilterValueT>(
+              rows_, true, !std::is_same_v<ExtractValues, DropValues>);
+        } else {
+          readHelper<velox::common::IsNull, kIsDense>(
+              filter, extractValues, std::forward<F>(readWithVisitor));
+        }
+        break;
+      case velox::common::FilterKind::kIsNotNull:
+        if constexpr (
+            kEncodingHasNulls && std::is_same_v<ExtractValues, DropValues>) {
+          reader_.filterNulls<FilterValueT>(rows_, false, false);
+        } else {
+          readHelper<velox::common::IsNotNull, kIsDense>(
+              filter, extractValues, std::forward<F>(readWithVisitor));
+        }
+        break;
+      case velox::common::FilterKind::kBytesRange:
+        readHelper<velox::common::BytesRange, kIsDense>(
+            filter, extractValues, std::forward<F>(readWithVisitor));
+        break;
+      case velox::common::FilterKind::kNegatedBytesRange:
+        readHelper<velox::common::NegatedBytesRange, kIsDense>(
+            filter, extractValues, std::forward<F>(readWithVisitor));
+        break;
+      case velox::common::FilterKind::kBytesValues:
+        readHelper<velox::common::BytesValues, kIsDense>(
+            filter, extractValues, std::forward<F>(readWithVisitor));
+        break;
+      case velox::common::FilterKind::kNegatedBytesValues:
+        readHelper<velox::common::NegatedBytesValues, kIsDense>(
+            filter, extractValues, std::forward<F>(readWithVisitor));
+        break;
+      default:
+        readHelper<velox::common::Filter, kIsDense>(
+            filter, extractValues, std::forward<F>(readWithVisitor));
+        break;
+    }
+  }
+
+  SelectiveColumnReader& reader_;
+  const RowSet rows_;
 };
 
 } // namespace facebook::velox::dwio::common

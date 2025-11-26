@@ -21,9 +21,10 @@
 
 namespace facebook::velox {
 
-uint64_t DecodedVector::constantNullMask_;
+uint64_t DecodedVector::constantNullMask_{0};
 
 namespace {
+
 std::vector<vector_size_t> makeConsecutiveIndices(size_t size) {
   std::vector<vector_size_t> consecutiveIndices(size);
   for (vector_size_t i = 0; i < consecutiveIndices.size(); ++i) {
@@ -31,6 +32,23 @@ std::vector<vector_size_t> makeConsecutiveIndices(size_t size) {
   }
   return consecutiveIndices;
 }
+
+const VectorPtr& getLoadedVector(const VectorPtr& vector) {
+  return BaseVector::loadedVectorShared(vector);
+}
+
+const BaseVector* getLoadedVector(const BaseVector* vector) {
+  return vector->loadedVector();
+}
+
+const VectorPtr& getValueVector(const VectorPtr& vector) {
+  return vector->valueVector();
+}
+
+const BaseVector* getValueVector(const BaseVector* vector) {
+  return vector->valueVector().get();
+}
+
 } // namespace
 
 const std::vector<vector_size_t>& DecodedVector::consecutiveIndices() {
@@ -42,46 +60,52 @@ const std::vector<vector_size_t>& DecodedVector::consecutiveIndices() {
 const std::vector<vector_size_t>& DecodedVector::zeroIndices() {
   static std::vector<vector_size_t> indices(10'000);
   return indices;
-};
+}
 
-void DecodedVector::decode(
-    const BaseVector& vector,
+template <typename T>
+VectorPtr DecodedVector::decodeImpl(
+    const T& vector,
     const SelectivityVector* rows,
     bool loadLazy) {
-  reset(end(vector.size(), rows));
+  reset(end(vector->size(), rows));
+  partialRowsDecoded_ = rows != nullptr;
   loadLazy_ = loadLazy;
-  bool isTopLevelLazyAndLoaded =
-      vector.isLazy() && vector.asUnchecked<LazyVector>()->isLoaded();
-  if (isTopLevelLazyAndLoaded || (loadLazy_ && isLazyNotLoaded(vector))) {
-    decode(*vector.loadedVector(), rows);
-    return;
+  const bool isTopLevelLazyAndLoaded = vector->isLazy() &&
+      vector->template asUnchecked<LazyVector>()->isLoaded();
+  if (isTopLevelLazyAndLoaded || (loadLazy_ && isLazyNotLoaded(*vector))) {
+    return decodeImpl(getLoadedVector(vector), rows, loadLazy);
   }
 
-  auto encoding = vector.encoding();
+  VectorPtr sharedBase;
+  const auto encoding = vector->encoding();
   switch (encoding) {
     case VectorEncoding::Simple::FLAT:
     case VectorEncoding::Simple::BIASED:
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
+    case VectorEncoding::Simple::FLAT_MAP:
     case VectorEncoding::Simple::MAP:
     case VectorEncoding::Simple::LAZY:
       isIdentityMapping_ = true;
-      setBaseData(vector, rows);
-      return;
+      setBaseData(vector, rows, sharedBase);
+      break;
     case VectorEncoding::Simple::CONSTANT: {
       isConstantMapping_ = true;
-      if (isLazyNotLoaded(vector)) {
-        baseVector_ = vector.valueVector().get();
-        constantIndex_ = vector.wrapInfo()->as<vector_size_t>()[0];
+      if (isLazyNotLoaded(*vector)) {
+        if constexpr (std::is_same_v<T, VectorPtr>) {
+          sharedBase = vector->valueVector();
+        }
+        baseVector_ = vector->valueVector().get();
+        constantIndex_ = vector->wrapInfo()->template as<vector_size_t>()[0];
         mayHaveNulls_ = true;
       } else {
-        setBaseData(vector, rows);
+        setBaseData(vector, rows, sharedBase);
       }
       break;
     }
     case VectorEncoding::Simple::DICTIONARY:
     case VectorEncoding::Simple::SEQUENCE: {
-      combineWrappers(&vector, rows);
+      combineWrappers(vector, rows, sharedBase);
       break;
     }
     default:
@@ -89,6 +113,37 @@ void DecodedVector::decode(
           "Unsupported vector encoding: {}",
           VectorEncoding::mapSimpleToName(encoding));
   }
+  return sharedBase;
+}
+
+DecodedVector::DecodedVector(
+    const BaseVector& vector,
+    const SelectivityVector& rows,
+    bool loadLazy) {
+  decodeImpl(&vector, &rows, loadLazy);
+}
+
+DecodedVector::DecodedVector(const BaseVector& vector, bool loadLazy) {
+  decodeImpl(&vector, nullptr, loadLazy);
+}
+
+void DecodedVector::decode(
+    const BaseVector& vector,
+    const SelectivityVector& rows,
+    bool loadLazy) {
+  decodeImpl(&vector, &rows, loadLazy);
+}
+
+void DecodedVector::decode(const BaseVector& vector, bool loadLazy) {
+  decodeImpl(&vector, nullptr, loadLazy);
+}
+
+VectorPtr DecodedVector::decodeAndGetBase(
+    const VectorPtr& vector,
+    bool loadLazy) {
+  auto sharedBase = decodeImpl(vector, nullptr, loadLazy);
+  VELOX_CHECK(sharedBase.get() == baseVector_);
+  return sharedBase;
 }
 
 void DecodedVector::makeIndices(
@@ -100,7 +155,8 @@ void DecodedVector::makeIndices(
   }
 
   reset(end(vector.size(), rows));
-  combineWrappers(&vector, rows, numLevels);
+  VectorPtr sharedPtr;
+  combineWrappers(&vector, rows, sharedPtr, numLevels);
 }
 
 void DecodedVector::reset(vector_size_t size) {
@@ -132,15 +188,17 @@ void DecodedVector::copyNulls(vector_size_t size) {
   nulls_ = copiedNulls_.data();
 }
 
+template <typename T>
 void DecodedVector::combineWrappers(
-    const BaseVector* vector,
+    const T& vector,
     const SelectivityVector* rows,
+    VectorPtr& sharedBase,
     int numLevels) {
   auto topEncoding = vector->encoding();
-  BaseVector* values = nullptr;
+  T values;
   if (topEncoding == VectorEncoding::Simple::DICTIONARY) {
-    indices_ = vector->wrapInfo()->as<vector_size_t>();
-    values = vector->valueVector().get();
+    indices_ = vector->wrapInfo()->template as<vector_size_t>();
+    values = getValueVector(vector);
     nulls_ = vector->rawNulls();
     if (nulls_) {
       hasExtraNulls_ = true;
@@ -154,14 +212,19 @@ void DecodedVector::combineWrappers(
   int32_t levelCounter = 0;
   for (;;) {
     if (numLevels != -1 && ++levelCounter == numLevels) {
-      baseVector_ = values;
+      if constexpr (std::is_same_v<T, VectorPtr>) {
+        // We get the shared base vector only in case numLevels == -1.
+        VELOX_UNREACHABLE();
+      } else {
+        baseVector_ = values;
+      }
       return;
     }
 
     auto encoding = values->encoding();
     if (isLazy(encoding) &&
-        (loadLazy_ || values->asUnchecked<LazyVector>()->isLoaded())) {
-      values = values->loadedVector();
+        (loadLazy_ || values->template asUnchecked<LazyVector>()->isLoaded())) {
+      values = getLoadedVector(values);
       encoding = values->encoding();
     }
 
@@ -172,14 +235,14 @@ void DecodedVector::combineWrappers(
       case VectorEncoding::Simple::BIASED:
       case VectorEncoding::Simple::ROW:
       case VectorEncoding::Simple::ARRAY:
+      case VectorEncoding::Simple::FLAT_MAP:
       case VectorEncoding::Simple::MAP:
-        setBaseData(*values, rows);
+        setBaseData(values, rows, sharedBase);
         return;
-      case VectorEncoding::Simple::DICTIONARY: {
+      case VectorEncoding::Simple::DICTIONARY:
         applyDictionaryWrapper(*values, rows);
-        values = values->valueVector().get();
+        values = getValueVector(values);
         break;
-      }
       default:
         VELOX_CHECK(false, "Unsupported vector encoding");
     }
@@ -225,7 +288,7 @@ void DecodedVector::applyDictionaryWrapper(
   });
 }
 
-void DecodedVector::fillInIndices() {
+void DecodedVector::fillInIndices() const {
   if (isConstantMapping_) {
     if (size_ > zeroIndices().size() || constantIndex_ != 0) {
       copiedIndices_.resize(size_);
@@ -283,60 +346,73 @@ void DecodedVector::setFlatNulls(
   }
 }
 
+template <typename T>
 void DecodedVector::setBaseData(
-    const BaseVector& vector,
-    const SelectivityVector* rows) {
-  auto encoding = vector.encoding();
-  baseVector_ = &vector;
+    const T& vector,
+    const SelectivityVector* rows,
+    VectorPtr& sharedBase) {
+  auto encoding = vector->encoding();
+  if constexpr (std::is_same_v<T, VectorPtr>) {
+    sharedBase = vector;
+    baseVector_ = vector.get();
+  } else {
+    baseVector_ = vector;
+  }
   switch (encoding) {
     case VectorEncoding::Simple::LAZY:
       break;
-    case VectorEncoding::Simple::FLAT: {
+    case VectorEncoding::Simple::FLAT:
       // values() may be nullptr if 'vector' is all nulls.
-      data_ = vector.values() ? vector.values()->as<void>() : nullptr;
-      setFlatNulls(vector, rows);
+      data_ =
+          vector->values() ? vector->values()->template as<void>() : nullptr;
+      setFlatNulls(*vector, rows);
       break;
-    }
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
-    case VectorEncoding::Simple::MAP: {
-      setFlatNulls(vector, rows);
+    case VectorEncoding::Simple::FLAT_MAP:
+    case VectorEncoding::Simple::MAP:
+      setFlatNulls(*vector, rows);
       break;
-    }
-    case VectorEncoding::Simple::CONSTANT: {
-      setBaseDataForConstant(vector, rows);
+    case VectorEncoding::Simple::CONSTANT:
+      setBaseDataForConstant(vector, rows, sharedBase);
       break;
-    }
     default:
       VELOX_UNREACHABLE();
   }
 }
 
+template <typename T>
 void DecodedVector::setBaseDataForConstant(
-    const BaseVector& vector,
-    const SelectivityVector* rows) {
-  if (!vector.isScalar()) {
-    baseVector_ = vector.wrappedVector();
-    constantIndex_ = vector.wrappedIndex(0);
+    const T& vector,
+    const SelectivityVector* rows,
+    VectorPtr& sharedBase) {
+  if (!vector->isScalar()) {
+    if constexpr (std::is_same_v<T, VectorPtr>) {
+      sharedBase = BaseVector::wrappedVectorShared(vector);
+      baseVector_ = sharedBase.get();
+    } else {
+      baseVector_ = vector->wrappedVector();
+    }
+    constantIndex_ = vector->wrappedIndex(0);
   }
-  if (!hasExtraNulls_ || vector.isNullAt(0)) {
+  if (!hasExtraNulls_ || vector->isNullAt(0)) {
     // A mapping over a constant is constant except if the
     // mapping adds nulls and the constant is not null.
     isConstantMapping_ = true;
     hasExtraNulls_ = false;
     indices_ = nullptr;
-    nulls_ = vector.isNullAt(0) ? &constantNullMask_ : nullptr;
+    nulls_ = vector->isNullAt(0) ? &constantNullMask_ : nullptr;
   } else {
     makeIndicesMutable();
 
     applyToRows(rows, [this](vector_size_t row) {
       copiedIndices_[row] = constantIndex_;
     });
-    setFlatNulls(vector, rows);
+    setFlatNulls(*vector, rows);
   }
-  data_ = vector.valuesAsVoid();
+  data_ = vector->valuesAsVoid();
   if (!nulls_) {
-    nulls_ = vector.isNullAt(0) ? &constantNullMask_ : nullptr;
+    nulls_ = vector->isNullAt(0) ? &constantNullMask_ : nullptr;
   }
   mayHaveNulls_ = hasExtraNulls_ || nulls_;
 }
@@ -373,25 +449,23 @@ BufferPtr copyNullsBuffer(
 } // namespace
 
 DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
-    const BaseVector& wrapper,
+    memory::MemoryPool& pool,
     vector_size_t size) const {
-  VELOX_CHECK(!isIdentityMapping_);
-  VELOX_CHECK(!isConstantMapping_);
   VELOX_CHECK_LE(size, size_);
 
   // Make a copy of the indices and nulls buffers.
-  BufferPtr indices = copyIndicesBuffer(indices_, size, wrapper.pool());
+  BufferPtr indices = copyIndicesBuffer(this->indices(), size, &pool);
   // Only copy nulls if we have nulls coming from one of the wrappers, don't
   // do it if nulls are missing or from the base vector.
   // TODO: remove the check for hasExtraNulls_ after #3553 is merged.
   BufferPtr nulls =
-      hasExtraNulls_ ? copyNullsBuffer(nulls_, size, wrapper.pool()) : nullptr;
+      hasExtraNulls_ ? copyNullsBuffer(nulls_, size, &pool) : nullptr;
   return {std::move(indices), std::move(nulls)};
 }
 
 VectorPtr DecodedVector::wrap(
     VectorPtr data,
-    const BaseVector& wrapper,
+    memory::MemoryPool& pool,
     vector_size_t size) {
   if (isConstantMapping_) {
     if (isNullAt(0)) {
@@ -405,7 +479,7 @@ VectorPtr DecodedVector::wrap(
     return BaseVector::wrapInConstant(size, constantIndex_, data);
   }
 
-  auto wrapping = dictionaryWrapping(wrapper, size);
+  auto wrapping = dictionaryWrapping(pool, size);
   return BaseVector::wrapInDictionary(
       std::move(wrapping.nulls),
       std::move(wrapping.indices),
@@ -413,7 +487,7 @@ VectorPtr DecodedVector::wrap(
       std::move(data));
 }
 
-const uint64_t* DecodedVector::nulls() {
+const uint64_t* DecodedVector::nulls(const SelectivityVector* rows) {
   if (allNulls_.has_value()) {
     return allNulls_.value();
   }
@@ -433,9 +507,19 @@ const uint64_t* DecodedVector::nulls() {
       // Copy base nulls.
       copiedNulls_.resize(bits::nwords(size_));
       auto* rawCopiedNulls = copiedNulls_.data();
-      for (auto i = 0; i < size_; ++i) {
-        bits::setNull(rawCopiedNulls, i, bits::isBitNull(nulls_, indices_[i]));
+      VELOX_CHECK(
+          partialRowsDecoded_ == (rows != nullptr),
+          "DecodedVector::nulls() must be called with the same rows as decode()");
+      if (rows != nullptr) {
+        // Partial consistency check: The end may be less than the decode time
+        // end but not greater.
+        VELOX_CHECK_LE(rows->end(), size_);
       }
+      VELOX_DEBUG_ONLY const auto baseSize = baseVector_->size();
+      applyToRows(rows, [&](auto i) {
+        VELOX_DCHECK_LT(indices_[i], baseSize);
+        bits::setNull(rawCopiedNulls, i, bits::isBitNull(nulls_, indices_[i]));
+      });
       allNulls_ = copiedNulls_.data();
     }
   }
@@ -453,5 +537,13 @@ void DecodedVector::applyToRows(const SelectivityVector* rows, Func&& func)
       func(i);
     }
   }
+}
+
+std::string DecodedVector::toString(vector_size_t idx) const {
+  if (isNullAt(idx)) {
+    return "null";
+  }
+
+  return baseVector_->toString(index(idx));
 }
 } // namespace facebook::velox

@@ -15,15 +15,24 @@
  */
 #include "velox/functions/prestosql/aggregates/PrestoHasher.h"
 
+#include <type_traits>
+
 #define XXH_INLINE_ALL
-#include <xxhash.h>
+#include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::aggregate {
 
 namespace {
+
+FOLLY_ALWAYS_INLINE uint64_t hashBuffer(const uint8_t* data, size_t size) {
+  return XXH64(data, size, 0);
+}
 
 template <typename T>
 FOLLY_ALWAYS_INLINE int64_t hashInteger(const T& value) {
@@ -42,7 +51,7 @@ FOLLY_ALWAYS_INLINE void applyHashFunction(
     const DecodedVector& vector,
     BufferPtr& hashes,
     Callable func) {
-  VELOX_CHECK_GE(hashes->size(), rows.end())
+  VELOX_CHECK_GE(hashes->size(), rows.end());
   auto rawHashes = hashes->asMutable<int64_t>();
 
   rows.applyToSelected([&](auto row) {
@@ -64,11 +73,38 @@ FOLLY_ALWAYS_INLINE void hashIntegral(
   });
 }
 
+template <
+    typename T,
+    typename std::enable_if_t<
+        std::is_same_v<T, float> || std::is_same_v<T, double>,
+        int> = 0>
+FOLLY_ALWAYS_INLINE void hashFloating(
+    const DecodedVector& vector,
+    const SelectivityVector& rows,
+    BufferPtr& hashes) {
+  using IntegralType =
+      std::conditional_t<std::is_same_v<T, float>, int32_t, int64_t>;
+  applyHashFunction(rows, vector, hashes, [&](auto row) {
+    auto value = vector.valueAt<T>(row);
+    if (std::isnan(value)) {
+      if constexpr (std::is_same_v<T, float>) {
+        return hashInteger<IntegralType>(0x7fc00000);
+      } else {
+        return hashInteger<IntegralType>(0x7ff8000000000000L);
+      }
+    } else if (value == (T{})) {
+      // If -0.0 treat it same as 0
+      return hashInteger<IntegralType>(0);
+    } else {
+      return hashInteger<IntegralType>(vector.valueAt<IntegralType>(row));
+    }
+  });
+}
+
 #if defined(__clang__)
 __attribute__((no_sanitize("integer")))
 #endif
-FOLLY_ALWAYS_INLINE int64_t
-safeHash(const int64_t& a, const int64_t& b) {
+FOLLY_ALWAYS_INLINE int64_t safeHash(const int64_t& a, const int64_t& b) {
   return a * 31 + b;
 }
 
@@ -100,11 +136,66 @@ FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::BOOLEAN>(
 }
 
 template <>
+FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::BIGINT>(
+    const SelectivityVector& rows,
+    BufferPtr& hashes) {
+  if (vector_->base()->type()->isShortDecimal()) {
+    applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+      // The Presto java ShortDecimal hash implementation
+      // returns the corresponding value directly.
+      return vector_->valueAt<int64_t>(row);
+    });
+  } else if (isTimestampWithTimeZoneType(vector_->base()->type())) {
+    // Hash only timestamp value.
+    applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+      return hashInteger(unpackMillisUtc(vector_->valueAt<int64_t>(row)));
+    });
+  } else {
+    applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+      return hashInteger(vector_->valueAt<int64_t>(row));
+    });
+  }
+}
+
+FOLLY_ALWAYS_INLINE uint64_t updateTail(uint64_t hash, uint64_t value) {
+  auto mix = XXH_rotl64(value * XXH_PRIME64_2, 31) * XXH_PRIME64_1;
+  auto temp = hash ^ mix;
+  return XXH_rotl64(temp, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+}
+
+FOLLY_ALWAYS_INLINE uint64_t hashLongDecimalPart(const uint64_t value) {
+  auto hash = XXH_PRIME64_5 + sizeof(uint64_t);
+  hash = updateTail(hash, value);
+  hash = XXH64_avalanche(hash);
+  return hash;
+}
+
+// The implementation of Presto LongDecimal hash can be found in
+// https://github.com/prestodb/presto/blob/master/presto-common/src/main/java/com/facebook/presto/common/type/LongDecimalType.java#L91-L96.
+template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::HUGEINT>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
   applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
-    return hashInteger(vector_->valueAt<int128_t>(row));
+    auto type = vector_->base()->type();
+    auto value = vector_->valueAt<int128_t>(row);
+
+    if (isIPAddressType(type)) {
+      auto byteArray = ipaddress::toIPv6ByteArray(value);
+      return hashBuffer(byteArray.data(), byteArray.size());
+    }
+
+    // Presto Java UnscaledDecimal128 representation uses signed magnitude
+    // representation. Only negative values differ in this representation.
+    // The processing here is mainly for the convenience of hash computation.
+    if (value < 0) {
+      value *= -1;
+      value |= DecimalUtil::kInt128Mask;
+    }
+    auto lower = HugeInt::lower(value);
+    auto high = HugeInt::upper(value);
+    return hashLongDecimalPart(lower) ^
+        hashLongDecimalPart(high & DecimalUtil::kInt64Mask);
   });
 }
 
@@ -112,7 +203,7 @@ template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::REAL>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
-  hashIntegral<int32_t>(*vector_.get(), rows, hashes);
+  hashFloating<float>(*vector_.get(), rows, hashes);
 }
 
 template <>
@@ -137,7 +228,7 @@ template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::DOUBLE>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
-  hashIntegral<int64_t>(*vector_.get(), rows, hashes);
+  hashFloating<double>(*vector_.get(), rows, hashes);
 }
 
 template <>
@@ -155,8 +246,10 @@ void PrestoHasher::hash<TypeKind::ARRAY>(
     BufferPtr& hashes) {
   auto baseArray = vector_->base()->as<ArrayVector>();
   auto indices = vector_->indices();
+  auto decodedNulls = vector_->nulls(&rows);
+
   auto elementRows = functions::toElementRows(
-      baseArray->elements()->size(), rows, baseArray, indices);
+      baseArray->elements()->size(), rows, baseArray, decodedNulls, indices);
 
   BufferPtr elementHashes =
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseArray->pool());
@@ -165,13 +258,12 @@ void PrestoHasher::hash<TypeKind::ARRAY>(
 
   auto rawSizes = baseArray->rawSizes();
   auto rawOffsets = baseArray->rawOffsets();
-  auto rawNulls = baseArray->rawNulls();
   auto rawElementHashes = elementHashes->as<int64_t>();
   auto rawHashes = hashes->asMutable<int64_t>();
 
   rows.applyToSelected([&](auto row) {
     int64_t hash = 0;
-    if (!(rawNulls && bits::isBitNull(rawNulls, indices[row]))) {
+    if (!((decodedNulls && bits::isBitNull(decodedNulls, row)))) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
 
@@ -189,10 +281,11 @@ void PrestoHasher::hash<TypeKind::MAP>(
     BufferPtr& hashes) {
   auto baseMap = vector_->base()->as<MapVector>();
   auto indices = vector_->indices();
-  VELOX_CHECK_EQ(children_.size(), 2)
+  auto decodedNulls = vector_->nulls(&rows);
+  VELOX_CHECK_EQ(children_.size(), 2);
 
   auto elementRows = functions::toElementRows(
-      baseMap->mapKeys()->size(), rows, baseMap, indices);
+      baseMap->mapKeys()->size(), rows, baseMap, decodedNulls, indices);
   BufferPtr keyHashes =
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseMap->pool());
 
@@ -208,11 +301,10 @@ void PrestoHasher::hash<TypeKind::MAP>(
 
   auto rawSizes = baseMap->rawSizes();
   auto rawOffsets = baseMap->rawOffsets();
-  auto rawNulls = baseMap->rawNulls();
 
   rows.applyToSelected([&](auto row) {
     int64_t hash = 0;
-    if (!(rawNulls && bits::isBitNull(rawNulls, indices[row]))) {
+    if (!((decodedNulls && bits::isBitNull(decodedNulls, row)))) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
 
@@ -231,14 +323,17 @@ void PrestoHasher::hash<TypeKind::ROW>(
     BufferPtr& hashes) {
   auto baseRow = vector_->base()->as<RowVector>();
   auto indices = vector_->indices();
-  SelectivityVector elementRows;
 
-  if (vector_->isIdentityMapping()) {
+  SelectivityVector elementRows;
+  if (vector_->isIdentityMapping() && !vector_->mayHaveNulls()) {
     elementRows = rows;
   } else {
     elementRows = SelectivityVector(baseRow->size(), false);
-    rows.applyToSelected(
-        [&](auto row) { elementRows.setValid(indices[row], true); });
+    rows.applyToSelected([&](auto row) {
+      if (!vector_->isNullAt(row)) {
+        elementRows.setValid(indices[row], true);
+      }
+    });
     elementRows.updateBounds();
   }
 
@@ -246,30 +341,31 @@ void PrestoHasher::hash<TypeKind::ROW>(
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseRow->pool());
 
   auto rawHashes = hashes->asMutable<int64_t>();
-  auto rowChildHashes = childHashes->as<int64_t>();
 
-  if (isTimestampWithTimeZoneType(vector_->base()->type())) {
-    // Hash only timestamp value.
-    children_[0]->hash(baseRow->childAt(0), elementRows, childHashes);
-    rows.applyToSelected([&](auto row) {
-      if (!baseRow->isNullAt(indices[row])) {
-        rawHashes[row] = rowChildHashes[indices[row]];
-      } else {
-        rawHashes[row] = 0;
-      }
-    });
-    return;
-  }
+  BufferPtr combinedChildHashes =
+      AlignedBuffer::allocate<int64_t>(elementRows.end(), baseRow->pool());
+  auto* rawCombinedChildHashes = combinedChildHashes->asMutable<int64_t>();
+  std::fill_n(rawCombinedChildHashes, elementRows.end(), 1);
 
   std::fill_n(rawHashes, rows.end(), 1);
 
   for (int i = 0; i < baseRow->childrenSize(); i++) {
     children_[i]->hash(baseRow->childAt(i), elementRows, childHashes);
 
-    rows.applyToSelected([&](auto row) {
-      rawHashes[row] = safeHash(rawHashes[row], rowChildHashes[indices[row]]);
+    auto rawChildHashes = childHashes->as<int64_t>();
+    elementRows.applyToSelected([&](auto row) {
+      rawCombinedChildHashes[row] =
+          safeHash(rawCombinedChildHashes[row], rawChildHashes[row]);
     });
   }
+
+  rows.applyToSelected([&](auto row) {
+    if (!vector_->isNullAt(row)) {
+      rawHashes[row] = rawCombinedChildHashes[indices[row]];
+    } else {
+      rawHashes[row] = 0;
+    }
+  });
 }
 
 void PrestoHasher::hash(
@@ -280,7 +376,7 @@ void PrestoHasher::hash(
       *vector->type() == *type_,
       "Vector type: {} != initialized type: {}",
       vector->type()->toString(),
-      type_->toString())
+      type_->toString());
   vector_->decode(*vector, rows);
   auto kind = vector_->base()->typeKind();
   VELOX_DYNAMIC_TYPE_DISPATCH(hash, kind, rows, hashes);

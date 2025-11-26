@@ -51,21 +51,6 @@ const std::vector<std::string> primitiveTypeNames() {
   return kPrimitiveTypeNames;
 }
 
-void toAppend(
-    const facebook::velox::exec::TypeSignature& signature,
-    std::string* result) {
-  result->append(signature.toString());
-}
-
-std::string TypeSignature::toString() const {
-  std::ostringstream out;
-  out << baseName_;
-  if (!parameters_.empty()) {
-    out << "(" << folly::join(",", parameters_) << ")";
-  }
-  return out.str();
-}
-
 std::string FunctionSignature::argumentsToString() const {
   std::vector<std::string> arguments;
   auto size = argumentTypes_.size();
@@ -107,38 +92,6 @@ size_t findNextComma(const std::string& str, size_t start) {
   return std::string::npos;
 }
 
-TypeSignature parseTypeSignature(const std::string& signature) {
-  auto parenPos = signature.find('(');
-  if (parenPos == std::string::npos) {
-    return TypeSignature(signature, {});
-  }
-
-  auto baseName = signature.substr(0, parenPos);
-  std::vector<TypeSignature> nestedTypes;
-
-  auto endParenPos = signature.rfind(')');
-  VELOX_CHECK(
-      endParenPos != std::string::npos,
-      "Couldn't find the closing parenthesis.");
-
-  auto prevPos = parenPos + 1;
-  auto commaPos = findNextComma(signature, prevPos);
-  while (commaPos != std::string::npos) {
-    auto token = signature.substr(prevPos, commaPos - prevPos);
-    boost::algorithm::trim(token);
-    nestedTypes.emplace_back(parseTypeSignature(token));
-
-    prevPos = commaPos + 1;
-    commaPos = findNextComma(signature, prevPos);
-  }
-
-  auto token = signature.substr(prevPos, endParenPos - prevPos);
-  boost::algorithm::trim(token);
-  nestedTypes.emplace_back(parseTypeSignature(token));
-
-  return TypeSignature(baseName, std::move(nestedTypes));
-}
-
 namespace {
 /// Returns true only if 'str' contains digits.
 bool isPositiveInteger(const std::string& str) {
@@ -153,6 +106,12 @@ void validateBaseTypeAndCollectTypeParams(
     const TypeSignature& arg,
     std::unordered_set<std::string>& collectedTypeVariables,
     bool isReturnType) {
+  if (isReturnType) {
+    VELOX_USER_CHECK(
+        !arg.isHomogeneousRow(),
+        "Homogeneous row cannot appear in return type");
+  }
+
   if (!variables.count(arg.baseName())) {
     auto typeName = boost::algorithm::to_upper_copy(arg.baseName());
 
@@ -161,14 +120,14 @@ void validateBaseTypeAndCollectTypeParams(
           !isReturnType, "Type 'Any' cannot appear in return type");
 
       VELOX_USER_CHECK(
-          arg.parameters().empty(), "Type 'Any' cannot have parameters")
+          arg.parameters().empty(), "Type 'Any' cannot have parameters");
       return;
     }
 
     if (!isPositiveInteger(typeName) &&
-        !tryMapNameToTypeKind(typeName).has_value() &&
+        !TypeKindName::tryToTypeKind(typeName).has_value() &&
         !isDecimalName(typeName) && !isDateName(typeName)) {
-      VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: {}", typeName);
+      VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: '{}'", typeName);
     }
 
     // Ensure all params are similarly supported.
@@ -182,8 +141,8 @@ void validateBaseTypeAndCollectTypeParams(
     // it doesn't have parameters, e.g M[T].
     VELOX_USER_CHECK(
         arg.parameters().empty(),
-        "Named type cannot have parameters : {}",
-        arg.toString())
+        "Named type cannot have parameters: '{}'",
+        arg.toString());
     collectedTypeVariables.insert(arg.baseName());
   }
 }
@@ -192,8 +151,13 @@ void validate(
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const TypeSignature& returnType,
     const std::vector<TypeSignature>& argumentTypes,
-    const std::vector<bool>& constantArguments) {
+    const std::vector<bool>& constantArguments,
+    const std::vector<TypeSignature>& additionalTypes = {}) {
   std::unordered_set<std::string> usedVariables;
+  // Validate the additional types, and collect the used variables.
+  for (const auto& type : additionalTypes) {
+    validateBaseTypeAndCollectTypeParams(variables, type, usedVariables, false);
+  }
   // Validate the argument types.
   for (const auto& arg : argumentTypes) {
     // Is base type a type parameter or a built in type ?
@@ -229,17 +193,23 @@ SignatureVariable::SignatureVariable(
     std::string name,
     std::optional<std::string> constraint,
     ParameterType type,
-    bool knownTypesOnly)
+    bool knownTypesOnly,
+    bool orderableTypesOnly,
+    bool comparableTypesOnly)
     : name_{std::move(name)},
       constraint_(constraint.has_value() ? std::move(constraint.value()) : ""),
       type_{type},
-      knownTypesOnly_(knownTypesOnly) {
+      knownTypesOnly_(knownTypesOnly),
+      orderableTypesOnly_(orderableTypesOnly),
+      comparableTypesOnly_(comparableTypesOnly) {
   VELOX_CHECK(
-      !knownTypesOnly_ || isTypeParameter(),
-      "Non-Type variables cannot have the knownTypesOnly constraint");
+      !(knownTypesOnly_ || orderableTypesOnly_ || comparableTypesOnly_) ||
+          isTypeParameter(),
+      "Non-Type variables cannot have the knownTypesOnly/orderableTypesOnly/comparableTypesOnly constraint");
 
   VELOX_CHECK(
-      isIntegerParameter() || (isTypeParameter() && constraint_.empty()),
+      (isIntegerParameter() || isEnumParameter() ||
+       (isTypeParameter() && constraint_.empty())),
       "Type variables cannot have constraints");
 }
 
@@ -255,6 +225,26 @@ FunctionSignature::FunctionSignature(
       constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
   validate(variables_, returnType_, argumentTypes_, constantArguments_);
+}
+
+FunctionSignature::FunctionSignature(
+    std::unordered_map<std::string, SignatureVariable> variables,
+    facebook::velox::exec::TypeSignature returnType,
+    std::vector<TypeSignature> argumentTypes,
+    std::vector<bool> constantArguments,
+    bool variableArity,
+    const std::vector<TypeSignature>& additionalTypes)
+    : variables_{std::move(variables)},
+      returnType_{std::move(returnType)},
+      argumentTypes_{std::move(argumentTypes)},
+      constantArguments_{std::move(constantArguments)},
+      variableArity_{variableArity} {
+  validate(
+      variables_,
+      returnType_,
+      argumentTypes_,
+      constantArguments_,
+      additionalTypes);
 }
 
 std::string AggregateFunctionSignature::toString() const {
@@ -274,6 +264,48 @@ FunctionSignaturePtr FunctionSignatureBuilder::build() {
       variableArity_);
 }
 
+FunctionSignatureBuilder& FunctionSignatureBuilder::knownTypeVariable(
+    const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ true,
+          /*orderableTypesOnly*/ false,
+          /*comparableTypesOnly*/ false));
+  return *this;
+}
+
+FunctionSignatureBuilder& FunctionSignatureBuilder::orderableTypeVariable(
+    const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ false,
+          /*orderableTypesOnly*/ true,
+          /*comparableTypesOnly*/ true));
+  return *this;
+}
+
+FunctionSignatureBuilder& FunctionSignatureBuilder::comparableTypeVariable(
+    const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ false,
+          /*orderableTypesOnly*/ false,
+          /*comparableTypesOnly*/ true));
+  return *this;
+}
+
 std::shared_ptr<AggregateFunctionSignature>
 AggregateFunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
@@ -285,6 +317,50 @@ AggregateFunctionSignatureBuilder::build() {
       std::move(argumentTypes_),
       std::move(constantArguments_),
       variableArity_);
+}
+
+AggregateFunctionSignatureBuilder&
+AggregateFunctionSignatureBuilder::knownTypeVariable(const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ true,
+          /*orderableTypesOnly*/ false,
+          /*comparableTypesOnly*/ false));
+  return *this;
+}
+
+AggregateFunctionSignatureBuilder&
+AggregateFunctionSignatureBuilder::orderableTypeVariable(
+    const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ false,
+          /*orderableTypesOnly*/ true,
+          /*comparableTypesOnly*/ true));
+  return *this;
+}
+
+AggregateFunctionSignatureBuilder&
+AggregateFunctionSignatureBuilder::comparableTypeVariable(
+    const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ false,
+          /*orderableTypesOnly*/ false,
+          /*comparableTypesOnly*/ true));
+  return *this;
 }
 
 std::string toString(

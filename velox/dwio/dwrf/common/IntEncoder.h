@@ -22,11 +22,14 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/common/Range.h"
 #include "velox/dwio/dwrf/common/Common.h"
-#include "velox/dwio/dwrf/common/OutputStream.h"
 
 namespace facebook::velox::dwrf {
+
+using facebook::velox::dwio::common::BufferedOutputStream;
+using facebook::velox::dwio::common::PositionRecorder;
 
 template <bool isSigned>
 class IntEncoder {
@@ -114,6 +117,21 @@ class IntEncoder {
     }
   }
 
+  /// Write a huge int value at a time. This method could be optimized to encode
+  /// a batch of values at a time and avoid condition checking for each write
+  /// following 'addImpl'.
+  virtual void writeHugeInt(int128_t value) {
+    if (!useVInts_) {
+      VELOX_NYI("Huge int encoding not supported for fixed length.");
+    } else {
+      if constexpr (isSigned) {
+        writeVsHugeInt(value);
+      } else {
+        writeVuHugeInt(value);
+      }
+    }
+  }
+
   /**
    * Get size of buffer used so far.
    */
@@ -176,6 +194,12 @@ class IntEncoder {
     writeVulong(ZigZag::encode(val));
   }
   FOLLY_ALWAYS_INLINE void writeLongLE(int64_t val);
+
+  FOLLY_ALWAYS_INLINE void writeVuHugeInt(uint128_t val);
+
+  FOLLY_ALWAYS_INLINE void writeVsHugeInt(int128_t val) {
+    writeVuHugeInt(ZigZag::encodeInt128(val));
+  }
 
  private:
   template <typename T>
@@ -317,8 +341,9 @@ template <bool isSigned>
     case 57 ... 63:
       return writeVarint<1>(value, buffer);
   }
-  DWIO_RAISE(folly::sformat(
-      "Unexpected leading zeros {} for value {}", leadingZeros, value));
+  DWIO_RAISE(
+      folly::sformat(
+          "Unexpected leading zeros {} for value {}", leadingZeros, value));
 }
 
 template <bool isSigned>
@@ -363,6 +388,19 @@ void IntEncoder<isSigned>::writeLongLE(int64_t val) {
   for (int32_t i = 0; i < numBytes_; i++) {
     writeByte(static_cast<char>(val & dwio::common::BASE_256_MASK));
     val >>= 8;
+  }
+}
+
+template <bool isSigned>
+void IntEncoder<isSigned>::writeVuHugeInt(uint128_t val) {
+  while (true) {
+    if ((val & ~0x7f) == 0) {
+      writeByte(static_cast<char>(val));
+      return;
+    }
+    writeByte(static_cast<char>(0x80 | (val & dwio::common::BASE_128_MASK)));
+    // Cast val to unsigned so as to force 0-fill right shift.
+    val >>= 7;
   }
 }
 

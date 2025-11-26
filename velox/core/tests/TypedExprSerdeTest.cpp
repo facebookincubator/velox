@@ -23,6 +23,10 @@ namespace facebook::velox::core::test {
 class TypedExprSerDeTest : public testing::Test,
                            public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   TypedExprSerDeTest() {
     Type::registerSerDe();
 
@@ -51,19 +55,22 @@ TEST_F(TypedExprSerDeTest, input) {
 }
 
 TEST_F(TypedExprSerDeTest, fieldAccess) {
-  auto expression = std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a");
+  std::shared_ptr<ITypedExpr> expression =
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a");
   testSerde(expression);
+  ASSERT_EQ(expression->toString(), "\"a\"");
 
-  expression = std::make_shared<FieldAccessTypedExpr>(
+  expression = std::make_shared<DereferenceTypedExpr>(
       VARCHAR(),
       std::make_shared<FieldAccessTypedExpr>(
           ROW({"a", "b"}, {VARCHAR(), BOOLEAN()}), "ab"),
-      "a");
+      0);
   testSerde(expression);
+  ASSERT_EQ(expression->toString(), "\"ab\"[a]");
 }
 
 TEST_F(TypedExprSerDeTest, constant) {
-  auto expression = std::make_shared<ConstantTypedExpr>(BIGINT(), 127);
+  auto expression = std::make_shared<ConstantTypedExpr>(BIGINT(), 127LL);
   testSerde(expression);
 
   expression =
@@ -80,51 +87,35 @@ TEST_F(TypedExprSerDeTest, call) {
   // a + b
   auto expression = std::make_shared<CallTypedExpr>(
       BIGINT(),
-      std::vector<TypedExprPtr>{
-          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"),
-          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "b"),
-      },
-      "plus");
+      "plus",
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "b"));
 
   testSerde(expression);
 
   // f(g(h(a, b), c))
   expression = std::make_shared<CallTypedExpr>(
       VARCHAR(),
-      std::vector<TypedExprPtr>{
+      "f",
+      std::make_shared<CallTypedExpr>(
+          DOUBLE(),
+          "g",
           std::make_shared<CallTypedExpr>(
-              DOUBLE(),
-              std::vector<TypedExprPtr>{
-                  std::make_shared<CallTypedExpr>(
-                      BIGINT(),
-                      std::vector<TypedExprPtr>{
-                          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"),
-                          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "b"),
-                      },
-                      "h"),
-                  std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c"),
-              },
-              "g"),
-      },
-      "f");
+              BIGINT(),
+              "h",
+              std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"),
+              std::make_shared<FieldAccessTypedExpr>(BIGINT(), "b")),
+          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c")));
   testSerde(expression);
 }
 
 TEST_F(TypedExprSerDeTest, cast) {
   auto expression = std::make_shared<CastTypedExpr>(
-      BIGINT(),
-      std::vector<TypedExprPtr>{
-          std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "a"),
-      },
-      false);
+      BIGINT(), std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "a"), false);
   testSerde(expression);
 
   expression = std::make_shared<CastTypedExpr>(
-      VARCHAR(),
-      std::vector<TypedExprPtr>{
-          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"),
-      },
-      true);
+      VARCHAR(), std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"), true);
   testSerde(expression);
 }
 
@@ -140,16 +131,16 @@ TEST_F(TypedExprSerDeTest, concat) {
 }
 
 TEST_F(TypedExprSerDeTest, lambda) {
-  // x -> (x > 10)
+  // x -> (x in (1, ..., 5))
   auto expression = std::make_shared<LambdaTypedExpr>(
       ROW({"x"}, {BIGINT()}),
       std::make_shared<CallTypedExpr>(
           BOOLEAN(),
-          std::vector<TypedExprPtr>{
-              std::make_shared<FieldAccessTypedExpr>(BIGINT(), "x"),
-              std::make_shared<ConstantTypedExpr>(BIGINT(), 10),
-          },
-          "gt"));
+          "in",
+          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "x"),
+          std::make_shared<ConstantTypedExpr>(makeArrayVector<int64_t>({
+              {1, 2, 3, 4, 5},
+          }))));
   testSerde(expression);
 }
 

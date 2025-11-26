@@ -16,8 +16,8 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/functions/prestosql/Utf8Utils.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -39,19 +39,47 @@ class FromUtf8Function : public exec::VectorFunction {
 
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto& decodedInput = *decodedArgs.at(0);
-    if (input->loadedVector()
-            ->as<SimpleVector<StringView>>()
-            ->computeAndSetIsAscii(rows)) {
-      // Input strings are all-ASCII.
-      toVarcharNoCopy(input, decodedInput, rows, context, result);
-      return;
+
+    // Read the constant replacement if it exisits and verify that it is valid.
+    bool constantReplacement =
+        args.size() == 1 || decodedArgs.at(1)->isConstantMapping();
+    std::string constantReplacementValue = kReplacementChar;
+
+    if (constantReplacement) {
+      if (args.size() > 1) {
+        auto& decodedReplacement = *decodedArgs.at(1);
+        try {
+          constantReplacementValue = getReplacementCharacter(
+              args[1]->type(), decodedReplacement, rows.begin());
+        } catch (const std::exception&) {
+          context.setErrors(rows, std::current_exception());
+          return;
+        }
+      }
+    }
+
+    // We can only do valid UTF-8 input optimization if replacement is valid and
+    // constant otherwise we have to check replacement for each row.
+    if (constantReplacement) {
+      if (input->loadedVector()
+              ->as<SimpleVector<StringView>>()
+              ->computeAndSetIsAscii(rows)) {
+        // Input strings are all-ASCII.
+        toVarcharNoCopy(input, decodedInput, rows, context, result);
+        return;
+      }
     }
 
     auto firstInvalidRow = findFirstInvalidRow(decodedInput, rows);
-    if (!firstInvalidRow.has_value()) {
-      // All inputs are valid UTF-8 strings.
-      toVarcharNoCopy(input, decodedInput, rows, context, result);
-      return;
+
+    // We can only do this optimization if replacement is valid and
+    // constant otherwise we have to check replacement for each row.
+    if (constantReplacement) {
+      if (!firstInvalidRow.has_value()) {
+        // All inputs are valid UTF-8 strings.
+        toVarcharNoCopy(input, decodedInput, rows, context, result);
+        return;
+      }
     }
 
     BaseVector::ensureWritable(rows, VARCHAR(), context.pool(), result);
@@ -65,31 +93,15 @@ class FromUtf8Function : public exec::VectorFunction {
 
     flatResult->getBufferWithSpace(totalInputSize);
 
-    // Optimize for common case of constant 'replacement' argument.
-    bool constantReplacement =
-        args.size() == 1 || decodedArgs.at(1)->isConstantMapping();
-
     if (constantReplacement) {
-      std::string replacement = kReplacementChar;
-      if (args.size() > 1) {
-        auto& decodedReplacement = *decodedArgs.at(1);
-        try {
-          replacement = getReplacementCharacter(
-              args[1]->type(), decodedReplacement, rows.begin());
-        } catch (const std::exception&) {
-          context.setErrors(rows, std::current_exception());
-          return;
-        }
-      }
-
       rows.applyToSelected([&](auto row) {
-        exec::StringWriter<false> writer(flatResult, row);
+        exec::StringWriter writer(flatResult, row);
         auto value = decodedInput.valueAt<StringView>(row);
         if (row < firstInvalidRow) {
           writer.append(value);
           writer.finalize();
         } else {
-          fixInvalidUtf8(value, replacement, writer);
+          fixInvalidUtf8(value, constantReplacementValue, writer);
         }
       });
     } else {
@@ -97,7 +109,7 @@ class FromUtf8Function : public exec::VectorFunction {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         auto replacement =
             getReplacementCharacter(args[1]->type(), decodedReplacement, row);
-        exec::StringWriter<false> writer(flatResult, row);
+        exec::StringWriter writer(flatResult, row);
         auto value = decodedInput.valueAt<StringView>(row);
         if (row < firstInvalidRow) {
           writer.append(value);
@@ -153,14 +165,15 @@ class FromUtf8Function : public exec::VectorFunction {
 
     auto replacement = decoded.valueAt<StringView>(row);
     if (!replacement.empty()) {
-      auto charLength =
-          tryGetCharLength(replacement.data(), replacement.size());
+      int32_t codePoint;
+      auto charLength = tryGetUtf8CharLength(
+          replacement.data(), replacement.size(), codePoint);
       VELOX_USER_CHECK_GT(
           charLength, 0, "Replacement is not a valid UTF-8 character");
       VELOX_USER_CHECK_EQ(
           charLength,
           replacement.size(),
-          "Replacement string must be empty or a single character")
+          "Replacement string must be empty or a single character");
     }
     return replacement;
   }
@@ -176,8 +189,9 @@ class FromUtf8Function : public exec::VectorFunction {
 
       int32_t pos = 0;
       while (pos < value.size()) {
-        auto charLength =
-            tryGetCharLength(value.data() + pos, value.size() - pos);
+        int32_t codePoint;
+        auto charLength = tryGetUtf8CharLength(
+            value.data() + pos, value.size() - pos, codePoint);
         if (charLength < 0) {
           firstInvalidRow = row;
           return false;
@@ -247,7 +261,7 @@ class FromUtf8Function : public exec::VectorFunction {
   void fixInvalidUtf8(
       StringView input,
       const std::string& replacement,
-      exec::StringWriter<false>& fixedWriter) const {
+      exec::StringWriter& fixedWriter) const {
     if (input.empty()) {
       fixedWriter.setEmpty();
       return;
@@ -255,8 +269,9 @@ class FromUtf8Function : public exec::VectorFunction {
 
     int32_t pos = 0;
     while (pos < input.size()) {
-      auto charLength =
-          tryGetCharLength(input.data() + pos, input.size() - pos);
+      int32_t codePoint;
+      auto charLength = tryGetUtf8CharLength(
+          input.data() + pos, input.size() - pos, codePoint);
       if (charLength > 0) {
         fixedWriter.append(std::string_view(input.data() + pos, charLength));
         pos += charLength;

@@ -13,117 +13,184 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <exception>
-#include <map>
+#include <folly/io/IOBuf.h>
+
+#include <array>
 #include <string>
 
-#include <folly/Range.h>
-#include <folly/io/IOBuf.h>
+#include "velox/common/base/GTestMacros.h"
+#include "velox/common/base/Status.h"
 
 namespace facebook::velox::encoding {
 
-class Base64Exception : public std::exception {
- public:
-  explicit Base64Exception(const char* msg) : msg_(msg) {}
-  const char* what() const noexcept override {
-    return msg_;
-  }
-
- protected:
-  const char* msg_;
-};
-
 class Base64 {
  public:
-  using Charset = std::array<char, 64>;
-  using ReverseIndex = std::array<uint8_t, 256>;
+  static const size_t kCharsetSize = 64;
+  static const size_t kReverseIndexSize = 256;
 
-  static std::string encode(const char* data, size_t len);
-  static std::string encode(folly::StringPiece text);
-  static std::string encode(const folly::IOBuf* text);
+  /// Character set used for Base64 encoding.
+  /// Contains specific characters that form the encoding scheme.
+  using Charset = std::array<char, kCharsetSize>;
 
-  /// Returns encoded size for the input of the specified size.
-  static size_t calculateEncodedSize(size_t size, bool withPadding = true);
+  /// Reverse lookup table for decoding.
+  /// Maps each possible encoded character to its corresponding numeric value
+  /// within the encoding base.
+  using ReverseIndex = std::array<uint8_t, kReverseIndexSize>;
 
-  /// Encodes the specified number of characters from the 'data' and writes the
-  /// result to the 'output'. The output must have enough space, e.g. as
+  /// Encodes the specified number of characters from the 'input'.
+  static std::string encode(const char* input, size_t inputSize);
+
+  /// Encodes the specified text.
+  static std::string encode(std::string_view text);
+
+  /// Encodes the specified IOBuf data.
+  static std::string encode(const folly::IOBuf* inputBuffer);
+
+  /// Encodes the specified number of characters from the 'input' and writes the
+  /// result to the 'outputBuffer'. The output must have enough space as
   /// returned by the calculateEncodedSize().
-  static void encode(const char* data, size_t size, char* output);
+  static void encode(const char* input, size_t inputSize, char* outputBuffer);
 
-  // Appends the encoded text to out.
-  static void encodeAppend(folly::StringPiece text, std::string& out);
+  /// Encodes the specified number of characters from the 'input' using URL
+  /// encoding.
+  static std::string encodeUrl(const char* input, size_t inputSize);
 
-  static std::string decode(folly::StringPiece encoded);
+  /// Encodes the specified text using URL encoding.
+  static std::string encodeUrl(std::string_view text);
 
-  /// Returns decoded size for the specified input. Adjusts the 'size' to
-  /// subtract the length of the padding, if exists.
-  static size_t
-  calculateDecodedSize(const char* data, size_t& size, bool withPadding = true);
+  /// Encodes the specified IOBuf data using URL encoding.
+  static std::string encodeUrl(const folly::IOBuf* inputBuffer);
 
-  /// Decodes the specified number of characters from the 'data' and writes the
-  /// result to the 'output'. The output must have enough space, e.g. as
-  /// returned by the calculateDecodedSize().
-  static void decode(const char* data, size_t size, char* output);
+  /// Encodes the specified number of characters from the 'input' and writes the
+  /// result to the 'outputBuffer' using URL encoding. The output must have
+  /// enough space as returned by the calculateEncodedSize().
+  static void
+  encodeUrl(const char* input, size_t inputSize, char* outputBuffer);
 
+  /// Decodes the input Base64 encoded string.
+  static std::string decode(std::string_view encodedText);
+
+  /// Decodes the specified encoded payload and writes the result to the
+  /// 'output'.
   static void decode(
       const std::pair<const char*, int32_t>& payload,
-      std::string& outp);
+      std::string& output);
 
-  /// Encodes the specified number of characters from the 'data' and writes the
-  /// result to the 'output'. The output must have enough space, e.g. as
-  /// returned by the calculateEncodedSize().
-  static void encodeUrl(const char* data, size_t size, char* output);
+  /// Decodes the specified number of characters from the 'input' and writes the
+  /// result to the 'outputBuffer'. The output must have enough space as
+  /// returned by the calculateDecodedSize().
+  static void decode(const char* input, size_t inputSize, char* outputBuffer);
 
-  // compatible with www's Base64URL::encode/decode
-  // TODO rename encode_url/decode_url to encodeUrl/encodeUrl.
-  static std::string encodeUrl(const char* data, size_t len);
-  static std::string encodeUrl(const folly::IOBuf* data);
-  static std::string encodeUrl(folly::StringPiece text);
+  /// Decodes the specified number of characters from the 'input' and writes the
+  /// result to the 'outputBuffer'.
+  static Status decode(
+      const char* input,
+      size_t inputSize,
+      char* outputBuffer,
+      size_t outputSize);
+
+  /// Decodes the input Base64 URL encoded string.
+  static std::string decodeUrl(std::string_view encodedText);
+
+  /// Decodes the specified URL encoded payload and writes the result to the
+  /// 'output'.
   static void decodeUrl(
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
-  static std::string decodeUrl(folly::StringPiece text);
 
-  static size_t
-  decode(const char* src, size_t src_len, char* dst, size_t dst_len);
+  /// Decodes the specified number of characters from the 'input' using URL
+  /// encoding and writes the result to the 'outputBuffer'
+  static Status decodeUrl(
+      const char* input,
+      size_t inputSize,
+      char* outputBuffer,
+      size_t outputSize);
 
-  static void decodeUrl(
-      const char* src,
-      size_t src_len,
-      char* dst,
-      size_t dst_len,
-      bool pad);
+  /// Decodes a Base64 MIME‐mode buffer back to binary.
+  /// Skips any non-Base64 chars (e.g. CR/LF).
+  static Status
+  decodeMime(const char* input, size_t inputSize, char* outputBuffer);
 
-  constexpr static char kBase64Pad = '=';
+  /// Encodes the input buffer into Base64 MIME format.
+  /// Inserts a CRLF every kMaxLineLength output characters.
+  static void
+  encodeMime(const char* input, size_t inputSize, char* outputBuffer);
+
+  /// Calculates the encoded size based on input 'inputSize'.
+  static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
+
+  /// Calculates the decoded size based on encoded input and adjusts the input
+  /// size for padding.
+  static Expected<size_t> calculateDecodedSize(
+      const char* input,
+      size_t& inputSize);
+
+  /// Calculates the decoded binary size of a MIME‐mode Base64 input,
+  /// accounting for padding and ignoring whitespace.
+  static Expected<size_t> calculateMimeDecodedSize(
+      const char* input,
+      const size_t inputSize);
+
+  /// Computes the exact output length for MIME‐mode Base64 encoding,
+  /// including required CRLF line breaks.
+  static size_t calculateMimeEncodedSize(size_t inputSize);
 
  private:
-  static inline size_t countPadding(const char* src, size_t len) {
-    DCHECK_GE(len, 2);
-    return src[len - 1] != kBase64Pad ? 0 : src[len - 2] != kBase64Pad ? 1 : 2;
+  // Padding character used in encoding.
+  static const char kPadding = '=';
+
+  // Soft Line breaks used in mime encoding as defined in RFC 2045, section 6.8:
+  // https://www.rfc-editor.org/rfc/rfc2045#section-6.8
+  inline static const std::string kNewline{"\r\n"};
+  static const size_t kMaxLineLength = 76;
+
+  // Checks if the input Base64 string is padded.
+  static inline bool isPadded(const char* input, size_t inputSize) {
+    return (inputSize > 0 && input[inputSize - 1] == kPadding);
   }
 
-  static uint8_t Base64ReverseLookup(char p, const ReverseIndex& table);
+  // Counts the number of padding characters in encoded input.
+  static inline size_t numPadding(const char* input, size_t inputSize) {
+    size_t numPadding{0};
+    while (inputSize > 0 && input[inputSize - 1] == kPadding) {
+      numPadding++;
+      inputSize--;
+    }
+    return numPadding;
+  }
 
+  // Reverse lookup helper function to get the original index of a Base64
+  // character.
+  static Expected<uint8_t> base64ReverseLookup(
+      char encodedChar,
+      const ReverseIndex& reverseIndex);
+
+  // Encodes the specified data using the provided charset.
   template <class T>
   static std::string
-  encodeImpl(const T& data, const Charset& charset, bool include_pad);
+  encodeImpl(const T& input, const Charset& charset, bool includePadding);
 
+  // Encodes the specified data using the provided charset.
   template <class T>
   static void encodeImpl(
-      const T& data,
+      const T& input,
       const Charset& charset,
-      bool include_pad,
-      char* out);
+      bool includePadding,
+      char* outputBuffer);
 
-  static size_t decodeImpl(
-      const char* src,
-      size_t src_len,
-      char* dst,
-      size_t dst_len,
-      const ReverseIndex& table,
-      bool include_pad);
+  // Decodes the specified data using the provided reverse lookup table.
+  static Expected<size_t> decodeImpl(
+      const char* input,
+      size_t inputSize,
+      char* outputBuffer,
+      size_t outputSize,
+      const ReverseIndex& reverseIndex);
+
+  VELOX_FRIEND_TEST(Base64Test, checksPadding);
+  VELOX_FRIEND_TEST(Base64Test, countsPaddingCorrectly);
 };
 
 } // namespace facebook::velox::encoding

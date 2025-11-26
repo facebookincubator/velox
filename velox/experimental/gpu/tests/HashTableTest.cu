@@ -35,7 +35,7 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-__device__ uint32_t jenkinsRevMix32(uint32_t key) {
+[[maybe_unused]] __device__ uint32_t jenkinsRevMix32(uint32_t key) {
   key += (key << 12); // key *= (1 + (1 << 12))
   key ^= (key >> 22);
   key += (key << 4); // key *= (1 + (1 << 4))
@@ -298,7 +298,7 @@ __global__ void probe<true>(
       j = (j + sizeof(uint32_t)) & tableSizeMask;
       cmpMask = 0xffffffff;
     }
-  end:
+  end:;
   }
 }
 
@@ -415,8 +415,9 @@ void partitionKeys(
   computeHistogram<<<(size + kBlockSize - 1) / kBlockSize, kBlockSize>>>(
       keys, size, numPartitions - 1, hist);
   CUDA_CHECK_FATAL(cudaMemset(offsets, 0, sizeof(int64_t)));
-  CUDA_CHECK_FATAL(cub::DeviceScan::InclusiveSum(
-      tmp, tmpSize, hist, offsets + 1, numPartitions));
+  CUDA_CHECK_FATAL(
+      cub::DeviceScan::InclusiveSum(
+          tmp, tmpSize, hist, offsets + 1, numPartitions));
   CUDA_CHECK_FATAL(cudaMemcpy(
       hist,
       offsets,
@@ -627,7 +628,7 @@ __global__ void probePartitioned<true>(
       j = (j + sizeof(uint32_t)) & tableSizeMask;
       cmpMask = 0xffffffff;
     }
-  end:
+  end:;
   }
 }
 
@@ -665,8 +666,9 @@ void runPartitioned() {
   auto hist = allocateDeviceMemory<int64_t>(numPartitions);
   auto offsets = allocateDeviceMemory<int64_t>(numPartitions + 1);
   size_t tmpSize;
-  CUDA_CHECK_FATAL(cub::DeviceScan::InclusiveSum(
-      nullptr, tmpSize, hist.get(), offsets.get(), numPartitions));
+  CUDA_CHECK_FATAL(
+      cub::DeviceScan::InclusiveSum(
+          nullptr, tmpSize, hist.get(), offsets.get(), numPartitions));
   auto tmp = allocateDeviceMemory<char>(tmpSize);
   auto shuffledKeys = allocateDeviceMemory<uint64_t>(numKeys);
 
@@ -710,8 +712,6 @@ void runPartitioned() {
       shuffledKeys.get(),
       tmp.get(),
       tmpSize);
-  CUDA_CHECK_FATAL(
-      cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte));
   CUDA_CHECK_FATAL(cudaFuncSetAttribute(
       probePartitioned<kUseTags>,
       cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -745,10 +745,14 @@ void runPartitioned() {
 
 int main(int argc, char** argv) {
   using namespace facebook::velox::gpu;
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   assert(__builtin_popcount(FLAGS_table_size) == 1);
   assert(FLAGS_table_size % kBlockSize == 0);
   CUDA_CHECK_FATAL(cudaSetDevice(FLAGS_device));
+  cudaDeviceProp prop;
+  CUDA_CHECK_FATAL(cudaGetDeviceProperties(&prop, FLAGS_device));
+  printf("Device : %s\n", prop.name);
+
   if (FLAGS_partitioned) {
     if (FLAGS_use_tags) {
       runPartitioned<true>();

@@ -18,13 +18,12 @@
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
-// A set of Allocations holding the fixed width payload
-// rows. The Runs are filled to the end except for the last one. This
-// is used for iterating over the payload for rehashing, returning
-// results etc. This is used via HashStringAllocator for variable length
-// allocation for backing ByteStreams for complex objects. In that case, there
-// is a current run that is appended to and when this is exhausted a new run is
-// started.
+/// A set of Allocations holding the fixed width payload ows. The Runs are
+/// filled to the end except for the last one. This is used for iterating over
+/// the payload for rehashing, returning results etc. This is used via
+/// HashStringAllocator for variable length allocation for backing ByteStreams
+/// for complex objects. In that case, there is a current run that is appended
+/// to and when this is exhausted a new run is started.
 class AllocationPool {
  public:
   static constexpr int32_t kMinPages = 16;
@@ -90,7 +89,7 @@ class AllocationPool {
     return pool_;
   }
 
-  /// Returns true if 'ptr' is inside the range alocations are made from.
+  /// Returns true if 'ptr' is inside the range allocations are made from.
   bool isInCurrentRange(void* ptr) const {
     return reinterpret_cast<char*>(ptr) >= startOfRun_ &&
         reinterpret_cast<char*>(ptr) < startOfRun_ + bytesInRun_;
@@ -131,9 +130,10 @@ class AllocationPool {
     return bytesInRun_ - currentOffset_;
   }
 
-  // Increses the reservation in 'pool_' when 'currentOffset_' goes past
-  // current end of last large allocation.
-  void growLastAllocation();
+  // Increases the reservation in 'pool_' if 'bytesRequested' moves
+  // 'currentOffset_' goes past current end of last large allocation, otherwise
+  // simply updates 'currentOffset_'.
+  void maybeGrowLastAllocation(uint64_t bytesRequested);
 
   void newRunImpl(memory::MachinePageCount numPages);
 
@@ -141,7 +141,7 @@ class AllocationPool {
   std::vector<memory::Allocation> allocations_;
   std::vector<memory::ContiguousAllocation> largeAllocations_;
 
-  // Points to the start of the run from which allocations are being nade.
+  // Points to the start of the run from which allocations are being made.
   char* startOfRun_{nullptr};
 
   // Total addressable bytes from 'startOfRun_'. Not all are necessarily

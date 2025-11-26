@@ -18,10 +18,13 @@
 #include <optional>
 #include <string>
 
+#include <glog/logging.h>
+#include <gtest/gtest.h>
 #include "folly/lang/Hint.h"
-#include "glog/logging.h"
-#include "gtest/gtest.h"
+
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/SimpleFunctionAdapter.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -34,12 +37,66 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 namespace {
+
 class SimpleFunctionTest : public functions::test::FunctionBaseTest {
  protected:
   VectorPtr arraySum(const std::vector<std::vector<int64_t>>& data) {
     return makeFlatVector<int64_t>(data.size(), [&](auto row) {
       return std::accumulate(data[row].begin(), data[row].end(), 0);
     });
+  }
+
+  template <typename T>
+  struct CallNullFreeFuncVoidOut {
+    VELOX_DEFINE_FUNCTION_TYPES(T);
+
+    template <typename T1, typename T2>
+    void callNullFree(int32_t&, const T1&, const T2&) {}
+
+    template <typename T1>
+    void callNullFree(int32_t&, const T1&) {}
+  };
+
+  template <typename T>
+  struct CallNullFreeFuncBoolOut {
+    VELOX_DEFINE_FUNCTION_TYPES(T);
+
+    template <typename T1, typename T2>
+    bool callNullFree(int32_t&, const T1&, const T2&) {
+      return true;
+    }
+
+    template <typename T1>
+    bool callNullFree(int32_t&, const T1&) {
+      return true;
+    }
+  };
+
+  template <typename... TArgs>
+  void testCallNullFreeSupportFlatNotNulls(bool voidOutput, bool expected) {
+    using holderClassVoid = core::UDFHolder<
+        CallNullFreeFuncVoidOut<exec::VectorExec>,
+        exec::VectorExec,
+        int32_t,
+        ConstantChecker<TArgs...>,
+        typename UnwrapConstantType<TArgs>::type...>;
+    using holderClassBool = core::UDFHolder<
+        CallNullFreeFuncBoolOut<exec::VectorExec>,
+        exec::VectorExec,
+        int32_t,
+        ConstantChecker<TArgs...>,
+        typename UnwrapConstantType<TArgs>::type...>;
+    if (voidOutput) {
+      ASSERT_EQ(
+          expected,
+          exec::SimpleFunctionAdapter<holderClassVoid>()
+              .supportsFlatNoNullsFastPath());
+    } else {
+      ASSERT_EQ(
+          expected,
+          exec::SimpleFunctionAdapter<holderClassBool>()
+              .supportsFlatNoNullsFastPath());
+    }
   }
 };
 
@@ -517,8 +574,9 @@ TEST_F(SimpleFunctionTest, defaultNullBehavior) {
 
   // Check that default null behavior functions don't get called on a null
   // input.
-  EXPECT_NO_THROW(evaluate<SimpleVector<bool>>(
-      "default_null_behavior(c0)", makeRowVector({flatVector})));
+  EXPECT_NO_THROW(
+      evaluate<SimpleVector<bool>>(
+          "default_null_behavior(c0)", makeRowVector({flatVector})));
 }
 
 // Test that function with non-default null behavior receives parameters as
@@ -787,7 +845,7 @@ TEST_F(SimpleFunctionTest, stringReuseConstant) {
   // Test reusing the strings from an argument when that argument is in a
   // ConstantVector.  Note that the other 2 arguments are FlatVectors to
   // prevent constant peeling.
-  registerFunction<Substr, Varchar, Varchar, int32_t, int32_t>({"substr"});
+  registerFunction<Substr, Varchar, Varchar, int32_t, int32_t>({"test_substr"});
 
   auto constantVector = vectorMaker_.constantVector<StringView>(
       {"super happy fun string"_sv,
@@ -797,7 +855,8 @@ TEST_F(SimpleFunctionTest, stringReuseConstant) {
   auto lengths = vectorMaker_.flatVector({1, 2, 3});
 
   auto result = evaluate<FlatVector<StringView>>(
-      "substr(c0, c1, c2)", makeRowVector({constantVector, starts, lengths}));
+      "test_substr(c0, c1, c2)",
+      makeRowVector({constantVector, starts, lengths}));
 
   auto expected = vectorMaker_.flatVector({"s"_sv, "up"_sv, "per"_sv});
   assertEqualVectors(expected, result);
@@ -933,11 +992,11 @@ VectorPtr testVariadicArgReuse(
   // This is a bit of a round about way of creating the SimpleFunctionAdapter,
   // especially since it requires the caller to register the function as well,
   // but it should be easier to maintain.
-  auto function =
-      exec::simpleFunctions()
-          .resolveFunction(functionName, {})
-          ->createFunction()
-          ->createVectorFunction({}, execCtx->queryCtx()->queryConfig());
+  auto resolved = exec::simpleFunctions().resolveFunction(functionName, {});
+  EXPECT_TRUE(resolved.has_value());
+
+  auto function = resolved->createFunction()->createVectorFunction(
+      {}, {}, execCtx->queryCtx()->queryConfig());
 
   // Create a dummy EvalCtx.
   SelectivityVector rows(inputs[0]->size());
@@ -1051,6 +1110,7 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
       StringInputFunction<exec::VectorExec>,
       exec::VectorExec,
       int32_t,
+      ConstantChecker<Varchar>,
       Varchar>;
   using function_t = exec::SimpleFunctionAdapter<holder_class_t>;
 
@@ -1062,6 +1122,29 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
 
   input->as<SimpleVector<StringView>>()->computeAndSetIsAscii(rows);
   ASSERT_TRUE(function_t::isAsciiArgs(rows, {input}));
+}
+
+template <typename T>
+struct StringInputIntOutputFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(int32_t& out, const arg_type<Varchar>& input) {
+    throw std::runtime_error(
+        "This method is not expected to be called for all-ascii input!");
+  }
+
+  void callAscii(int32_t& out, const arg_type<Varchar>& input) {
+    out = input.size();
+  }
+};
+
+TEST_F(SimpleFunctionTest, callAscii) {
+  registerFunction<StringInputIntOutputFunction, int32_t, Varchar>(
+      {"get_input_size"});
+  auto asciiInput = makeFlatVector<std::string>({"abc123", "10% #\0"});
+  EXPECT_NO_THROW(
+      evaluate<SimpleVector<int32_t>>(
+          "get_input_size(c0)", makeRowVector({asciiInput})));
 }
 
 // Return false always.
@@ -1134,4 +1217,490 @@ TEST_F(SimpleFunctionTest, simpleFunctionRegistryThreadSafe) {
     th.join();
   }
 }
+
+TEST_F(SimpleFunctionTest, flatNoNullsPathCallNullFree) {
+  // Void return type.
+  testCallNullFreeSupportFlatNotNulls<Map<int32_t, int32_t>>(true, false);
+  testCallNullFreeSupportFlatNotNulls<Array<int32_t>>(true, false);
+  testCallNullFreeSupportFlatNotNulls<Row<int32_t>>(true, false);
+  testCallNullFreeSupportFlatNotNulls<Any>(true, false);
+  testCallNullFreeSupportFlatNotNulls<Variadic<Any>>(true, false);
+  testCallNullFreeSupportFlatNotNulls<int32_t, Any>(true, false);
+  testCallNullFreeSupportFlatNotNulls<Any, int64_t>(true, false);
+
+  testCallNullFreeSupportFlatNotNulls<Variadic<int32_t>>(true, true);
+  testCallNullFreeSupportFlatNotNulls<int32_t>(true, true);
+  testCallNullFreeSupportFlatNotNulls<int64_t, int64_t>(true, true);
+  testCallNullFreeSupportFlatNotNulls<Varchar, Varchar>(true, true);
+
+  // Bool return type.
+  testCallNullFreeSupportFlatNotNulls<Map<int32_t, int32_t>>(false, false);
+  testCallNullFreeSupportFlatNotNulls<Array<int32_t>>(false, false);
+  testCallNullFreeSupportFlatNotNulls<Row<int32_t>>(false, false);
+  testCallNullFreeSupportFlatNotNulls<Any>(false, false);
+  testCallNullFreeSupportFlatNotNulls<Variadic<Any>>(false, false);
+  testCallNullFreeSupportFlatNotNulls<int32_t, Any>(false, false);
+  testCallNullFreeSupportFlatNotNulls<Any, int64_t>(false, false);
+
+  testCallNullFreeSupportFlatNotNulls<Variadic<int32_t>>(false, false);
+  testCallNullFreeSupportFlatNotNulls<int32_t>(false, false);
+  testCallNullFreeSupportFlatNotNulls<int64_t, int64_t>(false, false);
+  testCallNullFreeSupportFlatNotNulls<Varchar, Varchar>(false, false);
+}
+
+template <typename T>
+struct ConstantArgumentFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<int32_t>* /*first*/,
+      const arg_type<int32_t>* /*second*/,
+      const arg_type<Varchar>* /*third*/,
+      const arg_type<Generic<T1>>* /*fourth*/,
+      const arg_type<Array<int32_t>>* /*fifth*/,
+      const arg_type<Map<int32_t, int32_t>>* /*sixth*/) {}
+
+  bool callNullable(
+      out_type<int64_t>& out,
+      const arg_type<int32_t>* /*first*/,
+      const arg_type<int32_t>* /*second*/,
+      const arg_type<Varchar>* /*third*/,
+      const arg_type<Generic<T1>>* /*fourth*/,
+      const arg_type<Array<int32_t>>* /*fifth*/,
+      const arg_type<Map<int32_t, int32_t>>* /*sixth*/) {
+    out = 1;
+    return true;
+  }
+};
+
+TEST_F(SimpleFunctionTest, constantArgument) {
+  registerFunction<
+      ConstantArgumentFunction,
+      int64_t,
+      int32_t,
+      Constant<int32_t>,
+      Constant<Varchar>,
+      Constant<Generic<T1>>,
+      Constant<Array<int32_t>>,
+      Constant<Map<int32_t, int32_t>>>({"constant_argument_function"});
+  auto signatures = exec::simpleFunctions().getFunctionSignatures(
+      "constant_argument_function");
+  EXPECT_FALSE(signatures[0]->constantArguments().at(0));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(1));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(2));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(3));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(4));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(5));
+}
+
+template <typename TExec>
+struct DecimalPlusOneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const A* /*a*/) {
+    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+  }
+
+  template <typename R, typename A>
+  void call(R& out, A a) {
+    out = a + DecimalUtil::kPowersOfTen[scale_];
+  }
+
+ private:
+  int8_t scale_;
+};
+
+template <typename TExec>
+struct DecimalPlusTwoFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const A* /*a*/) {
+    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+  }
+
+  template <typename R, typename A>
+  void call(R& out, A a) {
+    out = a + 2 * DecimalUtil::kPowersOfTen[scale_];
+  }
+
+ private:
+  int8_t scale_;
+};
+
+TEST_F(SimpleFunctionTest, decimals) {
+  const auto& registry = exec::simpleFunctions();
+
+  registerFunction<
+      DecimalPlusOneFunction,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P1, S1>>({"decimal_plus_one"});
+
+  auto signatures = registry.getFunctionSignatures("decimal_plus_one");
+
+  EXPECT_EQ(1, signatures.size());
+  EXPECT_EQ("(decimal(i1,i5)) -> decimal(i1,i5)", signatures[0]->toString());
+
+  registerFunction<
+      DecimalPlusOneFunction,
+      LongDecimal<P1, S1>,
+      LongDecimal<P1, S1>>({"decimal_plus_one"});
+
+  signatures = registry.getFunctionSignatures("decimal_plus_one");
+
+  EXPECT_EQ(1, signatures.size());
+  EXPECT_EQ("(decimal(i1,i5)) -> decimal(i1,i5)", signatures[0]->toString());
+
+  {
+    auto resolved =
+        registry.resolveFunction("decimal_plus_one", {DECIMAL(10, 2)});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(DECIMAL(10, 2)->toString(), resolved->type()->toString());
+  }
+
+  {
+    auto resolved =
+        registry.resolveFunction("decimal_plus_one", {DECIMAL(30, 4)});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(DECIMAL(30, 4)->toString(), resolved->type()->toString());
+  }
+
+  auto data = makeRowVector({
+      // 12.34, 25.67
+      makeFlatVector<int64_t>({1234, 2567}, DECIMAL(10, 2)),
+      // 0.1234, 0.2567
+      makeFlatVector<int128_t>({1234, 2567}, DECIMAL(30, 4)),
+  });
+
+  auto result = evaluate("decimal_plus_one(c0)", data);
+
+  // 13.34, 26.67
+  VectorPtr expected = makeFlatVector<int64_t>({1334, 2667}, DECIMAL(10, 2));
+  assertEqualVectors(expected, result);
+
+  result = evaluate("decimal_plus_one(c1)", data);
+
+  // 1.1234, 1.2567
+  expected = makeFlatVector<int128_t>({11234, 12567}, DECIMAL(30, 4));
+  assertEqualVectors(expected, result);
+
+  // Verify overwrite behavior. Register a different function using the same
+  // name and physical signature as decimal_plus_one. Expect the new function to
+  // be used for (short) -> short signature.
+  // Not overwrite function registry.
+  registerFunction<
+      DecimalPlusTwoFunction,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P1, S1>>({"decimal_plus_one"}, {}, false);
+  result = evaluate("decimal_plus_one(c1)", data);
+  assertEqualVectors(expected, result);
+
+  // Overwrite function registry.
+  registerFunction<
+      DecimalPlusTwoFunction,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P1, S1>>({"decimal_plus_one"});
+
+  result = evaluate("decimal_plus_one(c0)", data);
+
+  // 14.34, 27.67
+  expected = makeFlatVector<int64_t>({1434, 2767}, DECIMAL(10, 2));
+  assertEqualVectors(expected, result);
+
+  // Expect the original decimal_plus_one to be used for (long) -> long
+  // signature that wasn't overwritten.
+
+  result = evaluate("decimal_plus_one(c1)", data);
+
+  // 1.1234, 1.2567
+  expected = makeFlatVector<int128_t>({11234, 12567}, DECIMAL(30, 4));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(SimpleFunctionTest, decimalsWithConstraints) {
+  const auto& registry = exec::simpleFunctions();
+
+  registerFunction<
+      DecimalPlusTwoFunction,
+      ShortDecimal<P2, S1>,
+      ShortDecimal<P1, S1>>(
+      {"decimal_plus_two"},
+      {exec::SignatureVariable(
+          P2::name(),
+          fmt::format("{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+          exec::ParameterType::kIntegerParameter)});
+
+  auto signatures = registry.getFunctionSignatures("decimal_plus_two");
+
+  EXPECT_EQ(1, signatures.size());
+  EXPECT_EQ("(decimal(i1,i5)) -> decimal(i2,i5)", signatures[0]->toString());
+  auto it = signatures[0]->variables().find("i2");
+  EXPECT_TRUE(it != signatures[0]->variables().end());
+  EXPECT_EQ("i1 + 1", it->second.constraint());
+
+  {
+    auto resolved =
+        registry.resolveFunction("decimal_plus_two", {DECIMAL(10, 2)});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(DECIMAL(11, 2)->toString(), resolved->type()->toString());
+  }
+
+  registerFunction<
+      DecimalPlusTwoFunction,
+      ShortDecimal<P2, S2>,
+      ShortDecimal<P1, S1>>(
+      {"decimal_plus_two_2"},
+      {
+          exec::SignatureVariable(
+              P2::name(),
+              fmt::format(
+                  "{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+              exec::ParameterType::kIntegerParameter),
+          exec::SignatureVariable(
+              S2::name(),
+              fmt::format("{a_scale} + 1", fmt::arg("a_scale", S1::name())),
+              exec::ParameterType::kIntegerParameter),
+      });
+
+  signatures = registry.getFunctionSignatures("decimal_plus_two_2");
+
+  EXPECT_EQ(1, signatures.size());
+  EXPECT_EQ("(decimal(i1,i5)) -> decimal(i2,i6)", signatures[0]->toString());
+  it = signatures[0]->variables().find("i2");
+  EXPECT_TRUE(it != signatures[0]->variables().end());
+  EXPECT_EQ("i1 + 1", it->second.constraint());
+
+  it = signatures[0]->variables().find("i6");
+  EXPECT_TRUE(it != signatures[0]->variables().end());
+  EXPECT_EQ("i5 + 1", it->second.constraint());
+
+  {
+    auto resolved =
+        registry.resolveFunction("decimal_plus_two_2", {DECIMAL(10, 2)});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(DECIMAL(11, 3)->toString(), resolved->type()->toString());
+  }
+}
+
+template <typename TExec>
+struct NoThrowFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  Status call(out_type<int64_t>& out, const arg_type<int64_t>& in) {
+    if (in % 3 != 0) {
+      return Status::UserError("Input must be divisible by 3");
+    }
+
+    // Throwing exceptions is not recommended, but allowed.
+    VELOX_USER_CHECK(in % 2 == 0, "Input must be even");
+
+    if (in == 6) {
+      return Status::UnknownError("Input must not be 6");
+    }
+
+    out = in / 6;
+    return Status::OK();
+  }
+};
+
+TEST_F(SimpleFunctionTest, noThrow) {
+  registerFunction<NoThrowFunction, int64_t, int64_t>({"no_throw"});
+
+  auto result = evaluateOnce<int64_t, int64_t>("no_throw(c0)", 12);
+  EXPECT_EQ(2, result);
+
+  // Errors reported via Status.
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("no_throw(c0)", 10)),
+      "Input must be divisible by 3");
+
+  result = evaluateOnce<int64_t, int64_t>("try(no_throw(c0))", 10);
+  EXPECT_EQ(std::nullopt, result);
+
+  // Errors reported by throwing exceptions.
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("no_throw(c0)", 15)),
+      "Input must be even");
+
+  result = evaluateOnce<int64_t, int64_t>("try(no_throw(c0))", 15);
+  EXPECT_EQ(std::nullopt, result);
+
+  // Non-user errors cannot be suppressed by TRY.
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("no_throw(c0)", 6)),
+      "Input must not be 6");
+
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("try(no_throw(c0))", 6)),
+      "Input must not be 6");
+}
+
+template <typename TExec>
+struct CallNullableNoThrowFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  Status callNullable(out_type<int64_t>& out, const arg_type<int64_t>* in) {
+    if (!in) {
+      return Status::UserError("Input cannot be NULL");
+    }
+    out = *in + 1;
+    return Status::OK();
+  }
+};
+
+TEST_F(SimpleFunctionTest, callNullableNoThrow) {
+  registerFunction<CallNullableNoThrowFunction, int64_t, int64_t>(
+      {"nullable_no_throw"});
+  // Error reported via Status by callNullable.
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("nullable_no_throw(c0)", std::nullopt)),
+      "Input cannot be NULL");
+  auto result = evaluateOnce<int64_t, int64_t>(
+      "try(nullable_no_throw(c0))", std::nullopt);
+  EXPECT_EQ(std::nullopt, result);
+
+  // No error.
+  result = evaluateOnce<int64_t, int64_t>("nullable_no_throw(c0)", 1);
+  EXPECT_EQ(2, result);
+}
+
+template <typename TExec>
+struct CallNullFreeNoThrowFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  Status callNullFree(out_type<int64_t>& out, const arg_type<int64_t>& in) {
+    if (in == 0) {
+      return Status::UserError("Input cannot be 0");
+    }
+    if (in % 2 == 0) {
+      return Status::UserError("Input cannot be even");
+    }
+    out = in + 1;
+    return Status::OK();
+  }
+};
+
+TEST_F(SimpleFunctionTest, callNullFreeNoThrow) {
+  registerFunction<CallNullFreeNoThrowFunction, int64_t, int64_t>(
+      {"null_free_no_throw"});
+  // Error reported via Status by callNullable.
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("null_free_no_throw(c0)", 0)),
+      "Input cannot be 0");
+  auto result =
+      evaluateOnce<int64_t, int64_t>("try(null_free_no_throw(c0))", 0);
+  EXPECT_EQ(std::nullopt, result);
+
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("null_free_no_throw(c0)", 4)),
+      "Input cannot be even");
+  result = evaluateOnce<int64_t, int64_t>("try(null_free_no_throw(c0))", 4);
+  EXPECT_EQ(std::nullopt, result);
+
+  // No error.
+  result = evaluateOnce<int64_t, int64_t>("null_free_no_throw(c0)", 1);
+  EXPECT_EQ(2, result);
+}
+
+template <typename TExec>
+struct DecimalPlusValueFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const A* /*a*/,
+      const B* /*b*/) {
+    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+  }
+
+  template <typename R, typename A, typename B>
+  void call(R& out, A a, B b) {
+    out = a + b * DecimalUtil::kPowersOfTen[scale_];
+  }
+
+ private:
+  int8_t scale_;
+};
+
+TEST_F(SimpleFunctionTest, toDebugString) {
+  const std::string functionName = "decimal_plus_value_debug_string";
+  registerFunction<
+      DecimalPlusValueFunction,
+      LongDecimal<P2, S1>,
+      LongDecimal<P1, S1>,
+      int32_t>(
+      {functionName},
+      {exec::SignatureVariable(
+          P2::name(),
+          fmt::format("{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+          exec::ParameterType::kIntegerParameter)});
+
+  auto resolved = exec::simpleFunctions().resolveFunction(
+      functionName, {DECIMAL(20, 2), INTEGER()});
+
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(
+      resolved.value().toDebugString(),
+      "Logical signature: (decimal(i1,i5), integer) -> decimal(i2,i5)\n"
+      "Physical signature: (HUGEINT, INTEGER) -> HUGEINT\n"
+      "Priority: 999997\nDefaultNullBehavior: true");
+}
+
+template <typename T>
+struct TimePlusOneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(out_type<Time>& out, const arg_type<Time>& input) {
+    out = input + 1;
+  }
+};
+
+template <typename T>
+struct ArrayTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(out_type<Array<Time>>& out, const arg_type<Array<Time>>& input) {
+    for (int i = 0; i < input.size(); i++) {
+      if (input[i].has_value()) {
+        out.push_back(input[i].value());
+      }
+    }
+  }
+};
+
+TEST_F(SimpleFunctionTest, timeTypeTest) {
+  registerFunction<TimePlusOneFunction, Time, Time>({"time_plus_one"});
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}, TIME()),
+  });
+  auto result = evaluate("time_plus_one(c0)", data);
+  auto expected = makeFlatVector<int64_t>({2, 3, 4}, TIME());
+  assertEqualVectors(expected, result);
+
+  // Test out Time in complex type.
+  {
+    registerFunction<ArrayTimeFunction, Array<Time>, Array<Time>>(
+        {"array_time"});
+
+    auto data = makeRowVector({
+        makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 6}}, TIME()),
+    });
+
+    auto result = evaluate("array_time(c0)", data);
+    auto expected = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 6}}, TIME());
+    assertEqualVectors(expected, result);
+  }
+}
+
 } // namespace

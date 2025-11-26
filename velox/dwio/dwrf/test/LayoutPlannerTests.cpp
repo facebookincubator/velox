@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/writer/LayoutPlanner.h"
 
 namespace facebook::velox::dwrf {
@@ -34,9 +35,16 @@ void testCreateNodeToColumnIdMapping(
   auto typeWithId = dwio::common::TypeWithId::create(type);
   EXPECT_EQ(expected, TestLayoutPlanner{*typeWithId}.getNodeToColumnMap());
 }
+
+class LayoutPlannerTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+};
 } // namespace
 
-TEST(LayoutPlannerTests, CreateNodeToColumnIdMapping) {
+TEST_F(LayoutPlannerTest, CreateNodeToColumnIdMapping) {
   testCreateNodeToColumnIdMapping(ROW({BOOLEAN()}), {{0, 0}, {1, 0}});
   testCreateNodeToColumnIdMapping(
       ROW(
@@ -88,13 +96,13 @@ TEST(LayoutPlannerTests, CreateNodeToColumnIdMapping) {
        {17, 5}});
 }
 
-TEST(LayoutPlannerTests, Basic) {
+TEST_F(LayoutPlannerTest, Basic) {
   auto config = std::make_shared<Config>();
   config->set(
-      Config::COMPRESSION, dwio::common::CompressionKind::CompressionKind_NONE);
+      Config::COMPRESSION, common::CompressionKind::CompressionKind_NONE);
   WriterContext context{
       config,
-      facebook::velox::memory::defaultMemoryManager().addRootPool(
+      facebook::velox::memory::memoryManager()->addRootPool(
           "LayoutPlannerTests")};
   // fake streams
   std::vector<DwrfStreamIdentifier> streams;
@@ -108,7 +116,7 @@ TEST(LayoutPlannerTests, Basic) {
                        uint32_t size) {
     auto streamId = DwrfStreamIdentifier{node, seq, col, kind};
     streams.push_back(streamId);
-    AppendOnlyBufferedStream out{context.newStream(streamId)};
+    dwio::common::AppendOnlyBufferedStream out{context.newStream(streamId)};
     out.write(data.data(), size);
     out.flush();
   };
@@ -120,12 +128,12 @@ TEST(LayoutPlannerTests, Basic) {
                          uint32_t seq,
                          proto::ColumnEncoding_Kind kind,
                          std::optional<int64_t> key = std::nullopt) {
-    auto& encoding = encodingManager.addEncodingToFooter(node);
-    encoding.set_node(node);
-    encoding.set_sequence(seq);
-    encoding.set_kind(kind);
+    auto encoding = encodingManager.addEncodingToFooter(node);
+    encoding.setNode(node);
+    encoding.setSequence(seq);
+    encoding.setKind(ColumnEncodingKindWrapper(&kind));
     if (key.has_value()) {
-      encoding.mutable_key()->set_intkey(*key);
+      encoding.mutableKey()->set_intkey(*key);
     }
   };
 

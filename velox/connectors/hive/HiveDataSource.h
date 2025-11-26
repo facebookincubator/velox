@@ -15,33 +15,33 @@
  */
 #pragma once
 
+#include "velox/common/base/RandomUtil.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/SplitReader.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/Reader.h"
-#include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive {
 
+class HiveConfig;
+
 class HiveDataSource : public DataSource {
  public:
   HiveDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
-      core::ExpressionEvaluator* expressionEvaluator,
-      memory::MemoryAllocator* allocator,
-      const std::string& scanId,
-      bool fileColumnNamesReadAsLowerCase,
-      folly::Executor* executor,
-      const dwio::common::ReaderOptions& options);
+      folly::Executor* ioExecutor,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<HiveConfig>& hiveConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -60,111 +60,133 @@ class HiveDataSource : public DataSource {
     return completedRows_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
   bool allPrefetchIssued() const override {
-    return rowReader_ && rowReader_->allPrefetchIssued();
+    return splitReader_ && splitReader_->allPrefetchIssued();
   }
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
   int64_t estimatedRowSize() override;
 
-  // Internal API, made public to be accessible in unit tests.  Do not use in
-  // other places.
-  static std::shared_ptr<common::ScanSpec> makeScanSpec(
-      const SubfieldFilters& filters,
-      const RowTypePtr& rowType,
-      const std::vector<const HiveColumnHandle*>& columnHandles,
-      const std::vector<common::Subfield>& remainingFilterInputs,
-      memory::MemoryPool* pool);
+  const common::SubfieldFilters* getFilters() const override {
+    return &filters_;
+  }
 
-  // Internal API, made public to be accessible in unit tests.  Do not use in
-  // other places.
-  static core::TypedExprPtr extractFiltersFromRemainingFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator,
-      bool negated,
-      SubfieldFilters& filters);
+  std::shared_ptr<wave::WaveDataSource> toWaveDataSource() override;
+
+  using WaveDelegateHookFunction =
+      std::function<std::shared_ptr<wave::WaveDataSource>(
+          const HiveTableHandlePtr& hiveTableHandle,
+          const std::shared_ptr<common::ScanSpec>& scanSpec,
+          const RowTypePtr& readerOutputType,
+          std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+          FileHandleFactory* fileHandleFactory,
+          folly::Executor* executor,
+          const ConnectorQueryCtx* connectorQueryCtx,
+          const std::shared_ptr<HiveConfig>& hiveConfig,
+          const std::shared_ptr<io::IoStatistics>& ioStats,
+          const exec::ExprSet* remainingFilter,
+          std::shared_ptr<common::MetadataFilter> metadataFilter)>;
+
+  static WaveDelegateHookFunction waveDelegateHook_;
+
+  static void registerWaveDelegateHook(WaveDelegateHookFunction hook);
+
+  const ConnectorQueryCtx* testingConnectorQueryCtx() const {
+    return connectorQueryCtx_;
+  }
 
  protected:
-  virtual uint64_t readNext(uint64_t size) {
-    return rowReader_->next(size, output_);
-  }
+  virtual std::unique_ptr<SplitReader> createSplitReader();
 
-  std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
-      const FileHandle&,
-      const dwio::common::ReaderOptions&);
-
-  virtual std::unique_ptr<dwio::common::RowReader> createRowReader(
-      dwio::common::RowReaderOptions& options) {
-    return reader_->createRowReader(options);
-  }
+  FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const ioExecutor_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
+  const std::shared_ptr<HiveConfig> hiveConfig_;
+  memory::MemoryPool* const pool_;
 
   std::shared_ptr<HiveConnectorSplit> split_;
-  FileHandleFactory* fileHandleFactory_;
-  dwio::common::ReaderOptions readerOpts_;
-  memory::MemoryPool* pool_;
+  HiveTableHandlePtr hiveTableHandle_;
+  std::shared_ptr<common::ScanSpec> scanSpec_;
   VectorPtr output_;
+  std::unique_ptr<SplitReader> splitReader_;
+
+  // Output type from file reader.  This is different from outputType_ that it
+  // contains column names before assignment, and columns that only used in
+  // remaining filter.
   RowTypePtr readerOutputType_;
-  std::unique_ptr<dwio::common::RowReader> rowReader_;
+
+  // Column handles for the partition key columns keyed on partition key column
+  // name.
+  std::unordered_map<std::string, HiveColumnHandlePtr> partitionKeys_;
+
+  std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<filesystems::File::IoStats> fsStats_;
 
  private:
+  std::vector<column_index_t> setupBucketConversion();
+
+  void setupRowIdColumn();
+
   // Evaluates remainingFilter_ on the specified vector. Returns number of rows
   // passed. Populates filterEvalCtx_.selectedIndices and selectedBits if only
   // some rows passed the filter. If none or all rows passed
   // filterEvalCtx_.selectedIndices and selectedBits are not updated.
   vector_size_t evaluateRemainingFilter(RowVectorPtr& rowVector);
 
-  void setConstantValue(
-      common::ScanSpec* FOLLY_NONNULL spec,
-      const TypePtr& type,
-      const velox::variant& value) const;
-
-  void setNullConstantValue(
-      common::ScanSpec* FOLLY_NONNULL spec,
-      const TypePtr& type) const;
-
-  void setPartitionValue(
-      common::ScanSpec* FOLLY_NONNULL spec,
-      const std::string& partitionKey,
-      const std::optional<std::string>& value) const;
-
   // Clear split_ after split has been fully processed.  Keep readers around to
   // hold adaptation.
   void resetSplit();
 
-  void configureRowReaderOptions(
-      dwio::common::RowReaderOptions&,
-      const RowTypePtr& rowType) const;
+  const RowVectorPtr& getEmptyOutput() {
+    if (!emptyOutput_) {
+      emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
+    }
+    return emptyOutput_;
+  }
 
+  // Add the information from column handle to the corresponding fields in this
+  // object.
+  void processColumnHandle(const HiveColumnHandlePtr& handle);
+
+  // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
-  // Column handles for the partition key columns keyed on partition key column
-  // name.
-  std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
-      partitionKeys_;
-  std::shared_ptr<dwio::common::IoStatistics> ioStats_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
+  core::ExpressionEvaluator* const expressionEvaluator_;
+
+  // Column handles for the Split info columns keyed on their column names.
+  std::unordered_map<std::string, HiveColumnHandlePtr> infoColumns_;
+  SpecialColumnNames specialColumns_{};
+  std::vector<common::Subfield> remainingFilterSubfields_;
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      subfields_;
+  std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
+  common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
-  dwio::common::RowReaderOptions rowReaderOpts_;
-  std::unique_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  bool emptySplit_;
-
+  RowVectorPtr emptyOutput_;
   dwio::common::RuntimeStatistics runtimeStats_;
-
-  std::shared_ptr<FileHandle> fileHandle_;
-  core::ExpressionEvaluator* expressionEvaluator_;
+  std::atomic<uint64_t> totalRemainingFilterTime_{0};
   uint64_t completedRows_ = 0;
+
+  // Field indices referenced in both remaining filter and output type. These
+  // columns need to be materialized eagerly to avoid missing values in output.
+  std::vector<column_index_t> multiReferencedFields_;
+
+  std::shared_ptr<random::RandomSkipTracker> randomSkip_;
+
+  int64_t numBucketConversion_ = 0;
 
   // Reusable memory for remaining filter evaluation.
   VectorPtr filterResult_;
   SelectivityVector filterRows_;
+  DecodedVector filterLazyDecoded_;
+  SelectivityVector filterLazyBaseRows_;
   exec::FilterEvalCtx filterEvalCtx_;
 
-  memory::MemoryAllocator* const allocator_;
-  const std::string& scanId_;
-  folly::Executor* executor_;
+  // Remembers the WaveDataSource. Successive calls to toWaveDataSource() will
+  // return the same.
+  std::shared_ptr<wave::WaveDataSource> waveDataSource_;
 };
-
 } // namespace facebook::velox::connector::hive

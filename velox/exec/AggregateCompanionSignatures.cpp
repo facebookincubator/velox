@@ -85,14 +85,16 @@ std::string toSuffixString(const TypeSignature& type) {
         toSuffixString(type.parameters()[1]);
   }
   if (upperName == "ROW") {
-    std::string result = "row";
-    for (const auto& child : type.parameters()) {
-      result = result + "_" + toSuffixString(child);
-    }
-    result += "_endrow";
-    return result;
+    name = "row";
   }
-  VELOX_UNREACHABLE("Unknown type: {}.", type.toString());
+  std::string result = name;
+  for (const auto& child : type.parameters()) {
+    result += '_';
+    result += toSuffixString(child);
+  }
+  result += "_end";
+  result += name;
+  return result;
 }
 
 std::vector<AggregateFunctionSignaturePtr>
@@ -100,20 +102,18 @@ CompanionSignatures::partialFunctionSignatures(
     const std::vector<AggregateFunctionSignaturePtr>& signatures) {
   std::vector<AggregateFunctionSignaturePtr> partialSignatures;
   for (const auto& signature : signatures) {
-    if (!isResultTypeResolvableGivenIntermediateType(signature)) {
-      continue;
-    }
     std::vector<TypeSignature> usedTypes = signature->argumentTypes();
     usedTypes.push_back(signature->intermediateType());
     auto variables = usedTypeVariables(usedTypes, signature->variables());
 
-    partialSignatures.push_back(std::make_shared<AggregateFunctionSignature>(
-        /*variables*/ variables,
-        /*returnType*/ signature->intermediateType(),
-        /*intermediateType*/ signature->intermediateType(),
-        /*argumentTypes*/ signature->argumentTypes(),
-        /*constantArguments*/ signature->constantArguments(),
-        /*variableArity*/ signature->variableArity()));
+    partialSignatures.push_back(
+        std::make_shared<AggregateFunctionSignature>(
+            /*variables*/ variables,
+            /*returnType*/ signature->intermediateType(),
+            /*intermediateType*/ signature->intermediateType(),
+            /*argumentTypes*/ signature->argumentTypes(),
+            /*constantArguments*/ signature->constantArguments(),
+            /*variableArity*/ signature->variableArity()));
   }
   return partialSignatures;
 }
@@ -124,10 +124,6 @@ std::string CompanionSignatures::partialFunctionName(const std::string& name) {
 
 AggregateFunctionSignaturePtr CompanionSignatures::mergeFunctionSignature(
     const AggregateFunctionSignaturePtr& signature) {
-  if (!isResultTypeResolvableGivenIntermediateType(signature)) {
-    return nullptr;
-  }
-
   std::vector<TypeSignature> usedTypes = {signature->intermediateType()};
   auto variables = usedTypeVariables(usedTypes, signature->variables());
   return std::make_shared<AggregateFunctionSignature>(
@@ -157,12 +153,12 @@ bool CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
     const std::vector<AggregateFunctionSignaturePtr>& signatures) {
   std::unordered_set<TypeSignature> seenTypes;
   for (const auto& signature : signatures) {
-    auto normalizdType =
+    auto normalizedType =
         normalizeType(signature->intermediateType(), signature->variables());
-    if (seenTypes.count(normalizdType)) {
+    if (seenTypes.count(normalizedType)) {
       return true;
     }
-    seenTypes.insert(normalizdType);
+    seenTypes.insert(normalizedType);
   }
   return false;
 }
@@ -170,10 +166,6 @@ bool CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
 AggregateFunctionSignaturePtr
 CompanionSignatures::mergeExtractFunctionSignature(
     const AggregateFunctionSignaturePtr& signature) {
-  if (!isResultTypeResolvableGivenIntermediateType(signature)) {
-    return nullptr;
-  }
-
   std::vector<TypeSignature> usedTypes = {
       signature->intermediateType(), signature->returnType()};
   auto variables = usedTypeVariables(usedTypes, signature->variables());
@@ -265,7 +257,7 @@ TypeSignature CompanionSignatures::normalizeTypeImpl(
   if (renamedVariables.count(baseName)) {
     return TypeSignature{renamedVariables[baseName], {}};
   }
-  // Variales to be renamed in consistent manner.
+  // Variables to be renamed in consistent manner.
   if (allVariables.count(baseName)) {
     auto normalizedName = fmt::format("T{}", renamedVariables.size());
     renamedVariables[baseName] = normalizedName;

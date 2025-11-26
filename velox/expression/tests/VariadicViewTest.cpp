@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "glog/logging.h"
+#include <glog/logging.h>
 #include "gtest/gtest.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
@@ -293,8 +293,9 @@ TEST_F(NullableVariadicViewTest, variadicIntMoreArgs) {
       {makeNullableFlatVector(std::vector<std::optional<int64_t>>{-1, -2, -3}),
        makeNullableFlatVector(
            std::vector<std::optional<int64_t>>{-4, std::nullopt, -6}),
-       makeNullableFlatVector(std::vector<std::optional<int64_t>>{
-           std::nullopt, std::nullopt, std::nullopt})});
+       makeNullableFlatVector(
+           std::vector<std::optional<int64_t>>{
+               std::nullopt, std::nullopt, std::nullopt})});
 }
 
 TEST_F(NullableVariadicViewTest, notNullContainer) {
@@ -351,8 +352,9 @@ TEST_F(NullFreeVariadicViewTest, variadicIntMoreArgs) {
       {makeNullableFlatVector(std::vector<std::optional<int64_t>>{-1, -2, -3}),
        makeNullableFlatVector(
            std::vector<std::optional<int64_t>>{-4, std::nullopt, -6}),
-       makeNullableFlatVector(std::vector<std::optional<int64_t>>{
-           std::nullopt, std::nullopt, std::nullopt})});
+       makeNullableFlatVector(
+           std::vector<std::optional<int64_t>>{
+               std::nullopt, std::nullopt, std::nullopt})});
 }
 
 TEST_F(NullFreeVariadicViewTest, iteratorDifference) {
@@ -377,7 +379,7 @@ const auto callNullablePrefix = "callNullable "_sv;
 const auto callAsciiPrefix = "callAscii "_sv;
 
 void writeInputToOutput(
-    StringWriter<>& out,
+    StringWriter& out,
     const VariadicView<true, Varchar>* inputs) {
   for (const auto& input : *inputs) {
     out += input.has_value() ? input.value() : null;

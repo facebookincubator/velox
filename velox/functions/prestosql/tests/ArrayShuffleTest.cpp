@@ -21,6 +21,7 @@
 #include <random>
 #include <sstream>
 
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -81,8 +82,7 @@ class ArrayShuffleTest : public FunctionBaseTest {
     DecodedVector decodedExpected(*input.get());
     exec::VectorReader<Array<T>> readerExpected(&decodedExpected);
 
-    auto actualVector =
-        evaluate<ArrayVector>("shuffle(C0)", makeRowVector({input}));
+    auto actualVector = evaluate("shuffle(C0)", makeRowVector({input}));
     // Validate each row from the actual decoded ArrayVector is a permutation
     // of the corresponding row from the expected decoded ArrayVector.
     DecodedVector decodedActual(*actualVector.get());
@@ -95,8 +95,9 @@ class ArrayShuffleTest : public FunctionBaseTest {
       auto expectedArray = readerExpected[i].materialize();
 
       // Assert the two vectors contain the same elements (ignoring order).
-      ASSERT_TRUE(std::is_permutation(
-          actualArray.begin(), actualArray.end(), expectedArray.begin()))
+      ASSERT_TRUE(
+          std::is_permutation(
+              actualArray.begin(), actualArray.end(), expectedArray.begin()))
           << "Actual array " << printArray(actualArray) << " at " << i
           << " must produce a permutation of expected array "
           << printArray(expectedArray);
@@ -172,8 +173,7 @@ class ArrayShuffleTest : public FunctionBaseTest {
         typename exec::ArrayView<false, int32_t>::materialize_t;
     folly::F14FastSet<materialize_t> distinctValueSet;
 
-    auto actualVector =
-        evaluate<ArrayVector>("shuffle(C0)", makeRowVector({inputVector}));
+    auto actualVector = evaluate("shuffle(C0)", makeRowVector({inputVector}));
 
     DecodedVector decodedActual(*actualVector.get());
     exec::VectorReader<Array<int32_t>> readerActual(&decodedActual);
@@ -182,8 +182,9 @@ class ArrayShuffleTest : public FunctionBaseTest {
       auto actualArray = readerActual.readNullFree(i).materialize();
       auto expectedArray = readerExpected.readNullFree(i).materialize();
 
-      ASSERT_TRUE(std::is_permutation(
-          actualArray.begin(), actualArray.end(), expectedArray.begin()))
+      ASSERT_TRUE(
+          std::is_permutation(
+              actualArray.begin(), actualArray.end(), expectedArray.begin()))
           << "Actual " << inputVector->encoding() << " array "
           << printArray(actualArray) << " at " << i
           << " must produce a permutation of expected array "
@@ -228,7 +229,7 @@ TEST_F(ArrayShuffleTest, nestedArrays) {
   innerArrayType c{6, 7, 8};
   outerArrayType row1{{a}, {b}};
   outerArrayType row2{std::nullopt, std::nullopt, {a}, {b}, {c}};
-  outerArrayType row3{{{}}};
+  outerArrayType row3{common::testutil::optionalEmpty};
   outerArrayType row4{{{std::nullopt}}};
   auto input =
       makeNullableNestedArrayVector<int64_t>({{row1}, {row2}, {row3}, {row4}});
@@ -248,8 +249,8 @@ TEST_F(ArrayShuffleTest, sortAndShuffle) {
         2,
         std::nullopt}});
   auto inputVector = makeRowVector({input});
-  auto result1 = evaluate<ArrayVector>("array_sort(C0)", inputVector);
-  auto result2 = evaluate<ArrayVector>("array_sort(shuffle(C0))", inputVector);
+  auto result1 = evaluate("array_sort(C0)", inputVector);
+  auto result2 = evaluate("array_sort(shuffle(C0))", inputVector);
 
   assertEqualVectors(result1, result2);
 }

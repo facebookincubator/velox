@@ -20,9 +20,9 @@
 #include <gflags/gflags.h>
 
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/CheckedArithmeticImpl.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
-#include "velox/functions/prestosql/CheckedArithmeticImpl.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
@@ -343,9 +343,9 @@ BENCHMARK(plusCheckedLarge) {
 } // namespace
 
 int main(int argc, char* argv[]) {
-  folly::init(&argc, &argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
+  folly::Init init{&argc, &argv};
+  ::gflags::ParseCommandLineFlags(&argc, &argv, true);
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   benchmark = std::make_unique<SimpleArithmeticBenchmark>();
   folly::runBenchmarks();
   benchmark.reset();

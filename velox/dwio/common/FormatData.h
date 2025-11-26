@@ -17,9 +17,8 @@
 #pragma once
 
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/ColumnSelector.h"
+#include "velox/dwio/common/PositionProvider.h"
 #include "velox/dwio/common/ScanSpec.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/type/Filter.h"
@@ -34,14 +33,14 @@ class FormatData {
 
   template <typename T>
   T& as() {
-    return *reinterpret_cast<T*>(this);
+    return *static_cast<T*>(this);
   }
 
   /// Reads nulls if the format has nulls separate from the encoded
   /// data. If there are no nulls, 'nulls' is set to nullptr, else to
   /// a suitable sized and padded Buffer. 'incomingNulls' may be given
   /// if there are enclosing level nulls that should be merged into
-  /// the read reasult. If provided, this has 'numValues' bits and
+  /// the read result. If provided, this has 'numValues' bits and
   /// each zero marks an incoming null for which no bit is read from
   /// the nulls stream of 'this'. For Parquet, 'nulls' is always set
   /// to nullptr because nulls are represented by the data pages
@@ -51,7 +50,7 @@ class FormatData {
   /// of a column are of interest, e.g. is null filter.
   virtual void readNulls(
       vector_size_t numValues,
-      const uint64_t* FOLLY_NULLABLE incomingNulls,
+      const uint64_t* incomingNulls,
       BufferPtr& nulls,
       bool nullsOnly = false) = 0;
 
@@ -87,7 +86,7 @@ class FormatData {
   /// is in FormatData the provider is at end. For ORC/DWRF the type
   /// dependent stream positions are accessed via the provider. The
   /// provider is valid until next call of this.
-  virtual dwio::common::PositionProvider seekToRowGroup(uint32_t index) = 0;
+  virtual dwio::common::PositionProvider seekToRowGroup(int64_t index) = 0;
 
   struct FilterRowGroupsResult {
     std::vector<uint64_t> filterResult;
@@ -132,7 +131,8 @@ class FormatData {
 /// Base class for format-specific reader initialization arguments.
 class FormatParams {
  public:
-  explicit FormatParams(memory::MemoryPool& pool) : pool_(pool) {}
+  FormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
+      : pool_(&pool), stats_(&stats) {}
 
   virtual ~FormatParams() = default;
 
@@ -143,11 +143,16 @@ class FormatParams {
       const velox::common::ScanSpec& scanSpec) = 0;
 
   memory::MemoryPool& pool() {
-    return pool_;
+    return *pool_;
+  }
+
+  ColumnReaderStatistics& runtimeStatistics() {
+    return *stats_;
   }
 
  private:
-  memory::MemoryPool& pool_;
+  memory::MemoryPool* const pool_;
+  ColumnReaderStatistics* const stats_;
 };
 
 } // namespace facebook::velox::dwio::common

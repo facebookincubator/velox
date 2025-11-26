@@ -25,63 +25,46 @@ class SelectiveStructColumnReaderBase
     : public dwio::common::SelectiveStructColumnReaderBase {
  public:
   SelectiveStructColumnReaderBase(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
-      bool isRoot = false)
+      bool isRoot = false,
+      bool generateLazyChildren = true)
       : dwio::common::SelectiveStructColumnReaderBase(
             requestedType,
-            dataType,
+            fileType,
             params,
             scanSpec,
-            isRoot),
+            isRoot,
+            generateLazyChildren),
         rowsPerRowGroup_(formatData_->rowsPerRowGroup().value()) {
-    VELOX_CHECK_EQ(nodeType_->id, dataType->id, "working on the same node");
+    VELOX_CHECK_EQ(fileType_->id(), fileType->id(), "working on the same node");
   }
 
-  void seekTo(vector_size_t offset, bool readsNullsOnly) override;
+  void seekTo(int64_t offset, bool readsNullsOnly) override;
 
-  void seekToRowGroup(uint32_t index) override {
-    dwio::common::SelectiveStructColumnReaderBase::seekToRowGroup(index);
-    if (isTopLevel_ && !formatData_->hasNulls()) {
-      readOffset_ = index * rowsPerRowGroup_;
-      return;
-    }
-    // There may be a nulls stream but no other streams for the struct.
-    formatData_->seekToRowGroup(index);
-    // Set the read offset recursively. Do this before seeking the
-    // children because list/map children will reset the offsets for
-    // their children.
-    setReadOffsetRecursive(index * rowsPerRowGroup_);
-    for (auto& child : children_) {
-      child->seekToRowGroup(index);
-    }
+  void seekToRowGroup(int64_t index) override {
+    seekToRowGroupFixedRowsPerRowGroup(index, rowsPerRowGroup_);
   }
 
   /// Advance field reader to the row group closest to specified offset by
   /// calling seekToRowGroup.
-  void advanceFieldReader(SelectiveColumnReader* reader, vector_size_t offset)
+  void advanceFieldReader(SelectiveColumnReader* reader, int64_t offset)
       override {
-    if (!reader->isTopLevel()) {
-      return;
-    }
-    auto rowGroup = reader->readOffset() / rowsPerRowGroup_;
-    auto nextRowGroup = offset / rowsPerRowGroup_;
-    if (nextRowGroup > rowGroup) {
-      reader->seekToRowGroup(nextRowGroup);
-      reader->setReadOffset(nextRowGroup * rowsPerRowGroup_);
-    }
+    advanceFieldReaderFixedRowsPerRowGroup(reader, offset, rowsPerRowGroup_);
   }
 
  private:
   const int32_t rowsPerRowGroup_;
 };
 
-struct SelectiveStructColumnReader : SelectiveStructColumnReaderBase {
+class SelectiveStructColumnReader : public SelectiveStructColumnReaderBase {
+ public:
   SelectiveStructColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
       bool isRoot = false);

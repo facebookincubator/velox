@@ -21,8 +21,8 @@
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/TypeUtils.h"
-#include "velox/exec/AggregationHook.h"
 #include "velox/type/Timestamp.h"
+#include "velox/vector/AggregationHook.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
@@ -31,46 +31,33 @@
 
 namespace facebook::velox::dwio::common {
 
-velox::common::AlwaysTrue& alwaysTrue();
-
-class Timer {
- public:
-  Timer() : startClocks_{folly::hardware_timestamp()} {}
-
-  uint64_t elapsedClocks() const {
-    return folly::hardware_timestamp() - startClocks_;
-  }
-
- private:
-  const uint64_t startClocks_;
-};
-
 template <typename T>
-void SelectiveColumnReader::ensureValuesCapacity(vector_size_t numRows) {
-  if (values_ && values_->unique() &&
+void SelectiveColumnReader::ensureValuesCapacity(
+    vector_size_t numRows,
+    bool preserveData) {
+  if (values_ && (isFlatMapValue_ || values_->unique()) &&
       values_->capacity() >=
           BaseVector::byteSize<T>(numRows) + simd::kPadding) {
     return;
   }
-  values_ = AlignedBuffer::allocate<T>(
-      numRows + (simd::kPadding / sizeof(T)), &memoryPool_);
+  auto newValues = AlignedBuffer::allocate<T>(
+      numRows + simd::kPadding / sizeof(T), memoryPool_);
+  if (preserveData) {
+    std::memcpy(
+        newValues->template asMutable<char>(), rawValues_, values_->capacity());
+  }
+  values_ = std::move(newValues);
   rawValues_ = values_->asMutable<char>();
 }
 
 template <typename T>
 void SelectiveColumnReader::prepareRead(
-    vector_size_t offset,
-    RowSet rows,
+    int64_t offset,
+    const RowSet& rows,
     const uint64_t* incomingNulls) {
-  seekTo(offset, scanSpec_->readsNullsOnly());
-  vector_size_t numRows = rows.back() + 1;
+  const vector_size_t numRows = rows.back() + 1;
+  readNulls(offset, numRows, incomingNulls);
 
-  // Do not re-use unless singly-referenced.
-  if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
-    nullsInReadRange_.reset();
-  }
-  formatData_->readNulls(
-      numRows, incomingNulls, nullsInReadRange_, readsNullsOnly());
   // We check for all nulls and no nulls. We expect both calls to
   // bits::isAllSet to fail early in the common case. We could do a
   // single traversal of null bits counting the bits and then compare
@@ -85,18 +72,19 @@ void SelectiveColumnReader::prepareRead(
           nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNotNull)) {
     nullsInReadRange_ = nullptr;
   }
+
   innerNonNullRows_.clear();
   outerNonNullRows_.clear();
   outputRows_.clear();
-  // is part of read() and after read returns getValues may be called.
+  // Is part of read() and after read returns getValues may be called.
   mayGetValues_ = true;
-  numOutConfirmed_ = 0;
   numValues_ = 0;
   valueSize_ = sizeof(T);
   inputRows_ = rows;
-  if (scanSpec_->filter() || hasMutation()) {
+  if (scanSpec_->filter() || hasDeletion()) {
     outputRows_.reserve(rows.size());
   }
+
   ensureValuesCapacity<T>(rows.size());
   if (scanSpec_->keepValues() && !scanSpec_->valueHook()) {
     valueRows_.clear();
@@ -106,7 +94,7 @@ void SelectiveColumnReader::prepareRead(
 
 template <typename T, typename TVector>
 void SelectiveColumnReader::getFlatValues(
-    RowSet rows,
+    const RowSet& rows,
     VectorPtr* result,
     const TypePtr& type,
     bool isFinal) {
@@ -115,17 +103,24 @@ void SelectiveColumnReader::getFlatValues(
   if (isFinal) {
     mayGetValues_ = false;
   }
+
   if (allNull_) {
-    *result = std::make_shared<ConstantVector<TVector>>(
-        &memoryPool_,
-        rows.size(),
-        true,
-        type,
-        T(),
-        SimpleVectorStats<TVector>{},
-        sizeof(TVector) * rows.size());
+    if (isFlatMapValue_) {
+      if (flatMapValueConstantNullValues_) {
+        flatMapValueConstantNullValues_->resize(rows.size());
+      } else {
+        flatMapValueConstantNullValues_ =
+            std::make_shared<ConstantVector<TVector>>(
+                memoryPool_, rows.size(), true, type, T());
+      }
+      *result = flatMapValueConstantNullValues_;
+    } else {
+      *result = std::make_shared<ConstantVector<TVector>>(
+          memoryPool_, rows.size(), true, type, T());
+    }
     return;
   }
+
   if (valueSize_ == sizeof(TVector)) {
     compactScalarValues<TVector, TVector>(rows, isFinal);
   } else if (sizeof(T) >= sizeof(TVector)) {
@@ -134,27 +129,43 @@ void SelectiveColumnReader::getFlatValues(
     upcastScalarValues<T, TVector>(rows);
   }
   valueSize_ = sizeof(TVector);
-  BufferPtr nulls = anyNulls_
-      ? (returnReaderNulls_ ? nullsInReadRange_ : resultNulls_)
-      : nullptr;
-  *result = std::make_shared<FlatVector<TVector>>(
-      &memoryPool_,
-      type,
-      nulls,
-      numValues_,
-      values_,
-      std::move(stringBuffers_));
+  if (isFlatMapValue_) {
+    if (flatMapValueFlatValues_) {
+      auto* flat = flatMapValueFlatValues_->asUnchecked<FlatVector<TVector>>();
+      flat->unsafeSetSize(numValues_);
+      flat->setNulls(resultNulls());
+      flat->unsafeSetValues(values_);
+      flat->setStringBuffers(std::move(stringBuffers_));
+    } else {
+      flatMapValueFlatValues_ = std::make_shared<FlatVector<TVector>>(
+          memoryPool_,
+          type,
+          resultNulls(),
+          numValues_,
+          values_,
+          std::move(stringBuffers_));
+    }
+    *result = flatMapValueFlatValues_;
+  } else {
+    *result = std::make_shared<FlatVector<TVector>>(
+        memoryPool_,
+        type,
+        resultNulls(),
+        numValues_,
+        values_,
+        std::move(stringBuffers_));
+  }
 }
 
 template <>
 void SelectiveColumnReader::getFlatValues<int8_t, bool>(
-    RowSet rows,
+    const RowSet& rows,
     VectorPtr* result,
     const TypePtr& type,
     bool isFinal);
 
 template <typename T, typename TVector>
-void SelectiveColumnReader::upcastScalarValues(RowSet rows) {
+void SelectiveColumnReader::upcastScalarValues(const RowSet& rows) {
   VELOX_CHECK_LE(rows.size(), numValues_);
   VELOX_CHECK(!rows.empty());
   if (!values_) {
@@ -183,7 +194,7 @@ void SelectiveColumnReader::upcastScalarValues(RowSet rows) {
   }
   vector_size_t rowIndex = 0;
   auto nextRow = rows[rowIndex];
-  bool moveNulls = shouldMoveNulls(rows);
+  auto* moveNullsFrom = shouldMoveNulls(rows);
   for (size_t i = 0; i < numValues_; i++) {
     if (sourceRows[i] < nextRow) {
       continue;
@@ -191,9 +202,8 @@ void SelectiveColumnReader::upcastScalarValues(RowSet rows) {
 
     VELOX_DCHECK(sourceRows[i] == nextRow);
     buf[rowIndex] = typedSourceValues[i];
-    if (moveNulls && rowIndex != i) {
-      bits::setBit(
-          rawResultNulls_, rowIndex, bits::isBitSet(rawResultNulls_, i));
+    if (moveNullsFrom && rowIndex != i) {
+      bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
     valueRows_[rowIndex] = nextRow;
     rowIndex++;
@@ -210,7 +220,9 @@ void SelectiveColumnReader::upcastScalarValues(RowSet rows) {
 }
 
 template <typename T, typename TVector>
-void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
+void SelectiveColumnReader::compactScalarValues(
+    const RowSet& rows,
+    bool isFinal) {
   VELOX_CHECK_LE(rows.size(), numValues_);
   VELOX_CHECK(!rows.empty());
   if (!values_ || (rows.size() == numValues_ && sizeof(T) == sizeof(TVector))) {
@@ -219,6 +231,7 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
     }
     return;
   }
+
   VELOX_CHECK_LE(sizeof(TVector), sizeof(T));
   T* typedSourceValues = reinterpret_cast<T*>(rawValues_);
   TVector* typedDestValues = reinterpret_cast<TVector*>(rawValues_);
@@ -237,29 +250,30 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
   if (valueRows_.empty()) {
     valueRows_.resize(rows.size());
   }
+
   vector_size_t rowIndex = 0;
   auto nextRow = rows[rowIndex];
-  bool moveNulls = shouldMoveNulls(rows);
-  for (size_t i = 0; i < numValues_; i++) {
+  const auto* moveNullsFrom = shouldMoveNulls(rows);
+  for (size_t i = 0; i < numValues_; ++i) {
     if (sourceRows[i] < nextRow) {
       continue;
     }
 
-    VELOX_DCHECK(sourceRows[i] == nextRow);
+    VELOX_DCHECK_EQ(sourceRows[i], nextRow);
     typedDestValues[rowIndex] = typedSourceValues[i];
-    if (moveNulls && rowIndex != i) {
-      bits::setBit(
-          rawResultNulls_, rowIndex, bits::isBitSet(rawResultNulls_, i));
+    if (moveNullsFrom && rowIndex != i) {
+      bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
     if (!isFinal) {
       valueRows_[rowIndex] = nextRow;
     }
-    rowIndex++;
+    ++rowIndex;
     if (rowIndex >= rows.size()) {
       break;
     }
     nextRow = rows[rowIndex];
   }
+
   numValues_ = rows.size();
   valueRows_.resize(numValues_);
   values_->setSize(numValues_ * sizeof(TVector));
@@ -267,7 +281,7 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
 
 template <>
 void SelectiveColumnReader::compactScalarValues<bool, bool>(
-    RowSet rows,
+    const RowSet& rows,
     bool isFinal);
 
 inline int32_t sizeOfIntKind(TypeKind kind) {
@@ -279,73 +293,20 @@ inline int32_t sizeOfIntKind(TypeKind kind) {
     case TypeKind::BIGINT:
       return 8;
     default:
-      VELOX_FAIL("Not an integer TypeKind");
+      VELOX_FAIL("Not an integer TypeKind: {}", static_cast<int>(kind));
   }
-}
-
-template <typename Move>
-void SelectiveColumnReader::compactComplexValues(
-    RowSet rows,
-    Move move,
-    bool isFinal) {
-  VELOX_CHECK_LE(rows.size(), outputRows_.size());
-  VELOX_CHECK(!rows.empty());
-  if (rows.size() == outputRows_.size()) {
-    return;
-  }
-  RowSet sourceRows;
-  // The row numbers corresponding to elements in 'values_' are in
-  // 'valueRows_' if values have been accessed before. Otherwise
-  // they are in 'outputRows_' if these are non-empty (there is a
-  // filter) and in 'inputRows_' otherwise.
-  if (!valueRows_.empty()) {
-    sourceRows = valueRows_;
-  } else if (!outputRows_.empty()) {
-    sourceRows = outputRows_;
-  } else {
-    sourceRows = inputRows_;
-  }
-  if (valueRows_.empty()) {
-    valueRows_.resize(rows.size());
-  }
-  vector_size_t rowIndex = 0;
-  auto nextRow = rows[rowIndex];
-  bool moveNulls = shouldMoveNulls(rows);
-  for (size_t i = 0; i < numValues_; i++) {
-    if (sourceRows[i] < nextRow) {
-      continue;
-    }
-
-    VELOX_DCHECK(sourceRows[i] == nextRow);
-    // The value at i is moved to be the value at 'rowIndex'.
-    move(i, rowIndex);
-    if (moveNulls && rowIndex != i) {
-      bits::setBit(
-          rawResultNulls_, rowIndex, bits::isBitSet(rawResultNulls_, i));
-    }
-    if (!isFinal) {
-      valueRows_[rowIndex] = nextRow;
-    }
-    rowIndex++;
-    if (rowIndex >= rows.size()) {
-      break;
-    }
-    nextRow = rows[rowIndex];
-  }
-  numValues_ = rows.size();
-  valueRows_.resize(numValues_);
 }
 
 template <typename T>
 void SelectiveColumnReader::filterNulls(
-    RowSet rows,
+    const RowSet& rows,
     bool isNull,
     bool extractValues) {
-  bool isDense = rows.back() == rows.size() - 1;
+  const bool isDense = rows.back() == rows.size() - 1;
   // We decide is (not) null based on 'nullsInReadRange_'. This may be
   // set due to nulls in enclosing structs even if the column itself
   // does not add nulls.
-  auto rawNulls =
+  auto* rawNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   if (isNull) {
     if (!rawNulls) {
@@ -368,7 +329,6 @@ void SelectiveColumnReader::filterNulls(
         }
       }
     }
-    readOffset_ += rows.back() + 1;
     return;
   }
 
@@ -391,7 +351,6 @@ void SelectiveColumnReader::filterNulls(
       }
     }
   }
-  readOffset_ += rows.back() + 1;
 }
 
 } // namespace facebook::velox::dwio::common

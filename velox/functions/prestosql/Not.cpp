@@ -42,7 +42,7 @@ class NotFunction : public exec::VectorFunction {
           AlignedBuffer::allocate<bool>(rows.end(), context.pool(), !value);
     } else {
       negated = AlignedBuffer::allocate<bool>(rows.end(), context.pool());
-      auto rawNegated = negated->asMutable<char>();
+      auto* rawNegated = negated->asMutable<uint64_t>();
 
       auto rawInput = input->asFlatVector<bool>()->rawValues<uint64_t>();
 
@@ -59,6 +59,10 @@ class NotFunction : public exec::VectorFunction {
         std::vector<BufferPtr>{});
 
     context.moveOrCopyResult(localResult, rows, result);
+  }
+
+  exec::FunctionCanonicalName getCanonicalName() const override {
+    return exec::FunctionCanonicalName::kNot;
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

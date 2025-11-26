@@ -16,7 +16,7 @@
 
 #include "velox/dwio/parquet/reader/RleBpDecoder.h"
 
-#include "velox/dwio/common/BitPackDecoder.h"
+#include <folly/Varint.h>
 
 namespace facebook::velox::parquet {
 
@@ -38,8 +38,8 @@ void RleBpDecoder::skip(uint64_t numValues) {
 
 void RleBpDecoder::readBits(
     int32_t numValues,
-    uint64_t* FOLLY_NONNULL outputBuffer,
-    bool* FOLLY_NULLABLE allOnes) {
+    uint64_t* outputBuffer,
+    bool* allOnes) {
   VELOX_CHECK_EQ(1, bitWidth_);
   auto toRead = numValues;
   int32_t numWritten = 0;
@@ -85,7 +85,8 @@ void RleBpDecoder::readBits(
 void RleBpDecoder::readHeader() {
   bitOffset_ = 0;
   auto maxVarIntLen = std::min<uint64_t>(
-      (uint64_t)folly::kMaxVarintLength64, bufferEnd_ - bufferStart_);
+      static_cast<uint64_t>(folly::kMaxVarintLength64),
+      bufferEnd_ - bufferStart_);
   folly::ByteRange headerRange(
       reinterpret_cast<const unsigned char*>(bufferStart_),
       reinterpret_cast<const unsigned char*>(bufferStart_ + maxVarIntLen));

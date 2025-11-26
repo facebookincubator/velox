@@ -15,11 +15,12 @@
  */
 #pragma once
 
-#include <folly/Optional.h>
+#include <optional>
 #include <string>
+#include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox {
-class Config;
+namespace facebook::velox::config {
+class ConfigBase;
 }
 
 namespace facebook::velox::connector::hive {
@@ -36,106 +37,287 @@ class HiveConfig {
       InsertExistingPartitionsBehavior behavior);
 
   /// Behavior on insert into existing partitions.
-  static constexpr const char* kInsertExistingPartitionsBehavior =
+  static constexpr const char* kInsertExistingPartitionsBehaviorSession =
       "insert_existing_partitions_behavior";
+  static constexpr const char* kInsertExistingPartitionsBehavior =
+      "insert-existing-partitions-behavior";
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
   static constexpr const char* kMaxPartitionsPerWriters =
+      "max-partitions-per-writers";
+  static constexpr const char* kMaxPartitionsPerWritersSession =
       "max_partitions_per_writers";
+
+  /// Maximum number of buckets allowed to output by the table writers.
+  static constexpr const char* kMaxBucketCount = "hive.max-bucket-count";
+  static constexpr const char* kMaxBucketCountSession = "hive.max_bucket_count";
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
-  static constexpr const char* kImmutablePartitions = "immutable_partitions";
+  static constexpr const char* kImmutablePartitions =
+      "hive.immutable-partitions";
 
-  /// Virtual addressing is used for AWS S3 and is the default
-  /// (path-style-access is false). Path access style is used for some on-prem
-  /// systems like Minio.
-  static constexpr const char* kS3PathStyleAccess = "hive.s3.path-style-access";
+  /// The GCS storage endpoint server.
+  static constexpr const char* kGcsEndpoint = "hive.gcs.endpoint";
 
-  /// Log granularity of AWS C++ SDK.
-  static constexpr const char* kS3LogLevel = "hive.s3.log-level";
+  /// The GCS service account configuration JSON key file.
+  static constexpr const char* kGcsCredentialsPath =
+      "hive.gcs.json-key-file-path";
 
-  /// Use HTTPS to communicate with the S3 API.
-  static constexpr const char* kS3SSLEnabled = "hive.s3.ssl.enabled";
+  /// The GCS maximum retry counter of transient errors.
+  static constexpr const char* kGcsMaxRetryCount = "hive.gcs.max-retry-count";
 
-  /// Use the EC2 metadata service to retrieve API credentials.
-  static constexpr const char* kS3UseInstanceCredentials =
-      "hive.s3.use-instance-credentials";
+  /// The GCS maximum time allowed to retry transient errors.
+  static constexpr const char* kGcsMaxRetryTime = "hive.gcs.max-retry-time";
 
-  /// The S3 storage endpoint server. This can be used to connect to an
-  /// S3-compatible storage system instead of AWS.
-  static constexpr const char* kS3Endpoint = "hive.s3.endpoint";
+  static constexpr const char* kGcsAuthAccessTokenProvider =
+      "hive.gcs.auth.access-token-provider";
 
-  /// Default AWS access key to use.
-  static constexpr const char* kS3AwsAccessKey = "hive.s3.aws-access-key";
+  /// Maps table field names to file field names using names, not indices.
+  static constexpr const char* kOrcUseColumnNames = "hive.orc.use-column-names";
+  static constexpr const char* kOrcUseColumnNamesSession =
+      "orc_use_column_names";
 
-  /// Default AWS secret key to use.
-  static constexpr const char* kS3AwsSecretKey = "hive.s3.aws-secret-key";
+  /// Maps table field names to file field names using names, not indices.
+  static constexpr const char* kParquetUseColumnNames =
+      "hive.parquet.use-column-names";
+  static constexpr const char* kParquetUseColumnNamesSession =
+      "parquet_use_column_names";
 
-  /// IAM role to assume.
-  static constexpr const char* kS3IamRole = "hive.s3.iam-role";
-
-  /// Session name associated with the IAM role.
-  static constexpr const char* kS3IamRoleSessionName =
-      "hive.s3.iam-role-session-name";
-
-  // The GCS storage endpoint server.
-  static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
-
-  // The GCS storage scheme, https for default credentials.
-  static constexpr const char* kGCSScheme = "hive.gcs.scheme";
-
-  // The GCS service account configuration as json string
-  static constexpr const char* kGCSCredentials = "hive.gcs.credentials";
-
-  // Read the source file column name as lower case.
+  /// Reads the source file column name as lower case.
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
+      "file-column-names-read-as-lower-case";
+  static constexpr const char* kFileColumnNamesReadAsLowerCaseSession =
       "file_column_names_read_as_lower_case";
 
-  // Set the max coalesce bytes for a request.
+  static constexpr const char* kPartitionPathAsLowerCaseSession =
+      "partition_path_as_lower_case";
+
+  static constexpr const char* kAllowNullPartitionKeys =
+      "allow-null-partition-keys";
+  static constexpr const char* kAllowNullPartitionKeysSession =
+      "allow_null_partition_keys";
+
+  static constexpr const char* kIgnoreMissingFilesSession =
+      "ignore_missing_files";
+
+  /// The max coalesce bytes for a request.
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
+  static constexpr const char* kMaxCoalescedBytesSession =
+      "max-coalesced-bytes";
 
-  // Set the max coalesce distance bytes for combining requests.
-  static constexpr const char* kMaxCoalescedDistanceBytes =
-      "max-coalesced-distance-bytes";
+  /// The max merge distance to combine read requests.
+  /// Note: The session property name differs from the constant name for
+  /// backward compatibility with Presto.
+  static constexpr const char* kMaxCoalescedDistance = "max-coalesced-distance";
+  static constexpr const char* kMaxCoalescedDistanceSession =
+      "orc_max_merge_distance";
 
-  static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
-      const Config* config);
+  /// The number of prefetch rowgroups
+  static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
 
-  static uint32_t maxPartitionsPerWriters(const Config* config);
+  /// The total size in bytes for a direct coalesce request. Up to 8MB load
+  /// quantum size is supported when SSD cache is enabled.
+  static constexpr const char* kLoadQuantum = "load-quantum";
+  static constexpr const char* kLoadQuantumSession = "load-quantum";
 
-  static bool immutablePartitions(const Config* config);
+  /// Maximum number of entries in the file handle cache.
+  static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
-  static bool s3UseVirtualAddressing(const Config* config);
+  /// Expiration time in ms for a file handle in the cache. A value of 0
+  /// means cache will not evict the handle after kFileHandleExprationDurationMs
+  /// has passed.
+  static constexpr const char* kFileHandleExpirationDurationMs =
+      "file-handle-expiration-duration-ms";
 
-  static std::string s3GetLogLevel(const Config* config);
+  /// Enable file handle cache.
+  static constexpr const char* kEnableFileHandleCache =
+      "file-handle-cache-enabled";
 
-  static bool s3UseSSL(const Config* config);
+  /// The size in bytes to be fetched with Meta data together, used when the
+  /// data after meta data will be used later. Optimization to decrease small IO
+  /// request
+  static constexpr const char* kFooterEstimatedSize = "footer-estimated-size";
 
-  static bool s3UseInstanceCredentials(const Config* config);
+  /// The threshold of file size in bytes when the whole file is fetched with
+  /// meta data together. Optimization to decrease the small IO requests
+  static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
-  static std::string s3Endpoint(const Config* config);
+  /// When set to be larger than 0, parallel unit loader feature is enabled and
+  /// it configures how many units (e.g., stripes) we load in parallel.
+  /// When set to 0, parallel unit loader feature is disabled and on demand unit
+  /// loader would be used.
+  static constexpr const char* kParallelUnitLoadCount =
+      "parallel-unit-load-count";
+  static constexpr const char* kParallelUnitLoadCountSession =
+      "parallel_unit_load_count";
 
-  static std::optional<std::string> s3AccessKey(const Config* config);
+  /// Config used to create write files. This config is provided to underlying
+  /// file system through hive connector and data sink. The config is free form.
+  /// The form should be defined by the underlying file system.
+  static constexpr const char* kWriteFileCreateConfig =
+      "hive.write_file_create_config";
 
-  static std::optional<std::string> s3SecretKey(const Config* config);
+  /// Maximum number of rows for sort writer in one batch of output.
+  static constexpr const char* kSortWriterMaxOutputRows =
+      "sort-writer-max-output-rows";
+  static constexpr const char* kSortWriterMaxOutputRowsSession =
+      "sort_writer_max_output_rows";
 
-  static std::optional<std::string> s3IAMRole(const Config* config);
+  /// Maximum bytes for sort writer in one batch of output.
+  static constexpr const char* kSortWriterMaxOutputBytes =
+      "sort-writer-max-output-bytes";
+  static constexpr const char* kSortWriterMaxOutputBytesSession =
+      "sort_writer_max_output_bytes";
 
-  static std::string s3IAMRoleSessionName(const Config* config);
+  /// Sort Writer will exit finish() method after this many milliseconds even if
+  /// it has not completed its work yet. Zero means no time limit.
+  static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
+      "sort-writer_finish_time_slice_limit_ms";
+  static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
+      "sort_writer_finish_time_slice_limit_ms";
 
-  static std::string gcsEndpoint(const Config* config);
+  // The unit for reading timestamps from files.
+  static constexpr const char* kReadTimestampUnit =
+      "hive.reader.timestamp-unit";
+  static constexpr const char* kReadTimestampUnitSession =
+      "hive.reader.timestamp_unit";
 
-  static std::string gcsScheme(const Config* config);
+  static constexpr const char* kReadTimestampPartitionValueAsLocalTime =
+      "hive.reader.timestamp-partition-value-as-local-time";
+  static constexpr const char* kReadTimestampPartitionValueAsLocalTimeSession =
+      "hive.reader.timestamp_partition_value_as_local_time";
 
-  static std::string gcsCredentials(const Config* config);
+  static constexpr const char* kReadStatsBasedFilterReorderDisabled =
+      "stats-based-filter-reorder-disabled";
+  static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
+      "stats_based_filter_reorder_disabled";
 
-  static bool isFileColumnNamesReadAsLowerCase(const Config* config);
+  static constexpr const char* kLocalDataPath = "hive_local_data_path";
+  static constexpr const char* kLocalFileFormat = "hive_local_file_format";
 
-  static int64_t maxCoalescedBytes(const Config* config);
+  /// Whether to preserve flat maps in memory as FlatMapVectors instead of
+  /// converting them to MapVectors.
+  static constexpr const char* kPreserveFlatMapsInMemory =
+      "hive.preserve-flat-maps-in-memory";
+  static constexpr const char* kPreserveFlatMapsInMemorySession =
+      "hive.preserve_flat_maps_in_memory";
 
-  static int32_t maxCoalescedDistanceBytes(const Config* config);
+  static constexpr const char* kUser = "user";
+  static constexpr const char* kSource = "source";
+  static constexpr const char* kSchema = "schema";
+
+  InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
+      const config::ConfigBase* session) const;
+
+  uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
+
+  uint32_t maxBucketCount(const config::ConfigBase* session) const;
+
+  bool immutablePartitions() const;
+
+  std::string gcsEndpoint() const;
+
+  std::string gcsCredentialsPath() const;
+
+  std::optional<int> gcsMaxRetryCount() const;
+
+  std::optional<std::string> gcsMaxRetryTime() const;
+
+  std::optional<std::string> gcsAuthAccessTokenProvider() const;
+
+  bool isOrcUseColumnNames(const config::ConfigBase* session) const;
+
+  bool isParquetUseColumnNames(const config::ConfigBase* session) const;
+
+  bool isFileColumnNamesReadAsLowerCase(
+      const config::ConfigBase* session) const;
+
+  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
+
+  bool allowNullPartitionKeys(const config::ConfigBase* session) const;
+
+  bool ignoreMissingFiles(const config::ConfigBase* session) const;
+
+  int64_t maxCoalescedBytes(const config::ConfigBase* session) const;
+
+  int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
+
+  int32_t prefetchRowGroups() const;
+
+  size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
+
+  int32_t loadQuantum(const config::ConfigBase* session) const;
+
+  int32_t numCacheFileHandles() const;
+
+  uint64_t fileHandleExpirationDurationMs() const;
+
+  bool isFileHandleCacheEnabled() const;
+
+  uint64_t fileWriterFlushThresholdBytes() const;
+
+  std::string writeFileCreateConfig() const;
+
+  uint32_t sortWriterMaxOutputRows(const config::ConfigBase* session) const;
+
+  uint64_t sortWriterMaxOutputBytes(const config::ConfigBase* session) const;
+
+  uint64_t sortWriterFinishTimeSliceLimitMs(
+      const config::ConfigBase* session) const;
+
+  uint64_t footerEstimatedSize() const;
+
+  uint64_t filePreloadThreshold() const;
+
+  // Returns the timestamp unit used when reading timestamps from files.
+  uint8_t readTimestampUnit(const config::ConfigBase* session) const;
+
+  // Whether to read timestamp partition value as local time. If false, read as
+  // UTC.
+  bool readTimestampPartitionValueAsLocalTime(
+      const config::ConfigBase* session) const;
+
+  /// Returns true if the stats based filter reorder for read is disabled.
+  bool readStatsBasedFilterReorderDisabled(
+      const config::ConfigBase* session) const;
+
+  /// Returns the file system path containing local data. If non-empty,
+  /// initializes LocalHiveConnectorMetadata to provide metadata for the tables
+  /// in the directory.
+  std::string hiveLocalDataPath() const;
+
+  /// Returns the name of the file format to use in interpreting the contents of
+  /// hiveLocalDataPath().
+  std::string hiveLocalFileFormat() const;
+
+  /// Whether to preserve flat maps in memory as FlatMapVectors instead of
+  /// converting them to MapVectors.
+  bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+
+  /// User of the query. Used for storage logging.
+  std::string user(const config::ConfigBase* session) const;
+
+  /// Source of the query. Used for storage access and logging.
+  std::string source(const config::ConfigBase* session) const;
+
+  /// Schema of the query. Used for storage logging.
+  std::string schema(const config::ConfigBase* session) const;
+
+  HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
+    VELOX_CHECK_NOT_NULL(
+        config, "Config is null for HiveConfig initialization");
+    config_ = std::move(config);
+    // TODO: add sanity check
+  }
+
+  const std::shared_ptr<const config::ConfigBase>& config() const {
+    return config_;
+  }
+
+ private:
+  std::shared_ptr<const config::ConfigBase> config_;
 };
 
 } // namespace facebook::velox::connector::hive

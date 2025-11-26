@@ -33,7 +33,11 @@ vector_size_t countElements(
     if (decodedVector.isNullAt(row)) {
       return;
     }
-    count += rawSizes[indices[row]];
+    // In some cases, the array/map vector is wrapped in dictionary encoding
+    // that can explode the cardinality of the underlying elements. This check
+    // helps ensure we fail instead of silently wrapping around and causing
+    // memory corruption or segfaults.
+    count = checkedPlus<vector_size_t>(count, rawSizes[indices[row]]);
   });
   return count;
 }
@@ -87,4 +91,11 @@ MapVectorPtr flattenMap(
     const SelectivityVector& rows,
     const VectorPtr& vector,
     DecodedVector& decodedVector);
+
+// Creates a nulls buffer to hold rows.size() nulls. Copies the original nulls
+// in 'vector' for positions [rows.begin(), rows.end()) and sets nulls for
+// unselected rows in 'rows'.
+BufferPtr addNullsForUnselectedRows(
+    const VectorPtr& vector,
+    const SelectivityVector& rows);
 } // namespace facebook::velox::functions

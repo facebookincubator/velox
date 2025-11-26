@@ -40,69 +40,99 @@ namespace velox {
 namespace error_source {
 using namespace folly::string_literals;
 
-// Errors where the root cause of the problem is either because of bad input
-// or an unsupported pattern of use are classified with source USER. Examples
-// of errors in this category include syntax errors, unavailable names or
-// objects.
+/// Errors where the root cause of the problem is either because of bad input
+/// or an unsupported pattern of use are classified with source USER. Examples
+/// of errors in this category include syntax errors, unavailable names or
+/// objects.
 inline constexpr auto kErrorSourceUser = "USER"_fs;
 
-// Errors where the root cause of the problem is an unexpected internal state in
-// the system.
+/// Errors where the root cause of the problem is an unexpected internal state
+/// in the system.
 inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
 
-// Errors where the root cause of the problem is some unreliable aspect of the
-// system are classified with source SYSTEM.
+/// Errors where the root cause of the problem is some unreliable aspect of the
+/// system are classified with source SYSTEM.
 inline constexpr auto kErrorSourceSystem = "SYSTEM"_fs;
+
+/// Errors where the root cause of the problem is some external dependency (e.g.
+/// storage)
+inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs;
 } // namespace error_source
 
 namespace error_code {
 using namespace folly::string_literals;
 
-//====================== User Error Codes ======================:
+///====================== User Error Codes ======================:
 
-// A generic user error code
+/// A generic user error code
 inline constexpr auto kGenericUserError = "GENERIC_USER_ERROR"_fs;
 
-// An error raised when an argument verification fails
+/// An error raised when an argument verification fails
 inline constexpr auto kInvalidArgument = "INVALID_ARGUMENT"_fs;
 
-// An error raised when a requested operation is not supported.
+/// An error raised when a requested operation is not supported.
 inline constexpr auto kUnsupported = "UNSUPPORTED"_fs;
 
-// Arithmetic errors - underflow, overflow, divide by zero etc.
+/// Arithmetic errors - underflow, overflow, divide by zero etc.
 inline constexpr auto kArithmeticError = "ARITHMETIC_ERROR"_fs;
 
-// Arithmetic errors - underflow, overflow, divide by zero etc.
+/// An error raised when types are not compatible
 inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
 
-//====================== Runtime Error Codes ======================:
+///====================== Runtime Error Codes ======================:
 
-// An error raised when the current state of a component is invalid.
+/// An error raised when the current state of a component is invalid.
 inline constexpr auto kInvalidState = "INVALID_STATE"_fs;
 
-// An error raised when unreachable code point was executed.
+/// An error raised when unreachable code point was executed.
 inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
 
-// An error raised when a requested operation is not yet supported.
+/// An error raised when a requested operation is not yet supported.
 inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
 
-// An error raised when memory pool exceeds limits.
+/// An error raised when memory pool exceeds limits.
 inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
 
-// An error raised when memory pool is aborted.
+/// An error raised when memory request failed due to arbitration failures. This
+/// is normally caused by insufficient global memory resource.
+inline constexpr auto kMemArbitrationFailure = "MEM_ARBITRATION_FAILURE"_fs;
+
+/// An error raised when memory pool is aborted.
 inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
 
-// Error caused by memory allocation failure.
+/// An error raised when memory arbitration times out.
+inline constexpr auto kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT"_fs;
+
+/// Error caused by memory allocation failure (inclusive of allocator memory cap
+/// exceeded).
 inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
 
-// Error caused by failing to allocate cache buffer space for IO.
+/// Error caused by failing to allocate cache buffer space for IO.
 inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
-// Errors indicating file read corruptions.
+/// An error raised when spill bytes exceeds limits.
+inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+
+/// An error raised to indicate any general failure happened during spilling.
+inline constexpr auto kGenericSpillFailure = "GENERIC_SPILL_FAILURE"_fs;
+
+/// An error raised when trace bytes exceeds limits.
+inline constexpr auto kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED"_fs;
+
+/// Errors indicating file read corruptions.
 inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
 
-// We do not know how to classify it yet.
+/// Errors indicating file not found.
+inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
+
+/// We do not know how to classify it yet.
 inline constexpr auto kUnknown = "UNKNOWN"_fs;
+
+/// VeloxRuntimeErrors due to unsupported input values such as unicode input to
+/// cast-varchar-to-integer. This kind of errors is allowed in expression
+/// fuzzer.
+inline constexpr auto kUnsupportedInputUncatchable =
+    "UNSUPPORTED_INPUT_UNCATCHABLE"_fs;
 } // namespace error_code
 
 class VeloxException : public std::exception {
@@ -126,16 +156,33 @@ class VeloxException : public std::exception {
       const std::exception_ptr& e,
       std::string_view message,
       std::string_view errorSource,
+      std::string_view errorCode,
       bool isRetriable,
       Type exceptionType = Type::kSystem,
       std::string_view exceptionName = "VeloxException");
 
-  // Inherited
+  VeloxException(
+      const std::exception_ptr& e,
+      std::string_view message,
+      std::string_view errorSource,
+      bool isRetriable,
+      Type exceptionType = Type::kSystem,
+      std::string_view exceptionName = "VeloxException")
+      : VeloxException(
+            e,
+            message,
+            errorSource,
+            "",
+            isRetriable,
+            exceptionType,
+            exceptionName) {}
+
+  /// Inherited
   const char* what() const noexcept override {
     return state_->what();
   }
 
-  // Introduced nonvirtuals
+  /// Introduced nonvirtuals
   const process::StackTrace* stackTrace() const {
     return state_->stackTrace.get();
   }
@@ -183,8 +230,8 @@ class VeloxException : public std::exception {
     return state_->context;
   }
 
-  const std::string& topLevelContext() const {
-    return state_->topLevelContext;
+  const std::string& additionalContext() const {
+    return state_->additionalContext;
   }
 
   const std::exception_ptr& wrappedException() const {
@@ -206,7 +253,7 @@ class VeloxException : public std::exception {
     // The current exception context.
     std::string context;
     // The top-level ancestor of the current exception context.
-    std::string topLevelContext;
+    std::string additionalContext;
     bool isRetriable;
     // The original std::exception.
     std::exception_ptr wrappedException;
@@ -269,6 +316,7 @@ class VeloxUserError : public VeloxException {
             e,
             message,
             error_source::kErrorSourceUser,
+            error_code::kInvalidArgument,
             isRetriable,
             Type::kUser,
             exceptionName) {}
@@ -313,6 +361,28 @@ class VeloxRuntimeError final : public VeloxException {
             exceptionName) {}
 };
 
+/// Returns a reference to a thread level counter of Velox error throws.
+int64_t& threadNumVeloxThrow();
+
+/// Returns a reference to a thread level boolean that controls whether no-throw
+/// APIs include detailed error messages in Status.
+bool& threadSkipErrorDetails();
+
+class ScopedThreadSkipErrorDetails {
+ public:
+  ScopedThreadSkipErrorDetails(bool skip = true)
+      : original_{threadSkipErrorDetails()} {
+    threadSkipErrorDetails() = skip;
+  }
+
+  ~ScopedThreadSkipErrorDetails() {
+    threadSkipErrorDetails() = original_;
+  }
+
+ private:
+  bool original_;
+};
+
 /// Holds a pointer to a function that provides addition context to be
 /// added to the detailed error message in case of an exception.
 struct ExceptionContext {
@@ -324,6 +394,10 @@ struct ExceptionContext {
 
   /// Value to pass to `messageFunc`. Can be null.
   void* arg{nullptr};
+
+  /// If true, then the addition context in 'this' is always included when there
+  /// are hierarchical exception contexts.
+  bool isEssential{false};
 
   /// Pointer to the parent context when there are hierarchical exception
   /// contexts.
@@ -368,7 +442,7 @@ ExceptionContext& getExceptionContext();
 /// exception context with the previous context held by the thread_local
 /// variable to allow retrieving the top-level context when there is an
 /// exception context hierarchy.
-class ExceptionContextSetter {
+class [[nodiscard]] ExceptionContextSetter {
  public:
   explicit ExceptionContextSetter(ExceptionContext value)
       : prev_{getExceptionContext()} {

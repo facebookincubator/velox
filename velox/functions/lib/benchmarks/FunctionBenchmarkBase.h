@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/expression/Expr.h"
+#include "velox/expression/RegisterSpecialForm.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -27,6 +28,18 @@ class FunctionBenchmarkBase {
  public:
   FunctionBenchmarkBase() {
     parse::registerTypeResolver();
+    exec::registerFunctionCallToSpecialForms();
+  }
+
+  void setTimezone(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, value},
+    });
+  }
+
+  void setAdjustTimestampToTimezone(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kAdjustTimestampToTimezone, value}});
   }
 
   exec::ExprSet compileExpression(
@@ -38,14 +51,28 @@ class FunctionBenchmarkBase {
     return exec::ExprSet({typed}, &execCtx_);
   }
 
+  void evaluate(
+      exec::ExprSet& exprSet,
+      const RowVectorPtr& data,
+      const SelectivityVector& rows,
+      VectorPtr& result) {
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
+    std::vector<VectorPtr> results{result};
+    exprSet.eval(rows, evalCtx, results);
+
+    // If result was nullptr, we need to pick up the value that was created.
+    if (!result) {
+      result = results[0];
+    }
+  }
+
   VectorPtr evaluate(
       exec::ExprSet& exprSet,
       const RowVectorPtr& data,
       const SelectivityVector& rows) {
-    exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
-    std::vector<VectorPtr> results(1);
-    exprSet.eval(rows, evalCtx, results);
-    return results[0];
+    VectorPtr result;
+    evaluate(exprSet, data, rows, result);
+    return result;
   }
 
   VectorPtr evaluate(exec::ExprSet& exprSet, const RowVectorPtr& data) {
@@ -67,8 +94,9 @@ class FunctionBenchmarkBase {
   }
 
  protected:
-  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
   parse::ParseOptions options_;

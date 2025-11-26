@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/Expr.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -64,7 +64,7 @@ template <
 void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
+    DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
     FlatVector<int64_t>& flatResult) {
   auto baseArray = arrayDecoded.base()->as<ArrayVector>();
@@ -73,7 +73,7 @@ void applyTypedFirstMatch(
   auto indices = arrayDecoded.indices();
 
   auto elementsBase = elementsDecoded.base();
-
+  auto elementIndices = elementsDecoded.indices();
   auto searchBase = searchDecoded.base();
   auto searchIndices = searchDecoded.indices();
 
@@ -84,8 +84,9 @@ void applyTypedFirstMatch(
 
     int i;
     for (i = 0; i < size; i++) {
-      if (!elementsBase->isNullAt(offset + i) &&
-          elementsBase->equalValueAt(searchBase, offset + i, searchIndex)) {
+      if (!elementsDecoded.isNullAt(offset + i) &&
+          elementsBase->equalValueAt(
+              searchBase, elementIndices[offset + i], searchIndex)) {
         flatResult.set(row, i + 1);
         break;
       }
@@ -154,7 +155,7 @@ template <
 void applyTypedWithInstance(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
+    DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
     const DecodedVector& instanceDecoded,
     FlatVector<int64_t>& flatResult) {
@@ -164,6 +165,7 @@ void applyTypedWithInstance(
   auto indices = arrayDecoded.indices();
 
   auto elementsBase = elementsDecoded.base();
+  auto elementIndices = elementsDecoded.indices();
 
   auto searchBase = searchDecoded.base();
   auto searchIndices = searchDecoded.indices();
@@ -186,8 +188,9 @@ void applyTypedWithInstance(
 
     int i;
     for (i = startIndex; i != endIndex; i += step) {
-      if (!elementsBase->isNullAt(offset + i) &&
-          elementsBase->equalValueAt(searchBase, offset + i, searchIndex)) {
+      if (!elementsDecoded.isNullAt(offset + i) &&
+          elementsBase->equalValueAt(
+              searchBase, elementIndices[offset + i], searchIndex)) {
         --instance;
         if (instance == 0) {
           flatResult.set(row, i + 1);
@@ -251,22 +254,23 @@ class ArrayPositionFunctionBasic : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {// array(T), T -> int64_t
-            exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("bigint")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .build(),
+    return {
+        // array(T), T -> int64_t
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("bigint")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .build(),
 
-            // array(T), T, int64_t -> int64_t
-            exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("bigint")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .argumentType("bigint")
-                .build()};
+        // array(T), T, int64_t -> int64_t
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("bigint")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .argumentType("bigint")
+            .build()};
   }
 };
 

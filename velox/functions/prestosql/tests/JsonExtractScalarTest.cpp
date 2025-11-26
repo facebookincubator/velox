@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -103,6 +104,19 @@ TEST_F(JsonExtractScalarTest, simple) {
       jsonExtractScalar(
           R"([{"k1":[{"k2": ["v1", "v2"]}]}])", "$[0].k1[0].k2[1]"),
       "v2");
+
+  // Paths without leading '$'.
+  EXPECT_EQ(jsonExtractScalar(R"({"k1":"v1"})", "k1"), "v1");
+  EXPECT_EQ(jsonExtractScalar(R"({"k1":{"k2": 999}})", "k1.k2"), "999");
+  EXPECT_EQ(jsonExtractScalar(R"([1,2])", "[0]"), "1");
+  EXPECT_EQ(jsonExtractScalar(R"({"k1":"v1"})", R"(["k1"])"), "v1");
+
+  // Paths with redundant '.'s.
+  auto json = "[1, 2, [10, 20, [100, 200, 300]]]";
+  EXPECT_EQ(jsonExtractScalar(json, "$[2][2][2]"), "300");
+  EXPECT_EQ(jsonExtractScalar(json, "$.[2].[2].[2]"), "300");
+  EXPECT_EQ(jsonExtractScalar(json, "$[2].[2].[2]"), "300");
+  EXPECT_EQ(jsonExtractScalar(json, "$[2][2].[2]"), "300");
 }
 
 TEST_F(JsonExtractScalarTest, jsonType) {
@@ -164,25 +178,42 @@ TEST_F(JsonExtractScalarTest, utf8) {
 }
 
 TEST_F(JsonExtractScalarTest, invalidPath) {
-  EXPECT_THROW(jsonExtractScalar(R"([0,1,2])", ""), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"([0,1,2])", "$[]"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"([0,1,2])", "$[-1]"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1"})", "$k1"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1"})", "$.k1."), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1"})", "$.k1]"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1)", "$.k1]"), VeloxUserError);
+  VELOX_ASSERT_THROW(jsonExtractScalar(R"([0,1,2])", ""), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"([0,1,2])", "$[]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"([0,1,2])", "$-1"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", "$k1"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", "$.k1."), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", "$.k1["), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1)", "$.k1["), "Invalid JSON path");
 }
 
-// TODO: Folly tries to convert scalar integers, and in case they are large
-// enough it overflows and throws conversion error. In this case, we do out best
-// and return NULL, but in Presto java the large integer is returned as-is as a
-// string.
+TEST_F(JsonExtractScalarTest, invalidJson) {
+  // Verify that we return null on invalid JSON regardless of whether the
+  // invalid section is after the target path.
+  EXPECT_EQ(jsonExtractScalar(R"({"a": "b", "c": "d})", "$.a"), std::nullopt);
+  EXPECT_EQ(jsonExtractScalar(R"([["a"], ["b]])", "$[0][0]"), std::nullopt);
+}
+
+TEST_F(JsonExtractScalarTest, escapedString) {
+  // Verify the the returned string is unescaped.
+  EXPECT_EQ(
+      jsonExtractScalar(R"({"x": {"a" : 1, "b" : "b\/c"} })", "$.x.b"), "b/c");
+}
+
+// simdjson, like Presto java, returns the large number as-is as a string,
+// without trying to convert it to an integer.
 TEST_F(JsonExtractScalarTest, overflow) {
   EXPECT_EQ(
       jsonExtractScalar(
           R"(184467440737095516151844674407370955161518446744073709551615)",
           "$"),
-      std::nullopt);
+      "184467440737095516151844674407370955161518446744073709551615");
 }
 
 // TODO: When there is a wildcard in the json path, Presto's behavior is to
@@ -206,6 +237,18 @@ TEST_F(JsonExtractScalarTest, wildcardSelect) {
   EXPECT_EQ(
       jsonExtractScalar(R"({"tags":{"a":["b"],"c":[]}})", "$.tags.c[*]"),
       std::nullopt);
+}
+
+TEST_F(JsonExtractScalarTest, nanJson) {
+  std::vector<std::string> badReplacements = {"garbage", "NaN", "}", "0/0"};
+
+  for (const auto& badReplacement : badReplacements) {
+    std::string js = fmt::format(
+        fmt::runtime(
+            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        badReplacement);
+    EXPECT_EQ(jsonExtractScalar(js, "$.over_occlusion_rate"), std::nullopt);
+  }
 }
 
 } // namespace

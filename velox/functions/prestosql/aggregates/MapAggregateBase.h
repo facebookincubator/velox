@@ -22,12 +22,10 @@
 
 namespace facebook::velox::aggregate::prestosql {
 
-template <typename K>
+template <typename K, typename AccumulatorType>
 class MapAggregateBase : public exec::Aggregate {
  public:
   explicit MapAggregateBase(TypePtr resultType) : Aggregate(resultType) {}
-
-  using AccumulatorType = MapAccumulator<K>;
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
@@ -35,16 +33,6 @@ class MapAggregateBase : public exec::Aggregate {
 
   bool isFixedSize() const override {
     return false;
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    const auto& type = resultType()->childAt(0);
-    for (auto index : indices) {
-      new (groups[index] + offset_) AccumulatorType(type, allocator_);
-    }
-    setAllNulls(groups, indices);
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -105,13 +93,6 @@ class MapAggregateBase : public exec::Aggregate {
     addSingleGroupMapInputToAccumulator(group, rows, args, false);
   }
 
-  void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      auto accumulator = value<AccumulatorType>(group);
-      accumulator->free(*allocator_);
-    }
-  }
-
  protected:
   vector_size_t countElements(char** groups, int32_t numGroups) const {
     vector_size_t size = 0;
@@ -119,6 +100,15 @@ class MapAggregateBase : public exec::Aggregate {
       size += value<AccumulatorType>(groups[i])->size();
     }
     return size;
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        auto accumulator = value<AccumulatorType>(group);
+        accumulator->free(*allocator_);
+      }
+    }
   }
 
   AccumulatorType* accumulator(char* group) {
@@ -195,12 +185,24 @@ class MapAggregateBase : public exec::Aggregate {
     });
   }
 
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    const auto& type = resultType()->childAt(0);
+    for (auto index : indices) {
+      new (groups[index] + offset_) AccumulatorType(type, allocator_);
+    }
+    setAllNulls(groups, indices);
+  }
+
   DecodedVector decodedKeys_;
   DecodedVector decodedValues_;
   DecodedVector decodedMaps_;
 };
 
-template <template <typename K> class TAggregate>
+template <template <
+    typename K,
+    typename Accumulator = MapAccumulator<K>> class TAggregate>
 std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
   auto typeKind = resultType->childAt(0)->kind();
   switch (typeKind) {
@@ -220,6 +222,8 @@ std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
       return std::make_unique<TAggregate<double>>(resultType);
     case TypeKind::TIMESTAMP:
       return std::make_unique<TAggregate<Timestamp>>(resultType);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       return std::make_unique<TAggregate<StringView>>(resultType);
     case TypeKind::ARRAY:
@@ -229,7 +233,7 @@ std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
     case TypeKind::UNKNOWN:
       return std::make_unique<TAggregate<int32_t>>(resultType);
     default:
-      VELOX_UNREACHABLE("Unexpected type {}", mapTypeKindToName(typeKind));
+      VELOX_UNREACHABLE("Unexpected type {}", TypeKindName::toName(typeKind));
   }
 }
 

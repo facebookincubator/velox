@@ -17,10 +17,10 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 template <>
 const bool* FlatVector<bool>::rawValues() const {
@@ -39,7 +39,9 @@ Range<bool> FlatVector<bool>::asRange() const {
 
 template <>
 void FlatVector<bool>::set(vector_size_t idx, bool value) {
-  VELOX_DCHECK(idx < BaseVector::length_);
+  VELOX_DCHECK_LT(idx, BaseVector::length_);
+  ensureValues();
+  VELOX_DCHECK(!values_->isView());
   if (BaseVector::rawNulls_) {
     BaseVector::setNull(idx, false);
   }
@@ -47,160 +49,9 @@ void FlatVector<bool>::set(vector_size_t idx, bool value) {
 }
 
 template <>
-void FlatVector<bool>::copyValuesAndNulls(
-    const BaseVector* source,
-    const SelectivityVector& rows,
-    const vector_size_t* toSourceRow) {
-  source = source->loadedVector();
-  VELOX_CHECK(
-      BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
-  VELOX_CHECK(BaseVector::length_ >= rows.end());
-  const uint64_t* sourceNulls = source->rawNulls();
-  uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
-  if (source->mayHaveNulls()) {
-    rawNulls = BaseVector::mutableRawNulls();
-  }
-  uint64_t* rawValues = reinterpret_cast<uint64_t*>(rawValues_);
-  if (source->isFlatEncoding()) {
-    auto flat = source->asUnchecked<FlatVector<bool>>();
-    auto* sourceValues = source->typeKind() != TypeKind::UNKNOWN
-        ? flat->rawValues<uint64_t>()
-        : nullptr;
-    if (!sourceValues) {
-      // All rows in source vector are null.
-      rows.applyToSelected(
-          [&](auto row) { bits::setNull(rawNulls, row, true); });
-    } else {
-      if (toSourceRow) {
-        rows.applyToSelected([&](auto row) {
-          int32_t sourceRow = toSourceRow[row];
-          if (sourceValues) {
-            bits::setBit(
-                rawValues, row, bits::isBitSet(sourceValues, sourceRow));
-          }
-          if (rawNulls) {
-            bits::setNull(
-                rawNulls,
-                row,
-                sourceNulls && bits::isBitNull(sourceNulls, sourceRow));
-          }
-        });
-      } else {
-        rows.applyToSelected([&](auto row) {
-          if (sourceValues) {
-            bits::setBit(rawValues, row, bits::isBitSet(sourceValues, row));
-          }
-          if (rawNulls) {
-            bits::setNull(
-                rawNulls,
-                row,
-                sourceNulls && bits::isBitNull(sourceNulls, row));
-          }
-        });
-      }
-    }
-  } else if (source->isConstantEncoding()) {
-    auto constant = source->asUnchecked<ConstantVector<bool>>();
-    if (constant->isNullAt(0)) {
-      addNulls(nullptr, rows);
-      return;
-    }
-    bool value = constant->valueAt(0);
-    auto range = rows.asRange();
-    if (value) {
-      bits::orBits(rawValues, range.bits(), range.begin(), range.end());
-    } else {
-      bits::andWithNegatedBits(
-          rawValues, range.bits(), range.begin(), range.end());
-    }
-    rows.clearNulls(rawNulls);
-  } else {
-    auto sourceVector = source->asUnchecked<SimpleVector<bool>>();
-    rows.applyToSelected([&](auto row) {
-      int32_t sourceRow = toSourceRow ? toSourceRow[row] : row;
-      if (!source->isNullAt(sourceRow)) {
-        bits::setBit(rawValues, row, sourceVector->valueAt(sourceRow));
-        if (rawNulls) {
-          bits::clearNull(rawNulls, row);
-        }
-      } else {
-        bits::setNull(rawNulls, row);
-      }
-    });
-  }
-}
-
-template <>
-void FlatVector<bool>::copyValuesAndNulls(
-    const BaseVector* source,
-    vector_size_t targetIndex,
-    vector_size_t sourceIndex,
-    vector_size_t count) {
-  if (count == 0) {
-    return;
-  }
-  source = source->loadedVector();
-  VELOX_CHECK(
-      BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
-  VELOX_CHECK(source->size() >= sourceIndex + count);
-  VELOX_CHECK(BaseVector::length_ >= targetIndex + count);
-
-  const uint64_t* sourceNulls = source->rawNulls();
-  auto rawValues = reinterpret_cast<uint64_t*>(rawValues_);
-  uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
-  if (source->mayHaveNulls()) {
-    rawNulls = BaseVector::mutableRawNulls();
-  }
-  if (source->isFlatEncoding()) {
-    if (source->typeKind() != TypeKind::UNKNOWN) {
-      auto* sourceValues =
-          source->asUnchecked<FlatVector<bool>>()->rawValues<uint64_t>();
-      bits::copyBits(sourceValues, sourceIndex, rawValues, targetIndex, count);
-    }
-    if (rawNulls) {
-      if (sourceNulls) {
-        bits::copyBits(sourceNulls, sourceIndex, rawNulls, targetIndex, count);
-      } else {
-        bits::fillBits(
-            rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
-      }
-    }
-  } else if (source->isConstantEncoding()) {
-    auto constant = source->asUnchecked<ConstantVector<bool>>();
-    if (constant->isNullAt(0)) {
-      bits::fillBits(rawNulls, targetIndex, targetIndex + count, bits::kNull);
-      return;
-    }
-    bool value = constant->valueAt(0);
-    bits::fillBits(rawValues, targetIndex, targetIndex + count, value);
-    if (rawNulls) {
-      bits::fillBits(
-          rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
-    }
-  } else {
-    auto sourceVector = source->typeKind() != TypeKind::UNKNOWN
-        ? source->asUnchecked<SimpleVector<bool>>()
-        : nullptr;
-    for (int32_t i = 0; i < count; ++i) {
-      if (!source->isNullAt(sourceIndex + i)) {
-        if (sourceVector) {
-          bits::setBit(
-              rawValues,
-              targetIndex + i,
-              sourceVector->valueAt(sourceIndex + i));
-        }
-        if (rawNulls) {
-          bits::clearNull(rawNulls, targetIndex + i);
-        }
-      } else {
-        bits::setNull(rawNulls, targetIndex + i);
-      }
-    }
-  }
-}
-
-template <>
-Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
+Buffer* FlatVector<StringView>::getBufferWithSpace(
+    size_t size,
+    bool exactSize) {
   VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
 
   // Check if the last buffer is uniquely referenced and has enough space.
@@ -212,7 +63,7 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
   }
 
   // Allocate a new buffer.
-  int32_t newSize = std::max(kInitialStringSize, size);
+  const size_t newSize = exactSize ? size : std::max(kInitialStringSize, size);
   BufferPtr newBuffer = AlignedBuffer::allocate<char>(newSize, pool());
   newBuffer->setSize(0);
   addStringBuffer(newBuffer);
@@ -220,8 +71,10 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
 }
 
 template <>
-char* FlatVector<StringView>::getRawStringBufferWithSpace(vector_size_t size) {
-  Buffer* buffer = getBufferWithSpace(size);
+char* FlatVector<StringView>::getRawStringBufferWithSpace(
+    size_t size,
+    bool exactSize) {
+  Buffer* buffer = getBufferWithSpace(size, exactSize);
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
   buffer->setSize(buffer->size() + size);
   return rawBuffer;
@@ -233,23 +86,12 @@ void FlatVector<StringView>::prepareForReuse() {
 
   // Check values buffer. Keep the buffer if singly-referenced and mutable.
   // Reset otherwise.
-  if (values_ && !(values_->unique() && values_->isMutable())) {
+  if (values_ && !values_->isMutable()) {
     values_ = nullptr;
     rawValues_ = nullptr;
   }
 
-  // Check string buffers. Keep at most one singly-referenced buffer if it is
-  // not too large.
-  if (!stringBuffers_.empty()) {
-    auto& firstBuffer = stringBuffers_.front();
-    if (firstBuffer->unique() && firstBuffer->isMutable() &&
-        firstBuffer->capacity() <= kMaxStringSizeForReuse) {
-      firstBuffer->setSize(0);
-      setStringBuffers({firstBuffer});
-    } else {
-      clearStringBuffers();
-    }
-  }
+  keepAtMostOneStringBuffer();
 
   // Clear the StringViews to avoid referencing freed memory.
   if (rawValues_) {
@@ -261,7 +103,9 @@ void FlatVector<StringView>::prepareForReuse() {
 
 template <>
 void FlatVector<StringView>::set(vector_size_t idx, StringView value) {
-  VELOX_DCHECK(idx < BaseVector::length_);
+  VELOX_DCHECK_LT(idx, BaseVector::length_);
+  ensureValues();
+  VELOX_DCHECK(!values_->isView());
   if (BaseVector::rawNulls_) {
     BaseVector::setNull(idx, false);
   }
@@ -273,22 +117,6 @@ void FlatVector<StringView>::set(vector_size_t idx, StringView value) {
     buffer->setSize(buffer->size() + value.size());
     memcpy(ptr, value.data(), value.size());
     rawValues_[idx] = StringView(ptr, value.size());
-  }
-}
-
-/// For types that requires buffer allocation this should be called only if
-/// value is inlined or if value is already allocated in a buffer within the
-/// vector. Used by StringWriter to allow UDFs to write directly into the
-/// buffers and avoid copying.
-template <>
-void FlatVector<StringView>::setNoCopy(
-    const vector_size_t idx,
-    const StringView& value) {
-  VELOX_DCHECK(idx < BaseVector::length_);
-  VELOX_DCHECK(values_->isMutable());
-  rawValues_[idx] = value;
-  if (BaseVector::nulls_) {
-    BaseVector::setNull(idx, false);
   }
 }
 
@@ -365,6 +193,15 @@ void FlatVector<StringView>::acquireSharedStringBuffersRecursive(
       return;
     }
 
+    case VectorEncoding::Simple::FLAT_MAP: {
+      acquireSharedStringBuffersRecursive(
+          source->asUnchecked<FlatMapVector>()->distinctKeys().get());
+      for (auto& mapValue : source->asUnchecked<FlatMapVector>()->mapValues()) {
+        acquireSharedStringBuffersRecursive(mapValue.get());
+      }
+      return;
+    }
+
     case VectorEncoding::Simple::ROW: {
       for (auto& child : source->asUnchecked<RowVector>()->children()) {
         acquireSharedStringBuffersRecursive(child.get());
@@ -434,14 +271,44 @@ void FlatVector<StringView>::copy(
     copyValuesAndNulls(source, rows, toSourceRow);
     acquireSharedStringBuffers(source);
   } else {
+    DecodedVector decoded(*source);
+    uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
+    if (decoded.mayHaveNulls()) {
+      rawNulls = BaseVector::mutableRawNulls();
+    }
+
+    size_t totalBytes = 0;
     rows.applyToSelected([&](vector_size_t row) {
-      auto sourceRow = toSourceRow ? toSourceRow[row] : row;
-      if (source->isNullAt(sourceRow)) {
-        setNull(row, true);
+      const auto sourceRow = toSourceRow ? toSourceRow[row] : row;
+      if (decoded.isNullAt(sourceRow)) {
+        bits::setNull(rawNulls, row);
       } else {
-        set(row, leaf->valueAt(source->wrappedIndex(sourceRow)));
+        if (rawNulls) {
+          bits::clearNull(rawNulls, row);
+        }
+        auto v = decoded.valueAt<StringView>(sourceRow);
+        if (v.isInline()) {
+          rawValues_[row] = v;
+        } else {
+          totalBytes += v.size();
+        }
       }
     });
+
+    if (totalBytes > 0) {
+      auto* buffer = getRawStringBufferWithSpace(totalBytes);
+      rows.applyToSelected([&](vector_size_t row) {
+        const auto sourceRow = toSourceRow ? toSourceRow[row] : row;
+        if (!decoded.isNullAt(sourceRow)) {
+          auto v = decoded.valueAt<StringView>(sourceRow);
+          if (!v.isInline()) {
+            memcpy(buffer, v.data(), v.size());
+            rawValues_[row] = StringView(buffer, v.size());
+            buffer += v.size();
+          }
+        }
+      });
+    }
   }
 
   if (auto stringVector = source->as<SimpleVector<StringView>>()) {
@@ -449,54 +316,127 @@ void FlatVector<StringView>::copy(
       setIsAscii(ascii.value(), rows);
     } else {
       // ASCII-ness for the 'rows' is not known.
-      ensureIsAsciiCapacity(rows.end());
+      ensureIsAsciiCapacity();
       // If we arent All ascii, then invalidate
       // because the remaining selected rows might be ascii
       if (!asciiInfo.isAllAscii()) {
         invalidateIsAscii();
       } else {
-        asciiInfo.asciiSetRows().deselect(rows);
+        asciiInfo.writeLockedAsciiComputedRows()->deselect(rows);
       }
     }
   }
 }
 
+// For strings if backing memory pool is not the same as the vector pool, we
+// need to perform a deep copy and reconstruct the string views against the
+// updated stringBuffers.
 template <>
-void FlatVector<StringView>::copy(
-    const BaseVector* source,
-    vector_size_t targetIndex,
-    vector_size_t sourceIndex,
-    vector_size_t count) {
-  if (count == 0) {
-    return;
-  }
-  BaseVector::copy(source, targetIndex, sourceIndex, count);
-}
-
-template <>
-void FlatVector<StringView>::copyRanges(
-    const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges) {
-  auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
-  if (pool_ == leaf->pool()) {
-    // We copy referencing the storage of 'source'.
-    for (auto& r : ranges) {
-      copyValuesAndNulls(source, r.targetIndex, r.sourceIndex, r.count);
-    }
-    acquireSharedStringBuffers(source);
+VectorPtr FlatVector<StringView>::testingCopyPreserveEncodings(
+    velox::memory::MemoryPool* pool) const {
+  const auto allocPool = pool ? pool : BaseVector::pool_;
+  // If the backing memory pool is the same as the vector pool
+  // we can do a shallow copy as string buffers can be shared.
+  if (pool == BaseVector::pool_) {
+    return std::make_shared<FlatVector<StringView>>(
+        allocPool,
+        BaseVector::type_,
+        AlignedBuffer::copy(allocPool, BaseVector::nulls_),
+        BaseVector::length_,
+        AlignedBuffer::copy(allocPool, values_),
+        std::vector<BufferPtr>(stringBuffers_),
+        SimpleVector<StringView>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<StringView>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
   } else {
-    for (auto& r : ranges) {
-      for (auto i = 0; i < r.count; ++i) {
-        if (source->isNullAt(r.sourceIndex + i)) {
-          setNull(r.targetIndex + i, true);
+    size_t totalBytes = 0;
+    auto newValuesBuffer =
+        AlignedBuffer::allocate<StringView>(BaseVector::size(), allocPool);
+    auto* rawCopyValues = newValuesBuffer->asMutable<StringView>();
+    // Copy non Null StringViews to value buffer.
+    for (vector_size_t i = 0; i < BaseVector::size(); i++) {
+      if (!BaseVector::isNullAt(i)) {
+        auto v = valueAt(i);
+        if (v.isInline()) {
+          rawCopyValues[i] = v;
         } else {
-          set(r.targetIndex + i,
-              leaf->valueAt(source->wrappedIndex(r.sourceIndex + i)));
+          totalBytes += v.size();
         }
       }
     }
+
+    std::vector<BufferPtr> newStringBuffers;
+    if (totalBytes > 0) {
+      newStringBuffers.emplace_back(
+          AlignedBuffer::allocate<char>(totalBytes, allocPool));
+      char* rawBuffer = newStringBuffers.back()->asMutable<char>();
+
+      for (vector_size_t i = 0; i < BaseVector::size(); i++) {
+        if (!BaseVector::isNullAt(i)) {
+          auto v = valueAt(i);
+          if (!v.isInline()) {
+            memcpy(rawBuffer, v.data(), v.size());
+            rawCopyValues[i] = StringView(rawBuffer, v.size());
+            rawBuffer += v.size();
+          }
+        }
+      }
+    }
+
+    return std::make_shared<FlatVector<StringView>>(
+        allocPool,
+        BaseVector::type_,
+        AlignedBuffer::copy(allocPool, BaseVector::nulls_),
+        BaseVector::length_,
+        newValuesBuffer,
+        std::move(newStringBuffers),
+        SimpleVector<StringView>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<StringView>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
   }
 }
 
-} // namespace velox
-} // namespace facebook
+// For strings, we also verify if they point to valid memory locations inside
+// the string buffers.
+template <>
+void FlatVector<StringView>::validate(
+    const VectorValidateOptions& options) const {
+  SimpleVector<StringView>::validate(options);
+  auto byteSize = BaseVector::byteSize<StringView>(BaseVector::size());
+  if (byteSize == 0) {
+    return;
+  }
+  VELOX_CHECK_NOT_NULL(values_);
+  VELOX_CHECK_GE(values_->size(), byteSize);
+  auto rawValues = values_->as<StringView>();
+
+  for (auto i = 0; i < BaseVector::length_; ++i) {
+    if (isNullAt(i)) {
+      continue;
+    }
+    auto stringView = rawValues[i];
+    if (!stringView.isInline()) {
+      bool isValid = false;
+      for (const auto& buffer : stringBuffers_) {
+        auto start = buffer->as<char>();
+        if (stringView.data() >= start &&
+            stringView.data() < start + buffer->size()) {
+          isValid = true;
+          break;
+        }
+      }
+      VELOX_CHECK(
+          isValid,
+          "String view at idx {} points outside of the string buffers",
+          i);
+    }
+  }
+}
+
+} // namespace facebook::velox

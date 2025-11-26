@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
+using facebook::velox::exec::test::AssertQueryBuilder;
+using facebook::velox::exec::test::PlanBuilder;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
@@ -29,6 +33,9 @@ class FirstAggregateTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     registerAggregateFunctions("spark_");
+    // Disable incremental aggregation tests because the boolean field in
+    // intermediate result of spark_first is unset and has undefined value.
+    AggregationTestBase::disableTestIncremental();
   }
 
   template <typename T>
@@ -44,6 +51,8 @@ class FirstAggregateTest : public AggregationTestBase {
 
       createDuckDbTable(vectors);
 
+      // We do not test with TableScan because having two input splits makes the
+      // result non-deterministic.
       {
         SCOPED_TRACE("ignore null + group by");
         testAggregations(
@@ -503,6 +512,36 @@ TEST_F(FirstAggregateTest, mapGlobal) {
   })};
 
   testGlobalAggregate(vectors, ignoreNullData, hasNullData);
+}
+
+TEST_F(FirstAggregateTest, spillingAndSorting) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 2, 2, 2}),
+      makeFlatVector<int32_t>({3, 2, 1, 0, 6, 5, 4, 5, 1, 3}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values(split(data))
+                  .singleAggregation({"c0"}, {"spark_first(c1 ORDER BY c1)"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<int32_t>({0, 1}),
+  });
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  exec::test::assertEqualResults({expected}, {results});
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+  exec::TestScopedSpillInjection scopedSpillInjection(100);
+  results = AssertQueryBuilder(plan)
+                .config(core::QueryConfig::kSpillEnabled, "true")
+                .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+                .spillDirectory(spillDirectory->getPath())
+                .copyResults(pool());
+  exec::test::assertEqualResults({expected}, {results});
 }
 
 } // namespace

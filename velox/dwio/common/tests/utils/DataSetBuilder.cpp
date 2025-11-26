@@ -37,7 +37,8 @@ RowTypePtr DataSetBuilder::makeRowType(
 DataSetBuilder& DataSetBuilder::makeDataset(
     RowTypePtr rowType,
     const size_t batchCount,
-    const size_t numRows) {
+    const size_t numRows,
+    const bool withRecursiveNulls) {
   if (batches_) {
     batches_->clear();
   } else {
@@ -45,8 +46,19 @@ DataSetBuilder& DataSetBuilder::makeDataset(
   }
 
   for (size_t i = 0; i < batchCount; ++i) {
-    batches_->push_back(std::static_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rowType, numRows, pool_, nullptr, i)));
+    if (withRecursiveNulls) {
+      batches_->push_back(
+          std::static_pointer_cast<RowVector>(
+              BatchMaker::createBatch(rowType, numRows, pool_, nullptr, i)));
+    } else {
+      batches_->push_back(
+          std::static_pointer_cast<RowVector>(BatchMaker::createBatch(
+              rowType,
+              numRows,
+              pool_,
+              [](vector_size_t /*index*/) { return false; },
+              i)));
+    }
   }
 
   return *this;
@@ -106,7 +118,7 @@ DataSetBuilder& DataSetBuilder::withAllNullsForField(
   for (RowVectorPtr batch : *batches_) {
     auto fieldValues = getChildBySubfield(batch.get(), field);
     SelectivityVector rows(fieldValues->size());
-    fieldValues->addNulls(nullptr, rows);
+    fieldValues->addNulls(rows);
   }
 
   return *this;
@@ -122,7 +134,7 @@ DataSetBuilder& DataSetBuilder::withNullsForField(
     if (nullsPercent == 0) {
       fieldValues->clearNulls(rows);
     } else if (nullsPercent >= 100) {
-      fieldValues->addNulls(nullptr, rows);
+      fieldValues->addNulls(rows);
     } else {
       std::vector<vector_size_t> nonNullRows =
           getSomeNonNullRowNumbers(fieldValues, 23);
@@ -231,6 +243,75 @@ DataSetBuilder& DataSetBuilder::makeUniformMapKeys(
       }
     }
     keys->copyRanges(keys.get(), ranges);
+  }
+  return *this;
+}
+
+DataSetBuilder& DataSetBuilder::makeMapStringValues(
+    const common::Subfield& field) {
+  for (auto& batch : *batches_) {
+    auto* map = dwio::common::getChildBySubfield(batch.get(), field)
+                    ->asUnchecked<MapVector>();
+    auto keyKind = map->type()->childAt(0)->kind();
+    auto valueKind = map->type()->childAt(1)->kind();
+    auto offsets = map->rawOffsets();
+    int32_t offsetIndex = 0;
+    auto mapSize = map->size();
+    auto getNextOffset = [&]() {
+      while (offsetIndex < mapSize) {
+        if (offsets[offsetIndex] != 0) {
+          return offsets[offsetIndex++];
+        }
+        ++offsetIndex;
+      }
+      return 0;
+    };
+
+    int32_t nextOffset = offsets[0];
+    int32_t nullCounter = 0;
+    auto size = map->mapKeys()->size();
+    if (keyKind == TypeKind::VARCHAR) {
+      if (auto keys = map->mapKeys()->as<FlatVector<StringView>>()) {
+        for (auto i = 0; i < size; ++i) {
+          if (i == nextOffset) {
+            // The first key of every map is fixed. The first value is limited
+            // cardinality so that at least one column of flat map comes out as
+            // dict.
+            std::string str = "dictEncodedValue";
+            keys->set(i, StringView(str));
+            nextOffset = getNextOffset();
+            continue;
+          }
+          if (!keys->isNullAt(i) && i % 3 == 0) {
+            std::string str = keys->valueAt(i);
+            str += "----123456789";
+            keys->set(i, StringView(str));
+          }
+        }
+      }
+    }
+    if (valueKind == TypeKind::VARCHAR) {
+      if (auto values = map->mapValues()->as<FlatVector<StringView>>()) {
+        offsetIndex = 0;
+        nextOffset = offsets[0];
+        for (auto i = 0; i < size; ++i) {
+          if (i == nextOffset) {
+            std::string str = fmt::format("dictEncoded{}", i % 3);
+            values->set(i, StringView(str));
+            if (nullCounter++ % 4 == 0) {
+              values->setNull(i, true);
+            }
+            nextOffset = getNextOffset();
+            continue;
+          }
+          if (!values->isNullAt(i) && i % 3 == 0) {
+            std::string str = values->valueAt(i);
+            str += "----123456789";
+            values->set(i, StringView(str));
+          }
+        }
+      }
+    }
   }
   return *this;
 }

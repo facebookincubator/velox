@@ -11,61 +11,93 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-version: '3.5'
 
+# The docker-compose file is used only for running the services:
+# `docker compose run adapters-cpp`
+#
+# If you want to build any of the images you will need to use docker bake:
+# `docker bake adapters-amd64`
+#
+# The target names are defined in docker-bake.hcl, you can use the names
+# from `docker-compose.yml`, like `adapters-cpp` but those will not make use
+# of layer caching and will tag images with the wrong tag for the multi-arch images.
+# Do this for local use only!
+#
+# When testing changes you want to push as a PR use docker bake.
 services:
-  ubuntu-cpp:
-    # Usage:
-    #   docker-compose pull ubuntu-cpp or docker-compose build ubuntu-cpp
-    #   docker-compose run --rm ubuntu-cpp
-    #   or
-    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-cpp
-    #   to set the number of threads used during compilation
-    image: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
+  # This is not an actual target and just used to inherit the env and volume
+  # defaults
+  base-block:
     build:
       context: .
-      dockerfile: scripts/ubuntu-22.04-cpp.dockerfile
     environment:
-      NUM_THREADS: 8 # default value for NUM_THREADS
-      VELOX_DEPENDENCY_SOURCE: BUNDLED # Build dependencies from source
-      CCACHE_DIR: "/velox/.ccache"
+      NUM_THREADS: ${NUM_THREADS:-8} # default value for NUM_THREADS
+      CCACHE_DIR: /velox/.ccache
     volumes:
       - .:/velox:delegated
-    command: scripts/docker-command.sh
+    working_dir: /velox
+    command: /velox/scripts/docker/docker-command.sh
+
+  ubuntu-cpp:
+    extends: base-block
+    image: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
+    build:
+      dockerfile: scripts/docker/ubuntu-22.04-cpp.dockerfile
+    environment:
+      VELOX_DEPENDENCY_SOURCE: BUNDLED # Build dependencies from source
 
   centos-cpp:
-    # Usage:
-    #   docker-compose pull centos-cpp or docker-compose build centos-cpp
-    #   docker-compose run --rm centos-cpp
-    #   or
-    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm centos-cpp
-    #   to set the number of threads used during compilation
-    image: ghcr.io/facebookincubator/velox-dev:amd64-centos-8-avx
+    extends: base-block
+    image: ghcr.io/facebookincubator/velox-dev:centos9
     build:
-      context: .
-      dockerfile: scripts/centos-8-stream.dockerfile
-    environment:
-      NUM_THREADS: 8 # default value for NUM_THREADS
-      CCACHE_DIR: "/velox/.ccache"
-    volumes:
-      - .:/velox:delegated
-    command: /bin/bash -c "scl enable gcc-toolset-9 '/velox/scripts/docker-command.sh'"
+      dockerfile: scripts/docker/centos-multi.dockerfile
+      target: centos9
+      args:
+        image: quay.io/centos/centos:stream9
+        VELOX_BUILD_SHARED: "ON"
 
-  python:
-    # Usage:
-    #   docker-compose pull ubuntu-cpp or docker-compose build ubuntu-cpp
-    #   docker-compose run --rm ubuntu-cpp
-    #   or
-    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-cpp
-    #   to set the number of threads used during compilation
-    image: ghcr.io/facebookincubator/velox-dev:torcharrow-avx
-    build:
-      context: .
-      dockerfile: scripts/velox-torcharrow-container.dockfile
+  adapters-cpp:
+    extends: centos-cpp
+    image: ghcr.io/facebookincubator/velox-dev:adapters
     environment:
-      PYTHON_EXECUTABLE: python3.7
-      NUM_THREADS: 8 # default value for NUM_THREADS
-      CCACHE_DIR: "/velox/.ccache"
-    volumes:
-      - .:/velox:delegated
-    command: cd /velox && make python-test
+      EXTRA_CMAKE_FLAGS: >-
+        -DVELOX_ENABLE_PARQUET=ON
+        -DVELOX_ENABLE_S3=ON
+    build:
+      target: adapters
+
+  adapters-cuda:
+    extends: adapters-cpp
+    privileged: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  presto-java:
+    extends: base-block
+    image: ghcr.io/facebookincubator/velox-dev:presto-java
+    build:
+      args:
+        - PRESTO_VERSION=0.295
+      dockerfile: scripts/docker/java.dockerfile
+
+  spark-server:
+    extends: base-block
+    image: ghcr.io/facebookincubator/velox-dev:spark-server
+    build:
+      args:
+        - SPARK_VERSION=3.5.1
+      dockerfile: scripts/docker/java.dockerfile
+
+  fedora:
+    extends: base-block
+    image: ghcr.io/facebookincubator/velox-dev:fedora
+    build:
+      dockerfile: scripts/docker/fedora.dockerfile
+      target: fedora
+    environment:
+      VELOX_BUILD_SHARED: "ON"

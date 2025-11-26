@@ -14,10 +14,17 @@
  * limitations under the License.
  */
 
+#include <boost/random/uniform_int_distribution.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/type/TypeEncodingUtil.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -25,8 +32,18 @@ using namespace facebook::velox;
 
 namespace {
 
+using facebook::velox::fuzzer::JsonInputGenerator;
+using facebook::velox::fuzzer::RandomInputGenerator;
+using facebook::velox::fuzzer::SetConstrainedGenerator;
+
 class VectorFuzzerTest : public testing::Test {
  public:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    registerJsonType();
+    registerQDigestType();
+  }
+
   memory::MemoryPool* pool() const {
     return pool_.get();
   }
@@ -78,7 +95,8 @@ class VectorFuzzerTest : public testing::Test {
   void validateMaxSizes(VectorPtr vector, size_t maxSize);
 
  private:
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
 };
 
 TEST_F(VectorFuzzerTest, flatPrimitive) {
@@ -166,6 +184,71 @@ TEST_F(VectorFuzzerTest, flatNotNull) {
 
   vector = fuzzer.fuzzFlatNotNull(MAP(BIGINT(), INTEGER()));
   ASSERT_FALSE(vector->mayHaveNulls());
+}
+
+struct Foo {
+  explicit Foo(int64_t id) : id_(id) {}
+  int64_t id_;
+};
+struct Bar {};
+
+TEST_F(VectorFuzzerTest, flatOpaque) {
+  // Exercises fuzzer.flatOpaque()
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.5;
+  VectorFuzzer fuzzer(opts, pool());
+  fuzzer.registerOpaqueTypeGenerator<Foo>([](FuzzerGenerator& rng) {
+    int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
+    return std::make_shared<Foo>(id);
+  });
+  fuzzer.registerOpaqueTypeGenerator<Bar>([](FuzzerGenerator& rng) {
+    throw std::runtime_error("Should not be called");
+    return std::make_shared<Bar>();
+  });
+
+  auto opaqueType = OPAQUE<Foo>();
+  VectorPtr vector = fuzzer.fuzzFlat(opaqueType);
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, vector->encoding());
+  ASSERT_TRUE(vector->type()->kindEquals(opaqueType));
+  ASSERT_EQ(opts.vectorSize, vector->size());
+  ASSERT_TRUE(vector->mayHaveNulls());
+
+  auto flatVector = vector->asFlatVector<std::shared_ptr<void>>();
+  for (auto i = 0; i < vector->size(); ++i) {
+    if (flatVector->isNullAt(i)) {
+      continue;
+    }
+    auto element = std::reinterpret_pointer_cast<Foo>(flatVector->valueAt(i));
+    ASSERT_GT(element->id_, 0);
+    ASSERT_LT(element->id_, 11);
+  }
+}
+
+TEST_F(VectorFuzzerTest, opaque) {
+  // Exercises fuzzer.fuzz() for opaque types.
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.5;
+  VectorFuzzer fuzzer(opts, pool());
+  fuzzer.registerOpaqueTypeGenerator<Foo>([](FuzzerGenerator& rng) {
+    int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
+    return std::make_shared<Foo>(id);
+  });
+  fuzzer.registerOpaqueTypeGenerator<Bar>([](FuzzerGenerator& rng) {
+    throw std::runtime_error("Should not be called");
+    return std::make_shared<Bar>();
+  });
+
+  auto opaqueType = OPAQUE<Foo>();
+  VectorPtr vector = fuzzer.fuzz(opaqueType, opts.vectorSize);
+  // There's a chance of the vector being wrapped in a dictionary or made into a
+  // constant.
+  ASSERT_TRUE(
+      vector->encoding() == VectorEncoding::Simple::DICTIONARY ||
+      vector->encoding() == VectorEncoding::Simple::FLAT ||
+      vector->encoding() == VectorEncoding::Simple::CONSTANT);
+  ASSERT_TRUE(vector->type()->kindEquals(opaqueType));
+  ASSERT_EQ(opts.vectorSize, vector->size());
+  ASSERT_TRUE(vector->mayHaveNulls());
 }
 
 TEST_F(VectorFuzzerTest, dictionary) {
@@ -334,6 +417,24 @@ TEST_F(VectorFuzzerTest, array) {
   ASSERT_EQ(arraySize, vector->size());
   ASSERT_GE(
       100, vector->offsetAt(arraySize - 1) + vector->sizeAt(arraySize - 1));
+
+  // Test fuzzArray with given element type. Check that element size doesn't
+  // exceed opts.complexElementsMaxSize.
+  const auto kElementMaxSize = 100;
+  opts.complexElementsMaxSize = kElementMaxSize;
+  fuzzer.setOptions(opts);
+
+  auto checkElementSize = [&](size_t arraySize) {
+    vector = fuzzer.fuzzArray(BIGINT(), arraySize);
+    ASSERT_TRUE(vector->type()->childAt(0)->isBigint());
+    ASSERT_EQ(arraySize, vector->size());
+    ASSERT_LE(
+        vector->offsetAt(arraySize - 1) + vector->sizeAt(arraySize - 1),
+        kElementMaxSize);
+  };
+  checkElementSize(kElementMaxSize);
+  checkElementSize(kElementMaxSize - 70);
+  checkElementSize(kElementMaxSize + 50);
 }
 
 TEST_F(VectorFuzzerTest, map) {
@@ -413,6 +514,102 @@ TEST_F(VectorFuzzerTest, row) {
   ASSERT_TRUE(vector->mayHaveNulls());
   EXPECT_THAT(
       vector->type()->asRow().names(), ::testing::ElementsAre("c0", "c1"));
+}
+
+TEST_F(VectorFuzzerTest, containerHasNulls) {
+  auto countNulls = [](const VectorPtr& vec) {
+    if (!vec->nulls()) {
+      return 0;
+    }
+    return BaseVector::countNulls(vec->nulls(), vec->size());
+  };
+
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 1000;
+  opts.nullRatio = 0.5;
+  opts.normalizeMapKeys = false;
+  opts.containerHasNulls = true;
+  opts.allowDictionaryVector = false;
+  opts.allowConstantVector = false;
+
+  {
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto arrayVector = fuzzer.fuzz(ARRAY(BIGINT()));
+    auto mapVector = fuzzer.fuzz(MAP(BIGINT(), BIGINT()));
+    auto rowVector = fuzzer.fuzz(ROW({BIGINT(), BIGINT()}));
+
+    // Check that both top level and elements have nulls.
+    EXPECT_GT(countNulls(arrayVector), 0);
+    EXPECT_GT(countNulls(mapVector), 0);
+    EXPECT_GT(countNulls(rowVector), 0);
+
+    auto arrayElements = arrayVector->as<ArrayVector>()->elements();
+    auto mapKeys = mapVector->as<MapVector>()->mapKeys();
+    auto mapValues = mapVector->as<MapVector>()->mapValues();
+    auto rowCol0 = rowVector->as<RowVector>()->childAt(0);
+    auto rowCol1 = rowVector->as<RowVector>()->childAt(1);
+
+    EXPECT_GT(countNulls(arrayElements), 0);
+    EXPECT_GT(countNulls(mapKeys), 0);
+    EXPECT_GT(countNulls(mapValues), 0);
+    EXPECT_GT(countNulls(rowCol0), 0);
+    EXPECT_GT(countNulls(rowCol1), 0);
+  }
+
+  // Test with containerHasNulls false.
+  {
+    opts.containerHasNulls = false;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto arrayVector = fuzzer.fuzz(ARRAY(BIGINT()));
+    auto mapVector = fuzzer.fuzz(MAP(BIGINT(), BIGINT()));
+    auto rowVector = fuzzer.fuzz(ROW({BIGINT(), BIGINT()}));
+
+    // Check that both top level and elements have nulls.
+    EXPECT_GT(countNulls(arrayVector), 0);
+    EXPECT_GT(countNulls(mapVector), 0);
+    EXPECT_GT(countNulls(rowVector), 0);
+
+    auto arrayElements = arrayVector->as<ArrayVector>()->elements();
+    auto mapKeys = mapVector->as<MapVector>()->mapKeys();
+    auto mapValues = mapVector->as<MapVector>()->mapValues();
+    auto rowCol0 = rowVector->as<RowVector>()->childAt(0);
+    auto rowCol1 = rowVector->as<RowVector>()->childAt(1);
+
+    EXPECT_EQ(countNulls(arrayElements), 0);
+    EXPECT_EQ(countNulls(mapKeys), 0);
+    EXPECT_EQ(countNulls(mapValues), 0);
+    EXPECT_EQ(countNulls(rowCol0), 0);
+    EXPECT_EQ(countNulls(rowCol1), 0);
+  }
+
+  // Test with containerHasNulls false. Flat vector version.
+  {
+    opts.containerHasNulls = false;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto arrayVector = fuzzer.fuzzFlat(ARRAY(BIGINT()));
+    auto mapVector = fuzzer.fuzzFlat(MAP(BIGINT(), BIGINT()));
+    auto rowVector = fuzzer.fuzzFlat(ROW({BIGINT(), BIGINT()}));
+
+    // Check that both top level and elements have nulls.
+    EXPECT_GT(countNulls(arrayVector), 0);
+    EXPECT_GT(countNulls(mapVector), 0);
+    EXPECT_GT(countNulls(rowVector), 0);
+
+    auto arrayElements = arrayVector->as<ArrayVector>()->elements();
+    auto mapKeys = mapVector->as<MapVector>()->mapKeys();
+    auto mapValues = mapVector->as<MapVector>()->mapValues();
+    auto rowCol0 = rowVector->as<RowVector>()->childAt(0);
+    auto rowCol1 = rowVector->as<RowVector>()->childAt(1);
+
+    EXPECT_EQ(countNulls(arrayElements), 0);
+    EXPECT_EQ(countNulls(mapKeys), 0);
+    EXPECT_EQ(countNulls(mapValues), 0);
+    EXPECT_EQ(countNulls(rowCol0), 0);
+    EXPECT_EQ(countNulls(rowCol1), 0);
+  }
 }
 
 FlatVectorPtr<Timestamp> genTimestampVector(
@@ -688,6 +885,31 @@ TEST_F(VectorFuzzerTest, fuzzRowChildrenToLazy) {
   ASSERT_TRUE(wrappedRow->childAt(1)->as<LazyVector>()->isLoaded());
 }
 
+TEST_F(VectorFuzzerTest, flatInputRow) {
+  VectorFuzzer fuzzer({.vectorSize = 10}, pool());
+  auto vector = fuzzer.fuzzInputFlatRow(
+      ROW({DOUBLE(), ARRAY(BIGINT()), MAP(BIGINT(), VARCHAR())}));
+  ASSERT_TRUE(vector->type()->kindEquals(
+      ROW({DOUBLE(), ARRAY(BIGINT()), MAP(BIGINT(), VARCHAR())})));
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, vector->childAt(0)->encoding());
+  ASSERT_EQ(VectorEncoding::Simple::ARRAY, vector->childAt(1)->encoding());
+  ASSERT_EQ(VectorEncoding::Simple::MAP, vector->childAt(2)->encoding());
+
+  // Arrays.
+  auto elements = vector->childAt(1)->as<ArrayVector>()->elements();
+  ASSERT_TRUE(elements->type()->kindEquals(BIGINT()));
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, elements->encoding());
+
+  // Maps.
+  auto mapKeys = vector->childAt(2)->as<MapVector>()->mapKeys();
+  ASSERT_TRUE(mapKeys->type()->kindEquals(BIGINT()));
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, mapKeys->encoding());
+
+  auto mapValues = vector->childAt(2)->as<MapVector>()->mapValues();
+  ASSERT_TRUE(mapValues->type()->kindEquals(VARCHAR()));
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, mapValues->encoding());
+}
+
 void VectorFuzzerTest::validateMaxSizes(VectorPtr vector, size_t maxSize) {
   if (vector->typeKind() == TypeKind::ARRAY) {
     validateMaxSizes(vector->template as<ArrayVector>()->elements(), maxSize);
@@ -743,4 +965,176 @@ TEST_F(VectorFuzzerTest, complexTooLarge) {
       VeloxUserError);
 }
 
+TEST_F(VectorFuzzerTest, randOrderableType) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_TRUE(fuzzer.randOrderableType()->isOrderable());
+  }
+}
+
+TEST_F(VectorFuzzerTest, randMapType) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_TRUE(fuzzer.randMapType()->isMap());
+  }
+}
+
+TEST_F(VectorFuzzerTest, randTypeByWidth) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Test typeWidth.
+  TypePtr type = BIGINT();
+  ASSERT_EQ(approximateTypeEncodingwidth(type), 1);
+  type = ARRAY(BIGINT());
+  ASSERT_EQ(approximateTypeEncodingwidth(type), 2);
+  type = MAP(BIGINT(), ARRAY(VARCHAR()));
+  ASSERT_EQ(approximateTypeEncodingwidth(type), 4);
+  type = ROW(
+      {INTEGER(), ARRAY(BIGINT()), MAP(VARCHAR(), DOUBLE()), ROW({TINYINT()})});
+  ASSERT_EQ(approximateTypeEncodingwidth(type), 7);
+
+  // Test randType by width. Results should has at least one field, so the
+  // minimal type width is 1.
+  type = fuzzer.randRowTypeByWidth(-1);
+  ASSERT_GE(approximateTypeEncodingwidth(type), 1);
+  type = fuzzer.randRowTypeByWidth(0);
+  ASSERT_GE(approximateTypeEncodingwidth(type), 1);
+  type = fuzzer.randRowTypeByWidth(1);
+  ASSERT_GE(approximateTypeEncodingwidth(type), 1);
+
+  folly::Random::DefaultGenerator rng;
+  rng.seed(0);
+  for (auto i = 0; i < 1000; ++i) {
+    const auto width = folly::Random::rand32(rng) % 128;
+    type = fuzzer.randRowTypeByWidth(width);
+    ASSERT_GE(approximateTypeEncodingwidth(type), width);
+  }
+}
+
+TEST_F(VectorFuzzerTest, customTypeGenerator) {
+  // Verify that the fuzzer automatically pick up the custom type generator for
+  // a registered custom type. In this case, we pick json type for verification.
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const uint32_t kSize = 10;
+  auto verifyJson = [&](const VectorPtr& result) {
+    EXPECT_TRUE(result != nullptr);
+    EXPECT_TRUE(isJsonType(result->type()));
+    EXPECT_EQ(result->size(), kSize);
+
+    DecodedVector decoded;
+    decoded.decode(*result, SelectivityVector(kSize));
+    folly::dynamic json;
+    folly::json::serialization_opts opts;
+    opts.allow_non_string_keys = true;
+    opts.allow_nan_inf = true;
+    for (auto j = 0; j < kSize; ++j) {
+      if (decoded.isNullAt(j)) {
+        continue;
+      }
+      std::string value = decoded.valueAt<StringView>(j);
+      try {
+        json = folly::parseJson(value, opts);
+      } catch (...) {
+        EXPECT_TRUE(false);
+      }
+    }
+  };
+  for (int i = 0; i < 5; i++) {
+    // We verify all the public APIs of the fuzzer.
+    verifyJson(fuzzer.fuzz(JSON(), kSize));
+    verifyJson(fuzzer.fuzzNotNull(JSON(), kSize));
+    verifyJson(fuzzer.fuzzConstant(JSON(), kSize));
+    verifyJson(fuzzer.fuzzFlat(JSON(), kSize));
+    verifyJson(fuzzer.fuzzFlatNotNull(JSON(), kSize));
+  }
+}
+
+TEST_F(VectorFuzzerTest, jsonConstrained) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const TypePtr type = ARRAY(ROW({BIGINT()}));
+  std::shared_ptr<JsonInputGenerator> generator =
+      std::make_shared<JsonInputGenerator>(
+          0,
+          JSON(),
+          0.2,
+          std::make_unique<RandomInputGenerator<ArrayType>>(0, type, 0.3));
+
+  const uint32_t kSize = 1000;
+  const auto& jsonOpts = generator->serializationOptions();
+  DecodedVector decoded;
+  for (auto i = 0; i < 10; ++i) {
+    auto vector = fuzzer.fuzz(JSON(), kSize, generator);
+    VELOX_CHECK_NOT_NULL(vector);
+    VELOX_CHECK_EQ(vector->type()->kind(), TypeKind::VARCHAR);
+    decoded.decode(*vector, SelectivityVector(kSize));
+    for (auto j = 0; j < kSize; ++j) {
+      if (decoded.isNullAt(j)) {
+        continue;
+      }
+      std::string value = decoded.valueAt<StringView>(j);
+      folly::dynamic json;
+      EXPECT_NO_THROW(json = folly::parseJson(value, jsonOpts));
+      EXPECT_TRUE(json.isNull() || json.isArray());
+    }
+  }
+}
+
+TEST_F(VectorFuzzerTest, setConstrained) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+
+  std::shared_ptr<SetConstrainedGenerator> generator =
+      std::make_shared<SetConstrainedGenerator>(
+          0, VARCHAR(), std::vector<variant>{variant("a"), variant("b")});
+  const uint32_t kSize = 1000;
+  auto vector = fuzzer.fuzz(VARCHAR(), kSize, generator);
+
+  DecodedVector decoded(*vector, SelectivityVector(kSize));
+  for (auto i = 0; i < kSize; ++i) {
+    std::string value = decoded.valueAt<StringView>(i);
+    EXPECT_TRUE(value == "a" || value == "b");
+  }
+}
+
+TEST_F(VectorFuzzerTest, qdigestTypeGeneration) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.2;
+  opts.vectorSize = 10;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const auto qdigestRealType = QDIGEST(REAL());
+  const auto qdigestDoulbeType = QDIGEST(DOUBLE());
+  const auto qdigestBigIntType = QDIGEST(BIGINT());
+
+  // Test QDigest with BIGINT parameter
+  {
+    auto vector = fuzzer.fuzz(QDIGEST(BIGINT()));
+    ASSERT_NE(vector, nullptr);
+    EXPECT_TRUE(vector->type()->equivalent(*qdigestBigIntType));
+    EXPECT_EQ(vector->size(), opts.vectorSize);
+  }
+
+  // Test QDigest with REAL parameter
+  {
+    auto vector = fuzzer.fuzz(QDIGEST(REAL()));
+    ASSERT_NE(vector, nullptr);
+    EXPECT_TRUE(vector->type()->equivalent(*qdigestRealType));
+    EXPECT_EQ(vector->size(), opts.vectorSize);
+  }
+
+  // Test QDigest with DOUBLE parameter
+  {
+    auto vector = fuzzer.fuzz(QDIGEST(BIGINT()));
+    ASSERT_NE(vector, nullptr);
+    EXPECT_TRUE(vector->type()->equivalent(*qdigestBigIntType));
+    EXPECT_EQ(vector->size(), opts.vectorSize);
+  }
+}
 } // namespace

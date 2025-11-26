@@ -910,7 +910,6 @@ BENCHMARK_RELATIVE(decodeNew_16) {
 BENCHMARK(decodeOld_32) {
   size_t currentLen = len_u32;
   const size_t startingLen = len_u32;
-  int32_t i = 0;
   while (currentLen != 0) {
     auto result =
         readVuLong(buffer_u32.data() + (startingLen - currentLen), currentLen);
@@ -939,7 +938,7 @@ BENCHMARK_RELATIVE(decodeNew_64) {
 }
 
 int32_t main(int32_t argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   // Populate uint16 buffer
   buffer_u16.resize(kNumElements);

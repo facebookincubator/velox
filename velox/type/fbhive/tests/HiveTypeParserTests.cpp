@@ -66,13 +66,13 @@ TEST(FbHive, decimal) {
   auto shortType = t->asShortDecimal();
   ASSERT_EQ(shortType.precision(), 10);
   ASSERT_EQ(shortType.scale(), 5);
-  ASSERT_EQ(t->toString(), "DECIMAL(10,5)");
+  ASSERT_EQ(t->toString(), "DECIMAL(10, 5)");
   t = parser.parse("decimal(21, 3)");
   ASSERT_EQ(t->kind(), TypeKind::HUGEINT);
   auto longType = t->asLongDecimal();
   ASSERT_EQ(longType.precision(), 21);
   ASSERT_EQ(longType.scale(), 3);
-  ASSERT_EQ(t->toString(), "DECIMAL(21,3)");
+  ASSERT_EQ(t->toString(), "DECIMAL(21, 3)");
 }
 
 TEST(FbHive, date) {
@@ -128,7 +128,7 @@ TEST(FbHive, badParse) {
       "Unexpected token uniontype at < bigint , int, float");
   VELOX_ASSERT_THROW(parser.parse("badid"), "Unexpected token badid at ");
   VELOX_ASSERT_THROW(
-      parser.parse("struct<int, bigint>"), "Unexpected token  bigint>");
+      parser.parse("struct<int, bigint>"), "Unexpected token ' bigint>'");
   VELOX_ASSERT_THROW(parser.parse("list<>"), "Unexpected token list at <>");
   VELOX_ASSERT_THROW(
       parser.parse("map<>"), "wrong param count for map type def");
@@ -140,7 +140,7 @@ TEST(FbHive, badParse) {
   VELOX_ASSERT_THROW(
       parser.parse("map<int>"), "wrong param count for map type def");
   VELOX_ASSERT_THROW(
-      parser.parse("decimal<20, 10>"), "Unexpected token 20, 10>");
+      parser.parse("decimal<20, 10>"), "Unexpected token '20, 10>'");
   VELOX_ASSERT_THROW(parser.parse("decimal(20, 10>"), "Unexpected token ");
   VELOX_ASSERT_THROW(
       parser.parse("decimal(a, 10)"),
@@ -176,4 +176,23 @@ TEST(FbHive, parseSpecialChar) {
   ASSERT_EQ(t->toString(), "ROW<\"a$_#\":INTEGER>");
 }
 
+struct Foo {};
+TEST(FbHive, parseOpaque) {
+  // Use a custom name to highlight this is just an alias.
+  registerOpaqueType<Foo>("bar");
+  HiveTypeParser parser;
+  auto t = parser.parse("opaque<bar>");
+  ASSERT_EQ(t->toString(), "OPAQUE<facebook::velox::type::fbhive::Foo>");
+  unregisterOpaqueType<Foo>("bar");
+}
+
+TEST(FbHive, parseUnregisteredOpaque) {
+  // Use a custom name to highlight this is just an alias.
+  registerOpaqueType<Foo>("bar");
+  HiveTypeParser parser;
+  VELOX_ASSERT_THROW(
+      parser.parse("opaque<Foo>"),
+      "Could not find type 'Foo'. Did you call registerOpaqueType?");
+  unregisterOpaqueType<Foo>("bar");
+}
 } // namespace facebook::velox::type::fbhive

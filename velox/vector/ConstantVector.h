@@ -39,14 +39,16 @@ class ConstantVector final : public SimpleVector<T> {
   ConstantVector(const ConstantVector&) = delete;
   ConstantVector& operator=(const ConstantVector&) = delete;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
        std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
+#endif
 
   ConstantVector(
       velox::memory::MemoryPool* pool,
-      size_t length,
+      vector_size_t length,
       bool isNull,
       TypePtr type,
       T&& val,
@@ -70,7 +72,7 @@ class ConstantVector final : public SimpleVector<T> {
         initialized_(true) {
     makeNullsBuffer();
     // Special handling for complex types
-    if (type->size() > 0) {
+    if (type->size() > 0 || type->kind() == TypeKind::ROW) {
       // Only allow null constants to be created through this interface.
       VELOX_CHECK(isNull_);
       valueVector_ = BaseVector::create(type, 1, pool);
@@ -82,19 +84,21 @@ class ConstantVector final : public SimpleVector<T> {
         setValue(value_.str());
       }
     }
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
     // If this is not encoded integer, or string, set value buffer
     if constexpr (can_simd) {
       valueBuffer_ = simd::setAll(value_);
     }
+#endif
   }
 
-  // Creates constant vector with value coming from 'index' element of the
-  // 'base' vector. Base vector can be flat or lazy vector. Base vector cannot
-  // be a constant or dictionary vector. Use BaseVector::wrapInConstant to
-  // automatically peel off encodings of the base vector.
-  //
-  // If base vector is lazy and has not been loaded yet, loading will be delayed
-  // until loadedVector() is called.
+  /// Creates constant vector with value coming from 'index' element of the
+  /// 'base' vector. Base vector can be flat or lazy vector. Base vector cannot
+  /// be a constant or dictionary vector. Use BaseVector::wrapInConstant to
+  /// automatically peel off encodings of the base vector.
+  ///
+  /// If base vector is lazy and has not been loaded yet, loading will be
+  /// delayed until loadedVector() is called.
   ConstantVector(
       velox::memory::MemoryPool* pool,
       vector_size_t length,
@@ -129,7 +133,14 @@ class ConstantVector final : public SimpleVector<T> {
     setInternalState();
   }
 
-  virtual ~ConstantVector() override = default;
+  virtual ~ConstantVector() override {
+    if (auto* wrapInfo = wrapInfo_.load()) {
+      delete wrapInfo;
+    }
+    if (valueVector_) {
+      valueVector_->clearContainingLazyAndWrapped();
+    }
+  }
 
   bool isNullAt(vector_size_t /*idx*/) const override {
     VELOX_DCHECK(initialized_);
@@ -180,30 +191,17 @@ class ConstantVector final : public SimpleVector<T> {
     return &value_;
   }
 
-  /**
-   * Loads a 256bit vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param byteOffset - the byte offset to laod from
-   */
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
+  /// Loads a 256bit vector of data at the virtual byteOffset given
+  /// Note this method is implemented on each vector type, but is intentionally
+  /// not virtual for performance reasons
   xsimd::batch<T> loadSIMDValueBufferAt(size_t /* byteOffset */) const {
     VELOX_DCHECK(initialized_);
     return valueBuffer_;
   }
+#endif
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  uint64_t retainedSize() const override {
-    VELOX_DCHECK(initialized_);
-    if (valueVector_) {
-      return valueVector_->retainedSize();
-    }
-    if (stringBuffer_) {
-      return stringBuffer_->capacity();
-    }
-    return sizeof(T);
-  }
 
   BaseVector* loadedVector() override {
     if (!valueVector_) {
@@ -235,28 +233,47 @@ class ConstantVector final : public SimpleVector<T> {
     return valueVector_ ? valueVector_->wrappedIndex(index_) : 0;
   }
 
-  BufferPtr wrapInfo() const override {
+  const BufferPtr& wrapInfo() const override {
     static const DummyReleaser kDummy;
-    return BufferView<DummyReleaser>::create(
-        reinterpret_cast<const uint8_t*>(&index_),
-        sizeof(vector_size_t),
-        kDummy);
+    auto* wrapInfo = wrapInfo_.load();
+    if (FOLLY_UNLIKELY(!wrapInfo)) {
+      wrapInfo = new BufferPtr(
+          BufferView<DummyReleaser>::create(
+              reinterpret_cast<const uint8_t*>(&index_),
+              sizeof(vector_size_t),
+              kDummy));
+      BufferPtr* oldWrapInfo = nullptr;
+      if (!wrapInfo_.compare_exchange_strong(oldWrapInfo, wrapInfo)) {
+        delete wrapInfo;
+        wrapInfo = oldWrapInfo;
+      }
+    }
+    return *wrapInfo;
   }
 
-  // Base vector if isScalar() is false (e.g. complex type vector) or if base
-  // vector is a lazy vector that hasn't been loaded yet.
+  /// Base vector if isScalar() is false (e.g. complex type vector) or if base
+  /// vector is a lazy vector that hasn't been loaded yet.
   const VectorPtr& valueVector() const override {
     return valueVector_;
   }
 
-  // Index of the element of the base vector that determines the value of this
-  // constant vector.
+  void setValueVector(VectorPtr valueVector) override {
+    valueVector_ = std::move(valueVector);
+  }
+
+  /// Index of the element of the base vector that determines the value of this
+  /// constant vector.
   vector_size_t index() const {
     return index_;
   }
 
-  void resize(vector_size_t size, bool setNotNull = true) override {
-    BaseVector::length_ = size;
+  void resize(vector_size_t newSize, bool /*setNotNull*/ = true) override {
+    VELOX_CHECK_GE(newSize, 0, "Size must be non-negative.");
+    BaseVector::length_ = newSize;
+    if constexpr (std::is_same_v<T, StringView>) {
+      SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(
+          newSize, SimpleVector<StringView>::getAllIsAscii());
+    }
   }
 
   VectorPtr slice(vector_size_t /*offset*/, vector_size_t length)
@@ -276,6 +293,22 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("addNulls not supported");
   }
 
+  bool containsNullAt(vector_size_t idx) const override {
+    if constexpr (std::is_same_v<T, ComplexType>) {
+      if (isNullAt(idx)) {
+        return true;
+      }
+
+      return valueVector_->containsNullAt(index_);
+    } else {
+      return isNullAt(idx);
+    }
+  }
+
+  void addNulls(const SelectivityVector& /*rows*/) override {
+    VELOX_FAIL("addNulls not supported");
+  }
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -289,8 +322,12 @@ class ConstantVector final : public SimpleVector<T> {
               isNull_, otherConstant->isNull_, flags);
         }
 
-        auto result =
-            SimpleVector<T>::comparePrimitiveAsc(value_, otherConstant->value_);
+        auto result = this->typeUsesCustomComparison_
+            ? SimpleVector<T>::comparePrimitiveAscWithCustomComparison(
+                  this->type_.get(), value_, otherConstant->value_)
+            : SimpleVector<T>::comparePrimitiveAsc(
+                  value_, otherConstant->value_);
+
         return flags.ascending ? result : result * -1;
       }
     }
@@ -304,9 +341,9 @@ class ConstantVector final : public SimpleVector<T> {
     }
 
     if (isNull_) {
-      return "null";
+      return std::string(BaseVector::kNullValueString);
     } else {
-      return SimpleVector<T>::valueToString(value());
+      return BaseVector::type()->template valueToString<T>(value());
     }
   }
 
@@ -316,6 +353,59 @@ class ConstantVector final : public SimpleVector<T> {
 
   bool isNullsWritable() const override {
     return false;
+  }
+
+  void validate(const VectorValidateOptions& options) const override {
+    // Do not call BaseVector's validate() since the nulls buffer has
+    // a fixed size for constant vectors.
+    if (options.callback) {
+      options.callback(*this);
+    }
+    if (valueVector_ != nullptr) {
+      if (!isNull_) {
+        VELOX_CHECK_LT(index_, valueVector_->size());
+      }
+      valueVector_->validate(options);
+    }
+  }
+
+  VectorPtr testingCopyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    auto selfPool = pool ? pool : BaseVector::pool_;
+    if (valueVector_) {
+      return std::make_shared<ConstantVector<T>>(
+          selfPool,
+          BaseVector::length_,
+          index_,
+          valueVector_->testingCopyPreserveEncodings(pool),
+          SimpleVector<T>::stats_);
+    }
+
+    return std::make_shared<ConstantVector<T>>(
+        selfPool,
+        BaseVector::length_,
+        isNull_,
+        BaseVector::type_,
+        T(value_),
+        SimpleVector<T>::stats_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
+  }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (valueVector_) {
+      valueVector_->transferOrCopyTo(pool);
+    }
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
+        auto newBuffer = AlignedBuffer::copy<char>(stringBuffer_, pool);
+        auto offset = value_.data() - stringBuffer_->template as<char>();
+        value_ =
+            StringView(newBuffer->template as<char>() + offset, value_.size());
+        stringBuffer_ = std::move(newBuffer);
+      }
+    }
   }
 
  protected:
@@ -338,10 +428,14 @@ class ConstantVector final : public SimpleVector<T> {
       // Do not load Lazy vector
       return;
     }
+    // Ensure any internal state in valueVector_ is initialized, and it points
+    // to the loaded vector underneath any lazy layers.
+    valueVector_ = BaseVector::loadedVectorShared(valueVector_);
 
     isNull_ = valueVector_->isNullAt(index_);
     BaseVector::distinctValueCount_ = isNull_ ? 0 : 1;
-    BaseVector::nullCount_ = isNull_ ? BaseVector::length_ : 0;
+    const vector_size_t vectorSize = BaseVector::length_;
+    BaseVector::nullCount_ = isNull_ ? vectorSize : 0;
     if (valueVector_->isScalar()) {
       auto simple = valueVector_->loadedVector()->as<SimpleVector<T>>();
       isNull_ = simple->isNullAt(index_);
@@ -365,11 +459,12 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   void setValue(const std::string& string) {
-    BaseVector::inMemoryBytes_ += string.size();
     value_ = velox::to<decltype(value_)>(string);
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
     if constexpr (can_simd) {
       valueBuffer_ = simd::setAll(value_);
     }
+#endif
   }
 
   void makeNullsBuffer() {
@@ -383,6 +478,18 @@ class ConstantVector final : public SimpleVector<T> {
     *BaseVector::nulls_->asMutable<uint64_t>() = bits::kNull64;
   }
 
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    VELOX_DCHECK(initialized_);
+    if (valueVector_) {
+      return valueVector_->retainedSize(totalStringBufferSize);
+    }
+    if (stringBuffer_) {
+      totalStringBufferSize += stringBuffer_->capacity();
+      return stringBuffer_->capacity();
+    }
+    return sizeof(T);
+  }
+
   // 'valueVector_' element 'index_' represents a complex constant
   // value. 'valueVector_' is nullptr if the constant is scalar.
   VectorPtr valueVector_;
@@ -393,9 +500,12 @@ class ConstantVector final : public SimpleVector<T> {
   T value_;
   bool isNull_ = false;
   bool initialized_{false};
+  mutable std::atomic<BufferPtr*> wrapInfo_{nullptr};
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   // This must be at end to avoid memory corruption.
   std::conditional_t<can_simd, xsimd::batch<T>, char> valueBuffer_;
+#endif
 };
 
 template <>

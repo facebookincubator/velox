@@ -18,12 +18,6 @@
 
 namespace facebook::velox::connector {
 namespace {
-std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>&
-connectorFactories() {
-  static std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>
-      factories;
-  return factories;
-}
 
 std::unordered_map<std::string, std::shared_ptr<Connector>>& connectors() {
   static std::unordered_map<std::string, std::shared_ptr<Connector>> connectors;
@@ -31,25 +25,16 @@ std::unordered_map<std::string, std::shared_ptr<Connector>>& connectors() {
 }
 } // namespace
 
-bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory) {
-  factory->initialize();
-  bool ok =
-      connectorFactories().insert({factory->connectorName(), factory}).second;
-  VELOX_CHECK(
-      ok,
-      "ConnectorFactory with name '{}' is already registered",
-      factory->connectorName());
-  return true;
+bool DataSink::Stats::empty() const {
+  return numWrittenBytes == 0 && numWrittenFiles == 0 && spillStats.empty();
 }
 
-std::shared_ptr<ConnectorFactory> getConnectorFactory(
-    const std::string& connectorName) {
-  auto it = connectorFactories().find(connectorName);
-  VELOX_CHECK(
-      it != connectorFactories().end(),
-      "ConnectorFactory with name '{}' not registered",
-      connectorName);
-  return it->second;
+std::string DataSink::Stats::toString() const {
+  return fmt::format(
+      "numWrittenBytes {} numWrittenFiles {} {}",
+      succinctBytes(numWrittenBytes),
+      numWrittenFiles,
+      spillStats.toString());
 }
 
 bool registerConnector(std::shared_ptr<Connector> connector) {
@@ -73,6 +58,10 @@ std::shared_ptr<Connector> getConnector(const std::string& connectorId) {
       "Connector with ID '{}' not registered",
       connectorId);
   return it->second;
+}
+
+bool hasConnector(const std::string& connectorId) {
+  return connectors().find(connectorId) != connectors().end();
 }
 
 const std::unordered_map<std::string, std::shared_ptr<Connector>>&
@@ -110,27 +99,18 @@ std::shared_ptr<cache::ScanTracker> Connector::getTracker(
   });
 }
 
-std::string commitStrategyToString(CommitStrategy commitStrategy) {
-  switch (commitStrategy) {
-    case CommitStrategy::kNoCommit:
-      return "NO_COMMIT";
-    case CommitStrategy::kTaskCommit:
-      return "TASK_COMMIT";
-    default:
-      VELOX_UNREACHABLE(
-          "UNKOWN COMMIT STRATEGY: {}", static_cast<int>(commitStrategy));
-  }
+namespace {
+const folly::F14FastMap<CommitStrategy, std::string_view>&
+commitStrategyNames() {
+  static const folly::F14FastMap<CommitStrategy, std::string_view> kNames = {
+      {CommitStrategy::kNoCommit, "NO_COMMIT"},
+      {CommitStrategy::kTaskCommit, "TASK_COMMIT"},
+  };
+  return kNames;
 }
+} // namespace
 
-CommitStrategy stringToCommitStrategy(const std::string& strategy) {
-  if (strategy == "NO_COMMIT") {
-    return CommitStrategy::kNoCommit;
-  } else if (strategy == "TASK_COMMIT") {
-    return CommitStrategy::kTaskCommit;
-  } else {
-    VELOX_UNREACHABLE("UNKOWN COMMIT STRATEGY: {}", strategy);
-  }
-}
+VELOX_DEFINE_ENUM_NAME(CommitStrategy, commitStrategyNames);
 
 folly::dynamic ColumnHandle::serializeBase(std::string_view name) {
   folly::dynamic obj = folly::dynamic::object;
@@ -153,4 +133,5 @@ folly::dynamic ConnectorTableHandle::serializeBase(
 folly::dynamic ConnectorTableHandle::serialize() const {
   return serializeBase("ConnectorTableHandle");
 }
+
 } // namespace facebook::velox::connector

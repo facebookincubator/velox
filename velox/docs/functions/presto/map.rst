@@ -2,6 +2,24 @@
 Map Functions
 ===========================
 
+.. function:: all_keys_match(x(K,V), function(K, boolean)) -> boolean
+
+    Returns whether all keys of a map match the given predicate. Returns true if all the keys match the predicate (a special case is when the map is empty); false if one or more keys don’t match; NULL if the predicate function returns NULL for one or more keys and true for all other keys. ::
+
+        SELECT all_keys_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> length(x) = 1); -- true
+
+.. function:: any_keys_match(x(K,V), function(K, boolean)) -> boolean
+
+    Returns whether any keys of a map match the given predicate. Returns true if one or more keys match the predicate; false if none of the keys match (a special case is when the map is empty); NULL if the predicate function returns NULL for one or more keys and false for all other keys. ::
+
+        SELECT any_keys_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 'a'); -- true
+
+.. function:: any_values_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns whether any values of a map matches the given predicate. Returns true if one or more values match the predicate; false if none of the values match (a special case is when the map is empty); NULL if the predicate function returns NULL for one or more values and false for all other values. ::
+
+        SELECT ANY_VALUES_MATCH(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), x -> x = 1); -- true
+
 .. function:: cardinality(x) -> bigint
     :noindex:
 
@@ -21,7 +39,8 @@ Map Functions
 .. function:: map(array(K), array(V)) -> map(K,V)
    :noindex:
 
-    Returns a map created using the given key/value arrays. ::
+    Returns a map created using the given key/value arrays. Keys are not allowed to be null or to contain nulls.
+    For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal. ::
 
         SELECT map(ARRAY[1,3], ARRAY[2,4]); -- {1 -> 2, 3 -> 4}
 
@@ -48,9 +67,110 @@ Map Functions
 
 .. function:: map_from_entries(array(row(K, V))) -> map(K, V)
 
-    Returns a map created from the given array of entries. ::
+    Returns a map created from the given array of entries. Keys are not allowed to be null or to contain nulls. ::
 
         SELECT map_from_entries(ARRAY[(1, 'x'), (2, 'y')]); -- {1 -> 'x', 2 -> 'y'}
+
+.. function:: map_normalize(map(varchar,double)) -> map(varchar,double)
+
+    Returns the map with the same keys but all non-null values scaled proportionally
+    so that the sum of values becomes 1. Map entries with null values remain unchanged.
+
+    When total sum of non-null values is zero, null values remain null,
+    zero, NaN, Infinity and -Infinity values become NaN,
+    positive values become Infinity, negative values become -Infinity.::
+
+        SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 4, 5])); -- {a=0.1, b=0.4, c=0.5}
+        SELECT map_normalize(map(array['a', 'b', 'c', 'd'], array[1, null, 4, 5])); -- {a=0.1, b=null, c=0.4, d=0.5}
+        SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 0, -1])); -- {a=Infinity, b=NaN, c=-Infinity}
+
+.. function:: map_remove_null_values(map(K,V)) -> map(K,V)
+
+    Returns a map by removing all the keys in input map with null values. If input
+    is null, output is null. If input map is empty, output map is empty.
+
+        SELECT map_remove_null_values(MAP(ARRAY['ab', 'bc', 'cd'], ARRAY[null, null, null])); -- {}
+        SELECT map_remove_null_values(MAP(ARRAY[], ARRAY[])); -- {}
+        SELECT map_remove_null_values(MAP(ARRAY[1, 2, 3], ARRAY[3, 4, NULL])); -- {1=3, 2=4}
+        SELECT map_remove_null_values(NULL); -- NULL
+
+.. function:: remap_keys(map(K,V), array(K), array(K)) -> map(K,V)
+
+      Returns a map with keys remapped according to the oldKeys and newKeys arrays.
+      Unmapped keys remain unchanged. Values are preserved. Null keys are ignored. ::
+
+          SELECT remap_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[1, 3], ARRAY[100, 300]); -- {100 -> 10, 2 -> 20, 300 -> 30}
+          SELECT remap_keys(MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), ARRAY['a', 'c'], ARRAY['alpha', 'charlie']); -- {alpha -> 1, b -> 2, charlie -> 3}
+          SELECT remap_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, null, 30]), ARRAY[1, 2], ARRAY[100, 200]); -- {100 -> 10, 200 -> null, 3 -> 30}
+          SELECT remap_keys(MAP(ARRAY[1, 2], ARRAY[10, 20]), ARRAY[], ARRAY[]); -- {1 -> 10, 2 -> 20}
+
+.. function:: map_subset(map(K,V), array(k)) -> map(K,V)
+
+    Constructs a map from those entries of ``map`` for which the key is in the array given
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {}
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {1->'a'}
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {1->'a'}
+        SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+        SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[]); -- {}
+
+.. function:: map_intersect(map(K,V), array(K)) -> map(K,V)
+
+    Returns a map containing only the entries from the input map whose keys are present in the given array.
+    This function is equivalent to map_subset. Null keys in the array are ignored.
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT map_intersect(MAP(ARRAY[1,2,3], ARRAY['a','b','c']), ARRAY[1,3]); -- {1->'a', 3->'c'}
+        SELECT map_intersect(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {}
+        SELECT map_intersect(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {}
+        SELECT map_intersect(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+
+.. function:: map_except(map(K,V), array(k)) -> map(K,V)
+
+    Constructs a map from those entries of ``map`` for which the key is not in the array given.
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {1->'a', 2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {1->'a', 2->'b'}
+        SELECT map_except(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+
+.. function:: map_top_n(map(K,V), n) -> map(K, V)
+
+    Truncates map items. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.
+
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- {'b' -> 3, 'a' -> 2}
+        SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- {'b' -> 3, 'c' -> NULL}
+
+.. function:: map_keys_by_top_n_values(map(K,V), n) -> array(K)
+
+    Returns an array of the top N keys from a map. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.
+
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_keys_by_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- ['b', 'a']
+        SELECT map_keys_by_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- ['b', 'c']
+
+.. function:: map_top_n_keys(map(K,V), n) -> array(K)
+
+    Constructs an array of the top N keys. Keys should be orderable.
+
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- ['c', 'b']
+        SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 0) --- []
+
+.. function:: map_top_n_values(map(K,V), n) -> array(V)
+
+    Returns top N values from a map, by sorting its values in descending order. Both keys and values should be orderable.
+
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- [3, 2]
 
 .. function:: map_keys(x(K,V)) -> array(K)
 
@@ -75,10 +195,29 @@ Map Functions
                             MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]),
                             (k, v1, v2) -> k || CAST(v1/v2 AS VARCHAR));
 
+.. function:: multimap_from_entries(array(row(K,V))) -> map(K,array(V))
+
+    Returns a multimap created from the given array of entries. Each key can be associated with multiple values. ::
+
+        SELECT multimap_from_entries(ARRAY[(1, 'x'), (2, 'y'), (1, 'z')]); -- {1 -> ['x', 'z'], 2 -> ['y']}
+
+.. function:: no_keys_match(x(K,V), function(K, boolean)) -> boolean
+
+    Returns whether no keys of a map match the given predicate. Returns true if none of the keys match the predicate (a special case is when the map is empty); false if one or more keys match; NULL if the predicate function returns NULL for one or more keys and false for all other keys. ::
+
+        SELECT no_keys_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 'd'); -- true
+
+.. function:: no_values_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns whether no values of a map match the given predicate. Returns true if none of the values match the predicate (a special case is when the map is empty); false if one or more values match; NULL if the predicate function returns NULL for one or more values and false for all other values. ::
+
+        SELECT no_values_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 'd'); -- true
+
 .. function:: subscript(map(K, V), key) -> V
    :noindex:
 
-    Returns value for given ``key``. Throws if the key is not contained in the map.
+    Returns value for given ``key``. Return null if the key is not contained in the map.
+    For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal and can be used as keys.
     Corresponds to SQL subscript operator [].
 
     SELECT name_to_age_map['Bob'] AS bob_age;
@@ -104,4 +243,3 @@ Map Functions
         SELECT transform_values(MAP(ARRAY ['a', 'b'], ARRAY [1, 2]), (k, v) -> k || CAST(v as VARCHAR)); -- {a -> a1, b -> b2}
         SELECT transform_values(MAP(ARRAY [1, 2], ARRAY [1.0, 1.4]), -- {1 -> one_1.0, 2 -> two_1.4}
                                 (k, v) -> MAP(ARRAY[1, 2], ARRAY['one', 'two'])[k] || '_' || CAST(v AS VARCHAR));
-

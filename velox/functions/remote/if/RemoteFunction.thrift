@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 
+package "facebook.com/velox/functions"
+
 namespace cpp2 facebook.velox.functions.remote
 namespace java.swift com.facebook.spark.remotefunctionserver.api
 
 cpp_include "folly/io/IOBuf.h"
 
-typedef binary (cpp2.type = "folly::IOBuf") IOBuf
+include "thrift/annotation/cpp.thrift"
+
+@cpp.Type{name = "folly::IOBuf"}
+typedef binary IOBuf
 
 /// The format used to serialize buffers/payloads.
 enum PageFormat {
@@ -49,6 +54,9 @@ struct RemoteFunctionPage {
 
   /// The number of logical rows in this page.
   3: i64 rowCount;
+
+  /// Serialized errors.
+  4: optional IOBuf errorPayload;
 }
 
 /// The parameters passed to the remote thrift call.

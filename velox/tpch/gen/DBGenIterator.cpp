@@ -17,12 +17,13 @@
 #include "velox/tpch/gen/DBGenIterator.h"
 
 #include <folly/Singleton.h>
+#include <velox/tpch/gen/dbgen/include/dbgen/dbgen_gunk.hpp>
 #include "velox/common/base/Exceptions.h"
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dbgen_gunk.hpp"
 
 namespace facebook::velox::tpch {
-
 namespace {
+
+using namespace dbgen;
 
 // DBGenBackend is a singleton that controls access to the DBGEN C functions,
 // and ensures that the required structures are properly initialized and
@@ -36,7 +37,11 @@ class DBGenBackend {
     // structures required by dbgen are populated.
     DBGenContext dbgenCtx;
     load_dists(
-        10 * 1024 * 1024, &dbgenCtx); // 10 MB buffer size for text generation.
+        FLAGS_velox_tpch_text_pool_size_mb * 1024 * 1024,
+        &dbgenCtx); // 300 MB buffer size for text generation.
+
+    // Initialize global dbgen buffers required to generate data.
+    init_build_buffers();
   }
   ~DBGenBackend() {
     cleanup_dists();

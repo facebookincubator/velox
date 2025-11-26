@@ -46,7 +46,7 @@ VectorPtr getChildBySubfield(
     const RowTypePtr& rootType) {
   const Type* type = rootType ? rootType.get() : rowVector->type().get();
   auto& path = subfield.path();
-  VELOX_CHECK(!path.empty())
+  VELOX_CHECK(!path.empty());
   auto* rowType = &type->asRow();
   auto* field = dynamic_cast<const Subfield::NestedField*>(path[0].get());
   VELOX_CHECK(field);
@@ -159,7 +159,54 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
 }
 
 template <>
+std::unique_ptr<Filter> ColumnStats<int128_t>::makeRangeFilter(
+    const FilterSpec& filterSpec) {
+  if (values_.empty()) {
+    return std::make_unique<velox::common::IsNull>();
+  }
+  int128_t lower = valueAtPct(filterSpec.startPct);
+  int128_t upper = valueAtPct(filterSpec.startPct + filterSpec.selectPct);
+
+  return std::make_unique<velox::common::HugeintRange>(
+      lower, upper, filterSpec.allowNulls_);
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
+    const FilterSpec& filterSpec) {
+  if (values_.empty()) {
+    return std::make_unique<velox::common::IsNull>();
+  }
+
+  int32_t lowerIndex;
+  int32_t upperIndex;
+  StringView lower = valueAtPct(filterSpec.startPct, &lowerIndex);
+  StringView upper =
+      valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
+
+  // When the filter rate is 0%, we should not allow the value at the boundary.
+  if (filterSpec.selectPct == 0) {
+    return std::make_unique<velox::common::BytesRange>(
+        std::string(lower),
+        false,
+        true,
+        std::string(upper),
+        false,
+        true,
+        filterSpec.allowNulls_);
+  }
+  return std::make_unique<velox::common::BytesRange>(
+      std::string(lower),
+      false,
+      false,
+      std::string(upper),
+      false,
+      false,
+      filterSpec.allowNulls_);
+}
+
+template <>
+std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
     const FilterSpec& filterSpec) {
   if (values_.empty()) {
     return std::make_unique<velox::common::IsNull>();
@@ -211,12 +258,56 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
 }
 
 template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRangeFilter(
+    const FilterSpec& filterSpec) {
+  if (values_.empty()) {
+    return std::make_unique<velox::common::IsNull>();
+  }
+  int32_t lowerIndex;
+  int32_t upperIndex;
+  Timestamp lower = valueAtPct(filterSpec.startPct, &lowerIndex);
+  Timestamp upper =
+      valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
+
+  return std::make_unique<velox::common::TimestampRange>(
+      lower, upper, filterSpec.selectPct > 25);
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRowGroupSkipRangeFilter(
     const std::vector<RowVectorPtr>& /*batches*/,
     const Subfield& /*subfield*/) {
   static std::string max = kMaxString;
   return std::make_unique<velox::common::BytesRange>(
       max, false, false, max, false, false, false);
+}
+
+template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRowGroupSkipRangeFilter(
+    const std::vector<RowVectorPtr>& batches,
+    const Subfield& subfield) {
+  Timestamp max;
+  bool hasMax = false;
+  for (const auto& batch : batches) {
+    auto values = getChildBySubfield(batch.get(), subfield, rootType_)
+                      ->as<SimpleVector<Timestamp>>();
+    DWIO_ENSURE_NOT_NULL(
+        values,
+        "Failed to convert to SimpleVector<Timestamp> for batch of kind ",
+        batch->type()->kindName());
+    for (auto i = 0; i < values->size(); ++i) {
+      if (values->isNullAt(i)) {
+        continue;
+      }
+      if (hasMax && max < values->valueAt(i)) {
+        max = values->valueAt(i);
+      } else if (!hasMax) {
+        max = values->valueAt(i);
+        hasMax = true;
+      }
+    }
+  }
+  return std::make_unique<velox::common::TimestampRange>(max, max, false);
 }
 
 std::string FilterGenerator::specsToString(
@@ -257,14 +348,11 @@ void FilterGenerator::collectFilterableSubFields(
     auto kind = rowType->childAt(i)->kind();
     switch (kind) {
       // ignore these types for filtering
-      case TypeKind::ARRAY:
-      case TypeKind::MAP:
       case TypeKind::UNKNOWN:
       case TypeKind::FUNCTION:
       case TypeKind::OPAQUE:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
-      case TypeKind::ROW:
       case TypeKind::INVALID:
         continue;
 
@@ -359,7 +447,9 @@ void FilterGenerator::addToScanSpec(
     const SubfieldFilters& filters,
     ScanSpec& spec) {
   for (auto& pair : filters) {
-    spec.getOrCreateChild(pair.first)->addFilter(*pair.second);
+    auto* child = spec.getOrCreateChild(pair.first);
+    VELOX_CHECK_NULL(child->filter());
+    child->setFilter(pair.second);
   }
 }
 
@@ -408,6 +498,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::BIGINT:
         stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
         break;
+      case TypeKind::HUGEINT:
+        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_);
+        break;
       case TypeKind::VARCHAR:
         stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);
         break;
@@ -420,6 +513,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::DOUBLE:
         stats = makeStats<TypeKind::DOUBLE>(vector->type(), rowType_);
         break;
+      case TypeKind::TIMESTAMP:
+        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_);
+        break;
       case TypeKind::ROW:
         stats = makeStats<TypeKind::ROW>(vector->type(), rowType_);
         break;
@@ -429,8 +525,6 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::MAP:
         stats = makeStats<TypeKind::MAP>(vector->type(), rowType_);
         break;
-      // TODO:
-      // Add support for TypeKind::TIMESTAMP.
       default:
         VELOX_CHECK(
             false,

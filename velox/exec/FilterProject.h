@@ -49,19 +49,46 @@ class FilterProject : public Operator {
     return BlockingReason::kNotBlocked;
   }
 
+  bool startDrain() override {
+    // No need to drain for project/filter operator.
+    return false;
+  }
+
   bool isFinished() override;
 
   void close() override {
     Operator::close();
-    exprs_->clear();
+    if (exprs_ != nullptr) {
+      exprs_->clear();
+    } else {
+      VELOX_CHECK(!initialized_);
+    }
+  }
+
+  /// Data for accelerator conversion.
+  struct Export {
+    const ExprSet* exprs;
+    bool hasFilter;
+    const std::vector<IdentityProjection>* resultProjections;
+  };
+
+  Export exprsAndProjection() const {
+    return Export{exprs_.get(), hasFilter_, &resultProjections_};
+  }
+
+  void initialize() override;
+
+  /// Ensures that expression stats are added to the operator stats if their
+  /// tracking is enabled via query config.
+  OperatorStats stats(bool clear) override;
+
+  /// Returns the filterNode, call this function before initialize the operator,
+  /// this field is reset in function initialize.
+  const std::shared_ptr<const core::FilterNode>& filterNode() const {
+    return filter_;
   }
 
  private:
-  // Tests if 'numProcessedRows_' equals to the length of input_ and clears
-  // outstanding references to input_ if done. Returns true if getOutput
-  // should return nullptr.
-  bool allInputProcessed();
-
   // Evaluate filter on all rows. Return number of rows that passed the filter.
   // Populate filterEvalCtx_.selectedBits and selectedIndices with the indices
   // of the passing rows if only some rows pass the filter. If all or no rows
@@ -69,18 +96,27 @@ class FilterProject : public Operator {
   // updated.
   vector_size_t filter(EvalCtx& evalCtx, const SelectivityVector& allRows);
 
-  // Evaluate projections on the specified rows and populate results_.
+  // Evaluate projections on the specified rows and return the results.
   // pre-condition: !isIdentityProjection_
-  void project(const SelectivityVector& rows, EvalCtx& evalCtx);
+  std::vector<VectorPtr> project(
+      const SelectivityVector& rows,
+      EvalCtx& evalCtx);
 
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
+
+  const bool lazyDereference_;
+
+  // Cached filter and project node for lazy initialization. After
+  // initialization, they will be reset, and initialized_ will be set to true.
+  std::shared_ptr<const core::ProjectNode> project_;
+  std::shared_ptr<const core::FilterNode> filter_;
+  bool initialized_{false};
+
   std::unique_ptr<ExprSet> exprs_;
   int32_t numExprs_;
 
   FilterEvalCtx filterEvalCtx_;
-
-  vector_size_t numProcessedInputRows_{0};
 
   // Indices for fields/input columns that are both an identity projection and
   // are referenced by either a filter or project expression. This is used to

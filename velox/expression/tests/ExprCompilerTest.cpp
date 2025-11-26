@@ -15,9 +15,12 @@
  */
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -26,22 +29,33 @@ namespace facebook::velox::exec::test {
 class ExprCompilerTest : public testing::Test,
                          public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    parse::registerTypeResolver();
+    functions::prestosql::registerAllScalarFunctions();
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
+  }
+
+  core::TypedExprPtr makeTypedExpr(
+      const std::string& text,
+      const RowTypePtr& rowType) {
+    auto untyped = parse::parseExpr(text, {});
+    return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
   core::TypedExprPtr andCall(
       const core::TypedExprPtr& a,
       const core::TypedExprPtr& b) {
-    return std::make_shared<core::CallTypedExpr>(
-        BOOLEAN(), std::vector<core::TypedExprPtr>{a, b}, "and");
+    return std::make_shared<core::CallTypedExpr>(BOOLEAN(), "and", a, b);
   }
 
   core::TypedExprPtr orCall(
       const core::TypedExprPtr& a,
       const core::TypedExprPtr& b) {
-    return std::make_shared<core::CallTypedExpr>(
-        BOOLEAN(), std::vector<core::TypedExprPtr>{a, b}, "or");
+    return std::make_shared<core::CallTypedExpr>(BOOLEAN(), "or", a, b);
   }
 
   core::TypedExprPtr concatCall(
@@ -73,6 +87,10 @@ class ExprCompilerTest : public testing::Test,
     return std::make_shared<core::ConstantTypedExpr>(VARCHAR(), variant(value));
   }
 
+  core::TypedExprPtr double_(double value) {
+    return std::make_shared<core::ConstantTypedExpr>(DOUBLE(), value);
+  }
+
   std::function<core::TypedExprPtr(const std::string& name)> makeField(
       const RowTypePtr& rowType) {
     return [&](const std::string& name) -> core::TypedExprPtr {
@@ -86,7 +104,7 @@ class ExprCompilerTest : public testing::Test,
         std::vector<core::TypedExprPtr>{expr}, execCtx_.get());
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{velox::core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
 };
@@ -179,12 +197,10 @@ TEST_F(ExprCompilerTest, concatStringFlattening) {
       {field("a"), concatCall({field("b"), field("c")}), field("d")});
   ASSERT_EQ("concat(a, b, c, d)", compile(expression)->toString());
 
-  // Constant folding happens after flattening.
+  // Inner concatCall is constant folded during expression compilation.
   expression = concatCall(
       {field("a"), concatCall({varchar("---"), varchar("...")}), field("b")});
-  ASSERT_EQ(
-      "concat(a, ---:VARCHAR, ...:VARCHAR, b)",
-      compile(expression)->toString());
+  ASSERT_EQ("concat(a, ---...:VARCHAR, b)", compile(expression)->toString());
 }
 
 TEST_F(ExprCompilerTest, concatArrayFlattening) {
@@ -236,9 +252,7 @@ TEST_F(ExprCompilerTest, concatArrayFlattening) {
 
 TEST_F(ExprCompilerTest, functionNameNotRegistered) {
   auto expression = std::make_shared<core::CallTypedExpr>(
-      VARCHAR(),
-      std::vector<core::TypedExprPtr>{varchar("---"), varchar("...")},
-      "not_registered_function");
+      VARCHAR(), "not_registered_function", varchar("---"), varchar("..."));
 
   VELOX_ASSERT_THROW(
       compile(expression),
@@ -252,9 +266,7 @@ TEST_F(ExprCompilerTest, functionSignatureNotRegistered) {
 
   VELOX_ASSERT_THROW(
       compile(expression),
-      "Scalar function concat not registered with arguments: (BIGINT, BIGINT). "
-      "Found function registered with the following signatures:\n"
-      "((varchar,varchar...) -> varchar)");
+      "Scalar function concat not registered with arguments: (BIGINT, BIGINT)");
 }
 
 TEST_F(ExprCompilerTest, constantFromFlatVector) {
@@ -273,6 +285,135 @@ TEST_F(ExprCompilerTest, customTypeConstant) {
 
   auto exprSet = compile(expression);
   ASSERT_EQ("[1, 2, 3]:JSON", compile(expression)->toString());
+}
+
+TEST_F(ExprCompilerTest, rewrites) {
+  auto rowType = ROW({"c0", "c1"}, {ARRAY(VARCHAR()), BIGINT()});
+  auto arraySortSql =
+      "array_sort(c0, (x, y) -> if(length(x) < length(y), -1, if(length(x) > length(y), 1, 0)))";
+
+  ASSERT_NO_THROW(
+      std::make_unique<ExprSet>(
+          std::vector<core::TypedExprPtr>{
+              makeTypedExpr(arraySortSql, rowType),
+              makeTypedExpr("c1 + 5", rowType),
+          },
+          execCtx_.get()));
+
+  auto exprSet = compile(makeTypedExpr(
+      "reduce(c0, 1, (s, x) -> s + x * 2, s -> s)",
+      ROW({"c0"}, {ARRAY(BIGINT())})));
+  ASSERT_EQ(exprSet->size(), 1);
+  ASSERT_EQ(
+      exprSet->expr(0)->toString(),
+      "plus(1:BIGINT, array_sum_propagate_element_null(transform(c0, (x) -> multiply(x, 2:BIGINT))))");
+
+  exprSet = compile(makeTypedExpr(
+      "reduce(c0, 1, (s, x) -> (s + 2) - x, s -> s)",
+      ROW({"c0"}, {ARRAY(BIGINT())})));
+  ASSERT_EQ(exprSet->size(), 1);
+  ASSERT_EQ(
+      exprSet->expr(0)->toString(),
+      "plus(1:BIGINT, array_sum_propagate_element_null(transform(c0, (x) -> minus(2:BIGINT, x))))");
+
+  exprSet = compile(makeTypedExpr(
+      "reduce(c0, 1, (s, x) -> if(x % 2 = 0, s + 3, s), s -> s)",
+      ROW({"c0"}, {ARRAY(BIGINT())})));
+  ASSERT_EQ(exprSet->size(), 1);
+  ASSERT_EQ(
+      exprSet->expr(0)->toString(),
+      "plus(1:BIGINT, array_sum_propagate_element_null(transform(c0, (x) -> switch(eq(mod(x, 2:BIGINT), 0:BIGINT), 3:BIGINT, 0:BIGINT))))");
+}
+
+TEST_F(ExprCompilerTest, eliminateUnnecessaryCast) {
+  auto exprSet =
+      compile(makeTypedExpr("cast(c0 as BIGINT)", ROW({{"c0", BIGINT()}})));
+  ASSERT_EQ(exprSet->size(), 1);
+  ASSERT_TRUE(dynamic_cast<const FieldReference*>(exprSet->expr(0).get()));
+}
+
+TEST_F(ExprCompilerTest, lambdaExpr) {
+  // Ensure that metadata computation correctly pulls in distinct fields from
+  // captured columns.
+
+  // Case 1: Standalone Expression
+  auto exprSet = compile(makeTypedExpr(
+      "find_first_index(c0, (x) -> (x = c1))",
+      ROW({"c0", "c1"}, {ARRAY(VARCHAR()), VARCHAR()})));
+  ASSERT_EQ(exprSet->size(), 1);
+  auto distinctFields = exprSet->expr(0)->distinctFields();
+  ASSERT_EQ(distinctFields.size(), 2);
+
+  // Case 2: Shared expression where the metadata is recomputed.
+  exprSet = compile(makeTypedExpr(
+      "if (find_first_index(c0, (x) -> (x = c1)) - 1 = 0, null::bigint, "
+      "find_first_index(c0, (x) -> (x = c1)) - 1)",
+      ROW({"c0", "c1"}, {ARRAY(VARCHAR()), VARCHAR()})));
+  ASSERT_EQ(exprSet->size(), 1);
+  distinctFields = exprSet->expr(0)->distinctFields();
+  ASSERT_EQ(distinctFields.size(), 2);
+}
+
+TEST_F(ExprCompilerTest, exprDeduplication) {
+  auto testExprDedup = [&](const core::TypedExprPtr& expression,
+                           bool shouldDedup,
+                           bool expectDedup,
+                           const std::string& description) {
+    std::unordered_map<std::string, std::string> configData(
+        {{core::QueryConfig::kExprDedupNonDeterministic,
+          shouldDedup ? "true" : "false"}});
+    auto queryCtx = velox::core::QueryCtx::create(
+        nullptr, core::QueryConfig(std::move(configData)));
+    auto execCtx = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get());
+
+    auto exprSet = std::make_unique<ExprSet>(
+        std::vector<core::TypedExprPtr>{expression}, execCtx.get());
+
+    ASSERT_EQ(exprSet->size(), 1);
+    auto& expr = exprSet->expr(0);
+    auto& leftInput = expr->inputs()[0];
+    auto& rightInput = expr->inputs()[1];
+
+    if (expectDedup) {
+      EXPECT_EQ(leftInput.get(), rightInput.get()) << description;
+    } else {
+      EXPECT_NE(leftInput.get(), rightInput.get()) << description;
+    }
+  };
+
+  // Test deterministic expressions - should always be deduplicated regardless
+  // of config
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto deterministicExpr = call(
+      "plus",
+      {call("plus", {makeField(rowType)("c0"), bigint(1)}),
+       call("plus", {makeField(rowType)("c0"), bigint(1)})});
+
+  testExprDedup(
+      deterministicExpr,
+      true,
+      true,
+      "Deterministic expressions should be deduplicated when config is true");
+  testExprDedup(
+      deterministicExpr,
+      false,
+      true,
+      "Deterministic expressions should always be deduplicated regardless of config");
+
+  // Test non-deterministic expressions - behavior depends on config
+  auto nonDeterministicExpr =
+      call("plus", {call("rand", {}), call("rand", {})});
+
+  testExprDedup(
+      nonDeterministicExpr,
+      true,
+      true,
+      "Non-deterministic expressions should be deduplicated when config is true");
+  testExprDedup(
+      nonDeterministicExpr,
+      false,
+      false,
+      "Non-deterministic expressions should NOT be deduplicated when config is false");
 }
 
 } // namespace facebook::velox::exec::test

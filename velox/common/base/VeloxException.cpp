@@ -25,7 +25,7 @@ namespace velox {
 std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr) {
   try {
     std::rethrow_exception(exceptionPtr);
-  } catch (const VeloxException& e) {
+  } catch (const VeloxException&) {
     return exceptionPtr;
   } catch (const std::exception& e) {
     return std::make_exception_ptr(
@@ -33,34 +33,46 @@ std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr) {
   }
 }
 
+int64_t& threadNumVeloxThrow() {
+  thread_local int64_t numThrow = 0;
+  return numThrow;
+}
+
+bool& threadSkipErrorDetails() {
+  thread_local bool skipErrorDetails{false};
+  return skipErrorDetails;
+}
+
 ExceptionContext& getExceptionContext() {
   thread_local ExceptionContext context;
   return context;
 }
 
-// Retrieves the message of the top-level ancestor of the current exception
-// context. If the top-level context message is not empty and is the same as the
-// current one, returns a string indicating they are the same.
-std::string getTopLevelExceptionContextString(
+// Traverses the context hierarchy and appends messages from all contexts that
+// are marked as essential.
+std::string getAdditionalExceptionContextString(
     VeloxException::Type exceptionType,
     const std::string& currentMessage) {
   auto* context = &getExceptionContext();
-  if (context->parent && context->parent->parent) {
-    while (context->parent && context->parent->parent) {
-      context = context->parent;
-    }
-    auto topLevelMessage = context->message(exceptionType);
-    if (!topLevelMessage.empty() && topLevelMessage == currentMessage) {
-      return "Same as context.";
-    } else {
-      return topLevelMessage;
-    }
+  std::string additionalMessage;
+  if (!context->parent || !context->parent->parent) {
+    return additionalMessage;
   }
-
-  if (!currentMessage.empty()) {
-    return "Same as context.";
+  context = context->parent;
+  while (context->parent) {
+    if (context->isEssential) {
+      auto message = context->message(exceptionType);
+      if (!message.empty()) {
+        additionalMessage += message + " ";
+      }
+    }
+    context = context->parent;
   }
-  return "";
+  if (!additionalMessage.empty()) {
+    // Get rid of the extra space at the end.
+    additionalMessage.pop_back();
+  }
+  return additionalMessage;
 }
 
 VeloxException::VeloxException(
@@ -85,8 +97,8 @@ VeloxException::VeloxException(
         state.errorSource = errorSource;
         state.errorCode = errorCode;
         state.context = getExceptionContext().message(exceptionType);
-        state.topLevelContext =
-            getTopLevelExceptionContextString(exceptionType, state.context);
+        state.additionalContext =
+            getAdditionalExceptionContextString(exceptionType, state.context);
         state.isRetriable = isRetriable;
       })) {}
 
@@ -94,6 +106,7 @@ VeloxException::VeloxException(
     const std::exception_ptr& e,
     std::string_view message,
     std::string_view errorSource,
+    std::string_view errorCode,
     bool isRetriable,
     Type exceptionType,
     std::string_view exceptionName)
@@ -106,10 +119,10 @@ VeloxException::VeloxException(
         state.failingExpression = "";
         state.message = message;
         state.errorSource = errorSource;
-        state.errorCode = "";
+        state.errorCode = errorCode;
         state.context = getExceptionContext().message(exceptionType);
-        state.topLevelContext =
-            getTopLevelExceptionContextString(exceptionType, state.context);
+        state.additionalContext =
+            getAdditionalExceptionContextString(exceptionType, state.context);
         state.isRetriable = isRetriable;
         state.wrappedException = e;
       })) {}
@@ -154,6 +167,18 @@ bool isStackTraceEnabled(VeloxException::Type type) {
   // only computation of the stacktrace but also contention on this atomic
   // variable
   return last->compare_exchange_strong(latest, now, std::memory_order_relaxed);
+}
+
+void stringAppendNumber(std::string& str, size_t number) {
+  // Manual implementation of itoa to avoid the cost of std::to_string.
+  const auto numberStartOffset = str.end() -
+      str.begin(); // Not `size()`. We need distance. The type is different.
+  size_t remaining = number;
+  do {
+    str += static_cast<char>('0' + remaining % 10);
+    remaining /= 10;
+  } while (remaining);
+  reverse(str.begin() + numberStartOffset, str.end());
 }
 
 } // namespace
@@ -217,8 +242,8 @@ void VeloxException::State::finalize() const {
     elaborateMessage += "Context: " + context + "\n";
   }
 
-  if (!topLevelContext.empty()) {
-    elaborateMessage += "Top-Level Context: " + topLevelContext + "\n";
+  if (!additionalContext.empty()) {
+    elaborateMessage += "Additional Context: " + additionalContext + "\n";
   }
 
   if (function) {
@@ -235,13 +260,7 @@ void VeloxException::State::finalize() const {
 
   if (line) {
     elaborateMessage += "Line: ";
-    auto len = elaborateMessage.size();
-    size_t t = line;
-    do {
-      elaborateMessage += static_cast<char>('0' + t % 10);
-      t /= 10;
-    } while (t);
-    reverse(elaborateMessage.begin() + len, elaborateMessage.end());
+    stringAppendNumber(elaborateMessage, line);
     elaborateMessage += '\n';
   }
 
@@ -252,10 +271,10 @@ void VeloxException::State::finalize() const {
     elaborateMessage += "Stack trace has been disabled.";
     if (exceptionType == VeloxException::Type::kSystem) {
       elaborateMessage +=
-          "Use --velox_exception_system_stacktrace=true to enable it.\n";
+          " Use --velox_exception_system_stacktrace_enabled=true to enable it.\n";
     } else {
       elaborateMessage +=
-          "Use --velox_exception_user_stacktrace=true to enable it.\n";
+          " Use --velox_exception_user_stacktrace_enabled=true to enable it.\n";
     }
   }
 }

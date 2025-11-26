@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox;
@@ -23,6 +24,9 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
 
 namespace {
+template <typename TKey, typename TValue>
+using Pair = std::pair<TKey, std::optional<TValue>>;
+
 class ArraysOverlapTest : public FunctionBaseTest {
  protected:
   void testExpr(
@@ -55,7 +59,11 @@ class ArraysOverlapTest : public FunctionBaseTest {
          {1, 1, -2, -2, -2, 4, 8},
          {2, -1},
          {1, 2, 3},
-         {std::nullopt}});
+         {std::nullopt},
+         {},
+         {std::nullopt},
+         {},
+         {1, 2}});
     auto array2 = makeNullableArrayVector<T>(
         {{1, -2, 4},
          {1, -2, 4},
@@ -63,9 +71,23 @@ class ArraysOverlapTest : public FunctionBaseTest {
          {1, -2, 4},
          {1, -2, std::nullopt},
          {5, 6, 7},
-         {std::nullopt}});
+         {std::nullopt},
+         {1, std::nullopt},
+         {},
+         {std::nullopt},
+         {}});
     auto expected = makeNullableFlatVector<bool>(
-        {true, true, std::nullopt, true, std::nullopt, false, std::nullopt});
+        {true,
+         true,
+         std::nullopt,
+         true,
+         std::nullopt,
+         false,
+         std::nullopt,
+         false,
+         false,
+         false,
+         false});
     testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
     testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
   }
@@ -80,6 +102,9 @@ class ArraysOverlapTest : public FunctionBaseTest {
           std::numeric_limits<T>::infinity(),
           std::numeric_limits<T>::max()},
          {std::numeric_limits<T>::quiet_NaN(), 9.0009},
+         {std::numeric_limits<T>::quiet_NaN(), 3.1},
+         // quiet NaN and signaling NaN are treated equal
+         {std::numeric_limits<T>::signaling_NaN(), 3.1},
          {std::numeric_limits<T>::quiet_NaN(), 9.0009, std::nullopt}});
     auto array2 = makeNullableArrayVector<T>(
         {{1.0, -2.0, 4.0},
@@ -87,9 +112,11 @@ class ArraysOverlapTest : public FunctionBaseTest {
          {1.0001, -2.02, std::numeric_limits<T>::max(), 8.00099},
          {9.0009, std::numeric_limits<T>::infinity()},
          {9.0009, std::numeric_limits<T>::quiet_NaN()},
+         {9.0009, std::numeric_limits<T>::quiet_NaN()},
+         {9.0009, std::numeric_limits<T>::quiet_NaN()},
          {9.0}});
     auto expected = makeNullableFlatVector<bool>(
-        {true, true, true, true, true, std::nullopt});
+        {true, true, true, true, true, true, true, std::nullopt});
     testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
     testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
   }
@@ -187,6 +214,70 @@ TEST_F(ArraysOverlapTest, longStrings) {
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
 }
 
+TEST_F(ArraysOverlapTest, complexTypeArray) {
+  auto left = makeNestedArrayVectorFromJson<int32_t>({
+      "[null, [1, 2, 3], [null, null]]",
+      "[[1], [2], []]",
+      "[[1, null, 3]]",
+      "[[1, null, 3]]",
+      "[null]",
+  });
+
+  auto right = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3]]",
+      "[[1]]",
+      "[[1, 2]]",
+      "[[1, null, 3]]",
+      "[[]]",
+  });
+
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, false, true, std::nullopt});
+  testExpr(expected, "arrays_overlap(c0, c1)", {left, right});
+}
+
+TEST_F(ArraysOverlapTest, complexTypeMap) {
+  std::vector<Pair<StringView, int64_t>> a{{"blue", 1}, {"red", 2}};
+  std::vector<Pair<StringView, int64_t>> b{{"green", std::nullopt}};
+  std::vector<Pair<StringView, int64_t>> c{{"yellow", 4}, {"purple", 5}};
+
+  std::vector<std::vector<std::vector<Pair<StringView, int64_t>>>> leftData{
+      {b, a}, {b}, {c, a}};
+  std::vector<std::vector<std::vector<Pair<StringView, int64_t>>>> rightData{
+      {a, b}, {}, {b}};
+
+  auto left = makeArrayOfMapVector<StringView, int64_t>(leftData);
+  auto right = makeArrayOfMapVector<StringView, int64_t>(rightData);
+  auto expected = makeNullableFlatVector<bool>({true, false, false});
+
+  testExpr(expected, "arrays_overlap(c0, c1)", {left, right});
+}
+
+TEST_F(ArraysOverlapTest, complexTypeRow) {
+  RowTypePtr rowType = ROW({INTEGER(), VARCHAR()});
+
+  using ArrayOfRow = std::vector<std::optional<std::tuple<int, std::string>>>;
+  std::vector<ArrayOfRow> leftData = {
+      {{{1, "red"}}, {{2, "blue"}}, {{3, "green"}}},
+      {{{1, "red"}}, {{2, "blue"}}, std::nullopt},
+      {{{1, "red"}}, std::nullopt, std::nullopt},
+      {{{1, "red"}},
+       std::tuple<int, std::string>{},
+       std::tuple<int, std::string>{}}};
+  std::vector<ArrayOfRow> rightData = {
+      {{{2, "blue"}}, {{1, "red"}}},
+      {{{1, "green"}}},
+      {{{1, "red"}}},
+      {{{2, "red"}}}};
+
+  auto left = makeArrayOfRowVector(leftData, rowType);
+  auto right = makeArrayOfRowVector(rightData, rowType);
+  auto expected =
+      makeNullableFlatVector<bool>({true, std::nullopt, true, false});
+
+  testExpr(expected, "arrays_overlap(c0, c1)", {left, right});
+}
+
 //// When one of the arrays is constant.
 TEST_F(ArraysOverlapTest, constant) {
   auto array1 = makeNullableArrayVector<int32_t>({
@@ -216,10 +307,7 @@ TEST_F(ArraysOverlapTest, constant) {
 }
 
 TEST_F(ArraysOverlapTest, dictionaryEncodedElementsInConstant) {
-  exec::registerVectorFunction(
-      "testing_dictionary_array_elements",
-      test::TestingDictionaryArrayElementsFunction::signatures(),
-      std::make_unique<test::TestingDictionaryArrayElementsFunction>());
+  TestingDictionaryArrayElementsFunction::registerFunction();
 
   auto array = makeArrayVector<int64_t>({{1, 3}, {2, 5}, {0, 6}});
   auto expected = makeNullableFlatVector<bool>({true, true, false});
@@ -227,4 +315,70 @@ TEST_F(ArraysOverlapTest, dictionaryEncodedElementsInConstant) {
       expected,
       "arrays_overlap(testing_dictionary_array_elements(ARRAY [2, 2, 3, 1, 2, 2]), c0)",
       {array});
+}
+
+TEST_F(ArraysOverlapTest, TimestampWithTimezone) {
+  auto testArraysOverlap =
+      [this](
+          const std::vector<std::optional<int64_t>>& array1,
+          const std::vector<std::optional<int64_t>>& array2,
+          std::optional<bool> expected) {
+        auto arrayVector1 = makeArrayVector(
+            {0}, makeNullableFlatVector(array1, TIMESTAMP_WITH_TIME_ZONE()));
+        auto arrayVector2 = makeArrayVector(
+            {0}, makeNullableFlatVector(array2, TIMESTAMP_WITH_TIME_ZONE()));
+        auto expectedVector = makeNullableFlatVector<bool>({expected});
+
+        testExpr(
+            expectedVector,
+            "arrays_overlap(C0, C1)",
+            {arrayVector1, arrayVector2});
+        testExpr(
+            expectedVector,
+            "arrays_overlap(C1, C0)",
+            {arrayVector1, arrayVector2});
+      };
+
+  testArraysOverlap(
+      {pack(1, 1),
+       pack(-2, 2),
+       pack(3, 3),
+       std::nullopt,
+       pack(4, 4),
+       pack(5, 5),
+       pack(6, 6),
+       std::nullopt},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      true);
+  testArraysOverlap(
+      {pack(1, 1), pack(2, 2), pack(-2, 3), pack(1, 4)},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      true);
+  testArraysOverlap(
+      {pack(3, 1), pack(8, 2), std::nullopt},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      std::nullopt);
+  testArraysOverlap(
+      {pack(1, 1),
+       pack(1, 2),
+       pack(-2, 3),
+       pack(-2, 4),
+       pack(-2, 5),
+       pack(4, 6),
+       pack(8, 7)},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      true);
+  testArraysOverlap(
+      {pack(2, 1), pack(-1, 2)},
+      {pack(1, 1), pack(-2, 2), std::nullopt},
+      std::nullopt);
+  testArraysOverlap(
+      {pack(1, 1), pack(2, 2), pack(3, 3)},
+      {pack(5, 1), pack(6, 2), pack(7, 3)},
+      false);
+  testArraysOverlap({std::nullopt}, {std::nullopt}, std::nullopt);
+  testArraysOverlap({}, {1, std::nullopt}, false);
+  testArraysOverlap({std::nullopt}, {}, false);
+  testArraysOverlap({}, {std::nullopt}, false);
+  testArraysOverlap({pack(1, 1), pack(2, 2)}, {}, false);
 }

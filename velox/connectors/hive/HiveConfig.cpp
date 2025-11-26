@@ -15,7 +15,8 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/core/Config.h"
+#include "velox/common/config/Config.h"
+#include "velox/core/QueryConfig.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -39,16 +40,6 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 } // namespace
 
 // static
-HiveConfig::InsertExistingPartitionsBehavior
-HiveConfig::insertExistingPartitionsBehavior(const Config* config) {
-  const auto behavior =
-      config->get<std::string>(kInsertExistingPartitionsBehavior);
-  return behavior.has_value()
-      ? stringToInsertExistingPartitionsBehavior(behavior.value())
-      : InsertExistingPartitionsBehavior::kError;
-}
-
-// static
 std::string HiveConfig::insertExistingPartitionsBehaviorString(
     InsertExistingPartitionsBehavior behavior) {
   switch (behavior) {
@@ -61,98 +52,225 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
   }
 }
 
-// static
-uint32_t HiveConfig::maxPartitionsPerWriters(const Config* config) {
-  return config->get<uint32_t>(kMaxPartitionsPerWriters, 100);
+HiveConfig::InsertExistingPartitionsBehavior
+HiveConfig::insertExistingPartitionsBehavior(
+    const config::ConfigBase* session) const {
+  return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
+      kInsertExistingPartitionsBehaviorSession,
+      config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
 }
 
-// static
-bool HiveConfig::immutablePartitions(const Config* config) {
-  return config->get<bool>(kImmutablePartitions, false);
+uint32_t HiveConfig::maxPartitionsPerWriters(
+    const config::ConfigBase* session) const {
+  return session->get<uint32_t>(
+      kMaxPartitionsPerWritersSession,
+      config_->get<uint32_t>(kMaxPartitionsPerWriters, 128));
 }
 
-// static
-bool HiveConfig::s3UseVirtualAddressing(const Config* config) {
-  return !config->get(kS3PathStyleAccess, false);
+uint32_t HiveConfig::maxBucketCount(const config::ConfigBase* session) const {
+  return session->get<uint32_t>(
+      kMaxBucketCountSession, config_->get<uint32_t>(kMaxBucketCount, 100'000));
 }
 
-// static
-std::string HiveConfig::s3GetLogLevel(const Config* config) {
-  return config->get(kS3LogLevel, std::string("FATAL"));
+bool HiveConfig::immutablePartitions() const {
+  return config_->get<bool>(kImmutablePartitions, false);
 }
 
-// static
-bool HiveConfig::s3UseSSL(const Config* config) {
-  return config->get(kS3SSLEnabled, true);
+std::string HiveConfig::gcsEndpoint() const {
+  return config_->get<std::string>(kGcsEndpoint, std::string(""));
 }
 
-// static
-bool HiveConfig::s3UseInstanceCredentials(const Config* config) {
-  return config->get(kS3UseInstanceCredentials, false);
+std::string HiveConfig::gcsCredentialsPath() const {
+  return config_->get<std::string>(kGcsCredentialsPath, std::string(""));
 }
 
-// static
-std::string HiveConfig::s3Endpoint(const Config* config) {
-  return config->get(kS3Endpoint, std::string(""));
+std::optional<int> HiveConfig::gcsMaxRetryCount() const {
+  return static_cast<std::optional<int>>(config_->get<int>(kGcsMaxRetryCount));
 }
 
-// static
-std::optional<std::string> HiveConfig::s3AccessKey(const Config* config) {
-  if (config->isValueExists(kS3AwsAccessKey)) {
-    return config->get(kS3AwsAccessKey).value();
-  }
-  return {};
+std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kGcsMaxRetryTime));
 }
 
-// static
-std::optional<std::string> HiveConfig::s3SecretKey(const Config* config) {
-  if (config->isValueExists(kS3AwsSecretKey)) {
-    return config->get(kS3AwsSecretKey).value();
-  }
-  return {};
+std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kGcsAuthAccessTokenProvider));
 }
 
-// static
-std::optional<std::string> HiveConfig::s3IAMRole(const Config* config) {
-  if (config->isValueExists(kS3IamRole)) {
-    return config->get(kS3IamRole).value();
-  }
-  return {};
+bool HiveConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
 }
 
-// static
-std::string HiveConfig::s3IAMRoleSessionName(const Config* config) {
-  return config->get(kS3IamRoleSessionName, std::string("velox-session"));
+bool HiveConfig::isParquetUseColumnNames(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kParquetUseColumnNamesSession,
+      config_->get<bool>(kParquetUseColumnNames, false));
 }
 
-// static
-std::string HiveConfig::gcsEndpoint(const Config* config) {
-  return config->get<std::string>(kGCSEndpoint, std::string(""));
+bool HiveConfig::isFileColumnNamesReadAsLowerCase(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kFileColumnNamesReadAsLowerCaseSession,
+      config_->get<bool>(kFileColumnNamesReadAsLowerCase, false));
 }
 
-// static
-std::string HiveConfig::gcsScheme(const Config* config) {
-  return config->get<std::string>(kGCSScheme, std::string(""));
+bool HiveConfig::isPartitionPathAsLowerCase(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(kPartitionPathAsLowerCaseSession, true);
 }
 
-// static
-std::string HiveConfig::gcsCredentials(const Config* config) {
-  return config->get<std::string>(kGCSCredentials, std::string(""));
+bool HiveConfig::allowNullPartitionKeys(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kAllowNullPartitionKeysSession,
+      config_->get<bool>(kAllowNullPartitionKeys, true));
 }
 
-// static.
-bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* config) {
-  return config->get<bool>(kFileColumnNamesReadAsLowerCase, false);
+bool HiveConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
+  return session->get<bool>(kIgnoreMissingFilesSession, false);
 }
 
-// static.
-int64_t HiveConfig::maxCoalescedBytes(const Config* config) {
-  return config->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
+int64_t HiveConfig::maxCoalescedBytes(const config::ConfigBase* session) const {
+  return session->get<int64_t>(
+      kMaxCoalescedBytesSession,
+      config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20)); // 128MB
 }
 
-// static.
-int32_t HiveConfig::maxCoalescedDistanceBytes(const Config* config) {
-  return config->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+int32_t HiveConfig::maxCoalescedDistanceBytes(
+    const config::ConfigBase* session) const {
+  const auto distance = config::toCapacity(
+      session->get<std::string>(
+          kMaxCoalescedDistanceSession,
+          config_->get<std::string>(kMaxCoalescedDistance, "512kB")),
+      config::CapacityUnit::BYTE);
+  VELOX_USER_CHECK_LE(
+      distance,
+      std::numeric_limits<int32_t>::max(),
+      "The max merge distance to combine read requests must be less than 2GB."
+      " Got {} bytes.",
+      distance);
+  return int32_t(distance);
+}
+
+int32_t HiveConfig::prefetchRowGroups() const {
+  return config_->get<int32_t>(kPrefetchRowGroups, 1);
+}
+
+size_t HiveConfig::parallelUnitLoadCount(
+    const config::ConfigBase* session) const {
+  auto count = session->get<size_t>(
+      kParallelUnitLoadCountSession,
+      config_->get<size_t>(kParallelUnitLoadCount, 0));
+  VELOX_CHECK_LE(count, 100, "parallelUnitLoadCount too large: {}", count);
+  return count;
+}
+
+int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
+  return session->get<int32_t>(
+      kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
+}
+
+int32_t HiveConfig::numCacheFileHandles() const {
+  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
+}
+
+uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
+  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
+}
+
+bool HiveConfig::isFileHandleCacheEnabled() const {
+  return config_->get<bool>(kEnableFileHandleCache, true);
+}
+
+std::string HiveConfig::writeFileCreateConfig() const {
+  return config_->get<std::string>(kWriteFileCreateConfig, "");
+}
+
+uint32_t HiveConfig::sortWriterMaxOutputRows(
+    const config::ConfigBase* session) const {
+  return session->get<uint32_t>(
+      kSortWriterMaxOutputRowsSession,
+      config_->get<uint32_t>(kSortWriterMaxOutputRows, 1024));
+}
+
+uint64_t HiveConfig::sortWriterMaxOutputBytes(
+    const config::ConfigBase* session) const {
+  return config::toCapacity(
+      session->get<std::string>(
+          kSortWriterMaxOutputBytesSession,
+          config_->get<std::string>(kSortWriterMaxOutputBytes, "10MB")),
+      config::CapacityUnit::BYTE);
+}
+
+uint64_t HiveConfig::sortWriterFinishTimeSliceLimitMs(
+    const config::ConfigBase* session) const {
+  return session->get<uint64_t>(
+      kSortWriterFinishTimeSliceLimitMsSession,
+      config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
+}
+
+uint64_t HiveConfig::footerEstimatedSize() const {
+  return config_->get<uint64_t>(kFooterEstimatedSize, 256UL << 10);
+}
+
+uint64_t HiveConfig::filePreloadThreshold() const {
+  return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
+}
+
+uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
+  const auto unit = session->get<uint8_t>(
+      kReadTimestampUnitSession,
+      config_->get<uint8_t>(kReadTimestampUnit, 3 /*milli*/));
+  VELOX_CHECK(
+      unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
+      "Invalid timestamp unit.");
+  return unit;
+}
+
+bool HiveConfig::readTimestampPartitionValueAsLocalTime(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kReadTimestampPartitionValueAsLocalTimeSession,
+      config_->get<bool>(kReadTimestampPartitionValueAsLocalTime, true));
+}
+
+bool HiveConfig::readStatsBasedFilterReorderDisabled(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kReadStatsBasedFilterReorderDisabledSession,
+      config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
+}
+
+std::string HiveConfig::hiveLocalDataPath() const {
+  return config_->get<std::string>(kLocalDataPath, "");
+}
+
+std::string HiveConfig::hiveLocalFileFormat() const {
+  return config_->get<std::string>(kLocalFileFormat, "");
+}
+
+bool HiveConfig::preserveFlatMapsInMemory(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kPreserveFlatMapsInMemorySession,
+      config_->get<bool>(kPreserveFlatMapsInMemory, false));
+}
+
+std::string HiveConfig::user(const config::ConfigBase* session) const {
+  return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
+}
+
+std::string HiveConfig::source(const config::ConfigBase* session) const {
+  return session->get<std::string>(
+      kSource, config_->get<std::string>(kSource, ""));
+}
+
+std::string HiveConfig::schema(const config::ConfigBase* session) const {
+  return session->get<std::string>(
+      kSchema, config_->get<std::string>(kSchema, ""));
 }
 
 } // namespace facebook::velox::connector::hive

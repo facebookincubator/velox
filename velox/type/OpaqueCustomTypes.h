@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -33,9 +34,13 @@ class CastOperator;
 template <typename T, const char* customTypeName>
 class OpaqueCustomTypeRegister {
  public:
-  static void registerType() {
-    facebook::velox::registerCustomType(
+  static bool registerType() {
+    return facebook::velox::registerCustomType(
         customTypeName, std::make_unique<const TypeFactory>());
+  }
+
+  static bool unregisterType() {
+    return facebook::velox::unregisterCustomType(customTypeName);
   }
 
   // Type used in the simple function interface as CustomType<TypeT>.
@@ -51,8 +56,9 @@ class OpaqueCustomTypeRegister {
     VeloxType() : OpaqueType(std::type_index(typeid(T))) {}
 
     static const TypePtr& get() {
-      static const TypePtr instance{new VeloxType()};
-      return instance;
+      static const VeloxType kInstance;
+      static const TypePtr kInstancePtr{TypePtr{}, &kInstance};
+      return kInstancePtr;
     }
 
     static const std::shared_ptr<const exec::CastOperator>& getCastOperator() {
@@ -77,17 +83,28 @@ class OpaqueCustomTypeRegister {
     return VeloxType::get();
   }
 
+  static const TypePtr& get() {
+    return VeloxType::get();
+  }
+
  private:
-  class TypeFactory : public CustomTypeFactories {
+  class TypeFactory : public CustomTypeFactory {
    public:
     TypeFactory() = default;
 
-    TypePtr getType() const override {
+    TypePtr getType(
+        const std::vector<TypeParameter>& parameters) const override {
+      VELOX_CHECK(parameters.empty());
       return singletonTypePtr();
     }
 
     exec::CastOperatorPtr getCastOperator() const override {
       VELOX_UNSUPPORTED();
+    }
+
+    AbstractInputGeneratorPtr getInputGenerator(
+        const InputGeneratorConfig& /*config*/) const override {
+      return nullptr;
     }
   };
 };

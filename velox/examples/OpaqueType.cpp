@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Udf.h"
 #include "velox/type/Type.h"
@@ -187,9 +188,10 @@ int main(int argc, char** argv) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_resolver_vector, "map_resolver_vector");
 
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   // Create memory pool and other query-related structures.
-  auto queryCtx = std::make_shared<core::QueryCtx>();
-  auto pool = memory::addDefaultLeafMemoryPool();
+  auto queryCtx = core::QueryCtx::create();
+  auto pool = memory::memoryManager()->addLeafPool();
   core::ExecCtx execCtx{pool.get(), queryCtx.get()};
 
   // Next, we need to generate an input batch of data (rowVector). We create a
@@ -313,7 +315,7 @@ VectorPtr evaluate(
   std::vector<VectorPtr> result{nullptr};
   SelectivityVector rows{rowVector->size()};
 
-  auto rowType = rowVector->type()->as<TypeKind::ROW>();
+  auto& rowType = rowVector->type()->as<TypeKind::ROW>();
 
   auto fieldAccessExprNode1 = std::make_shared<core::FieldAccessTypedExpr>(
       rowType.findChild(argName1), argName1);
@@ -322,9 +324,9 @@ VectorPtr evaluate(
 
   auto exprPlan = std::make_shared<core::CallTypedExpr>(
       OPAQUE<UserDefinedOutput>(),
-      std::vector<core::TypedExprPtr>{
-          fieldAccessExprNode1, fieldAccessExprNode2},
-      functionName);
+      functionName,
+      fieldAccessExprNode1,
+      fieldAccessExprNode2);
 
   exec::ExprSet exprSet({exprPlan}, &execCtx);
   exec::EvalCtx evalCtx(&execCtx, &exprSet, rowVector.get());

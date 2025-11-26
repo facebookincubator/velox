@@ -17,7 +17,6 @@
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 
-#include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/wrap/coded-stream-wrapper.h"
@@ -33,19 +32,19 @@ namespace {
 template <typename IsProjected>
 void findProjectedNodes(
     BitSet& projectedNodes,
-    const TypeWithId& expected,
-    const TypeWithId& actual,
-    IsProjected isProjected) {
+    const dwio::common::TypeWithId& expected,
+    const dwio::common::TypeWithId& actual,
+    IsProjected&& isProjected) {
   // we don't need to perform schema compatibility check since reader should
   // have already done that before reaching here.
   // if a leaf node is projected, all the intermediate node from root to the
   // node should also be projected. So we can return as soon as seeing node that
   // is not projected
-  if (!isProjected(expected.id)) {
+  if (!isProjected(expected.id())) {
     return;
   }
-  projectedNodes.insert(actual.id);
-  switch (actual.type->kind()) {
+  projectedNodes.insert(actual.id());
+  switch (actual.type()->kind()) {
     case TypeKind::ROW: {
       uint64_t childCount = std::min(expected.size(), actual.size());
       for (uint64_t i = 0; i < childCount; ++i) {
@@ -53,7 +52,7 @@ void findProjectedNodes(
             projectedNodes,
             *expected.childAt(i),
             *actual.childAt(i),
-            isProjected);
+            std::forward<IsProjected>(isProjected));
       }
       break;
     }
@@ -62,19 +61,19 @@ void findProjectedNodes(
           projectedNodes,
           *expected.childAt(0),
           *actual.childAt(0),
-          isProjected);
+          std::forward<IsProjected>(isProjected));
       break;
     case TypeKind::MAP: {
       findProjectedNodes(
           projectedNodes,
           *expected.childAt(0),
           *actual.childAt(0),
-          isProjected);
+          std::forward<IsProjected>(isProjected));
       findProjectedNodes(
           projectedNodes,
           *expected.childAt(1),
           *actual.childAt(1),
-          isProjected);
+          std::forward<IsProjected>(isProjected));
       break;
     }
     default:
@@ -105,117 +104,165 @@ BufferPtr readDict(
 
 std::function<BufferPtr()>
 StripeStreamsBase::getIntDictionaryInitializerForNode(
-    const EncodingKey& ek,
+    const EncodingKey& encodingKey,
     uint64_t elementWidth,
     const StreamLabels& streamLabels,
     uint64_t dictionaryWidth) {
   // Create local copy for manipulation
-  EncodingKey localEk{ek};
-  auto dictData = localEk.forKind(proto::Stream_Kind_DICTIONARY_DATA);
-  auto dataStream = getStream(dictData, streamLabels.label(), false);
-  auto dictionarySize = getEncoding(localEk).dictionarysize();
+  EncodingKey dictEncodingKey{encodingKey};
+  auto dictDataSi = StripeStreamsUtil::getStreamForKind(
+      *this,
+      dictEncodingKey,
+      proto::Stream_Kind_DICTIONARY_DATA,
+      proto::orc::Stream_Kind_DICTIONARY_DATA);
+
+  auto dictDataStream = getStream(dictDataSi, streamLabels.label(), false);
+  const auto dictionarySize = format() == DwrfFormat::kDwrf
+      ? getEncoding(dictEncodingKey).dictionarysize()
+      : getEncodingOrc(dictEncodingKey).dictionarysize();
   // Try fetching shared dictionary streams instead.
-  if (!dataStream) {
+  if (!dictDataStream) {
     // Get the label of the top level column, since this dictionary is shared by
-    // the entire column
+    // the entire column.
     auto label = streamLabels.label();
     // Shouldn't be empty, but just in case
     if (!label.empty()) {
       // Ex: "/5/1759392083" -> "/5"
       label = label.substr(0, label.find('/', 1));
     }
-    localEk = EncodingKey(ek.node, 0);
-    dictData = localEk.forKind(proto::Stream_Kind_DICTIONARY_DATA);
-    dataStream = getStream(dictData, label, false);
+    dictEncodingKey = EncodingKey(encodingKey.node(), 0);
+    dictDataSi = StripeStreamsUtil::getStreamForKind(
+        *this,
+        dictEncodingKey,
+        proto::Stream_Kind_DICTIONARY_DATA,
+        proto::orc::Stream_Kind_DICTIONARY_DATA);
+    dictDataStream = getStream(dictDataSi, label, false);
   }
-  bool dictVInts = getUseVInts(dictData);
-  DWIO_ENSURE(dataStream.get());
+
+  const bool dictVInts = getUseVInts(dictDataSi);
+  VELOX_CHECK_NOT_NULL(dictDataStream);
   stripeDictionaryCache_->registerIntDictionary(
-      localEk,
+      dictEncodingKey,
       [dictReader = createDirectDecoder</* isSigned = */ true>(
-           std::move(dataStream), dictVInts, elementWidth),
+           std::move(dictDataStream), dictVInts, elementWidth),
        dictionaryWidth,
        dictionarySize](velox::memory::MemoryPool* pool) mutable {
         return VELOX_WIDTH_DISPATCH(
             dictionaryWidth, readDict, dictReader.get(), dictionarySize, pool);
       });
-  return [&dictCache = *stripeDictionaryCache_, localEk]() {
+  return [&dictCache = *stripeDictionaryCache_, dictEncodingKey]() {
     // If this is not flat map or if dictionary is not shared, return as is
-    return dictCache.getIntDictionary(localEk);
+    return dictCache.getIntDictionary(dictEncodingKey);
   };
 }
 
 void StripeStreamsImpl::loadStreams() {
-  auto& footer = reader_.getStripeFooter();
+  const auto& stripeFooter = *readState_->stripeMetadata->footer;
 
-  // HACK!!!
-  // Column selector filters based on requested schema (ie, table schema), while
-  // we need filter based on file schema. As a result we cannot call
-  // shouldReadNode directly. Instead, build projected nodes set based on node
-  // id from file schema. Column selector should really be fixed to handle file
-  // schema properly
-  BitSet projectedNodes(0);
-  auto expected = selector_.getSchemaWithId();
-  auto actual = reader_.getReader().getSchemaWithId();
-  findProjectedNodes(projectedNodes, *expected, *actual, [&](uint32_t node) {
-    return selector_.shouldReadNode(node);
-  });
+  if (selector_) {
+    // HACK!!!
+    //
+    // Column selector filters based on requested schema (ie, table schema),
+    // while we need filter based on file schema. As a result we cannot call
+    // shouldReadNode directly. Instead, build projected nodes set based on node
+    // id from file schema. Column selector should really be fixed to handle
+    // file schema properly.
+    VELOX_CHECK_NULL(projectedNodes_);
+    projectedNodes_ = std::make_shared<BitSet>(0);
+    auto expected = selector_->getSchemaWithId();
+    auto actual = readState_->readerBase->schemaWithId();
+    findProjectedNodes(
+        *projectedNodes_, *expected, *actual, [&](uint32_t node) {
+          return selector_->shouldReadNode(node);
+        });
+  }
 
-  auto addStream = [&](auto& stream, auto& offset) {
+  const auto addStreamDwrf = [&](const proto::Stream& stream, auto& offset) {
     if (stream.has_offset()) {
       offset = stream.offset();
     }
-    if (projectedNodes.contains(stream.node())) {
-      streams_[stream] = {offset, stream};
+    if (projectedNodes_->contains(stream.node())) {
+      streams_.insert_or_assign(stream, StreamInformationImpl{offset, stream});
     }
+
     offset += stream.length();
   };
 
-  uint64_t streamOffset = 0;
-  for (auto& stream : footer.streams()) {
-    addStream(stream, streamOffset);
-  }
+  const auto addStreamOrc = [&](const proto::orc::Stream& stream,
+                                auto& offset) {
+    if (projectedNodes_->contains(stream.column())) {
+      streams_.insert_or_assign(stream, StreamInformationImpl{offset, stream});
+    }
 
-  // update column encoding for each stream
-  for (uint32_t i = 0; i < footer.encoding_size(); ++i) {
-    auto& e = footer.encoding(i);
-    auto node = e.has_node() ? e.node() : i;
-    if (projectedNodes.contains(node)) {
-      encodings_[{node, e.has_sequence() ? e.sequence() : 0}] = i;
+    offset += stream.length();
+  };
+
+  uint64_t streamOffset{0};
+  for (int i = 0; i < stripeFooter.streamsSize(); i++) {
+    if (stripeFooter.format() == DwrfFormat::kDwrf) {
+      addStreamDwrf(stripeFooter.streamDwrf(i), streamOffset);
+    } else {
+      addStreamOrc(stripeFooter.streamOrc(i), streamOffset);
     }
   }
 
-  // handle encrypted columns
-  auto& handler = reader_.getDecryptionHandler();
-  if (handler.isEncrypted()) {
-    DWIO_ENSURE_EQ(
-        handler.getEncryptionGroupCount(), footer.encryptiongroups_size());
-    folly::F14FastSet<uint32_t> groupIndices;
-    bits::forEachSetBit(
-        projectedNodes.bits(), 0, projectedNodes.max() + 1, [&](uint32_t node) {
-          if (handler.isEncrypted(node)) {
-            groupIndices.insert(handler.getEncryptionGroupIndex(node));
-          }
-        });
-
-    // decrypt encryption groups
-    for (auto index : groupIndices) {
-      auto& group = footer.encryptiongroups(index);
-      auto groupProto =
-          reader_.getReader().readProtoFromString<proto::StripeEncryptionGroup>(
-              group,
-              std::addressof(handler.getEncryptionProviderByIndex(index)));
-      streamOffset = 0;
-      for (auto& stream : groupProto->streams()) {
-        addStream(stream, streamOffset);
+  // update column encoding for each stream
+  for (uint32_t i = 0; i < stripeFooter.columnEncodingSize(); ++i) {
+    if (stripeFooter.format() == DwrfFormat::kDwrf) {
+      const auto& e = stripeFooter.columnEncodingDwrf(i);
+      const auto node = e.has_node() ? e.node() : i;
+      if (projectedNodes_->contains(node)) {
+        encodings_[{node, e.has_sequence() ? e.sequence() : 0}] = i;
       }
-      for (auto& encoding : groupProto->encoding()) {
-        DWIO_ENSURE(encoding.has_node(), "node is required");
-        auto node = encoding.node();
-        if (projectedNodes.contains(node)) {
-          decryptedEncodings_[{
-              node, encoding.has_sequence() ? encoding.sequence() : 0}] =
-              encoding;
+    } else {
+      // kOrc
+      if (projectedNodes_->contains(i)) {
+        encodings_[{i, 0}] = i;
+      }
+    }
+  }
+
+  // handle encrypted columns, only supported for dwrf
+  if (stripeFooter.format() == DwrfFormat::kDwrf) {
+    const auto& decryptionHandler =
+        *readState_->stripeMetadata->decryptionHandler;
+    if (decryptionHandler.isEncrypted()) {
+      VELOX_CHECK_EQ(
+          decryptionHandler.getEncryptionGroupCount(),
+          stripeFooter.encryptiongroupsSize());
+      folly::F14FastSet<uint32_t> groupIndices;
+      bits::forEachSetBit(
+          projectedNodes_->bits(),
+          0,
+          projectedNodes_->max() + 1,
+          [&](uint32_t node) {
+            if (decryptionHandler.isEncrypted(node)) {
+              groupIndices.insert(
+                  decryptionHandler.getEncryptionGroupIndex(node));
+            }
+          });
+
+      // decrypt encryption groups
+      for (auto index : groupIndices) {
+        const auto& group = stripeFooter.encryptiongroupsDwrf(index);
+        const auto groupProto =
+            readState_->readerBase
+                ->readProtoFromString<proto::StripeEncryptionGroup>(
+                    group,
+                    std::addressof(
+                        decryptionHandler.getEncryptionProviderByIndex(index)));
+        streamOffset = 0;
+        for (auto& stream : groupProto->streams()) {
+          addStreamDwrf(stream, streamOffset);
+        }
+        for (auto& encoding : groupProto->encoding()) {
+          VELOX_CHECK(encoding.has_node(), "node is required");
+          const auto node = encoding.node();
+          if (projectedNodes_->contains(node)) {
+            decryptedEncodings_[{
+                node, encoding.has_sequence() ? encoding.sequence() : 0}] =
+                encoding;
+          }
         }
       }
     }
@@ -228,23 +275,23 @@ StripeStreamsImpl::getCompressedStream(
     std::string_view label) const {
   const auto& info = getStreamInfo(si);
 
-  std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
+  std::unique_ptr<dwio::common::SeekableInputStream> streamInput;
   if (isIndexStream(si.kind())) {
-    streamRead = getIndexStreamFromCache(info);
+    streamInput = getIndexStreamFromCache(info);
   }
 
-  if (!streamRead) {
-    streamRead = reader_.getStripeInput().enqueue(
+  if (!streamInput) {
+    streamInput = readState_->stripeMetadata->stripeInput->enqueue(
         {info.getOffset() + stripeStart_, info.getLength(), label}, &si);
   }
 
-  DWIO_ENSURE(streamRead != nullptr, " Stream can't be read", si.toString());
-  return streamRead;
+  VELOX_CHECK_NOT_NULL(streamInput, " Stream can't be read", si.toString());
+  return streamInput;
 }
 
 folly::F14FastMap<uint32_t, std::vector<uint32_t>>
 StripeStreamsImpl::getEncodingKeys() const {
-  DWIO_ENSURE_EQ(
+  VELOX_CHECK_EQ(
       decryptedEncodings_.size(),
       0,
       "Not supported for reader with encryption");
@@ -252,7 +299,7 @@ StripeStreamsImpl::getEncodingKeys() const {
   folly::F14FastMap<uint32_t, std::vector<uint32_t>> encodingKeys;
   for (const auto& kv : encodings_) {
     const auto ek = kv.first;
-    encodingKeys[ek.node].push_back(ek.sequence);
+    encodingKeys[ek.node()].push_back(ek.sequence());
   }
 
   return encodingKeys;
@@ -263,43 +310,43 @@ StripeStreamsImpl::getStreamIdentifiers() const {
   folly::F14FastMap<uint32_t, std::vector<DwrfStreamIdentifier>>
       nodeToStreamIdMap;
 
-  for (const auto& kv : streams_) {
-    nodeToStreamIdMap[kv.first.encodingKey().node].push_back(kv.first);
+  for (const auto& item : streams_) {
+    nodeToStreamIdMap[item.first.encodingKey().node()].push_back(item.first);
   }
-
   return nodeToStreamIdMap;
 }
 
 std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
     const DwrfStreamIdentifier& si,
     std::string_view label,
-    bool /* throwIfNotFound*/) const {
-  // if not found, return an empty {}
-  const auto& info = getStreamInfo(si, false /* throwIfNotFound */);
-  if (!info.valid()) { // Stream not found.
+    bool /*throwIfNotFound*/) const {
+  // If not found, return an empty {}
+  const auto& info = getStreamInfo(si, /*throwIfNotFound=*/false);
+  if (!info.valid()) {
+    // Stream not found.
     return {};
   }
 
-  std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
+  std::unique_ptr<dwio::common::SeekableInputStream> streamInput;
   if (isIndexStream(si.kind())) {
-    streamRead = getIndexStreamFromCache(info);
+    streamInput = getIndexStreamFromCache(info);
   }
 
-  if (!streamRead) {
-    streamRead = reader_.getStripeInput().enqueue(
+  if (!streamInput) {
+    streamInput = readState_->stripeMetadata->stripeInput->enqueue(
         {info.getOffset() + stripeStart_, info.getLength(), label}, &si);
   }
 
-  if (!streamRead) {
-    return streamRead;
+  if (!streamInput) {
+    return streamInput;
   }
 
-  auto streamDebugInfo =
+  const auto streamDebugInfo =
       fmt::format("Stripe {} Stream {}", stripeIndex_, si.toString());
-  return reader_.getReader().createDecompressedStream(
-      std::move(streamRead),
+  return readState_->readerBase->createDecompressedStream(
+      std::move(streamInput),
       streamDebugInfo,
-      getDecrypter(si.encodingKey().node));
+      getDecrypter(si.encodingKey().node()));
 }
 
 uint32_t StripeStreamsImpl::visitStreamsOfNode(
@@ -307,12 +354,11 @@ uint32_t StripeStreamsImpl::visitStreamsOfNode(
     std::function<void(const StreamInformation&)> visitor) const {
   uint32_t count = 0;
   for (auto& item : streams_) {
-    if (item.first.encodingKey().node == node) {
+    if (item.first.encodingKey().node() == node) {
       visitor(item.second);
       ++count;
     }
   }
-
   return count;
 }
 
@@ -328,38 +374,43 @@ bool StripeStreamsImpl::getUseVInts(const DwrfStreamIdentifier& si) const {
 std::unique_ptr<dwio::common::SeekableInputStream>
 StripeStreamsImpl::getIndexStreamFromCache(
     const StreamInformation& info) const {
-  std::unique_ptr<dwio::common::SeekableInputStream> indexStream;
-  auto& reader = reader_.getReader();
-  auto& metadataCache = reader.getMetadataCache();
-  if (metadataCache) {
-    auto indexBase = metadataCache->get(StripeCacheMode::INDEX, stripeIndex_);
-    if (indexBase) {
-      auto offset = info.getOffset();
-      auto length = info.getLength();
-      if (auto cacheInput =
-              dynamic_cast<dwio::common::CacheInputStream*>(indexBase.get())) {
-        cacheInput->Skip(offset);
-        cacheInput->setRemainingBytes(length);
-        return indexBase;
-      }
-      const void* start;
-      int32_t ignored;
-      DWIO_ENSURE(indexBase->Next(&start, &ignored), "failed to read index");
-      indexStream = std::make_unique<dwio::common::SeekableArrayInputStream>(
-          static_cast<const char*>(start) + offset, length);
-    }
+  auto& metadataCache = readState_->readerBase->metadataCache();
+  if (!metadataCache) {
+    return nullptr;
   }
-  return indexStream;
+
+  auto indexBase = metadataCache->get(StripeCacheMode::INDEX, stripeIndex_);
+  if (!indexBase) {
+    return nullptr;
+  }
+
+  const auto offset = info.getOffset();
+  const auto length = info.getLength();
+  if (auto* cacheInput =
+          dynamic_cast<dwio::common::CacheInputStream*>(indexBase.get())) {
+    cacheInput->SkipInt64(offset);
+    cacheInput->setRemainingBytes(length);
+    return indexBase;
+  }
+
+  const void* start;
+  {
+    int32_t ignored;
+    const bool ret = indexBase->Next(&start, &ignored);
+    VELOX_CHECK(ret, "Failed to read index");
+  }
+  return std::make_unique<dwio::common::SeekableArrayInputStream>(
+      static_cast<const char*>(start) + offset, length);
 }
 
 void StripeStreamsImpl::loadReadPlan() {
-  DWIO_ENSURE_EQ(readPlanLoaded_, false, "only load read plan once!");
+  VELOX_CHECK(!readPlanLoaded_, "only load read plan once!");
   SCOPE_EXIT {
     readPlanLoaded_ = true;
   };
 
-  auto& input = reader_.getStripeInput();
-  input.load(LogType::STREAM_BUNDLE);
+  auto* input = readState_->stripeMetadata->stripeInput;
+  input->load(LogType::STREAM_BUNDLE);
 }
 
 } // namespace facebook::velox::dwrf

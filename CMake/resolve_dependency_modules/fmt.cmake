@@ -13,21 +13,17 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_FMT_VERSION 8.0.1)
-set(VELOX_FMT_BUILD_SHA256_CHECKSUM
-    b06ca3130158c625848f3fb7418f235155a4d389b2abc3a6245fb01cb0eb1e01)
-set(VELOX_FMT_SOURCE_URL
-    "https://github.com/fmtlib/fmt/archive/${VELOX_FMT_VERSION}.tar.gz")
+set(VELOX_FMT_VERSION 11.2.0)
+set(
+  VELOX_FMT_BUILD_SHA256_CHECKSUM
+  bc23066d87ab3168f27cef3e97d545fa63314f5c79df5ea444d41d56f962c6af
+)
+set(VELOX_FMT_SOURCE_URL "https://github.com/fmtlib/fmt/archive/${VELOX_FMT_VERSION}.tar.gz")
 
-resolve_dependency_url(FMT)
+velox_resolve_dependency_url(FMT)
 
 message(STATUS "Building fmt from source")
-FetchContent_Declare(
-  fmt
-  URL ${VELOX_FMT_SOURCE_URL}
-  URL_HASH ${VELOX_FMT_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/fmt/no-targets.patch)
-
+FetchContent_Declare(fmt URL ${VELOX_FMT_SOURCE_URL} URL_HASH ${VELOX_FMT_BUILD_SHA256_CHECKSUM})
 # Force fmt to create fmt-config.cmake which can be found by other dependecies
 # (e.g. folly)
 set(FMT_INSTALL ON)

@@ -16,6 +16,7 @@
 
 #include "velox/exec/TableWriteMerge.h"
 
+#include "HashAggregation.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Task.h"
 
@@ -48,19 +49,45 @@ bool containsNonNullRows(const VectorPtr& vector) {
 TableWriteMerge::TableWriteMerge(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const std::shared_ptr<const core::TableWriteMergeNode>& TableWriteMergeNode)
+    const std::shared_ptr<const core::TableWriteMergeNode>& tableWriteMergeNode)
     : Operator(
           driverCtx,
-          TableWriteMergeNode->outputType(),
+          tableWriteMergeNode->outputType(),
           operatorId,
-          TableWriteMergeNode->id(),
+          tableWriteMergeNode->id(),
           "TableWriteMerge") {
-  VELOX_CHECK(outputType_->equivalent(*TableWriteTraits::outputType()));
+  if (tableWriteMergeNode->outputType()->size() == 1) {
+    VELOX_USER_CHECK(!tableWriteMergeNode->hasColumnStatsSpec());
+  } else {
+    VELOX_USER_CHECK(tableWriteMergeNode->outputType()->equivalent(*(
+        TableWriteTraits::outputType(tableWriteMergeNode->columnStatsSpec()))));
+  }
+  if (tableWriteMergeNode->hasColumnStatsSpec()) {
+    statsCollector_ = std::make_unique<ColumnStatsCollector>(
+        tableWriteMergeNode->columnStatsSpec().value(),
+        tableWriteMergeNode->sources()[0]->outputType(),
+        &operatorCtx_->driverCtx()->queryConfig(),
+        operatorCtx_->pool(),
+        &nonReclaimableSection_);
+  }
+}
+
+void TableWriteMerge::initialize() {
+  Operator::initialize();
+  if (statsCollector_ != nullptr) {
+    statsCollector_->initialize();
+  }
 }
 
 void TableWriteMerge::addInput(RowVectorPtr input) {
   VELOX_CHECK(!noMoreInput_);
   VELOX_CHECK_GT(input->size(), 0);
+
+  if (isStatistics(input)) {
+    VELOX_CHECK_NOT_NULL(statsCollector_);
+    statsCollector_->addInput(input);
+    return;
+  }
 
   // Increments row count.
   numRows_ += TableWriteTraits::getRowCount(input);
@@ -82,8 +109,20 @@ void TableWriteMerge::addInput(RowVectorPtr input) {
   if (containsNonNullRows(fragmentVector)) {
     fragmentVectors_.push(fragmentVector);
   }
+}
 
-  // TODO: add stats aggregation support.
+void TableWriteMerge::noMoreInput() {
+  Operator::noMoreInput();
+  if (statsCollector_ != nullptr) {
+    statsCollector_->noMoreInput();
+  }
+}
+
+void TableWriteMerge::close() {
+  if (statsCollector_ != nullptr) {
+    statsCollector_->close();
+  }
+  Operator::close();
 }
 
 RowVectorPtr TableWriteMerge::getOutput() {
@@ -94,6 +133,15 @@ RowVectorPtr TableWriteMerge::getOutput() {
 
   if (!noMoreInput_ || finished_) {
     return nullptr;
+  }
+
+  if (statsCollector_ != nullptr && !statsCollector_->finished()) {
+    const std::string commitContext = createTableCommitContext(false);
+    return TableWriteTraits::createAggregationStatsOutput(
+        outputType_,
+        statsCollector_->getOutput(),
+        StringView(commitContext),
+        pool());
   }
   finished_ = true;
   return createLastOutput();
@@ -156,13 +204,17 @@ RowVectorPtr TableWriteMerge::createLastOutput() {
       const std::string lastCommitContext = createTableCommitContext(true);
       contextVector->set(0, StringView(lastCommitContext));
     } else {
-      // All the fragments shall have already been output.
-      VELOX_CHECK_EQ(outputChannel, TableWriteTraits::kFragmentChannel);
+      // All the fragments and statistics shall have already been outputted.
       VELOX_CHECK(fragmentVectors_.empty());
       output->childAt(outputChannel) = BaseVector::createNullConstant(
           outputType_->childAt(outputChannel), 1, pool());
     }
   }
   return output;
+}
+
+bool TableWriteMerge::isStatistics(RowVectorPtr input) {
+  return input->childAt(TableWriteTraits::kRowCountChannel)->isNullAt(0) &&
+      input->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(0);
 }
 } // namespace facebook::velox::exec

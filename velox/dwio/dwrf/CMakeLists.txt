@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(common)
 add_subdirectory(proto)
+add_subdirectory(common)
 add_subdirectory(reader)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(test)
@@ -22,3 +22,5 @@ elseif(${VELOX_BUILD_TEST_UTILS})
 endif()
 add_subdirectory(utils)
 add_subdirectory(writer)
+
+velox_install_library_headers()

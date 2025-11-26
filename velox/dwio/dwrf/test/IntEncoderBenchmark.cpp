@@ -18,8 +18,8 @@
 #include <folly/Varint.h>
 #include <folly/init/Init.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/DataBufferHolder.h"
 #include "velox/dwio/common/Range.h"
-#include "velox/dwio/dwrf/common/DataBufferHolder.h"
 #include "velox/dwio/dwrf/common/EncoderUtil.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 
@@ -30,7 +30,7 @@ using namespace facebook::velox::memory;
 
 static size_t generateAutoId(int64_t startId, int64_t count) {
   size_t capacity = count * folly::kMaxVarintLength64;
-  auto pool = memory::addDefaultLeafMemoryPool();
+  auto pool = memory::memoryManager()->addLeafPool();
   DataBufferHolder holder{*pool, capacity};
   auto output = std::make_unique<BufferedOutputStream>(holder);
   auto encoder =
@@ -44,7 +44,7 @@ static size_t generateAutoId(int64_t startId, int64_t count) {
 
 static size_t generateAutoId2(int64_t startId, int64_t count) {
   size_t capacity = count * folly::kMaxVarintLength64;
-  auto pool = memory::addDefaultLeafMemoryPool();
+  auto pool = memory::memoryManager()->addLeafPool();
   DataBufferHolder holder{*pool, capacity};
   auto output = std::make_unique<BufferedOutputStream>(holder);
   auto encoder =
@@ -117,8 +117,9 @@ FOLLY_ALWAYS_INLINE static int32_t findSetBitsNew(uint64_t value) {
     case 57 ... 63:
       return 1;
   }
-  DWIO_RAISE(folly::sformat(
-      "Unexpected leading zeros {} for value {}", leadingZeros, value));
+  DWIO_RAISE(
+      folly::sformat(
+          "Unexpected leading zeros {} for value {}", leadingZeros, value));
 }
 
 size_t iters = 2000;
@@ -204,7 +205,8 @@ BENCHMARK_RELATIVE(GenerateAutoIdNew_64) {
 }
 
 int32_t main(int32_t argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   folly::runBenchmarks();
   return 0;
 }

@@ -51,7 +51,7 @@ class CumeDistFunction : public exec::WindowFunction {
       if (peerStart != currentPeerGroupStart_) {
         currentPeerGroupStart_ = peerStart;
         runningTotal_ += peerGroupEndsVector[i] - peerStart + 1;
-        cumeDist_ = double(runningTotal_) / numPartitionRows_;
+        cumeDist_ = static_cast<double>(runningTotal_) / numPartitionRows_;
       }
       rawValues[resultOffset + i] = cumeDist_;
     }
@@ -74,9 +74,11 @@ void registerCumeDist(const std::string& name) {
   exec::registerWindowFunction(
       name,
       std::move(signatures),
+      exec::WindowFunction::Metadata::defaultMetadata(),
       [name](
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& /*resultType*/,
+          bool /*ignoreNulls*/,
           velox::memory::MemoryPool* /*pool*/,
           HashStringAllocator* /*stringAllocator*/,
           const velox::core::QueryConfig& /*queryConfig*/)

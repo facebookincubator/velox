@@ -15,6 +15,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -24,6 +25,8 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::functions;
 
 namespace {
+
+using fuzzer::UTF8CharList;
 
 class StringAsciiUTFFunctionBenchmark
     : public functions::test::FunctionBenchmarkBase {
@@ -185,7 +188,7 @@ BENCHMARK_RELATIVE(aciiRPad) {
 // asciiUpper                                        98.22%    68.98ms    14.50
 //============================================================================
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   folly::runBenchmarks();
   return 0;

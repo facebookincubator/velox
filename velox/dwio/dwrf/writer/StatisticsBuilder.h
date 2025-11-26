@@ -17,6 +17,7 @@
 #pragma once
 
 #include <velox/common/base/Exceptions.h>
+#include <velox/common/hyperloglog/SparseHll.h>
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -76,11 +77,22 @@ inline dwio::common::KeyInfo constructKey(const dwrf::proto::KeyInfo& keyInfo) {
 struct StatisticsBuilderOptions {
   explicit StatisticsBuilderOptions(
       uint32_t stringLengthLimit,
-      std::optional<uint64_t> initialSize = std::nullopt)
-      : stringLengthLimit{stringLengthLimit}, initialSize{initialSize} {}
+      std::optional<uint64_t> initialSize = std::nullopt,
+      bool countDistincts = false,
+      HashStringAllocator* allocator = nullptr)
+      : stringLengthLimit{stringLengthLimit},
+        initialSize{initialSize},
+        countDistincts(countDistincts),
+        allocator(allocator) {}
 
   uint32_t stringLengthLimit;
   std::optional<uint64_t> initialSize;
+  bool countDistincts{false};
+  HashStringAllocator* allocator;
+
+  StatisticsBuilderOptions withoutNumDistinct() const {
+    return StatisticsBuilderOptions(stringLengthLimit, initialSize);
+  }
 
   static StatisticsBuilderOptions fromConfig(const Config& config) {
     return StatisticsBuilderOptions{config.get(Config::STRING_STATS_LIMIT)};
@@ -90,11 +102,14 @@ struct StatisticsBuilderOptions {
 /*
  * Base class for stats builder. Stats builder is used in writer and file merge
  * to collect and merge stats.
+ * It can also be used for gathering stats in ad hoc sampling. In this case it
+ * may also count distinct values if enabled in 'options'.
  */
 class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
  public:
+  /// Constructs with 'options'.
   explicit StatisticsBuilder(const StatisticsBuilderOptions& options)
-      : options_{options} {
+      : options_{options}, arena_(std::make_unique<google::protobuf::Arena>()) {
     init();
   }
 
@@ -132,6 +147,18 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     }
   }
 
+  template <typename T>
+  void addHash(const T& data) {
+    if (hll_) {
+      hll_->insertHash(folly::hasher<T>()(data));
+    }
+  }
+
+  int64_t cardinality() const {
+    VELOX_CHECK_NOT_NULL(hll_);
+    return hll_->cardinality();
+  }
+
   /*
    * Merge stats of same type. This is used in writer to aggregate file level
    * stats.
@@ -150,7 +177,7 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
   /*
    * Write stats to proto
    */
-  virtual void toProto(proto::ColumnStatistics& stats) const;
+  virtual void toProto(ColumnStatisticsWriteWrapper& stats) const;
 
   std::unique_ptr<dwio::common::ColumnStatistics> build() const;
 
@@ -170,17 +197,22 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     hasNull_ = false;
     rawSize_ = 0;
     size_ = options_.initialSize;
+    if (options_.countDistincts) {
+      hll_ = std::make_shared<common::hll::SparseHll<>>(options_.allocator);
+    }
   }
 
  protected:
   StatisticsBuilderOptions options_;
+  std::shared_ptr<common::hll::SparseHll<>> hll_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
 };
 
 class BooleanStatisticsBuilder : public StatisticsBuilder,
                                  public dwio::common::BooleanColumnStatistics {
  public:
   explicit BooleanStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options} {
+      : StatisticsBuilder{options.withoutNumDistinct()} {
     init();
   }
 
@@ -202,7 +234,7 @@ class BooleanStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -229,6 +261,7 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
       max_ = value;
     }
     addWithOverflowCheck(sum_, value, count);
+    addHash(value);
   }
 
   void merge(
@@ -240,7 +273,7 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -278,6 +311,7 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     if (max_.has_value() && value > max_.value()) {
       max_ = value;
     }
+    addHash(value);
     // value * count sometimes is not same as adding values (count) times. So
     // add in a loop
     if (sum_.has_value()) {
@@ -299,7 +333,7 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -325,7 +359,7 @@ class StringStatisticsBuilder : public StatisticsBuilder,
 
   ~StringStatisticsBuilder() override = default;
 
-  void addValues(folly::StringPiece value, uint64_t count = 1) {
+  void addValues(std::string_view value, uint64_t count = 1) {
     // min_/max_ is not initialized with default that can be compared against
     // easily. So we need to capture whether self is empty and handle
     // differently.
@@ -335,13 +369,14 @@ class StringStatisticsBuilder : public StatisticsBuilder,
       min_ = value;
       max_ = value;
     } else {
-      if (min_.has_value() && value < folly::StringPiece{min_.value()}) {
+      if (min_.has_value() && value < std::string_view{min_.value()}) {
         min_ = value;
       }
-      if (max_.has_value() && value > folly::StringPiece{max_.value()}) {
+      if (max_.has_value() && value > std::string_view{max_.value()}) {
         max_ = value;
       }
     }
+    addHash(value);
 
     addWithOverflowCheck<uint64_t>(length_, value.size(), count);
   }
@@ -355,7 +390,7 @@ class StringStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   uint32_t lengthLimit_;
@@ -375,7 +410,7 @@ class BinaryStatisticsBuilder : public StatisticsBuilder,
                                 public dwio::common::BinaryColumnStatistics {
  public:
   explicit BinaryStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options} {
+      : StatisticsBuilder{options.withoutNumDistinct()} {
     init();
   }
 
@@ -395,7 +430,7 @@ class BinaryStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -412,6 +447,7 @@ class MapStatisticsBuilder : public StatisticsBuilder,
       : StatisticsBuilder{options},
         valueType_{type.as<velox::TypeKind::MAP>().valueType()} {
     init();
+    hll_.reset();
   }
 
   ~MapStatisticsBuilder() override = default;
@@ -442,7 +478,7 @@ class MapStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {

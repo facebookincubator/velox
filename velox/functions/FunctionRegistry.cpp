@@ -32,26 +32,6 @@
 namespace facebook::velox {
 namespace {
 
-exec::TypeSignature typeToTypeSignature(std::shared_ptr<const Type> type) {
-  std::vector<exec::TypeSignature> children;
-  if (type->size()) {
-    children.reserve(type->size());
-    for (auto i = 0; i < type->size(); i++) {
-      children.emplace_back(typeToTypeSignature(type->childAt(i)));
-    }
-  }
-  const std::string& kindName = type->kindName();
-  return exec::TypeSignature(
-      boost::algorithm::to_lower_copy(kindName), std::move(children));
-}
-
-void populateSimpleFunctionSignatures(FunctionSignatureMap& map) {
-  const auto& simpleFunctions = exec::simpleFunctions();
-  for (const auto& functionName : simpleFunctions.getFunctionNames()) {
-    map[functionName] = simpleFunctions.getFunctionSignatures(functionName);
-  }
-}
-
 void populateVectorFunctionSignatures(FunctionSignatureMap& map) {
   auto vectorFunctions = exec::vectorFunctionFactories();
   vectorFunctions.withRLock([&map](const auto& locked) {
@@ -71,8 +51,35 @@ void populateVectorFunctionSignatures(FunctionSignatureMap& map) {
 } // namespace
 
 FunctionSignatureMap getFunctionSignatures() {
+  const auto& simpleFunctions = exec::simpleFunctions();
+  FunctionSignatureMap result = simpleFunctions.getFunctionSignatureMap();
+  populateVectorFunctionSignatures(result);
+  return result;
+}
+
+std::vector<const exec::FunctionSignature*> getFunctionSignatures(
+    const std::string& functionName) {
+  // Some functions have both simple and vector implementations (for different
+  // signatures). Collect all signatures.
+  // Check simple functions first.
+  auto signatures = exec::simpleFunctions().getFunctionSignatures(functionName);
+
+  // Check vector functions.
+  auto& vectorFunctions = exec::vectorFunctionFactories();
+  vectorFunctions.withRLock([&](const auto& functions) {
+    auto it = functions.find(functionName);
+    if (it != functions.end()) {
+      for (const auto& signature : it->second.signatures) {
+        signatures.push_back(signature.get());
+      }
+    }
+  });
+
+  return signatures;
+}
+
+FunctionSignatureMap getVectorFunctionSignatures() {
   FunctionSignatureMap result;
-  populateSimpleFunctionSignatures(result);
   populateVectorFunctionSignatures(result);
   return result;
 }
@@ -83,7 +90,26 @@ void clearFunctionRegistry() {
       [](auto& functionMap) { functionMap.clear(); });
 }
 
-std::shared_ptr<const Type> resolveFunction(
+std::optional<bool> isDeterministic(const std::string& functionName) {
+  const auto simpleFunctions =
+      exec::simpleFunctions().getFunctionSignaturesAndMetadata(functionName);
+  const auto metadata = exec::getVectorFunctionMetadata(functionName);
+  if (simpleFunctions.empty() && !metadata.has_value()) {
+    return std::nullopt;
+  }
+
+  for (const auto& [metadata_2, _] : simpleFunctions) {
+    if (!metadata_2.deterministic) {
+      return false;
+    }
+  }
+  if (metadata.has_value() && !metadata.value().deterministic) {
+    return false;
+  }
+  return true;
+}
+
+TypePtr resolveFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   // Check if this is a simple function.
@@ -95,7 +121,36 @@ std::shared_ptr<const Type> resolveFunction(
   return resolveVectorFunction(functionName, argTypes);
 }
 
-std::shared_ptr<const Type> resolveFunctionOrCallableSpecialForm(
+TypePtr resolveFunctionWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  // Check if this is a simple function.
+  if (auto resolvedFunction =
+          exec::simpleFunctions().resolveFunctionWithCoercions(
+              functionName, argTypes, coercions)) {
+    return resolvedFunction->type();
+  }
+
+  // Check if VectorFunctions has this function name + signature.
+  return exec::resolveVectorFunctionWithCoercions(
+      functionName, argTypes, coercions);
+}
+
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveFunctionWithMetadata(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  if (auto resolvedFunction =
+          exec::simpleFunctions().resolveFunction(functionName, argTypes)) {
+    return std::pair<TypePtr, exec::VectorFunctionMetadata>{
+        resolvedFunction->type(), resolvedFunction->metadata()};
+  }
+
+  return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
+}
+
+TypePtr resolveFunctionOrCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   if (auto returnType = resolveCallableSpecialForm(functionName, argTypes)) {
@@ -105,25 +160,13 @@ std::shared_ptr<const Type> resolveFunctionOrCallableSpecialForm(
   return resolveFunction(functionName, argTypes);
 }
 
-std::shared_ptr<const Type> resolveCallableSpecialForm(
+TypePtr resolveCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
-  // TODO Replace with struct_pack
-  if (functionName == "row_constructor") {
-    auto numInput = argTypes.size();
-    std::vector<TypePtr> types(numInput);
-    std::vector<std::string> names(numInput);
-    for (auto i = 0; i < numInput; i++) {
-      types[i] = argTypes[i];
-      names[i] = fmt::format("c{}", i + 1);
-    }
-    return ROW(std::move(names), std::move(types));
-  }
-
   return exec::resolveTypeForSpecialForm(functionName, argTypes);
 }
 
-std::shared_ptr<const Type> resolveSimpleFunction(
+TypePtr resolveSimpleFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   if (auto resolvedFunction =
@@ -134,10 +177,23 @@ std::shared_ptr<const Type> resolveSimpleFunction(
   return nullptr;
 }
 
-std::shared_ptr<const Type> resolveVectorFunction(
+TypePtr resolveVectorFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   return exec::resolveVectorFunction(functionName, argTypes);
+}
+
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadata(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
+}
+
+void removeFunction(const std::string& functionName) {
+  exec::mutableSimpleFunctions().removeFunction(functionName);
+  exec::vectorFunctionFactories().withWLock(
+      [&](auto& functionMap) { functionMap.erase(functionName); });
 }
 
 } // namespace facebook::velox

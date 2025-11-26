@@ -13,12 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
+namespace {
 class LimitTest : public HiveConnectorTestBase {};
 
 TEST_F(LimitTest, basic) {
@@ -35,18 +40,27 @@ TEST_F(LimitTest, basic) {
   }
   createDuckDbTable(vectors);
 
-  auto makePlan = [&](int32_t offset, int32_t limit) {
+  auto makePlan = [&](int64_t offset, int64_t limit) {
     return PlanBuilder().values(vectors).limit(offset, limit, true).planNode();
   };
 
   assertQuery(makePlan(0, 10), "SELECT * FROM tmp LIMIT 10");
-  assertQuery(makePlan(0, 1'000), "SELECT * FROM tmp LIMIT 1000");
+  int64_t limit = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000000;
+  int64_t offset = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000;
+  assertQuery(
+      makePlan(0, limit), fmt::format("SELECT * FROM tmp LIMIT {}", limit));
   assertQuery(makePlan(0, 1'234), "SELECT * FROM tmp LIMIT 1234");
 
   assertQuery(makePlan(17, 10), "SELECT * FROM tmp OFFSET 17 LIMIT 10");
   assertQuery(makePlan(17, 983), "SELECT * FROM tmp OFFSET 17 LIMIT 983");
-  assertQuery(makePlan(17, 1'000), "SELECT * FROM tmp OFFSET 17 LIMIT 1000");
   assertQuery(makePlan(17, 2'000), "SELECT * FROM tmp OFFSET 17 LIMIT 2000");
+  assertQuery(
+      makePlan(offset, limit),
+      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT {}", offset, limit));
+
+  assertQuery(
+      makePlan(offset, 2000),
+      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT 2000", offset));
 
   assertQuery(makePlan(1'000, 145), "SELECT * FROM tmp OFFSET 1000 LIMIT 145");
   assertQuery(
@@ -69,7 +83,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
       {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
 
   auto file = TempFilePath::create();
-  writeToFile(file->path, {data});
+  writeToFile(file->getPath(), {data});
 
   core::PlanNodeId scanNodeId;
 
@@ -81,13 +95,13 @@ TEST_F(LimitTest, limitOverLocalExchange) {
                         .limit(0, 20, true)
                         .planNode();
 
-  TaskCursor cursor(params);
-  cursor.task()->addSplit(
-      scanNodeId, exec::Split(makeHiveConnectorSplit(file->path)));
+  auto cursor = TaskCursor::create(params);
+  cursor->task()->addSplit(
+      scanNodeId, exec::Split(makeHiveConnectorSplit(file->getPath())));
 
   int32_t numRead = 0;
-  while (cursor.moveNext()) {
-    auto vector = cursor.current();
+  while (cursor->moveNext()) {
+    auto vector = cursor->current();
     numRead += vector->size();
   }
 
@@ -95,5 +109,226 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   // receiving that message.
 
   ASSERT_EQ(20, numRead);
-  ASSERT_TRUE(waitForTaskCompletion(cursor.task().get()));
+  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
 }
+
+TEST_F(LimitTest, partialLimitEagerFlush) {
+  std::vector<RowVectorPtr> batches(
+      10, makeRowVector({makeFlatVector(std::vector<int64_t>(1, 0))}));
+  auto test = [&](bool projectInBetween) {
+    SCOPED_TRACE(fmt::format("projectInBetween={}", projectInBetween));
+    CursorParameters params;
+    auto builder = PlanBuilder().values(batches).limit(0, 10, true);
+    if (projectInBetween) {
+      builder = builder.project({"c0 + 1 as c0"});
+    }
+    params.planNode = builder.partitionedOutput({}, 1).planNode();
+    auto cursor = TaskCursor::create(params);
+    ASSERT_FALSE(cursor->moveNext());
+    auto bufferManager = exec::OutputBufferManager::getInstanceRef();
+    auto [numPagesPromise, numPagesFuture] = folly::makePromiseContract<int>();
+    ASSERT_TRUE(bufferManager->getData(
+        cursor->task()->taskId(),
+        0,
+        INT32_MAX,
+        0,
+        [numPagesPromise =
+             std::make_shared<folly::Promise<int>>(std::move(numPagesPromise))](
+            std::vector<std::unique_ptr<folly::IOBuf>> pages,
+            int64_t /*sequence*/,
+            std::vector<int64_t> /*remainingBytes*/) {
+          numPagesPromise->setValue(pages.size());
+        }));
+    ASSERT_GE(std::move(numPagesFuture).get(std::chrono::seconds(1)), 10);
+    cursor->task()->requestCancel();
+  };
+  test(true);
+  test(false);
+}
+
+TEST_F(LimitTest, barrier) {
+  std::vector<RowVectorPtr> vectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  const int numSplits{5};
+  const int numRowsPerSplit{1'000};
+  for (int32_t i = 0; i < numSplits; ++i) {
+    vectors.push_back(makeRowVector({makeFlatVector<int32_t>(
+        numRowsPerSplit, [](auto row) { return row; })}));
+    tempFiles.push_back(TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(tempFiles), vectors);
+  createDuckDbTable(vectors);
+
+  struct {
+    bool barrierExecution;
+    int offset;
+    int limit;
+    int numExpectedBarriers;
+    int numExpectedOutputRows;
+    int numExpectedFinishedSplits;
+    int numExpectedOutputBatches;
+
+    std::string toString() const {
+      return fmt::format(
+          "barrierExecution {}, offset: {}, limit: {}, numExpectedBarriers: {}, numExpectedOutputRows: {}, numExpectedFinishedSplits: {}, numExpectedOutputBatches: {}",
+          barrierExecution,
+          offset,
+          limit,
+          numExpectedBarriers,
+          numExpectedOutputRows,
+          numExpectedFinishedSplits,
+          numExpectedOutputBatches);
+    }
+  } testSettings[] = {// Test the case where the limit covers all the input rows
+                      // with barrier and not.
+                      {true,
+                       0,
+                       numRowsPerSplit * numSplits,
+                       numSplits,
+                       numRowsPerSplit * numSplits,
+                       numSplits - 1,
+                       numSplits},
+                      {false,
+                       0,
+                       numRowsPerSplit * numSplits,
+                       0,
+                       numRowsPerSplit * numSplits,
+                       numSplits - 1,
+                       numSplits},
+                      // Test the cases where the limit covers the first entire
+                      // split rows with barrier or not. with barrier and not.
+                      {true, 0, numRowsPerSplit, 1, numRowsPerSplit, 0, 1},
+                      {false, 0, numRowsPerSplit, 0, numRowsPerSplit, 0, 1},
+                      // Test the case where the limit covers the one and half
+                      // split rows with barrier or not.
+                      {true,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit / 2,
+                       2,
+                       numRowsPerSplit + numRowsPerSplit / 2,
+                       1,
+                       2},
+                      {false,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit / 2,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit / 2,
+                       1,
+                       2},
+                      {true,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       2,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       1,
+                       2},
+                      {false,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       1,
+                       2},
+                      // Test the case where the limit set to cover more than
+                      // all the input rows with barrier or not.
+                      {true,
+                       0,
+                       numRowsPerSplit * (numSplits + 1),
+                       numSplits,
+                       numRowsPerSplit * numSplits,
+                       numSplits,
+                       numSplits},
+                      {false,
+                       0,
+                       numRowsPerSplit * (numSplits + 1),
+                       0,
+                       numRowsPerSplit * numSplits,
+                       numSplits,
+                       numSplits},
+                      // Test the cases where the limit set to cover partial
+                      // input rows in the middle with barrier or not.
+                      {true,
+                       numRowsPerSplit,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       3,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       2,
+                       2},
+                      {false,
+                       numRowsPerSplit,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       0,
+                       numRowsPerSplit + numRowsPerSplit - 1,
+                       2,
+                       2},
+                      {true,
+                       numRowsPerSplit,
+                       numRowsPerSplit * (numSplits - 1),
+                       numSplits,
+                       numRowsPerSplit * (numSplits - 1),
+                       numSplits - 1,
+                       numSplits - 1},
+                      {false,
+                       numRowsPerSplit,
+                       numRowsPerSplit * (numSplits - 1),
+                       0,
+                       numRowsPerSplit * (numSplits - 1),
+                       numSplits - 1,
+                       numSplits - 1},
+                      {true,
+                       numRowsPerSplit,
+                       numRowsPerSplit / 2,
+                       2,
+                       numRowsPerSplit / 2,
+                       1,
+                       1},
+                      {false,
+                       numRowsPerSplit,
+                       numRowsPerSplit / 2,
+                       0,
+                       numRowsPerSplit / 2,
+                       1,
+                       1},
+                      {true,
+                       numRowsPerSplit / 2,
+                       numRowsPerSplit * numSplits,
+                       numSplits,
+                       numRowsPerSplit * numSplits - numRowsPerSplit / 2,
+                       numSplits,
+                       numSplits},
+                      {false,
+                       numRowsPerSplit / 2,
+                       numRowsPerSplit * numSplits,
+                       0,
+                       numRowsPerSplit * numSplits - numRowsPerSplit / 2,
+                       numSplits,
+                       numSplits}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
+    core::PlanNodeId limitPlanNodeId;
+    auto plan = PlanBuilder()
+                    .tableScan(asRowType(vectors.back()->type()))
+                    .limit(testData.offset, testData.limit, true)
+                    .capturePlanNodeId(limitPlanNodeId)
+                    .planNode();
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .splits(makeHiveConnectorSplits(tempFiles))
+                    .serialExecution(true)
+                    .barrierExecution(testData.barrierExecution)
+                    .assertResults(
+                        fmt::format(
+                            "SELECT * FROM tmp LIMIT {} OFFSET {}",
+                            testData.limit,
+                            testData.offset));
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numBarriers, testData.numExpectedBarriers);
+    ASSERT_EQ(taskStats.numFinishedSplits, testData.numExpectedFinishedSplits);
+    ASSERT_EQ(
+        exec::toPlanStats(taskStats).at(limitPlanNodeId).outputRows,
+        testData.numExpectedOutputRows);
+    ASSERT_EQ(
+        exec::toPlanStats(taskStats).at(limitPlanNodeId).outputVectors,
+        testData.numExpectedOutputBatches);
+  }
+}
+} // namespace

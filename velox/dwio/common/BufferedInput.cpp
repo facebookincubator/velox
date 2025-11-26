@@ -15,6 +15,8 @@
  */
 
 #include <fmt/format.h>
+#include <numeric>
+#include <utility>
 
 #include "folly/io/Cursor.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -24,6 +26,23 @@ DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
 using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
+
+static_assert(std::is_move_constructible<BufferedInput>());
+
+namespace {
+void copyIOBufToMemory(folly::IOBuf&& iobuf, folly::Range<char*> allocated) {
+  folly::io::Cursor cursor(&iobuf);
+  VELOX_CHECK_EQ(cursor.totalLength(), allocated.size(), "length mismatch.");
+  cursor.pull(allocated.data(), allocated.size());
+}
+} // namespace
+
+uint64_t BufferedInput::nextFetchSize() const {
+  return std::accumulate(
+      regions_.cbegin(), regions_.cend(), 0L, [](uint64_t a, const Region& b) {
+        return a + b.length;
+      });
+}
 
 void BufferedInput::load(const LogType logType) {
   // no regions to load
@@ -47,38 +66,44 @@ void BufferedInput::load(const LogType logType) {
     std::vector<folly::IOBuf> iobufs(regions_.size());
     input_->vread(regions_, {iobufs.data(), iobufs.size()}, logType);
     for (size_t i = 0; i < regions_.size(); ++i) {
-      const auto& region = regions_[i];
-      auto iobuf = std::move(iobufs[i]);
-
-      auto allocated = allocate(region);
-      folly::io::Cursor cursor(&iobuf);
-      DWIO_ENSURE_EQ(
-          cursor.totalLength(), allocated.size(), "length mismatch.");
-      cursor.pull(allocated.data(), allocated.size());
+      copyIOBufToMemory(std::move(iobufs[i]), allocate(regions_[i]));
     }
-
   } else {
     for (const auto& region : regions_) {
-      auto allocated = allocate(region);
-      input_->read(allocated.data(), allocated.size(), region.offset, logType);
+      readToBuffer(region.offset, allocate(region), logType);
     }
   }
 
-  // clear the loaded regions
+  // clear the loaded regions.
   regions_.clear();
+}
+
+void BufferedInput::readToBuffer(
+    uint64_t offset,
+    folly::Range<char*> allocated,
+    const LogType logType) {
+  uint64_t usec = 0;
+  {
+    MicrosecondTimer timer(&usec);
+    input_->read(allocated.data(), allocated.size(), offset, logType);
+  }
+  if (auto* stats = input_->getStats()) {
+    stats->read().increment(allocated.size());
+    stats->queryThreadIoLatency().increment(usec);
+  }
 }
 
 std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
     Region region,
-    const dwio::common::StreamIdentifier* /*si*/) {
+    const dwio::common::StreamIdentifier* /*sid*/) {
   if (region.length == 0) {
     return std::make_unique<SeekableArrayInputStream>(
         static_cast<const char*>(nullptr), 0);
   }
 
-  // if the region is already in buffer - such as metadata
+  // If the region is already in buffer - such as metadata.
   auto ret = readBuffer(region.offset, region.length);
-  if (ret) {
+  if (ret != nullptr) {
     return ret;
   }
 
@@ -88,7 +113,13 @@ std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
       // Save "i", the position in which this region was enqueued. This will
       // help faster lookup using enqueuedToBufferOffset_ later.
       [region, this, i = regions_.size() - 1]() {
-        return readInternal(region.offset, region.length, i);
+        auto result = readInternal(region.offset, region.length, i);
+        VELOX_CHECK(
+            std::get<1>(result) != MAX_UINT64,
+            "Fail to read region offset={} length={}",
+            region.offset,
+            region.length);
+        return result;
       });
 }
 
@@ -129,8 +160,8 @@ void BufferedInput::sortRegions() {
 
 void BufferedInput::mergeRegions() {
   auto& r = regions_;
+  VELOX_CHECK(!r.empty(), "Assumes that there's at least one region");
   auto& e = enqueuedToBufferOffset_;
-  size_t ia = 0;
   // We want to map here where each region ended in the final merged regions
   // vector.
   // For example, if this is the regions vector: {{6, 3}, {24, 3}, {3, 3}, {0,
@@ -141,13 +172,12 @@ void BufferedInput::mergeRegions() {
   // position 0. The original region 1, became region 1, and original region 4
   // became region 2
   std::vector<size_t> te(e.size());
-
-  DWIO_ENSURE(!r.empty(), "Assumes that there's at least one region");
-  DWIO_ENSURE_GT(r[ia].length, 0, "invalid region");
-
   te[e[0]] = 0;
+
+  size_t ia = 0;
+  VELOX_CHECK_GT(r[ia].length, 0, "invalid region");
   for (size_t ib = 1; ib < r.size(); ++ib) {
-    DWIO_ENSURE_GT(r[ib].length, 0, "invalid region");
+    VELOX_CHECK_GT(r[ib].length, 0, "invalid region");
     if (!tryMerge(r[ia], r[ib])) {
       r[++ia] = r[ib];
     }
@@ -159,7 +189,7 @@ void BufferedInput::mergeRegions() {
 }
 
 bool BufferedInput::tryMerge(Region& first, const Region& second) {
-  DWIO_ENSURE_GE(second.offset, first.offset, "regions should be sorted.");
+  VELOX_CHECK_GE(second.offset, first.offset, "regions should be sorted.");
   const int64_t gap = second.offset - first.offset - first.length;
 
   // Duplicate regions (extension==0) is the only case allowed to merge for
@@ -178,10 +208,8 @@ bool BufferedInput::tryMerge(Region& first, const Region& second) {
         input_->getStats()->incRawOverreadBytes(gap);
       }
     }
-
     return true;
   }
-
   return false;
 }
 
@@ -189,12 +217,10 @@ std::unique_ptr<SeekableInputStream> BufferedInput::readBuffer(
     uint64_t offset,
     uint64_t length) const {
   const auto result = readInternal(offset, length);
-
-  auto size = std::get<1>(result);
+  const auto size = std::get<1>(result);
   if (size == MAX_UINT64) {
     return {};
   }
-
   return std::make_unique<SeekableArrayInputStream>(std::get<0>(result), size);
 }
 
@@ -209,7 +235,7 @@ std::tuple<const char*, uint64_t> BufferedInput::readInternal(
 
   std::optional<size_t> index;
   if (i.has_value()) {
-    auto vi = i.value();
+    const auto vi = i.value();
     // There's a possibility that our user enqueued, then tried to read before
     // calling load(). In that case, enqueuedToBufferOffset_ will be empty or
     // have the values from a previous load. So I want to make sure that he ends
@@ -218,14 +244,16 @@ std::tuple<const char*, uint64_t> BufferedInput::readInternal(
     if (vi < enqueuedToBufferOffset_.size() &&
         enqueuedToBufferOffset_[vi] < offsets_.size() &&
         offsets_[enqueuedToBufferOffset_[vi]] <= offset) {
-      index = enqueuedToBufferOffset_[i.value()];
+      index = enqueuedToBufferOffset_[vi];
     }
   }
+
   if (!index.has_value()) {
     // Binary search to get the first fileOffset for which: offset < fileOffset
-    auto it = std::upper_bound(offsets_.cbegin(), offsets_.cend(), offset);
+    const auto it =
+        std::upper_bound(offsets_.cbegin(), offsets_.cend(), offset);
     // If the first element was already greater than the target offset we don't
-    // have it
+    // have it.
     if (it != offsets_.cbegin()) {
       index = std::distance(offsets_.cbegin(), it) - 1;
     }
@@ -235,14 +263,13 @@ std::tuple<const char*, uint64_t> BufferedInput::readInternal(
     const uint64_t bufferOffset = offsets_[index.value()];
     const auto& buffer = buffers_[index.value()];
     if (bufferOffset + buffer.size() >= offset + length) {
-      DWIO_ENSURE_LE(bufferOffset, offset, "Invalid offset for readInternal");
-      DWIO_ENSURE_LE(
+      VELOX_CHECK_LE(bufferOffset, offset, "Invalid offset for readInternal");
+      VELOX_CHECK_LE(
           (offset - bufferOffset) + length,
           buffer.size(),
           "Invalid readOffset for read Internal ",
           fmt::format(
               "{} {} {} {}", offset, bufferOffset, length, buffer.size()));
-
       return std::make_tuple(buffer.data() + (offset - bufferOffset), length);
     }
   }

@@ -29,7 +29,6 @@ class MapEntriesFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     auto& arg = args[0];
-
     VectorPtr localResult;
 
     // Input can be constant or flat.
@@ -52,7 +51,7 @@ class MapEntriesFunction : public exec::VectorFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // map(K,V) -> array(row(K,V))
     return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V")
                 .returnType("array(row(K,V))")
                 .argumentType("map(K,V)")
@@ -71,7 +70,7 @@ class MapEntriesFunction : public exec::VectorFunction {
         context.pool(),
         outputType->childAt(0),
         BufferPtr(nullptr),
-        inputMap->mapKeys()->size(),
+        std::min(inputMap->mapKeys()->size(), inputMap->mapValues()->size()),
         std::vector<VectorPtr>{inputMap->mapKeys(), inputMap->mapValues()});
 
     return std::make_shared<ArrayVector>(

@@ -3,12 +3,12 @@ Vectors
 =======
 
 Velox vectors is columnar in-memory format for storing query data during
-execution. It is similar to Arrow, but features more encodings and different
+execution. It is similar to Arrow, but features more encodings and a different
 layout for strings, arrays and maps which support out-of-order writes. Vectors
 form the very foundation of the Velox library.
 
-Velox vectors support :doc:`scalar and complex types</develop/types>` and come in a few different
-encodings.
+Velox vectors support :doc:`scalar and complex types</develop/types>` and come
+in a few different encodings.
 
 Supported encodings are:
 
@@ -18,8 +18,8 @@ Supported encodings are:
 * Bias
 * Sequence
 
-In this guide we’ll discuss flat, constant and dictionary encoding. Bias and
-sequence encodings are not in scope for this guide.
+In this guide, we’ll discuss flat, constant, and dictionary encodings. Bias and
+sequence encodings are not in the scope of this guide.
 
 A single vector represents multiple rows of a single column. RowVector is used
 to represent a set of rows for multiple columns as well as a set of rows for a
@@ -130,7 +130,9 @@ of rows in the vector.
 
 Vectors are always held by std::shared_ptr using the VectorPtr alias.
 
-using VectorPtr = std::shared_ptr<BaseVector>;
+.. code-block:: c++
+
+    using VectorPtr = std::shared_ptr<BaseVector>;
 
 The “bits” namespace contains a number of convenience functions for working with
 a nulls buffer.
@@ -175,10 +177,10 @@ std::shared_ptr using the FlatVectorPtr alias.
     template <typename T>
     using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;
 
-The following diagram shows a flat vector of type INTEGER with 11 values. This
+The following diagram shows a flat vector of type INTEGER with 12 values. This
 vector is represented as FlatVector<int32_t>. The `values_` buffer has space for
-at least 11 consecutive entries of 4 bytes each. Nulls buffer has space for at
-least 11 consecutive entries of 1 bit each.  Values in positions 2,7, 11 are
+at least 12 consecutive entries of 4 bytes each. Nulls buffer has space for at
+least 12 consecutive entries of 1 bit each.  Values in positions 2,7, 11 are
 null, e.g. bits 2, 7, 11 in `nulls_` buffer are 0. The rest of the bits in the
 `nulls_` buffer are 1. Entries 2, 7, 11 in `values_` buffer contain garbage.
 
@@ -200,10 +202,10 @@ the prefix and the pointer.
     :align: center
 
 The following diagram illustrates the difference in in-memory representation of
-a long and short string. “Yellowstone national park” is a 25-characters long
+a long and short string. “Yellowstone National Park” is a 25-character long
 string which is too long to be inlined. Hence, StringView stores a 4-byte
 prefix “Yell” and a pointer to the whole string in a string buffer. The “heavy
-rain” string is only 10-characters long and therefore stored inlined in the
+rain” string is only 10 characters long and therefore stored inlined in the
 StringView. Having prefixes of long strings stored in the StringView allows
 optimizing comparison operations.
 
@@ -215,9 +217,9 @@ Strings in the string buffers appear not necessarily in order and there can be
 gaps between individual strings. A single vector may use one or more string
 buffers.
 
-The following diagram shows a vector of type VARCHAR with 7 values. This vector
+The following diagram shows a vector of type VARCHAR with 8 values. This vector
 is represented as FlatVector<StringView>. `values_` buffer has space for at least
-7 entries 16 bytes each. `stringBuffers_` array has one entry containing a
+8 entries 16 bytes each. `stringBuffers_` array has one entry containing a
 concatenation of non-inlined strings. Each entry in `values_` buffer uses 4 bytes
 to store the size of the string.
 
@@ -240,8 +242,8 @@ like substr and split. The results of these functions consist of substrings of
 the original strings and therefore can use StringViews which point to the same
 string buffers as the input vectors.
 
-A result of applying substr(s, 2) function to a vector shown above looks like
-this:
+A result of applying `presto substr(s, 2) <https://prestodb.io/docs/current/functions/string.html#substr-string-start-varchar>`_ function to a vector shown above looks
+like this:
 
 .. image:: images/substr-result.png
     :width: 700
@@ -250,9 +252,15 @@ this:
 This vector is using the same string buffer as the original one. It simply
 references it using std::shared_ptr. The individual StringView entries either
 contain strings inline or refer to positions in the original strings buffer.
-After applying substr(s, 2) function string in position 1 became short enough
-to fit inside the StringView, hence, it no longer contains a pointer to a
+After applying `presto substr(s, 2) <https://prestodb.io/docs/current/functions/string.html#substr-string-start-varchar>`_ function a string in position 1 became short
+enough to fit inside the StringView, hence, it no longer contains a pointer to a
 position in the string buffer.
+
+Allowing these zero-copy implementations of functions that simply change the
+starting position/length of a string, means that we may end up with StringViews
+pointing to overlapping ranges within `stringBuffers_`. For this reason the
+Buffers in `stringBuffers_` should be treated as immutable to prevent
+modifications from unintentionally cascading.
 
 Flat vectors of type TIMESTAMP are represented by FlatVector<Timestamp>.
 Timestamp struct consists of two 64-bit integers: seconds and nanoseconds. Each
@@ -277,12 +285,13 @@ characters.
     bool isNull_ = false;
     BufferPtr stringBuffer_;
 
-BaseVector::wrapInConstant() static method can be used to create a constant
+BaseVector::createConstant() static method can be used to create a constant
 vector from a scalar value.
 
 .. code-block:: c++
 
     static std::shared_ptr<BaseVector> createConstant(
+        const TypePtr& type,
         variant value,
         vector_size_t size,
         velox::memory::MemoryPool* pool);
@@ -322,24 +331,24 @@ Multiple dictionary vectors can refer to the same base vector. We are saying
 that the dictionary vector wraps the base vector.
 
 Here is a dictionary of type INTEGER that represents a result of a filter: n % 2
-= 0. The base vector contains 11 entries. Only 5 of these entries passed the
-filter, hence, the size of the dictionary vector is 5. The indices buffer
-contains 5 entries referring to positions in the original vector that passed
+= 0. The base vector contains 12 entries. Only 6 of these entries passed the
+filter, hence, the size of the dictionary vector is 6. The indices buffer
+contains 6 entries referring to positions in the original vector that passed
 the filter.
 
 .. image:: images/dictionary-subset2.png
     :width: 500
     :align: center
 
-When filter or filter-like operation applies to multiple columns, the results
+When a filter or a filter-like operation is applied to multiple columns, the results
 can be represented as multiple dictionary vectors all sharing the same indices
 buffer. This allows to reduce the amount of memory needed for the indices
 buffers and enables efficient expression evaluation via peeling of shared
 dictionaries.
 
 Dictionary encoding is used to represent the results of a join, where probe side
-columns are wrapped into dictionaries to avoid duplicating the rows with
-multiple matches in the build side. Dictionary encoding is also used to
+columns are wrapped into dictionaries to avoid duplicating rows with
+multiple matches on the build side. Dictionary encoding is also used to
 represent the results of an unnest.
 
 Dictionary vector can wrap any other vector including another dictionary.
@@ -359,8 +368,8 @@ vector in a dictionary.
 innermost vector of a dictionary, e.g. Dict(Dict(Flat))->wrappedVector() return
 Flat.
 
-**wrappedIndex(index)** virtual method defined in BaseVector translates index into
-the dictionary vector into an index into the innermost vector, e.g.
+**wrappedIndex(index)** virtual method defined in BaseVector translates the index in
+the dictionary vector into the index in the innermost vector, e.g.
 wrappedIndex(3) returns 6 for the dictionary vector above.
 
 Dictionary vector has its own nulls buffer independent of the nulls buffer of
@@ -385,8 +394,9 @@ ArrayVector
 ~~~~~~~~~~~
 
 ArrayVector stores values of type ARRAY. In addition to nulls buffer, it
-contains offsets and sizes buffers and an elements vector. Offsets and sizes
-are 32-bit integers.
+contains offsets and sizes buffers and an elements vector. Offsets and sizes are
+32-bit integers. The non-null non-empty ranges formed by offsets and sizes in a
+vector is not allowed to overlap with each other.
 
 .. code-block:: c++
 
@@ -442,8 +452,9 @@ MapVector
 ~~~~~~~~~
 
 MapVector stores values of type MAP. In addition to nulls buffer, it contains
-offsets and sizes buffers, keys and values vectors. Offsets and sizes are
-32-bit integers.
+offsets and sizes buffers, keys and values vectors. Offsets and sizes are 32-bit
+integers. The non-null non-empty ranges formed by offsets and sizes in a vector
+is not allowed to overlap with each other.
 
 .. code-block:: c++
 
@@ -527,7 +538,7 @@ to a particular row in another vector.
     vector_size_t index_;
 
 The following diagram shows a complex vector of type ARRAY(INTEGER) representing
-an array of 3 integers: [10, 12, -1, 0]. It is defined as a pointer to row 2 in
+an array of 4 integers: [10, 12, -1, 0]. It is defined as a pointer to row 2 in
 some other ArrayVector.
 
 .. image:: images/constant-array-vector.png
@@ -550,7 +561,7 @@ referring to the innermost vector, e.g. wrapInConstant(100, 5, Dict
 **wrappedVector()** virtual method defined in BaseVector provides access to the
 underlying flat vector.
 
-**wrappedIndex(index)** virtual method defined in BaseVector returns the index into
+**wrappedIndex(index)** virtual method defined in BaseVector returns the index in
 the underlying flat vector that identifies the constant value. This method
 returns the same value for all inputs as all rows of the constant vector map to
 the same row of the underlying flat vector.

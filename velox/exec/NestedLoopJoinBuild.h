@@ -58,6 +58,8 @@ class NestedLoopJoinBuild : public Operator {
     Operator::close();
   }
 
+  std::vector<RowVectorPtr> mergeDataVectors() const;
+
  private:
   std::vector<RowVectorPtr> dataVectors_;
 

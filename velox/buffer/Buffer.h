@@ -19,6 +19,8 @@
 #include <iomanip>
 
 #include <boost/intrusive_ptr.hpp>
+#include <fmt/format.h>
+#include <utility>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -26,10 +28,12 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/Memory.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
+class Buffer;
 class AlignedBuffer;
+
+using BufferPtr = boost::intrusive_ptr<Buffer>;
 
 // Represents vector payloads, like arrays of numbers or strings or
 // associated null flags. Buffers are reference counted and must be
@@ -55,21 +59,40 @@ class Buffer {
   // type. Thus the conditions are: trivial destructor (no resources to release)
   // and trivially copyable (so memcpy works)
   template <typename T>
-  static inline constexpr bool is_pod_like_v =
-      std::is_trivially_destructible_v<T>&& std::is_trivially_copyable_v<T>;
+  static constexpr bool is_pod_like_v =
+      std::is_trivially_destructible_v<T> && std::is_trivially_copyable_v<T>;
 
-  virtual ~Buffer(){};
+  virtual ~Buffer() = default;
 
-  void addRef() {
-    referenceCount_.fetch_add(1);
+  static constexpr uint8_t kPODBit = 0;
+  static constexpr uint8_t kPODMask = 1 << kPODBit;
+  static constexpr uint8_t kViewBit = 1;
+  static constexpr uint8_t kViewMask = 1 << kViewBit;
+  static_assert(kPODBit != kViewBit);
+
+  enum class Type : uint8_t {
+    kNonPOD = 0 << kPODBit | 0 << kViewBit,
+    kPOD = 1 << kPODBit | 0 << kViewBit,
+    kNonPODView = 0 << kPODBit | 1 << kViewBit,
+    kPODView = 1 << kPODBit | 1 << kViewBit,
+  };
+
+  static std::string typeString(Type type);
+
+  Type type() const {
+    return type_;
   }
 
-  int refCount() const {
-    return referenceCount_;
+  void addRef() noexcept {
+    referenceCount_.fetch_add(1, std::memory_order_acq_rel);
+  }
+
+  int refCount() const noexcept {
+    return referenceCount_.load(std::memory_order_acquire);
   }
 
   void release() {
-    if (referenceCount_.fetch_sub(1) == 1) {
+    if (referenceCount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       releaseResources();
       if (pool_) {
         freeToPool();
@@ -83,30 +106,32 @@ class Buffer {
   const T* as() const {
     // We can't check actual types, but we can sanity-check POD/non-POD
     // conversion. `void` is special as it's used in type-erased contexts
-    VELOX_DCHECK((std::is_same_v<T, void>) || podType_ == is_pod_like_v<T>);
+    VELOX_DCHECK(std::is_void_v<T> || isPOD() == is_pod_like_v<T>);
     return reinterpret_cast<const T*>(data_);
   }
 
   template <typename T>
   Range<T> asRange() {
-    return Range<T>(as<T>(), 0, size() / sizeof(T));
+    return {as<T>(), 0, static_cast<int32_t>(size() / sizeof(T))};
   }
 
   template <typename T>
   T* asMutable() const {
-    VELOX_CHECK(mutable_);
+    // TODO: change this to isMutable(). See
+    // https://github.com/facebookincubator/velox/issues/6562.
+    VELOX_CHECK(!isView());
     // We can't check actual types, but we can sanity-check POD/non-POD
     // conversion. `void` is special as it's used in type-erased contexts
-    VELOX_DCHECK((std::is_same_v<T, void>) || podType_ == is_pod_like_v<T>);
+    VELOX_DCHECK(std::is_void_v<T> || isPOD() == is_pod_like_v<T>);
     return reinterpret_cast<T*>(data_);
   }
 
   template <typename T>
   MutableRange<T> asMutableRange() {
-    return MutableRange<T>(asMutable<T>(), 0, size() / sizeof(T));
+    return {asMutable<T>(), 0, static_cast<int32_t>(size() / sizeof(T))};
   }
 
-  size_t size() const {
+  size_t size() const noexcept {
     return size_;
   }
 
@@ -115,37 +140,34 @@ class Buffer {
   // respectively.
   // TODO: `resize` is probably a better name for this method
   virtual void setSize(size_t size) {
-    VELOX_CHECK(mutable_);
+    VELOX_CHECK(!isView());
     VELOX_CHECK_LE(size, capacity_);
     size_ = size;
     checkEndGuard();
   }
 
-  uint64_t capacity() const {
+  uint64_t capacity() const noexcept {
     return capacity_;
   }
 
-  bool unique() const {
-    return referenceCount_ == 1;
+  bool unique() const noexcept {
+    return refCount() == 1;
   }
 
-  velox::memory::MemoryPool* pool() const {
+  velox::memory::MemoryPool* pool() const noexcept {
     return pool_;
   }
 
-  bool isMutable() const {
-    return mutable_;
+  bool isMutable() const noexcept {
+    return !isView() && unique();
   }
 
-  virtual bool isView() const {
-    return false;
+  bool isView() const {
+    return (static_cast<uint8_t>(type_) & kViewMask) != 0;
   }
 
-  virtual void setIsMutable(bool isMutable) {
-    VELOX_CHECK(
-        !isMutable || referenceCount_ == 1,
-        "A multiply referenced Buffer should not be set to mutable");
-    mutable_ = isMutable;
+  bool isPOD() const {
+    return (static_cast<uint8_t>(type_) & kPODMask) != 0;
   }
 
   friend std::ostream& operator<<(std::ostream& os, const Buffer& buffer) {
@@ -175,6 +197,38 @@ class Buffer {
     os.flags(f);
 
     return os;
+  }
+
+  /// Slice a buffer with specific type T.
+  /// For boolean type and if the 'offset' is not multiple of 8, return a
+  /// shifted copy, new buffer is allocated from 'pool'.
+  /// Otherwise return a BufferView into the original buffer (with shared
+  /// ownership of original buffer).
+  ///
+  /// @param buffer A pointer to the buffer to be sliced. Must not be null.
+  /// @param offset The element position in the buffer where the slice begins.
+  /// Must be less or equal than the buffer size.
+  /// @param length The number of elements to include in the slice. Must be
+  /// less or equal than the buffer size - 'offset'.
+  /// @param pool A pointer to a memory pool for allocating new buffers,
+  /// required if a new buffer needs to be created.
+  template <typename T>
+  static BufferPtr slice(
+      const BufferPtr& buffer,
+      size_t offset,
+      size_t length,
+      memory::MemoryPool* pool) {
+    VELOX_CHECK_NOT_NULL(buffer, "Buffer must not be null.");
+    return sliceBufferZeroCopy(
+        sizeof(T), is_pod_like_v<T>, buffer, offset, length);
+  }
+
+  /// Transfers this buffer to 'pool'. Returns true if the transfer succeeds, or
+  /// false if the transfer fails. A buffer can be transferred to 'pool' if its
+  /// original pool and 'pool' are from the same MemoryAllocator and the buffer
+  /// is not a BufferView.
+  virtual bool transferTo(velox::memory::MemoryPool* /*pool*/) {
+    VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
  protected:
@@ -217,9 +271,9 @@ class Buffer {
   }
 
   virtual void copyFrom(const Buffer* other, size_t bytes) {
-    VELOX_CHECK(mutable_);
+    VELOX_CHECK(!isView());
     VELOX_CHECK_GE(capacity_, bytes);
-    VELOX_CHECK(podType_);
+    VELOX_CHECK_EQ(type_, Type::kPOD);
     memcpy(data_, other->data_, bytes);
   }
 
@@ -230,26 +284,33 @@ class Buffer {
   }
 
   Buffer(
-      velox::memory::MemoryPool* pool,
+      Type type,
       uint8_t* data,
       size_t capacity,
-      bool podType)
-      : pool_(pool),
-        data_(data),
-        capacity_(capacity),
-        referenceCount_(0),
-        podType_(podType) {}
+      velox::memory::MemoryPool* pool)
+      : pool_{pool}, data_{data}, capacity_{capacity}, type_{type} {}
 
   velox::memory::MemoryPool* const pool_;
   uint8_t* const data_;
-  uint64_t size_ = 0;
-  uint64_t capacity_ = 0;
-  std::atomic<int32_t> referenceCount_;
-  bool mutable_ = true;
-  bool podType_ = true;
-  // Pad to 64 bytes. If using as int32_t[], guarantee that value at index -1 ==
-  // -1.
-  uint64_t padding_[2] = {static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
+
+  uint64_t size_{0};
+  uint64_t capacity_;
+  std::atomic_int32_t referenceCount_{0};
+
+  const Type type_;
+
+  // Pad to 64 bytes.
+  // If using as int32_t[], guarantee that value at index -1 == -1.
+  uint64_t padding_[2]{static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
+
+ private:
+  static BufferPtr sliceBufferZeroCopy(
+      size_t typeSize,
+      bool podType,
+      const BufferPtr& buffer,
+      size_t offset,
+      size_t length);
+
   // Needs to use setCapacity() from static method reallocate().
   friend class AlignedBuffer;
 };
@@ -260,21 +321,26 @@ static_assert(
 
 template <>
 inline Range<bool> Buffer::asRange<bool>() {
-  return Range<bool>(as<uint64_t>(), 0, size() * 8);
+  return {as<uint64_t>(), 0, static_cast<int32_t>(size() * 8)};
 }
 
 template <>
 inline MutableRange<bool> Buffer::asMutableRange<bool>() {
-  return MutableRange<bool>(asMutable<uint64_t>(), 0, size() * 8);
+  return {asMutable<uint64_t>(), 0, static_cast<int32_t>(size() * 8)};
 }
 
-using BufferPtr = boost::intrusive_ptr<Buffer>;
+template <>
+BufferPtr Buffer::slice<bool>(
+    const BufferPtr& buffer,
+    size_t offset,
+    size_t length,
+    memory::MemoryPool* pool);
 
-static inline void intrusive_ptr_add_ref(Buffer* buffer) {
+FOLLY_ALWAYS_INLINE void intrusive_ptr_add_ref(Buffer* buffer) noexcept {
   buffer->addRef();
 }
 
-static inline void intrusive_ptr_release(Buffer* buffer) {
+FOLLY_ALWAYS_INLINE void intrusive_ptr_release(Buffer* buffer) noexcept {
   buffer->release();
 }
 
@@ -291,7 +357,7 @@ class AlignedBuffer : public Buffer {
   static constexpr int32_t kSizeofAlignedBuffer = 64;
   static constexpr int32_t kPaddedSize = kSizeofAlignedBuffer + simd::kPadding;
 
-  ~AlignedBuffer() {
+  ~AlignedBuffer() override {
     // This may throw, which is expected to signal an error to the
     // user. This is better for distributed debugging than killing the
     // process. In concept this indicates the possibility of memory
@@ -303,10 +369,8 @@ class AlignedBuffer : public Buffer {
   // It's almost like partial specialization, but we redirect all POD types to
   // the same non-templated class
   template <typename T>
-  using ImplClass = typename std::conditional<
-      is_pod_like_v<T>,
-      AlignedBuffer,
-      NonPODAlignedBuffer<T>>::type;
+  using ImplClass = std::
+      conditional_t<is_pod_like_v<T>, AlignedBuffer, NonPODAlignedBuffer<T>>;
 
   /**
    * Allocates enough memory to store numElements of type T.  May
@@ -318,18 +382,41 @@ class AlignedBuffer : public Buffer {
   static BufferPtr allocate(
       size_t numElements,
       velox::memory::MemoryPool* pool,
-      const std::optional<T>& initValue = std::nullopt) {
+      const std::optional<T>& initValue = std::nullopt,
+      bool allocateExact = false) {
     size_t size = checkedMultiply(numElements, sizeof(T));
-    size_t preferredSize =
-        pool->preferredSize(checkedPlus<size_t>(size, kPaddedSize));
+    size_t preferredSize = 0;
+    if (allocateExact) {
+      const size_t tSize = (size / kSizeofAlignedBuffer) * kSizeofAlignedBuffer;
+
+      preferredSize =
+          checkedPlus<size_t>(tSize, kSizeofAlignedBuffer + kPaddedSize);
+    } else {
+      preferredSize =
+          pool->preferredSize(checkedPlus<size_t>(size, kPaddedSize));
+    }
+
     void* memory = pool->allocate(preferredSize);
-    auto* buffer = new (memory) ImplClass<T>(pool, preferredSize - kPaddedSize);
+    VELOX_CHECK_NOT_NULL(memory);
+    auto* buffer = new (memory) ImplClass<T>{pool, preferredSize - kPaddedSize};
     // set size explicitly instead of setSize because `fillNewMemory` already
     // called the constructors
     buffer->size_ = size;
     BufferPtr result(buffer);
     buffer->template fillNewMemory<T>(0, size, initValue);
     return result;
+  }
+
+  /// A verbose version of the allocate() with the exact size.
+  /// May allocate slightly more memory than strictly necessary. Guarantees that
+  /// simd::kPadding bytes past capacity() are addressable and asserts that
+  /// these do not get overrun.
+  template <typename T>
+  static BufferPtr allocateExact(
+      size_t numElements,
+      velox::memory::MemoryPool* pool,
+      const std::optional<T>& initValue = std::nullopt) {
+    return allocate<T>(numElements, pool, initValue, true);
   }
 
   // Changes the capacity of '*buffer'. The buffer may grow/shrink in
@@ -351,7 +438,7 @@ class AlignedBuffer : public Buffer {
     auto oldSize = old->size();
 
     if (size > oldSize && size < old->capacity() && old->unique()) {
-      VELOX_CHECK(old->mutable_);
+      VELOX_CHECK(!old->isView());
       reinterpret_cast<ImplClass<T>*>(old)->template fillNewMemory<T>(
           oldSize, size, initValue);
       // set size explicitly instead of setSize because `fillNewMemory` already
@@ -360,7 +447,7 @@ class AlignedBuffer : public Buffer {
       return;
     }
     velox::memory::MemoryPool* pool = old->pool();
-    if (!is_pod_like_v<T>) {
+    if constexpr (!is_pod_like_v<T>) {
       // We always take this code path for non-POD types because
       // pool->reallocate below would move memory around without calling move
       // constructor.
@@ -373,49 +460,32 @@ class AlignedBuffer : public Buffer {
       // called the constructors
       newBuffer->size_ = size;
       *buffer = std::move(newBuffer);
-      return;
-    }
-    if (!old->unique()) {
+    } else if (!old->unique()) {
       auto newBuffer = allocate<T>(numElements, pool);
       newBuffer->copyFrom(old, std::min(size, old->size()));
       reinterpret_cast<AlignedBuffer*>(newBuffer.get())
           ->template fillNewMemory<T>(old->size(), size, initValue);
       newBuffer->size_ = size;
       *buffer = std::move(newBuffer);
-      return;
+    } else {
+      auto oldCapacity = checkedPlus<size_t>(old->capacity(), kPaddedSize);
+      auto preferredSize =
+          pool->preferredSize(checkedPlus<size_t>(size, kPaddedSize));
+
+      void* newPtr = pool->reallocate(old, oldCapacity, preferredSize);
+
+      // Make the old buffer no longer owned by '*buffer' because reallocate
+      // freed the old buffer. Reassigning the new buffer to
+      // '*buffer' would be a double free if we didn't do this.
+      buffer->detach();
+
+      auto newBuffer =
+          new (newPtr) AlignedBuffer{pool, preferredSize - kPaddedSize};
+      newBuffer->setSize(size);
+      newBuffer->fillNewMemory<T>(oldSize, size, initValue);
+
+      *buffer = newBuffer;
     }
-    auto oldCapacity = checkedPlus<size_t>(old->capacity(), kPaddedSize);
-    auto preferredSize =
-        pool->preferredSize(checkedPlus<size_t>(size, kPaddedSize));
-    // Make the buffer no longer owned by '*buffer' because reallocate
-    // may free the old buffer. Reassigning the new buffer to
-    // '*buffer' would be a double free.
-    buffer->detach();
-    // Decrement the reference count.  No need to check, we just
-    // checked old->unique().
-    old->referenceCount_.fetch_sub(1);
-    void* newPtr;
-    try {
-      newPtr = pool->reallocate(old, oldCapacity, preferredSize);
-    } catch (const std::exception&) {
-      *buffer = old;
-      throw;
-    }
-    if (newPtr == reinterpret_cast<void*>(old)) {
-      // The pointer did not change. Put the old pointer back in the
-      // smart pointer and adjust capacity.
-      *buffer = old;
-      (*buffer)->setCapacity(preferredSize - kPaddedSize);
-      (*buffer)->setSize(size);
-      reinterpret_cast<AlignedBuffer*>(buffer->get())
-          ->fillNewMemory<T>(oldSize, size, initValue);
-      return;
-    }
-    auto newBuffer =
-        new (newPtr) AlignedBuffer(pool, preferredSize - kPaddedSize);
-    newBuffer->setSize(size);
-    newBuffer->fillNewMemory<T>(oldSize, size, initValue);
-    *buffer = newBuffer;
   }
 
   // Appends bytes starting at 'items' for a length of 'sizeof(T) *
@@ -450,7 +520,7 @@ class AlignedBuffer : public Buffer {
     }
 
     VELOX_CHECK(
-        bufferPtr->podType_, "Support for non POD types not implemented yet");
+        bufferPtr->isPOD(), "Support for non POD types not implemented yet");
 
     // The reason we use uint8_t is because mutableNulls()->size() will return
     // in byte count. We also don't bother initializing since copyFrom will be
@@ -462,13 +532,49 @@ class AlignedBuffer : public Buffer {
     return newBuffer;
   }
 
+  template <typename T>
+  static BufferPtr copy(
+      const BufferPtr& buffer,
+      velox::memory::MemoryPool* pool) {
+    if (buffer == nullptr) {
+      return nullptr;
+    }
+
+    // The reason we use uint8_t is because mutableNulls()->size() will return
+    // in byte count. We also don't bother initializing since copyFrom will be
+    // overwriting anyway.
+    BufferPtr newBuffer;
+    if constexpr (std::is_same_v<T, bool>) {
+      newBuffer = AlignedBuffer::allocate<uint8_t>(buffer->size(), pool);
+    } else {
+      const auto numElements = checkedDivide(buffer->size(), sizeof(T));
+      newBuffer = AlignedBuffer::allocate<T>(numElements, pool);
+    }
+
+    newBuffer->copyFrom(buffer.get(), newBuffer->size());
+
+    return newBuffer;
+  }
+
+  bool transferTo(velox::memory::MemoryPool* pool) override {
+    if (pool_ == pool) {
+      return true;
+    }
+    if (pool_->transferTo(
+            pool, this, checkedPlus<size_t>(kPaddedSize, capacity_))) {
+      setPool(pool);
+      return true;
+    }
+    return false;
+  }
+
  protected:
   AlignedBuffer(velox::memory::MemoryPool* pool, size_t capacity)
-      : Buffer(
-            pool,
+      : Buffer{
+            Type::kPOD,
             reinterpret_cast<uint8_t*>(this) + sizeof(*this),
             capacity,
-            true /*podType*/) {
+            pool} {
     static_assert(sizeof(*this) == kAlignment);
     static_assert(sizeof(*this) == kSizeofAlignedBuffer);
     setEndGuard();
@@ -502,7 +608,12 @@ class AlignedBuffer : public Buffer {
     }
   }
 
- protected:
+  void setPool(velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool** poolPtr =
+        const_cast<velox::memory::MemoryPool**>(&pool_);
+    *poolPtr = pool;
+  }
+
   void setEndGuardImpl() override {
     *reinterpret_cast<uint64_t*>(data_ + capacity_) = kEndGuard;
   }
@@ -522,11 +633,13 @@ template <>
 inline BufferPtr AlignedBuffer::allocate<bool>(
     size_t numElements,
     velox::memory::MemoryPool* pool,
-    const std::optional<bool>& initValue) {
+    const std::optional<bool>& initValue,
+    bool allocateExact) {
   return allocate<char>(
       bits::nbytes(numElements),
       pool,
-      initValue ? std::optional<char>(*initValue ? -1 : 0) : std::nullopt);
+      initValue ? std::optional<char>(*initValue ? -1 : 0) : std::nullopt,
+      allocateExact);
 }
 
 template <>
@@ -565,13 +678,30 @@ class NonPODAlignedBuffer : public Buffer {
     }
   }
 
+  bool transferTo(velox::memory::MemoryPool* pool) override {
+    if (pool_ == pool) {
+      return true;
+    }
+
+    if (pool_->transferTo(
+            pool,
+            this,
+            checkedPlus<size_t>(AlignedBuffer::kPaddedSize, capacity_))) {
+      velox::memory::MemoryPool** poolPtr =
+          const_cast<velox::memory::MemoryPool**>(&pool_);
+      *poolPtr = pool;
+      return true;
+    }
+    return false;
+  }
+
  protected:
   NonPODAlignedBuffer(velox::memory::MemoryPool* pool, size_t capacity)
-      : Buffer(
-            pool,
+      : Buffer{
+            Type::kNonPOD,
             reinterpret_cast<uint8_t*>(this) + sizeof(*this),
             capacity,
-            false /*podType*/) {
+            pool} {
     static_assert(sizeof(*this) == AlignedBuffer::kAlignment);
     static_assert(sizeof(*this) == sizeof(AlignedBuffer));
   }
@@ -579,8 +709,8 @@ class NonPODAlignedBuffer : public Buffer {
   void releaseResources() override {
     VELOX_CHECK_EQ(size_ % sizeof(T), 0);
     size_t numValues = size_ / sizeof(T);
-    // we can't use asMutable because it checks isMutable and we wan't to
-    // destroy regardless
+    // we can't use asMutable because it checks isMutable and we wan't
+    // to destroy regardless
     T* ptr = reinterpret_cast<T*>(data_);
     for (int i = 0; i < numValues; ++i) {
       ptr[i].~T();
@@ -588,7 +718,9 @@ class NonPODAlignedBuffer : public Buffer {
   }
 
   void copyFrom(const Buffer* other, size_t bytes) override {
-    VELOX_CHECK(mutable_);
+    // TODO: change this to isMutable(). See
+    // https://github.com/facebookincubator/velox/issues/6562.
+    VELOX_CHECK(!isView());
     VELOX_CHECK_GE(size_, bytes);
     VELOX_DCHECK(
         dynamic_cast<const NonPODAlignedBuffer<T>*>(other) != nullptr,
@@ -619,10 +751,12 @@ class NonPODAlignedBuffer : public Buffer {
     int oldNum = oldBytes / sizeof(T);
     int newNum = newBytes / sizeof(T);
     auto data = asMutable<T>();
-    for (int i = oldNum; i < newNum; ++i) {
-      if (initValue) {
+    if (initValue) {
+      for (int i = oldNum; i < newNum; ++i) {
         new (data + i) T(*initValue);
-      } else {
+      }
+    } else {
+      for (int i = oldNum; i < newNum; ++i) {
         new (data + i) T();
       }
     }
@@ -642,44 +776,60 @@ class NonPODAlignedBuffer : public Buffer {
 template <typename Releaser>
 class BufferView : public Buffer {
  public:
-  static BufferPtr create(
-      const uint8_t* data,
-      size_t size,
-      Releaser releaser,
-      bool podType = true) {
-    BufferView<Releaser>* view = new BufferView(data, size, releaser, podType);
-    BufferPtr result(view);
+  template <typename R = Releaser>
+  static BufferPtr
+  create(const uint8_t* data, size_t size, R&& releaser, bool podType = true) {
+    auto* view = new BufferView{data, size, std::forward<R>(releaser), podType};
+    BufferPtr result{view};
     return result;
+  }
+
+  // Helper method to create a buffer view referencing another existing Buffer.
+  template <typename R = Releaser>
+  static BufferPtr
+  create(const BufferPtr& innerBuffer, R&& releaser, bool podType = true) {
+    return create(
+        innerBuffer->as<uint8_t>(),
+        innerBuffer->size(),
+        std::forward<R>(releaser),
+        podType);
   }
 
   ~BufferView() override {
     releaser_.release();
   }
 
-  bool isView() const override {
-    return true;
-  }
-  void setIsMutable(bool isMutable) override {
-    VELOX_CHECK(!isMutable, "A BufferView cannot be set to mutable");
+  bool transferTo(velox::memory::MemoryPool* pool) override {
+    if (pool_ == pool) {
+      return true;
+    }
+    return false;
   }
 
  private:
-  BufferView(const uint8_t* data, size_t size, Releaser releaser, bool podType)
+  template <typename R>
+  BufferView(const uint8_t* data, size_t size, R&& releaser, bool podType)
       // A BufferView must be created over the data held by a cache
       // pin, which is typically const. The Buffer enforces const-ness
       // when returning the pointer. We cast away the const here to
       // avoid a separate code path for const and non-const Buffer
       // payloads.
-      : Buffer(nullptr, const_cast<uint8_t*>(data), size, podType),
-        releaser_(releaser) {
-    mutable_ = false;
+      : Buffer{podType ? Type::kPODView : Type::kNonPODView, const_cast<uint8_t*>(data), size, nullptr},
+        releaser_{std::forward<R>(releaser)} {
     size_ = size;
-    capacity_ = size;
     releaser_.addRef();
   }
 
-  Releaser const releaser_;
+  [[no_unique_address]] const Releaser releaser_;
 };
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox
+
+// fmt formatter specialization for Buffer::Type
+template <>
+struct fmt::formatter<facebook::velox::Buffer::Type> : formatter<std::string> {
+  auto format(facebook::velox::Buffer::Type s, format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::Buffer::typeString(s), ctx);
+  }
+};

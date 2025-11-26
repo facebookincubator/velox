@@ -18,17 +18,16 @@
 
 namespace facebook::velox::parse {
 
-std::shared_ptr<const core::IExpr> parseExpr(
-    const std::string& expr,
-    const ParseOptions& options) {
+core::ExprPtr parseExpr(const std::string& expr, const ParseOptions& options) {
   facebook::velox::duckdb::ParseOptions duckConversionOptions;
   duckConversionOptions.parseDecimalAsDouble = options.parseDecimalAsDouble;
   duckConversionOptions.parseIntegerAsBigint = options.parseIntegerAsBigint;
+  duckConversionOptions.parseInListAsArray = options.parseInListAsArray;
   duckConversionOptions.functionPrefix = options.functionPrefix;
   return facebook::velox::duckdb::parseExpr(expr, duckConversionOptions);
 }
 
-std::vector<std::shared_ptr<const core::IExpr>> parseMultipleExpressions(
+std::vector<core::ExprPtr> parseMultipleExpressions(
     const std::string& expr,
     const ParseOptions& options) {
   facebook::velox::duckdb::ParseOptions duckConversionOptions;
@@ -39,9 +38,13 @@ std::vector<std::shared_ptr<const core::IExpr>> parseMultipleExpressions(
       expr, duckConversionOptions);
 }
 
-std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
-    const std::string& expr) {
-  return facebook::velox::duckdb::parseOrderByExpr(expr);
+OrderByClause parseOrderByExpr(const std::string& expr) {
+  auto orderBy = facebook::velox::duckdb::parseOrderByExpr(expr);
+
+  return {
+      .expr = std::move(orderBy.expr),
+      .ascending = orderBy.ascending,
+      .nullsFirst = orderBy.nullsFirst};
 }
 
 } // namespace facebook::velox::parse

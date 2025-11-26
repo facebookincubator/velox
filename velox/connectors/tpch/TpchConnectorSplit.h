@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <fmt/format.h>
 #include "velox/connectors/Connector.h"
 
 namespace facebook::velox::connector::tpch {
@@ -22,9 +23,16 @@ namespace facebook::velox::connector::tpch {
 struct TpchConnectorSplit : public connector::ConnectorSplit {
   explicit TpchConnectorSplit(
       const std::string& connectorId,
-      size_t totalParts = 1,
-      size_t partNumber = 0)
-      : ConnectorSplit(connectorId),
+      size_t totalParts,
+      size_t partNumber)
+      : TpchConnectorSplit(connectorId, true, totalParts, partNumber) {}
+
+  TpchConnectorSplit(
+      const std::string& connectorId,
+      bool cacheable,
+      size_t totalParts,
+      size_t partNumber)
+      : ConnectorSplit(connectorId, /*_splitWeight=*/0, cacheable),
         totalParts(totalParts),
         partNumber(partNumber) {
     VELOX_CHECK_GE(totalParts, 1, "totalParts must be >= 1");
@@ -40,3 +48,24 @@ struct TpchConnectorSplit : public connector::ConnectorSplit {
 };
 
 } // namespace facebook::velox::connector::tpch
+
+template <>
+struct fmt::formatter<facebook::velox::connector::tpch::TpchConnectorSplit>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::connector::tpch::TpchConnectorSplit s,
+      format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<
+    std::shared_ptr<facebook::velox::connector::tpch::TpchConnectorSplit>>
+    : formatter<std::string> {
+  auto format(
+      std::shared_ptr<facebook::velox::connector::tpch::TpchConnectorSplit> s,
+      format_context& ctx) const {
+    return formatter<std::string>::format(s->toString(), ctx);
+  }
+};

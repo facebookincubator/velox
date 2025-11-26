@@ -16,8 +16,6 @@
 
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-#include "velox/exec/Task.h"
-
 namespace facebook::velox::test {
 
 BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool) {
@@ -44,8 +42,6 @@ BufferPtr makeIndices(
 }
 
 VectorTestBase::~VectorTestBase() {
-  // Wait for all the tasks to be deleted.
-  exec::Task::testingWaitForAllTasksToBeDeleted();
   // Reset the executor to wait for all the async activities to finish.
   executor_.reset();
 }
@@ -112,6 +108,40 @@ BufferPtr VectorTestBase::makeNulls(const std::vector<bool>& values) {
     bits::setNull(rawNulls, i, values[i]);
   }
   return nulls;
+}
+
+std::vector<RowVectorPtr> VectorTestBase::split(
+    const RowVectorPtr& vector,
+    int32_t n) {
+  const auto numRows = vector->size();
+  VELOX_CHECK_GE(numRows, n);
+
+  const auto numRowsPerVector = numRows / n;
+  std::vector<RowVectorPtr> vectors;
+
+  vector_size_t offset = 0;
+  for (auto i = 0; i < n - 1; ++i) {
+    vectors.push_back(
+        std::dynamic_pointer_cast<RowVector>(
+            vector->slice(offset, numRowsPerVector)));
+    offset += numRowsPerVector;
+  }
+
+  vectors.push_back(
+      std::dynamic_pointer_cast<RowVector>(
+          vector->slice(offset, numRows - offset)));
+  return vectors;
+}
+
+VectorPtr VectorTestBase::asArray(VectorPtr elements) {
+  auto* pool = elements->pool();
+  auto arrayType = ARRAY(elements->type());
+
+  BufferPtr sizes =
+      AlignedBuffer::allocate<vector_size_t>(1, pool, elements->size());
+  BufferPtr offsets = allocateOffsets(1, pool);
+  return std::make_shared<ArrayVector>(
+      pool, arrayType, nullptr, 1, offsets, sizes, std::move(elements));
 }
 
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {

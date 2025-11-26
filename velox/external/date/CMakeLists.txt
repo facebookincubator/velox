@@ -9,8 +9,5 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-include_directories(SYSTEM velox/external)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_OS_TZDB")
-
-add_library(velox_external_date tz.cpp)
+velox_add_library(velox_external_date tz.cpp)

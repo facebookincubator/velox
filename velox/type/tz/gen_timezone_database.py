@@ -42,26 +42,33 @@ cpp_template = Template(
 //       > velox/type/tz/TimeZoneDatabase.cpp
 //
 // The zone-index.properties file should be the same one used in Presto,
-// Available here : https://github.com/prestodb/presto/blob/master/presto-common/src/main/resources/com/facebook/presto/common/type/zone-index.properties.
+// Available here :
+// https://github.com/prestodb/presto/blob/master/presto-common/src/main/resources/com/facebook/presto/common/type/zone-index.properties.
 // @generated
 
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace facebook::velox::util {
 
-const std::unordered_map<int64_t, std::string>& getTimeZoneDB() {
-  static std::unordered_map<int64_t, std::string> tzDB = {
+const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries() {
+  static auto* tzDB = new std::vector<std::pair<int16_t, std::string>>([] {
+    // Work around clang compiler bug causing multi-hour compilation
+    // with -fsanitize=fuzzer
+    // https://github.com/llvm/llvm-project/issues/75666
+    return std::vector<std::pair<int16_t, std::string>>{
 $entries
-  };
-  return tzDB;
+    };
+  }());
+  return *tzDB;
 }
 
 } // namespace facebook::velox::util\
 """
 )
 
-entry_template = Template('      {$tz_id, "$tz_name"},')
+entry_template = Template('        {$tz_id, "$tz_name"},')
 
 
 def parse_arguments():

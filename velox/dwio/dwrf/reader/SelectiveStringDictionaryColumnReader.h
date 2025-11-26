@@ -28,11 +28,18 @@ class SelectiveStringDictionaryColumnReader
   using ValueType = int32_t;
 
   SelectiveStringDictionaryColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void seekToRowGroup(uint32_t index) override {
+  bool hasBulkPath() const override {
+    // Only ORC uses RLEv2 encoding. Currently, ORC string data does not
+    // support fastpath reads. When reading RLEv2-encoded string data
+    // with null, the query will fail.
+    return version_ != velox::dwrf::RleVersion_2;
+  }
+
+  void seekToRowGroup(int64_t index) override {
     SelectiveColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->as<DwrfData>().seekToRowGroup(index);
     if (strideDictStream_) {
@@ -53,26 +60,17 @@ class SelectiveStringDictionaryColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void getValues(RowSet rows, VectorPtr* result) override;
+  void getValues(const RowSet& rows, VectorPtr* result) override;
 
  private:
   void loadStrideDictionary();
   void makeDictionaryBaseVector();
 
   template <typename TVisitor>
-  void readWithVisitor(RowSet rows, TVisitor visitor);
-
-  template <typename TFilter, bool isDense, typename ExtractValues>
-  void readHelper(common::Filter* filter, RowSet rows, ExtractValues values);
-
-  template <bool isDense, typename ExtractValues>
-  void processFilter(
-      common::Filter* filter,
-      RowSet rows,
-      ExtractValues extractValues);
+  void readWithVisitor(TVisitor visitor);
 
   // Fills 'values' from 'data' and 'lengthDecoder'. The count of
   // values is in 'values.numValues'.
@@ -81,6 +79,9 @@ class SelectiveStringDictionaryColumnReader
       dwio::common::IntDecoder</*isSigned*/ false>& lengthDecoder,
       dwio::common::DictionaryValues& values);
   void ensureInitialized();
+
+  void makeFlat(VectorPtr* result);
+
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
   std::unique_ptr<dwio::common::SeekableInputStream> strideDictStream_;
@@ -95,79 +96,23 @@ class SelectiveStringDictionaryColumnReader
   RleVersion version_;
 
   const StrideIndexProvider& provider_;
+  dwio::common::ColumnReaderStatistics& statistics_;
 
   // lazy load the dictionary
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;
   bool initialized_{false};
+  int64_t numRowsScanned_;
 };
 
 template <typename TVisitor>
-void SelectiveStringDictionaryColumnReader::readWithVisitor(
-    RowSet rows,
-    TVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
+void SelectiveStringDictionaryColumnReader::readWithVisitor(TVisitor visitor) {
   if (version_ == velox::dwrf::RleVersion_1) {
     decodeWithVisitor<velox::dwrf::RleDecoderV1<false>>(
         dictIndex_.get(), visitor);
   } else {
     decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(
         dictIndex_.get(), visitor);
-  }
-  readOffset_ += numRows;
-}
-
-template <typename TFilter, bool isDense, typename ExtractValues>
-void SelectiveStringDictionaryColumnReader::readHelper(
-    common::Filter* filter,
-    RowSet rows,
-    ExtractValues values) {
-  readWithVisitor(
-      rows,
-      dwio::common::
-          StringDictionaryColumnVisitor<TFilter, ExtractValues, isDense>(
-              *reinterpret_cast<TFilter*>(filter), this, rows, values));
-}
-
-template <bool isDense, typename ExtractValues>
-void SelectiveStringDictionaryColumnReader::processFilter(
-    common::Filter* filter,
-    RowSet rows,
-    ExtractValues extractValues) {
-  switch (filter ? filter->kind() : common::FilterKind::kAlwaysTrue) {
-    case common::FilterKind::kAlwaysTrue:
-      readHelper<common::AlwaysTrue, isDense>(filter, rows, extractValues);
-      break;
-    case common::FilterKind::kIsNull:
-      filterNulls<int32_t>(
-          rows,
-          true,
-          !std::is_same_v<decltype(extractValues), dwio::common::DropValues>);
-      break;
-    case common::FilterKind::kIsNotNull:
-      if (std::is_same_v<decltype(extractValues), dwio::common::DropValues>) {
-        filterNulls<int32_t>(rows, false, false);
-      } else {
-        readHelper<common::IsNotNull, isDense>(filter, rows, extractValues);
-      }
-      break;
-    case common::FilterKind::kBytesRange:
-      readHelper<common::BytesRange, isDense>(filter, rows, extractValues);
-      break;
-    case common::FilterKind::kNegatedBytesRange:
-      readHelper<common::NegatedBytesRange, isDense>(
-          filter, rows, extractValues);
-      break;
-    case common::FilterKind::kBytesValues:
-      readHelper<common::BytesValues, isDense>(filter, rows, extractValues);
-      break;
-    case common::FilterKind::kNegatedBytesValues:
-      readHelper<common::NegatedBytesValues, isDense>(
-          filter, rows, extractValues);
-      break;
-    default:
-      readHelper<common::Filter, isDense>(filter, rows, extractValues);
-      break;
   }
 }
 

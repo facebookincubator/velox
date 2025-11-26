@@ -13,20 +13,46 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <re2/re2.h>
+
+#include "velox/common/config/Config.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::core {
 
-QueryConfig::QueryConfig(
-    const std::unordered_map<std::string, std::string>& values)
-    : config_{std::make_unique<MemConfig>(values)} {}
+QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)
+    : QueryConfig{
+          ConfigTag{},
+          std::make_shared<config::ConfigBase>(std::move(values))} {}
 
-QueryConfig::QueryConfig(std::unordered_map<std::string, std::string>&& values)
-    : config_{std::make_unique<MemConfig>(std::move(values))} {}
+QueryConfig::QueryConfig(
+    ConfigTag /*tag*/,
+    std::shared_ptr<const config::IConfig> config)
+    : config_{std::move(config)} {
+  validateConfig();
+}
+
+void QueryConfig::validateConfig() {
+  // Validate if timezone name can be recognized.
+  if (auto tz = config_->get<std::string>(QueryConfig::kSessionTimezone)) {
+    VELOX_USER_CHECK(
+        tz::getTimeZoneID(*tz, false) != -1,
+        "session '{}' set with invalid value '{}'",
+        QueryConfig::kSessionTimezone,
+        *tz);
+  }
+}
 
 void QueryConfig::testingOverrideConfigUnsafe(
     std::unordered_map<std::string, std::string>&& values) {
-  config_ = std::make_unique<MemConfig>(std::move(values));
+  config_ = std::make_unique<config::ConfigBase>(std::move(values));
+}
+
+std::unordered_map<std::string, std::string> QueryConfig::rawConfigsCopy()
+    const {
+  return config_->rawConfigsCopy();
 }
 
 } // namespace facebook::velox::core

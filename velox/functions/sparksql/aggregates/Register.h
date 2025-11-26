@@ -18,5 +18,8 @@
 #include <string>
 
 namespace facebook::velox::functions::aggregate::sparksql {
-void registerAggregateFunctions(const std::string& prefix);
+void registerAggregateFunctions(
+    const std::string& prefix,
+    bool withCompanionFunctions = true,
+    bool overwrite = true);
 } // namespace facebook::velox::functions::aggregate::sparksql

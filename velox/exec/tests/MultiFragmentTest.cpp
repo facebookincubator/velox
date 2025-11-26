@@ -15,54 +15,146 @@
  */
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/common/DataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/TableScan.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
-using namespace facebook::velox::connector::hive;
-using namespace facebook::velox::common::testutil;
-using namespace facebook::velox::memory;
 
 using facebook::velox::common::testutil::TestValue;
 using facebook::velox::test::BatchMaker;
 
-class MultiFragmentTest : public HiveConnectorTestBase {
+namespace facebook::velox::exec {
+namespace {
+
+struct TestParam {
+  VectorSerde::Kind serdeKind;
+  common::CompressionKind compressionKind;
+
+  TestParam(
+      VectorSerde::Kind _serdeKind,
+      common::CompressionKind _compressionKind)
+      : serdeKind(_serdeKind), compressionKind(_compressionKind) {}
+};
+
+class MultiFragmentTest : public HiveConnectorTestBase,
+                          public testing::WithParamInterface<TestParam> {
+ public:
+  static std::vector<TestParam> getTestParams() {
+    std::vector<TestParam> params;
+    params.emplace_back(
+        VectorSerde::Kind::kPresto, common::CompressionKind_NONE);
+    params.emplace_back(
+        VectorSerde::Kind::kCompactRow, common::CompressionKind_NONE);
+    params.emplace_back(
+        VectorSerde::Kind::kUnsafeRow, common::CompressionKind_NONE);
+    params.emplace_back(
+        VectorSerde::Kind::kPresto, common::CompressionKind_LZ4);
+    params.emplace_back(
+        VectorSerde::Kind::kCompactRow, common::CompressionKind_LZ4);
+    params.emplace_back(
+        VectorSerde::Kind::kUnsafeRow, common::CompressionKind_LZ4);
+    return params;
+  }
+
  protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    exec::ExchangeSource::factories().clear();
+    exec::ExchangeSource::registerFactory(createLocalExchangeSource);
+    configSettings_[core::QueryConfig::kShuffleCompressionKind] =
+        common::compressionKindToString(GetParam().compressionKind);
+  }
+
+  void TearDown() override {
+    vectors_.clear();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static std::string makeTaskId(const std::string& prefix, int num) {
     return fmt::format("local://{}-{}", prefix, num);
   }
 
+  static std::string makeBadTaskId(const std::string& prefix, int num) {
+    return fmt::format("bad://{}-{}", prefix, num);
+  }
+
+  static exec::Consumer noopConsumer() {
+    return [](RowVectorPtr, bool, ContinueFuture*) {
+      return BlockingReason::kNotBlocked;
+    };
+  }
+
   std::shared_ptr<Task> makeTask(
       const std::string& taskId,
-      std::shared_ptr<const core::PlanNode> planNode,
-      int destination,
+      const core::PlanNodePtr& planNode,
+      int destination = 0,
       Consumer consumer = nullptr,
-      int64_t maxMemory = kMaxMemory) {
+      int64_t maxMemory = memory::kMaxMemory,
+      folly::Executor* executor = nullptr) const {
     auto configCopy = configSettings_;
-    auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::move(configCopy));
+    auto queryCtx = core::QueryCtx::create(
+        executor ? executor : executor_.get(),
+        core::QueryConfig(std::move(configCopy)));
     queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), maxMemory));
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
         std::move(planFragment),
         destination,
         std::move(queryCtx),
+        Task::ExecutionMode::kParallel,
         std::move(consumer));
+  }
+
+  std::shared_ptr<Task> makeTask(
+      const std::string& taskId,
+      const core::PlanNodePtr& planNode,
+      std::unordered_map<std::string, std::string>& extraQueryConfigs,
+      int destination = 0,
+      Consumer consumer = nullptr,
+      int64_t maxMemory = memory::kMaxMemory,
+      const std::optional<common::SpillDiskOptions>& diskSpillOpts =
+          std::nullopt) const {
+    auto configCopy = configSettings_;
+    for (const auto& [k, v] : extraQueryConfigs) {
+      configCopy[k] = v;
+    }
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig(std::move(configCopy)),
+        {},
+        nullptr,
+        nullptr,
+        executor_.get());
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    core::PlanFragment planFragment{planNode};
+    return Task::create(
+        taskId,
+        std::move(planFragment),
+        destination,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel,
+        std::move(consumer),
+        /*memoryArbitrationPriority=*/0,
+        diskSpillOpts);
   }
 
   std::vector<RowVectorPtr> makeVectors(int count, int rowsPerVector) {
@@ -75,70 +167,100 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     return vectors;
   }
 
-  void addHiveSplits(
-      std::shared_ptr<Task> task,
+  static void addHiveSplits(
+      const std::shared_ptr<Task>& task,
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
     for (auto& filePath : filePaths) {
       auto split = exec::Split(
-          std::make_shared<HiveConnectorSplit>(
+          std::make_shared<connector::hive::HiveConnectorSplit>(
               kHiveConnectorId,
-              "file:" + filePath->path,
+              "file:" + filePath->getPath(),
               facebook::velox::dwio::common::FileFormat::DWRF),
           -1);
       task->addSplit("0", std::move(split));
-      VLOG(1) << filePath->path << "\n";
+      VLOG(1) << filePath->getPath() << "\n";
     }
     task->noMoreSplits("0");
   }
 
-  void addRemoteSplits(
+  static void addHiveSplits(
+      const std::shared_ptr<Task>& task,
+      const std::unordered_map<
+          core::PlanNodeId,
+          std::vector<std::shared_ptr<TempFilePath>>>& nodeSplits) {
+    for (const auto& [scanNodeId, splitPaths] : nodeSplits) {
+      for (const auto& filePath : splitPaths) {
+        auto split = exec::Split(
+            std::make_shared<connector::hive::HiveConnectorSplit>(
+                kHiveConnectorId,
+                "file:" + filePath->getPath(),
+                facebook::velox::dwio::common::FileFormat::DWRF),
+            -1);
+        task->addSplit(scanNodeId, std::move(split));
+      }
+    }
+
+    for (const auto& [scanNodeId, _] : nodeSplits) {
+      task->noMoreSplits(scanNodeId);
+    }
+  }
+
+  static exec::Split remoteSplit(const std::string& taskId) {
+    return exec::Split(std::make_shared<RemoteConnectorSplit>(taskId));
+  }
+
+  static void addRemoteSplits(
       std::shared_ptr<Task> task,
       const std::vector<std::string>& remoteTaskIds) {
     for (auto& taskId : remoteTaskIds) {
-      auto split =
-          exec::Split(std::make_shared<RemoteConnectorSplit>(taskId), -1);
-      task->addSplit("0", std::move(split));
+      task->addSplit("0", remoteSplit(taskId));
     }
     task->noMoreSplits("0");
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const std::shared_ptr<const core::PlanNode>& plan,
-      const std::vector<std::string>& remoteTaskIds,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt) {
-    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-    for (auto& taskId : remoteTaskIds) {
-      splits.push_back(std::make_shared<RemoteConnectorSplit>(taskId));
-    }
-    return OperatorTestBase::assertQuery(plan, splits, duckDbSql, sortingKeys);
-  }
-
-  void assertQueryOrdered(
-      const std::shared_ptr<const core::PlanNode>& plan,
-      const std::vector<std::string>& remoteTaskIds,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    assertQuery(plan, remoteTaskIds, duckDbSql, sortingKeys);
   }
 
   void setupSources(int filePathCount, int rowsPerVector) {
     filePaths_ = makeFilePaths(filePathCount);
     vectors_ = makeVectors(filePaths_.size(), rowsPerVector);
     for (int i = 0; i < filePaths_.size(); i++) {
-      writeToFile(filePaths_[i]->path, vectors_[i]);
+      writeToFile(filePaths_[i]->getPath(), vectors_[i]);
     }
     createDuckDbTable(vectors_);
   }
 
+  int32_t enqueue(
+      const std::string& taskId,
+      int32_t destination,
+      const RowVectorPtr& data) {
+    auto page =
+        toSerializedPage(data, GetParam().serdeKind, bufferManager_, pool());
+    const auto pageSize = page->size();
+
+    ContinueFuture unused;
+    auto blocked =
+        bufferManager_->enqueue(taskId, destination, std::move(page), &unused);
+    VELOX_CHECK(!blocked);
+    return pageSize;
+  }
+
   void verifyExchangeStats(
       const std::shared_ptr<Task>& task,
-      int32_t expectedCount) const {
-    auto exchangeStats =
-        task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+      int32_t expectedNumPagesCount,
+      int32_t expectedBackgroundCpuCount) const {
+    auto taskStats = exec::toPlanStats(task->taskStats());
+
+    const auto& exchangeOperatorStats = taskStats.at("0");
+    ASSERT_GT(exchangeOperatorStats.rawInputBytes, 0);
+    ASSERT_GT(exchangeOperatorStats.rawInputRows, 0);
+    const auto& exchangeStats = taskStats.at("0").customStats;
     ASSERT_EQ(1, exchangeStats.count("localExchangeSource.numPages"));
     ASSERT_EQ(
-        expectedCount, exchangeStats.at("localExchangeSource.numPages").count);
+        expectedNumPagesCount,
+        exchangeStats.at("localExchangeSource.numPages").count);
+    ASSERT_EQ(
+        expectedBackgroundCpuCount,
+        exchangeStats.at(Operator::kBackgroundCpuTimeNanos).count);
+    ASSERT_EQ(
+        expectedBackgroundCpuCount, taskStats.at("0").backgroundTiming.count);
   }
 
   RowTypePtr rowType_{
@@ -147,47 +269,69 @@ class MultiFragmentTest : public HiveConnectorTestBase {
   std::unordered_map<std::string, std::string> configSettings_;
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
+  std::shared_ptr<OutputBufferManager> bufferManager_{
+      OutputBufferManager::getInstanceRef()};
 };
 
-TEST_F(MultiFragmentTest, aggregationSingleKey) {
+TEST_P(MultiFragmentTest, aggregationSingleKey) {
   setupSources(10, 1000);
   std::vector<std::shared_ptr<Task>> tasks;
   auto leafTaskId = makeTaskId("leaf", 0);
   core::PlanNodePtr partialAggPlan;
+  core::PlanNodeId partitionNodeId;
+  std::shared_ptr<Task> leafTask;
   {
-    partialAggPlan = PlanBuilder()
-                         .tableScan(rowType_)
-                         .project({"c0 % 10 AS c0", "c1"})
-                         .partialAggregation({"c0"}, {"sum(c1)"})
-                         .partitionedOutput({"c0"}, 3)
-                         .planNode();
+    partialAggPlan =
+        PlanBuilder()
+            .tableScan(rowType_)
+            .project({"c0 % 10 AS c0", "c1"})
+            .partialAggregation({"c0"}, {"sum(c1)"})
+            .partitionedOutput(
+                {"c0"}, 3, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
 
-    auto leafTask = makeTask(leafTaskId, partialAggPlan, 0);
+    leafTask = makeTask(leafTaskId, partialAggPlan, 0);
     tasks.push_back(leafTask);
-    Task::start(leafTask, 4);
+    leafTask->start(4);
     addHiveSplits(leafTask, filePaths_);
   }
 
   core::PlanNodePtr finalAggPlan;
   std::vector<std::string> finalAggTaskIds;
+  core::PlanNodeId exchangeNodeId;
+  std::vector<std::shared_ptr<Task>> finalTasks;
   for (int i = 0; i < 3; i++) {
-    finalAggPlan = PlanBuilder()
-                       .exchange(partialAggPlan->outputType())
-                       .finalAggregation({"c0"}, {"sum(a0)"}, {BIGINT()})
-                       .partitionedOutput({}, 1)
-                       .planNode();
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(partialAggPlan->outputType(), GetParam().serdeKind)
+            .capturePlanNodeId(exchangeNodeId)
+            .finalAggregation({"c0"}, {"sum(a0)"}, {{BIGINT()}})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
 
     finalAggTaskIds.push_back(makeTaskId("final-agg", i));
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
     tasks.push_back(task);
-    Task::start(task, 1);
+    finalTasks.push_back(task);
+    task->start(1);
     addRemoteSplits(task, {leafTaskId});
   }
 
-  auto op = PlanBuilder().exchange(finalAggPlan->outputType()).planNode();
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType(), GetParam().serdeKind)
+                .planNode();
 
-  assertQuery(
-      op, finalAggTaskIds, "SELECT c0 % 10, sum(c1) FROM tmp GROUP BY 1");
+  std::vector<Split> finalAggTaskSplits;
+  for (auto finalAggTaskId : finalAggTaskIds) {
+    finalAggTaskSplits.emplace_back(remoteSplit(finalAggTaskId));
+  }
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .splits(std::move(finalAggTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT c0 % 10, sum(c1) FROM tmp GROUP BY 1");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -221,98 +365,149 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
       pools.swap(childPools);
     }
     if (i == 0) {
-      // For leaf task, it has total 21 memory pools: task pool + 4 plan node
-      // pools (TableScan, FilterProject, PartialAggregation, PartitionedOutput)
-      // + 16 operator pools (4 drivers * number of plan nodes) + 4 connector
-      // pools for TableScan.
+      // For leaf task, it has total 21 memory pools: task pool + 4 plan
+      // node pools (TableScan, FilterProject, PartialAggregation,
+      // PartitionedOutput)
+      // + 16 operator pools (4 drivers * number of plan nodes) + 4
+      // connector pools for TableScan.
       ASSERT_EQ(numPools, 25);
     } else {
       // For root task, it has total 8 memory pools: task pool + 3 plan node
-      // pools (Exchange, Aggregation, PartitionedOutput) and 4 leaf pools: 3
-      // operator pools (1 driver * number of plan nodes) + 1 exchange client
-      // pool.
+      // pools (Exchange, Aggregation, PartitionedOutput) and 4 leaf pools:
+      // 3 operator pools (1 driver * number of plan nodes) + 1 exchange
+      // client pool.
       ASSERT_EQ(numPools, 8);
     }
   }
+  auto leafPlanStats = toPlanStats(leafTask->taskStats());
+  const auto serdeKindRuntimsStats =
+      leafPlanStats.at(partitionNodeId)
+          .customStats.at(Operator::kShuffleSerdeKind);
+  ASSERT_EQ(serdeKindRuntimsStats.count, 4);
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+
+  for (const auto& finalTask : finalTasks) {
+    auto finalPlanStats = toPlanStats(finalTask->taskStats());
+    const auto serdeKindRuntimsStats =
+        finalPlanStats.at(exchangeNodeId)
+            .customStats.at(Operator::kShuffleSerdeKind);
+    ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+    ASSERT_EQ(
+        serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+    ASSERT_EQ(
+        serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+  }
 }
 
-TEST_F(MultiFragmentTest, aggregationMultiKey) {
+TEST_P(MultiFragmentTest, aggregationMultiKey) {
   setupSources(10, 1'000);
   std::vector<std::shared_ptr<Task>> tasks;
   auto leafTaskId = makeTaskId("leaf", 0);
   core::PlanNodePtr partialAggPlan;
   {
-    partialAggPlan = PlanBuilder()
-                         .tableScan(rowType_)
-                         .project({"c0 % 10 AS c0", "c1 % 2 AS c1", "c2"})
-                         .partialAggregation({"c0", "c1"}, {"sum(c2)"})
-                         .partitionedOutput({"c0", "c1"}, 3)
-                         .planNode();
+    partialAggPlan =
+        PlanBuilder()
+            .tableScan(rowType_)
+            .project({"c0 % 10 AS c0", "c1 % 2 AS c1", "c2"})
+            .partialAggregation({"c0", "c1"}, {"sum(c2)"})
+            .partitionedOutput(
+                {"c0", "c1"}, 3, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
 
     auto leafTask = makeTask(leafTaskId, partialAggPlan, 0);
     tasks.push_back(leafTask);
-    Task::start(leafTask, 4);
+    leafTask->start(4);
     addHiveSplits(leafTask, filePaths_);
   }
 
   core::PlanNodePtr finalAggPlan;
   std::vector<std::string> finalAggTaskIds;
   for (int i = 0; i < 3; i++) {
-    finalAggPlan = PlanBuilder()
-                       .exchange(partialAggPlan->outputType())
-                       .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {BIGINT()})
-                       .partitionedOutput({}, 1)
-                       .planNode();
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(partialAggPlan->outputType(), GetParam().serdeKind)
+            .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {{BIGINT()}})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
 
     finalAggTaskIds.push_back(makeTaskId("final-agg", i));
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
     tasks.push_back(task);
-    Task::start(task, 1);
+    task->start(1);
     addRemoteSplits(task, {leafTaskId});
   }
 
-  auto op = PlanBuilder().exchange(finalAggPlan->outputType()).planNode();
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType(), GetParam().serdeKind)
+                .planNode();
 
-  assertQuery(
-      op,
-      finalAggTaskIds,
-      "SELECT c0 % 10, c1 % 2, sum(c2) FROM tmp GROUP BY 1, 2");
+  std::vector<Split> finalAggTaskSplits;
+  for (auto finalAggTaskId : finalAggTaskIds) {
+    finalAggTaskSplits.emplace_back(remoteSplit(finalAggTaskId));
+  }
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .splits(std::move(finalAggTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT c0 % 10, c1 % 2, sum(c2) FROM tmp GROUP BY 1, 2");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
 }
 
-TEST_F(MultiFragmentTest, distributedTableScan) {
+TEST_P(MultiFragmentTest, distributedTableScan) {
   setupSources(10, 1000);
   // Run the table scan several times to test the caching.
   for (int i = 0; i < 3; ++i) {
     auto leafTaskId = makeTaskId("leaf", 0);
 
-    auto leafPlan = PlanBuilder()
-                        .tableScan(rowType_)
-                        .project({"c0 % 10", "c1 % 2", "c2"})
-                        .partitionedOutput({}, 1, {"c2", "p1", "p0"})
-                        .planNode();
+    auto leafPlan =
+        PlanBuilder()
+            .tableScan(rowType_)
+            .project({"c0 % 10", "c1 % 2", "c2"})
+            .partitionedOutput({}, 1, {"c2", "p1", "p0"}, GetParam().serdeKind)
+            .planNode();
 
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-    Task::start(leafTask, 4);
+    leafTask->start(4);
     addHiveSplits(leafTask, filePaths_);
 
-    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+    auto op = PlanBuilder()
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
     auto task =
-        assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
+        test::AssertQueryBuilder(op, duckDbQueryRunner_)
+            .split(remoteSplit(leafTaskId))
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .assertResults("SELECT c2, c1 % 2, c0 % 10 FROM tmp");
 
-    verifyExchangeStats(task, 1);
+    verifyExchangeStats(task, 1, 1);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
 }
 
-TEST_F(MultiFragmentTest, mergeExchange) {
+// This test simulate the situation where an MergeExchange is aborted and
+// causing a Driver thread to hold on to additional references to Task, and a
+// deadlock at shutdown because of a tight loop inside the Driver thread.
+//
+// When the tasks correspond to a MergeExchange are aborted, we expect
+// gracefully exiting of the task itself, and all relevant resources are cleaned
+// up. What happens is that the tasks are aborted; however, the MergeExchange
+// operator's ExchangeClient's are never closed, so the Driver threads are stuck
+// in a tight request loop. This test ensures that after the Tasks have
+// successfully aborted, we're only left with the correct amount of references
+// to the Merge task.
+TEST_P(MultiFragmentTest, abortMergeExchange) {
   setupSources(20, 1000);
 
-  static const core::SortOrder kAscNullsLast(true, false);
   std::vector<std::shared_ptr<Task>> tasks;
 
   std::vector<std::shared_ptr<TempFilePath>> filePaths0(
@@ -326,63 +521,199 @@ TEST_F(MultiFragmentTest, mergeExchange) {
   std::vector<std::string> partialSortTaskIds;
   RowTypePtr outputType;
 
+  core::PlanNodeId partitionNodeId;
+  auto executor = folly::CPUThreadPoolExecutor(4, 4);
   for (int i = 0; i < 2; ++i) {
-    auto sortTaskId = makeTaskId("orderby", tasks.size());
+    auto sortTaskId = makeTaskId("orderby", static_cast<int>(tasks.size()));
     partialSortTaskIds.push_back(sortTaskId);
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto partialSortPlan = PlanBuilder(planNodeIdGenerator)
-                               .localMerge(
-                                   {"c0"},
-                                   {PlanBuilder(planNodeIdGenerator)
-                                        .tableScan(rowType_)
-                                        .orderBy({"c0"}, true)
-                                        .planNode()})
-                               .partitionedOutput({}, 1)
-                               .planNode();
+    auto partialSortPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge(
+                {"c0"},
+                {PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType_)
+                     .orderBy({"c0"}, true)
+                     .planNode()})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
 
-    auto sortTask = makeTask(sortTaskId, partialSortPlan, tasks.size());
+    auto sortTask = makeTask(
+        sortTaskId,
+        partialSortPlan,
+        static_cast<int>(tasks.size()),
+        nullptr,
+        memory::kMaxMemory,
+        &executor);
     tasks.push_back(sortTask);
-    Task::start(sortTask, 4);
+    sortTask->start(4);
     addHiveSplits(sortTask, filePathsList[i]);
     outputType = partialSortPlan->outputType();
   }
 
+  auto finalSortTaskId = makeTaskId("orderby", static_cast<int>(tasks.size()));
+  core::PlanNodeId mergeExchangeId;
+  auto finalSortPlan =
+      PlanBuilder()
+          .mergeExchange(outputType, {"c0"}, GetParam().serdeKind)
+          .capturePlanNodeId(mergeExchangeId)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+  auto mergeTask = makeTask(finalSortTaskId, finalSortPlan, 0);
+  tasks.push_back(mergeTask);
+  mergeTask->start(1);
+  addRemoteSplits(mergeTask, partialSortTaskIds);
+
+  for (auto& task : tasks) {
+    task->requestAbort();
+    ASSERT_TRUE(waitForTaskAborted(task.get())) << task->taskId();
+  }
+
+  // Ensure that the threads in the executor can gracefully join
+  executor.join();
+
+  // Wait till all the terminations, closures and destructions so that
+  // the reference count drops to 2.
+  while (mergeTask.use_count() > 2) {
+    std::this_thread::yield();
+  }
+
+  // The references to mergeTask should be two, one for the local variable
+  // itself and one reference inside tasks variable.
+  EXPECT_EQ(mergeTask.use_count(), 2);
+}
+
+TEST_P(MultiFragmentTest, mergeExchange) {
+  setupSources(20, 1000);
+  static const core::SortOrder kAscNullsLast(true, false);
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::vector<std::shared_ptr<TempFilePath>> filePaths0(
+      filePaths_.begin(), filePaths_.begin() + 10);
+  std::vector<std::shared_ptr<TempFilePath>> filePaths1(
+      filePaths_.begin() + 10, filePaths_.end());
+  std::vector<std::vector<std::shared_ptr<TempFilePath>>> filePathsList = {
+      filePaths0, filePaths1};
+  std::vector<std::string> partialSortTaskIds;
+  RowTypePtr outputType;
+  core::PlanNodeId partitionNodeId;
+  for (int numPartialSortTasks = 0; numPartialSortTasks < 2;
+       ++numPartialSortTasks) {
+    auto sortTaskId = makeTaskId("orderby", tasks.size());
+    partialSortTaskIds.push_back(sortTaskId);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    std::vector<std::shared_ptr<const core::PlanNode>> sources;
+    sources.reserve(5);
+    std::vector<std::string> scanNodeIds;
+    scanNodeIds.reserve(5);
+    for (int numSourcesPerPartialSortTask = 0; numSourcesPerPartialSortTask < 5;
+         ++numSourcesPerPartialSortTask) {
+      core::PlanNodeId scanNodeId;
+      sources.push_back(PlanBuilder(planNodeIdGenerator)
+                            .tableScan(rowType_)
+                            .capturePlanNodeId(scanNodeId)
+                            .orderBy({"c0"}, true)
+                            .planNode());
+      scanNodeIds.push_back(scanNodeId);
+    }
+
+    auto partialSortPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge({"c0"}, std::move(sources))
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
+    auto sortTask = makeTask(sortTaskId, partialSortPlan, tasks.size());
+    tasks.push_back(sortTask);
+    sortTask->start(4);
+
+    std::unordered_map<
+        core::PlanNodeId,
+        std::vector<std::shared_ptr<TempFilePath>>>
+        nodeSplits;
+    nodeSplits.reserve(5);
+    for (int i = 0; i < 5; ++i) {
+      nodeSplits[scanNodeIds[i]] = std::vector<std::shared_ptr<TempFilePath>>();
+    }
+    auto& filePaths = filePathsList[numPartialSortTasks];
+    for (int i = 0; i < filePaths.size(); ++i) {
+      nodeSplits[scanNodeIds[i % scanNodeIds.size()]].push_back(filePaths[i]);
+    }
+
+    addHiveSplits(sortTask, nodeSplits);
+    outputType = partialSortPlan->outputType();
+  }
+
   auto finalSortTaskId = makeTaskId("orderby", tasks.size());
-  auto finalSortPlan = PlanBuilder()
-                           .mergeExchange(outputType, {"c0"})
-                           .partitionedOutput({}, 1)
-                           .planNode();
+  core::PlanNodeId mergeExchangeId;
+  auto finalSortPlan =
+      PlanBuilder()
+          .mergeExchange(outputType, {"c0"}, GetParam().serdeKind)
+          .capturePlanNodeId(mergeExchangeId)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
 
-  auto task = makeTask(finalSortTaskId, finalSortPlan, 0);
-  tasks.push_back(task);
-  Task::start(task, 1);
-  addRemoteSplits(task, partialSortTaskIds);
+  auto mergeTask = makeTask(finalSortTaskId, finalSortPlan, 0);
+  tasks.push_back(mergeTask);
+  mergeTask->start(1);
+  addRemoteSplits(mergeTask, partialSortTaskIds);
 
-  auto op = PlanBuilder().exchange(outputType).planNode();
-  assertQueryOrdered(
-      op, {finalSortTaskId}, "SELECT * FROM tmp ORDER BY 1 NULLS LAST", {0});
+  auto op = PlanBuilder().exchange(outputType, GetParam().serdeKind).planNode();
+
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .split(remoteSplit(finalSortTaskId))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults(
+          "SELECT * FROM tmp ORDER BY 1 NULLS LAST", std::vector<uint32_t>{0});
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
+
+  const auto finalSortStats = toPlanStats(mergeTask->taskStats());
+  const auto& mergeExchangeStats = finalSortStats.at(mergeExchangeId);
+
+  EXPECT_EQ(20'000, mergeExchangeStats.inputRows);
+  EXPECT_EQ(20'000, mergeExchangeStats.rawInputRows);
+
+  EXPECT_LT(0, mergeExchangeStats.inputBytes);
+  EXPECT_LT(0, mergeExchangeStats.rawInputBytes);
+
+  const auto serdeKindRuntimsStats =
+      mergeExchangeStats.customStats.at(Operator::kShuffleSerdeKind);
+  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
 }
 
 // Test reordering and dropping columns in PartitionedOutput operator.
-TEST_F(MultiFragmentTest, partitionedOutput) {
+TEST_P(MultiFragmentTest, partitionedOutput) {
   setupSources(10, 1000);
 
   // Test dropping columns only
   {
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan = PlanBuilder()
-                        .values(vectors_)
-                        .partitionedOutput({}, 1, {"c0", "c1"})
-                        .planNode();
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, {"c0", "c1"}, GetParam().serdeKind)
+            .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-    Task::start(leafTask, 4);
-    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+    leafTask->start(4);
+    auto op = PlanBuilder()
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
 
-    assertQuery(op, {leafTaskId}, "SELECT c0, c1 FROM tmp");
+    test::AssertQueryBuilder(op, duckDbQueryRunner_)
+        .split(remoteSplit(leafTaskId))
+        .config(
+            core::QueryConfig::kShuffleCompressionKind,
+            common::compressionKindToString(GetParam().compressionKind))
+        .assertResults("SELECT c0, c1 FROM tmp");
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -390,15 +721,23 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
   // Test reordering and dropping at the same time
   {
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan = PlanBuilder()
-                        .values(vectors_)
-                        .partitionedOutput({}, 1, {"c3", "c0", "c2"})
-                        .planNode();
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, {"c3", "c0", "c2"}, GetParam().serdeKind)
+            .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-    Task::start(leafTask, 4);
-    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+    leafTask->start(4);
+    auto op = PlanBuilder()
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
 
-    assertQuery(op, {leafTaskId}, "SELECT c3, c0, c2 FROM tmp");
+    test::AssertQueryBuilder(op, duckDbQueryRunner_)
+        .split(remoteSplit(leafTaskId))
+        .config(
+            core::QueryConfig::kShuffleCompressionKind,
+            common::compressionKindToString(GetParam().compressionKind))
+        .assertResults("SELECT c3, c0, c2 FROM tmp");
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -410,14 +749,23 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
         PlanBuilder()
             .values(vectors_)
             .partitionedOutput(
-                {}, 1, {"c0", "c1", "c2", "c3", "c4", "c3", "c2", "c1", "c0"})
+                {},
+                1,
+                {"c0", "c1", "c2", "c3", "c4", "c3", "c2", "c1", "c0"},
+                GetParam().serdeKind)
             .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-    Task::start(leafTask, 4);
-    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+    leafTask->start(4);
+    auto op = PlanBuilder()
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
 
-    assertQuery(
-        op, {leafTaskId}, "SELECT c0, c1, c2, c3, c4, c3, c2, c1, c0 FROM tmp");
+    test::AssertQueryBuilder(op, duckDbQueryRunner_)
+        .split(remoteSplit(leafTaskId))
+        .config(
+            core::QueryConfig::kShuffleCompressionKind,
+            common::compressionKindToString(GetParam().compressionKind))
+        .assertResults("SELECT c0, c1, c2, c3, c4, c3, c2, c1, c0 FROM tmp");
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -426,32 +774,86 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
   {
     constexpr int32_t kFanout = 4;
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan = PlanBuilder()
-                        .values(vectors_)
-                        .partitionedOutput({"c5"}, kFanout, {"c2", "c0", "c3"})
-                        .planNode();
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput(
+                {"c5"}, kFanout, {"c2", "c0", "c3"}, GetParam().serdeKind)
+            .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-    Task::start(leafTask, 4);
+    leafTask->start(4);
 
-    auto intermediatePlan = PlanBuilder()
-                                .exchange(leafPlan->outputType())
-                                .partitionedOutput({}, 1, {"c3", "c0", "c2"})
-                                .planNode();
+    auto intermediatePlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
+            .partitionedOutput({}, 1, {"c3", "c0", "c2"}, GetParam().serdeKind)
+            .planNode();
     std::vector<std::string> intermediateTaskIds;
     for (auto i = 0; i < kFanout; ++i) {
       intermediateTaskIds.push_back(makeTaskId("intermediate", i));
       auto intermediateTask =
           makeTask(intermediateTaskIds.back(), intermediatePlan, i);
-      Task::start(intermediateTask, 1);
+      intermediateTask->start(1);
       addRemoteSplits(intermediateTask, {leafTaskId});
     }
 
-    auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
+    auto op =
+        PlanBuilder()
+            .exchange(intermediatePlan->outputType(), GetParam().serdeKind)
+            .planNode();
 
+    std::vector<Split> intermediateSplits;
+    for (auto intermediateTaskId : intermediateTaskIds) {
+      intermediateSplits.emplace_back(remoteSplit(intermediateTaskId));
+    }
     auto task =
-        assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
+        test::AssertQueryBuilder(op, duckDbQueryRunner_)
+            .splits(std::move(intermediateSplits))
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .assertResults("SELECT c3, c0, c2 FROM tmp");
 
-    verifyExchangeStats(task, kFanout);
+    verifyExchangeStats(task, kFanout, kFanout);
+
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+  }
+
+  // Test dropping all columns.
+  {
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .addNode(
+                [](std::string nodeId,
+                   core::PlanNodePtr source) -> core::PlanNodePtr {
+                  return core::PartitionedOutputNode::broadcast(
+                      nodeId, 1, ROW({}), GetParam().serdeKind, source);
+                })
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    leafTask->start(4);
+    leafTask->updateOutputBuffers(1, true);
+
+    auto op = PlanBuilder()
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
+
+    vector_size_t numRows = 0;
+    for (const auto& vector : vectors_) {
+      numRows += vector->size();
+    }
+
+    auto result =
+        AssertQueryBuilder(op)
+            .split(remoteSplit(leafTaskId))
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .copyResults(pool());
+    ASSERT_EQ(*result->type(), *ROW({}));
+    ASSERT_EQ(result->size(), numRows);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -459,56 +861,460 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
   // Test asynchronously deleting task buffer (due to abort from downstream).
   {
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan = PlanBuilder()
-                        .values(vectors_)
-                        .partitionedOutput({}, 1, {"c0", "c1"})
-                        .planNode();
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, {"c0", "c1"}, GetParam().serdeKind)
+            .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-    Task::start(leafTask, 4);
-    auto bufferMgr = PartitionedOutputBufferManager::getInstance().lock();
+    leafTask->start(4);
     // Delete the results asynchronously to simulate abort from downstream.
-    bufferMgr->deleteResults(leafTaskId, 0);
+    bufferManager_->deleteResults(leafTaskId, 0);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
 }
 
-TEST_F(MultiFragmentTest, broadcast) {
+TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
+  setupSources(20, 1000);
+  static const core::SortOrder kAscNullsLast(true, false);
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::vector<std::shared_ptr<TempFilePath>> filePaths0(
+      filePaths_.begin(), filePaths_.begin() + 10);
+  std::vector<std::shared_ptr<TempFilePath>> filePaths1(
+      filePaths_.begin() + 10, filePaths_.end());
+  std::vector<std::vector<std::shared_ptr<TempFilePath>>> filePathsList = {
+      filePaths0, filePaths1};
+  std::vector<std::string> partialSortTaskIds;
+  RowTypePtr outputType;
+  std::vector<std::shared_ptr<TempDirectoryPath>> spillDirectories;
+  core::PlanNodeId partitionNodeId;
+  std::unordered_map<std::string, std::string> spillMergeConfigs{
+      {"spill_enabled", "true"},
+      {"local_merge_spill_enabled", "true"},
+      {"local_merge_max_num_merge_sources", "3"}};
+  std::vector<core::PlanNodeId> localMergeNodeIds;
+  for (int numPartialSortTasks = 0; numPartialSortTasks < 2;
+       ++numPartialSortTasks) {
+    auto sortTaskId = makeTaskId("orderby", tasks.size());
+    partialSortTaskIds.push_back(sortTaskId);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    std::vector<std::shared_ptr<const core::PlanNode>> sources;
+    sources.reserve(5);
+    std::vector<std::string> scanNodeIds;
+    scanNodeIds.reserve(5);
+    for (int numSourcesPerPartialSortTask = 0; numSourcesPerPartialSortTask < 5;
+         ++numSourcesPerPartialSortTask) {
+      core::PlanNodeId scanNodeId;
+      sources.push_back(PlanBuilder(planNodeIdGenerator)
+                            .tableScan(rowType_)
+                            .capturePlanNodeId(scanNodeId)
+                            .orderBy({"c0"}, true)
+                            .planNode());
+      scanNodeIds.push_back(scanNodeId);
+    }
+
+    core::PlanNodeId localMergeNodeId;
+    auto partialSortPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge({"c0"}, std::move(sources))
+            .capturePlanNodeId(localMergeNodeId)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
+    localMergeNodeIds.push_back(localMergeNodeId);
+    spillDirectories.push_back(TempDirectoryPath::create());
+    common::SpillDiskOptions spillOpts;
+    spillOpts.spillDirPath = spillDirectories[numPartialSortTasks]->getPath();
+    auto sortTask = makeTask(
+        sortTaskId,
+        partialSortPlan,
+        spillMergeConfigs,
+        tasks.size(),
+        /*consumer=*/nullptr,
+        memory::kMaxMemory,
+        spillOpts);
+    tasks.push_back(sortTask);
+    sortTask->start(4);
+
+    std::unordered_map<
+        core::PlanNodeId,
+        std::vector<std::shared_ptr<TempFilePath>>>
+        nodeSplits;
+    nodeSplits.reserve(5);
+    for (int i = 0; i < 5; ++i) {
+      nodeSplits[scanNodeIds[i]] = std::vector<std::shared_ptr<TempFilePath>>();
+    }
+    auto& filePaths = filePathsList[numPartialSortTasks];
+    for (int i = 0; i < filePaths.size(); ++i) {
+      nodeSplits[scanNodeIds[i % scanNodeIds.size()]].push_back(filePaths[i]);
+    }
+
+    addHiveSplits(sortTask, nodeSplits);
+    outputType = partialSortPlan->outputType();
+  }
+
+  auto finalSortTaskId = makeTaskId("orderby", tasks.size());
+  core::PlanNodeId mergeExchangeId;
+  auto finalSortPlan =
+      PlanBuilder()
+          .mergeExchange(outputType, {"c0"}, GetParam().serdeKind)
+          .capturePlanNodeId(mergeExchangeId)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  auto mergeTask = makeTask(finalSortTaskId, finalSortPlan, 0);
+  tasks.push_back(mergeTask);
+  mergeTask->start(1);
+  addRemoteSplits(mergeTask, partialSortTaskIds);
+
+  auto op = PlanBuilder().exchange(outputType, GetParam().serdeKind).planNode();
+
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .split(remoteSplit(finalSortTaskId))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults(
+          "SELECT * FROM tmp ORDER BY 1 NULLS LAST", std::vector<uint32_t>{0});
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+  for (auto i = 0; i < 2; ++i) {
+    auto taskStats = toPlanStats(tasks[i]->taskStats());
+    auto& planStats = taskStats.at(localMergeNodeIds[i]);
+    ASSERT_GT(planStats.spilledBytes, 0);
+    ASSERT_GT(planStats.spilledPartitions, 0);
+    ASSERT_GT(planStats.spilledFiles, 0);
+  }
+
+  const auto finalSortStats = toPlanStats(mergeTask->taskStats());
+  const auto& mergeExchangeStats = finalSortStats.at(mergeExchangeId);
+
+  EXPECT_EQ(20'000, mergeExchangeStats.inputRows);
+  EXPECT_EQ(20'000, mergeExchangeStats.rawInputRows);
+
+  EXPECT_LT(0, mergeExchangeStats.inputBytes);
+  EXPECT_LT(0, mergeExchangeStats.rawInputBytes);
+
+  const auto serdeKindRuntimsStats =
+      mergeExchangeStats.customStats.at(Operator::kShuffleSerdeKind);
+  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+}
+
+TEST_P(MultiFragmentTest, noHashPartitionSkew) {
+  setupSources(10, 1000);
+
+  // Update the key column.
+  int count{0};
+  for (auto& vector : vectors_) {
+    vector->childAt(0) = makeFlatVector<int64_t>(
+        vector->childAt(0)->size(), [&](auto /*unused*/) { return count++; });
+  };
+
+  // Test dropping columns only.
+  const int numPartitions{8};
+  auto producerTaskId = makeTaskId("producer", 0);
+  auto producerPlan =
+      PlanBuilder()
+          .values(vectors_)
+          .partitionedOutput(
+              {"c0"}, numPartitions, {"c0", "c1"}, GetParam().serdeKind)
+          .planNode();
+  auto producerTask = makeTask(producerTaskId, producerPlan, 0);
+  producerTask->start(1);
+
+  core::PlanNodeId partialAggregationNodeId;
+  auto consumerPlan =
+      PlanBuilder()
+          .exchange(producerPlan->outputType(), GetParam().serdeKind)
+          .localPartition({"c0"})
+          .partialAggregation({"c0"}, {"count(1)"})
+          .capturePlanNodeId(partialAggregationNodeId)
+          .localPartition({})
+          .finalAggregation()
+          .singleAggregation({}, {"sum(1)"})
+          .planNode();
+
+  // This is computed based offline and shouldn't change across runs.
+  const std::vector<int> expectedValues{
+      1'189, 1'266, 1'274, 1'228, 1'250, 1'225, 1'308, 1'260};
+
+  const int numConsumerDriverThreads{4};
+  const auto runConsumer = [&](int partition) {
+    const auto expectedResult = makeRowVector({makeFlatVector<int64_t>(
+        std::vector<int64_t>{expectedValues[partition]})});
+    SCOPED_TRACE(fmt::format("partition {}", partition));
+    auto consumerTask =
+        test::AssertQueryBuilder(consumerPlan)
+            .split(remoteSplit(producerTaskId))
+            .destination(partition)
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .maxDrivers(numConsumerDriverThreads)
+            .assertResults(expectedResult);
+
+    // Verifies that each partial aggregation operator process a number of
+    // inputs.
+    auto consumerTaskStats = exec::toPlanStats(consumerTask->taskStats());
+    const auto& partialAggregationNodeStats =
+        consumerTaskStats.at(partialAggregationNodeId);
+    ASSERT_EQ(
+        partialAggregationNodeStats.customStats.at("hashtable.numDistinct")
+            .count,
+        numConsumerDriverThreads);
+    ASSERT_GT(
+        partialAggregationNodeStats.customStats.at("hashtable.numDistinct").min,
+        0);
+    ASSERT_GT(
+        partialAggregationNodeStats.customStats.at("hashtable.numDistinct").max,
+        0);
+  };
+
+  std::vector<std::thread> consumerThreads;
+  for (int partition = 0; partition < numPartitions; ++partition) {
+    consumerThreads.emplace_back([&, partition]() { runConsumer(partition); });
+  }
+
+  for (auto& consumerThread : consumerThreads) {
+    consumerThread.join();
+  }
+}
+
+TEST_P(MultiFragmentTest, noHivePartitionSkew) {
+  setupSources(10, 1000);
+
+  // Update the key column.
+  int count{0};
+  for (auto& vector : vectors_) {
+    vector->childAt(0) = makeFlatVector<int64_t>(
+        vector->childAt(0)->size(), [&](auto /*unused*/) { return count++; });
+  };
+
+  // Test dropping columns only.
+  const int numBuckets = 256;
+  const int numPartitions{8};
+  auto producerTaskId = makeTaskId("producer", 0);
+  auto producerPlan =
+      PlanBuilder()
+          .values(vectors_)
+          .partitionedOutput(
+              {"c0"},
+              numPartitions,
+              false,
+              std::make_shared<connector::hive::HivePartitionFunctionSpec>(
+                  numBuckets,
+                  std::vector<column_index_t>{0},
+                  std::vector<VectorPtr>{}),
+              {"c0", "c1"},
+              GetParam().serdeKind)
+          .planNode();
+  auto producerTask = makeTask(producerTaskId, producerPlan, 0);
+  producerTask->start(1);
+
+  core::PlanNodeId partialAggregationNodeId;
+  auto consumerPlan =
+      PlanBuilder()
+          .exchange(producerPlan->outputType(), GetParam().serdeKind)
+          .localPartition(numBuckets, {0}, {})
+          .partialAggregation({"c0"}, {"count(1)"})
+          .capturePlanNodeId(partialAggregationNodeId)
+          .localPartition({})
+          .finalAggregation()
+          .singleAggregation({}, {"sum(1)"})
+          .planNode();
+
+  const int numConsumerDriverThreads{4};
+  const auto runConsumer = [&](int partition) {
+    // Hive partition evenly distribute rows across nodes.
+    const auto expectedResult =
+        makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{1'250})});
+    SCOPED_TRACE(fmt::format("partition {}", partition));
+    auto consumerTask =
+        test::AssertQueryBuilder(consumerPlan)
+            .split(remoteSplit(producerTaskId))
+            .destination(partition)
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .maxDrivers(numConsumerDriverThreads)
+            .assertResults(expectedResult);
+
+    // Verifies that each partial aggregation operator process a number of
+    // inputs.
+    auto consumerTaskStats = exec::toPlanStats(consumerTask->taskStats());
+    const auto& partialAggregationNodeStats =
+        consumerTaskStats.at(partialAggregationNodeId);
+    ASSERT_EQ(
+        partialAggregationNodeStats.customStats.at("hashtable.numDistinct")
+            .count,
+        numConsumerDriverThreads);
+    ASSERT_GT(
+        partialAggregationNodeStats.customStats.at("hashtable.numDistinct").min,
+        0);
+    ASSERT_GT(
+        partialAggregationNodeStats.customStats.at("hashtable.numDistinct").max,
+        0);
+  };
+
+  std::vector<std::thread> consumerThreads;
+  for (int partition = 0; partition < numPartitions; ++partition) {
+    consumerThreads.emplace_back([&, partition]() { runConsumer(partition); });
+  }
+
+  for (auto& consumerThread : consumerThreads) {
+    consumerThread.join();
+  }
+}
+
+TEST_P(MultiFragmentTest, partitionedOutputWithLargeInput) {
+  // Verify that partitionedOutput operator is able to split a single input
+  // vector if it hits memory or row limits.
+  // We create a large vector that hits the row limit (70% - 120% of 10,000).
+  // This test exercises splitting up the input both from the edges and the
+  // middle as it ends up splitting it into at least 3.
+  setupSources(1, 30'000);
+  // Single Partition
+  {
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput(
+                {}, 1, {"c0", "c1", "c2", "c3", "c4"}, GetParam().serdeKind)
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0, nullptr, 4 << 20);
+    leafTask->start(1);
+    auto op = PlanBuilder()
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
+
+    auto task =
+        test::AssertQueryBuilder(op, duckDbQueryRunner_)
+            .split(remoteSplit(leafTaskId))
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .assertResults("SELECT c0, c1, c2, c3, c4 FROM tmp");
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+        << leafTask->taskId() << "state: " << leafTask->state();
+    auto taskStats = toPlanStats(leafTask->taskStats());
+    ASSERT_GT(taskStats.at("1").outputVectors, 2);
+  }
+
+  // Multiple partitions but round-robin.
+  {
+    constexpr int32_t kFanout = 2;
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput(
+                {},
+                kFanout,
+                false,
+                std::make_shared<exec::RoundRobinPartitionFunctionSpec>(),
+                {"c0", "c1", "c2", "c3", "c4"},
+                GetParam().serdeKind)
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    leafTask->start(1);
+
+    auto intermediatePlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
+            .partitionedOutput(
+                {}, 1, {"c0", "c1", "c2", "c3", "c4"}, GetParam().serdeKind)
+            .planNode();
+    std::vector<std::string> intermediateTaskIds;
+    for (auto i = 0; i < kFanout; ++i) {
+      intermediateTaskIds.push_back(makeTaskId("intermediate", i));
+      auto intermediateTask =
+          makeTask(intermediateTaskIds.back(), intermediatePlan, i);
+      intermediateTask->start(1);
+      addRemoteSplits(intermediateTask, {leafTaskId});
+    }
+
+    auto op =
+        PlanBuilder()
+            .exchange(intermediatePlan->outputType(), GetParam().serdeKind)
+            .planNode();
+
+    std::vector<Split> intermediateSplits;
+    for (auto intermediateTaskId : intermediateTaskIds) {
+      intermediateSplits.emplace_back(remoteSplit(intermediateTaskId));
+    }
+    auto task =
+        test::AssertQueryBuilder(op, duckDbQueryRunner_)
+            .splits(std::move(intermediateSplits))
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .assertResults("SELECT c0, c1, c2, c3, c4 FROM tmp");
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+        << "state: " << leafTask->state();
+    auto taskStats = toPlanStats(leafTask->taskStats());
+    ASSERT_GT(taskStats.at("1").outputVectors, 2);
+  }
+}
+
+TEST_P(MultiFragmentTest, broadcast) {
   auto data = makeRowVector(
       {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
 
   // Make leaf task: Values -> Repartitioning (broadcast)
   std::vector<std::shared_ptr<Task>> tasks;
   auto leafTaskId = makeTaskId("leaf", 0);
-  auto leafPlan =
-      PlanBuilder().values({data}).partitionedOutputBroadcast().planNode();
+  auto leafPlan = PlanBuilder()
+                      .values({data})
+                      .partitionedOutputBroadcast(
+                          /*outputLayout=*/{}, GetParam().serdeKind)
+                      .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
   tasks.emplace_back(leafTask);
-  Task::start(leafTask, 1);
+  leafTask->start(1);
 
   // Make next stage tasks.
   core::PlanNodePtr finalAggPlan;
   std::vector<std::string> finalAggTaskIds;
   for (int i = 0; i < 3; i++) {
-    finalAggPlan = PlanBuilder()
-                       .exchange(leafPlan->outputType())
-                       .singleAggregation({}, {"count(1)"})
-                       .partitionedOutput({}, 1)
-                       .planNode();
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
+            .singleAggregation({}, {"count(1)"})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
 
     finalAggTaskIds.push_back(makeTaskId("final-agg", i));
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
     tasks.emplace_back(task);
-    Task::start(task, 1);
+    task->start(1);
     leafTask->updateOutputBuffers(i + 1, false);
     addRemoteSplits(task, {leafTaskId});
   }
   leafTask->updateOutputBuffers(finalAggTaskIds.size(), true);
 
   // Collect results from multiple tasks.
-  auto op = PlanBuilder().exchange(finalAggPlan->outputType()).planNode();
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType(), GetParam().serdeKind)
+                .planNode();
 
-  assertQuery(op, finalAggTaskIds, "SELECT UNNEST(array[1000, 1000, 1000])");
+  std::vector<Split> finalAggTaskSplits;
+  for (auto finalAggTaskId : finalAggTaskIds) {
+    finalAggTaskSplits.emplace_back(remoteSplit(finalAggTaskId));
+  }
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .splits(std::move(finalAggTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT UNNEST(array[1000, 1000, 1000])");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -519,7 +1325,7 @@ TEST_F(MultiFragmentTest, broadcast) {
   leafTask->updateOutputBuffers(finalAggTaskIds.size(), true);
 }
 
-TEST_F(MultiFragmentTest, roundRobinPartition) {
+TEST_P(MultiFragmentTest, roundRobinPartition) {
   auto data = {
       makeRowVector({
           makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
@@ -543,7 +1349,9 @@ TEST_F(MultiFragmentTest, roundRobinPartition) {
               {},
               2,
               false,
-              std::make_shared<exec::RoundRobinPartitionFunctionSpec>())
+              std::make_shared<exec::RoundRobinPartitionFunctionSpec>(),
+              /*outputLayout=*/{},
+              GetParam().serdeKind)
           .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
 
@@ -551,7 +1359,7 @@ TEST_F(MultiFragmentTest, roundRobinPartition) {
   auto addTask = [&](std::shared_ptr<Task> task,
                      const std::vector<std::string>& remoteTaskIds) {
     tasks.emplace_back(task);
-    Task::start(task, 1);
+    task->start(1);
     if (!remoteTaskIds.empty()) {
       addRemoteSplits(task, remoteTaskIds);
     }
@@ -563,10 +1371,11 @@ TEST_F(MultiFragmentTest, roundRobinPartition) {
   core::PlanNodePtr collectPlan;
   std::vector<std::string> collectTaskIds;
   for (int i = 0; i < 2; i++) {
-    collectPlan = PlanBuilder()
-                      .exchange(leafPlan->outputType())
-                      .partitionedOutput({}, 1)
-                      .planNode();
+    collectPlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
 
     collectTaskIds.push_back(makeTaskId("collect", i));
     auto task = makeTask(collectTaskIds.back(), collectPlan, i);
@@ -574,24 +1383,38 @@ TEST_F(MultiFragmentTest, roundRobinPartition) {
   }
 
   // Collect everything.
-  auto finalPlan = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+  auto finalPlan = PlanBuilder()
+                       .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                       .planNode();
 
-  assertQuery(finalPlan, {collectTaskIds}, "SELECT * FROM tmp");
+  std::vector<Split> collectTaskSplits;
+  for (auto collectTaskId : collectTaskIds) {
+    collectTaskSplits.emplace_back(remoteSplit(collectTaskId));
+  }
+  test::AssertQueryBuilder(finalPlan, duckDbQueryRunner_)
+      .splits(std::move(collectTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT * FROM tmp");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
 }
 
-TEST_F(MultiFragmentTest, replicateNullsAndAny) {
-  auto data = makeRowVector({makeFlatVector<int32_t>(
-      1'000, [](auto row) { return row; }, nullEvery(7))});
+// Test PartitionedOutput operator with constant partitioning keys.
+TEST_P(MultiFragmentTest, constantKeys) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(
+          1'000, [](auto row) { return row; }, nullEvery(7)),
+  });
 
   std::vector<std::shared_ptr<Task>> tasks;
   auto addTask = [&](std::shared_ptr<Task> task,
                      const std::vector<std::string>& remoteTaskIds) {
     tasks.emplace_back(task);
-    Task::start(task, 1);
+    task->start(1);
     if (!remoteTaskIds.empty()) {
       addRemoteSplits(task, remoteTaskIds);
     }
@@ -601,7 +1424,8 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafPlan = PlanBuilder()
                       .values({data})
-                      .partitionedOutput({"c0"}, 3, true)
+                      .partitionedOutput(
+                          {"c0", "123"}, 3, true, {"c0"}, GetParam().serdeKind)
                       .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
   addTask(leafTask, {});
@@ -612,10 +1436,10 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
   for (int i = 0; i < 3; i++) {
     finalAggPlan =
         PlanBuilder()
-            .exchange(leafPlan->outputType())
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
             .project({"c0 is null AS co_is_null"})
             .partialAggregation({}, {"count_if(co_is_null)", "count(1)"})
-            .partitionedOutput({}, 1)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .planNode();
 
     finalAggTaskIds.push_back(makeTaskId("final-agg", i));
@@ -625,16 +1449,90 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
 
   // Collect results and verify number of nulls is 3 times larger than in the
   // original data.
-  auto op =
-      PlanBuilder()
-          .exchange(finalAggPlan->outputType())
-          .finalAggregation({}, {"sum(a0)", "sum(a1)"}, {BIGINT(), BIGINT()})
-          .planNode();
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType(), GetParam().serdeKind)
+                .finalAggregation(
+                    {}, {"sum(a0)", "sum(a1)"}, {{BIGINT()}, {BIGINT()}})
+                .planNode();
 
-  assertQuery(
-      op,
-      finalAggTaskIds,
-      "SELECT 3 * ceil(1000.0 / 7) /* number of null rows */, 1000 + 2 * ceil(1000.0 / 7) /* total number of rows */");
+  std::vector<Split> finalAggTaskSplits;
+  for (auto finalAggTaskId : finalAggTaskIds) {
+    finalAggTaskSplits.emplace_back(remoteSplit(finalAggTaskId));
+  }
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .splits(std::move(finalAggTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults(
+          "SELECT 3 * ceil(1000.0 / 7) /* number of null rows */, 1000 + 2 * ceil(1000.0 / 7) /* total number of rows */");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+TEST_P(MultiFragmentTest, replicateNullsAndAny) {
+  auto data = makeRowVector({makeFlatVector<int32_t>(
+      1'000, [](auto row) { return row; }, nullEvery(7))});
+
+  std::vector<std::shared_ptr<Task>> tasks;
+  auto addTask = [&](std::shared_ptr<Task> task,
+                     const std::vector<std::string>& remoteTaskIds) {
+    tasks.emplace_back(task);
+    task->start(1);
+    if (!remoteTaskIds.empty()) {
+      addRemoteSplits(task, remoteTaskIds);
+    }
+  };
+
+  // Make leaf task: Values -> Repartitioning (3-way)
+  auto leafTaskId = makeTaskId("leaf", 0);
+  auto leafPlan =
+      PlanBuilder()
+          .values({data})
+          .partitionedOutput(
+              {"c0"}, 3, true, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+  addTask(leafTask, {});
+
+  // Make next stage tasks to count nulls.
+  core::PlanNodePtr finalAggPlan;
+  std::vector<std::string> finalAggTaskIds;
+  for (int i = 0; i < 3; i++) {
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
+            .project({"c0 is null AS co_is_null"})
+            .partialAggregation({}, {"count_if(co_is_null)", "count(1)"})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+
+    finalAggTaskIds.push_back(makeTaskId("final-agg", i));
+    auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
+    addTask(task, {leafTaskId});
+  }
+
+  // Collect results and verify number of nulls is 3 times larger than in the
+  // original data.
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType(), GetParam().serdeKind)
+                .finalAggregation(
+                    {}, {"sum(a0)", "sum(a1)"}, {{BIGINT()}, {BIGINT()}})
+                .planNode();
+
+  std::vector<Split> finalAggTaskSplits;
+  for (auto finalAggTaskId : finalAggTaskIds) {
+    finalAggTaskSplits.emplace_back(remoteSplit(finalAggTaskId));
+  }
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .splits(std::move(finalAggTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults(
+          "SELECT 3 * ceil(1000.0 / 7) /* number of null rows */, 1000 + 2 * ceil(1000.0 / 7) /* total number of rows */");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -642,12 +1540,12 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
 }
 
 // Test query finishing before all splits have been scheduled.
-TEST_F(MultiFragmentTest, limit) {
+TEST_P(MultiFragmentTest, limit) {
   auto data = makeRowVector({makeFlatVector<int32_t>(
       1'000, [](auto row) { return row; }, nullEvery(7))});
 
   auto file = TempFilePath::create();
-  writeToFile(file->path, {data});
+  writeToFile(file->getPath(), {data});
 
   // Make leaf task: Values -> PartialLimit(10) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
@@ -655,43 +1553,35 @@ TEST_F(MultiFragmentTest, limit) {
       PlanBuilder()
           .tableScan(std::dynamic_pointer_cast<const RowType>(data->type()))
           .limit(0, 10, true)
-          .partitionedOutput({}, 1)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
           .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  Task::start(leafTask, 1);
+  leafTask->start(1);
 
   leafTask.get()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->path)));
+      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
 
   // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()
-                  .exchange(leafPlan->outputType())
+                  .exchange(leafPlan->outputType(), GetParam().serdeKind)
                   .localPartition(std::vector<std::string>{})
                   .limit(0, 10, false)
                   .planNode();
 
-  auto split =
-      exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
-
   // Expect the task to produce results before receiving no-more-splits message.
-  bool splitAdded = false;
-  auto task = ::assertQuery(
-      plan,
-      [&](Task* task) {
-        if (splitAdded) {
-          return;
-        }
-        task->addSplit("0", std::move(split));
-        splitAdded = true;
-      },
-      "VALUES (null), (1), (2), (3), (4), (5), (6), (null), (8), (9)",
-      duckDbQueryRunner_);
-
+  auto task =
+      test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .split(remoteSplit(leafTaskId))
+          .config(
+              core::QueryConfig::kShuffleCompressionKind,
+              common::compressionKindToString(GetParam().compressionKind))
+          .assertResults(
+              "VALUES (null), (1), (2), (3), (4), (5), (6), (null), (8), (9)");
   ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
 }
 
-TEST_F(MultiFragmentTest, mergeExchangeOverEmptySources) {
+TEST_P(MultiFragmentTest, mergeExchangeOverEmptySources) {
   std::vector<std::shared_ptr<Task>> tasks;
   std::vector<std::string> leafTaskIds;
 
@@ -701,20 +1591,82 @@ TEST_F(MultiFragmentTest, mergeExchangeOverEmptySources) {
     auto taskId = makeTaskId("leaf-", i);
     leafTaskIds.push_back(taskId);
     auto plan =
-        PlanBuilder().values({data}).partitionedOutput({}, 1).planNode();
+        PlanBuilder()
+            .values({data})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
 
     auto task = makeTask(taskId, plan, tasks.size());
     tasks.push_back(task);
-    Task::start(task, 4);
+    task->start(4);
   }
 
   auto exchangeTaskId = makeTaskId("exchange-", 0);
   auto plan = PlanBuilder()
-                  .mergeExchange(rowType_, {"c0"})
+                  .mergeExchange(rowType_, {"c0"}, GetParam().serdeKind)
                   .singleAggregation({"c0"}, {"count(1)"})
                   .planNode();
 
-  assertQuery(plan, leafTaskIds, "");
+  std::vector<Split> leafTaskSplits;
+  for (auto leafTaskId : leafTaskIds) {
+    leafTaskSplits.emplace_back(remoteSplit(leafTaskId));
+  }
+  test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .splits(std::move(leafTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeExchangeFailureOnStart) {
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::vector<std::string> leafTaskIds;
+
+  const auto injectErrorMsg{"injectError"};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::ExchangeQueue::dequeueLocked",
+      std::function<void(ExchangeQueue*)>(
+          ([&](ExchangeQueue* /*unused*/) { VELOX_FAIL(injectErrorMsg); })));
+
+  auto data = makeRowVector(rowType_, 0);
+
+  for (int i = 0; i < 2; ++i) {
+    auto taskId = makeTaskId("leaf-", i);
+    leafTaskIds.push_back(taskId);
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+
+    auto task = makeTask(taskId, plan, tasks.size());
+    tasks.push_back(task);
+    task->start(4);
+  }
+
+  auto exchangeTaskId = makeTaskId("exchange-", 0);
+  auto plan = PlanBuilder()
+                  .mergeExchange(rowType_, {"c0"}, GetParam().serdeKind)
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .planNode();
+
+  std::vector<Split> leafTaskSplits;
+  for (auto leafTaskId : leafTaskIds) {
+    leafTaskSplits.emplace_back(remoteSplit(leafTaskId));
+  }
+  VELOX_ASSERT_THROW(
+      test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .splits(std::move(leafTaskSplits))
+          .config(
+              core::QueryConfig::kShuffleCompressionKind,
+              common::compressionKindToString(GetParam().compressionKind))
+          .assertResults(""),
+      injectErrorMsg);
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -724,22 +1676,23 @@ TEST_F(MultiFragmentTest, mergeExchangeOverEmptySources) {
 namespace {
 core::PlanNodePtr makeJoinOverExchangePlan(
     const RowTypePtr& exchangeType,
-    const RowVectorPtr& buildData) {
+    const RowVectorPtr& buildData,
+    VectorSerde::Kind serdeKind) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   return PlanBuilder(planNodeIdGenerator)
-      .exchange(exchangeType)
+      .exchange(exchangeType, serdeKind)
       .hashJoin(
           {"c0"},
           {"u_c0"},
           PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
           "",
           {"c0"})
-      .partitionedOutput({}, 1)
+      .partitionedOutput({}, 1, /*outputLayout=*/{}, serdeKind)
       .planNode();
 }
 } // namespace
 
-TEST_F(MultiFragmentTest, earlyCompletion) {
+TEST_P(MultiFragmentTest, earlyCompletion) {
   // Setup a distributed query with 4 tasks:
   // - 1 leaf task with results partitioned 2 ways;
   // - 2 intermediate tasks reading from 2 partitions produced by the leaf task.
@@ -767,12 +1720,13 @@ TEST_F(MultiFragmentTest, earlyCompletion) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto plan = PlanBuilder()
                   .values({data, data, data, data})
-                  .partitionedOutput({"c0"}, 2)
+                  .partitionedOutput(
+                      {"c0"}, 2, /*outputLayout=*/{}, GetParam().serdeKind)
                   .planNode();
 
   auto task = makeTask(leafTaskId, plan, tasks.size());
   tasks.push_back(task);
-  Task::start(task, 1);
+  task->start(1);
 
   // Create intermediate tasks.
   std::vector<std::string> joinTaskIds;
@@ -786,8 +1740,8 @@ TEST_F(MultiFragmentTest, earlyCompletion) {
           {"u_c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
     }
 
-    auto joinPlan =
-        makeJoinOverExchangePlan(asRowType(data->type()), buildData);
+    auto joinPlan = makeJoinOverExchangePlan(
+        asRowType(data->type()), buildData, GetParam().serdeKind);
 
     joinOutputType = joinPlan->outputType();
 
@@ -796,23 +1750,32 @@ TEST_F(MultiFragmentTest, earlyCompletion) {
 
     auto task = makeTask(taskId, joinPlan, i);
     tasks.push_back(task);
-    Task::start(task, 4);
+    task->start(4);
 
     addRemoteSplits(task, {leafTaskId});
   }
 
   // Create output task.
-  auto outputPlan = PlanBuilder().exchange(joinOutputType).planNode();
+  auto outputPlan =
+      PlanBuilder().exchange(joinOutputType, GetParam().serdeKind).planNode();
 
-  assertQuery(
-      outputPlan, joinTaskIds, "SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
+  std::vector<Split> joinTaskSplits;
+  for (auto joinTaskId : joinTaskIds) {
+    joinTaskSplits.emplace_back(remoteSplit(joinTaskId));
+  }
+  test::AssertQueryBuilder(outputPlan, duckDbQueryRunner_)
+      .splits(std::move(joinTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
 }
 
-TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
+TEST_P(MultiFragmentTest, earlyCompletionBroadcast) {
   // Same as 'earlyCompletion' test, but broadcasts leaf task results to all
   // intermediate tasks.
 
@@ -830,12 +1793,13 @@ TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto plan = PlanBuilder()
                   .values({data, data, data, data})
-                  .partitionedOutputBroadcast()
+                  .partitionedOutputBroadcast(
+                      /*outputLayout=*/{}, GetParam().serdeKind)
                   .planNode();
 
   auto leafTask = makeTask(leafTaskId, plan, tasks.size());
   tasks.push_back(leafTask);
-  Task::start(leafTask, 1);
+  leafTask->start(1);
 
   // Create intermediate tasks.
   std::vector<std::string> joinTaskIds;
@@ -849,8 +1813,8 @@ TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
           {"u_c0"}, {makeFlatVector<int64_t>({-7, 10, 12345678})});
     }
 
-    auto joinPlan =
-        makeJoinOverExchangePlan(asRowType(data->type()), buildData);
+    auto joinPlan = makeJoinOverExchangePlan(
+        asRowType(data->type()), buildData, GetParam().serdeKind);
 
     joinOutputType = joinPlan->outputType();
 
@@ -859,7 +1823,7 @@ TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
 
     auto task = makeTask(taskId, joinPlan, i);
     tasks.push_back(task);
-    Task::start(task, 4);
+    task->start(4);
 
     leafTask->updateOutputBuffers(i + 1, false);
 
@@ -868,16 +1832,26 @@ TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
   leafTask->updateOutputBuffers(joinTaskIds.size(), true);
 
   // Create output task.
-  auto outputPlan = PlanBuilder().exchange(joinOutputType).planNode();
+  auto outputPlan =
+      PlanBuilder().exchange(joinOutputType, GetParam().serdeKind).planNode();
 
-  assertQuery(outputPlan, joinTaskIds, "SELECT UNNEST([10, 10, 10, 10])");
+  std::vector<Split> joinTaskSplits;
+  for (auto joinTaskId : joinTaskIds) {
+    joinTaskSplits.emplace_back(remoteSplit(joinTaskId));
+  }
+  test::AssertQueryBuilder(outputPlan, duckDbQueryRunner_)
+      .splits(std::move(joinTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT UNNEST([10, 10, 10, 10])");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
 }
 
-TEST_F(MultiFragmentTest, earlyCompletionMerge) {
+TEST_P(MultiFragmentTest, earlyCompletionMerge) {
   // Same as 'earlyCompletion' test, but uses MergeExchange instead of Exchange.
 
   std::vector<std::shared_ptr<Task>> tasks;
@@ -894,12 +1868,13 @@ TEST_F(MultiFragmentTest, earlyCompletionMerge) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto plan = PlanBuilder()
                   .values({data, data, data, data})
-                  .partitionedOutput({"c0"}, 2)
+                  .partitionedOutput(
+                      {"c0"}, 2, /*outputLayout=*/{}, GetParam().serdeKind)
                   .planNode();
 
   auto task = makeTask(leafTaskId, plan, tasks.size());
   tasks.push_back(task);
-  Task::start(task, 1);
+  task->start(1);
 
   // Create intermediate tasks.
   std::vector<std::string> joinTaskIds;
@@ -916,14 +1891,15 @@ TEST_F(MultiFragmentTest, earlyCompletionMerge) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto joinPlan =
         PlanBuilder(planNodeIdGenerator)
-            .mergeExchange(asRowType(data->type()), {"c0"})
+            .mergeExchange(
+                asRowType(data->type()), {"c0"}, GetParam().serdeKind)
             .hashJoin(
                 {"c0"},
                 {"u_c0"},
                 PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
                 "",
                 {"c0"})
-            .partitionedOutput({}, 1)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .planNode();
 
     joinOutputType = joinPlan->outputType();
@@ -933,16 +1909,25 @@ TEST_F(MultiFragmentTest, earlyCompletionMerge) {
 
     auto task = makeTask(taskId, joinPlan, i);
     tasks.push_back(task);
-    Task::start(task, 4);
+    task->start(4);
 
     addRemoteSplits(task, {leafTaskId});
   }
 
   // Create output task.
-  auto outputPlan = PlanBuilder().exchange(joinOutputType).planNode();
+  auto outputPlan =
+      PlanBuilder().exchange(joinOutputType, GetParam().serdeKind).planNode();
 
-  assertQuery(
-      outputPlan, joinTaskIds, "SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
+  std::vector<Split> joinTaskSplits;
+  for (auto joinTaskId : joinTaskIds) {
+    joinTaskSplits.emplace_back(remoteSplit(joinTaskId));
+  }
+  test::AssertQueryBuilder(outputPlan, duckDbQueryRunner_)
+      .splits(std::move(joinTaskSplits))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -1027,7 +2012,7 @@ class SlowOperatorTranslator : public Operator::PlanNodeTranslator {
   }
 };
 
-TEST_F(MultiFragmentTest, exchangeDestruction) {
+TEST_P(MultiFragmentTest, exchangeDestruction) {
   // This unit test tests the proper destruction of ExchangeClient upon
   // task destruction.
   Operator::registerOperator(std::make_unique<SlowOperatorTranslator>());
@@ -1042,27 +2027,28 @@ TEST_F(MultiFragmentTest, exchangeDestruction) {
   auto leafTaskId = makeTaskId("leaf", 0);
   core::PlanNodePtr leafPlan;
 
-  leafPlan = PlanBuilder()
-                 .tableScan(rowType_)
-                 .project({"c0 % 10 AS c0", "c1"})
-                 .partitionedOutput({}, 1)
-                 .planNode();
+  leafPlan =
+      PlanBuilder()
+          .tableScan(rowType_)
+          .project({"c0 % 10 AS c0", "c1"})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
 
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  Task::start(leafTask, 1);
+  leafTask->start(1);
   addHiveSplits(leafTask, filePaths_);
 
   auto rootPlan =
       PlanBuilder()
-          .exchange(leafPlan->outputType())
+          .exchange(leafPlan->outputType(), GetParam().serdeKind)
           .addNode([&leafPlan](std::string id, core::PlanNodePtr node) {
             return std::make_shared<SlowNode>(id, std::move(node));
           })
-          .partitionedOutput({}, 1)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
           .planNode();
 
   auto rootTask = makeTask("root-task", rootPlan, 0);
-  Task::start(rootTask, 1);
+  rootTask->start(1);
   addRemoteSplits(rootTask, {leafTaskId});
 
   ASSERT_FALSE(waitForTaskCompletion(rootTask.get(), 1'000'000));
@@ -1076,24 +2062,25 @@ TEST_F(MultiFragmentTest, exchangeDestruction) {
   rootTask = nullptr;
 }
 
-TEST_F(MultiFragmentTest, cancelledExchange) {
+TEST_P(MultiFragmentTest, cancelledExchange) {
   // Create a source fragment borrow the output type from it.
-  auto planFragment = exec::test::PlanBuilder()
-                          .tableScan(rowType_)
-                          .filter("c0 % 5 = 1")
-                          .partitionedOutput({}, 1, {"c0", "c1"})
-                          .planFragment();
+  auto planFragment =
+      exec::test::PlanBuilder()
+          .tableScan(rowType_)
+          .filter("c0 % 5 = 1")
+          .partitionedOutput({}, 1, {"c0", "c1"}, GetParam().serdeKind)
+          .planFragment();
 
   // Create task with exchange.
   auto planFragmentWithExchange =
       exec::test::PlanBuilder()
-          .exchange(planFragment.planNode->outputType())
-          .partitionedOutput({}, 1)
+          .exchange(planFragment.planNode->outputType(), GetParam().serdeKind)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
           .planFragment();
   auto exchangeTask =
       makeTask("output.0.0.1", planFragmentWithExchange.planNode, 0);
   // Start the task and abort it straight away.
-  Task::start(exchangeTask, 2);
+  exchangeTask->start(2);
   exchangeTask->requestAbort();
 
   /* sleep override */
@@ -1105,11 +2092,18 @@ TEST_F(MultiFragmentTest, cancelledExchange) {
 
 class TestCustomExchangeNode : public core::PlanNode {
  public:
-  TestCustomExchangeNode(const core::PlanNodeId& id, const RowTypePtr type)
-      : PlanNode(id), outputType_(type) {}
+  TestCustomExchangeNode(
+      const core::PlanNodeId& id,
+      const RowTypePtr type,
+      VectorSerde::Kind serdeKind)
+      : PlanNode(id), outputType_(type), serdeKind_(serdeKind) {}
 
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  VectorSerde::Kind serdeKind() const {
+    return serdeKind_;
   }
 
   const std::vector<core::PlanNodePtr>& sources() const override {
@@ -1134,14 +2128,15 @@ class TestCustomExchangeNode : public core::PlanNode {
     // Nothing to add
   }
 
-  RowTypePtr outputType_;
+  const RowTypePtr outputType_;
+  const VectorSerde::Kind serdeKind_;
 };
 
 class TestCustomExchange : public exec::Exchange {
  public:
   TestCustomExchange(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL ctx,
+      DriverCtx* ctx,
       const std::shared_ptr<const TestCustomExchangeNode>& customExchangeNode,
       std::shared_ptr<ExchangeClient> exchangeClient)
       : exec::Exchange(
@@ -1149,7 +2144,8 @@ class TestCustomExchange : public exec::Exchange {
             ctx,
             std::make_shared<core::ExchangeNode>(
                 customExchangeNode->id(),
-                customExchangeNode->outputType()),
+                customExchangeNode->outputType(),
+                customExchangeNode->serdeKind()),
             std::move(exchangeClient)) {}
 
   RowVectorPtr getOutput() override {
@@ -1174,40 +2170,58 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
   }
 };
 
-TEST_F(MultiFragmentTest, customPlanNodeWithExchangeClient) {
+TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
   setupSources(5, 100);
   Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
   auto leafTaskId = makeTaskId("leaf", 0);
+  core::PlanNodeId partitionNodeId;
   auto leafPlan =
-      PlanBuilder().values(vectors_).partitionedOutput({}, 1).planNode();
+      PlanBuilder()
+          .values(vectors_)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .capturePlanNodeId(partitionNodeId)
+          .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  Task::start(leafTask, 1);
+  leafTask->start(1);
 
   CursorParameters params;
+  params.queryConfigs.emplace(
+      core::QueryConfig::kShuffleCompressionKind,
+      common::compressionKindToString(GetParam().compressionKind));
   core::PlanNodeId testNodeId;
   params.maxDrivers = 1;
   params.planNode =
       PlanBuilder()
           .addNode([&leafPlan](std::string id, core::PlanNodePtr /* input */) {
             return std::make_shared<TestCustomExchangeNode>(
-                id, leafPlan->outputType());
+                id, leafPlan->outputType(), GetParam().serdeKind);
           })
           .capturePlanNodeId(testNodeId)
           .planNode();
 
-  auto cursor = std::make_unique<TaskCursor>(params);
+  auto cursor = TaskCursor::create(params);
   auto task = cursor->task();
   addRemoteSplits(task, {leafTaskId});
   while (cursor->moveNext()) {
   }
+  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+      << leafTask->taskId();
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+
   EXPECT_NE(
       toPlanStats(task->taskStats())
           .at(testNodeId)
           .customStats.count("testCustomExchangeStat"),
       0);
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
-      << leafTask->taskId();
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+
+  auto planStats = toPlanStats(leafTask->taskStats());
+  const auto serdeKindRuntimsStats =
+      planStats.at(partitionNodeId).customStats.at(Operator::kShuffleSerdeKind);
+  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
 }
 
 // This test is to reproduce the race condition between task terminate and no
@@ -1220,18 +2234,19 @@ TEST_F(MultiFragmentTest, customPlanNodeWithExchangeClient) {
 //     task is not running.
 // T5: task terminate processes the pending remote splits by accessing the
 //     associated exchange client and run into segment fault.
-DEBUG_ONLY_TEST_F(
+DEBUG_ONLY_TEST_P(
     MultiFragmentTest,
     raceBetweenTaskTerminateAndTaskNoMoreSplits) {
   setupSources(10, 1000);
   auto leafTaskId = makeTaskId("leaf", 0);
-  core::PlanNodePtr leafPlan = PlanBuilder()
-                                   .tableScan(rowType_)
-                                   .project({"c0 % 10 AS c0", "c1"})
-                                   .partitionedOutput({}, 1)
-                                   .planNode();
+  core::PlanNodePtr leafPlan =
+      PlanBuilder()
+          .tableScan(rowType_)
+          .project({"c0 % 10 AS c0", "c1"})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  Task::start(leafTask, 1);
+  leafTask->start(1);
   addHiveSplits(leafTask, filePaths_);
 
   const std::string kRootTaskId("root-task");
@@ -1246,9 +2261,7 @@ DEBUG_ONLY_TEST_F(
           return;
         }
         // Trigger to add more split after the task has run into error.
-        auto split =
-            exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
-        task->addSplit("0", std::move(split));
+        task->addSplit("0", remoteSplit(leafTaskId));
       })));
 
   SCOPED_TESTVALUE_SET(
@@ -1263,8 +2276,8 @@ DEBUG_ONLY_TEST_F(
         blockTerminate.await([&]() { return readyToTerminate.load(); });
       })));
   auto rootPlan = PlanBuilder()
-                      .exchange(leafPlan->outputType())
-                      .finalAggregation({"c0"}, {"count(c1)"}, {BIGINT()})
+                      .exchange(leafPlan->outputType(), GetParam().serdeKind)
+                      .finalAggregation({"c0"}, {"count(c1)"}, {{BIGINT()}})
                       .planNode();
 
   const int64_t kRootMemoryLimit = 1 << 20;
@@ -1272,15 +2285,15 @@ DEBUG_ONLY_TEST_F(
       kRootTaskId,
       rootPlan,
       0,
-      [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/)
-          -> BlockingReason { return BlockingReason::kNotBlocked; },
+      [](RowVectorPtr /*unused*/,
+         bool drained,
+         ContinueFuture* /*unused*/) -> BlockingReason {
+        VELOX_CHECK(!drained);
+        return BlockingReason::kNotBlocked;
+      },
       kRootMemoryLimit);
-  Task::start(rootTask, 1);
-  {
-    auto split =
-        exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
-    rootTask->addSplit("0", std::move(split));
-  }
+  rootTask->start(1);
+  rootTask->addSplit("0", remoteSplit(leafTaskId));
   blockNoMoreSplits.await([&]() { return noMoreSplits.load(); });
   rootTask->noMoreSplits("0");
   // Unblock task terminate execution after no more split call finishes.
@@ -1289,18 +2302,20 @@ DEBUG_ONLY_TEST_F(
   ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
 }
 
-TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
+TEST_P(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   setupSources(8, 1000);
   auto taskId = makeTaskId("task", 0);
   core::PlanNodePtr leafPlan;
   leafPlan =
-      PlanBuilder().tableScan(rowType_).partitionedOutput({}, 1).planNode();
+      PlanBuilder()
+          .tableScan(rowType_)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
 
   auto task = makeTask(taskId, leafPlan, 0);
-  Task::start(task, 1);
+  task->start(1);
   addHiveSplits(task, filePaths_);
 
-  auto bufferManager = PartitionedOutputBufferManager::getInstance().lock();
   const uint64_t maxBytes = std::numeric_limits<uint64_t>::max();
   const int destination = 0;
   std::vector<std::unique_ptr<folly::IOBuf>> receivedIobufs;
@@ -1308,13 +2323,14 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   for (;;) {
     auto dataPromise = ContinuePromise("WaitForOutput");
     bool complete{false};
-    ASSERT_TRUE(bufferManager->getData(
+    ASSERT_TRUE(bufferManager_->getData(
         taskId,
         destination,
         maxBytes,
         sequence,
         [&](std::vector<std::unique_ptr<folly::IOBuf>> iobufs,
-            int64_t inSequence) {
+            int64_t inSequence,
+            std::vector<int64_t> /*remainingBytes*/) {
           for (auto& iobuf : iobufs) {
             if (iobuf != nullptr) {
               ++inSequence;
@@ -1355,7 +2371,79 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   task.reset();
 }
 
-DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
+DEBUG_ONLY_TEST_P(
+    MultiFragmentTest,
+    taskTerminateWithProblematicRemainingRemoteSplits) {
+  // Start the task with 2 drivers.
+  auto probeData =
+      makeRowVector({"p_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId exchangeNodeId;
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData}, true)
+          .hashJoin(
+              {"p_c0"},
+              {"c0"},
+              PlanBuilder(planNodeIdGenerator)
+                  .exchange(rowType_, GetParam().serdeKind)
+                  .capturePlanNodeId(exchangeNodeId)
+                  .planNode(),
+              "",
+              {"c0"})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+  auto taskId = makeTaskId("final", 0);
+  auto task = makeTask(taskId, plan, 0);
+  task->start(2);
+
+  std::atomic<bool> driverRunWaitFlag{true};
+  folly::EventCount driverRunWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal",
+      std::function<void(const Driver*)>([&](const Driver* /* unused */) {
+        // Block on driver run so that added bad split is not immediately
+        // consumed. It gets unblocked when task termination state is set.
+        driverRunWait.await([&]() { return !(driverRunWaitFlag.load()); });
+      }));
+
+  std::atomic<bool> taskSetErrorWaitFlag{true};
+  folly::EventCount taskSetErrorWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::setError",
+      std::function<void(const Task*)>([&](const Task* /* unused */) {
+        taskSetErrorWait.await(
+            [&]() { return !(taskSetErrorWaitFlag.load()); });
+      }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::terminate",
+      std::function<void(const Task*)>([&](const Task* /* unused */) {
+        driverRunWaitFlag = false;
+        driverRunWait.notifyAll();
+      }));
+
+  std::thread failThread([&]() {
+    try {
+      VELOX_FAIL("Test terminate task");
+    } catch (const VeloxException&) {
+      task->setError(std::current_exception());
+    }
+  });
+
+  // Add one more bad split, making sure `remainingRemoteSplits` is not empty
+  // and processing it would cause an exception.
+  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 0)));
+  taskSetErrorWaitFlag = false;
+  taskSetErrorWait.notifyAll();
+
+  // Wait for the task to fail, and make sure the task has been deleted instead
+  // of hanging as a zombie task.
+  ASSERT_TRUE(waitForTaskFailure(task.get(), 3'000'000)) << task->taskId();
+  failThread.join();
+}
+
+DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeWithEarlyTermination) {
   setupSources(10, 1000);
 
   std::vector<std::shared_ptr<TempFilePath>> filePaths(
@@ -1365,18 +2453,19 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
   auto sortTaskId = makeTaskId("orderby", 0);
   partialSortTaskIds.push_back(sortTaskId);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto partialSortPlan = PlanBuilder(planNodeIdGenerator)
-                             .localMerge(
-                                 {"c0"},
-                                 {PlanBuilder(planNodeIdGenerator)
-                                      .tableScan(rowType_)
-                                      .orderBy({"c0"}, true)
-                                      .planNode()})
-                             .partitionedOutput({}, 1)
-                             .planNode();
+  auto partialSortPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .localMerge(
+              {"c0"},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(rowType_)
+                   .orderBy({"c0"}, true)
+                   .planNode()})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
 
   auto partialSortTask = makeTask(sortTaskId, partialSortPlan, 1);
-  Task::start(partialSortTask, 1);
+  partialSortTask->start(1);
   addHiveSplits(partialSortTask, filePaths);
 
   std::atomic<bool> blockMergeOnce{true};
@@ -1393,21 +2482,921 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
         }
         mergeIsBlockedWait.await([&]() { return mergeIsBlockedReady.load(); });
         // Trigger early termination.
-        op->testingOperatorCtx()->task()->requestAbort();
+        op->operatorCtx()->task()->requestAbort();
       }));
 
   auto finalSortTaskId = makeTaskId("orderby", 1);
-  auto finalSortPlan = PlanBuilder()
-                           .mergeExchange(partialSortPlan->outputType(), {"c0"})
-                           .partitionedOutput({}, 1)
-                           .planNode();
+  auto finalSortPlan =
+      PlanBuilder()
+          .mergeExchange(
+              partialSortPlan->outputType(), {"c0"}, GetParam().serdeKind)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
   auto finalSortTask = makeTask(finalSortTaskId, finalSortPlan, 0);
-  Task::start(finalSortTask, 1);
+  finalSortTask->start(1);
   addRemoteSplits(finalSortTask, partialSortTaskIds);
 
   mergeIsBlockedReady.store(true);
   mergeIsBlockedWait.notifyAll();
 
-  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 1'000'000'000));
-  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 1'000'000'000));
+  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 30'000'000));
+  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 30'000'000));
 }
+
+class DataFetcher {
+ public:
+  DataFetcher(const std::string& taskId, int32_t destination, int64_t maxBytes)
+      : taskId_{taskId}, destination_{destination}, maxBytes_{maxBytes} {}
+
+  /// Starts fetching data for the task and destination specified in the
+  /// constructor. Returns a future that gets completes once all the data has
+  /// been fetched.
+  ContinueFuture fetch() {
+    auto [p, f] = makeVeloxContinuePromiseContract("DataFetcher");
+    promise_ = std::move(p);
+    doFetch(kInitialSequence);
+    return std::move(f);
+  }
+
+  struct Stats {
+    /// Number of possibly multi-page packets received.
+    int32_t numPackets;
+    /// Number of pages received. Includes the last null page.
+    int32_t numPages;
+    /// Total number of bytes received across all pages.
+    int64_t totalBytes;
+
+    /// Average number of bytes per packet.
+    int64_t averagePacketBytes() const {
+      return numPackets > 0 ? (totalBytes / numPackets) : 0;
+    }
+
+    std::string toString() const {
+      return fmt::format(
+          "numPackets {} numPages {} totalBytes {}",
+          numPackets,
+          numPages,
+          totalBytes);
+    }
+  };
+
+  Stats stats() const {
+    return {numPackets_, numPages_, totalBytes_};
+  }
+
+  std::string getPacketPageSizes() const {
+    std::stringstream out;
+    for (const auto& sizes : packetPageSizes_) {
+      out << sizes.size() << " pages: [" << folly::join(", ", sizes) << "], ";
+    }
+    return to<std::string>(packetPageSizes_.size()) + " packets: [" +
+        out.str() + "]";
+  }
+
+  std::atomic<bool>& bufferFull() {
+    return bufferFull_;
+  }
+
+  std::atomic<bool>& bufferDone() {
+    return bufferDone_;
+  }
+
+  folly::EventCount& bufferFullOrDoneWait() {
+    return bufferFullOrDoneWait_;
+  }
+
+ private:
+  static constexpr int64_t kInitialSequence = 0;
+
+  void doFetch(int64_t sequence) {
+    // We only want to consume data when the buffer is full or done because we
+    // want to make sure maxBytes is respected, so there needs to be enough data
+    // in the buffer for maxBytes to have an effect.
+    bufferFullOrDoneWait_.await(
+        [&]() { return bufferFull_.load() || bufferDone_.load(); });
+    // Reset the bufferFull_ flag as we're about to consume some data and we
+    // want to detect when it fills up again. Note that we don't reset the
+    // bufferDone_ flag because once it's done it's done.
+    bufferFull_ = false;
+
+    bool ok = bufferManager_->getData(
+        taskId_,
+        destination_,
+        maxBytes_,
+        sequence,
+        [&](auto pages, auto sequence, auto /*remainingBytes*/) mutable {
+          const auto nextSequence = sequence + pages.size();
+          const bool atEnd = processData(std::move(pages), sequence);
+          bufferManager_->acknowledge(taskId_, destination_, nextSequence);
+
+          if (atEnd) {
+            bufferManager_->deleteResults(taskId_, destination_);
+            promise_.setValue();
+          } else {
+            doFetch(nextSequence);
+          }
+        });
+    VELOX_CHECK(ok);
+  }
+
+  bool processData(
+      std::vector<std::unique_ptr<folly::IOBuf>> pages,
+      int64_t sequence) {
+    numPages_ += pages.size();
+    ++numPackets_;
+
+    /// Save the page sizes of each packet to help with diagnosis.
+    auto pageSizes = std::vector<std::size_t>();
+
+    int64_t numBytes = 0;
+    bool atEnd = false;
+    for (const auto& page : pages) {
+      if (page == nullptr) {
+        VELOX_CHECK(!atEnd);
+        atEnd = true;
+      } else {
+        auto chainDataLength = page->computeChainDataLength();
+        numBytes += chainDataLength;
+        pageSizes.push_back(chainDataLength);
+      }
+    }
+
+    totalBytes_ += numBytes;
+    packetPageSizes_.push_back(std::move(pageSizes));
+    return atEnd;
+  }
+
+  const std::string taskId_;
+  const int32_t destination_;
+  const int64_t maxBytes_;
+  ContinuePromise promise_{ContinuePromise::makeEmpty()};
+  int32_t numPackets_{0};
+  int32_t numPages_{0};
+  int64_t totalBytes_{0};
+  /// All the pages sizes of each packet.
+  std::vector<std::vector<std::size_t>> packetPageSizes_;
+
+  /// Flag that gets set when the OutputBuffer is full.
+  std::atomic<bool> bufferFull_{false};
+  /// Flag that gets set when the OutputBuffer sees that all upstream Drivers
+  /// have finished.
+  std::atomic<bool> bufferDone_{false};
+  /// Used to notify DataFetcher that one of the above bool flags has been set.
+  folly::EventCount bufferFullOrDoneWait_;
+
+  std::shared_ptr<OutputBufferManager> bufferManager_{
+      OutputBufferManager::getInstanceRef()};
+};
+
+/// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB
+/// granularity. It can do so only if PartitionedOutput operator limits the size
+/// of individual pages. PartitionedOutput operator is expected to limit page
+/// sizes to no more than 1MB give and take 30%.
+DEBUG_ONLY_TEST_P(MultiFragmentTest, maxBytes) {
+  if (GetParam().compressionKind != common::CompressionKind_NONE) {
+    // NOTE: different compression generates different serialized byte size so
+    // only test with no-compression to ease testing.s
+    return;
+  }
+  std::string s(25, 'x');
+  // This number is chosen so that serialization of all the 100 vectors can fit
+  // in 32MB (the QueryConfig::maxOutputBufferSize).  Otherwise the driver is
+  // blocked, since the data consumed by DataFetcher is so small that the
+  // remaining buffered data is still larger than OutputBuffer::continueSize_.
+  constexpr int kNumRows = 4'800;
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeConstant(StringView(s), kNumRows),
+  });
+
+  core::PlanNodeId outputNodeId;
+  auto plan =
+      PlanBuilder()
+          .values({data}, false, 100)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .capturePlanNodeId(outputNodeId)
+          .planNode();
+
+  int32_t testIteration = 0;
+  DataFetcher::Stats prevStats;
+
+  auto test = [&](int64_t maxBytes) {
+    const auto taskId = fmt::format("test.{}", testIteration++);
+
+    SCOPED_TRACE(taskId);
+    SCOPED_TRACE(fmt::format("maxBytes: {}", maxBytes));
+
+    DataFetcher fetcher(taskId, 0, maxBytes);
+
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::OutputBuffer::enqueue",
+        std::function<void(const OutputBuffer*)>(
+            [&](const OutputBuffer* /* unused */) {
+              fetcher.bufferFull() = true;
+              fetcher.bufferFullOrDoneWait().notifyAll();
+            }));
+
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::OutputBuffer::checkIfDone",
+        std::function<void(const OutputBuffer*)>(
+            [&](const OutputBuffer* /* unused */) {
+              fetcher.bufferDone() = true;
+              fetcher.bufferFullOrDoneWait().notifyAll();
+            }));
+
+    auto task = makeTask(taskId, plan, 0);
+    task->start(1);
+    task->updateOutputBuffers(1, true);
+
+    fetcher.fetch().wait();
+
+    ASSERT_TRUE(waitForTaskCompletion(task.get()));
+
+    const auto stats = fetcher.stats();
+    if (testIteration > 1) {
+      ASSERT_EQ(prevStats.numPages, stats.numPages);
+      ASSERT_EQ(prevStats.totalBytes, stats.totalBytes);
+      ASSERT_GT(prevStats.numPackets, stats.numPackets)
+          << stats.toString() << " " << fetcher.getPacketPageSizes();
+    }
+
+    ASSERT_LT(stats.averagePacketBytes(), maxBytes * 1.5);
+
+    auto taskStats = toPlanStats(task->taskStats());
+    const auto& outputStats = taskStats.at(outputNodeId);
+
+    ASSERT_EQ(outputStats.outputBytes, stats.totalBytes);
+    ASSERT_EQ(outputStats.inputRows, 100 * data->size());
+    ASSERT_EQ(outputStats.outputRows, 100 * data->size());
+    prevStats = stats;
+  };
+
+  static const int64_t kMB = 1 << 20;
+  test(kMB);
+  test(3 * kMB);
+  test(5 * kMB);
+  test(10 * kMB);
+  test(20 * kMB);
+  test(40 * kMB);
+}
+
+// Verifies that ExchangeClient stats are populated even if task fails.
+DEBUG_ONLY_TEST_P(MultiFragmentTest, exchangeStatsOnFailure) {
+  // Triggers a failure after fetching first 10 pages.
+  std::atomic_uint64_t expectedReceivedPages{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::LocalExchangeSource",
+      std::function<void(exec::ExchangeSource * data)>(
+          [&](exec::ExchangeSource* source) {
+            auto* queue = source->testingQueue();
+            const auto receivedPages = queue->receivedPages();
+            if (receivedPages > 10) {
+              expectedReceivedPages = receivedPages;
+
+              VELOX_FAIL("Forced failure after {} pages", receivedPages);
+            }
+          }));
+
+  std::string s(25, 'x');
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
+      makeConstant(StringView(s), 10'000),
+  });
+
+  auto producerPlan =
+      PlanBuilder()
+          .values({data}, false, 30)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  auto producerTaskId = makeTaskId("producer", 0);
+  auto producerTask = makeTask(producerTaskId, producerPlan, 0);
+  producerTask->start(1);
+  producerTask->updateOutputBuffers(1, true);
+
+  auto plan = PlanBuilder()
+                  .exchange(producerPlan->outputType(), GetParam().serdeKind)
+                  .planNode();
+
+  auto task = makeTask("t", plan, 0, noopConsumer());
+  task->start(4);
+  task->addSplit("0", remoteSplit(producerTaskId));
+  task->noMoreSplits("0");
+
+  ASSERT_TRUE(test::waitForTaskFailure(task.get(), 3'000'000));
+
+  ASSERT_TRUE(task->errorMessage().find("Forced failure") != std::string::npos)
+      << "Got: [" << task->errorMessage() << "]";
+
+  auto stats = toPlanStats(task->taskStats());
+
+  EXPECT_EQ(
+      expectedReceivedPages,
+      stats.at("0").customStats.at("numReceivedPages").sum);
+
+  ASSERT_TRUE(waitForTaskCompletion(producerTask.get(), 3'000'000));
+}
+
+TEST_P(MultiFragmentTest, earlyTaskFailure) {
+  setupSources(1, 10);
+
+  const auto partialSortTaskId = makeTaskId("partialSortBy", 0);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto partialSortPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .localMerge(
+              {"c0"},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(rowType_)
+                   .orderBy({"c0"}, true)
+                   .planNode()})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+  for (bool internalFailure : {false, true}) {
+    SCOPED_TRACE(fmt::format("internalFailure: {}", internalFailure));
+
+    auto partialSortTask = makeTask(partialSortTaskId, partialSortPlan, 1);
+    partialSortTask->start(1);
+    addHiveSplits(partialSortTask, filePaths_);
+    auto outputType = partialSortPlan->outputType();
+
+    auto finalSortTaskId = makeTaskId("finalSortBy", 0);
+    auto finalSortPlan =
+        PlanBuilder()
+            .mergeExchange(outputType, {"c0"}, GetParam().serdeKind)
+            .partitionedOutput({}, 1)
+            .planNode();
+
+    auto finalSortTask = makeTask(finalSortTaskId, finalSortPlan, 0);
+    if (internalFailure) {
+      try {
+        VELOX_FAIL("memoryAbortTest");
+      } catch (const VeloxRuntimeError&) {
+        finalSortTask->pool()->abort(std::current_exception());
+      }
+    } else {
+      finalSortTask->requestAbort().wait();
+    }
+
+    finalSortTask->start(1);
+    addRemoteSplits(finalSortTask, std::vector<std::string>{partialSortTaskId});
+    partialSortTask->requestAbort().wait();
+
+    if (internalFailure) {
+      ASSERT_TRUE(waitForTaskFailure(finalSortTask.get()))
+          << finalSortTask->taskId();
+    } else {
+      ASSERT_TRUE(waitForTaskAborted(finalSortTask.get()))
+          << finalSortTask->taskId();
+    }
+    ASSERT_TRUE(waitForTaskAborted(partialSortTask.get()))
+        << partialSortTask->taskId();
+  }
+}
+
+TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+
+  const int32_t numPartitions = 100;
+  auto producerPlan = test::PlanBuilder()
+                          .values({data})
+                          .partitionedOutput(
+                              {"c0"},
+                              numPartitions,
+                              /*outputLayout=*/{},
+                              GetParam().serdeKind)
+                          .planNode();
+  const auto producerTaskId = "local://t1";
+
+  auto plan = test::PlanBuilder()
+                  .exchange(asRowType(data->type()), GetParam().serdeKind)
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>(3'000, [](auto row) { return 1 + row % 3; }),
+  });
+
+  auto test = [&](uint64_t maxBytes, int32_t expectedBatches) {
+    auto producerTask = makeTask(producerTaskId, producerPlan);
+
+    bufferManager_->initializeTask(
+        producerTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        numPartitions,
+        1);
+
+    auto cleanupGuard = folly::makeGuard([&]() {
+      producerTask->requestCancel();
+      bufferManager_->removeTask(producerTaskId);
+    });
+
+    // Enqueue many small pages.
+    const int32_t numPages = 1'000;
+    for (auto i = 0; i < numPages; ++i) {
+      enqueue(producerTaskId, 17, data);
+    }
+    bufferManager_->noMoreData(producerTaskId);
+
+    auto task = test::AssertQueryBuilder(plan)
+                    .split(remoteSplit(producerTaskId))
+                    .destination(17)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchBytes,
+                        std::to_string(maxBytes))
+                    .assertResults(expected);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    const auto& stats = taskStats.at("0");
+
+    ASSERT_EQ(expected->size(), stats.outputRows);
+    ASSERT_EQ(expectedBatches, stats.outputVectors);
+    ASSERT_EQ(numPages, stats.customStats.at("numReceivedPages").sum);
+  };
+
+  if (GetParam().serdeKind == VectorSerde::Kind::kPresto) {
+    test(1, 1'000);
+    test(1'000, 56);
+    test(10'000, 7);
+    test(100'000, 2);
+  } else if (GetParam().serdeKind == VectorSerde::Kind::kCompactRow) {
+    test(1, 1'000);
+    test(1'000, 39);
+    test(10'000, 5);
+    test(100'000, 2);
+  } else {
+    test(1, 1'000);
+    test(1'000, 72);
+    test(10'000, 8);
+    test(100'000, 2);
+  }
+}
+
+TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
+  if (GetParam().serdeKind != VectorSerde::Kind::kCompactRow) {
+    return;
+  }
+  const uint64_t kNumColumns = 100;
+  const uint64_t kNumRows = 2'000;
+  const int32_t kNumPartitions = 2;
+
+  std::vector<int64_t> columnElements;
+  for (auto i = 0; i < kNumRows; ++i) {
+    columnElements.push_back(i);
+  }
+  std::vector<VectorPtr> columns;
+  for (auto i = 0; i < kNumColumns; ++i) {
+    columns.push_back(makeFlatVector<int64_t>(columnElements));
+  }
+
+  // 'data' is a wide vector of 20k rows and 100 columns(children vectors). Each
+  // row estimated to be 100 * 8b = 800b.
+  auto data = makeRowVector(columns);
+
+  auto producerPlan = test::PlanBuilder()
+                          .values({data})
+                          .partitionedOutput(
+                              {"c0"},
+                              kNumPartitions,
+                              /*outputLayout=*/{},
+                              VectorSerde::Kind::kCompactRow)
+                          .planNode();
+  const auto producerTaskId = "local://t1";
+
+  auto plan =
+      test::PlanBuilder()
+          .exchange(asRowType(data->type()), VectorSerde::Kind::kCompactRow)
+          .planNode();
+
+  auto expected = makeRowVector(columns);
+
+  auto test = [&](uint64_t maxBytes, int32_t expectedBatches) {
+    auto producerTask = makeTask(producerTaskId, producerPlan);
+
+    bufferManager_->initializeTask(
+        producerTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        kNumPartitions,
+        1);
+
+    auto cleanupGuard = folly::makeGuard([&]() {
+      producerTask->requestCancel();
+      bufferManager_->removeTask(producerTaskId);
+    });
+
+    // Enqueue a single large page.
+    enqueue(producerTaskId, 0, data);
+
+    bufferManager_->noMoreData(producerTaskId);
+
+    auto task = test::AssertQueryBuilder(plan)
+                    .split(remoteSplit(producerTaskId))
+                    .destination(0)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchBytes,
+                        std::to_string(maxBytes))
+                    .assertResults(expected);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    const auto& stats = taskStats.at("0");
+
+    ASSERT_EQ(expected->size(), stats.outputRows);
+    ASSERT_EQ(expectedBatches, stats.outputVectors);
+    ASSERT_EQ(1, stats.customStats.at("numReceivedPages").sum);
+  };
+
+  test(1, kNumRows / 64 + 1);
+  test(1'000, kNumRows / 64 + 1);
+  test(160'000, 14);
+  test(10'000'000, 2);
+}
+
+TEST_P(MultiFragmentTest, compression) {
+  constexpr int32_t kNumRepeats = 1'000'000;
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+
+  const auto producerPlan =
+      test::PlanBuilder()
+          .values({data}, false, kNumRepeats)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  const auto plan = test::PlanBuilder()
+                        .exchange(asRowType(data->type()), GetParam().serdeKind)
+                        .singleAggregation({}, {"sum(c0)"})
+                        .planNode();
+
+  const auto expected =
+      makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{6000000})});
+
+  const auto test = [&](const std::string& producerTaskId,
+                        float minCompressionRatio,
+                        bool expectSkipCompression) {
+    PartitionedOutput::testingSetMinCompressionRatio(minCompressionRatio);
+    auto producerTask = makeTask(producerTaskId, producerPlan);
+    producerTask->start(1);
+
+    auto consumerTask =
+        test::AssertQueryBuilder(plan)
+            .split(remoteSplit(producerTaskId))
+            .config(
+                core::QueryConfig::kShuffleCompressionKind,
+                common::compressionKindToString(GetParam().compressionKind))
+            .destination(0)
+            .assertResults(expected);
+
+    auto consumerTaskStats = exec::toPlanStats(consumerTask->taskStats());
+    const auto& consumerPlanStats = consumerTaskStats.at("0");
+    ASSERT_EQ(
+        consumerPlanStats.customStats.at(Operator::kShuffleCompressionKind).min,
+        static_cast<common::CompressionKind>(GetParam().compressionKind));
+    ASSERT_EQ(
+        consumerPlanStats.customStats.at(Operator::kShuffleCompressionKind).max,
+        static_cast<common::CompressionKind>(GetParam().compressionKind));
+    ASSERT_EQ(data->size() * kNumRepeats, consumerPlanStats.outputRows);
+
+    auto producerTaskStats = exec::toPlanStats(producerTask->taskStats());
+    const auto& producerStats = producerTaskStats.at("1");
+    ASSERT_EQ(
+        producerStats.customStats.at(Operator::kShuffleCompressionKind).min,
+        static_cast<common::CompressionKind>(GetParam().compressionKind));
+    ASSERT_EQ(
+        producerStats.customStats.at(Operator::kShuffleCompressionKind).max,
+        static_cast<common::CompressionKind>(GetParam().compressionKind));
+    if (GetParam().compressionKind == common::CompressionKind_NONE) {
+      ASSERT_EQ(
+          producerStats.customStats.count(
+              IterativeVectorSerializer::kCompressedBytes),
+          0);
+      ASSERT_EQ(
+          producerStats.customStats.count(
+              IterativeVectorSerializer::kCompressionInputBytes),
+          0);
+      ASSERT_EQ(
+          producerStats.customStats.count(
+              IterativeVectorSerializer::kCompressionSkippedBytes),
+          0);
+      return;
+    }
+    // The data is extremely compressible, 1, 2, 3 repeated 1000000 times.
+    if (!expectSkipCompression) {
+      ASSERT_LT(
+          producerStats.customStats
+              .at(IterativeVectorSerializer::kCompressedBytes)
+              .sum,
+          producerStats.customStats
+              .at(IterativeVectorSerializer::kCompressionInputBytes)
+              .sum);
+      ASSERT_EQ(producerStats.customStats.count("compressionSkippedBytes"), 0);
+    } else {
+      ASSERT_LT(
+          0,
+          producerStats.customStats
+              .at(IterativeVectorSerializer::kCompressionSkippedBytes)
+              .sum);
+    }
+  };
+
+  {
+    SCOPED_TRACE(
+        fmt::format("compression kind {}", GetParam().compressionKind));
+    {
+      SCOPED_TRACE(fmt::format("minCompressionRatio 0.7"));
+      test("local://t1", 0.7, false);
+    }
+    SCOPED_TRACE(fmt::format("minCompressionRatio 0.0000001"));
+    {
+      test("local://t2", 0.0000001, true);
+    }
+  }
+}
+TEST_P(MultiFragmentTest, scaledTableScan) {
+  const int numSplits = 20;
+  std::vector<std::shared_ptr<TempFilePath>> splitFiles;
+  std::vector<RowVectorPtr> splitVectors;
+  for (auto i = 0; i < numSplits; ++i) {
+    auto vectors = makeVectors(10, 1'000);
+    auto filePath = TempFilePath::create();
+    writeToFile(filePath->getPath(), vectors);
+    splitFiles.push_back(std::move(filePath));
+    splitVectors.insert(splitVectors.end(), vectors.begin(), vectors.end());
+  }
+
+  createDuckDbTable(splitVectors);
+
+  struct {
+    bool scaleEnabled;
+    double scaleUpMemoryUsageRatio;
+    bool expectScaleUp;
+
+    std::string debugString() const {
+      return fmt::format(
+          "scaleEnabled {}, scaleUpMemoryUsageRatio {}, expectScaleUp {}",
+          scaleEnabled,
+          scaleUpMemoryUsageRatio,
+          expectScaleUp);
+    }
+  } testSettings[] = {
+      {false, 0.9, false},
+      {true, 0.9, true},
+      {false, 1.0, false},
+      {true, 1.0, true},
+      {false, 0.00001, false},
+      {true, 0.00001, false},
+      {false, 0.0, false},
+      {true, 0.0, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId scanNodeId;
+    configSettings_[core::QueryConfig::kTableScanScaledProcessingEnabled] =
+        testData.scaleEnabled ? "true" : "false";
+    configSettings_[core::QueryConfig::kTableScanScaleUpMemoryUsageRatio] =
+        std::to_string(testData.scaleUpMemoryUsageRatio);
+
+    const auto leafPlan =
+        PlanBuilder()
+            .tableScan(rowType_)
+            .capturePlanNodeId(scanNodeId)
+            .partialAggregation(
+                {"c5"}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+
+    const auto leafTaskId = "local://leaf-0";
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0, nullptr, 128ULL << 20);
+    const auto numLeafDrivers{4};
+    leafTask->start(numLeafDrivers);
+    addHiveSplits(leafTask, splitFiles);
+
+    const auto finalAggPlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType(), GetParam().serdeKind)
+            .finalAggregation(
+                {"c5"},
+                {"max(a0)", "sum(a1)", "sum(a2)", "sum(a3)", "sum(a4)"},
+                {{BIGINT()}, {INTEGER()}, {SMALLINT()}, {REAL()}, {DOUBLE()}})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+
+    const auto finalAggTaskId = "local://final-agg-0";
+    auto finalAggTask = makeTask(finalAggTaskId, finalAggPlan, 0);
+    const auto numFinalAggrDrivers{1};
+    finalAggTask->start(numFinalAggrDrivers);
+    addRemoteSplits(finalAggTask, {leafTaskId});
+
+    const auto resultPlan =
+        PlanBuilder()
+            .exchange(finalAggPlan->outputType(), GetParam().serdeKind)
+            .planNode();
+
+    test::AssertQueryBuilder(resultPlan, duckDbQueryRunner_)
+        .split(remoteSplit(finalAggTaskId))
+        .config(
+            core::QueryConfig::kShuffleCompressionKind,
+            common::compressionKindToString(GetParam().compressionKind))
+        .assertResults(
+            "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
+
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(waitForTaskCompletion(finalAggTask.get()))
+        << finalAggTask->taskId();
+
+    auto planStats = toPlanStats(leafTask->taskStats());
+    if (testData.scaleEnabled) {
+      ASSERT_EQ(
+          planStats.at(scanNodeId)
+              .customStats.count(TableScan::kNumRunningScaleThreads),
+          1);
+      if (testData.expectScaleUp) {
+        ASSERT_GE(
+            planStats.at(scanNodeId)
+                .customStats[TableScan::kNumRunningScaleThreads]
+                .sum,
+            1);
+        ASSERT_LE(
+            planStats.at(scanNodeId)
+                .customStats[TableScan::kNumRunningScaleThreads]
+                .sum,
+            numLeafDrivers);
+      } else {
+        ASSERT_EQ(
+            planStats.at(scanNodeId)
+                .customStats.count(TableScan::kNumRunningScaleThreads),
+            1);
+      }
+    } else {
+      ASSERT_EQ(
+          planStats.at(scanNodeId)
+              .customStats.count(TableScan::kNumRunningScaleThreads),
+          0);
+    }
+  }
+}
+
+// Test row output with no columns (empty schema).
+TEST_P(MultiFragmentTest, emptySchema) {
+  // Create data with rows but no columns
+  auto emptyRowType = ROW({}, {});
+  auto data = makeRowVector(emptyRowType, 1'000);
+
+  std::vector<std::shared_ptr<Task>> tasks;
+  auto leafTaskId = makeTaskId("leaf", 0);
+
+  // Leaf task: Values -> PartitionedOutput
+  auto leafPlan =
+      PlanBuilder()
+          .values({data})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  auto leafTask = makeTask(leafTaskId, leafPlan, tasks.size());
+  tasks.push_back(leafTask);
+  leafTask->start(4);
+
+  // Root task: Exchange -> Project
+  auto rootTaskId = makeTaskId("root", 0);
+  auto rootPlan = PlanBuilder()
+                      .exchange(emptyRowType, GetParam().serdeKind)
+                      .singleAggregation({}, {"count(1)"})
+                      .planNode();
+
+  test::AssertQueryBuilder(rootPlan, duckDbQueryRunner_)
+      .split(remoteSplit(leafTaskId))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT 1000");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+// Test stateful deserialization with different batch byte limits.
+// This validates that the Exchange operator correctly breaks in the middle
+// and continues from the leftover when batch size limits are reached.
+TEST_P(MultiFragmentTest, batchBytes) {
+  auto test = [&](int32_t numBatches,
+                  int32_t rowsPerBatch,
+                  uint64_t preferredBatchBytes,
+                  uint64_t expectedAtLeastOutputBatches = 0) {
+    SCOPED_TRACE(
+        fmt::format(
+            "numBatches={}, rowsPerBatch={}, preferredBatchBytes={}",
+            numBatches,
+            rowsPerBatch,
+            succinctBytes(preferredBatchBytes)));
+
+    std::vector<RowVectorPtr> batches;
+    batches.reserve(numBatches);
+
+    for (int i = 0; i < numBatches; ++i) {
+      auto batch = makeRowVector({
+          makeFlatVector<int64_t>(
+              rowsPerBatch,
+              [i, rowsPerBatch](auto row) { return i * rowsPerBatch + row; }),
+          makeFlatVector<int32_t>(
+              rowsPerBatch,
+              [i, rowsPerBatch](auto row) {
+                return (i * rowsPerBatch + row) % 1000;
+              }),
+          makeFlatVector<double>(
+              rowsPerBatch,
+              [i, rowsPerBatch](auto row) {
+                return (i * rowsPerBatch + row) * 1.5;
+              }),
+      });
+      batches.push_back(batch);
+    }
+
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(batches)
+            .partitionedOutput({}, 1, {"c0", "c1", "c2"}, GetParam().serdeKind)
+            .planNode();
+
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    leafTask->start(1);
+
+    core::PlanNodeId exchangeNodeId;
+    auto rootPlan =
+        PlanBuilder()
+            .exchange(
+                ROW({"c0", "c1", "c2"}, {BIGINT(), INTEGER(), DOUBLE()}),
+                GetParam().serdeKind)
+            .capturePlanNodeId(exchangeNodeId)
+            .singleAggregation({}, {"count(1)", "sum(c0)", "avg(c2)"})
+            .planNode();
+
+    auto extraConfigs = std::unordered_map<std::string, std::string>{
+        {core::QueryConfig::kPreferredOutputBatchBytes,
+         std::to_string(preferredBatchBytes)},
+        {core::QueryConfig::kShuffleCompressionKind,
+         common::compressionKindToString(GetParam().compressionKind)}};
+
+    auto task = test::AssertQueryBuilder(rootPlan, duckDbQueryRunner_)
+                    .split(remoteSplit(leafTaskId))
+                    .configs(extraConfigs)
+                    .assertResults(
+                        fmt::format(
+                            "SELECT {}, {}, {}",
+                            numBatches * rowsPerBatch,
+                            (static_cast<int64_t>(numBatches) * rowsPerBatch *
+                             (numBatches * rowsPerBatch - 1)) /
+                                2,
+                            (static_cast<int64_t>(numBatches) * rowsPerBatch *
+                             (numBatches * rowsPerBatch - 1)) /
+                                2 * 1.5 / (numBatches * rowsPerBatch)));
+
+    waitForTaskCompletion(leafTask.get());
+
+    // Verify Exchange stats to ensure data was processed correctly
+    auto rootTaskStats = toPlanStats(task->taskStats());
+    const auto& exchangeStats = rootTaskStats.at(exchangeNodeId);
+
+    EXPECT_GE(exchangeStats.outputVectors, expectedAtLeastOutputBatches);
+  };
+
+  // Presto serialization operates at page-level granularity (pages are atomic).
+  // The number of output batches depends on how many Presto pages are created
+  // during serialization, which varies based on encoding, compression, and
+  // data.
+  //
+  // For this test (100 input batches × 100 rows = 10,000 rows):
+  // The actual behavior shows all pages are merged and processed together,
+  // resulting in a single batch output currently.
+  //
+  // This is a known limitation - Presto pages cannot be partially deserialized.
+  // The fix prevents INT32_MAX overflow by controlling the merge size, but
+  // fine-grained batch control requires deeper changes to PrestoVectorSerde.
+
+  if (GetParam().serdeKind == VectorSerde::Kind::kPresto) {
+    // Current implementation merges all pages and processes in one batch
+    // The key improvement is preventing overflow, not fine-grained batching
+    test(100, 100, 1, 1); // Expect single batch with all data
+    test(100, 100, 1ULL << 30, 1); // Expect single batch with all data
+  } else {
+    // Row-based serialization (CompactRow/UnsafeRow) supports row-level
+    // batching With 1 byte limit: Can produce many small batches
+    test(100, 100, 1, 100);
+    // With 1GB limit: All rows fit in one batch
+    test(100, 100, 1ULL << 30, 1);
+  }
+}
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    MultiFragmentTest,
+    MultiFragmentTest,
+    testing::ValuesIn(MultiFragmentTest::getTestParams()),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}_{}",
+          VectorSerde::kindName(info.param.serdeKind),
+          compressionKindToString(info.param.compressionKind));
+    });
+} // namespace
+} // namespace facebook::velox::exec

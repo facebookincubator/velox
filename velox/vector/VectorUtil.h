@@ -20,14 +20,13 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 template <typename T>
 static inline BufferPtr copyToBuffer(
     const T& values,
     velox::memory::MemoryPool* pool,
-    folly::Optional<int32_t> size = folly::none,
+    std::optional<int32_t> size = std::nullopt,
     bool returnsNullptr = false) {
   using Value = typename T::value_type;
   VELOX_CHECK(pool, "pool must be non-null");
@@ -45,5 +44,4 @@ static inline BufferPtr copyToBuffer(
   return returnsNullptr ? nullptr : AlignedBuffer::allocate<Value>(0, pool);
 }
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

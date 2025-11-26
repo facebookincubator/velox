@@ -15,68 +15,85 @@ add_subdirectory(json)
 add_subdirectory(types)
 add_subdirectory(window)
 
-add_library(
+velox_add_library(
   velox_functions_prestosql_impl
   ArrayConstructor.cpp
   ArrayContains.cpp
   ArrayDistinct.cpp
   ArrayDuplicates.cpp
+  ArrayFlatten.cpp
   ArrayIntersectExcept.cpp
-  ArrayMatch.cpp
+  ArrayAndMapMatch.cpp
+  ArrayMinMaxBy.cpp
   ArrayPosition.cpp
-  ArrayShuffle.cpp
   ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
-  DecimalVectorFunctions.cpp
+  DecimalFunctions.cpp
   ElementAt.cpp
   FilterFunctions.cpp
-  FromUnixTime.cpp
+  FindFirst.cpp
   FromUtf8.cpp
-  GreatestLeast.cpp
   InPredicate.cpp
+  InRewrite.cpp
   JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp
   MapFromEntries.cpp
   MapKeysAndValues.cpp
+  MapSubset.cpp
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
-  Repeat.cpp
   Reverse.cpp
   RowFunction.cpp
   Sequence.cpp
-  SimpleComparisonMatcher.cpp
-  Slice.cpp
+  SfmSketchFunctions.cpp
   Split.cpp
+  SplitToMap.cpp
   StringFunctions.cpp
   Subscript.cpp
   ToUtf8.cpp
   Transform.cpp
   TransformKeys.cpp
   TransformValues.cpp
-  URLFunctions.cpp
-  Utf8Utils.cpp
+  TypeOf.cpp
+  UpperLower.cpp
+  URIParser.cpp
   VectorArithmetic.cpp
   WidthBucketArray.cpp
   Zip.cpp
-  ZipWith.cpp)
+  ZipWith.cpp
+)
 
-target_link_libraries(
+velox_link_libraries(
   velox_functions_prestosql_impl
   velox_common_hyperloglog
   velox_functions_json
   velox_functions_lib
   velox_expression
-  md5
+  velox_external_md5
   velox_type_tz
   velox_presto_types
   velox_functions_util
-  Folly::folly)
+  Folly::folly
+  FastFloat::fast_float
+  stemmer::stemmer
+)
 
-set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
-                                                            high_memory_pool)
+if(VELOX_ENABLE_FAISS)
+  velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
+  velox_compile_definitions(velox_functions_prestosql_impl PRIVATE VELOX_ENABLE_FAISS)
+endif()
+
+if(VELOX_ENABLE_GEO)
+  add_subdirectory(geospatial)
+  velox_link_libraries(velox_functions_prestosql_impl velox_functions_geo)
+endif()
+
+if(NOT VELOX_MONO_LIBRARY)
+  set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE high_memory_pool)
+endif()
 
 if(${VELOX_ENABLE_AGGREGATES})
   add_subdirectory(aggregates)
@@ -85,6 +102,7 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
   add_subdirectory(coverage)
+  add_subdirectory(fuzzer)
 elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()

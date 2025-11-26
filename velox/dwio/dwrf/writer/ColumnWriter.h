@@ -17,10 +17,10 @@
 #pragma once
 
 #include "velox/common/base/GTestMacros.h"
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/ByteRLE.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
-#include "velox/dwio/dwrf/common/OutputStream.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
@@ -45,12 +45,31 @@ class ColumnWriter {
   virtual void reset() = 0;
 
   virtual void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride =
-          [](auto& /* e */) {}) = 0;
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride =
+          [](auto /* e */) {}) {
+    VELOX_NYI();
+  }
+
+  virtual void flush(
+      std::function<velox::dwrf::proto::ColumnEncoding&(uint32_t)>
+          encodingFactory,
+      std::function<void(velox::dwrf::proto::ColumnEncoding&)>
+          encodingOverride = [](auto& /* e */) {}) {
+    VELOX_NYI();
+  }
 
   virtual uint64_t writeFileStats(
-      std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const = 0;
+      std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory)
+      const {
+    VELOX_NYI();
+  }
+
+  virtual uint64_t writeFileStats(
+      std::function<velox::dwrf::proto::ColumnStatistics&(uint32_t)>
+          statsFactory) const {
+    VELOX_NYI();
+  }
 
   virtual bool tryAbandonDictionaries(bool force) = 0;
 
@@ -59,18 +78,20 @@ class ColumnWriter {
       WriterContext& context,
       const uint32_t id,
       const uint32_t sequence)
-      : context_{context}, id_{id}, sequence_{sequence} {}
+      : id_{id}, sequence_{sequence}, context_{context} {}
 
-  virtual void setEncoding(proto::ColumnEncoding& encoding) const {
-    encoding.set_kind(proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT);
-    encoding.set_dictionarysize(0);
-    encoding.set_node(id_);
-    encoding.set_sequence(sequence_);
+  virtual void setEncoding(ColumnEncodingWriteWrapper& columnEncoding) const {
+    auto columnEncodingKind =
+        proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
+    columnEncoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+    columnEncoding.setDictionarySize(0);
+    columnEncoding.setNode(id_);
+    columnEncoding.setSequence(sequence_);
   }
 
-  WriterContext& context_;
   const uint32_t id_;
   const uint32_t sequence_;
+  WriterContext& context_;
 };
 
 class BaseColumnWriter : public ColumnWriter {
@@ -99,9 +120,9 @@ class BaseColumnWriter : public ColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride =
-          [](auto& /* e */) {}) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride =
+          [](auto /* e */) {}) override {
     if (!isRoot()) {
       present_->flush();
 
@@ -113,28 +134,29 @@ class BaseColumnWriter : public ColumnWriter {
       }
     }
 
-    auto& encoding = encodingFactory(id_);
+    auto encoding = encodingFactory(id_);
     setEncoding(encoding);
     encodingOverride(encoding);
     indexBuilder_->flush();
   }
 
-  uint64_t writeFileStats(std::function<proto::ColumnStatistics&(uint32_t)>
-                              statsFactory) const override {
-    auto& stats = statsFactory(id_);
+  uint64_t writeFileStats(
+      std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory)
+      const override {
+    auto stats = statsFactory(id_);
     fileStatsBuilder_->toProto(stats);
-    uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
+    const uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
     for (auto& child : children_) {
       child->writeFileStats(statsFactory);
     }
-    stats.set_size(size);
+    stats.setSize(size);
     return size;
   }
 
-  // Determine whether dictionary is the right encoding to use when writing
-  // the first stripe. We will continue using the same decision for all
-  // subsequent stripes.
-  // Returns true if an encoding change is performed, false otherwise.
+  /// Determines whether dictionary is the right encoding to use when writing
+  /// the first stripe. We will continue using the same decision for all
+  /// subsequent stripes. Returns true if an encoding change is performed, false
+  /// otherwise.
   bool tryAbandonDictionaries(bool force) override {
     bool result = false;
     for (auto& child : children_) {
@@ -151,15 +173,16 @@ class BaseColumnWriter : public ColumnWriter {
       WriterContext& context,
       const dwio::common::TypeWithId& type,
       const uint32_t sequence = 0,
-      std::function<void(IndexBuilder&)> onRecordPosition = nullptr);
+      std::function<void(IndexBuilder&)> onRecordPosition = nullptr,
+      DwrfFormat format = DwrfFormat::kDwrf);
 
  protected:
   BaseColumnWriter(
       WriterContext& context,
       const dwio::common::TypeWithId& type,
-      const uint32_t sequence,
+      uint32_t sequence,
       std::function<void(IndexBuilder&)> onRecordPosition)
-      : ColumnWriter{context, type.id, sequence},
+      : ColumnWriter{context, type.id(), sequence},
         type_{type},
         indexBuilder_{context_.newIndexBuilder(
             newStream(StreamKind::StreamKind_ROW_INDEX))},
@@ -168,29 +191,30 @@ class BaseColumnWriter : public ColumnWriter {
       present_ =
           createBooleanRleEncoder(newStream(StreamKind::StreamKind_PRESENT));
     }
-    auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
-    indexStatsBuilder_ = StatisticsBuilder::create(*type.type, options);
-    fileStatsBuilder_ = StatisticsBuilder::create(*type.type, options);
+    const auto options =
+        StatisticsBuilderOptions::fromConfig(context.getConfigs());
+    indexStatsBuilder_ = StatisticsBuilder::create(*type.type(), options);
+    fileStatsBuilder_ = StatisticsBuilder::create(*type.type(), options);
   }
 
   uint64_t writeNulls(const VectorPtr& slice, const common::Ranges& ranges) {
-    if (UNLIKELY(ranges.size() == 0)) {
+    if (FOLLY_UNLIKELY(ranges.size() == 0)) {
       return 0;
     }
-    auto nulls = slice->rawNulls();
     if (!slice->mayHaveNulls()) {
       present_->add(nullptr, ranges, nullptr);
     } else {
+      auto* nulls = slice->rawNulls();
       present_->addBits(nulls, ranges, nullptr, false);
     }
     return 0;
   }
 
-  // Function used only for the cases dealing with Dictionary vectors
+  /// Function used only for the cases dealing with Dictionary vectors
   uint64_t writeNulls(
       const DecodedVector& decoded,
       const common::Ranges& ranges) {
-    if (UNLIKELY(ranges.size() == 0)) {
+    if (FOLLY_UNLIKELY(ranges.size() == 0)) {
       return 0;
     }
     if (!decoded.mayHaveNulls()) {
@@ -221,12 +245,12 @@ class BaseColumnWriter : public ColumnWriter {
 
   std::unique_ptr<BufferedOutputStream> newStream(StreamKind kind) {
     return context_.newStream(
-        DwrfStreamIdentifier{id_, sequence_, type_.column, kind});
+        DwrfStreamIdentifier{id_, sequence_, type_.column(), kind});
   }
 
   void suppressStream(StreamKind kind, uint32_t sequence) {
     context_.suppressStream(
-        DwrfStreamIdentifier{id_, sequence, type_.column, kind});
+        DwrfStreamIdentifier{id_, sequence, type_.column(), kind});
   }
 
   void suppressStream(StreamKind kind) {
@@ -243,7 +267,7 @@ class BaseColumnWriter : public ColumnWriter {
   }
 
   bool isIndexEnabled() const {
-    return context_.isIndexEnabled;
+    return context_.indexEnabled();
   }
 
   virtual bool useDictionaryEncoding() const {
@@ -261,14 +285,15 @@ class BaseColumnWriter : public ColumnWriter {
   std::unique_ptr<IndexBuilder> indexBuilder_;
   std::unique_ptr<StatisticsBuilder> indexStatsBuilder_;
   std::unique_ptr<StatisticsBuilder> fileStatsBuilder_;
-
   std::unique_ptr<ByteRleEncoder> present_;
   bool hasNull_ = false;
   // callback used to inject the logic that captures positions for flat map
   // in_map stream
   const std::function<void(IndexBuilder&)> onRecordPosition_;
 
-  VELOX_FRIEND_TEST(ColumnWriterTests, LowMemoryModeConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTest, LowMemoryModeConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTest, StringDictionaryEncodingEnabledConfig);
   friend class ValueStatisticsBuilder;
   friend class ValueWriter;
 };

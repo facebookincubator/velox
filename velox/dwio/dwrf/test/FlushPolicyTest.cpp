@@ -25,7 +25,14 @@ using namespace facebook::velox::memory;
 
 namespace facebook::velox::dwrf {
 
-TEST(DefaultFlushPolicyTest, StripeProgressTest) {
+class DefaultFlushPolicyTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+};
+
+TEST_F(DefaultFlushPolicyTest, StripeProgressTest) {
   struct TestCase {
     const uint64_t stripeSizeThreshold;
     const int64_t stripeSize;
@@ -41,17 +48,18 @@ TEST(DefaultFlushPolicyTest, StripeProgressTest) {
           .stripeSizeThreshold = 200, .stripeSize = 400, .shouldFlush = true}};
   for (const auto& testCase : testCases) {
     DefaultFlushPolicy policy{
-        testCase.stripeSizeThreshold, /* dictionarySizeThreshold */ 0};
+        testCase.stripeSizeThreshold, /*dictionarySizeThreshold=*/0};
     EXPECT_EQ(
         testCase.shouldFlush,
-        policy.shouldFlush(dwio::common::StripeProgress{
-            .stripeSizeEstimate = testCase.stripeSize}));
+        policy.shouldFlush(
+            dwio::common::StripeProgress{
+                .stripeSizeEstimate = testCase.stripeSize}));
   }
 }
 
-TEST(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
+TEST_F(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
   struct TestCase {
-    const bool stripeProgressDecision;
+    const bool flushStripe;
     const bool overMemoryBudget;
     const uint64_t dictionarySizeThreshold;
     const uint64_t dictionarySize;
@@ -60,66 +68,176 @@ TEST(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
 
   std::vector<TestCase> testCases{
       TestCase{
-          .stripeProgressDecision = false,
+          .flushStripe = false,
           .overMemoryBudget = false,
           .dictionarySizeThreshold = 20,
           .dictionarySize = 15,
           .decision = FlushDecision::SKIP},
       TestCase{
-          .stripeProgressDecision = false,
+          .flushStripe = false,
           .overMemoryBudget = true,
           .dictionarySizeThreshold = 20,
           .dictionarySize = 15,
           .decision = FlushDecision::SKIP},
       TestCase{
-          .stripeProgressDecision = true,
+          .flushStripe = true,
           .overMemoryBudget = false,
           .dictionarySizeThreshold = 20,
           .dictionarySize = 15,
           .decision = FlushDecision::SKIP},
       TestCase{
-          .stripeProgressDecision = true,
+          .flushStripe = true,
           .overMemoryBudget = true,
           .dictionarySizeThreshold = 20,
           .dictionarySize = 15,
           .decision = FlushDecision::SKIP},
       TestCase{
-          .stripeProgressDecision = false,
-          .overMemoryBudget = false,
-          .dictionarySizeThreshold = 20,
-          .dictionarySize = 42,
-          .decision = FlushDecision::FLUSH_DICTIONARY},
-      TestCase{
-          .stripeProgressDecision = false,
-          .overMemoryBudget = true,
-          .dictionarySizeThreshold = 20,
-          .dictionarySize = 42,
-          .decision = FlushDecision::FLUSH_DICTIONARY},
-      TestCase{
-          .stripeProgressDecision = true,
+          .flushStripe = false,
           .overMemoryBudget = false,
           .dictionarySizeThreshold = 20,
           .dictionarySize = 42,
           .decision = FlushDecision::FLUSH_DICTIONARY},
       TestCase{
-          .stripeProgressDecision = true,
+          .flushStripe = false,
           .overMemoryBudget = true,
           .dictionarySizeThreshold = 20,
           .dictionarySize = 42,
-          .decision = FlushDecision::FLUSH_DICTIONARY}};
+          .decision = FlushDecision::FLUSH_DICTIONARY},
+      TestCase{
+          .flushStripe = true,
+          .overMemoryBudget = false,
+          .dictionarySizeThreshold = 20,
+          .dictionarySize = 42,
+          .decision = FlushDecision::SKIP},
+      TestCase{
+          .flushStripe = true,
+          .overMemoryBudget = true,
+          .dictionarySizeThreshold = 20,
+          .dictionarySize = 42,
+          .decision = FlushDecision::SKIP}};
   for (const auto& testCase : testCases) {
-    DefaultFlushPolicy policy{
-        /* stripeSizeThreshold */ 0, testCase.dictionarySizeThreshold};
+    DefaultFlushPolicy policy{/*stripeSizeThreshold=*/1000,
+                              testCase.dictionarySizeThreshold};
     EXPECT_EQ(
         testCase.decision,
         policy.shouldFlushDictionary(
-            testCase.stripeProgressDecision,
+            testCase.flushStripe,
             testCase.overMemoryBudget,
-            testCase.dictionarySize));
+            // StripeProgress is not used in this test.
+            dwio::common::StripeProgress{},
+            testCase.dictionarySize))
+        << fmt::format(
+               "flushStripe = {}, overMemoryBudget = {}, dictionarySize = {}",
+               testCase.flushStripe,
+               testCase.overMemoryBudget,
+               testCase.dictionarySize);
   }
 }
 
-TEST(RowsPerStripeFlushPolicyTest, EmptyFile) {
+TEST_F(DefaultFlushPolicyTest, EarlyDictionaryEvaluation) {
+  // Test the precedence of decisions.
+  struct TestCase {
+    dwio::common::StripeProgress stripeProgress;
+    const uint64_t stripeSizeThreshold;
+    const bool flushStripe;
+    const uint64_t dictionarySizeThreshold;
+    const uint64_t dictionarySize;
+    const FlushDecision decision;
+  };
+
+  std::vector<TestCase> testCases{
+      TestCase{
+          .stripeProgress =
+              dwio::common::StripeProgress{.stripeSizeEstimate = 100},
+          .stripeSizeThreshold = 200,
+          .flushStripe = false,
+          .dictionarySizeThreshold = 20,
+          .dictionarySize = 15,
+          .decision = FlushDecision::EVALUATE_DICTIONARY},
+      TestCase{
+          .stripeProgress =
+              dwio::common::StripeProgress{.stripeSizeEstimate = 100},
+          .stripeSizeThreshold = 200,
+          .flushStripe = false,
+          .dictionarySizeThreshold = 20,
+          .dictionarySize = 42,
+          .decision = FlushDecision::FLUSH_DICTIONARY},
+      TestCase{
+          .stripeProgress =
+              dwio::common::StripeProgress{.stripeSizeEstimate = 100},
+          .stripeSizeThreshold = 200,
+          .flushStripe = true,
+          .dictionarySizeThreshold = 20,
+          .dictionarySize = 42,
+          .decision = FlushDecision::SKIP}};
+  for (const auto& testCase : testCases) {
+    DefaultFlushPolicy policy{
+        testCase.stripeSizeThreshold, testCase.dictionarySizeThreshold};
+    EXPECT_EQ(
+        testCase.decision,
+        policy.shouldFlushDictionary(
+            testCase.flushStripe,
+            /*overMemoryBudget=*/false,
+            testCase.stripeProgress,
+            testCase.dictionarySize))
+        << fmt::format(
+               "flushStripe = {}, stripeSizeThreshold = {}, estimatedStripeSize = {}, dictionarySizeThreshold = {}, dictionarySize = {}",
+               testCase.flushStripe,
+               testCase.stripeSizeThreshold,
+               testCase.stripeProgress.stripeSizeEstimate,
+               testCase.dictionarySizeThreshold,
+               testCase.dictionarySize);
+  }
+
+  // Test dictionary evaluation signals throughout the stripe.
+  DefaultFlushPolicy policy{
+      /*stripeSizeThreshold=*/1000,
+      /*dictionarySizeThreshold=*/std::numeric_limits<uint64_t>::max()};
+  EXPECT_EQ(
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          dwio::common::StripeProgress{.stripeSizeEstimate = 100},
+          /*dictionarySize=*/20),
+      FlushDecision::SKIP);
+  EXPECT_EQ(
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          dwio::common::StripeProgress{.stripeSizeEstimate = 200},
+          /*dictionarySize=*/20),
+      FlushDecision::SKIP);
+  EXPECT_EQ(
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          dwio::common::StripeProgress{.stripeSizeEstimate = 400},
+          /*dictionarySize=*/20),
+      FlushDecision::EVALUATE_DICTIONARY);
+  EXPECT_EQ(
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          dwio::common::StripeProgress{.stripeSizeEstimate = 500},
+          /*dictionarySize=*/20),
+      FlushDecision::SKIP);
+  EXPECT_EQ(
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          dwio::common::StripeProgress{.stripeSizeEstimate = 700},
+          /*dictionarySize=*/20),
+      FlushDecision::EVALUATE_DICTIONARY);
+  EXPECT_EQ(
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          dwio::common::StripeProgress{.stripeSizeEstimate = 900},
+          /*dictionarySize=*/20),
+      FlushDecision::SKIP);
+}
+
+TEST_F(DefaultFlushPolicyTest, EmptyFile) {
   // Empty vector creation succeeds.
   RowsPerStripeFlushPolicy policy({});
 
@@ -128,7 +246,7 @@ TEST(RowsPerStripeFlushPolicyTest, EmptyFile) {
       exception::LoggedException);
 }
 
-TEST(RowsPerStripeFlushPolicyTest, InvalidCases) {
+TEST_F(DefaultFlushPolicyTest, InvalidCases) {
   // Vector with 0 rows, throws
   ASSERT_THROW(
       RowsPerStripeFlushPolicy policy({5, 7, 0, 10}),
@@ -136,23 +254,47 @@ TEST(RowsPerStripeFlushPolicyTest, InvalidCases) {
 }
 
 // RowsPerStripeFlushPolicy has no dictionary flush criteria.
-TEST(RowsPerSTripeFlushPolicyTest, DictionaryCriteriaTest) {
+TEST_F(DefaultFlushPolicyTest, DictionaryCriteriaTest) {
   auto config = std::make_shared<Config>();
   WriterContext context{
-      config, defaultMemoryManager().addRootPool("DictionaryCriteriaTest")};
+      config, memory::memoryManager()->addRootPool("DictionaryCriteriaTest")};
 
   RowsPerStripeFlushPolicy policy({42});
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(false, false, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/false,
+          // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          context));
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(false, true, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/false,
+          /*overMemoryBudget=*/true,
+          // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          context));
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(true, false, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/true,
+          /*overMemoryBudget=*/false,
+          // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          context));
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(true, true, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary(
+          /*flushStripe=*/true,
+          /*overMemoryBudget=*/true,
+          // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          context));
 }
 
-TEST(RowsPerStripeFlushPolicyTest, FlushTest) {
+TEST_F(DefaultFlushPolicyTest, FlushTest) {
   RowsPerStripeFlushPolicy policy({5, 7, 12});
 
   ASSERT_FALSE(policy.shouldFlush(

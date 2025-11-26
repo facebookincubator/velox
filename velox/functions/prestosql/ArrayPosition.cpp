@@ -15,17 +15,30 @@
  */
 #include <folly/CPortability.h>
 
-#include "velox/expression/Expr.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions {
 namespace {
 
+template <typename T>
+inline bool isPrimitiveEqual(const T& lhs, const T& rhs) {
+  if constexpr (std::is_floating_point_v<T>) {
+    return util::floating_point::NaNAwareEquals<T>{}(lhs, rhs);
+  } else {
+    return lhs == rhs;
+  }
+}
+
 // Find the index of the first match for primitive types.
 template <
+    bool useCustomComparison,
     TypeKind kind,
-    typename std::enable_if_t<TypeTraits<kind>::isPrimitiveType, int> = 0>
+    typename std::enable_if_t<
+        !useCustomComparison && TypeTraits<kind>::isPrimitiveType,
+        int> = 0>
 void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -76,7 +89,7 @@ void applyTypedFirstMatch(
 
       int i;
       for (i = 0; i < size; i++) {
-        if (rawElements[offset + i] == search) {
+        if (isPrimitiveEqual<T>(rawElements[offset + i], search)) {
           flatResult.set(row, i + 1);
           break;
         }
@@ -99,7 +112,7 @@ void applyTypedFirstMatch(
     int i;
     for (i = 0; i < size; i++) {
       if (!elementsDecoded.isNullAt(offset + i) &&
-          elementsDecoded.valueAt<T>(offset + i) == search) {
+          isPrimitiveEqual<T>(elementsDecoded.valueAt<T>(offset + i), search)) {
         flatResult.set(row, i + 1);
         break;
       }
@@ -112,12 +125,15 @@ void applyTypedFirstMatch(
 
 // Find the index of the first match for complex types.
 template <
+    bool useCustomComparison,
     TypeKind kind,
-    typename std::enable_if_t<!TypeTraits<kind>::isPrimitiveType, int> = 0>
+    typename std::enable_if_t<
+        useCustomComparison || !TypeTraits<kind>::isPrimitiveType,
+        int> = 0>
 void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
+    DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
     FlatVector<int64_t>& flatResult) {
   auto baseArray = arrayDecoded.base()->as<ArrayVector>();
@@ -126,6 +142,7 @@ void applyTypedFirstMatch(
   auto indices = arrayDecoded.indices();
 
   auto elementsBase = elementsDecoded.base();
+  auto elementIndices = elementsDecoded.indices();
 
   auto searchBase = searchDecoded.base();
   auto searchIndices = searchDecoded.indices();
@@ -137,8 +154,9 @@ void applyTypedFirstMatch(
 
     int i;
     for (i = 0; i < size; i++) {
-      if (!elementsBase->isNullAt(offset + i) &&
-          elementsBase->equalValueAt(searchBase, offset + i, searchIndex)) {
+      if (!elementsDecoded.isNullAt(offset + i) &&
+          elementsBase->equalValueAt(
+              searchBase, elementIndices[offset + i], searchIndex)) {
         flatResult.set(row, i + 1);
         break;
       }
@@ -167,8 +185,11 @@ FOLLY_ALWAYS_INLINE void getLoopBoundary(
 
 // Find the index of the instance-th match for primitive types.
 template <
+    bool useCustomComparison,
     TypeKind kind,
-    typename std::enable_if_t<TypeTraits<kind>::isPrimitiveType, int> = 0>
+    typename std::enable_if_t<
+        !useCustomComparison && TypeTraits<kind>::isPrimitiveType,
+        int> = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
@@ -244,7 +265,7 @@ void applyTypedWithInstance(
 
       int i;
       for (i = startIndex; i != endIndex; i += step) {
-        if (rawElements[offset + i] == search) {
+        if (isPrimitiveEqual<T>(rawElements[offset + i], search)) {
           if (--remaining == 0) {
             flatResult.set(row, i + 1);
             break;
@@ -276,7 +297,7 @@ void applyTypedWithInstance(
     int i;
     for (i = startIndex; i != endIndex; i += step) {
       if (!elementsDecoded.isNullAt(offset + i) &&
-          elementsDecoded.valueAt<T>(offset + i) == search) {
+          isPrimitiveEqual<T>(elementsDecoded.valueAt<T>(offset + i), search)) {
         --instance;
         if (instance == 0) {
           flatResult.set(row, i + 1);
@@ -292,13 +313,16 @@ void applyTypedWithInstance(
 
 // Find the index of the instance-th match for complex types.
 template <
+    bool useCustomComparison,
     TypeKind kind,
-    typename std::enable_if_t<!TypeTraits<kind>::isPrimitiveType, int> = 0>
+    typename std::enable_if_t<
+        useCustomComparison || !TypeTraits<kind>::isPrimitiveType,
+        int> = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
     DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
+    DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
     const DecodedVector& instanceDecoded,
     FlatVector<int64_t>& flatResult) {
@@ -308,7 +332,7 @@ void applyTypedWithInstance(
   auto indices = arrayDecoded.indices();
 
   auto elementsBase = elementsDecoded.base();
-
+  auto elementIndices = elementsDecoded.indices();
   auto searchBase = searchDecoded.base();
   auto searchIndices = searchDecoded.indices();
 
@@ -331,8 +355,9 @@ void applyTypedWithInstance(
 
     int i;
     for (i = startIndex; i != endIndex; i += step) {
-      if (!elementsBase->isNullAt(offset + i) &&
-          elementsBase->equalValueAt(searchBase, offset + i, searchIndex)) {
+      if (!elementsDecoded.isNullAt(offset + i) &&
+          elementsBase->equalValueAt(
+              searchBase, elementIndices[offset + i], searchIndex)) {
         --instance;
         if (instance == 0) {
           flatResult.set(row, i + 1);
@@ -344,6 +369,50 @@ void applyTypedWithInstance(
       flatResult.set(row, 0);
     }
   });
+}
+
+template <bool useCustomComparison>
+void applyInternal(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    exec::EvalCtx& context,
+    VectorPtr& result) {
+  context.ensureWritable(rows, BIGINT(), result);
+  auto flatResult = result->asFlatVector<int64_t>();
+
+  exec::DecodedArgs decodedArgs(rows, args, context);
+  auto elements = decodedArgs.at(0)->base()->as<ArrayVector>()->elements();
+  exec::LocalSelectivityVector nestedRows(context, elements->size());
+  nestedRows.get()->setAll();
+  exec::LocalDecodedVector elementsHolder(
+      context, *elements, *nestedRows.get());
+
+  if (args.size() == 2) {
+    VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+        applyTypedFirstMatch,
+        useCustomComparison,
+        args[1]->typeKind(),
+        rows,
+        *decodedArgs.at(0),
+        *elementsHolder.get(),
+        *decodedArgs.at(1),
+        *flatResult);
+  } else {
+    const auto& instanceVector = args[2];
+    VELOX_CHECK(instanceVector->type()->isBigint());
+
+    VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+        applyTypedWithInstance,
+        useCustomComparison,
+        args[1]->typeKind(),
+        rows,
+        context,
+        *decodedArgs.at(0),
+        *elementsHolder.get(),
+        *decodedArgs.at(1),
+        *decodedArgs.at(2),
+        *flatResult);
+  }
 }
 
 class ArrayPositionFunction : public exec::VectorFunction {
@@ -360,59 +429,31 @@ class ArrayPositionFunction : public exec::VectorFunction {
     VELOX_CHECK(arrayVector->type()->asArray().elementType()->kindEquals(
         searchVector->type()));
 
-    context.ensureWritable(rows, BIGINT(), result);
-    auto flatResult = result->asFlatVector<int64_t>();
-
-    exec::DecodedArgs decodedArgs(rows, args, context);
-    auto elements = decodedArgs.at(0)->base()->as<ArrayVector>()->elements();
-    exec::LocalSelectivityVector nestedRows(context, elements->size());
-    nestedRows.get()->setAll();
-    exec::LocalDecodedVector elementsHolder(
-        context, *elements, *nestedRows.get());
-
-    if (args.size() == 2) {
-      VELOX_DYNAMIC_TYPE_DISPATCH(
-          applyTypedFirstMatch,
-          searchVector->typeKind(),
-          rows,
-          *decodedArgs.at(0),
-          *elementsHolder.get(),
-          *decodedArgs.at(1),
-          *flatResult);
+    if (searchVector->type()->providesCustomComparison()) {
+      applyInternal<true>(rows, args, context, result);
     } else {
-      const auto& instanceVector = args[2];
-      VELOX_CHECK(instanceVector->type()->isBigint());
-
-      VELOX_DYNAMIC_TYPE_DISPATCH(
-          applyTypedWithInstance,
-          searchVector->typeKind(),
-          rows,
-          context,
-          *decodedArgs.at(0),
-          *elementsHolder.get(),
-          *decodedArgs.at(1),
-          *decodedArgs.at(2),
-          *flatResult);
+      applyInternal<false>(rows, args, context, result);
     }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {// array(T), T -> int64_t
-            exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("bigint")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .build(),
+    return {
+        // array(T), T -> int64_t
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("bigint")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .build(),
 
-            // array(T), T, int64_t -> int64_t
-            exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("bigint")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .argumentType("bigint")
-                .build()};
+        // array(T), T, int64_t -> int64_t
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("bigint")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .argumentType("bigint")
+            .build()};
   }
 };
 

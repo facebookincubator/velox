@@ -25,31 +25,39 @@ add_executable(
   BoolAndOrTest.cpp
   CentralMomentsAggregationTest.cpp
   ChecksumAggregateTest.cpp
+  ClassificationAggregationTest.cpp
   CountAggregationTest.cpp
+  CountDistinctTest.cpp
   CountIfAggregationTest.cpp
   CovarianceAggregationTest.cpp
   EntropyAggregationTest.cpp
+  GeometricMeanTest.cpp
   HistogramTest.cpp
   Main.cpp
   MapAccumulatorTest.cpp
-  MinMaxByAggregationTest.cpp
-  MinMaxTest.cpp
-  PrestoHasherTest.cpp
-  SetAggTest.cpp
-  SetUnionTest.cpp
-  SumTest.cpp
   MapAggTest.cpp
   MapUnionAggregationTest.cpp
   MapUnionSumTest.cpp
-  ValueListTest.cpp
-  VarianceAggregationTest.cpp
+  NumericHistogramTest.cpp
   MaxSizeForStatsTest.cpp
-  SumDataSizeForStatsTest.cpp)
+  MinMaxByAggregationTest.cpp
+  MinMaxTest.cpp
+  MultiMapAggTest.cpp
+  NoisyCountGaussianAggregationTest.cpp
+  NoisyCountIfGaussianAggregationTest.cpp
+  NoisySumGaussianAggregationTest.cpp
+  NoisyApproxSfmAggregationTest.cpp
+  PrestoHasherTest.cpp
+  QDigestAggTest.cpp
+  ReduceAggTest.cpp
+  SetAggTest.cpp
+  SetUnionTest.cpp
+  SumDataSizeForStatsTest.cpp
+  SumTest.cpp
+  VarianceAggregationTest.cpp
+)
 
-add_test(
-  NAME velox_aggregates_test
-  COMMAND velox_aggregates_test
-  WORKING_DIRECTORY .)
+add_test(NAME velox_aggregates_test COMMAND velox_aggregates_test WORKING_DIRECTORY .)
 
 target_link_libraries(
   velox_aggregates_test
@@ -61,6 +69,7 @@ target_link_libraries(
   velox_file
   velox_functions_aggregates
   velox_functions_aggregates_test_lib
+  velox_functions_window_test_lib
   velox_functions_test_lib
   velox_functions_prestosql
   velox_functions_lib
@@ -68,6 +77,8 @@ target_link_libraries(
   velox_simple_aggregate
   velox_type
   velox_vector_fuzzer
+  velox_temp_path
   gflags::gflags
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main
+)

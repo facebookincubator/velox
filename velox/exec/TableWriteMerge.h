@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/ColumnStatsCollector.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
@@ -29,13 +30,17 @@ class TableWriteMerge : public Operator {
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::TableWriteMergeNode>&
-          TableWriteMergeNode);
+          tableWriteMergeNode);
+
+  void initialize() override;
 
   BlockingReason isBlocked(ContinueFuture* /* future */) override {
     return BlockingReason::kNotBlocked;
   }
 
   void addInput(RowVectorPtr input) override;
+
+  void noMoreInput() override;
 
   virtual bool needsInput() const override {
     return true;
@@ -46,6 +51,8 @@ class TableWriteMerge : public Operator {
   bool isFinished() override {
     return finished_;
   }
+
+  void close() override;
 
  private:
   // Creates non-last output with fragments and last commit context only.
@@ -58,6 +65,10 @@ class TableWriteMerge : public Operator {
   // Creates the last output and fragment columns must be null.
   RowVectorPtr createLastOutput();
 
+  // Check if the input is statistics input.
+  bool isStatistics(RowVectorPtr input);
+
+  std::unique_ptr<ColumnStatsCollector> statsCollector_;
   bool finished_{false};
   // The sum of written rows.
   int64_t numRows_{0};

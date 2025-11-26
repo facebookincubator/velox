@@ -25,52 +25,38 @@ class CallbackSink : public Operator {
   CallbackSink(
       int32_t operatorId,
       DriverCtx* driverCtx,
-      std::function<BlockingReason(RowVectorPtr, ContinueFuture*)> callback)
-      : Operator(driverCtx, nullptr, operatorId, "N/A", "CallbackSink"),
-        callback_{callback} {}
+      Consumer consumeCb,
+      std::function<BlockingReason(ContinueFuture*)> startedCb = nullptr,
+      const std::string& planNodeId = "N/A")
+      : Operator(driverCtx, nullptr, operatorId, planNodeId, "CallbackSink"),
+        startedCb_{std::move(startedCb)},
+        consumeCb_{std::move(consumeCb)} {}
 
-  void addInput(RowVectorPtr input) override {
-    loadColumns(input, *operatorCtx_->execCtx());
-    blockingReason_ = callback_(input, &future_);
-  }
+  void addInput(RowVectorPtr input) override;
 
-  RowVectorPtr getOutput() override {
-    return nullptr;
-  }
+  RowVectorPtr getOutput() override;
+
+  bool startDrain() override;
 
   bool needsInput() const override {
-    return callback_ != nullptr;
+    return consumeCb_ != nullptr;
   }
 
-  void noMoreInput() override {
-    Operator::noMoreInput();
-    close();
-  }
+  void noMoreInput() override;
 
-  BlockingReason isBlocked(ContinueFuture* future) override {
-    if (blockingReason_ != BlockingReason::kNotBlocked) {
-      *future = std::move(future_);
-      blockingReason_ = BlockingReason::kNotBlocked;
-      return BlockingReason::kWaitForConsumer;
-    }
-    return BlockingReason::kNotBlocked;
-  }
+  BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override {
     return noMoreInput_;
   }
 
  private:
-  void close() override {
-    if (callback_) {
-      callback_(nullptr, nullptr);
-      callback_ = nullptr;
-    }
-  }
+  void close() override;
 
   ContinueFuture future_;
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
-  std::function<BlockingReason(RowVectorPtr, ContinueFuture*)> callback_;
+  std::function<BlockingReason(ContinueFuture*)> startedCb_;
+  Consumer consumeCb_;
 };
 
 } // namespace facebook::velox::exec

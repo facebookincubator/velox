@@ -14,17 +14,14 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
-#include <algorithm>
-#include <array>
-#include <random>
+
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/RowContainer.h"
-#include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::exec::test {
@@ -33,10 +30,33 @@ class RowContainerTestBase : public testing::Test,
                              public velox::test::VectorTestBase {
  protected:
   void SetUp() override {
-    pool_ = memory::addDefaultLeafMemoryPool();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
+    }
+    if (!isRegisteredVectorSerde()) {
+      facebook::velox::serializer::presto::PrestoVectorSerde::
+          registerVectorSerde();
+    }
+    if (!isRegisteredVectorSerde()) {
+      facebook::velox::serializer::presto::PrestoVectorSerde::
+          registerVectorSerde();
+    }
+    if (!isRegisteredVectorSerde()) {
+      facebook::velox::serializer::presto::PrestoVectorSerde::
+          registerVectorSerde();
+    }
+    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+      facebook::velox::serializer::presto::PrestoVectorSerde::
+          registerNamedVectorSerde();
+    }
+    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+      facebook::velox::serializer::CompactRowVectorSerde::
+          registerNamedVectorSerde();
+    }
+    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+      facebook::velox::serializer::spark::UnsafeRowVectorSerde::
+          registerNamedVectorSerde();
     }
     filesystems::registerLocalFileSystem();
   }
@@ -57,7 +77,7 @@ class RowContainerTestBase : public testing::Test,
       const std::vector<TypePtr>& keyTypes,
       const std::vector<TypePtr>& dependentTypes,
       bool isJoinBuild = true) {
-    return std::make_unique<RowContainer>(
+    auto container = std::make_unique<RowContainer>(
         keyTypes,
         !isJoinBuild,
         std::vector<Accumulator>{},
@@ -66,10 +86,9 @@ class RowContainerTestBase : public testing::Test,
         isJoinBuild,
         true,
         true,
-        pool_.get(),
-        ContainerRowSerde::instance());
+        pool_.get());
+    VELOX_CHECK(container->testingMutable());
+    return container;
   }
-
-  std::shared_ptr<memory::MemoryPool> pool_;
 };
 } // namespace facebook::velox::exec::test

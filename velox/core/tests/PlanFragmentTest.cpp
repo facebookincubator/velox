@@ -27,6 +27,10 @@ using facebook::velox::exec::test::PlanBuilder;
 namespace {
 class PlanFragmentTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   void SetUp() override {
     rowType_ = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
     rowTypeWithProjection_ = ROW(
@@ -63,7 +67,7 @@ class PlanFragmentTest : public testing::Test {
         {QueryConfig::kOrderBySpillEnabled,
          orderBySpillEnabled ? "true" : "false"},
     });
-    return std::make_shared<QueryCtx>(nullptr, std::move(configData));
+    return QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
   }
 
   RowTypePtr rowType_;
@@ -74,9 +78,10 @@ class PlanFragmentTest : public testing::Test {
   RowTypePtr probeTypeWithProjection_;
   std::vector<RowVectorPtr> emptyProbeVectors_;
   std::shared_ptr<PlanNode> probeValueNode_;
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
 };
-}; // namespace
+} // namespace
 
 TEST_F(PlanFragmentTest, orderByCanSpill) {
   struct {
@@ -100,7 +105,8 @@ TEST_F(PlanFragmentTest, orderByCanSpill) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    const std::vector<FieldAccessTypedExprPtr> sortingKeys{nullptr};
+    const std::vector<FieldAccessTypedExprPtr> sortingKeys{
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")};
     const std::vector<SortOrder> sortingOrders{{true, true}};
     auto orderBy = std::make_shared<OrderByNode>(
         "orderBy", sortingKeys, sortingOrders, false, valueNode_);
@@ -123,10 +129,10 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
   const std::vector<FieldAccessTypedExprPtr> emptyPreGroupingKeys;
   std::vector<std::string> aggregateNames{"sum"};
   std::vector<std::string> emptyAggregateNames{};
-  std::vector<TypedExprPtr> aggregateInputs{
-      std::make_shared<InputTypedExpr>(BIGINT())};
+  auto aggregateInput = std::make_shared<InputTypedExpr>(BIGINT());
   const std::vector<AggregationNode::Aggregate> aggregates{
-      {std::make_shared<core::CallTypedExpr>(BIGINT(), aggregateInputs, "sum"),
+      {std::make_shared<core::CallTypedExpr>(BIGINT(), "sum", aggregateInput),
+       {},
        nullptr,
        {},
        {}}};
@@ -142,8 +148,9 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
 
     std::string debugString() const {
       return fmt::format(
-          "aggregationStep:{} isSpillEnabled:{} isAggregationSpillEnabled:{} isDistinct:{} hasPreAggregation:{} expectedCanSpill:{}",
-          aggregationStep,
+          "aggregationStep:{} isSpillEnabled:{} isAggregationSpillEnabled:{} "
+          "isDistinct:{} hasPreAggregation:{} expectedCanSpill:{}",
+          AggregationNode::toName(aggregationStep),
           isSpillEnabled,
           isAggregationSpillEnabled,
           isDistinct,
@@ -153,7 +160,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
   } testSettings[] = {
       {AggregationNode::Step::kSingle, false, true, false, false, false},
       {AggregationNode::Step::kSingle, true, false, false, false, false},
-      {AggregationNode::Step::kSingle, true, true, true, false, false},
+      {AggregationNode::Step::kSingle, true, true, true, false, true},
       {AggregationNode::Step::kSingle, true, true, false, true, false},
       {AggregationNode::Step::kSingle, true, true, false, false, true},
       {AggregationNode::Step::kIntermediate, false, true, false, false, false},
@@ -166,11 +173,11 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
       {AggregationNode::Step::kPartial, true, true, true, false, false},
       {AggregationNode::Step::kPartial, true, true, false, true, false},
       {AggregationNode::Step::kPartial, true, true, false, false, false},
-      {AggregationNode::Step::kSingle, false, true, false, false, false},
-      {AggregationNode::Step::kSingle, true, false, false, false, false},
-      {AggregationNode::Step::kSingle, true, true, true, false, false},
-      {AggregationNode::Step::kSingle, true, true, false, true, false},
-      {AggregationNode::Step::kSingle, true, true, false, false, true}};
+      {AggregationNode::Step::kFinal, false, true, false, false, false},
+      {AggregationNode::Step::kFinal, true, false, false, false, false},
+      {AggregationNode::Step::kFinal, true, true, true, false, true},
+      {AggregationNode::Step::kFinal, true, true, false, true, false},
+      {AggregationNode::Step::kFinal, true, true, false, false, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -314,5 +321,59 @@ TEST_F(PlanFragmentTest, hashJoin) {
     ASSERT_EQ(
         planFragment.canSpill(queryCtx->queryConfig()),
         testData.expectedCanSpill);
+  }
+}
+
+TEST_F(PlanFragmentTest, executionStrategyToString) {
+  ASSERT_EQ(
+      executionStrategyToString(core::ExecutionStrategy::kUngrouped),
+      "UNGROUPED");
+  ASSERT_EQ(
+      executionStrategyToString(core::ExecutionStrategy::kGrouped), "GROUPED");
+  ASSERT_EQ(
+      executionStrategyToString(static_cast<core::ExecutionStrategy>(999)),
+      "UNKNOWN: 999");
+}
+
+TEST_F(PlanFragmentTest, supportsBarrier) {
+  // Plan fragment with plan node not supporting barrier.
+  {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto plan = PlanBuilder(planNodeIdGenerator)
+                          .tableScan(rowType_)
+                          .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                          .hashJoin(
+                              {"t0"},
+                              {"u0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .tableScan(rowType_)
+                                  .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                                  .planNode(),
+                              "",
+                              {"t1"},
+                              core::JoinType::kAnti)
+                          .planNode();
+    const PlanFragment planFragment{plan};
+    ASSERT_TRUE(planFragment.firstNodeNotSupportingBarrier() != nullptr);
+  }
+  // Plan fragment with plan node supporting barrier.
+  {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(rowType_)
+                    .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                    .mergeJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(rowType_)
+                            .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                            .planNode(),
+                        "",
+                        {"t0", "t1", "t2", "u0", "u1", "u2"},
+                        core::JoinType::kInner)
+                    .planNode();
+    const PlanFragment planFragment{plan};
+    ASSERT_TRUE(planFragment.firstNodeNotSupportingBarrier() == nullptr);
   }
 }

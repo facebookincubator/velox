@@ -35,11 +35,16 @@ std::string inlinedString() {
 
 class StringViewBufferHolderTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  }
+
   StringViewBufferHolder makeHolder() {
     return StringViewBufferHolder(pool_.get());
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
 };
 
 TEST_F(StringViewBufferHolderTest, inlinedStringViewDoesNotCopyToBuffer) {
@@ -156,23 +161,21 @@ TEST_F(StringViewBufferHolderTest, getOwnedValueCanBeCalledWithStringType) {
   ASSERT_EQ(1, holder.buffers().size());
 }
 
-TEST_F(
-    StringViewBufferHolderTest,
-    getOwnedValueCanBeCalledWithStringPieceType) {
+TEST_F(StringViewBufferHolderTest, getOwnedValueCanBeCalledWithStringViewType) {
   const char* buf = "abcdefghijklmnopqrstuvxz";
   StringView result;
-  folly::StringPiece piece;
+  std::string_view view;
 
   auto holder = makeHolder();
   ASSERT_EQ(0, holder.buffers().size());
 
   {
     std::string str = buf;
-    piece = str;
-    result = holder.getOwnedValue(piece);
+    view = str;
+    result = holder.getOwnedValue(view);
   }
 
-  // `str` is already destructed and piece is invalid.
+  // `str` is already destructed and `view` is invalid.
   ASSERT_EQ(StringView(buf), result);
   ASSERT_EQ(1, holder.buffers().size());
 }
@@ -201,6 +204,27 @@ TEST_F(StringViewBufferHolderTest, buffersCopy) {
 
   EXPECT_EQ(buffers.back()->as<uint8_t>(), firstMoved.back()->as<uint8_t>());
   EXPECT_NE(&buffers, &firstMoved);
+}
+
+TEST_F(StringViewBufferHolderTest, addOwnedBuffer) {
+  auto holder = makeHolder();
+  ASSERT_EQ(0, holder.buffers().size());
+  auto buffer = AlignedBuffer::allocate<char>(10, pool_.get());
+  holder.addOwnedBuffer(std::move(buffer));
+  ASSERT_EQ(1, holder.buffers().size());
+  ASSERT_EQ(1, holder.moveBuffers().size());
+}
+
+TEST_F(StringViewBufferHolderTest, addOwnedBufferThrowsForWrongPool) {
+  auto holder = makeHolder();
+  ASSERT_EQ(0, holder.buffers().size());
+  auto buffer = AlignedBuffer::allocate<char>(10, pool_.get());
+  holder.addOwnedBuffer(std::move(buffer));
+
+  auto newPool = memory::memoryManager()->addLeafPool();
+  ASSERT_THROW(
+      holder.addOwnedBuffer(AlignedBuffer::allocate<char>(10, newPool.get())),
+      VeloxException);
 }
 
 } // namespace facebook::velox

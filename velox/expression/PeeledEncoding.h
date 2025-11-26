@@ -32,6 +32,11 @@ class LocalSelectivityVector;
 /// translate top level rows into inner rows and wrap a vector (typically
 /// generated as a result of applying an expression on the peeled vectors).
 ///
+/// When the base vector size is larger than 8 times of the selected rows, we do
+/// not save the dictionary wrapping.  Instead, we store a flattened version of
+/// the selected rows and return them when needed.  The wrapping in this case is
+/// kept as FLAT, and the inner/outer rows translation will be identical.
+///
 /// Typical usage pattern for peeling includes:
 /// (See Expr::applyFunctionWithPeeling() for example usage)
 /// 1. peeling a set of input vectors
@@ -113,6 +118,13 @@ class PeeledEncoding {
   static std::shared_ptr<PeeledEncoding> peel(
       const std::vector<VectorPtr>& vectorsToPeel,
       const SelectivityVector& rows,
+      DecodedVector& decodedVector,
+      bool canPeelsHaveNulls,
+      std::vector<VectorPtr>& peeledVectors);
+
+  static std::shared_ptr<PeeledEncoding> peel(
+      const std::vector<VectorPtr>& vectorsToPeel,
+      const SelectivityVector& rows,
       LocalDecodedVector& decodedVector,
       bool canPeelsHaveNulls,
       std::vector<VectorPtr>& peeledVectors);
@@ -144,7 +156,7 @@ class PeeledEncoding {
   /// selectivity vector.
   VectorPtr wrap(
       const TypePtr& outputType,
-      velox::memory::MemoryPool* FOLLY_NONNULL pool,
+      velox::memory::MemoryPool* pool,
       VectorPtr peeledResult,
       const SelectivityVector& rows) const;
 
@@ -164,7 +176,7 @@ class PeeledEncoding {
       vector_size_t innerRow = indices ? indices[outerRow] : constantWrapIndex_;
       func(outerRow, innerRow);
     });
-  };
+  }
 
  private:
   PeeledEncoding() = default;
@@ -174,7 +186,7 @@ class PeeledEncoding {
   bool peelInternal(
       const std::vector<VectorPtr>& vectorsToPeel,
       const SelectivityVector& rows,
-      LocalDecodedVector& decodedVector,
+      DecodedVector& decodedVector,
       bool canPeelsHaveNulls,
       std::vector<VectorPtr>& peeledVectors);
 

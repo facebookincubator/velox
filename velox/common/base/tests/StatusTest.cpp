@@ -1,0 +1,290 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/common/base/Status.h"
+#include <gtest/gtest.h>
+#include <sstream>
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
+
+namespace facebook::velox::test {
+namespace {
+
+TEST(StatusTest, testCodeAndMessage) {
+  Status ok = Status::OK();
+  ASSERT_EQ(StatusCode::kOK, ok.code());
+  ASSERT_EQ("", ok.message());
+  ASSERT_EQ("OK", ok.codeAsString());
+  ASSERT_TRUE(ok.ok());
+  ASSERT_FALSE(ok.isIOError());
+
+  Status fileError = Status::IOError("file error");
+  ASSERT_EQ(StatusCode::kIOError, fileError.code());
+  ASSERT_EQ("file error", fileError.message());
+}
+
+TEST(StatusTest, testNoMessage) {
+  Status fileError = Status::IOError();
+  ASSERT_EQ(StatusCode::kIOError, fileError.code());
+  ASSERT_EQ("", fileError.message());
+  ASSERT_EQ("IOError: ", fileError.toString());
+  ASSERT_EQ("IOError", fileError.codeAsString());
+}
+
+TEST(StatusTest, testToString) {
+  Status fileError = Status::IOError("file error");
+  ASSERT_EQ("IOError: file error", fileError.toString());
+  ASSERT_EQ("IOError", fileError.codeAsString());
+
+  std::stringstream ss;
+  ss << fileError;
+  ASSERT_EQ(fileError.toString(), ss.str());
+
+  // Check that fmt has the right specializations.
+  ASSERT_EQ(fileError.toString(), fmt::format("{}", fileError));
+  ASSERT_EQ("Unknown error", fmt::format("{}", StatusCode::kUnknownError));
+}
+
+TEST(StatusTest, andStatus) {
+  Status a = Status::OK();
+  Status b = Status::OK();
+  Status c = Status::Invalid("invalid value");
+  Status d = Status::IOError("file error");
+
+  Status res;
+  res = a & b;
+  ASSERT_TRUE(res.ok());
+  res = a & c;
+  ASSERT_TRUE(res.isInvalid());
+  res = d & c;
+  ASSERT_TRUE(res.isIOError());
+
+  res = Status::OK();
+  res &= c;
+  ASSERT_TRUE(res.isInvalid());
+  res &= d;
+  ASSERT_TRUE(res.isInvalid());
+
+  // With rvalues.
+  res = Status::OK() & Status::Invalid("foo");
+  ASSERT_TRUE(res.isInvalid());
+  res = Status::Invalid("foo") & Status::OK();
+  ASSERT_TRUE(res.isInvalid());
+  res = Status::Invalid("foo") & Status::IOError("bar");
+  ASSERT_TRUE(res.isInvalid());
+
+  res = Status::OK();
+  res &= Status::OK();
+  ASSERT_TRUE(res.ok());
+  res &= Status::Invalid("foo");
+  ASSERT_TRUE(res.isInvalid());
+  res &= Status::IOError("bar");
+  ASSERT_TRUE(res.isInvalid());
+}
+
+TEST(StatusTest, testEquality) {
+  ASSERT_EQ(Status(), Status::OK());
+  ASSERT_EQ(Status::Invalid("error"), Status::Invalid("error"));
+
+  ASSERT_NE(Status::Invalid("error"), Status::OK());
+  ASSERT_NE(Status::Invalid("error"), Status::Invalid("other error"));
+}
+
+TEST(StatusTest, testAbort) {
+  Status a = Status::Invalid("will abort process");
+  ASSERT_DEATH(a.abort(), "");
+}
+
+Status returnIf(bool cond) {
+  VELOX_RETURN_IF(cond, Status::Invalid("error"));
+  return Status::OK();
+}
+
+Status returnNotOk(Status s) {
+  VELOX_RETURN_NOT_OK(s);
+  return Status::Invalid("invalid");
+}
+
+#define STATUS_MACRO_TEST(name, macro) \
+  Status returnMacro##name() {         \
+    macro;                             \
+    return Status::OK();               \
+  }
+
+STATUS_MACRO_TEST(EmptyMessage, VELOX_USER_RETURN_GT(2, 1));
+STATUS_MACRO_TEST(Format, VELOX_USER_RETURN_GT(2, 1, "Occurred {} times.", 5));
+STATUS_MACRO_TEST(GT, VELOX_USER_RETURN_GT(2, 1, "User error occurred."));
+STATUS_MACRO_TEST(GE, VELOX_USER_RETURN_GE(2, 1, "User error occurred."));
+STATUS_MACRO_TEST(LT, VELOX_USER_RETURN_LT(1, 2, "User error occurred."));
+STATUS_MACRO_TEST(LE, VELOX_USER_RETURN_LE(1, 2, "User error occurred."));
+STATUS_MACRO_TEST(EQ, VELOX_USER_RETURN_EQ(1, 1, "User error occurred."));
+STATUS_MACRO_TEST(NE, VELOX_USER_RETURN_NE(1, 3, "User error occurred."));
+STATUS_MACRO_TEST(
+    NULL,
+    VELOX_USER_RETURN_NULL(nullptr, "User error occurred."));
+
+Status returnNotNull(Status* status) {
+  VELOX_USER_RETURN_NOT_NULL(status, "User error occurred.");
+  return Status::OK();
+}
+
+Status returnMacroCheck() {
+  Status status = Status::OK();
+  VELOX_USER_RETURN(
+      status.code() != StatusCode::kCancelled, "User error occurred.");
+  return Status::OK();
+}
+
+TEST(StatusTest, statusMacros) {
+  ASSERT_EQ(returnIf(true), Status::Invalid("error"));
+  ASSERT_EQ(returnIf(false), Status::OK());
+
+  ASSERT_EQ(returnNotOk(Status::UserError("user")), Status::UserError("user"));
+  ASSERT_EQ(returnNotOk(Status::OK()), Status::Invalid("invalid"));
+
+  VELOX_CHECK_OK(Status::OK()); // does not throw.
+
+  bool didThrow = false;
+  try {
+    VELOX_CHECK_OK(Status::Invalid("invalid"));
+  } catch (const VeloxRuntimeError&) {
+    didThrow = true;
+  }
+  ASSERT_TRUE(didThrow) << "VELOX_CHECK_OK did not throw";
+
+  ASSERT_EQ(
+      returnMacroCheck(),
+      Status::UserError(
+          "Reason: User error occurred.\nExpression: status.code() != StatusCode::kCancelled\n"));
+  ASSERT_EQ(
+      returnMacroEmptyMessage(),
+      Status::UserError("Reason: (2 vs. 1)\nExpression: 2 > 1\n"));
+  ASSERT_EQ(
+      returnMacroFormat(),
+      Status::UserError(
+          "Reason: (2 vs. 1) Occurred 5 times.\nExpression: 2 > 1\n"));
+  ASSERT_EQ(
+      returnMacroGT(),
+      Status::UserError(
+          "Reason: (2 vs. 1) User error occurred.\nExpression: 2 > 1\n"));
+  ASSERT_EQ(
+      returnMacroGE(),
+      Status::UserError(
+          "Reason: (2 vs. 1) User error occurred.\nExpression: 2 >= 1\n"));
+  ASSERT_EQ(
+      returnMacroLT(),
+      Status::UserError(
+          "Reason: (1 vs. 2) User error occurred.\nExpression: 1 < 2\n"));
+  ASSERT_EQ(
+      returnMacroLE(),
+      Status::UserError(
+          "Reason: (1 vs. 2) User error occurred.\nExpression: 1 <= 2\n"));
+  ASSERT_EQ(
+      returnMacroEQ(),
+      Status::UserError(
+          "Reason: (1 vs. 1) User error occurred.\nExpression: 1 == 1\n"));
+  ASSERT_EQ(
+      returnMacroNE(),
+      Status::UserError(
+          "Reason: (1 vs. 3) User error occurred.\nExpression: 1 != 3\n"));
+  ASSERT_EQ(
+      returnMacroNULL(),
+      Status::UserError(
+          "Reason: User error occurred.\nExpression: nullptr == nullptr\n"));
+  Status status = Status::OK();
+  ASSERT_EQ(
+      returnNotNull(&status),
+      Status::UserError(
+          "Reason: User error occurred.\nExpression: status != nullptr\n"));
+}
+
+TEST(StatusTest, statusMacrosSkipDetails) {
+  ScopedThreadSkipErrorDetails skipErrorDetails(true);
+  ASSERT_EQ(returnMacroCheck(), Status::UserError());
+  ASSERT_EQ(returnMacroEmptyMessage(), Status::UserError());
+  ASSERT_EQ(returnMacroFormat(), Status::UserError());
+  ASSERT_EQ(returnMacroGT(), Status::UserError());
+  ASSERT_EQ(returnMacroGE(), Status::UserError());
+  ASSERT_EQ(returnMacroLT(), Status::UserError());
+  ASSERT_EQ(returnMacroLE(), Status::UserError());
+  ASSERT_EQ(returnMacroEQ(), Status::UserError());
+  ASSERT_EQ(returnMacroNE(), Status::UserError());
+  ASSERT_EQ(returnMacroNULL(), Status::UserError());
+  Status status = Status::OK();
+  ASSERT_EQ(returnNotNull(&status), Status::UserError());
+}
+
+Expected<int> modulo(int a, int b) {
+  if (b == 0) {
+    return folly::makeUnexpected(Status::UserError("division by zero"));
+  }
+
+  return a % b;
+}
+
+TEST(StatusTest, expected) {
+  auto result = modulo(10, 3);
+  EXPECT_TRUE(result.hasValue());
+  EXPECT_EQ(result.value(), 1);
+
+  result = modulo(10, 0);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), Status::UserError("division by zero"));
+}
+
+Expected<bool> returnUnexpectedIf(bool cond) {
+  VELOX_RETURN_UNEXPECTED_IF(cond, Status::Invalid("error"));
+  return true;
+}
+
+Expected<bool> returnUnexpected(const Expected<int>& expected) {
+  VELOX_RETURN_UNEXPECTED(expected);
+  return expected.value() == 0;
+}
+
+Expected<bool> returnUnexpectedNotOk(Status s) {
+  VELOX_RETURN_UNEXPECTED_NOT_OK(s);
+  return true;
+}
+
+TEST(StatusTest, expectedMacros) {
+  auto result = returnUnexpectedIf(true);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), Status::Invalid("error"));
+
+  result = returnUnexpectedIf(false);
+  EXPECT_TRUE(result.hasValue());
+  EXPECT_TRUE(result.value());
+
+  result = returnUnexpected(modulo(10, 0));
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), Status::UserError("division by zero"));
+
+  result = returnUnexpected(modulo(10, 3));
+  EXPECT_TRUE(result.hasValue());
+  EXPECT_FALSE(result.value());
+
+  result = returnUnexpectedNotOk(Status::UserError("user"));
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), Status::UserError("user"));
+
+  result = returnUnexpectedNotOk(Status::OK());
+  EXPECT_TRUE(result.hasValue());
+  EXPECT_TRUE(result.value());
+}
+
+} // namespace
+} // namespace facebook::velox::test

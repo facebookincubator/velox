@@ -14,9 +14,13 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/Macros.h"
+#include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include <fmt/format.h>
+#include <cstdint>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -33,11 +37,9 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
     TypeKind::REAL,
     TypeKind::DOUBLE,
     TypeKind::VARCHAR,
-    TypeKind::MAP,
     TypeKind::ARRAY,
     TypeKind::ROW};
 
-using TestMapType = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
 using TestArrayType = std::vector<std::optional<StringView>>;
 using TestRowType = variant;
 
@@ -61,10 +63,6 @@ class ArraySortTest : public FunctionBaseTest,
         ->template asFlatVector<T>();
   }
 
-  const MapVector* getMapVector() {
-    return dynamic_cast<MapVector*>(dataVectorsByType_[TypeKind::MAP].get());
-  }
-
   template <typename T>
   T dataAt(vector_size_t index) {
     EXPECT_LT(index, numValues_);
@@ -79,14 +77,6 @@ class ArraySortTest : public FunctionBaseTest,
       inputVectors.push_back(inputValues);
     }
     return makeNullableArrayVector<T>(inputVectors);
-  }
-
-  MapVectorPtr buildMapVector() {
-    return makeMapVector<int32_t, int32_t>(
-        numValues_,
-        [&](vector_size_t /*row*/) { return 1; },
-        [&](vector_size_t row) { return row; },
-        [&](vector_size_t row) { return row; });
   }
 
   template <typename T>
@@ -192,12 +182,10 @@ class ArraySortTest : public FunctionBaseTest,
     };
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
-      auto actualResult =
-          evaluate<ArrayVector>("array_sort(c0)", testData.inputVector);
+      auto actualResult = evaluate("array_sort(c0)", testData.inputVector);
       assertEqualVectors(testData.expectedResult, actualResult);
 
-      auto descResult =
-          evaluate<ArrayVector>("array_sort_desc(c0)", testData.inputVector);
+      auto descResult = evaluate("array_sort_desc(c0)", testData.inputVector);
       assertEqualVectors(testData.expectedDescResult, descResult);
     }
   }
@@ -228,9 +216,6 @@ class ArraySortTest : public FunctionBaseTest,
       case TypeKind::VARCHAR:
         test<StringView>();
         break;
-      case TypeKind::MAP:
-        test<TestMapType>();
-        break;
       case TypeKind::ARRAY:
         test<TestArrayType>();
         break;
@@ -239,7 +224,31 @@ class ArraySortTest : public FunctionBaseTest,
         break;
       default:
         VELOX_FAIL(
-            "Unsupported data type of sort_array: {}", mapTypeKindToName(kind));
+            "Unsupported data type of sort_array: {}",
+            TypeKindName::toName(kind));
+    }
+  }
+
+  template <typename T>
+  void testFloatingPoint() {
+    // Verify that NaNs are treated as greater than infinity
+    static const T kNaN = std::numeric_limits<T>::quiet_NaN();
+    static const T kInfinity = std::numeric_limits<T>::infinity();
+    static const T kNegativeInfinity = -1 * std::numeric_limits<T>::infinity();
+
+    auto input = makeRowVector({makeNullableArrayVector<T>(
+        {{kInfinity, -1, kNaN, 1, kNegativeInfinity, kNaN, 0}})});
+
+    {
+      auto expected = makeNullableArrayVector<T>(
+          {{kNegativeInfinity, -1, 0, 1, kInfinity, kNaN, kNaN}});
+      assertEqualVectors(expected, evaluate("try(array_sort(c0))", input));
+    }
+
+    {
+      auto expected = makeNullableArrayVector<T>(
+          {{kNaN, kNaN, kInfinity, 1, 0, -1, kNegativeInfinity}});
+      assertEqualVectors(expected, evaluate("try(array_sort_desc(c0))", input));
     }
   }
 
@@ -274,16 +283,6 @@ FlatVectorPtr<bool> ArraySortTest::buildScalarVector() {
 }
 
 template <>
-TestMapType ArraySortTest::dataAt<TestMapType>(vector_size_t index) {
-  EXPECT_LT(index, numValues_);
-  const int32_t key =
-      getMapVector()->mapKeys()->asFlatVector<int32_t>()->valueAt(index);
-  const std::optional<int32_t> value =
-      getMapVector()->mapValues()->asFlatVector<int32_t>()->valueAt(index);
-  return TestMapType({std::pair{key, value}});
-}
-
-template <>
 TestArrayType ArraySortTest::dataAt<TestArrayType>(vector_size_t index) {
   EXPECT_LT(index, numValues_);
   TestArrayType array;
@@ -298,17 +297,6 @@ template <>
 TestRowType ArraySortTest::dataAt<TestRowType>(vector_size_t index) {
   EXPECT_LT(index, numValues_);
   return variant::row({getScalarVector<double>()->valueAt(index)});
-}
-
-template <>
-ArrayVectorPtr ArraySortTest::arrayVector<TestMapType>(
-    const std::vector<std::optional<TestMapType>>& inputValues) {
-  std::vector<std::vector<std::optional<TestMapType>>> inputVectors;
-  inputVectors.reserve(numVectors_);
-  for (int i = 0; i < numVectors_; ++i) {
-    inputVectors.push_back(inputValues);
-  }
-  return makeArrayOfMapVector<int32_t, int32_t>(inputVectors);
 }
 
 template <>
@@ -373,9 +361,6 @@ void ArraySortTest::SetUp() {
       case TypeKind::VARCHAR:
         dataVectorsByType_.emplace(type, buildScalarVector<StringView>());
         break;
-      case TypeKind::MAP:
-        dataVectorsByType_.emplace(type, buildMapVector());
-        break;
       case TypeKind::ARRAY:
       case TypeKind::ROW:
         // ARRAY and ROW will reuse the scalar data vectors built for DOUBLE and
@@ -383,7 +368,8 @@ void ArraySortTest::SetUp() {
         break;
       default:
         VELOX_FAIL(
-            "Unsupported data type of sort_array: {}", mapTypeKindToName(type));
+            "Unsupported data type of sort_array: {}",
+            TypeKindName::toName(type));
     }
   }
   ASSERT_LE(dataVectorsByType_.size(), kSupportedTypes.size());
@@ -391,6 +377,24 @@ void ArraySortTest::SetUp() {
 
 TEST_P(ArraySortTest, basic) {
   runTest(GetParam());
+}
+
+TEST_F(ArraySortTest, unknown) {
+  auto input = makeNullableArrayVector<UnknownValue>({
+      {std::nullopt, std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt},
+  });
+
+  auto result = evaluate("array_sort(c0)", makeRowVector({input}));
+  assertEqualVectors(input, result);
+
+  input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[1, 2]",
+  });
+
+  result = evaluate("array_sort(c0, x -> null)", makeRowVector({input}));
+  assertEqualVectors(input, result);
 }
 
 TEST_F(ArraySortTest, constant) {
@@ -553,6 +557,11 @@ TEST_F(ArraySortTest, lambda) {
     SCOPED_TRACE(lambdaExpr);
     auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
     assertEqualVectors(sortedAsc, result);
+
+    SelectivityVector firstRow(1);
+    result =
+        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
+    assertEqualVectors(sortedAsc->slice(0, 1), result);
   };
 
   auto testDesc = [&](const std::string& name, const std::string& lambdaExpr) {
@@ -560,6 +569,11 @@ TEST_F(ArraySortTest, lambda) {
     SCOPED_TRACE(lambdaExpr);
     auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
     assertEqualVectors(sortedDesc, result);
+
+    SelectivityVector firstRow(1);
+    result =
+        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
+    assertEqualVectors(sortedDesc->slice(0, 1), result);
   };
 
   // Different ways to sort by length ascending.
@@ -581,6 +595,313 @@ TEST_F(ArraySortTest, lambda) {
   testDesc(
       "array_sort",
       "(x, y) -> if(length(x) < length(y), 1, if(length(x) = length(y), 0, -1))");
+}
+
+TEST_F(ArraySortTest, unsupporteLambda) {
+  auto data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3, 4]",
+          "[1, 2, 3]",
+      }),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("array_sort(c0, (a, b) -> 0)", data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+}
+
+TEST_F(ArraySortTest, failOnMapTypeSort) {
+  static const std::string kErrorMessage =
+      "Scalar function signature is not supported"_sv;
+  auto data = makeRowVector({BaseVector::createNullConstant(
+      ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool())});
+  auto testFail = [&](const std::string& name) {
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0, x -> x)", name), data), kErrorMessage);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), data), kErrorMessage);
+  };
+
+  testFail("array_sort");
+  testFail("array_sort_desc");
+}
+
+TEST_F(ArraySortTest, failOnArrayNullCompare) {
+  auto baseVector = makeArrayVectorFromJson<int32_t>({
+      "[null, 1]",
+      "[1, 1]",
+      "[2, 2]",
+      "[2, null]",
+      "[4, 4]",
+      "[5, null]",
+      "null",
+  });
+  static const std::string kErrorMessage = "Ordering nulls is not supported";
+
+  // [2, null] vs [4, 4], [5, null] vs null no throw.
+  const auto noNullCompareBatch = makeRowVector({
+      makeArrayVector({3, 5}, baseVector),
+  });
+
+  // [null, 1] vs [1, 1] throws.
+  auto nullCompareBatch1 = makeRowVector({
+      makeArrayVector({0, 3, 5}, baseVector),
+  });
+
+  // [2, 2] vs [2, null] throws.
+  auto nullCompareBatch2 = makeRowVector({
+      makeArrayVector({1, 4}, baseVector),
+  });
+
+  for (const auto& name : {"array_sort", "array_sort_desc"}) {
+    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        kErrorMessage);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        kErrorMessage);
+  }
+
+  {
+    auto expected = makeArrayVector({2, 3, 5}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch1));
+  }
+
+  {
+    auto expected = makeArrayVector({3, 4}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch2));
+  }
+}
+
+TEST_F(ArraySortTest, failOnRowNullCompare) {
+  auto baseVector = makeRowVector({
+      makeNullableFlatVector<int32_t>({std::nullopt, 1, 2, 2, 4, 5, 0}),
+      makeNullableFlatVector<int32_t>(
+          {1, 1, 2, std::nullopt, 4, std::nullopt, 0}),
+  });
+  baseVector->setNull(6, true);
+  static const std::string kErrorMessage = "Ordering nulls is not supported";
+
+  // (2, null) vs (4, 4), (5, null) vs null no throw.
+  const auto noNullCompareBatch = makeRowVector({
+      makeArrayVector({3, 5}, baseVector),
+  });
+
+  // (null, 1) vs (1, 1) throws.
+  auto nullCompareBatch1 = makeRowVector({
+      makeArrayVector({0, 3, 5}, baseVector),
+  });
+
+  // (2, 2) vs (2, null) throws.
+  auto nullCompareBatch2 = makeRowVector({
+      makeArrayVector({1, 4}, baseVector),
+  });
+
+  for (const auto& name : {"array_sort", "array_sort_desc"}) {
+    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        kErrorMessage);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        kErrorMessage);
+  }
+
+  {
+    auto expected = makeArrayVector({2, 3, 5}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch1));
+  }
+
+  {
+    auto expected = makeArrayVector({3, 4}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch2));
+  }
+}
+
+TEST_F(ArraySortTest, timestampWithTimezone) {
+  auto testArraySort =
+      [this](
+          const std::vector<std::optional<int64_t>>& inputArray,
+          const std::vector<std::optional<int64_t>>& expectedAscArray,
+          const std::vector<std::optional<int64_t>>& expectedDescArray) {
+        const auto input = makeRowVector({makeArrayVector(
+            {0},
+            makeNullableFlatVector<int64_t>(
+                inputArray, TIMESTAMP_WITH_TIME_ZONE()))});
+        const auto expectedAsc = makeArrayVector(
+            {0},
+            makeNullableFlatVector<int64_t>(
+                expectedAscArray, TIMESTAMP_WITH_TIME_ZONE()));
+        const auto expectedDesc = makeArrayVector(
+            {0},
+            makeNullableFlatVector<int64_t>(
+                expectedDescArray, TIMESTAMP_WITH_TIME_ZONE()));
+
+        auto resultAsc = evaluate("array_sort(c0)", input);
+        assertEqualVectors(expectedAsc, resultAsc);
+
+        auto resultDesc = evaluate("array_sort_desc(c0)", input);
+        assertEqualVectors(expectedDesc, resultDesc);
+      };
+
+  testArraySort(
+      {pack(2, 0), pack(1, 1), pack(0, 2)},
+      {pack(0, 2), pack(1, 1), pack(2, 0)},
+      {pack(2, 0), pack(1, 1), pack(0, 2)});
+  testArraySort(
+      {pack(0, 0), pack(1, 1), pack(2, 2)},
+      {pack(0, 0), pack(1, 1), pack(2, 2)},
+      {pack(2, 2), pack(1, 1), pack(0, 0)});
+  testArraySort(
+      {pack(0, 0), pack(0, 1), pack(0, 2)},
+      {pack(0, 0), pack(0, 1), pack(0, 2)},
+      {pack(0, 0), pack(0, 1), pack(0, 2)});
+  testArraySort(
+      {pack(1, 0), pack(0, 1), pack(2, 2)},
+      {pack(0, 1), pack(1, 0), pack(2, 2)},
+      {pack(2, 2), pack(1, 0), pack(0, 1)});
+  testArraySort(
+      {std::nullopt, pack(1, 0), pack(0, 1), pack(2, 2)},
+      {pack(0, 1), pack(1, 0), pack(2, 2), std::nullopt},
+      {pack(2, 2), pack(1, 0), pack(0, 1), std::nullopt});
+  testArraySort(
+      {std::nullopt, std::nullopt, pack(1, 2), pack(0, 1), pack(2, 0)},
+      {pack(0, 1), pack(1, 2), pack(2, 0), std::nullopt, std::nullopt},
+      {pack(2, 0), pack(1, 2), pack(0, 1), std::nullopt, std::nullopt});
+  testArraySort(
+      {std::nullopt, pack(1, 1), pack(0, 2), std::nullopt, pack(2, 0)},
+      {pack(0, 2), pack(1, 1), pack(2, 0), std::nullopt, std::nullopt},
+      {pack(2, 0), pack(1, 1), pack(0, 2), std::nullopt, std::nullopt});
+  testArraySort(
+      {pack(1, 1), std::nullopt, pack(0, 0), pack(2, 2), std::nullopt},
+      {pack(0, 0), pack(1, 1), pack(2, 2), std::nullopt, std::nullopt},
+      {pack(2, 2), pack(1, 1), pack(0, 0), std::nullopt, std::nullopt});
+  testArraySort(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+}
+
+template <typename T>
+struct TimeZoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& ts) {
+    result = unpackZoneKeyId(*ts);
+  }
+};
+
+TEST_F(ArraySortTest, timestampWithTimezoneWithLambda) {
+  registerFunction<TimeZoneFunction, int64_t, TimestampWithTimezone>(
+      {"timezone"});
+
+  auto testArraySort =
+      [this](
+          const std::vector<std::optional<int64_t>>& inputArray,
+          const std::vector<std::optional<int64_t>>& expectedAscArray,
+          const std::vector<std::optional<int64_t>>& expectedDescArray) {
+        const auto input = makeRowVector({makeArrayVector(
+            {0},
+            makeNullableFlatVector<int64_t>(
+                inputArray, TIMESTAMP_WITH_TIME_ZONE()))});
+        const auto expectedAsc = makeArrayVector(
+            {0},
+            makeNullableFlatVector<int64_t>(
+                expectedAscArray, TIMESTAMP_WITH_TIME_ZONE()));
+        const auto expectedDesc = makeArrayVector(
+            {0},
+            makeNullableFlatVector<int64_t>(
+                expectedDescArray, TIMESTAMP_WITH_TIME_ZONE()));
+
+        auto resultAsc = evaluate("array_sort(c0, x -> timezone(x))", input);
+        assertEqualVectors(expectedAsc, resultAsc);
+
+        auto resultDesc =
+            evaluate("array_sort_desc(c0, x -> timezone(x))", input);
+        assertEqualVectors(expectedDesc, resultDesc);
+      };
+
+  testArraySort(
+      {pack(2, 0), pack(1, 1), pack(0, 2)},
+      {pack(2, 0), pack(1, 1), pack(0, 2)},
+      {pack(0, 2), pack(1, 1), pack(2, 0)});
+  testArraySort(
+      {pack(0, 0), pack(1, 1), pack(2, 2)},
+      {pack(0, 0), pack(1, 1), pack(2, 2)},
+      {pack(2, 2), pack(1, 1), pack(0, 0)});
+  testArraySort(
+      {pack(0, 0), pack(0, 1), pack(0, 2)},
+      {pack(0, 0), pack(0, 1), pack(0, 2)},
+      {pack(0, 2), pack(0, 1), pack(0, 0)});
+  testArraySort(
+      {pack(1, 0), pack(0, 1), pack(2, 2)},
+      {pack(1, 0), pack(0, 1), pack(2, 2)},
+      {pack(2, 2), pack(0, 1), pack(1, 0)});
+  testArraySort(
+      {std::nullopt, pack(1, 0), pack(0, 1), pack(2, 2)},
+      {pack(1, 0), pack(0, 1), pack(2, 2), std::nullopt},
+      {pack(2, 2), pack(0, 1), pack(1, 0), std::nullopt});
+  testArraySort(
+      {std::nullopt, std::nullopt, pack(1, 2), pack(0, 1), pack(2, 0)},
+      {pack(2, 0), pack(0, 1), pack(1, 2), std::nullopt, std::nullopt},
+      {pack(1, 2), pack(0, 1), pack(2, 0), std::nullopt, std::nullopt});
+  testArraySort(
+      {std::nullopt, pack(1, 1), pack(0, 2), std::nullopt, pack(2, 0)},
+      {pack(2, 0), pack(1, 1), pack(0, 2), std::nullopt, std::nullopt},
+      {pack(0, 2), pack(1, 1), pack(2, 0), std::nullopt, std::nullopt});
+  testArraySort(
+      {pack(1, 1), std::nullopt, pack(0, 0), pack(2, 2), std::nullopt},
+      {pack(0, 0), pack(1, 1), pack(2, 2), std::nullopt, std::nullopt},
+      {pack(2, 2), pack(1, 1), pack(0, 0), std::nullopt, std::nullopt});
+  testArraySort(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+}
+
+TEST_F(ArraySortTest, floatingPointExtremes) {
+  testFloatingPoint<float>();
+  testFloatingPoint<double>();
+}
+
+TEST_F(ArraySortTest, constant_desc_boolean) {
+  auto data = makeRowVector({makeNullableArrayVector<bool>({
+      {false, true, std::nullopt, false, true, false, false},
+      {true, false, true, false, false, std::nullopt},
+      {false, std::nullopt, false, false, true, true, true, std::nullopt},
+      {false, std::nullopt, false, false, true, true, false, std::nullopt},
+      {true, std::nullopt},
+      {false, std::nullopt},
+      {true, std::nullopt, true},
+      {std::nullopt, false, false},
+      {std::nullopt, std::nullopt},
+  })});
+
+  auto expected = makeRowVector({makeNullableArrayVector<bool>({
+      {true, true, false, false, false, false, std::nullopt},
+      {true, true, false, false, false, std::nullopt},
+      {true, true, true, false, false, false, std::nullopt, std::nullopt},
+      {true, true, false, false, false, false, std::nullopt, std::nullopt},
+      {true, std::nullopt},
+      {false, std::nullopt},
+      {true, true, std::nullopt},
+      {false, false, std::nullopt},
+      {std::nullopt, std::nullopt},
+  })});
+
+  auto result = evaluate("array_sort_desc(c0)", data);
+  assertEqualVectors(expected, makeRowVector({result}));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

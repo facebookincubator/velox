@@ -19,74 +19,82 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
 
-#define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)             \
-  [&]() {                                                                \
-    switch (typeKind) {                                                  \
-      case TypeKind::BOOLEAN: {                                          \
-        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::TINYINT: {                                          \
-        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::SMALLINT: {                                         \
-        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);           \
-      }                                                                  \
-      case TypeKind::INTEGER: {                                          \
-        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::BIGINT: {                                           \
-        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);             \
-      }                                                                  \
-      case TypeKind::VARCHAR:                                            \
-      case TypeKind::VARBINARY: {                                        \
-        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
-      }                                                                  \
-      default:                                                           \
-        VELOX_UNREACHABLE(                                               \
-            "Unsupported value ID type: ", mapTypeKindToName(typeKind)); \
-    }                                                                    \
+#define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
+  [&]() {                                                                   \
+    switch (typeKind) {                                                     \
+      case TypeKind::BOOLEAN: {                                             \
+        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::TINYINT: {                                             \
+        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::SMALLINT: {                                            \
+        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);              \
+      }                                                                     \
+      case TypeKind::INTEGER: {                                             \
+        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::BIGINT: {                                              \
+        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);                \
+      }                                                                     \
+      case TypeKind::VARCHAR:                                               \
+      case TypeKind::VARBINARY: {                                           \
+        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::TIMESTAMP: {                                           \
+        return TEMPLATE_FUNC<TypeKind::TIMESTAMP>(__VA_ARGS__);             \
+      }                                                                     \
+      default:                                                              \
+        VELOX_UNREACHABLE(                                                  \
+            "Unsupported value ID type: ", TypeKindName::toName(typeKind)); \
+    }                                                                       \
   }()
 
 namespace {
-template <TypeKind Kind>
+template <bool typeProvidesCustomComparison, TypeKind Kind>
 uint64_t hashOne(DecodedVector& decoded, vector_size_t index) {
-  if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+  if constexpr (
+      Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
       Kind == TypeKind::MAP) {
     // Virtual function call for complex type.
     return decoded.base()->hashValueAt(decoded.index(index));
+  } else {
+    // Inlined for scalars.
+    using T = typename KindToFlatVector<Kind>::HashRowType;
+    T value = decoded.valueAt<T>(index);
+
+    if constexpr (typeProvidesCustomComparison) {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(
+                 decoded.base()->type().get())
+          ->hash(value);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      return util::floating_point::NaNAwareHash<T>()(value);
+    } else {
+      return folly::hasher<T>()(value);
+    }
   }
-  // Inlined for scalars.
-  using T = typename KindToFlatVector<Kind>::HashRowType;
-  return folly::hasher<T>()(decoded.valueAt<T>(index));
 }
 } // namespace
 
-template <TypeKind Kind>
+template <bool typeProvidesCustomComparison, TypeKind Kind>
 void VectorHasher::hashValues(
     const SelectivityVector& rows,
     bool mix,
     uint64_t* result) {
-  using T = typename TypeTraits<Kind>::NativeType;
   if (decoded_.isConstantMapping()) {
     auto hash = decoded_.isNullAt(rows.begin())
         ? kNullHash
-        : hashOne<Kind>(decoded_, rows.begin());
+        : hashOne<typeProvidesCustomComparison, Kind>(decoded_, rows.begin());
     rows.applyToSelected([&](vector_size_t row) {
       result[row] = mix ? bits::hashMix(result[row], hash) : hash;
     });
-  } else if (decoded_.isIdentityMapping()) {
-    rows.applyToSelected([&](vector_size_t row) {
-      if (decoded_.isNullAt(row)) {
-        result[row] = mix ? bits::hashMix(result[row], kNullHash) : kNullHash;
-        return;
-      }
-      auto hash = hashOne<Kind>(decoded_, row);
-      result[row] = mix ? bits::hashMix(result[row], hash) : hash;
-    });
-  } else {
+  } else if (
+      !decoded_.isIdentityMapping() &&
+      rows.countSelected() > decoded_.base()->size()) {
     cachedHashes_.resize(decoded_.base()->size());
     std::fill(cachedHashes_.begin(), cachedHashes_.end(), kNullHash);
     rows.applyToSelected([&](vector_size_t row) {
@@ -97,9 +105,18 @@ void VectorHasher::hashValues(
       auto baseIndex = decoded_.index(row);
       uint64_t hash = cachedHashes_[baseIndex];
       if (hash == kNullHash) {
-        hash = hashOne<Kind>(decoded_, row);
+        hash = hashOne<typeProvidesCustomComparison, Kind>(decoded_, row);
         cachedHashes_[baseIndex] = hash;
       }
+      result[row] = mix ? bits::hashMix(result[row], hash) : hash;
+    });
+  } else {
+    rows.applyToSelected([&](vector_size_t row) {
+      if (decoded_.isNullAt(row)) {
+        result[row] = mix ? bits::hashMix(result[row], kNullHash) : kNullHash;
+        return;
+      }
+      auto hash = hashOne<typeProvidesCustomComparison, Kind>(decoded_, row);
       result[row] = mix ? bits::hashMix(result[row], hash) : hash;
     });
   }
@@ -158,7 +175,7 @@ bool VectorHasher::makeValueIdsFlatWithNulls<bool>(
     const SelectivityVector& rows,
     uint64_t* result) {
   const auto* values = decoded_.data<uint64_t>();
-  const auto* nulls = decoded_.nulls();
+  const auto* nulls = decoded_.nulls(&rows);
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
     if (bits::isBitNull(nulls, row)) {
       if (multiplier_ == 1) {
@@ -173,6 +190,36 @@ bool VectorHasher::makeValueIdsFlatWithNulls<bool>(
   return true;
 }
 
+template <typename T, bool mayHaveNulls>
+void VectorHasher::makeValueIdForOneRow(
+    const uint64_t* nulls,
+    vector_size_t row,
+    const T* values,
+    vector_size_t valueRow,
+    uint64_t* result,
+    bool& success) {
+  if constexpr (mayHaveNulls) {
+    if (bits::isBitNull(nulls, row)) {
+      if (multiplier_ == 1) {
+        result[row] = 0;
+      }
+      return;
+    }
+  }
+  T value = values[valueRow];
+  if (!success) {
+    analyzeValue(value);
+    return;
+  }
+  auto id = valueId(value);
+  if (id == kUnmappable) {
+    success = false;
+    analyzeValue(value);
+  } else {
+    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+  }
+}
+
 template <typename T>
 bool VectorHasher::makeValueIdsFlatNoNulls(
     const SelectivityVector& rows,
@@ -184,20 +231,7 @@ bool VectorHasher::makeValueIdsFlatNoNulls(
 
   bool success = true;
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-    T value = values[row];
-    if (!success) {
-      // If all were not mappable and we do not remove unmappable,
-      // we just analyze the remaining so we can decide the hash mode.
-      analyzeValue(value);
-      return;
-    }
-    uint64_t id = valueId(value);
-    if (id == kUnmappable) {
-      success = false;
-      analyzeValue(value);
-      return;
-    }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    makeValueIdForOneRow<T, false>(nullptr, row, values, row, result, success);
   });
 
   return success;
@@ -208,30 +242,11 @@ bool VectorHasher::makeValueIdsFlatWithNulls(
     const SelectivityVector& rows,
     uint64_t* result) {
   const auto* values = decoded_.data<T>();
-  const auto* nulls = decoded_.nulls();
+  const auto* nulls = decoded_.nulls(&rows);
 
   bool success = true;
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-    if (bits::isBitNull(nulls, row)) {
-      if (multiplier_ == 1) {
-        result[row] = 0;
-      }
-      return;
-    }
-    T value = values[row];
-    if (!success) {
-      // If all were not mappable we just analyze the remaining so we can decide
-      // the hash mode.
-      analyzeValue(value);
-      return;
-    }
-    uint64_t id = valueId(value);
-    if (id == kUnmappable) {
-      success = false;
-      analyzeValue(value);
-      return;
-    }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    makeValueIdForOneRow<T, true>(nulls, row, values, row, result, success);
   });
   return success;
 }
@@ -240,43 +255,59 @@ template <typename T, bool mayHaveNulls>
 bool VectorHasher::makeValueIdsDecoded(
     const SelectivityVector& rows,
     uint64_t* result) {
+  auto indices = decoded_.indices();
+  auto values = decoded_.data<T>();
+  bool success = true;
+
+  if (rows.countSelected() <= decoded_.base()->size()) {
+    // Cache is not beneficial in this case and we don't use them.
+    auto* nulls = decoded_.nulls(&rows);
+    rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+      makeValueIdForOneRow<T, mayHaveNulls>(
+          nulls, row, values, indices[row], result, success);
+    });
+    return success;
+  }
+
   cachedHashes_.resize(decoded_.base()->size());
   std::fill(cachedHashes_.begin(), cachedHashes_.end(), 0);
 
-  auto indices = decoded_.indices();
-  auto values = decoded_.data<T>();
-
-  bool success = true;
-  rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+  int numCachedHashes = 0;
+  rows.testSelected([&](vector_size_t row) INLINE_LAMBDA {
     if constexpr (mayHaveNulls) {
       if (decoded_.isNullAt(row)) {
         if (multiplier_ == 1) {
           result[row] = 0;
         }
-        return;
+        return true;
       }
     }
-    auto baseIndex = indices[row];
-    uint64_t id = cachedHashes_[baseIndex];
-    if (id == 0) {
-      T value = values[baseIndex];
 
-      if (!success) {
-        // If all were not mappable we just analyze the remaining so we can
-        // decide the hash mode.
-        analyzeValue(value);
-        return;
+    auto baseIndex = indices[row];
+    uint64_t& id = cachedHashes_[baseIndex];
+
+    if (success) {
+      if (id == 0) {
+        T value = values[baseIndex];
+        id = valueId(value);
+        numCachedHashes++;
+        if (id == kUnmappable) {
+          analyzeValue(value);
+          success = false;
+        }
       }
-      id = valueId(value);
-      if (id == kUnmappable) {
-        analyzeValue(value);
-        success = false;
-        return;
+      result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    } else {
+      if (id == 0) {
+        id = kUnmappable;
+        numCachedHashes++;
+        analyzeValue(values[baseIndex]);
       }
-      cachedHashes_[baseIndex] = id;
     }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+
+    return success || numCachedHashes < cachedHashes_.size();
   });
+
   return success;
 }
 
@@ -320,6 +351,8 @@ bool VectorHasher::makeValueIdsDecoded<bool, false>(
 bool VectorHasher::computeValueIds(
     const SelectivityVector& rows,
     raw_vector<uint64_t>& result) {
+  checkTypeSupportsValueIds();
+
   return VALUE_ID_TYPE_DISPATCH(makeValueIds, typeKind_, rows, result.data());
 }
 
@@ -330,6 +363,8 @@ bool VectorHasher::computeValueIdsForRows(
     int32_t nullByte,
     uint8_t nullMask,
     raw_vector<uint64_t>& result) {
+  checkTypeSupportsValueIds();
+
   return VALUE_ID_TYPE_DISPATCH(
       makeValueIdsForRows,
       typeKind_,
@@ -372,8 +407,7 @@ void VectorHasher::lookupValueIdsTyped(
     const DecodedVector& decoded,
     SelectivityVector& rows,
     raw_vector<uint64_t>& hashes,
-    uint64_t* result,
-    bool noNulls) const {
+    uint64_t* result) const {
   using T = typename TypeTraits<Kind>::NativeType;
   if (decoded.isConstantMapping()) {
     if (decoded.isNullAt(rows.begin())) {
@@ -393,9 +427,9 @@ void VectorHasher::lookupValueIdsTyped(
       });
     }
   } else if (decoded.isIdentityMapping()) {
-    if (Kind == TypeKind::BIGINT && isRange_ && noNulls) {
+    if (Kind == TypeKind::BIGINT && isRange_) {
       lookupIdsRangeSimd<int64_t>(decoded, rows, result);
-    } else if (Kind == TypeKind::INTEGER && isRange_ && noNulls) {
+    } else if (Kind == TypeKind::INTEGER && isRange_) {
       lookupIdsRangeSimd<int32_t>(decoded, rows, result);
     } else {
       rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
@@ -502,8 +536,9 @@ void VectorHasher::lookupValueIds(
     const BaseVector& values,
     SelectivityVector& rows,
     ScratchMemory& scratchMemory,
-    raw_vector<uint64_t>& result,
-    bool noNulls) const {
+    raw_vector<uint64_t>& result) const {
+  checkTypeSupportsValueIds();
+
   scratchMemory.decoded.decode(values, rows);
   VALUE_ID_TYPE_DISPATCH(
       lookupValueIdsTyped,
@@ -511,15 +546,26 @@ void VectorHasher::lookupValueIds(
       scratchMemory.decoded,
       rows,
       scratchMemory.hashes,
-      result.data(),
-      noNulls);
+      result.data());
 }
 
 void VectorHasher::hash(
     const SelectivityVector& rows,
     bool mix,
     raw_vector<uint64_t>& result) {
-  VELOX_DYNAMIC_TYPE_DISPATCH(hashValues, typeKind_, rows, mix, result.data());
+  if (typeKind_ == TypeKind::UNKNOWN) {
+    rows.applyToSelected([&](auto row) {
+      result[row] = mix ? bits::hashMix(result[row], kNullHash) : kNullHash;
+    });
+  } else {
+    if (typeProvidesCustomComparison_) {
+      VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+          hashValues, true, typeKind_, rows, mix, result.data());
+    } else {
+      VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+          hashValues, false, typeKind_, rows, mix, result.data());
+    }
+  }
 }
 
 void VectorHasher::hashPrecomputed(
@@ -540,8 +586,14 @@ void VectorHasher::precompute(const BaseVector& value) {
 
   const SelectivityVector rows(1, true);
   decoded_.decode(value, rows);
-  precomputedHash_ =
-      VELOX_DYNAMIC_TYPE_DISPATCH(hashOne, typeKind_, decoded_, 0);
+
+  if (typeProvidesCustomComparison_) {
+    precomputedHash_ = VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+        hashOne, true, typeKind_, decoded_, 0);
+  } else {
+    precomputedHash_ = VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+        hashOne, false, typeKind_, decoded_, 0);
+  }
 }
 
 void VectorHasher::analyze(
@@ -550,6 +602,8 @@ void VectorHasher::analyze(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask) {
+  checkTypeSupportsValueIds();
+
   VALUE_ID_TYPE_DISPATCH(
       analyzeTyped, typeKind_, groups, numGroups, offset, nullByte, nullMask);
 }
@@ -560,7 +614,7 @@ void VectorHasher::analyzeValue(StringView value) {
   auto data = value.data();
   if (!rangeOverflow_) {
     if (size > kStringASRangeMaxSize) {
-      rangeOverflow_ = true;
+      setRangeOverflow();
     } else {
       int64_t number = stringAsNumber(data, size);
       updateRange(number);
@@ -572,7 +626,7 @@ void VectorHasher::analyzeValue(StringView value) {
     auto pair = uniqueValues_.insert(unique);
     if (pair.second) {
       if (uniqueValues_.size() > kMaxDistinct) {
-        distinctOverflow_ = true;
+        setDistinctOverflow();
         return;
       }
       copyStringToLocal(&*pair.first);
@@ -586,7 +640,7 @@ void VectorHasher::copyStringToLocal(const UniqueValue* unique) {
     return;
   }
   if (distinctStringsBytes_ > kMaxDistinctStringsBytes) {
-    distinctOverflow_ = true;
+    setDistinctOverflow();
     return;
   }
   if (uniqueValuesStorage_.empty()) {
@@ -608,15 +662,31 @@ void VectorHasher::copyStringToLocal(const UniqueValue* unique) {
       reinterpret_cast<int64_t>(str->data() + start));
 }
 
+void VectorHasher::setDistinctOverflow() {
+  distinctOverflow_ = true;
+  uniqueValues_.clear();
+  uniqueValuesStorage_.clear();
+  distinctStringsBytes_ = 0;
+}
+
+void VectorHasher::setRangeOverflow() {
+  rangeOverflow_ = true;
+  hasRange_ = false;
+}
+
 std::unique_ptr<common::Filter> VectorHasher::getFilter(
     bool nullAllowed) const {
+  if (typeProvidesCustomComparison_) {
+    return nullptr;
+  }
+
   switch (typeKind_) {
     case TypeKind::TINYINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::SMALLINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::INTEGER:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::BIGINT:
       if (!distinctOverflow_) {
         std::vector<int64_t> values;
@@ -627,7 +697,7 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
 
         return common::createBigintValues(values, nullAllowed);
       }
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     default:
       // TODO Add support for strings.
       return nullptr;
@@ -680,6 +750,7 @@ void extendRange(
     case TypeKind::BIGINT:
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
       extendRange<int64_t>(reserve, min, max);
       break;
 
@@ -708,6 +779,12 @@ void VectorHasher::cardinality(
     int32_t reservePct,
     uint64_t& asRange,
     uint64_t& asDistincts) {
+  if (!typeSupportsValueIds()) {
+    asRange = kRangeTooLarge;
+    asDistincts = kRangeTooLarge;
+    return;
+  }
+
   if (typeKind_ == TypeKind::BOOLEAN) {
     hasRange_ = true;
     asRange = 3;
@@ -718,7 +795,7 @@ void VectorHasher::cardinality(
   if (!hasRange_ || rangeOverflow_) {
     asRange = kRangeTooLarge;
   } else if (__builtin_sub_overflow(max_, min_, &signedRange)) {
-    rangeOverflow_ = true;
+    setRangeOverflow();
     asRange = kRangeTooLarge;
   } else if (signedRange < kMaxRange) {
     // We check that after the extension by reservePct the range of max - min
@@ -733,7 +810,7 @@ void VectorHasher::cardinality(
     extendRange(type_->kind(), reservePct, min, max);
     asRange = (max - min) + 2;
   } else {
-    rangeOverflow_ = true;
+    setRangeOverflow();
     asRange = kRangeTooLarge;
   }
   if (distinctOverflow_) {
@@ -749,6 +826,8 @@ uint64_t VectorHasher::enableValueIds(uint64_t multiplier, int32_t reservePct) {
       typeKind_,
       TypeKind::BOOLEAN,
       "A boolean VectorHasher should  always be by range");
+  checkTypeSupportsValueIds();
+
   multiplier_ = multiplier;
   rangeSize_ = addIdReserve(uniqueValues_.size(), reservePct) + 1;
   isRange_ = false;
@@ -762,6 +841,8 @@ uint64_t VectorHasher::enableValueIds(uint64_t multiplier, int32_t reservePct) {
 uint64_t VectorHasher::enableValueRange(
     uint64_t multiplier,
     int32_t reservePct) {
+  checkTypeSupportsValueIds();
+
   multiplier_ = multiplier;
   VELOX_CHECK_LE(0, reservePct);
   VELOX_CHECK(hasRange_);
@@ -806,8 +887,7 @@ void VectorHasher::merge(const VectorHasher& other) {
     min_ = std::min(min_, other.min_);
     max_ = std::max(max_, other.max_);
   } else {
-    hasRange_ = false;
-    rangeOverflow_ = true;
+    setRangeOverflow();
   }
   if (!distinctOverflow_ && !other.distinctOverflow_) {
     // Unique values can be merged without dispatch on type. All the
@@ -820,16 +900,20 @@ void VectorHasher::merge(const VectorHasher& other) {
       uniqueValues_.insert(value);
     }
   } else {
-    distinctOverflow_ = true;
+    setDistinctOverflow();
   }
 }
 
 std::string VectorHasher::toString() const {
   std::stringstream out;
-  out << "<VectorHasher type=" << type_->toString() << "  isRange_=" << isRange_
-      << " rangeSize= " << rangeSize_ << " min=" << min_ << " max=" << max_
-      << " multiplier=" << multiplier_
-      << " numDistinct=" << uniqueValues_.size() << ">";
+  out << "VectorHasher channel: " << channel_ << " " << type_->toString()
+      << " multiplier: " << multiplier_;
+  if (isRange_) {
+    out << " range size " << rangeSize_ << ": [" << min_ << ", " << max_ << "]";
+  }
+  if (!distinctOverflow_) {
+    out << " numDistinct: " << uniqueValues_.size();
+  }
   return out.str();
 }
 
@@ -837,14 +921,25 @@ std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
     const RowTypePtr& rowType,
     const std::vector<core::FieldAccessTypedExprPtr>& keys) {
   const auto numKeys = keys.size();
-
-  std::vector<std::unique_ptr<VectorHasher>> hashers;
-  hashers.reserve(numKeys);
+  std::vector<column_index_t> keyChannels;
+  keyChannels.reserve(numKeys);
   for (const auto& key : keys) {
     const auto channel = exprToChannel(key.get(), rowType);
-    hashers.push_back(VectorHasher::create(key->type(), channel));
+    keyChannels.push_back(channel);
   }
+  return createVectorHashers(rowType, keyChannels);
+}
 
+std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+    const RowTypePtr& rowType,
+    const std::vector<column_index_t>& keyChannels) {
+  const auto numKeys = keyChannels.size();
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  hashers.reserve(numKeys);
+  for (const auto& keyChannel : keyChannels) {
+    hashers.push_back(
+        VectorHasher::create(rowType->childAt(keyChannel), keyChannel));
+  }
   return hashers;
 }
 

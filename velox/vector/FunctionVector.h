@@ -22,6 +22,9 @@ namespace facebook::velox {
 
 namespace exec {
 class EvalCtx;
+class EvalErrors;
+
+using EvalErrorsPtr = std::shared_ptr<EvalErrors>;
 } // namespace exec
 
 // Represents a function with possible captures.
@@ -67,7 +70,7 @@ class Callable {
       const BufferPtr& wrapCapture,
       exec::EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      ErrorVectorPtr& elementErrors,
+      exec::EvalErrorsPtr& elementErrors,
       VectorPtr* result) = 0;
 };
 
@@ -91,7 +94,7 @@ class FunctionVector : public BaseVector {
       /// Rows that lambda applies to.
       SelectivityVector* rows;
 
-      operator bool() const {
+      explicit operator bool() const {
         return callable != nullptr;
       }
     };
@@ -127,7 +130,7 @@ class FunctionVector : public BaseVector {
   FunctionVector(velox::memory::MemoryPool* pool, TypePtr type)
       : BaseVector(
             pool,
-            type,
+            std::move(type),
             VectorEncoding::Simple::FUNCTION,
             BufferPtr(nullptr),
             0) {}
@@ -150,7 +153,11 @@ class FunctionVector : public BaseVector {
     }
 
     rowSets_.push_back(rows);
-    functions_.push_back(callable);
+    functions_.push_back(std::move(callable));
+  }
+
+  bool containsNullAt(vector_size_t idx) const override {
+    return false;
   }
 
   std::optional<int32_t> compare(
@@ -189,7 +196,22 @@ class FunctionVector : public BaseVector {
     VELOX_NYI();
   }
 
+  VectorPtr testingCopyPreserveEncodings(
+      velox::memory::MemoryPool* /* pool */ = nullptr) const override {
+    VELOX_UNSUPPORTED(
+        "testingCopyPreserveEncodings not defined for FunctionVector");
+  }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
+    VELOX_UNSUPPORTED("transferTo not defined for FunctionVector");
+  }
+
  private:
+  uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const override {
+    VELOX_UNREACHABLE("retainedSize should not be called on FunctionVector");
+  }
+
   std::vector<std::shared_ptr<Callable>> functions_;
   std::vector<SelectivityVector> rowSets_;
 };

@@ -15,76 +15,255 @@
  */
 
 #include "velox/expression/tests/ExpressionVerifier.h"
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include "velox/common/base/Fs.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
 
-namespace {
-void logRowVector(const RowVectorPtr& rowVector) {
-  if (rowVector == nullptr) {
-    return;
-  }
-  LOG(INFO) << rowVector->childrenSize() << " vectors as input:";
-  for (const auto& child : rowVector->children()) {
-    LOG(INFO) << "\t" << child->toString(/*recursive=*/true);
-  }
+using exec::test::ReferenceQueryErrorCode;
 
-  if (VLOG_IS_ON(1)) {
-    LOG(INFO) << "RowVector contents (" << rowVector->type()->toString()
-              << "):";
+namespace {
+void logInputs(const std::vector<fuzzer::InputTestCase>& inputTestCases) {
+  int testCaseIdx = 0;
+  for (const auto& [rowVector, rows] : inputTestCases) {
+    VLOG(1) << "Input test case " << testCaseIdx++ << ": "
+            << rowVector->childrenSize() << " vectors as input:";
+    VLOG(1) << rowVector->childrenSize() << " vectors as input:";
+    for (const auto& child : rowVector->children()) {
+      VLOG(1) << "\t" << child->toString(/*recursive=*/true);
+    }
+
+    VLOG(1) << "RowVector contents (" << rowVector->type()->toString() << "):";
 
     for (vector_size_t i = 0; i < rowVector->size(); ++i) {
-      LOG(INFO) << "\tAt " << i << ": " << rowVector->toString(i);
+      VLOG(1) << "\tAt " << i << ": " << rowVector->toString(i);
     }
+    VLOG(1) << "Rows to verify: " << rows.toString(rows.end());
   }
 }
 
-void compareVectors(
-    const VectorPtr& left,
-    const VectorPtr& right,
-    const SelectivityVector& rows) {
-  // Print vector contents if in verbose mode.
-  size_t vectorSize = left->size();
-  if (VLOG_IS_ON(1)) {
-    LOG(INFO) << "== Result contents (common vs. simple): ";
-    rows.applyToSelected([&](vector_size_t row) {
-      LOG(INFO) << fmt::format(
-          "At {} [ {} vs {} ]", row, left->toString(row), right->toString(row));
-    });
-    LOG(INFO) << "===================";
+// Generate random id for plannode. Eventually used for fuzzer table
+// uniqueness in Presto SOT tests.
+std::string generateRandomId() {
+  auto id = boost::uuids::to_string(boost::uuids::random_generator()());
+  folly::MutableStringPiece msp(&id[0], id.size());
+  msp.replaceAll("-", "_");
+  return id;
+}
+
+core::PlanNodePtr makeSourcePlan(
+    const RowVectorPtr& input,
+    const std::vector<core::TypedExprPtr>& transformProjections) {
+  core::PlanNodePtr source = std::make_shared<core::ValuesNode>(
+      generateRandomId(), std::vector<RowVectorPtr>{input});
+
+  std::vector<std::string> transformNames(transformProjections.size());
+  // If we need to transform types into intermediate types, add an extra
+  // ProjectNode to do it.
+  if (!transformProjections.empty()) {
+    VELOX_CHECK_EQ(transformProjections.size(), input->children().size());
+    for (auto i = 0; i < transformNames.size(); ++i) {
+      transformNames[i] = input->type()->asRow().nameOf(i);
+    }
+    source = std::make_shared<core::ProjectNode>(
+        "transform", transformNames, transformProjections, source);
   }
 
-  rows.applyToSelected([&](vector_size_t row) {
-    VELOX_CHECK(
-        left->equalValueAt(right.get(), row, row),
-        "Different results at idx '{}': '{}' vs. '{}'",
-        row,
-        left->toString(row),
-        right->toString(row));
-  });
+  return source;
+}
 
-  LOG(INFO) << "All results match.";
+core::PlanNodePtr makeProjectionPlan(
+    const RowVectorPtr& input,
+    const std::vector<core::TypedExprPtr>& projections,
+    const std::vector<core::TypedExprPtr>& transformProjections) {
+  std::vector<std::string> names{projections.size()};
+  for (auto i = 0; i < names.size(); ++i) {
+    names[i] = fmt::format("p{}", i);
+  }
+
+  core::PlanNodePtr source = makeSourcePlan(input, transformProjections);
+
+  return std::make_shared<core::ProjectNode>(
+      "project", names, projections, source);
+}
+
+bool defaultNullRowsSkipped(const exec::ExprSet& exprSet) {
+  auto stats = exprSet.stats();
+  for (auto iter = stats.begin(); iter != stats.end(); ++iter) {
+    if (iter->second.defaultNullRowsSkipped) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns a RowVector with only the rows specified in 'rows'. Does not maintain
+// encodings.
+RowVectorPtr reduceToSelectedRows(
+    const RowVectorPtr& rowVector,
+    const SelectivityVector& rows) {
+  if (rows.isAllSelected()) {
+    return rowVector;
+  }
+  BufferPtr indices = allocateIndices(rows.end(), rowVector->pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  vector_size_t cnt = 0;
+  rows.applyToSelected([&](vector_size_t row) { rawIndices[cnt++] = row; });
+  VELOX_CHECK_GT(cnt, 0);
+  indices->setSize(cnt * sizeof(vector_size_t));
+  // Top level row vector is not expected to be encoded, therefore we copy
+  // instead of wrapping in the indices.
+  RowVectorPtr reducedVector = std::dynamic_pointer_cast<RowVector>(
+      BaseVector::create(rowVector->type(), cnt, rowVector->pool()));
+  SelectivityVector rowsToCopy(cnt);
+  reducedVector->copy(rowVector.get(), rowsToCopy, rawIndices);
+  return reducedVector;
+}
+
+// Returns the expression set used by common expression eval path.
+exec::ExprSet createExprSetCommon(
+    const std::vector<core::TypedExprPtr>& plans,
+    core::ExecCtx* execCtx,
+    bool disableConstantFolding) {
+  if (disableConstantFolding) {
+    exec::ExprSet exprSetCommon(
+        plans, execCtx, /*enableConstantFolding=*/false);
+    return exprSetCommon;
+  }
+
+  // When constant folding is enabled, the expression evaluation can throw
+  // VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE, which is allowed in
+  // the fuzzer test.
+  try {
+    exec::ExprSet exprSetCommon(plans, execCtx, /*enableConstantFolding=*/true);
+    return exprSetCommon;
+  } catch (const VeloxException& e) {
+    if (e.errorCode() != error_code::kUnsupportedInputUncatchable) {
+      LOG(ERROR)
+          << "ExprSet: Exceptions other than VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE are not allowed.";
+      throw;
+    }
+    LOG(WARNING)
+        << "ExprSet: Disabling constant folding to avoid VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE during evaluation.";
+    exec::ExprSet exprSetCommon(
+        plans, execCtx, /*enableConstantFolding=*/false);
+    return exprSetCommon;
+  } catch (...) {
+    LOG(ERROR)
+        << "ExprSet: Exceptions other than VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE are not allowed.";
+    throw;
+  }
+}
+
+// If referenceQueryRunner is set, populates transformedInputTestCases with
+// copies of inputTestCases where the inputs are transformed in cases where the
+// reference query runner deems it necessary (e.g. it uses intermediate only
+// types as inputs). transformPlans is populated with the projections that must
+// be applied to the inputs.
+//
+// If referenceQueryRunner is not set, transformedInputTestCases is populated
+// with an exact copy of inputTestCases and transformPlans is left empty.
+void transformInputTestCases(
+    const std::vector<fuzzer::InputTestCase>& inputTestCases,
+    const std::shared_ptr<ReferenceQueryRunner>& referenceQueryRunner,
+    memory::MemoryPool* pool,
+    std::vector<fuzzer::InputTestCase>& transformedInputTestCases,
+    std::vector<core::TypedExprPtr>& transformPlans) {
+  transformPlans = {};
+
+  if (referenceQueryRunner == nullptr) {
+    transformedInputTestCases = inputTestCases;
+    return;
+  }
+
+  // Check if we need to transform types into intermediate types (if we don't
+  // the projections will be no-ops).
+  std::vector<RowVectorPtr> input;
+  for (const auto& testCase : inputTestCases) {
+    input.push_back(testCase.inputVector);
+  }
+  const auto [transformedInputs, transformProjections] =
+      referenceQueryRunner->inputProjections(input);
+  for (const auto& expr : transformProjections) {
+    transformPlans.push_back(
+        core::Expressions::inferTypes(
+            expr, transformedInputs[0]->type(), pool));
+  }
+  for (int i = 0; i < transformedInputs.size(); ++i) {
+    transformedInputTestCases.push_back(
+        fuzzer::InputTestCase{
+            transformedInputs[i], inputTestCases[i].activeRows});
+  }
+}
+
+// If transformPlans is non-empty, applies them to rowVector and returns
+// a RowVector with those results as the values and originalInputFields as the
+// field names.
+//
+// Otherwise simply return rowVector.
+RowVectorPtr transformInput(
+    const RowVectorPtr& rowVector,
+    core::ExecCtx* execCtx,
+    const bool disableConstantFolding,
+    const std::vector<core::TypedExprPtr>& transformPlans,
+    const std::vector<std::string>& originalInputFields) {
+  if (transformPlans.empty()) {
+    return rowVector;
+  }
+
+  exec::ExprSet transformExprSet =
+      createExprSetCommon(transformPlans, execCtx, disableConstantFolding);
+  exec::EvalCtx transformEvalCtx(execCtx, &transformExprSet, rowVector.get());
+  std::vector<VectorPtr> transformEvalResult;
+  transformExprSet.eval(
+      SelectivityVector(rowVector->size()),
+      transformEvalCtx,
+      transformEvalResult);
+  return VectorMaker(execCtx->pool())
+      .rowVector(originalInputFields, transformEvalResult);
 }
 
 } // namespace
 
-ResultOrError ExpressionVerifier::verify(
+std::pair<
+    std::vector<fuzzer::ResultOrError>,
+    std::vector<ExpressionVerifier::VerificationState>>
+ExpressionVerifier::verify(
     const std::vector<core::TypedExprPtr>& plans,
-    const RowVectorPtr& rowVector,
+    const std::vector<fuzzer::InputTestCase>& inputTestCases,
     VectorPtr&& resultVector,
     bool canThrow,
-    std::vector<int> columnsToWrapInLazy) {
+    const InputRowMetadata& inputRowMetadata) {
   for (int i = 0; i < plans.size(); ++i) {
     LOG(INFO) << "Executing expression " << i << " : " << plans[i]->toString();
   }
-  logRowVector(rowVector);
+  logInputs(inputTestCases);
 
   // Store data and expression in case of reproduction.
   VectorPtr copiedResult;
-  std::string sql = "";
+  std::string sql;
+
+  std::vector<fuzzer::InputTestCase> transformedInputTestCases;
+  std::vector<core::TypedExprPtr> transformPlans;
+
+  transformInputTestCases(
+      inputTestCases,
+      referenceQueryRunner_,
+      execCtx_->pool(),
+      transformedInputTestCases,
+      transformPlans);
+
+  const std::vector<std::string> originalInputFields =
+      inputTestCases[0].inputVector->type()->asRow().names();
 
   // Complex constants that aren't all expressible in sql
   std::vector<VectorPtr> complexConstants;
@@ -108,124 +287,340 @@ ResultOrError ExpressionVerifier::verify(
     }
     if (options_.persistAndRunOnce) {
       persistReproInfo(
-          rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
+          inputTestCases,
+          inputRowMetadata,
+          copiedResult,
+          sql,
+          complexConstants);
     }
   }
 
-  // Execute expression plan using both common and simplified evals.
-  std::vector<VectorPtr> commonEvalResult;
-  std::vector<VectorPtr> simplifiedEvalResult;
-  if (resultVector && resultVector->encoding() == VectorEncoding::Simple::ROW) {
-    auto resultRowVector = resultVector->asUnchecked<RowVector>();
-    auto children = resultRowVector->children();
-    commonEvalResult.resize(children.size());
-    simplifiedEvalResult.resize(children.size());
-    for (int i = 0; i < children.size(); ++i) {
-      commonEvalResult[i] = children[i];
-    }
-  } else {
-    // For backwards compatibility where there was a single result and plan.
-    VELOX_CHECK_EQ(plans.size(), 1);
-    commonEvalResult.push_back(resultVector);
-    simplifiedEvalResult.resize(1);
-  }
-  std::exception_ptr exceptionCommonPtr;
-  std::exception_ptr exceptionSimplifiedPtr;
+  std::vector<fuzzer::ResultOrError> results;
+  std::vector<VerificationState> verificationStates;
+  // Share ExpressionSet between consecutive iterations to simulate its usage in
+  // FilterProject.
+  exec::ExprSet exprSetCommon =
+      createExprSetCommon(plans, execCtx_, options_.disableConstantFolding);
+  exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
 
-  VLOG(1) << "Starting common eval execution.";
-  SelectivityVector rows{rowVector ? rowVector->size() : 1};
-
-  // Execute with common expression eval path. Some columns of the input row
-  // vector will be wrapped in lazy as specified in 'columnsToWrapInLazy'.
-  try {
-    exec::ExprSet exprSetCommon(
-        plans, execCtx_, !options_.disableConstantFolding);
-    auto inputRowVector = rowVector;
-    if (!columnsToWrapInLazy.empty()) {
-      inputRowVector =
-          VectorFuzzer::fuzzRowChildrenToLazy(rowVector, columnsToWrapInLazy);
-      LOG(INFO) << "Modified inputs for common eval path: ";
-      logRowVector(inputRowVector);
-    }
-    exec::EvalCtx evalCtxCommon(execCtx_, &exprSetCommon, inputRowVector.get());
-
-    exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
-  } catch (const VeloxUserError&) {
-    if (!canThrow) {
-      LOG(ERROR)
-          << "Common eval wasn't supposed to throw, but it did. Aborting.";
-      persistReproInfoIfNeeded(
-          rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
-      throw;
-    }
-    exceptionCommonPtr = std::current_exception();
-  } catch (...) {
-    LOG(ERROR)
-        << "Common eval: Exceptions other than VeloxUserError are not allowed.";
-    persistReproInfoIfNeeded(
-        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
-    throw;
-  }
-
-  VLOG(1) << "Starting simplified eval execution.";
-
-  // Execute with simplified expression eval path.
-  try {
-    exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
-    exec::EvalCtx evalCtxSimplified(
-        execCtx_, &exprSetSimplified, rowVector.get());
-
-    exprSetSimplified.eval(rows, evalCtxSimplified, simplifiedEvalResult);
-  } catch (const VeloxUserError&) {
-    exceptionSimplifiedPtr = std::current_exception();
-  } catch (...) {
-    LOG(ERROR)
-        << "Simplified eval: Exceptions other than VeloxUserError are not allowed.";
-    persistReproInfoIfNeeded(
-        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
-    throw;
-  }
-
-  try {
-    // Compare results or exceptions (if any). Fail if anything is different.
-    if (exceptionCommonPtr || exceptionSimplifiedPtr) {
-      // Throws in case exceptions are not compatible. If they are compatible,
-      // return false to signal that the expression failed.
-      compareExceptions(exceptionCommonPtr, exceptionSimplifiedPtr);
-      return {nullptr, exceptionCommonPtr};
-    } else {
-      // Throws in case output is different.
-      VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
-      VELOX_CHECK_EQ(simplifiedEvalResult.size(), plans.size());
-      for (int i = 0; i < plans.size(); ++i) {
-        compareVectors(commonEvalResult[i], simplifiedEvalResult[i], rows);
+  int testCaseItr = 0;
+  for (auto [rowVector, rows] : transformedInputTestCases) {
+    LOG(INFO) << "Executing test case: " << testCaseItr++;
+    // Execute expression plan using both common and simplified evals.
+    std::vector<VectorPtr> commonEvalResult;
+    std::vector<VectorPtr> simplifiedEvalResult;
+    if (resultVector) {
+      VELOX_CHECK(resultVector->encoding() == VectorEncoding::Simple::ROW);
+      auto resultRowVector = resultVector->asUnchecked<RowVector>();
+      auto children = resultRowVector->children();
+      commonEvalResult.resize(children.size());
+      simplifiedEvalResult.resize(children.size());
+      for (int i = 0; i < children.size(); ++i) {
+        commonEvalResult[i] = children[i];
       }
     }
-  } catch (...) {
-    persistReproInfoIfNeeded(
-        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
-    throw;
-  }
+    std::exception_ptr exceptionCommonPtr;
+    std::exception_ptr exceptionSimplifiedPtr;
 
-  if (!options_.reproPersistPath.empty() && options_.persistAndRunOnce) {
-    // A guard to make sure it runs only once with persistAndRunOnce flag
-    // turned on. It shouldn't reach here normally since the flag is used to
-    // persist repro info for crash failures. But if it hasn't crashed by now,
-    // we still don't want another iteration.
-    LOG(WARNING)
-        << "Iteration succeeded with --persist_and_run_once flag enabled "
-           "(expecting crash failure)";
-    exit(0);
-  }
+    VLOG(1) << "Starting common eval execution.";
 
-  return {
-      VectorMaker(commonEvalResult[0]->pool()).rowVector(commonEvalResult),
-      nullptr};
+    // Execute with common expression eval path. Some columns of the input row
+    // vector will be wrapped in lazy as specified in 'columnsToWrapInLazy'.
+
+    // Whether UNSUPPORTED_INPUT_UNCATCHABLE error is thrown from either the
+    // common or simplified evaluation path. This error is allowed to thrown
+    // only from one evaluation path because it is VeloxRuntimeError, hence
+    // cannot be suppressed by default nulls.
+    bool unsupportedInputUncatchableError{false};
+    // Whether default null behavior takes place in the common evaluation path.
+    // If so, errors from Presto are allowed because Presto doesn't suppress
+    // error by default nulls.
+    bool defaultNull{false};
+    try {
+      // If we need to transform types into intermediate types, do so here
+      // before we evaluate exprSetCommon.
+      RowVectorPtr inputRowVector = transformInput(
+          rowVector,
+          execCtx_,
+          options_.disableConstantFolding,
+          transformPlans,
+          originalInputFields);
+
+      VectorPtr copiedInput;
+      inputRowVector = VectorFuzzer::fuzzRowChildrenToLazy(
+          inputRowVector, inputRowMetadata.columnsToWrapInLazy);
+      if (inputRowMetadata.columnsToWrapInLazy.empty()) {
+        // Copy loads lazy vectors so only do this when there are no lazy
+        // inputs.
+        copiedInput = BaseVector::copy(*inputRowVector);
+      }
+
+      exec::EvalCtx evalCtxCommon(
+          execCtx_, &exprSetCommon, inputRowVector.get());
+      exprSetCommon.eval(
+          0,
+          exprSetCommon.size(),
+          true /*initialize*/,
+          rows,
+          evalCtxCommon,
+          commonEvalResult);
+      defaultNull = defaultNullRowsSkipped(exprSetCommon);
+
+      if (copiedInput) {
+        // Flatten the input vector as an optimization if its very deeply
+        // nested.
+        fuzzer::compareVectors(
+            copiedInput,
+            BaseVector::copy(*inputRowVector),
+            "Copy of original input",
+            "Input after common",
+            rows);
+      }
+      LOG(INFO) << "Common eval succeeded.";
+    } catch (const VeloxException& e) {
+      LOG(INFO) << "Common eval failed.";
+      if (e.errorCode() == error_code::kUnsupportedInputUncatchable) {
+        unsupportedInputUncatchableError = true;
+      } else if (!(canThrow && e.isUserError())) {
+        if (!canThrow) {
+          LOG(ERROR)
+              << "Common eval wasn't supposed to throw, but it did. Aborting.";
+        } else if (!e.isUserError()) {
+          LOG(ERROR)
+              << "Common eval: VeloxRuntimeErrors other than UNSUPPORTED_INPUT_UNCATCHABLE error are not allowed.";
+        }
+        persistReproInfoIfNeeded(
+            inputTestCases,
+            inputRowMetadata,
+            copiedResult,
+            sql,
+            complexConstants);
+        throw;
+      }
+      exceptionCommonPtr = std::current_exception();
+    } catch (...) {
+      LOG(ERROR)
+          << "Common eval: Exceptions other than VeloxUserError or VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE are not allowed.";
+      persistReproInfoIfNeeded(
+          inputTestCases,
+          inputRowMetadata,
+          copiedResult,
+          sql,
+          complexConstants);
+      throw;
+    }
+
+    VLOG(1) << "Starting reference eval execution.";
+
+    if (referenceQueryRunner_ != nullptr) {
+      VLOG(1) << "Execute with reference DB.";
+      auto inputRowVector = reduceToSelectedRows(rowVector, rows);
+      auto projectionPlan =
+          makeProjectionPlan(inputRowVector, plans, transformPlans);
+      auto referenceResultOrError =
+          computeReferenceResults(projectionPlan, referenceQueryRunner_.get());
+
+      auto referenceEvalResult = referenceResultOrError.first;
+
+      if (referenceResultOrError.second !=
+          ReferenceQueryErrorCode::kReferenceQueryUnsupported) {
+        bool exceptionReference =
+            (referenceResultOrError.second !=
+             ReferenceQueryErrorCode::kSuccess);
+        try {
+          // Compare results or exceptions (if any). Fail if anything is
+          // different.
+          if (exceptionCommonPtr || exceptionReference) {
+            // Throws in case only one evaluation path throws exception.
+            // Otherwise, return false to signal that the expression failed.
+            if (exceptionCommonPtr && exceptionReference) {
+              LOG(INFO) << "Both paths threw exception.";
+              verificationStates.push_back(VerificationState::kBothPathsThrow);
+            } else {
+              verificationStates.push_back(
+                  VerificationState::kReferencePathUnsupported);
+              if (!(defaultNull &&
+                    referenceQueryRunner_->runnerType() ==
+                        ReferenceQueryRunner::RunnerType::kPrestoQueryRunner)) {
+                LOG(ERROR) << fmt::format(
+                    "Only {} path threw exception",
+                    exceptionCommonPtr ? "common" : "reference");
+                if (exceptionCommonPtr) {
+                  std::rethrow_exception(exceptionCommonPtr);
+                } else {
+                  auto referenceSql =
+                      referenceQueryRunner_->toSql(projectionPlan);
+                  VELOX_FAIL(
+                      "Reference path throws for query: {}", *referenceSql);
+                }
+              }
+            }
+          } else {
+            // Throws in case output is different.
+            VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
+            VELOX_CHECK(referenceEvalResult.has_value());
+
+            std::vector<TypePtr> types;
+            for (auto i = 0; i < commonEvalResult.size(); ++i) {
+              types.push_back(commonEvalResult[i]->type());
+            }
+            auto commonEvalResultRow = std::make_shared<RowVector>(
+                execCtx_->pool(),
+                ROW(std::move(types)),
+                nullptr,
+                commonEvalResult[0]->size(),
+                commonEvalResult);
+            commonEvalResultRow =
+                reduceToSelectedRows(commonEvalResultRow, rows);
+            VELOX_CHECK(
+                exec::test::assertEqualResults(
+                    referenceEvalResult.value(),
+                    projectionPlan->outputType(),
+                    {commonEvalResultRow}),
+                "Velox and reference DB results don't match");
+            LOG(INFO) << "Verified results against reference DB";
+            verificationStates.push_back(
+                VerificationState::kVerifiedAgainstReference);
+          }
+        } catch (...) {
+          persistReproInfoIfNeeded(
+              inputTestCases,
+              inputRowMetadata,
+              copiedResult,
+              sql,
+              complexConstants);
+          throw;
+        }
+      } else {
+        LOG(INFO) << "Reference DB doesn't support this query";
+        verificationStates.push_back(
+            VerificationState::kReferencePathUnsupported);
+      }
+    } else {
+      VLOG(1) << "Execute with simplified expression eval path.";
+      try {
+        exec::EvalCtx evalCtxSimplified(
+            execCtx_, &exprSetSimplified, rowVector.get());
+
+        auto copy = BaseVector::copy(*rowVector);
+        exprSetSimplified.eval(
+            0,
+            exprSetSimplified.size(),
+            true /*initialize*/,
+            rows,
+            evalCtxSimplified,
+            simplifiedEvalResult);
+
+        // Flatten the input vector as an optimization if its very deeply
+        // nested.
+        fuzzer::compareVectors(
+            copy,
+            BaseVector::copy(*rowVector),
+            "Copy of original input",
+            "Input after simplified",
+            rows);
+      } catch (const VeloxException& e) {
+        if (e.errorCode() == error_code::kUnsupportedInputUncatchable) {
+          unsupportedInputUncatchableError = true;
+        } else if (!e.isUserError()) {
+          LOG(ERROR)
+              << "Simplified eval: VeloxRuntimeErrors other than UNSUPPORTED_INPUT_UNCATCHABLE error are not allowed.";
+          persistReproInfoIfNeeded(
+              inputTestCases,
+              inputRowMetadata,
+              copiedResult,
+              sql,
+              complexConstants);
+          throw;
+        }
+        exceptionSimplifiedPtr = std::current_exception();
+      } catch (...) {
+        LOG(ERROR)
+            << "Simplified eval: Exceptions other than VeloxUserError or VeloxRuntimeError with UNSUPPORTED_INPUT are not allowed.";
+        persistReproInfoIfNeeded(
+            inputTestCases,
+            inputRowMetadata,
+            copiedResult,
+            sql,
+            complexConstants);
+        throw;
+      }
+
+      try {
+        // Compare results or exceptions (if any). Fail if anything is
+        // different.
+        if (exceptionCommonPtr || exceptionSimplifiedPtr) {
+          // UNSUPPORTED_INPUT_UNCATCHABLE errors are VeloxRuntimeErrors that
+          // cannot
+          // be suppressed by default NULLs. So it may happen that only one of
+          // the common and simplified path throws this error. In this case, we
+          // do not compare the exceptions.
+          if (!unsupportedInputUncatchableError) {
+            // Throws in case exceptions are not compatible. If they are
+            // compatible, return false to signal that the expression failed.
+            fuzzer::compareExceptions(
+                exceptionCommonPtr, exceptionSimplifiedPtr);
+          }
+          results.push_back(
+              {nullptr,
+               exceptionCommonPtr ? exceptionCommonPtr : exceptionSimplifiedPtr,
+               unsupportedInputUncatchableError});
+          verificationStates.push_back(VerificationState::kBothPathsThrow);
+          continue;
+        } else {
+          // Throws in case output is different.
+          VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
+          VELOX_CHECK_EQ(simplifiedEvalResult.size(), plans.size());
+          for (int i = 0; i < plans.size(); ++i) {
+            fuzzer::compareVectors(
+                commonEvalResult[i],
+                simplifiedEvalResult[i],
+                "common path results ",
+                "simplified path results",
+                rows);
+          }
+          verificationStates.push_back(
+              VerificationState::kVerifiedAgainstReference);
+        }
+      } catch (...) {
+        persistReproInfoIfNeeded(
+            inputTestCases,
+            inputRowMetadata,
+            copiedResult,
+            sql,
+            complexConstants);
+        throw;
+      }
+    }
+
+    if (!options_.reproPersistPath.empty() && options_.persistAndRunOnce) {
+      // A guard to make sure it runs only once with persistAndRunOnce flag
+      // turned on. It shouldn't reach here normally since the flag is used to
+      // persist repro info for crash failures. But if it hasn't crashed by now,
+      // we still don't want another iteration.
+      LOG(WARNING)
+          << "Iteration succeeded with --persist_and_run_once flag enabled "
+             "(expecting crash failure)";
+      exit(0);
+    }
+
+    if (exceptionCommonPtr) {
+      results.push_back(
+          {nullptr, exceptionCommonPtr, unsupportedInputUncatchableError});
+    } else {
+      results.push_back(
+          {VectorMaker(commonEvalResult[0]->pool()).rowVector(commonEvalResult),
+           nullptr,
+           unsupportedInputUncatchableError});
+    }
+  }
+  VELOX_CHECK_EQ(results.size(), verificationStates.size());
+  return std::make_pair(results, verificationStates);
 }
 
 void ExpressionVerifier::persistReproInfoIfNeeded(
-    const VectorPtr& inputVector,
-    const std::vector<int>& columnsToWrapInLazy,
+    const std::vector<fuzzer::InputTestCase>& inputTestCases,
+    const InputRowMetadata& inputRowMetadata,
     const VectorPtr& resultVector,
     const std::string& sql,
     const std::vector<VectorPtr>& complexConstants) {
@@ -233,18 +628,19 @@ void ExpressionVerifier::persistReproInfoIfNeeded(
     LOG(INFO) << "Skipping persistence because repro path is empty.";
   } else if (!options_.persistAndRunOnce) {
     persistReproInfo(
-        inputVector, columnsToWrapInLazy, resultVector, sql, complexConstants);
+        inputTestCases, inputRowMetadata, resultVector, sql, complexConstants);
   }
 }
 
 void ExpressionVerifier::persistReproInfo(
-    const VectorPtr& inputVector,
-    std::vector<int> columnsToWrapInLazy,
+    const std::vector<fuzzer::InputTestCase>& inputTestCases,
+    const InputRowMetadata& inputRowMetadata,
     const VectorPtr& resultVector,
     const std::string& sql,
     const std::vector<VectorPtr>& complexConstants) {
-  std::string inputPath;
-  std::string lazyListPath;
+  std::vector<std::string> inputPaths;
+  std::vector<std::string> inputSelectivityVectorPaths;
+  std::string inputRowMetadataPath;
   std::string resultPath;
   std::string sqlPath;
   std::string complexConstantsPath;
@@ -260,22 +656,40 @@ void ExpressionVerifier::persistReproInfo(
     LOG(INFO) << "Failed to create directory for persisting repro info.";
     return;
   }
-  // Saving input vector
-  inputPath = fmt::format("{}/{}", dirPath->c_str(), kInputVectorFileName);
-  try {
-    saveVectorToFile(inputVector.get(), inputPath.c_str());
-  } catch (std::exception& e) {
-    inputPath = e.what();
+  // Saving input test cases
+  for (int i = 0; i < inputTestCases.size(); i++) {
+    auto filePath = fmt::format(
+        "{}/{}_{}", dirPath->c_str(), kInputVectorFileNamePrefix, i);
+    try {
+      saveVectorToFile(inputTestCases[i].inputVector.get(), filePath.c_str());
+      inputPaths.push_back(filePath);
+    } catch (std::exception& e) {
+      inputPaths.clear();
+      inputPaths.push_back(e.what());
+      break;
+    }
+
+    filePath = fmt::format(
+        "{}/{}_{}", dirPath->c_str(), kInputSelectivityVectorFileNamePrefix, i);
+    try {
+      saveSelectivityVectorToFile(
+          inputTestCases[i].activeRows, filePath.c_str());
+      inputSelectivityVectorPaths.push_back(filePath);
+    } catch (std::exception& e) {
+      inputSelectivityVectorPaths.clear();
+      inputSelectivityVectorPaths.push_back(e.what());
+      break;
+    }
   }
 
   // Saving the list of column indices that are to be wrapped in lazy.
-  if (!columnsToWrapInLazy.empty()) {
-    lazyListPath =
-        fmt::format("{}/{}", dirPath->c_str(), kIndicesOfLazyColumnsFileName);
+  if (!inputRowMetadata.empty()) {
+    inputRowMetadataPath =
+        fmt::format("{}/{}", dirPath->c_str(), kInputRowMetadataFileName);
     try {
-      saveStdVectorToFile<int>(columnsToWrapInLazy, lazyListPath.c_str());
+      inputRowMetadata.saveToFile(inputRowMetadataPath.c_str());
     } catch (std::exception& e) {
-      lazyListPath = e.what();
+      inputRowMetadataPath = e.what();
     }
   }
 
@@ -313,13 +727,15 @@ void ExpressionVerifier::persistReproInfo(
 
   std::stringstream ss;
   ss << "Persisted input: --fuzzer_repro_path " << dirPath.value();
-  ss << " --input_path " << inputPath;
+  ss << " --input_paths " << boost::algorithm::join(inputPaths, ",")
+     << " --input_selectivity_vector_paths "
+     << boost::algorithm::join(inputSelectivityVectorPaths, ",");
   if (resultVector) {
     ss << " --result_path " << resultPath;
   }
   ss << " --sql_path " << sqlPath;
-  if (!columnsToWrapInLazy.empty()) {
-    ss << " --lazy_column_list_path " << lazyListPath;
+  if (!inputRowMetadata.empty()) {
+    ss << " --input_row_metadata_path " << inputRowMetadataPath;
   }
   if (!complexConstants.empty()) {
     ss << " --complex_constant_path " << complexConstantsPath;
@@ -338,13 +754,13 @@ class MinimalSubExpressionFinder {
   // Tries subexpressions of plan until finding the minimal failing subtree.
   void findMinimalExpression(
       core::TypedExprPtr plan,
-      const RowVectorPtr& rowVector,
-      const std::vector<int>& columnsToWrapInLazy) {
-    if (verifyWithResults(plan, rowVector, columnsToWrapInLazy)) {
+      const std::vector<fuzzer::InputTestCase>& inputTestCases,
+      const InputRowMetadata& inputRowMetadata) {
+    if (verifyWithResults(plan, inputTestCases, inputRowMetadata)) {
       errorExit("Retry should have failed");
     }
     bool minimalFound =
-        findMinimalRecursive(plan, rowVector, columnsToWrapInLazy);
+        findMinimalRecursive(plan, inputTestCases, inputRowMetadata);
     if (minimalFound) {
       errorExit("Found minimal failing expression.");
     } else {
@@ -363,14 +779,14 @@ class MinimalSubExpressionFinder {
   // breakpoint inside this to debug failures.
   bool findMinimalRecursive(
       core::TypedExprPtr plan,
-      const RowVectorPtr& rowVector,
-      const std::vector<int>& columnsToWrapInLazy) {
+      const std::vector<fuzzer::InputTestCase>& inputTestCases,
+      const InputRowMetadata& inputRowMetadata) {
     bool anyFailed = false;
     for (auto& input : plan->inputs()) {
-      if (!verifyWithResults(input, rowVector, columnsToWrapInLazy)) {
+      if (!verifyWithResults(input, inputTestCases, inputRowMetadata)) {
         anyFailed = true;
         bool minimalFound =
-            findMinimalRecursive(input, rowVector, columnsToWrapInLazy);
+            findMinimalRecursive(input, inputTestCases, inputRowMetadata);
         if (minimalFound) {
           return true;
         }
@@ -379,10 +795,10 @@ class MinimalSubExpressionFinder {
     if (!anyFailed) {
       LOG(INFO) << "Failed with all children succeeding: " << plan->toString();
       // Re-running the minimum failed. Put breakpoint here to debug.
-      verifyWithResults(plan, rowVector, columnsToWrapInLazy);
-      if (!columnsToWrapInLazy.empty()) {
+      verifyWithResults(plan, inputTestCases, inputRowMetadata);
+      if (!inputRowMetadata.columnsToWrapInLazy.empty()) {
         LOG(INFO) << "Trying without lazy:";
-        if (verifyWithResults(plan, rowVector, {})) {
+        if (verifyWithResults(plan, inputTestCases, {})) {
           LOG(INFO) << "Minimal failure succeeded without lazy vectors";
         }
       }
@@ -398,15 +814,16 @@ class MinimalSubExpressionFinder {
   // contents in result vector.
   bool verifyWithResults(
       core::TypedExprPtr plan,
-      const RowVectorPtr& rowVector,
-      const std::vector<int>& columnsToWrapInLazy) {
+      const std::vector<fuzzer::InputTestCase>& inputTestCases,
+      const InputRowMetadata& inputRowMetadata) {
     VectorPtr result;
     LOG(INFO) << "Running with empty results vector :" << plan->toString();
-    bool emptyResult = verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
+    bool emptyResult =
+        verifyPlan(plan, inputTestCases, inputRowMetadata, result);
     LOG(INFO) << "Running with non empty vector :" << plan->toString();
     result = vectorFuzzer_.fuzzFlat(plan->type());
     bool filledResult =
-        verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
+        verifyPlan(plan, inputTestCases, inputRowMetadata, result);
     if (emptyResult != filledResult) {
       LOG(ERROR) << fmt::format(
           "Different results for empty vs populated ! Empty result = {} filledResult = {}",
@@ -420,8 +837,8 @@ class MinimalSubExpressionFinder {
   // Returns true if the verification is successful.
   bool verifyPlan(
       core::TypedExprPtr plan,
-      const RowVectorPtr& rowVector,
-      const std::vector<int>& columnsToWrapInLazy,
+      const std::vector<fuzzer::InputTestCase>& inputTestCases,
+      const InputRowMetadata& inputRowMetadata,
       VectorPtr results) {
     // Turn off unnecessary logging.
     FLAGS_minloglevel = 2;
@@ -430,11 +847,11 @@ class MinimalSubExpressionFinder {
     try {
       verifier_.verify(
           {plan},
-          rowVector,
+          inputTestCases,
           results ? BaseVector::copy(*results) : nullptr,
           true, // canThrow
-          columnsToWrapInLazy);
-    } catch (const std::exception& e) {
+          inputRowMetadata);
+    } catch (const std::exception&) {
       success = false;
     }
     FLAGS_minloglevel = 0;
@@ -450,8 +867,8 @@ void computeMinimumSubExpression(
     ExpressionVerifier&& minimalVerifier,
     VectorFuzzer& fuzzer,
     const std::vector<core::TypedExprPtr>& plans,
-    const RowVectorPtr& rowVector,
-    const std::vector<int>& columnsToWrapInLazy) {
+    const std::vector<fuzzer::InputTestCase>& inputTestCases,
+    const InputRowMetadata& inputRowMetadata) {
   auto finder = MinimalSubExpressionFinder(std::move(minimalVerifier), fuzzer);
   if (plans.size() > 1) {
     LOG(INFO)
@@ -462,7 +879,7 @@ void computeMinimumSubExpression(
   for (auto plan : plans) {
     LOG(INFO) << "============================================";
     LOG(INFO) << "Finding minimal subexpression for plan:" << plan->toString();
-    finder.findMinimalExpression(plan, rowVector, columnsToWrapInLazy);
+    finder.findMinimalExpression(plan, inputTestCases, inputRowMetadata);
     LOG(INFO) << "============================================";
   }
 }

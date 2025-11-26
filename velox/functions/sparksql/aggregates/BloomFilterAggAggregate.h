@@ -23,6 +23,8 @@
 namespace facebook::velox::functions::aggregate::sparksql {
 
 exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
-    const std::string& name);
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite);
 
 } // namespace facebook::velox::functions::aggregate::sparksql

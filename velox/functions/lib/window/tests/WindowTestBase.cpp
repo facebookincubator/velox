@@ -19,7 +19,7 @@
 #include <boost/random/uniform_int_distribution.hpp>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -48,13 +48,49 @@ WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
   return {op, functionSql, querySql};
 }
 
+WindowTestBase::QueryInfo WindowTestBase::buildStreamingWindowQuery(
+    const std::vector<RowVectorPtr>& input,
+    const std::string& function,
+    const std::string& overClause,
+    const std::string& frameClause) {
+  std::string functionSql =
+      fmt::format("{} over ({} {})", function, overClause, frameClause);
+  std::vector<std::string> orderByClauses;
+  auto windowExpr = duckdb::parseWindowExpr(functionSql, {});
+
+  // Extract the partition by keys.
+  for (const auto& partition : windowExpr.partitionBy) {
+    orderByClauses.push_back(partition->toString() + " NULLS FIRST");
+  }
+
+  // Extract the order by keys.
+  for (const auto& clause : windowExpr.orderBy) {
+    orderByClauses.push_back(clause.toString());
+  }
+
+  // Sort the input data before streaming window.
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values(input)
+                  .orderBy(orderByClauses, false)
+                  .streamingWindow({functionSql})
+                  .planNode();
+
+  auto rowType = asRowType(input[0]->type());
+  std::string columnsString = folly::join(", ", rowType->names());
+  std::string querySql =
+      fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
+
+  return {plan, functionSql, querySql};
+}
+
 RowVectorPtr WindowTestBase::makeSimpleVector(vector_size_t size) {
   return makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
       makeFlatVector<int32_t>(
-          size, [](auto row) { return row % 7; }, nullEvery(15)),
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 13 + 1; }),
+          size, [](auto row) { return row % 7; }, nullEvery(11)),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 6 + 1; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 4 + 1; }),
   });
 }
 
@@ -63,8 +99,8 @@ RowVectorPtr WindowTestBase::makeSinglePartitionVector(vector_size_t size) {
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
       makeFlatVector<int32_t>(
           size, [](auto row) { return row; }, nullEvery(7)),
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 13 + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 6 + 1; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 4 + 1; }),
   });
 }
 
@@ -72,8 +108,8 @@ RowVectorPtr WindowTestBase::makeSingleRowPartitionsVector(vector_size_t size) {
   return makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 13 + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 6 + 1; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 4 + 1; }),
   });
 }
 
@@ -100,7 +136,7 @@ RowVectorPtr WindowTestBase::makeRandomInputVector(vector_size_t size) {
       {makeRandomInputVector(BIGINT(), size, 0.2),
        makeRandomInputVector(VARCHAR(), size, 0.3),
        makeFlatVector<int64_t>(size, genRandomFrameValue),
-       makeFlatVector<int64_t>(size, genRandomFrameValue)});
+       makeFlatVector<int32_t>(size, genRandomFrameValue)});
 }
 
 void WindowTestBase::testWindowFunction(
@@ -108,18 +144,226 @@ void WindowTestBase::testWindowFunction(
     const std::string& function,
     const std::vector<std::string>& overClauses,
     const std::vector<std::string>& frameClauses,
-    bool createTable) {
+    bool createTable,
+    WindowStyle windowStyle) {
   if (createTable) {
     createDuckDbTable(input);
   }
+
+  // Generate a random boolean to determine the window style
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<int> dis(0, 1);
+
+  int n = 0;
   for (const auto& overClause : overClauses) {
-    for (auto& frameClause : frameClauses) {
-      auto queryInfo =
-          buildWindowQuery(input, function, overClause, frameClause);
-      SCOPED_TRACE(queryInfo.functionSql);
+    for (const auto& frameClause : frameClauses) {
+      ++n;
+
+      auto resolvedWindowStyle = windowStyle == WindowStyle::kRandom
+          ? static_cast<int>(dis(gen))
+          : static_cast<int>(windowStyle);
+
+      WindowTestBase::QueryInfo queryInfo;
+      if (resolvedWindowStyle == static_cast<int>(WindowStyle::kSort)) {
+        queryInfo = buildWindowQuery(input, function, overClause, frameClause);
+      } else {
+        queryInfo =
+            buildStreamingWindowQuery(input, function, overClause, frameClause);
+      }
+
+      SCOPED_TRACE(fmt::format("Query #{}: {}", n, queryInfo.functionSql));
       assertQuery(queryInfo.planNode, queryInfo.querySql);
     }
   }
+}
+
+void WindowTestBase::testWindowFunction(
+    const std::vector<RowVectorPtr>& input,
+    const std::string& function,
+    const std::string& overClause,
+    const std::string& frameClause,
+    const RowVectorPtr& expectedResult) {
+  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
+  SCOPED_TRACE(queryInfo.functionSql);
+  assertQuery(queryInfo.planNode, expectedResult);
+}
+
+void WindowTestBase::rangeFrameTestImpl(
+    bool ascending,
+    const std::string& function,
+    const RangeFrameBound& startBound,
+    const RangeFrameBound& endBound,
+    bool unorderedColumns) {
+  auto size = 25;
+  // For frames with k RANGE PRECEDING/FOLLOWING, Velox requires the application
+  // to add columns with the range frame boundary value computed according
+  // to the frame type.
+  // If the frame is k PRECEDING :
+  // frame_boundary_value = current_order_by - k (for ascending ORDER BY)
+  // frame_boundary_value = current_order_by + k (for descending ORDER BY)
+  // If the frame is k FOLLOWING :
+  // frame_boundary_value = current_order_by + k (for ascending ORDER BY)
+  // frame_boundary_value = current_order_by - k (for descending ORDER BY)
+  auto computeOffset = [&](const RangeFrameBound& frame) -> int64_t {
+    if (frame.bound == BoundType::kCurrentRow) {
+      return 0;
+    }
+    VELOX_CHECK(frame.value.has_value());
+    if (frame.bound == BoundType::kPreceding) {
+      return ascending ? -frame.value.value() : frame.value.value();
+    } else {
+      return ascending ? frame.value.value() : -frame.value.value();
+    }
+  };
+
+  // Compute frame boundary columns for asc/desc ORDER BY.
+  auto offset = computeOffset(startBound);
+  auto startColumn = makeFlatVector<int64_t>(
+      size, [offset](auto row) { return row + offset; });
+  offset = computeOffset(endBound);
+  auto endColumn = makeFlatVector<int64_t>(
+      size, [offset](auto row) { return row + offset; });
+
+  RowVectorPtr vectors;
+  // Velox frames require the column bounds.
+  auto veloxFrameBound = [](const RangeFrameBound& frame,
+                            const std::string& colName) -> std::string {
+    if (frame.bound == BoundType::kCurrentRow) {
+      return "CURRENT ROW";
+    }
+    if (frame.bound == BoundType::kPreceding) {
+      return colName + " PRECEDING";
+    }
+    return colName + " FOLLOWING";
+  };
+  std::string veloxFrame;
+  std::string overClause;
+  if (unorderedColumns) {
+    vectors = makeRowVector({
+        endColumn,
+        startColumn,
+        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+    });
+    veloxFrame = "range between " + veloxFrameBound(startBound, "c1") +
+        " and " + veloxFrameBound(endBound, "c0");
+    overClause = "partition by c3 order by c2";
+  } else {
+    vectors = makeRowVector({
+        makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        startColumn,
+        endColumn,
+    });
+    veloxFrame = "range between " + veloxFrameBound(startBound, "c2") +
+        " and " + veloxFrameBound(endBound, "c3");
+    overClause = "partition by c0 order by c1";
+  }
+  if (!ascending) {
+    overClause += " desc";
+  }
+  createDuckDbTable({vectors});
+
+  // DuckDB frames uses the constant bounds.
+  auto duckFrameBound = [](const RangeFrameBound& frame) -> std::string {
+    if (frame.bound == BoundType::kCurrentRow) {
+      return "CURRENT ROW";
+    }
+    VELOX_CHECK(frame.value.has_value());
+    if (frame.bound == BoundType::kPreceding) {
+      return fmt::format("{} PRECEDING", frame.value.value());
+    }
+    return fmt::format("{} FOLLOWING", frame.value.value());
+  };
+  std::string duckFrame = "range between " + duckFrameBound(startBound) +
+      " and " + duckFrameBound(endBound);
+
+  std::string veloxFunction =
+      fmt::format("{} over ({} {})", function, overClause, veloxFrame);
+  std::string duckFunction =
+      fmt::format("{} over ({} {})", function, overClause, duckFrame);
+  auto op = PlanBuilder()
+                .setParseOptions(options_)
+                .values({vectors})
+                .window({veloxFunction})
+                .planNode();
+
+  auto rowType = asRowType(vectors->type());
+  std::string columnsString = folly::join(", ", rowType->names());
+  std::string querySql =
+      fmt::format("SELECT {}, {} FROM tmp", columnsString, duckFunction);
+  SCOPED_TRACE(veloxFunction);
+  assertQuery(op, querySql);
+}
+
+void WindowTestBase::rangeFrameTest(
+    bool ascending,
+    const std::string& function,
+    const RangeFrameBound& startBound,
+    const RangeFrameBound& endBound) {
+  rangeFrameTestImpl(ascending, function, startBound, endBound, false);
+  rangeFrameTestImpl(ascending, function, startBound, endBound, true);
+}
+
+void WindowTestBase::testKRangeFrames(const std::string& function) {
+  // RANGE BETWEEN 4 PRECEDING AND 2 FOLLOWING.
+  rangeFrameTest(
+      true, function, {4, BoundType::kPreceding}, {2, BoundType::kFollowing});
+  rangeFrameTest(
+      false, function, {4, BoundType::kPreceding}, {2, BoundType::kFollowing});
+
+  // RANGE BETWEEN 4 PRECEDING AND CURRENT ROW.
+  rangeFrameTest(
+      true,
+      function,
+      {4, BoundType::kPreceding},
+      {std::nullopt, BoundType::kCurrentRow});
+  rangeFrameTest(
+      false,
+      function,
+      {4, BoundType::kPreceding},
+      {std::nullopt, BoundType::kCurrentRow});
+
+  // RANGE BETWEEN 4 PRECEDING AND 2 PRECEDING. There are no rows in that range.
+  // So this tests empty frames.
+  rangeFrameTest(
+      true, function, {4, BoundType::kPreceding}, {2, BoundType::kPreceding});
+  rangeFrameTest(
+      false, function, {4, BoundType::kPreceding}, {2, BoundType::kPreceding});
+
+  // RANGE BETWEEN 6 PRECEDING AND 2 PRECEDING. There is exactly one row in that
+  // range.
+  rangeFrameTest(
+      true, function, {6, BoundType::kPreceding}, {2, BoundType::kPreceding});
+  rangeFrameTest(
+      false, function, {6, BoundType::kPreceding}, {2, BoundType::kPreceding});
+
+  // RANGE BETWEEN 2 FOLLOWING AND 4 FOLLOWING. There are no rows in that range.
+  // So this tests empty frames.
+  rangeFrameTest(
+      true, function, {2, BoundType::kFollowing}, {4, BoundType::kFollowing});
+  rangeFrameTest(
+      false, function, {2, BoundType::kFollowing}, {4, BoundType::kFollowing});
+
+  // RANGE BETWEEN CURRENT ROW AND 4 FOLLOWING.
+  rangeFrameTest(
+      true,
+      function,
+      {std::nullopt, BoundType::kCurrentRow},
+      {4, BoundType::kFollowing});
+  rangeFrameTest(
+      false,
+      function,
+      {std::nullopt, BoundType::kCurrentRow},
+      {4, BoundType::kFollowing});
+
+  // RANGE BETWEEN 2 FOLLOWING AND 6 FOLLOWING. There is exactly one row in that
+  // range.
+  rangeFrameTest(
+      true, function, {2, BoundType::kFollowing}, {6, BoundType::kFollowing});
+  rangeFrameTest(
+      false, function, {2, BoundType::kFollowing}, {6, BoundType::kFollowing});
 }
 
 void WindowTestBase::assertWindowFunctionError(
@@ -143,4 +387,4 @@ void WindowTestBase::assertWindowFunctionError(
       assertQuery(queryInfo.planNode, queryInfo.querySql), errorMessage);
 }
 
-}; // namespace facebook::velox::window::test
+} // namespace facebook::velox::window::test

@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/aggregates/PrestoHasher.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -28,6 +30,10 @@ using limits = std::numeric_limits<T>;
 class PrestoHasherTest : public testing::Test,
                          public facebook::velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   template <typename T>
   void assertHash(
       const std::vector<std::optional<T>>& data,
@@ -109,6 +115,25 @@ class PrestoHasherTest : public testing::Test,
 
     checkHashes(dictionaryVector, modifiedExpected);
 
+    // The dictionary vector is larger than the values.
+    // We make it much larger so that if we allocate any Buffers using the base
+    // Vector's size, it won't be large enough to hold the number of elements in
+    // the DictionaryVector even after aligning the size and expanding it to the
+    // preferred size.
+    auto longerSize = vectorSize * 100;
+
+    modifiedExpected.resize(longerSize);
+    for (size_t i = 0; i < longerSize; ++i) {
+      modifiedExpected[i] = expected[i % vectorSize];
+    }
+
+    BufferPtr longerIndices = makeIndices(
+        longerSize, [vectorSize](auto row) { return row % vectorSize; });
+
+    dictionaryVector = wrapInDictionary(longerIndices, longerSize, vector);
+
+    checkHashes(dictionaryVector, modifiedExpected);
+
     // Wrap in a constant vector of various sizes.
 
     for (int size = 1; size <= vectorSize - 1; size++) {
@@ -177,12 +202,40 @@ TEST_F(PrestoHasherTest, date) {
 
 TEST_F(PrestoHasherTest, unscaledShortDecimal) {
   assertHash<int64_t>(
-      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DECIMAL(10, 5));
+      {0,
+       1000,
+       -1000,
+       std::nullopt,
+       DecimalUtil::kShortDecimalMax,
+       DecimalUtil::kShortDecimalMin},
+      {0,
+       1000,
+       -1000,
+       0,
+       DecimalUtil::kShortDecimalMax,
+       DecimalUtil::kShortDecimalMin},
+      DECIMAL(18, 0));
 }
 
 TEST_F(PrestoHasherTest, unscaledLongDecimal) {
   assertHash<int128_t>(
-      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DECIMAL(20, 5));
+      {0,
+       1000,
+       -1000,
+       HugeInt::build(0, 6223891681234568000UL),
+       HugeInt::build(9223372036854775805UL, 6898690891216455152UL),
+       std::nullopt,
+       DecimalUtil::kLongDecimalMax,
+       DecimalUtil::kLongDecimalMin},
+      {0,
+       -3317384982385163790,
+       -3317384982385163790,
+       -2440068372815350100,
+       8392582729122626937,
+       0,
+       3027397587645285649,
+       3027397587645285649},
+      DECIMAL(38, 0));
 }
 
 TEST_F(PrestoHasherTest, doubles) {
@@ -241,7 +294,7 @@ TEST_F(PrestoHasherTest, arrays) {
        {{10, 11}},
        {{12, std::nullopt}},
        std::nullopt,
-       {{}}});
+       common::testutil::optionalEmpty});
 
   assertHash(
       baseArrayVector,
@@ -268,7 +321,7 @@ TEST_F(PrestoHasherTest, arrays) {
       {{std::nullopt}},
       {{1, 2, 3}},
       {{1024, std::nullopt, -99, -999}},
-      {{}},
+      common::testutil::optionalEmpty,
       {{std::nullopt, -1}},
   });
 
@@ -310,16 +363,25 @@ TEST_F(PrestoHasherTest, maps) {
 }
 
 TEST_F(PrestoHasherTest, rows) {
-  auto row = makeRowVector(
-      {makeFlatVector<int64_t>({1, 3}), makeFlatVector<int64_t>({2, 4})});
+  auto row = makeRowVector({
+      makeFlatVector<int64_t>({1, 3}),
+      makeFlatVector<int64_t>({2, 4}),
+  });
 
   assertHash(row, {4329740752828761434, 655643799837772474});
 
-  row = makeRowVector(
-      {makeNullableFlatVector<int64_t>({1, std::nullopt}),
-       makeNullableFlatVector<int64_t>({std::nullopt, 4})});
+  row = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 4}),
+  });
 
   assertHash(row, {7113531408683827503, -1169223928725763049});
+
+  row->setNull(0, true);
+  assertHash(row, {0, -1169223928725763049});
+
+  row->setNull(1, true);
+  assertHash(row, {0, 0});
 }
 
 TEST_F(PrestoHasherTest, wrongVectorType) {
@@ -334,39 +396,30 @@ TEST_F(PrestoHasherTest, timestampWithTimezone) {
   const auto toUnixtimeWithTimeZone =
       [&](const std::vector<std::optional<std::pair<int64_t, std::string>>>&
               timestampWithTimeZones) {
-        std::vector<std::optional<int64_t>> timestamps;
-        std::vector<std::optional<int16_t>> timeZoneIds;
+        std::vector<std::optional<int64_t>> timestampWithTimeZoneVector;
         auto size = timestampWithTimeZones.size();
         BufferPtr nulls =
             AlignedBuffer::allocate<uint64_t>(bits::nwords(size), pool());
         auto rawNulls = nulls->asMutable<uint64_t>();
-        timestamps.reserve(size);
-        timeZoneIds.reserve(size);
+        timestampWithTimeZoneVector.reserve(size);
 
         for (auto i = 0; i < size; i++) {
           auto timestampWithTimeZone = timestampWithTimeZones[i];
           if (timestampWithTimeZone.has_value()) {
             auto timestamp = timestampWithTimeZone.value().first;
             auto tz = timestampWithTimeZone.value().second;
-            const int16_t tzid = util::getTimeZoneID(tz);
-            timeZoneIds.push_back(tzid);
-            timestamps.push_back(timestamp);
+            const int16_t tzid = tz::getTimeZoneID(tz);
+            auto timestampWithTimezone = pack(timestamp, tzid);
+            timestampWithTimeZoneVector.push_back(timestampWithTimezone);
             bits::clearNull(rawNulls, i);
           } else {
-            timeZoneIds.push_back(std::nullopt);
-            timestamps.push_back(std::nullopt);
+            timestampWithTimeZoneVector.push_back(std::nullopt);
             bits::setNull(rawNulls, i);
           }
         }
 
-        return std::make_shared<RowVector>(
-            pool(),
-            TIMESTAMP_WITH_TIME_ZONE(),
-            nulls,
-            size,
-            std::vector<VectorPtr>{
-                makeNullableFlatVector(timestamps),
-                makeNullableFlatVector(timeZoneIds)});
+        return makeNullableFlatVector(
+            timestampWithTimeZoneVector, TIMESTAMP_WITH_TIME_ZONE());
       };
 
   auto timestampWithTimeZones = toUnixtimeWithTimeZone(
@@ -379,4 +432,22 @@ TEST_F(PrestoHasherTest, timestampWithTimezone) {
       {-3461822077982309083, -3461822077982309083, -8497890125589769483, 0});
 }
 
+TEST_F(PrestoHasherTest, ipAddress) {
+  auto makeIpAdressFromString = [](std::string_view ipAddr) -> int128_t {
+    auto ret = ipaddress::tryGetIPv6asInt128FromString(ipAddr);
+    return ret.value();
+  };
+
+  auto ipAddresses = makeNullableFlatVector(
+      std::vector<std::optional<int128_t>>{
+          makeIpAdressFromString("2001:db8::ff00:42:8329"),
+          makeIpAdressFromString("192.168.1.1"),
+          makeIpAdressFromString("::ffff:1.2.3.4"),
+          std::nullopt},
+      IPADDRESS());
+
+  assertHash(
+      ipAddresses,
+      {-4694347089639306204, 2704428192845283049, -1632332718929005309, 0});
+}
 } // namespace facebook::velox::aggregate::test

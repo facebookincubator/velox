@@ -15,89 +15,191 @@
  */
 
 #include "HdfsReadFile.h"
-#include <folly/synchronization/CallOnce.h>
-#include <hdfs/hdfs.h>
+#include "velox/external/hdfs/ArrowHdfsInternal.h"
 
 namespace facebook::velox {
 
-HdfsReadFile::HdfsReadFile(hdfsFS hdfs, const std::string_view path)
-    : hdfsClient_(hdfs), filePath_(path) {
-  fileInfo_ = hdfsGetPathInfo(hdfsClient_, filePath_.data());
-  VELOX_CHECK_NOT_NULL(
-      fileInfo_,
-      "Unable to get file path info for file: {}. got error: {}",
-      filePath_,
-      hdfsGetLastError());
-}
+struct HdfsFile {
+  filesystems::arrow::io::internal::LibHdfsShim* driver_;
+  hdfsFS client_;
+  hdfsFile handle_;
 
-void HdfsReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
-    const {
-  checkFileReadParameters(offset, length);
-  auto file = hdfsOpenFile(hdfsClient_, filePath_.data(), O_RDONLY, 0, 0, 0);
-  VELOX_CHECK_NOT_NULL(
-      file,
-      "Unable to open file {}. got error: {}",
-      filePath_,
-      hdfsGetLastError());
-  seekToPosition(file, offset);
-  uint64_t totalBytesRead = 0;
-  while (totalBytesRead < length) {
-    auto bytesRead = hdfsRead(hdfsClient_, file, pos, length - totalBytesRead);
-    VELOX_CHECK(bytesRead >= 0, "Read failure in HDFSReadFile::preadInternal.")
-    totalBytesRead += bytesRead;
-    pos += bytesRead;
+  HdfsFile() : driver_(nullptr), client_(nullptr), handle_(nullptr) {}
+  ~HdfsFile() {
+    if (handle_ && driver_->CloseFile(client_, handle_) == -1) {
+      LOG(ERROR) << "Unable to close file, errno: " << errno;
+    }
   }
 
-  if (hdfsCloseFile(hdfsClient_, file) == -1) {
-    LOG(ERROR) << "Unable to close file, errno: " << errno;
+  void open(
+      filesystems::arrow::io::internal::LibHdfsShim* driver,
+      hdfsFS client,
+      const std::string& path) {
+    driver_ = driver;
+    client_ = client;
+    handle_ = driver->OpenFile(client, path.data(), O_RDONLY, 0, 0, 0);
+    VELOX_CHECK_NOT_NULL(
+        handle_,
+        "Unable to open file {}. got error: {}",
+        path,
+        driver_->GetLastExceptionRootCause());
   }
+
+  void seek(uint64_t offset) const {
+    VELOX_CHECK_EQ(
+        driver_->Seek(client_, handle_, offset),
+        0,
+        "Cannot seek through HDFS file, error is : {}",
+        driver_->GetLastExceptionRootCause());
+  }
+
+  int32_t read(char* pos, uint64_t length) const {
+    auto bytesRead = driver_->Read(client_, handle_, pos, length);
+    VELOX_CHECK(bytesRead >= 0, "Read failure in HDFSReadFile::preadInternal.");
+    return bytesRead;
+  }
+};
+
+class HdfsReadFile::Impl {
+ public:
+  Impl(
+      filesystems::arrow::io::internal::LibHdfsShim* driver,
+      hdfsFS hdfs,
+      const std::string_view path)
+      : driver_(driver), hdfsClient_(hdfs), filePath_(path) {
+    fileInfo_ = driver_->GetPathInfo(hdfsClient_, filePath_.data());
+    if (fileInfo_ == nullptr) {
+      auto error = fmt::format(
+          "FileNotFoundException: Path {} does not exist.", filePath_);
+      auto errMsg = fmt::format(
+          "Unable to get file path info for file: {}. got error: {}",
+          filePath_,
+          error);
+      if (error.find("FileNotFoundException") != std::string::npos) {
+        VELOX_FILE_NOT_FOUND_ERROR(errMsg);
+      }
+      VELOX_FAIL(errMsg);
+    }
+  }
+
+  ~Impl() {
+    // Should call hdfsFreeFileInfo to avoid memory leak
+    if (fileInfo_) {
+      driver_->FreeFileInfo(fileInfo_, 1);
+    }
+  }
+
+  void preadInternal(uint64_t offset, uint64_t length, char* pos) const {
+    checkFileReadParameters(offset, length);
+    if (!file_->handle_) {
+      file_->open(driver_, hdfsClient_, filePath_);
+    }
+    file_->seek(offset);
+    uint64_t totalBytesRead = 0;
+    while (totalBytesRead < length) {
+      auto bytesRead = file_->read(pos, length - totalBytesRead);
+      totalBytesRead += bytesRead;
+      pos += bytesRead;
+    }
+  }
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const FileStorageContext& fileStorageContext) const {
+    preadInternal(offset, length, static_cast<char*>(buf));
+    return {static_cast<char*>(buf), length};
+  }
+
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      const FileStorageContext& fileStorageContext) const {
+    std::string result(length, 0);
+    char* pos = result.data();
+    preadInternal(offset, length, pos);
+    return result;
+  }
+
+  uint64_t size() const {
+    return fileInfo_->mSize;
+  }
+
+  uint64_t memoryUsage() const {
+    return fileInfo_->mBlockSize;
+  }
+
+  bool shouldCoalesce() const {
+    return false;
+  }
+
+  std::string getName() const {
+    return filePath_;
+  }
+
+  void checkFileReadParameters(uint64_t offset, uint64_t length) const {
+    auto fileSize = size();
+    auto endPoint = offset + length;
+    VELOX_CHECK_GE(
+        fileSize,
+        endPoint,
+        "Cannot read HDFS file beyond its size: {}, offset: {}, end point: {}",
+        fileSize,
+        offset,
+        endPoint);
+  }
+
+ private:
+  filesystems::arrow::io::internal::LibHdfsShim* driver_;
+  hdfsFS hdfsClient_;
+  std::string filePath_;
+  hdfsFileInfo* fileInfo_;
+  folly::ThreadLocal<HdfsFile> file_;
+};
+
+HdfsReadFile::HdfsReadFile(
+    filesystems::arrow::io::internal::LibHdfsShim* driver,
+    hdfsFS hdfs,
+    const std::string_view path)
+    : pImpl(std::make_unique<Impl>(driver, hdfs, path)) {}
+
+HdfsReadFile::~HdfsReadFile() = default;
+
+std::string_view HdfsReadFile::pread(
+    uint64_t offset,
+    uint64_t length,
+    void* buf,
+    const FileStorageContext& fileStorageContext) const {
+  return pImpl->pread(offset, length, buf, fileStorageContext);
 }
 
-void HdfsReadFile::seekToPosition(hdfsFile file, uint64_t offset) const {
-  auto seekStatus = hdfsSeek(hdfsClient_, file, offset);
-  VELOX_CHECK_EQ(
-      seekStatus,
-      0,
-      "Cannot seek through HDFS file: {}, error: {}",
-      filePath_,
-      std::string(hdfsGetLastError()));
-}
-
-std::string_view
-HdfsReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
-  preadInternal(offset, length, static_cast<char*>(buf));
-  return {static_cast<char*>(buf), length};
-}
-
-std::string HdfsReadFile::pread(uint64_t offset, uint64_t length) const {
-  std::string result(length, 0);
-  char* pos = result.data();
-  preadInternal(offset, length, pos);
-  return result;
+std::string HdfsReadFile::pread(
+    uint64_t offset,
+    uint64_t length,
+    const FileStorageContext& fileStorageContext) const {
+  return pImpl->pread(offset, length, fileStorageContext);
 }
 
 uint64_t HdfsReadFile::size() const {
-  return fileInfo_->mSize;
+  return pImpl->size();
 }
 
 uint64_t HdfsReadFile::memoryUsage() const {
-  return fileInfo_->mBlockSize;
+  return pImpl->memoryUsage();
 }
 
 bool HdfsReadFile::shouldCoalesce() const {
-  return false;
+  return pImpl->shouldCoalesce();
+}
+
+std::string HdfsReadFile::getName() const {
+  return pImpl->getName();
 }
 
 void HdfsReadFile::checkFileReadParameters(uint64_t offset, uint64_t length)
     const {
-  auto fileSize = size();
-  auto endPoint = offset + length;
-  VELOX_CHECK_GE(
-      fileSize,
-      endPoint,
-      "Cannot read HDFS file beyond its size: {}, offset: {}, end point: {}",
-      fileSize,
-      offset,
-      endPoint)
+  pImpl->checkFileReadParameters(offset, length);
 }
+
 } // namespace facebook::velox

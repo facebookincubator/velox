@@ -16,8 +16,10 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include "velox/exec/VectorHasher.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
@@ -51,8 +53,13 @@ class BenchmarkBase {
         base);
   }
 
+  memory::MemoryPool* pool() {
+    return pool_.get();
+  }
+
  private:
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
   VectorMaker vectorMaker_{pool_.get()};
 };
 
@@ -65,9 +72,9 @@ void benchmarkComputeValueIds(bool withNulls) {
   auto values = base.vectorMaker().flatVector<T>(
       size,
       [](vector_size_t row) { return row % 17; },
-      withNulls ? test::VectorMaker::nullEvery(7) : nullptr);
+      withNulls ? velox::test::VectorMaker::nullEvery(7) : nullptr);
 
-  raw_vector<uint64_t> hashes(size);
+  raw_vector<uint64_t> hashes(size, base.pool());
   SelectivityVector rows(size);
   hasher.decode(*values, rows);
   hasher.computeValueIds(rows, hashes);
@@ -148,7 +155,7 @@ void benchmarkComputeValueIdsForStrings(bool flattenDictionaries) {
   uint64_t multiplier = 1;
   for (int i = 0; i < 4; i++) {
     auto hasher = hashers[i].get();
-    raw_vector<uint64_t> result(size);
+    raw_vector<uint64_t> result(size, base.pool());
     hasher->decode(*vectors[i], allRows);
     auto ok = hasher->computeValueIds(allRows, result);
     folly::doNotOptimizeAway(ok);
@@ -157,7 +164,7 @@ void benchmarkComputeValueIdsForStrings(bool flattenDictionaries) {
   }
   suspender.dismiss();
 
-  raw_vector<uint64_t> result(size);
+  raw_vector<uint64_t> result(size, base.pool());
   for (int i = 0; i < 10'000; i++) {
     for (int j = 0; j < 4; j++) {
       auto hasher = hashers[j].get();
@@ -177,8 +184,95 @@ BENCHMARK_RELATIVE(computeValueIdsFlatStrings) {
   benchmarkComputeValueIdsForStrings(true);
 }
 
+BENCHMARK(computeValueIdsLowCardinalityLargeBatchSize) {
+  folly::BenchmarkSuspender suspender;
+
+  vector_size_t cardinality = 300;
+  vector_size_t batchSize = 30'000'000;
+  BenchmarkBase base;
+
+  std::vector<std::optional<int64_t>> data(batchSize);
+  for (int i = 0; i < batchSize; i++) {
+    data[i] = i % cardinality;
+  }
+  auto values = base.vectorMaker().dictionaryVector<int64_t>(data);
+
+  for (int i = 0; i < 10; i++) {
+    raw_vector<uint64_t> hashes(batchSize, base.pool());
+    SelectivityVector rows(batchSize);
+    VectorHasher hasher(BIGINT(), 0);
+    hasher.decode(*values, rows);
+    suspender.dismiss();
+
+    bool ok = hasher.computeValueIds(rows, hashes);
+    folly::doNotOptimizeAway(ok);
+    suspender.rehire();
+  }
+}
+
+BENCHMARK(computeValueIdsLowCardinalityNotAllUsed) {
+  folly::BenchmarkSuspender suspender;
+
+  vector_size_t cardinality = 300;
+  vector_size_t batchSize = 30'000'000;
+  BenchmarkBase base;
+
+  auto data = base.vectorMaker().flatVector<int64_t>(
+      cardinality, [](vector_size_t row) { return row; });
+  BufferPtr indices = allocateIndices(batchSize, base.pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  // Assign indices such that array is reversed.
+  for (size_t i = 0; i < batchSize; ++i) {
+    rawIndices[i] = i % (cardinality - 1);
+  }
+  auto values = BaseVector::wrapInDictionary(nullptr, indices, batchSize, data);
+
+  for (int i = 0; i < 10; i++) {
+    raw_vector<uint64_t> hashes(batchSize, base.pool());
+    SelectivityVector rows(batchSize);
+    VectorHasher hasher(BIGINT(), 0);
+    hasher.decode(*values, rows);
+    suspender.dismiss();
+
+    bool ok = hasher.computeValueIds(rows, hashes);
+    folly::doNotOptimizeAway(ok);
+    suspender.rehire();
+  }
+}
+
+BENCHMARK(computeValueIdsDictionaryForFiltering) {
+  folly::BenchmarkSuspender suspender;
+
+  vector_size_t cardinality = 30'000'000;
+  vector_size_t batchSize = 300;
+  BenchmarkBase base;
+
+  auto data = base.vectorMaker().flatVector<int64_t>(
+      cardinality, [](vector_size_t row) { return row; });
+  BufferPtr indices = allocateIndices(batchSize, base.pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  // Assign indices such that array is reversed.
+  for (size_t i = 0; i < batchSize; ++i) {
+    rawIndices[i] = i * 1000;
+  }
+  auto values = BaseVector::wrapInDictionary(nullptr, indices, batchSize, data);
+
+  for (int i = 0; i < 10; i++) {
+    raw_vector<uint64_t> hashes(batchSize, base.pool());
+    SelectivityVector rows(batchSize);
+    VectorHasher hasher(BIGINT(), 0);
+    hasher.decode(*values, rows);
+    suspender.dismiss();
+
+    bool ok = hasher.computeValueIds(rows, hashes);
+    folly::doNotOptimizeAway(ok);
+    suspender.rehire();
+  }
+}
+
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   folly::runBenchmarks();
   return 0;
 }

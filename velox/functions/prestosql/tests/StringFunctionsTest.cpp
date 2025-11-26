@@ -18,6 +18,7 @@
 #include <cctype>
 #include <random>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -26,7 +27,6 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::test;
-using namespace std::string_literals;
 
 namespace {
 /// Generate an ascii random string of size length
@@ -91,13 +91,23 @@ class StringFunctionsTest : public FunctionBaseTest {
       int stringVectorIndex = 0) {
     auto row = makeRowVector(args);
     auto stringVector = args[stringVectorIndex];
-    int refCountBeforeEval =
-        bufferRefCounts(stringVector->asFlatVector<StringView>());
+    auto flatStringArg = stringVector->asFlatVector<StringView>();
+
+    int refCountBeforeEval = bufferRefCounts(flatStringArg);
     auto result = evaluate<FlatVector<StringView>>(query, row);
 
-    int refCountAfterEval =
-        bufferRefCounts(stringVector->asFlatVector<StringView>());
-    EXPECT_EQ(refCountAfterEval, 2 * refCountBeforeEval) << "at " << query;
+    int refCountAfterEval = bufferRefCounts(flatStringArg);
+
+    int numNonNullBuffersInStringArg = 0;
+    for (const auto& buf : flatStringArg->stringBuffers()) {
+      if (buf != nullptr) {
+        numNonNullBuffersInStringArg++;
+      }
+    }
+
+    EXPECT_EQ(
+        refCountAfterEval, refCountBeforeEval + numNonNullBuffersInStringArg)
+        << "at " << query;
 
     return result;
   }
@@ -301,61 +311,26 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& subString,
       int64_t instance);
 
+  int64_t levenshteinDistance(
+      const std::string& left,
+      const std::string& right);
+
+  double jaroWinklerSimilarity(
+      const std::string& left,
+      const std::string& right);
+
   using replace_input_test_t = std::vector<std::pair<
       std::tuple<std::string, std::string, std::string>,
       std::string>>;
 
   void testReplaceFlatVector(
       const replace_input_test_t& tests,
-      bool withReplaceArgument);
+      bool withReplaceArgument,
+      bool replaceFirst = false);
 
-  void testReplaceInPlace(
-      const std::vector<std::pair<std::string, std::string>>& tests,
-      const std::string& search,
-      const std::string& replace,
-      bool multiReferenced);
-
-  static std::string generateInvalidUtf8() {
-    std::string str;
-    str.resize(2);
-    // Create corrupt data below.
-    char16_t c = u'\u04FF';
-    str[0] = (char)c;
-    str[1] = (char)c;
-    return str;
-  }
-
-  // Generate complex encoding with the format:
-  // whitespace|unicode line separator|ascii|two bytes encoding|three bytes
-  // encoding|four bytes encoding|whitespace|unicode line separator
-  static std::string generateComplexUtf8(bool invalid = false) {
-    std::string str;
-    // White spaces
-    str.append(" \u2028"s);
-    if (invalid) {
-      str.append(generateInvalidUtf8());
-    }
-    // Ascii
-    str.append("hello");
-    // two bytes
-    str.append(" \u017F");
-    // three bytes
-    str.append(" \u4FE1");
-    // four bytes
-    std::string tmp;
-    tmp.resize(4);
-    tmp[0] = 0xF0;
-    tmp[1] = 0xAF;
-    tmp[2] = 0xA8;
-    tmp[3] = 0x9F;
-    str.append(" ").append(tmp);
-    if (invalid) {
-      str.append(generateInvalidUtf8());
-    }
-    // white spaces
-    str.append("\u2028 ");
-    return str;
-  }
+  using replace_first_input_test_t = std::vector<std::pair<
+      std::tuple<std::string, std::string, std::string>,
+      std::string>>;
 };
 
 /**
@@ -398,6 +373,7 @@ TEST_F(StringFunctionsTest, substrConstant) {
  */
 TEST_F(StringFunctionsTest, substrVariable) {
   std::shared_ptr<FlatVector<StringView>> result;
+  std::shared_ptr<FlatVector<StringView>> substringResult;
   vector_size_t size = 100;
   std::vector<std::string> ref_strings(size);
 
@@ -417,31 +393,132 @@ TEST_F(StringFunctionsTest, substrVariable) {
 
   auto stringVector = makeStrings(size, strings);
 
+  // Test substr function
   result = evaluateSubstr(
       "substr(c0, c1, c2)", {stringVector, startVector, lengthVector});
+
+  // Test substring alias function with the same arguments
+  substringResult = evaluateSubstr(
+      "substring(c0, c1, c2)", {stringVector, startVector, lengthVector});
+
   EXPECT_EQ(stringVector.use_count(), 1);
   // Destroying string vector
   stringVector = nullptr;
 
-  for (int i = 0; i < size; ++i) {
-    // Checking the null results
-    if (expectNullString(i) || expectNullStart(i) || expectNullLength(i)) {
-      EXPECT_TRUE(result->isNullAt(i)) << "expected null at " << i;
-    } else {
-      if (expectedStart(i) != 0) {
-        EXPECT_EQ(result->valueAt(i).size(), expectedLength(i)) << "at " << i;
-        for (int l = 0; l < expectedLength(i); l++) {
-          EXPECT_EQ(
-              result->valueAt(i).data()[l],
-              strings[i][expectedStart(i) - 1 + l])
-              << "at " << i;
+  auto validateResult =
+      [&strings](
+          const std::shared_ptr<FlatVector<StringView>>& vector,
+          const std::string& funcName) {
+        for (int i = 0; i < vector->size(); ++i) {
+          // Checking the null results
+          if (expectNullString(i) || expectNullStart(i) ||
+              expectNullLength(i)) {
+            EXPECT_TRUE(vector->isNullAt(i))
+                << "expected null at " << i << " for " << funcName;
+          } else {
+            if (expectedStart(i) != 0) {
+              EXPECT_EQ(vector->valueAt(i).size(), expectedLength(i))
+                  << "at " << i << " for " << funcName;
+              for (int l = 0; l < expectedLength(i); l++) {
+                EXPECT_EQ(
+                    vector->valueAt(i).data()[l],
+                    strings[i][expectedStart(i) - 1 + l])
+                    << "at " << i << " for " << funcName;
+              }
+            } else {
+              EXPECT_EQ(vector->valueAt(i).size(), 0)
+                  << "at " << i << " for " << funcName;
+            }
+          }
         }
-      } else {
-        // Special test for start = 0. The Presto semantic expect empty string
-        EXPECT_EQ(result->valueAt(i).size(), 0);
-      }
+      };
+
+  validateResult(result, "substr");
+  validateResult(substringResult, "substring");
+
+  for (int i = 0; i < size; ++i) {
+    if (!expectNullString(i) && !expectNullStart(i) && !expectNullLength(i)) {
+      EXPECT_EQ(
+          result->valueAt(i).getString(),
+          substringResult->valueAt(i).getString())
+          << "at " << i << ": substr and substring results should match";
     }
   }
+}
+
+TEST_F(StringFunctionsTest, substrInvalidUtf8) {
+  const auto substr = [&](std::optional<std::string> str,
+                          std::optional<int32_t> start,
+                          std::optional<int32_t> length) {
+    return evaluateOnce<std::string>("substr(c0, c1, c2)", str, start, length);
+  };
+
+  // The byte \xE7 indicates it should have 2 more bytes to be valid UTF-8, but
+  // it doesn't.
+  EXPECT_EQ(substr("abc\xE7xyz", 2, 4), "bc\xE7x");
+  // The byte \xBF is a UTF-8 continuation character, these aren't preceded by
+  // a valid prefix byte, but they should be ignored and not count towards the
+  // length of the substring or where the substring starts.
+  EXPECT_EQ(
+      substr(
+          "\xBF"
+          "\xBF"
+          "a"
+          "\xBF"
+          "\xBF"
+          "b"
+          "\xBF"
+          "\xBF"
+          "c"
+          "\xBF"
+          "\xBF"
+          "x"
+          "\xBF"
+          "\xBF"
+          "y"
+          "\xBF"
+          "\xBF"
+          "z"
+          "\xBF"
+          "\xBF",
+          2,
+          4),
+      "b"
+      "\xBF"
+      "\xBF"
+      "c"
+      "\xBF"
+      "\xBF"
+      "x"
+      "\xBF"
+      "\xBF"
+      "y"
+      "\xBF"
+      "\xBF");
+  // Check that when the substring goes to the end of the string, and the string
+  // ends with UTF-8 continuation characters, we don't go off the end of the
+  // string.
+  EXPECT_EQ(
+      substr(
+          "\xBF"
+          "\xBF"
+          "a"
+          "\xBF"
+          "\xBF"
+          "b"
+          "\xBF"
+          "\xBF"
+          "c"
+          "\xBF"
+          "\xBF",
+          2,
+          2),
+      "b"
+      "\xBF"
+      "\xBF"
+      "c"
+      "\xBF"
+      "\xBF");
 }
 
 /**
@@ -629,6 +706,54 @@ TEST_F(StringFunctionsTest, substrWithConditionalSingleBuffer) {
   }
 }
 
+TEST_F(StringFunctionsTest, substrVarbinary) {
+  auto substr = [&](const std::string& input,
+                    int64_t start,
+                    std::optional<int64_t> length = {}) {
+    if (length.has_value()) {
+      return evaluateOnce<std::string>(
+          "substr(c0, c1, c2)",
+          {VARBINARY(), BIGINT(), BIGINT()},
+          std::optional(input),
+          std::optional(start),
+          length);
+    } else {
+      return evaluateOnce<std::string>(
+          "substr(c0, c1)",
+          {VARBINARY(), BIGINT()},
+          std::optional(input),
+          std::optional(start));
+    }
+  };
+
+  EXPECT_EQ(substr("Apple", 0), "");
+  EXPECT_EQ(substr("Apple", 1), "Apple");
+  EXPECT_EQ(substr("Apple", 3), "ple");
+  EXPECT_EQ(substr("Apple", 5), "e");
+  EXPECT_EQ(substr("Apple", 100), "");
+
+  EXPECT_EQ(substr("Apple", -1), "e");
+  EXPECT_EQ(substr("Apple", -4), "pple");
+  EXPECT_EQ(substr("Apple", -5), "Apple");
+  EXPECT_EQ(substr("Apple", -100), "");
+
+  EXPECT_EQ(substr("", 0), "");
+  EXPECT_EQ(substr("", 1), "");
+  EXPECT_EQ(substr("", -1), "");
+
+  EXPECT_EQ(substr("Apple", 1, 1), "A");
+  EXPECT_EQ(substr("Apple", 2, 3), "ppl");
+  EXPECT_EQ(substr("Apple", 2, 4), "pple");
+  EXPECT_EQ(substr("Apple", 2, 10), "pple");
+
+  EXPECT_EQ(substr("Apple", -1, 1), "e");
+  EXPECT_EQ(substr("Apple", -3, 2), "pl");
+  EXPECT_EQ(substr("Apple", -3, 5), "ple");
+  EXPECT_EQ(substr("Apple", -5, 4), "Appl");
+  EXPECT_EQ(substr("Apple", -5, 10), "Apple");
+  EXPECT_EQ(substr("Apple", -6, 1), "");
+}
+
 namespace {
 std::vector<std::tuple<std::string, std::string>> getUpperAsciiTestData() {
   return {
@@ -759,7 +884,7 @@ TEST_F(StringFunctionsTest, concat) {
   size_t maxStringLength = 100;
 
   std::vector<std::vector<std::string>> inputTable;
-  for (int argsCount = 1; argsCount <= maxArgsCount; argsCount++) {
+  for (int argsCount = 2; argsCount <= maxArgsCount; argsCount++) {
     inputTable.clear();
 
     // Create table with argsCount columns
@@ -845,6 +970,43 @@ TEST_F(StringFunctionsTest, concat) {
 
     test::assertEqualVectors(expected, result);
   }
+
+  // Less than 2 concatenation arguments throws exception.
+  {
+    VELOX_ASSERT_THROW(
+        evaluateOnce<std::string>("concat('a')", {}),
+        "Scalar function signature is not supported: concat(VARCHAR).");
+  }
+}
+
+TEST_F(StringFunctionsTest, concatVarbinary) {
+  auto input = makeRowVector({
+      makeFlatVector<std::string>(
+          {
+              "apple",
+              "orange",
+              "pineapple",
+              "mixed berries",
+              "",
+              "plum",
+          },
+          VARBINARY()),
+  });
+
+  auto result =
+      evaluate("concat(c0, '_'::varbinary, c0, '_'::varbinary, c0)", input);
+  auto expected = makeFlatVector<std::string>(
+      {
+          "apple_apple_apple",
+          "orange_orange_orange",
+          "pineapple_pineapple_pineapple",
+          "mixed berries_mixed berries_mixed berries",
+          "__",
+          "plum_plum_plum",
+      },
+      VARBINARY());
+
+  test::assertEqualVectors(expected, result);
 }
 
 // Test length vector function
@@ -888,6 +1050,95 @@ TEST_F(StringFunctionsTest, length) {
   for (int i = 0; i < 10; ++i) {
     EXPECT_EQ(result->valueAt(i), 11);
   }
+}
+
+TEST_F(StringFunctionsTest, bitLength) {
+  const auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int64_t>("bit_length(c0)", std::move(arg));
+  };
+
+  // Test basic cases
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength("hello"), 40);
+
+  // Test non-ASCII characters
+  EXPECT_EQ(bitLength("hell o\u00EF"), 64);
+  EXPECT_EQ(bitLength("中123"), 48);
+
+  // Single byte characters
+  EXPECT_EQ(bitLength("a"), 8);
+  EXPECT_EQ(bitLength("ab"), 16);
+  EXPECT_EQ(bitLength("abc"), 24);
+
+  // Multi-byte UTF-8 characters
+  EXPECT_EQ(bitLength("é"), 16);
+  EXPECT_EQ(bitLength("€"), 24);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+
+  // Mixed ASCII and Unicode
+  EXPECT_EQ(bitLength("hello世界"), 88);
+
+  // Test with null input
+  EXPECT_EQ(bitLength(std::nullopt), std::nullopt);
+
+  // Test constant vectors
+  auto rows = makeRowVector({makeRowVector(
+      {makeFlatVector<int32_t>(5, [](vector_size_t row) { return row; })})});
+  auto result = evaluate<SimpleVector<int64_t>>("bit_length('test')", rows);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(result->valueAt(i), 32);
+  }
+}
+
+TEST_F(StringFunctionsTest, startsWith) {
+  auto startsWith = [&](const std::string& x, const std::string& y) {
+    return evaluateOnce<bool>(
+               "starts_with(c0, c1)", std::optional(x), std::optional(y))
+        .value();
+  };
+
+  ASSERT_TRUE(startsWith("", ""));
+  ASSERT_TRUE(startsWith("Hello world!", ""));
+  ASSERT_TRUE(startsWith("Hello world!", "Hello"));
+  ASSERT_TRUE(startsWith("Hello world!", "Hello world"));
+  ASSERT_TRUE(startsWith("Hello world!", "Hello world!"));
+
+  ASSERT_FALSE(startsWith("Hello world!", "Hello world! "));
+  ASSERT_FALSE(startsWith("Hello world!", "hello"));
+  ASSERT_FALSE(startsWith("", " "));
+}
+
+TEST_F(StringFunctionsTest, endsWith) {
+  auto endsWith = [&](const std::string& x, const std::string& y) {
+    return evaluateOnce<bool>(
+               "ends_with(c0, c1)", std::optional(x), std::optional(y))
+        .value();
+  };
+
+  ASSERT_TRUE(endsWith("", ""));
+  ASSERT_TRUE(endsWith("Hello world!", ""));
+  ASSERT_TRUE(endsWith("Hello world!", "world!"));
+  ASSERT_TRUE(endsWith("Hello world!", "lo world!"));
+  ASSERT_TRUE(endsWith("Hello world!", "Hello world!"));
+
+  ASSERT_FALSE(endsWith("Hello world!", " Hello world!"));
+  ASSERT_FALSE(endsWith("Hello world!", "hello"));
+  ASSERT_FALSE(endsWith("", " "));
+}
+
+TEST_F(StringFunctionsTest, endsWithHasNull) {
+  auto data =
+      makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+  auto rest = evaluate(fmt::format("ends_with(c0, '{}')", ""), data);
+  ASSERT_TRUE(rest->isNullAt(0));
+
+  data = makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+  rest = evaluate(fmt::format("ends_with(c0, null)"), data);
+  ASSERT_TRUE(rest->isNullAt(0));
+
+  data = makeRowVector({makeNullableFlatVector<std::string>({"hello"})});
+  rest = evaluate(fmt::format("ends_with(c0, null)"), data);
+  ASSERT_TRUE(rest->isNullAt(0));
 }
 
 // Test strpos function
@@ -1131,70 +1382,201 @@ TEST_F(StringFunctionsTest, codePoint) {
   }
 }
 
-void StringFunctionsTest::testReplaceInPlace(
-    const std::vector<std::pair<std::string, std::string>>& tests,
-    const std::string& search,
-    const std::string& replace,
-    bool multiReferenced) {
-  auto makeInput = [&]() {
-    auto stringVector = makeFlatVector<StringView>(tests.size());
+int64_t StringFunctionsTest::levenshteinDistance(
+    const std::string& left,
+    const std::string& right) {
+  return evaluateOnce<int64_t>(
+             "levenshtein_distance(c0, c1)",
+             std::optional(left),
+             std::optional(right))
+      .value();
+}
 
-    for (int i = 0; i < tests.size(); i++) {
-      stringVector->set(i, StringView(tests[i].first));
-    }
-    auto crossRefVector = makeFlatVector<StringView>(1);
+TEST_F(StringFunctionsTest, asciiLevenshteinDistance) {
+  EXPECT_EQ(levenshteinDistance("", ""), 0);
+  EXPECT_EQ(levenshteinDistance("", "hello"), 5);
+  EXPECT_EQ(levenshteinDistance("hello", ""), 5);
+  EXPECT_EQ(levenshteinDistance("hello", "hello"), 0);
+  EXPECT_EQ(levenshteinDistance("hello", "olleh"), 4);
+  EXPECT_EQ(levenshteinDistance("hello world", "hello"), 6);
+  EXPECT_EQ(levenshteinDistance("hello", "hello world"), 6);
+  EXPECT_EQ(levenshteinDistance("hello world", "hel wold"), 3);
+  EXPECT_EQ(levenshteinDistance("hello world", "hellq wodld"), 2);
+  EXPECT_EQ(levenshteinDistance("hello word", "dello world"), 2);
+  EXPECT_EQ(levenshteinDistance("  facebook  ", "  facebook  "), 0);
+  EXPECT_EQ(levenshteinDistance("hello", std::string(100000, 'h')), 99999);
+  EXPECT_EQ(levenshteinDistance(std::string(100000, 'l'), "hello"), 99998);
+  EXPECT_EQ(levenshteinDistance(std::string(1000001, 'h'), ""), 1000001);
+  EXPECT_EQ(levenshteinDistance("", std::string(1000001, 'h')), 1000001);
+}
 
-    if (multiReferenced) {
-      crossRefVector->acquireSharedStringBuffers(stringVector.get());
-    }
-    return stringVector;
+TEST_F(StringFunctionsTest, unicodeLevenshteinDistance) {
+  EXPECT_EQ(
+      levenshteinDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      levenshteinDistance("hello na\u00EFve world", "hello na:ive world"), 2);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      3);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5,love,\u5E0C\u671B"),
+      4);
+}
+
+TEST_F(StringFunctionsTest, invalidLevenshteinDistance) {
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("a\xA9ü", "hello world"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("Ψ\xFF\xFFΣΓΔA", "abc"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("ab", "AΔΓΣ\xFF\xFFΨ"),
+      "Invalid UTF-8 encoding in characters");
+
+  VELOX_ASSERT_THROW(
+      levenshteinDistance(std::string(1001, 'h'), std::string(1001, 'o')),
+      "The combined inputs size exceeded max Levenshtein distance combined input size");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance(std::string(500001, 'h'), "bec"),
+      "The combined inputs size exceeded max Levenshtein distance combined input size");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("bec", std::string(500001, 'h')),
+      "The combined inputs size exceeded max Levenshtein distance combined input size");
+}
+
+double StringFunctionsTest::jaroWinklerSimilarity(
+    const std::string& left,
+    const std::string& right) {
+  return evaluateOnce<double>(
+             "jarowinkler_similarity(c0, c1)",
+             std::optional(left),
+             std::optional(right))
+      .value();
+}
+
+TEST_F(StringFunctionsTest, asciiJaroWinklerSimilarity) {
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("", ""), 1.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRACE", "TRACE"), 1.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRATE", "TRACE"), 0.91);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRACE", "TRATE"), 0.91);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("arnab", "aranb"), 0.95);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("DwAyNE", "DuANE"), 0.84);
+
+  // Test edge cases with empty strings
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("abc", ""), 0.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("", "xyz"), 0.0);
+}
+
+TEST_F(StringFunctionsTest, unicodeJaroWinklerSimilarity) {
+  // Test for non-ASCII
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRA\u00EFE", "TRACE"), 0.91);
+  EXPECT_DOUBLE_EQ(
+      jaroWinklerSimilarity(
+          "\u4FE1\u5FF5\u7231\u00EF\u671B", "\u4FE1\u5FF5\u7231\u5E0C\u671B"),
+      0.91);
+  EXPECT_DOUBLE_EQ(
+      jaroWinklerSimilarity(
+          "\u4FE1\u00EF\u7231y\u5E0C\u671B", "\u4FE1\u5FF5\u7231\u5E0C\u671B"),
+      0.84);
+}
+
+TEST_F(StringFunctionsTest, invalidJaroWinklerSimilarity) {
+  // Test for invalid utf-8 characters
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello world", "a\xA9ü"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello world", "Ψ\xFF\xFFΣΓΔA"),
+      "Invalid UTF-8 encoding in characters");
+
+  // Test for maximum length
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity(std::string(1001, 'x'), std::string(1001, 'x')),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello", std::string(500000, 'x')),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity(std::string(500000, 'x'), "hello"),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+}
+
+TEST_F(StringFunctionsTest, longestCommonPrefix) {
+  const auto longestCommonPrefix = [&](std::optional<std::string> left,
+                                       std::optional<std::string> right) {
+    return evaluateOnce<std::string>(
+        "longest_common_prefix(c0, c1)", std::move(left), std::move(right));
   };
 
-  auto testResults = [&](const FlatVector<StringView>* results) {
-    for (int32_t i = 0; i < tests.size(); ++i) {
-      ASSERT_EQ(results->valueAt(i), StringView(tests[i].second));
-    }
-  };
+  // Test basic cases.
+  EXPECT_EQ(longestCommonPrefix("", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", "hello"), "");
+  EXPECT_EQ(longestCommonPrefix("hello", ""), "");
+  EXPECT_EQ(longestCommonPrefix("hello", "hello"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello world", "hello"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello", "hello world"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello world", "hel wold"), "hel");
+  EXPECT_EQ(longestCommonPrefix("hel wold", "hello world"), "hel");
 
-  auto result = evaluate<FlatVector<StringView>>(
-      fmt::format("replace(c0, '{}', '{}')", search, replace),
-      makeRowVector({makeInput()}));
-  testResults(result.get());
+  // Test for non-ASCII.
+  EXPECT_EQ(longestCommonPrefix("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"), "");
+  EXPECT_EQ(
+      longestCommonPrefix(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B");
+  EXPECT_EQ(
+      longestCommonPrefix(
+          "\u4FE1\u5FF5,\u7221,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      "\u4FE1\u5FF5,");
+  EXPECT_EQ(
+      longestCommonPrefix("hello na\u00EFve world", "hello na\u00EFve"),
+      "hello na\u00EFve");
 
-  // Test in place optimization. If in-place is expected, make sure it happened.
-  // If its not expected make sure it did not happen.
-  auto applyReplaceFunction = [&](std::vector<VectorPtr>& functionInputs,
-                                  VectorPtr& resultPtr) {
-    core::QueryConfig config({});
-    auto replaceFunction =
-        exec::getVectorFunction("replace", {VARCHAR(), VARCHAR()}, {}, config);
-    SelectivityVector rows(tests.size());
-    ExprSet exprSet({}, &execCtx_);
-    RowVectorPtr inputRows = makeRowVector({});
-    exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputRows.get());
-    replaceFunction->apply(rows, functionInputs, VARCHAR(), evalCtx, resultPtr);
-  };
+  // Test null cases.
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, "hello"), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix("hello", std::nullopt), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, std::nullopt), std::nullopt);
 
-  std::vector<VectorPtr> functionInputs = {
-      makeInput(),
-      makeConstant(search.c_str(), tests.size()),
-      makeConstant(replace.c_str(), tests.size())};
+  // Test different lengths.
+  EXPECT_EQ(longestCommonPrefix("a", "abcdef"), "a");
+  EXPECT_EQ(longestCommonPrefix("abcdef", "a"), "a");
 
-  VectorPtr resultPtr;
-  applyReplaceFunction(functionInputs, resultPtr);
-  testResults(resultPtr->asFlatVector<StringView>());
+  // Additional Unicode tests.
+  EXPECT_EQ(longestCommonPrefix("café", "cat"), "ca");
+  EXPECT_EQ(longestCommonPrefix("préfix", "prefix"), "pr");
+  EXPECT_EQ(longestCommonPrefix("🚀🌟", "🚀🔥"), "🚀");
+  EXPECT_EQ(longestCommonPrefix("Ψ", "Ψmore"), "Ψ");
+  EXPECT_EQ(longestCommonPrefix("hellö", "hell"), "hell");
 
-  if (!multiReferenced && search >= replace) {
-    // Expected in-place.
-    ASSERT_TRUE(resultPtr == functionInputs[0]);
-  } else {
-    ASSERT_FALSE(resultPtr == functionInputs[0]);
-  }
+  // Test for invalid UTF-8 characters.
+  VELOX_ASSERT_THROW(
+      longestCommonPrefix("hello world", "\x81"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      longestCommonPrefix("hello world", "2\x81"),
+      "Invalid UTF-8 encoding in characters");
 }
 
 void StringFunctionsTest::testReplaceFlatVector(
     const replace_input_test_t& tests,
-    bool withReplaceArgument) {
+    bool withReplaceArgument,
+    bool replaceFirst) {
   auto stringVector = makeFlatVector<StringView>(tests.size());
   auto searchVector = makeFlatVector<StringView>(tests.size());
   auto replaceVector =
@@ -1209,8 +1591,11 @@ void StringFunctionsTest::testReplaceFlatVector(
   }
 
   FlatVectorPtr<StringView> result;
-
-  if (withReplaceArgument) {
+  if (replaceFirst) {
+    result = evaluate<FlatVector<StringView>>(
+        "replace_first(c0, c1, c2)",
+        makeRowVector({stringVector, searchVector, replaceVector}));
+  } else if (withReplaceArgument) {
     result = evaluate<FlatVector<StringView>>(
         "replace(c0, c1, c2)",
         makeRowVector({stringVector, searchVector, replaceVector}));
@@ -1224,17 +1609,84 @@ void StringFunctionsTest::testReplaceFlatVector(
   }
 }
 
+TEST_F(StringFunctionsTest, replaceFirst) {
+  testReplaceFlatVector(
+      {{{"hello_world", "cannot_find_me", "test"}, {"hello_world"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"hello_world", "e", "test"}, {"htestllo_world"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"hello_world_foobar", "_", ""}, {"helloworld_foobar"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"hello_world_foobar", "_", "__"}, {"hello__world_foobar"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"Testcases test cases", "cases", ""}, {"Test test cases"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"test cases", "", "Add "}, {"Add test cases"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"", "", "not_empty"}, {"not_empty"}}}, true, /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"", "foo", "bar"}, {""}}}, true, /*replaceFirst*/ true);
+  // Test unicode
+  testReplaceFlatVector(
+      {{{"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "á", "ÀÁ"},
+        {"àÀÁâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "", "ÀÁ"},
+        {"ÀÁàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"}}},
+      true,
+      /*replaceFirst*/ true);
+  testReplaceFlatVector(
+      {{{"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "", "string"},
+        {"stringàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"}}},
+      true,
+      /*replaceFirst*/ true);
+
+  testReplaceFlatVector({{{"foobar", "oo", "tt"}, {"fttbar"}}}, true, true);
+  testReplaceFlatVector({{{"oooooo", "oo", "tt"}, {"ttoooo"}}}, true, true);
+
+  testReplaceFlatVector(
+      {{{"αβγδεζηθικλμνξοπρςστυφχψ", "θι", "ψ"}, {"αβγδεζηψκλμνξοπρςστυφχψ"}}},
+      true,
+      true);
+  testReplaceFlatVector({{{"θιбвгдежз", "θι", "ψ"}, {"ψбвгдежз"}}}, true, true);
+
+  // Test constant vectors
+  auto rows = makeRowVector(makeRowType({BIGINT()}), 10);
+  auto result = evaluate<SimpleVector<StringView>>(
+      "replace('hello_world', '_', '')", rows);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(result->valueAt(i), StringView("helloworld"));
+  }
+}
+
 TEST_F(StringFunctionsTest, replace) {
   replace_input_test_t testsThreeArgs = {
       {{"aaa", "a", "aa"}, {"aaaaaa"}},
       {{"123tech123", "123", "tech"}, {"techtechtech"}},
       {{"123tech123", "123", ""}, {"tech"}},
       {{"222tech", "2", "3"}, {"333tech"}},
+      {{"", "", "K"}, {"K"}},
+      {{"", "", ""}, {""}},
   };
 
   replace_input_test_t testsTwoArgs = {
       {{"abcdefabcdef", "cd", ""}, {"abefabef"}},
       {{"123tech123", "123", ""}, {"tech"}},
+      {{"", "K", ""}, {""}},
       {{"", "", ""}, {""}},
   };
 
@@ -1242,19 +1694,21 @@ TEST_F(StringFunctionsTest, replace) {
 
   testReplaceFlatVector(testsTwoArgs, false);
 
-  // Test in place path
-  std::vector<std::pair<std::string, std::string>> testsInplace = {
-      {"aaa", "bbb"},
-      {"aba", "bbb"},
-      {"qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertyuio",
-       "qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertyuio"},
-      {"qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertaaaa",
-       "qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertbbbb"},
-  };
+  replace_input_test_t moreTests = {
+      {{"aaa", "a", "b"}, {"bbb"}},
+      {{"aba", "a", "b"}, {"bbb"}},
+      {{"qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertyuio",
+        "a",
+        "b"},
+       {"qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertyuio"}},
+      {{"qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertaaaa",
+        "a",
+        "b"},
+       {"qwertyuiowertyuioqwertyuiopwertyuiopwertyuiopwertyuiopertyuioqwertyuiopwertyuiowertbbbb"}},
+      {{"a", "a", "bb"}, {"bb"}},
+      {{"aa", "a", "bb"}, {"bbbb"}}};
 
-  testReplaceInPlace(testsInplace, "a", "b", true);
-  testReplaceInPlace(testsInplace, "a", "b", false);
-  testReplaceInPlace({{"a", "bb"}, {"aa", "bbbb"}}, "a", "bb", false);
+  testReplaceFlatVector(moreTests, true);
 
   // Test constant vectors
   auto rows = makeRowVector(makeRowType({BIGINT()}), 10);
@@ -1265,7 +1719,7 @@ TEST_F(StringFunctionsTest, replace) {
   }
 }
 
-TEST_F(StringFunctionsTest, replaceWithReusableInputButNoInplace) {
+TEST_F(StringFunctionsTest, replaceWithReusableInput) {
   auto c0 = ({
     auto values = makeFlatVector<std::string>({"foo"});
     auto indices = allocateIndices(100, execCtx_.pool());
@@ -1287,6 +1741,62 @@ TEST_F(StringFunctionsTest, replaceWithReusableInputButNoInplace) {
   for (int i = 50; i < 100; ++i) {
     EXPECT_TRUE(result->isNullAt(i));
   }
+}
+
+TEST_F(StringFunctionsTest, replaceOverlappingStringViews) {
+  auto test = [&](const std::string& function) {
+    BufferPtr stringData = AlignedBuffer::allocate<char>(15, pool_.get());
+    memcpy(stringData->asMutable<char>(), "abcdefghijklmno", 15);
+    const char* str = stringData->as<char>();
+
+    BufferPtr values = AlignedBuffer::allocate<StringView>(3, pool_.get());
+    auto* valuesMutable = values->asMutable<StringView>();
+    // Make the strings large enough that they are not inlined.
+    // Note that only the first string contains the substring "abc", though the
+    // other two contain portions of it. This test verifies that "abc" is not
+    // replaced with "def" in the original string buffer (which would cause
+    // visible changes in the other two strings).
+    valuesMutable[0] = StringView(str, 13); // abcdefghijklm
+    valuesMutable[1] = StringView(str + 1, 13); // bcdefghijklmn
+    valuesMutable[2] = StringView(str + 2, 13); // cdefghijklmno
+
+    auto inputVector = std::make_shared<FlatVector<StringView>>(
+        pool_.get(),
+        VARCHAR(),
+        nullptr,
+        3,
+        std::move(values),
+        std::vector<BufferPtr>{std::move(stringData)});
+    const auto numRows = inputVector->size();
+
+    core::QueryConfig config({});
+    auto replaceFunction = exec::getVectorFunction(
+        function, {VARCHAR(), VARCHAR(), VARCHAR()}, {}, config);
+    SelectivityVector rows(numRows);
+    ExprSet exprSet({}, &execCtx_);
+    RowVectorPtr inputRows = makeRowVector({});
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputRows.get());
+
+    std::vector<VectorPtr> functionInputs{
+        std::move(inputVector),
+        makeConstant("abc", numRows),
+        makeConstant("def", numRows)};
+    VectorPtr resultPtr;
+    // We call apply on the VectorFunction, rather than calling evaluate to
+    // ensure that the input Vectors are unique (simulating the case where the
+    // input to replace is an intermediate result in the expression). This is to
+    // ensure we test any optimizations that attempt to reuse the input as the
+    // output or update the string buffers in place when the inputs are unique.
+    replaceFunction->apply(rows, functionInputs, VARCHAR(), evalCtx, resultPtr);
+
+    auto* results = resultPtr->as<FlatVector<StringView>>();
+    EXPECT_EQ(results->valueAt(0), "defdefghijklm");
+    EXPECT_EQ(results->valueAt(1), "bcdefghijklmn");
+    EXPECT_EQ(results->valueAt(2), "cdefghijklmno");
+  };
+
+  test("replace");
+  test("replace_first");
 }
 
 TEST_F(StringFunctionsTest, controlExprEncodingPropagation) {
@@ -1342,6 +1852,27 @@ TEST_F(StringFunctionsTest, reverse) {
   EXPECT_EQ(reverse(invalidIncompleteString), "\xa0\xed");
 }
 
+TEST_F(StringFunctionsTest, varbinaryReverse) {
+  // Reversing binary string with multi-byte unicode characters doesn't preserve
+  // the characters.
+  auto input =
+      makeFlatVector<std::string>({"hi", "", "\u4FE1 \u7231"}, VARBINARY());
+
+  // \u4FE1 character is 3 bytes: \xE4\xBF\xA1
+  // \u7231 character is 3 bytes: \xE7\x88\xB1
+  auto expected = makeFlatVector<std::string>(
+      {"ih", "", "\xB1\x88\xE7 \xA1\xBF\xE4"}, VARBINARY());
+  auto result = evaluate("reverse(c0)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+
+  // Reversing same string as varchar preserves the characters.
+  input = makeFlatVector<std::string>({"hi", "", "\u4FE1 \u7231"}, VARCHAR());
+  expected = makeFlatVector<std::string>(
+      {"ih", "", "\xE7\x88\xB1 \xE4\xBF\xA1"}, VARCHAR());
+  result = evaluate("reverse(c0)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
 TEST_F(StringFunctionsTest, toUtf8) {
   const auto toUtf8 = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("to_utf8(c0)", value);
@@ -1364,10 +1895,11 @@ TEST_F(StringFunctionsTest, toUtf8) {
   // during execution) to a vector of size 2 and passed on to to_utf8(). Here,
   // if the intermediate flat vector is created for a size > 2 then the function
   // throws.
-  EXPECT_NO_THROW(evaluateSimplified<FlatVector<bool>>(
-      "to_utf8(c0) = to_utf8('this')",
-      makeRowVector({makeNullableFlatVector<StringView>(
-          {std::nullopt, "test"_sv, std::nullopt})})));
+  EXPECT_NO_THROW(
+      evaluateSimplified<FlatVector<bool>>(
+          "to_utf8(c0) = to_utf8('this')",
+          makeRowVector({makeNullableFlatVector<StringView>(
+              {std::nullopt, "test"_sv, std::nullopt})})));
 }
 
 namespace {
@@ -1654,123 +2186,6 @@ TEST_F(StringFunctionsTest, asciiPropagationWithDisparateInput) {
   testAsciiPropagation(c1, c3, c2, all, true, "ascii_propagation_check", {});
 }
 
-TEST_F(StringFunctionsTest, trim) {
-  // Making input vector
-  std::string complexStr = generateComplexUtf8();
-  std::string expectedComplexStr = complexStr.substr(4, complexStr.size() - 8);
-
-  const auto trim = [&](std::optional<std::string> input) {
-    return evaluateOnce<std::string>("trim(c0)", input);
-  };
-
-  EXPECT_EQ("facebook", trim("  facebook  "));
-  EXPECT_EQ("facebook", trim("  facebook"));
-  EXPECT_EQ("facebook", trim("facebook  "));
-  EXPECT_EQ("facebook", trim("\n\nfacebook \n "));
-  EXPECT_EQ("", trim(" \n"));
-  EXPECT_EQ("", trim(""));
-  EXPECT_EQ("", trim("    "));
-  EXPECT_EQ("a", trim("  a  "));
-
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim(" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim("  \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim(" \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-
-  EXPECT_EQ(expectedComplexStr, trim(complexStr));
-  EXPECT_EQ(
-      "Ψ\xFF\xFFΣΓΔA", trim("\u2028 \r \t \nΨ\xFF\xFFΣΓΔA \u2028 \r \t \n"));
-}
-
-TEST_F(StringFunctionsTest, ltrim) {
-  std::string complexStr = generateComplexUtf8();
-  std::string expectedComplexStr = complexStr.substr(4, complexStr.size() - 4);
-
-  const auto ltrim = [&](std::optional<std::string> input) {
-    return evaluateOnce<std::string>("ltrim(c0)", input);
-  };
-
-  EXPECT_EQ("facebook", ltrim("facebook"));
-  EXPECT_EQ("facebook ", ltrim("  facebook "));
-  EXPECT_EQ("facebook \n", ltrim("\n\nfacebook \n"));
-  EXPECT_EQ("", ltrim("\n"));
-  EXPECT_EQ("", ltrim(" "));
-  EXPECT_EQ("", ltrim("     "));
-  EXPECT_EQ("a  ", ltrim("  a  "));
-  EXPECT_EQ("facebo ok", ltrim(" facebo ok"));
-  EXPECT_EQ("move fast", ltrim("\tmove fast"));
-  EXPECT_EQ("move fast", ltrim("\r\t move fast"));
-  EXPECT_EQ("hello", ltrim("\n\t\r hello"));
-
-  EXPECT_EQ("\u4F60\u597D", ltrim(" \u4F60\u597D"));
-  EXPECT_EQ("\u4F60\u597D ", ltrim(" \u4F60\u597D "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      ltrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B ",
-      ltrim(" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      ltrim("  \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      ltrim(" \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-
-  EXPECT_EQ(expectedComplexStr, ltrim(complexStr));
-  EXPECT_EQ("Ψ\xFF\xFFΣΓΔA", ltrim("  \u2028 \r \t \n   Ψ\xFF\xFFΣΓΔA"));
-}
-
-TEST_F(StringFunctionsTest, rtrim) {
-  std::string complexStr = generateComplexUtf8();
-  std::string expectedComplexStr = complexStr.substr(0, complexStr.size() - 4);
-
-  const auto rtrim = [&](std::optional<std::string> input) {
-    return evaluateOnce<std::string>("rtrim(c0)", input);
-  };
-
-  EXPECT_EQ("facebook", rtrim("facebook"));
-  EXPECT_EQ(" facebook", rtrim(" facebook  "));
-  EXPECT_EQ("\nfacebook", rtrim("\nfacebook \n\n"));
-  EXPECT_EQ("", rtrim(" \n"));
-  EXPECT_EQ("", rtrim(" "));
-  EXPECT_EQ("", rtrim("     "));
-  EXPECT_EQ("  a", rtrim("  a  "));
-  EXPECT_EQ("facebo ok", rtrim("facebo ok "));
-  EXPECT_EQ("move fast", rtrim("move fast\t"));
-  EXPECT_EQ("move fast", rtrim("move fast\r\t "));
-  EXPECT_EQ("hello", rtrim("hello\n\t\r "));
-
-  EXPECT_EQ(" \u4F60\u597D", rtrim(" \u4F60\u597D"));
-  EXPECT_EQ(" \u4F60\u597D", rtrim(" \u4F60\u597D "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      " \u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim(" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "));
-
-  EXPECT_EQ(expectedComplexStr, rtrim(complexStr));
-  EXPECT_EQ("     Ψ\xFF\xFFΣΓΔA", rtrim("     Ψ\xFF\xFFΣΓΔA \u2028 \r \t \n"));
-}
-
 TEST_F(StringFunctionsTest, rpad) {
   const auto rpad = [&](std::optional<std::string> string,
                         std::optional<int64_t> size,
@@ -1876,4 +2291,193 @@ TEST_F(StringFunctionsTest, concatInSwitchExpr) {
   auto expected = makeFlatVector<StringView>(
       {"This is a long sentence-zzz"_sv, "aaa-This is some other sentence"_sv});
   test::assertEqualVectors(expected, result);
+}
+
+TEST_F(StringFunctionsTest, varbinaryLength) {
+  auto vector = makeFlatVector<std::string>(
+      {"hi", "", "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u671B"}, VARBINARY());
+  auto expected = makeFlatVector<int64_t>({2, 0, 22});
+  auto result = evaluate("length(c0)", makeRowVector({vector}));
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(StringFunctionsTest, hammingDistance) {
+  const auto hammingDistance = [&](std::optional<std::string> left,
+                                   std::optional<std::string> right) {
+    return evaluateOnce<int64_t>("hamming_distance(c0, c1)", left, right);
+  };
+
+  EXPECT_EQ(hammingDistance("", ""), 0);
+  EXPECT_EQ(hammingDistance(" ", " "), 0);
+  EXPECT_EQ(hammingDistance("6", "6"), 0);
+  EXPECT_EQ(hammingDistance("z", "z"), 0);
+  EXPECT_EQ(hammingDistance("a", "b"), 1);
+  EXPECT_EQ(hammingDistance("b", "B"), 1);
+  EXPECT_EQ(hammingDistance("hello", "hello"), 0);
+  EXPECT_EQ(hammingDistance("hello", "jello"), 1);
+  EXPECT_EQ(hammingDistance("like", "hate"), 3);
+  EXPECT_EQ(hammingDistance("hello", "world"), 4);
+  EXPECT_EQ(hammingDistance("Customs", "Luptoki"), 4);
+  EXPECT_EQ(hammingDistance("This is lame", "Why to slam "), 8);
+  EXPECT_EQ(
+      hammingDistance(
+          "The quick brown fox jumps over the lazy dog",
+          "The quick green dog jumps over the grey pot"),
+      10);
+
+  EXPECT_EQ(hammingDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      hammingDistance(
+          "The quick b\u0155\u00F6wn fox jumps over the laz\uFF59 dog",
+          "The quick br\u006Fwn fox jumps over the la\u1E91y dog"),
+      4);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0001"), 0);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0002"), 1);
+  // Test equal null characters on ASCII path.
+  EXPECT_EQ(
+      hammingDistance(std::string("\u0000", 1), std::string("\u0000", 1)), 0);
+  // Test null and non-null character on ASCII path.
+  EXPECT_EQ(hammingDistance(std::string("\u0000", 1), "\u0001"), 1);
+  // Test null and non-null character on non-ASCII path.
+  EXPECT_EQ(hammingDistance(std::string("\u0000", 1), "\u7231"), 1);
+  // Test equal null characters on non-ASCII path.
+  EXPECT_EQ(
+      hammingDistance(
+          std::string("\u7231\u0000", 2), std::string("\u7231\u0000", 2)),
+      0);
+  // Test invalid UTF-8 characters.
+  EXPECT_EQ(hammingDistance("\xFF\xFF", "\xF0\x82"), 0);
+
+  VELOX_ASSERT_THROW(
+      hammingDistance("\u0000", "\u0001"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello", ""),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("", "hello"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello", "o"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("h", "hello"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello na\u00EFve world", "hello na:ive world"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      "The input strings to hamming_distance function must have the same length");
+  // Test invalid UTF-8 characters.
+  VELOX_ASSERT_THROW(
+      hammingDistance("\xFF\x82\xFF", "\xF0\x82"),
+      "The input strings to hamming_distance function must have the same length");
+}
+
+TEST_F(StringFunctionsTest, normalize) {
+  const auto normalizeWithoutForm = [&](std::optional<std::string> string) {
+    return evaluateOnce<std::string>("normalize(c0)", string);
+  };
+
+  const auto normalizeWithForm = [&](std::optional<std::string> string,
+                                     const std::string& form) {
+    return evaluateOnce<std::string>(
+        fmt::format("normalize(c0, '{}')", form), string);
+  };
+
+  EXPECT_EQ(normalizeWithoutForm(std::nullopt), std::nullopt);
+  EXPECT_EQ(normalizeWithoutForm(""), "");
+  EXPECT_EQ(normalizeWithoutForm("sch\u00f6n"), "sch\u00f6n");
+  EXPECT_EQ(normalizeWithForm(std::nullopt, "NFD"), std::nullopt);
+  EXPECT_EQ(normalizeWithForm("", "NFKC"), "");
+  EXPECT_EQ(
+      normalizeWithForm(
+          (normalizeWithForm("sch\u00f6n", "NFD"), "scho\u0308n"), "NFC"),
+      "sch\u00f6n");
+  EXPECT_EQ(
+      normalizeWithForm(
+          (normalizeWithForm("sch\u00f6n", "NFKD"), "scho\u0308n"), "NFKC"),
+      "sch\u00f6n");
+  EXPECT_EQ(
+      normalizeWithForm("Hello world from Velox!!", "NFKC"),
+      "Hello world from Velox!!");
+
+  std::string testStringOne =
+      "\u3231\u3327\u3326\u2162\u3231\u3327\u3326\u2162\u3231\u3327\u3326\u2162";
+  std::string testStringTwo =
+      "(\u682a)\u30c8\u30f3\u30c9\u30ebIII(\u682a)\u30c8\u30f3\u30c9\u30ebIII(\u682a)\u30c8\u30f3\u30c9\u30ebIII";
+  EXPECT_EQ(normalizeWithForm(testStringOne, "NFKC"), testStringTwo);
+  EXPECT_EQ(
+      normalizeWithForm((normalizeWithForm(testStringTwo, "NFC")), "NFKC"),
+      testStringTwo);
+
+  std::string testStringThree =
+      "\uff8a\uff9d\uff76\uff78\uff76\uff85\uff8a\uff9d\uff76\uff78\uff76\uff85\uff8a\uff9d\uff76\uff78\uff76\uff85\uff8a\uff9d\uff76\uff78\uff76\uff85";
+  std::string testStringFour =
+      "\u30cf\u30f3\u30ab\u30af\u30ab\u30ca\u30cf\u30f3\u30ab\u30af\u30ab\u30ca\u30cf\u30f3\u30ab\u30af\u30ab\u30ca\u30cf\u30f3\u30ab\u30af\u30ab\u30ca";
+  EXPECT_EQ(normalizeWithForm(testStringThree, "NFKC"), testStringFour);
+  EXPECT_EQ(
+      normalizeWithForm((normalizeWithForm(testStringFour, "NFD")), "NFKC"),
+      testStringFour);
+
+  // Invalid UTF-8 string
+  std::string inValidTestString = "\xEF\xBE\x8";
+  EXPECT_EQ(normalizeWithForm(inValidTestString, "NFKC"), inValidTestString);
+  VELOX_ASSERT_THROW(
+      normalizeWithForm("sch\u00f6n", "NFKE"),
+      "Normalization form must be one of [NFD, NFC, NFKD, NFKC]");
+}
+
+TEST_F(StringFunctionsTest, trail) {
+  auto trail = [&](std::optional<std::string> string,
+                   std::optional<int32_t> N) {
+    return evaluateOnce<std::string>("trail(c0, c1)", string, N);
+  };
+  // Test registered signatures
+  auto signatures = getSignatureStrings("trail");
+  ASSERT_EQ(1, signatures.size());
+  ASSERT_EQ(1, signatures.count("(varchar,integer) -> varchar"));
+
+  // Basic Test
+  EXPECT_EQ("bar", trail("foobar", 3));
+  EXPECT_EQ("foobar", trail("foobar", 7));
+  EXPECT_EQ("", trail("foobar", 0));
+  EXPECT_EQ("", trail("foobar", -1));
+
+  // Test empty
+  EXPECT_EQ("", trail("", 3));
+}
+
+TEST_F(StringFunctionsTest, xxHash64FunctionVarchar) {
+  const auto xxhash64 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t>(
+        "xxhash64_internal(c0)", VARCHAR(), std::move(value));
+  };
+
+  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
+
+  EXPECT_EQ(-1205034819632174695, xxhash64(""));
+  EXPECT_EQ(4952883123889572249, xxhash64("abc"));
+  EXPECT_EQ(-1843406881296486760, xxhash64("ABC"));
+  EXPECT_EQ(9087872763436141786, xxhash64("string to xxhash64 as param"));
+  EXPECT_EQ(6332497344822543626, xxhash64("special characters %_@"));
+  EXPECT_EQ(-3364246049109667261, xxhash64("    leading space"));
+  // Unicode characters
+  EXPECT_EQ(-7331673579364787606, xxhash64("café"));
+  // String with null bytes
+  EXPECT_EQ(160339756714205673, xxhash64("abc\\x00def"));
+  // Non-ASCII strings
+  EXPECT_EQ(8176744303664166369, xxhash64("日本語"));
 }

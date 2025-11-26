@@ -34,13 +34,19 @@ class AverageAggregate {
   using InputType = Row<T>;
 
   // Type of intermediate result vector wrapped in Row.
-  using IntermediateType =
-      Row</*sum*/ double,
-          /*count*/ int64_t>;
+  using IntermediateType = Row</*sum*/ double,
+                               /*count*/ int64_t>;
 
   // Type of output vector.
   using OutputType =
       std::conditional_t<std::is_same_v<T, float>, float, double>;
+
+  static bool toIntermediate(
+      exec::out_type<Row<double, int64_t>>& out,
+      exec::arg_type<T> in) {
+    out.copy_from(std::make_tuple(static_cast<double>(in), 1));
+    return true;
+  }
 
   struct AccumulatorType {
     double sum_;
@@ -49,7 +55,9 @@ class AverageAggregate {
     AccumulatorType() = delete;
 
     // Constructor used in initializeNewGroups().
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        AverageAggregate* /*fn*/) {
       sum_ = 0;
       count_ = 0;
     }
@@ -58,7 +66,7 @@ class AverageAggregate {
     // wrapped in InputType.
     void addInput(HashStringAllocator* /*allocator*/, exec::arg_type<T> data) {
       sum_ += data;
-      count_++;
+      count_ = checkedPlus<int64_t>(count_, 1);
     }
 
     // combine expects one parameter of exec::arg_type<IntermediateType>.
@@ -71,7 +79,7 @@ class AverageAggregate {
       VELOX_CHECK(other.at<0>().has_value());
       VELOX_CHECK(other.at<1>().has_value());
       sum_ += other.at<0>().value();
-      count_ += other.at<1>().value();
+      count_ = checkedPlus<int64_t>(count_, other.at<1>().value());
     }
 
     bool writeFinalResult(exec::out_type<OutputType>& out) {
@@ -93,18 +101,20 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(double,bigint)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(double,bigint)")
+            .argumentType(inputType)
+            .build());
   }
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("real")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("real")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("real")
+          .intermediateType("row(double,bigint)")
+          .argumentType("real")
+          .build());
 
   return exec::registerAggregateFunction(
       name,
@@ -123,21 +133,23 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
             case TypeKind::SMALLINT:
               return std::make_unique<
                   SimpleAggregateAdapter<AverageAggregate<int16_t>>>(
-                  resultType);
+                  step, argTypes, resultType);
             case TypeKind::INTEGER:
               return std::make_unique<
                   SimpleAggregateAdapter<AverageAggregate<int32_t>>>(
-                  resultType);
+                  step, argTypes, resultType);
             case TypeKind::BIGINT:
               return std::make_unique<
                   SimpleAggregateAdapter<AverageAggregate<int64_t>>>(
-                  resultType);
+                  step, argTypes, resultType);
             case TypeKind::REAL:
               return std::make_unique<
-                  SimpleAggregateAdapter<AverageAggregate<float>>>(resultType);
+                  SimpleAggregateAdapter<AverageAggregate<float>>>(
+                  step, argTypes, resultType);
             case TypeKind::DOUBLE:
               return std::make_unique<
-                  SimpleAggregateAdapter<AverageAggregate<double>>>(resultType);
+                  SimpleAggregateAdapter<AverageAggregate<double>>>(
+                  step, argTypes, resultType);
             default:
               VELOX_FAIL(
                   "Unknown input type for {} aggregation {}",
@@ -148,11 +160,13 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
           switch (resultType->kind()) {
             case TypeKind::REAL:
               return std::make_unique<
-                  SimpleAggregateAdapter<AverageAggregate<float>>>(resultType);
+                  SimpleAggregateAdapter<AverageAggregate<float>>>(
+                  step, argTypes, resultType);
             case TypeKind::DOUBLE:
             case TypeKind::ROW:
               return std::make_unique<
-                  SimpleAggregateAdapter<AverageAggregate<double>>>(resultType);
+                  SimpleAggregateAdapter<AverageAggregate<double>>>(
+                  step, argTypes, resultType);
             default:
               VELOX_FAIL(
                   "Unsupported result type for final aggregation: {}",
@@ -160,7 +174,8 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
           }
         }
       },
-      true);
+      true /*registerCompanionFunctions*/,
+      true /*overwrite*/);
 }
 
 } // namespace facebook::velox::aggregate

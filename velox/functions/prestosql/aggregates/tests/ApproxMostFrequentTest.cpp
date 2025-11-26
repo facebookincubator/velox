@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::functions::aggregate::test;
 
@@ -27,7 +27,6 @@ struct ApproxMostFrequentTest : AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   std::shared_ptr<FlatVector<int>> makeGroupKeys() {
@@ -137,7 +136,9 @@ TYPED_TEST(ApproxMostFrequentTest, emptyGroup) {
 using ApproxMostFrequentTestInt = ApproxMostFrequentTest<int>;
 
 TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
-  static_cast<memory::MemoryPoolImpl*>(pool())->testingSetCapacity(1 << 21);
+  auto rootPool = memory::memoryManager()->addRootPool(
+      "test-root", 1 << 21, exec::MemoryReclaimer::create());
+  auto leafPool = rootPool->addLeafChild("test-leaf");
   auto run = [&](int64_t buckets) {
     auto rows = makeRowVector({
         makeConstant<int64_t>(buckets, buckets),
@@ -148,7 +149,7 @@ TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
                     .values({rows})
                     .singleAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
                     .planNode();
-    return exec::test::AssertQueryBuilder(plan).copyResults(pool());
+    return exec::test::AssertQueryBuilder(plan).copyResults(leafPool.get());
   };
   ASSERT_EQ(run(10)->size(), 1);
   try {
@@ -178,6 +179,139 @@ TEST_F(ApproxMostFrequentTestStringView, stringLifeCycle) {
   });
   testReadFromFiles(
       {rows, rows}, {}, {"approx_most_frequent(3, c0, 31)"}, {expected});
+}
+
+class ApproxMostFrequentTestBoolean : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+  }
+};
+
+TEST_F(ApproxMostFrequentTestBoolean, basic) {
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 0, 1, 0, 1, 0, 1}),
+      makeFlatVector<bool>(
+          {true, false, true, true, false, false, false, false}),
+      makeConstant(true, 8),
+      makeConstant(false, 8),
+      makeAllNullFlatVector<bool>(8),
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, true, false, std::nullopt, false, false}),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<bool, int64_t>({
+          {{true, 3}, {false, 5}},
+      }),
+  });
+
+  testAggregations(
+      {input}, {}, {"approx_most_frequent(3, c1, 31)"}, {expected});
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeMapVector<bool, int64_t>({
+          {{true, 2}, {false, 2}},
+          {{true, 1}, {false, 3}},
+      }),
+  });
+
+  testAggregations(
+      {input}, {"c0"}, {"approx_most_frequent(3, c1, 31)"}, {expected});
+
+  // All 'true'.
+  expected = makeRowVector({makeMapVector<bool, int64_t>({{{true, 8}}})});
+  testAggregations(
+      {input}, {}, {"approx_most_frequent(3, c2, 31)"}, {expected});
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeMapVector<bool, int64_t>({
+          {{true, 4}},
+          {{true, 4}},
+      }),
+  });
+
+  testAggregations(
+      {input}, {"c0"}, {"approx_most_frequent(3, c2, 31)"}, {expected});
+
+  // All 'false'.
+  expected = makeRowVector({makeMapVector<bool, int64_t>({{{false, 8}}})});
+  testAggregations(
+      {input}, {}, {"approx_most_frequent(3, c3, 31)"}, {expected});
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeMapVector<bool, int64_t>({
+          {{false, 4}},
+          {{false, 4}},
+      }),
+  });
+
+  testAggregations(
+      {input}, {"c0"}, {"approx_most_frequent(3, c3, 31)"}, {expected});
+
+  // All nulls.
+  expected = makeRowVector({
+      BaseVector::createNullConstant(MAP(BOOLEAN(), BIGINT()), 1, pool()),
+  });
+  testAggregations(
+      {input}, {}, {"approx_most_frequent(3, c4, 31)"}, {expected});
+
+  // Some nulls.
+  expected = makeRowVector({
+      makeMapVector<bool, int64_t>({
+          {{true, 2}, {false, 4}},
+      }),
+  });
+
+  testAggregations(
+      {input}, {}, {"approx_most_frequent(3, c5, 31)"}, {expected});
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeMapVector<bool, int64_t>({
+          {{true, 1}, {false, 2}},
+          {{true, 1}, {false, 2}},
+      }),
+  });
+
+  testAggregations(
+      {input}, {"c0"}, {"approx_most_frequent(3, c5, 31)"}, {expected});
+}
+
+class ApproxMostFrequentTestJson : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+  }
+};
+
+TEST_F(ApproxMostFrequentTestJson, basic) {
+  // JSON strings as input
+  std::vector<std::string> jsonStrings = {
+      "{\"type\": \"store\"}",
+      "{\"type\": \"fruit\"}",
+      "{\"type\": \"fruit\"}",
+      "{\"type\": \"book\"}",
+      "{\"type\": \"store\"}",
+      "{\"type\": \"fruit\"}"};
+
+  auto inputVector = makeFlatVector<StringView>(
+      static_cast<vector_size_t>(jsonStrings.size()),
+      [&](auto row) { return StringView(jsonStrings[row]); });
+
+  MapVectorPtr expectedMap = makeMapVector<StringView, int64_t>(
+      {{{StringView("{\"type\": \"fruit\"}"), 3},
+        {StringView("{\"type\": \"store\"}"), 2}}});
+  auto expected = makeRowVector({{expectedMap}});
+
+  testAggregations(
+      {makeRowVector({inputVector})},
+      {},
+      {"approx_most_frequent(2, c0, 31)"},
+      {expected});
 }
 
 } // namespace

@@ -14,18 +14,28 @@
 include_guard(GLOBAL)
 
 set(VELOX_GTEST_VERSION 1.13.0)
-set(VELOX_GTEST_BUILD_SHA256_CHECKSUM
-    ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363)
-set(VELOX_GTEST_SOURCE_URL
-    "https://github.com/google/googletest/archive/refs/tags/v${VELOX_GTEST_VERSION}.tar.gz"
+set(
+  VELOX_GTEST_BUILD_SHA256_CHECKSUM
+  ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363
+)
+set(
+  VELOX_GTEST_SOURCE_URL
+  "https://github.com/google/googletest/archive/refs/tags/v${VELOX_GTEST_VERSION}.tar.gz"
 )
 
-resolve_dependency_url(GTEST)
+velox_resolve_dependency_url(GTEST)
 
 message(STATUS "Building gtest from source")
 FetchContent_Declare(
-  gtest
+  googletest
   URL ${VELOX_GTEST_SOURCE_URL}
-  URL_HASH ${VELOX_GTEST_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_GTEST_BUILD_SHA256_CHECKSUM}
+  OVERRIDE_FIND_PACKAGE
+  SYSTEM
+  EXCLUDE_FROM_ALL
+)
 
-FetchContent_MakeAvailable(gtest)
+FetchContent_MakeAvailable(googletest)
+
+# Mask compilation warning in clang 16.
+target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)

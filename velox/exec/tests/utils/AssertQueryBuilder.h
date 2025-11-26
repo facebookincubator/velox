@@ -35,16 +35,47 @@ class AssertQueryBuilder {
   /// Change requested number of drivers. Default is 1.
   AssertQueryBuilder& maxDrivers(int32_t maxDrivers);
 
+  /// Change the query memory pool capacity. Default has no limit
+  AssertQueryBuilder& maxQueryCapacity(int64_t maxCapacity);
+
+  /// Change task's 'destination', the partition number assigned to the task.
+  /// Default is 0.
+  AssertQueryBuilder& destination(int32_t destination);
+
+  /// Use serial execution mode to execute the Velox plan.
+  /// Default is false.
+  AssertQueryBuilder& serialExecution(bool serial);
+
+  /// Use barrier task execution mode to execute the Velox plan.
+  /// Default is false.
+  AssertQueryBuilder& barrierExecution(bool barrier);
+
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
   AssertQueryBuilder& config(const std::string& key, const std::string& value);
 
-  /// Set connector-specific configuration property. May be called multiple
-  /// times to set multiple properties for one or multiple connectors.
-  AssertQueryBuilder& connectorConfig(
+  template <typename T>
+  typename std::enable_if<std::is_arithmetic<T>::value, AssertQueryBuilder&>::
+      type
+      config(const std::string& key, const T& value) {
+    return config(key, std::to_string(value));
+  }
+
+  /// Set multiple configuration properties.
+  AssertQueryBuilder& configs(
+      const std::unordered_map<std::string, std::string>& values);
+
+  /// Set connector-specific configuration session property. May be called
+  /// multiple times to set multiple properties for one or multiple connectors.
+  AssertQueryBuilder& connectorSessionProperty(
       const std::string& connectorId,
       const std::string& key,
       const std::string& value);
+
+  AssertQueryBuilder& connectorSessionProperties(
+      const std::unordered_map<
+          std::string,
+          std::unordered_map<std::string, std::string>>& properties);
 
   // Methods to add splits.
 
@@ -86,6 +117,10 @@ class AssertQueryBuilder {
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
           connectorSplits);
 
+  /// Indicate that the splits should be added with sequence numbers to the task
+  /// when the query runs.
+  AssertQueryBuilder& addSplitWithSequence(bool addWithSequence);
+
   /// Sets the QueryCtx.
   AssertQueryBuilder& queryCtx(const std::shared_ptr<core::QueryCtx>& ctx) {
     params_.queryCtx = ctx;
@@ -99,7 +134,31 @@ class AssertQueryBuilder {
     return *this;
   }
 
-  // Methods to run the query and verify the results.
+  /// Methods to configure the group execution mode.
+  AssertQueryBuilder& executionStrategy(
+      core::ExecutionStrategy executionStrategy) {
+    params_.executionStrategy = executionStrategy;
+    return *this;
+  }
+
+  AssertQueryBuilder& numSplitGroups(int numSplitGroups) {
+    params_.numSplitGroups = numSplitGroups;
+    return *this;
+  }
+
+  AssertQueryBuilder& numConcurrentSplitGroups(
+      int32_t numConcurrentSplitGroups) {
+    params_.numConcurrentSplitGroups = numConcurrentSplitGroups;
+    return *this;
+  }
+
+  AssertQueryBuilder& groupedExecutionLeafNodeIds(
+      const std::unordered_set<core::PlanNodeId>& groupedExecutionLeafNodeIds) {
+    params_.groupedExecutionLeafNodeIds = groupedExecutionLeafNodeIds;
+    return *this;
+  }
+
+  /// Methods to run the query and verify the results.
 
   /// Run the query and verify results against DuckDB. Requires
   /// duckDbQueryRunner to be provided in the constructor.
@@ -123,23 +182,40 @@ class AssertQueryBuilder {
       const TypePtr& expectedType,
       vector_size_t expectedNumRows);
 
-  /// Run the query and collect all results into a single vector. Throws if
-  /// query returns empty result.
-  RowVectorPtr copyResults(memory::MemoryPool* FOLLY_NONNULL pool);
+  /// Run the query and collect all results into a single vector.
+  RowVectorPtr copyResults(memory::MemoryPool* pool);
+
+  /// Similar to above method and also returns the task.
+  RowVectorPtr copyResults(
+      memory::MemoryPool* pool,
+      std::shared_ptr<Task>& task);
+
+  /// Run the query and copy the result Vectors as their original batches.
+  std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
+
+  /// Run the query and return the number of result rows.
+  uint64_t runWithoutResults(std::shared_ptr<Task>& task);
 
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 
+  static std::unique_ptr<folly::Executor> newExecutor() {
+    return std::make_unique<folly::CPUThreadPoolExecutor>(
+        std::thread::hardware_concurrency());
+  }
+
   // Used by the created task as the default driver executor.
-  std::unique_ptr<folly::Executor> executor_{
-      new folly::CPUThreadPoolExecutor(std::thread::hardware_concurrency())};
-  DuckDbQueryRunner* FOLLY_NULLABLE const duckDbQueryRunner_;
+  std::unique_ptr<folly::Executor> executor_{newExecutor()};
+  DuckDbQueryRunner* const duckDbQueryRunner_;
   CursorParameters params_;
   std::unordered_map<std::string, std::string> configs_;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
-      connectorConfigs_;
+      connectorSessionProperties_;
   std::unordered_map<core::PlanNodeId, std::vector<Split>> splits_;
+  bool addSplitWithSequence_{false};
+  // The sequence Id to be used when addSplitWithSequence_ is true.
+  int32_t sequenceId_{0};
 };
 
 } // namespace facebook::velox::exec::test

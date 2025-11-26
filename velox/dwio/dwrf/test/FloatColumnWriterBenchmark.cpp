@@ -30,7 +30,7 @@ constexpr vector_size_t kVectorSize = 10000;
 vector_size_t kNumIterations = 1000;
 
 float genData(float pos) {
-  return float(pos * (float)3.14);
+  return float(pos * static_cast<float>(3.14));
 }
 
 bool isNotNull(int32_t pos, int32_t nullEvery) {
@@ -42,7 +42,7 @@ void runBenchmark(int nullEvery) {
 
   auto type = CppToType<float>::create();
   auto typeWithId = TypeWithId::create(type, 1);
-  auto pool = memory::addDefaultLeafMemoryPool();
+  auto pool = memory::memoryManager()->addLeafPool();
   VectorPtr vector;
   // Prepare input
   BufferPtr values = AlignedBuffer::allocate<float>(kVectorSize, pool.get());
@@ -75,11 +75,10 @@ void runBenchmark(int nullEvery) {
   braces.dismiss();
 
   for (auto i = 0; i < kNumIterations; i++) {
-    auto config = std::make_shared<Config>();
+    auto config = std::make_shared<dwrf::Config>();
     WriterContext context{
         config,
-        memory::defaultMemoryManager().addRootPool(
-            "FloatColumnWriterBenchmark")};
+        memory::memoryManager()->addRootPool("FloatColumnWriterBenchmark")};
     auto writer = BaseColumnWriter::create(context, *typeWithId, 0);
     writer->write(vector, common::Ranges::of(0, kVectorSize));
   }
@@ -130,7 +129,8 @@ BENCHMARK(FloatColumnWriterBenchmark10000) {
 }
 
 int32_t main(int32_t argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   folly::runBenchmarks();
   return 0;
 }

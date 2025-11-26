@@ -19,7 +19,6 @@
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
-#include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/vector/FlatVector.h"
 
@@ -28,112 +27,6 @@ namespace facebook::velox::functions {
 using namespace stringCore;
 
 namespace {
-/**
- * Upper and Lower functions have a fast path for ascii where the functions
- * can be applied in place.
- * */
-template <bool isLower /*instantiate for upper or lower*/>
-class UpperLowerTemplateFunction : public exec::VectorFunction {
- private:
-  /// String encoding wrappable function
-  template <bool isAscii>
-  struct ApplyInternal {
-    static void apply(
-        const SelectivityVector& rows,
-        const DecodedVector* decodedInput,
-        FlatVector<StringView>* results) {
-      rows.applyToSelected([&](int row) {
-        auto proxy = exec::StringWriter<>(results, row);
-        if constexpr (isLower) {
-          stringImpl::lower<isAscii>(
-              proxy, decodedInput->valueAt<StringView>(row));
-        } else {
-          stringImpl::upper<isAscii>(
-              proxy, decodedInput->valueAt<StringView>(row));
-        }
-        proxy.finalize();
-      });
-    }
-  };
-
-  void applyInternalInPlace(
-      const SelectivityVector& rows,
-      DecodedVector* decodedInput,
-      FlatVector<StringView>* results) const {
-    rows.applyToSelected([&](int row) {
-      auto proxy = exec::StringWriter<true /*reuseInput*/>(
-          results,
-          row,
-          decodedInput->valueAt<StringView>(row) /*reusedInput*/,
-          true /*inPlace*/);
-      if constexpr (isLower) {
-        stringImpl::lowerAsciiInPlace(proxy);
-      } else {
-        stringImpl::upperAsciiInPlace(proxy);
-      }
-      proxy.finalize();
-    });
-  }
-
- public:
-  bool isDefaultNullBehavior() const override {
-    return true;
-  }
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK(args.size() == 1);
-    VELOX_CHECK(args[0]->typeKind() == TypeKind::VARCHAR);
-
-    // Read content before calling prepare results
-    BaseVector* inputStringsVector = args[0].get();
-    exec::LocalDecodedVector inputHolder(context, *inputStringsVector, rows);
-    auto decodedInput = inputHolder.get();
-
-    auto ascii = isAscii(inputStringsVector, rows);
-
-    bool tryInplace = ascii &&
-        (inputStringsVector->encoding() == VectorEncoding::Simple::FLAT);
-
-    // If tryInplace, then call prepareFlatResultsVector(). If the latter
-    // returns true, note that the input arg was moved to result, so that the
-    // buffer can be reused as output.
-    if (tryInplace &&
-        prepareFlatResultsVector(result, rows, context, args.at(0))) {
-      auto* resultFlatVector = result->as<FlatVector<StringView>>();
-      applyInternalInPlace(rows, decodedInput, resultFlatVector);
-      return;
-    }
-
-    // Not in place path.
-    VectorPtr emptyVectorPtr;
-    prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
-    auto* resultFlatVector = result->as<FlatVector<StringView>>();
-
-    StringEncodingTemplateWrapper<ApplyInternal>::apply(
-        ascii, rows, decodedInput, resultFlatVector);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // varchar -> varchar
-    return {exec::FunctionSignatureBuilder()
-                .returnType("varchar")
-                .argumentType("varchar")
-                .build()};
-  }
-
-  bool ensureStringEncodingSetAtAllInputs() const override {
-    return true;
-  }
-
-  bool propagateStringEncodingFromAllInputs() const override {
-    return true;
-  }
-};
 
 /**
  * concat(string1, ..., stringN) → varchar
@@ -197,10 +90,10 @@ class ConcatFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
+      const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    context.ensureWritable(rows, VARCHAR(), result);
+    context.ensureWritable(rows, outputType, result);
     auto flatResult = result->asFlatVector<StringView>();
 
     auto numArgs = argMapping_.size();
@@ -256,13 +149,22 @@ class ConcatFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // varchar, varchar,.. -> varchar
-    return {exec::FunctionSignatureBuilder()
-                .returnType("varchar")
-                .argumentType("varchar")
-                .argumentType("varchar")
-                .variableArity()
-                .build()};
+    return {
+        // varchar, varchar,.. -> varchar
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .variableArity("varchar")
+            .build(),
+        // varbinary, varbinary,.. -> varbinary
+        exec::FunctionSignatureBuilder()
+            .returnType("varbinary")
+            .argumentType("varbinary")
+            .argumentType("varbinary")
+            .variableArity("varbinary")
+            .build(),
+    };
   }
 
   static exec::VectorFunctionMetadata metadata() {
@@ -282,7 +184,13 @@ class ConcatFunction : public exec::VectorFunction {
  * replace(string, search, replace) → varchar
  * Replaces all instances of search with replace in string.
  * If search is an empty string, inserts replace in front of every character
- *and at the end of the string.
+ * and at the end of the string.
+ *
+ * If replaceFirst=true.
+ * replace_first(string, search, replace) -> varchar
+ * Replaces the first instances of ``search`` with ``replace`` in ``string``.
+ * If search is an empty string, it inserts replace at the beginning of the
+ * string.
  **/
 class Replace : public exec::VectorFunction {
  private:
@@ -297,32 +205,22 @@ class Replace : public exec::VectorFunction {
       const SelectivityVector& rows,
       FlatVector<StringView>* results) const {
     rows.applyToSelected([&](int row) {
-      auto proxy = exec::StringWriter<>(results, row);
+      auto proxy = exec::StringWriter(results, row);
       stringImpl::replace(
-          proxy, stringReader(row), searchReader(row), replaceReader(row));
+          proxy,
+          stringReader(row),
+          searchReader(row),
+          replaceReader(row),
+          replaceFirst_);
       proxy.finalize();
     });
   }
 
-  template <
-      typename StringReader,
-      typename SearchReader,
-      typename ReplaceReader>
-  void applyInPlace(
-      StringReader stringReader,
-      SearchReader searchReader,
-      ReplaceReader replaceReader,
-      const SelectivityVector& rows,
-      FlatVector<StringView>* results) const {
-    rows.applyToSelected([&](int row) {
-      auto proxy = exec::StringWriter<true /*reuseInput*/>(
-          results, row, stringReader(row) /*reusedInput*/, true /*inPlace*/);
-      stringImpl::replaceInPlace(proxy, searchReader(row), replaceReader(row));
-      proxy.finalize();
-    });
-  }
+  const bool replaceFirst_;
 
  public:
+  explicit Replace(bool replaceFirst) : replaceFirst_(replaceFirst) {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -372,27 +270,6 @@ class Replace : public exec::VectorFunction {
       }
     };
 
-    // Right now we enable the inplace if 'search' and 'replace' are constants
-    // and 'search' size is larger than or equal to 'replace' and if the input
-    // vector is reused.
-
-    // TODO: analyze other options for enabling inplace i.e.:
-    // 1. Decide per row.
-    // 2. Scan inputs for max lengths and decide based on that. ..etc
-    bool tryInplace = replaceArgValue.has_value() &&
-        searchArgValue.has_value() &&
-        (searchArgValue.value().size() >= replaceArgValue.value().size()) &&
-        (args.at(0)->encoding() == VectorEncoding::Simple::FLAT);
-
-    if (tryInplace) {
-      if (prepareFlatResultsVector(result, rows, context, args.at(0))) {
-        auto* resultFlatVector = result->as<FlatVector<StringView>>();
-        applyInPlace(
-            stringReader, searchReader, replaceReader, rows, resultFlatVector);
-        return;
-      }
-    }
-
     // Not in place path
     VectorPtr emptyVectorPtr;
     prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
@@ -402,8 +279,17 @@ class Replace : public exec::VectorFunction {
         stringReader, searchReader, replaceReader, rows, resultFlatVector);
   }
 
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
+      bool replaceFirst) {
+    return replaceFirst ? std::vector<std::shared_ptr<exec::FunctionSignature>>{
+        // varchar, varchar, varchar -> varchar
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .build(),
+    } : std::vector<std::shared_ptr<exec::FunctionSignature>>{
         // varchar, varchar -> varchar
         exec::FunctionSignatureBuilder()
             .returnType("varchar")
@@ -431,16 +317,6 @@ class Replace : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_upper,
-    UpperLowerTemplateFunction<false /*isLower*/>::signatures(),
-    std::make_unique<UpperLowerTemplateFunction<false /*isLower*/>>());
-
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_lower,
-    UpperLowerTemplateFunction<true /*isLower*/>::signatures(),
-    std::make_unique<UpperLowerTemplateFunction<true /*isLower*/>>());
-
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
     udf_concat,
     ConcatFunction::signatures(),
@@ -452,8 +328,13 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
     });
 
 VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_replaceFirst,
+    Replace::signatures(/*replaceFirst*/ true),
+    std::make_unique<Replace>(/*replaceFirst*/ true));
+
+VELOX_DECLARE_VECTOR_FUNCTION(
     udf_replace,
-    Replace::signatures(),
-    std::make_unique<Replace>());
+    Replace::signatures(/*replaceFirst*/ false),
+    std::make_unique<Replace>(/*replaceFirst*/ false));
 
 } // namespace facebook::velox::functions

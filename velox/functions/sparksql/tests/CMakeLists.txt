@@ -15,22 +15,70 @@
 add_executable(
   velox_functions_spark_test
   ArithmeticTest.cpp
+  ArrayAppendTest.cpp
+  ArrayConcatTest.cpp
+  ArrayFlattenTest.cpp
+  ArrayGetTest.cpp
+  ArrayInsertTest.cpp
+  ArrayMaxTest.cpp
+  ArrayMinTest.cpp
+  ArrayPrependTest.cpp
   ArraySortTest.cpp
+  ArrayShuffleTest.cpp
+  ArrayUnionTest.cpp
+  ArgTypesGeneratorTest.cpp
+  AtLeastNNonNullsTest.cpp
+  Base64Test.cpp
   BitwiseTest.cpp
-  CompareNullSafeTests.cpp
+  CharTypeWriteSideCheckTest.cpp
+  ComparisonsTest.cpp
+  ConcatWsTest.cpp
   DateTimeFunctionsTest.cpp
+  DecimalArithmeticTest.cpp
+  DecimalCompareTest.cpp
+  DecimalRoundTest.cpp
+  DecimalUtilTest.cpp
   ElementAtTest.cpp
+  FactorialTest.cpp
+  FromJsonTest.cpp
+  FromToJsonRoundTripTest.cpp
+  GetArrayStructFieldsTest.cpp
+  GetJsonObjectTest.cpp
+  GetStructFieldTest.cpp
   HashTest.cpp
+  InitcapTest.cpp
   InTest.cpp
+  JsonArrayLengthTest.cpp
+  JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
+  LuhnCheckTest.cpp
+  MakeDecimalTest.cpp
+  MakeTimestampTest.cpp
+  MapConcatTest.cpp
   MapTest.cpp
+  MaskTest.cpp
   MightContainTest.cpp
+  MonotonicallyIncreasingIdTest.cpp
+  RaiseErrorTest.cpp
+  RandTest.cpp
+  ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
+  SliceTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
-  SplitFunctionsTest.cpp
+  SparkCastExprTest.cpp
+  SparkPartitionIdTest.cpp
+  SplitTest.cpp
   StringTest.cpp
-  XxHash64Test.cpp)
+  StringToMapTest.cpp
+  ToJsonTest.cpp
+  UnBase64Test.cpp
+  UnscaledValueFunctionTest.cpp
+  UpperLowerTest.cpp
+  UuidTest.cpp
+  VarcharTypeWriteSideCheckTest.cpp
+  XxHash64Test.cpp
+)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 
@@ -39,8 +87,22 @@ target_link_libraries(
   velox_functions_spark
   velox_functions_test_lib
   velox_exec_test_lib
+  velox_expression_fuzzer_test_utility
+  velox_expression_fuzzer
   fmt::fmt
-  gtest
-  gtest_main
-  gmock
-  gflags::gflags)
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
+add_executable(velox_spark_function_registry_test RegisterTest.cpp)
+
+add_test(velox_spark_function_registry_test velox_spark_function_registry_test)
+
+target_link_libraries(
+  velox_spark_function_registry_test
+  velox_expression
+  velox_functions_spark
+  GTest::gtest
+  GTest::gtest_main
+)

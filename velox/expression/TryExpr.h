@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
@@ -25,9 +26,10 @@ class TryExpr : public SpecialForm {
   /// Try expression adds nulls, hence, doesn't support flat-no-nulls fast path.
   TryExpr(TypePtr type, ExprPtr&& input)
       : SpecialForm(
+            SpecialFormKind::kTry,
             std::move(type),
             {std::move(input)},
-            "try",
+            expression::kTry,
             false /* supportsFlatNoNullsFastPath */,
             false /* trackCpuUsage */) {}
 
@@ -44,7 +46,7 @@ class TryExpr : public SpecialForm {
   void nullOutErrors(
       const SelectivityVector& rows,
       EvalCtx& context,
-      VectorPtr& result);
+      VectorPtr& result) const;
 
  private:
   // This is safe to call only after all metadata is computed for input
@@ -61,7 +63,8 @@ class TryCallToSpecialForm : public FunctionCallToSpecialForm {
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
-      bool trackCpuUsage) override;
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
 };
 
 } // namespace facebook::velox::exec

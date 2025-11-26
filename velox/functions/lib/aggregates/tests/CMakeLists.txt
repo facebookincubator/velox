@@ -12,7 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_functions_aggregates_test_lib AggregationTestBase.cpp)
+add_subdirectory(utils)
 
-target_link_libraries(velox_functions_aggregates_test_lib velox_exec_test_lib
-                      velox_vector_test_lib)
+add_executable(velox_functions_aggregates_test ValueListTest.cpp)
+
+add_test(NAME velox_functions_aggregates_test COMMAND velox_functions_aggregates_test)
+
+target_link_libraries(
+  velox_functions_aggregates_test
+  velox_functions_aggregates
+  velox_functions_test_lib
+  Folly::folly
+  GTest::gtest
+  GTest::gtest_main
+  glog::glog
+)

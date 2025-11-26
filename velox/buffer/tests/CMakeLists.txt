@@ -20,9 +20,10 @@ target_link_libraries(
   velox_memory
   velox_buffer
   velox_test_util
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   glog::glog
   gflags::gflags
-  pthread)
+  pthread
+)

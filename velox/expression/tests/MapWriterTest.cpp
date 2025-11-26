@@ -20,16 +20,18 @@
 #include <optional>
 #include <tuple>
 
-#include <velox/expression/VectorReaders.h>
-#include <velox/vector/ComplexVector.h>
-#include <velox/vector/DecodedVector.h>
-#include <velox/vector/SelectivityVector.h>
 #include "folly/container/F14Map.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SelectivityVector.h"
 namespace facebook::velox {
 namespace {
 
@@ -138,6 +140,12 @@ class MapWriterTest : public functions::test::FunctionBaseTest {
     writer.writer->setOffset(0);
     return writer;
   }
+
+ protected:
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    common::testutil::TestValue::enable();
+  }
 };
 
 TEST_F(MapWriterTest, addNull) {
@@ -199,7 +207,6 @@ TEST_F(MapWriterTest, writeThenCommitNullNestedInRow) {
 
   {
     vectorWriter.setOffset(1);
-    auto& mapWriter = vectorWriter.current().get_writer_at<0>();
     vectorWriter.commit();
   }
   vectorWriter.finish();
@@ -645,6 +652,64 @@ TEST_F(MapWriterTest, appendToKeysAndValues) {
   ASSERT_EQ(values->asFlatVector<int64_t>()->valueAt(1), 20);
 }
 
+// Make sure MapWriter correctly handles 'result' MapVector, where keys and
+// values child vectors have different sizes.
+TEST_F(MapWriterTest, differentKeyValueSizes) {
+  using out_t = Map<int32_t, int32_t>;
+  auto mapType = CppToType<out_t>::create();
+
+  // Keys vector is shorter than values vector.
+  auto result = std::make_shared<MapVector>(
+      pool(),
+      mapType,
+      nullptr, // no nulls
+      3,
+      makeIndices({0, 2, 4}), // offsets
+      makeIndices({2, 2, 2}), // sizes
+      makeFlatVector<int32_t>({0, 1, 0, 1, 0, 1}), // keys
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) // values
+  );
+
+  EXPECT_EQ(6, result->mapKeys()->size());
+  EXPECT_EQ(10, result->mapValues()->size());
+
+  {
+    // Write map at offset 0.
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result);
+    vectorWriter.setOffset(0);
+    auto& mapWriter = vectorWriter.current();
+    mapWriter.copy_from(folly::F14FastMap<int64_t, int64_t>{{1, 2}});
+
+    vectorWriter.commit();
+    vectorWriter.finish();
+  }
+
+  {
+    // Write map at offset 2.
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result);
+    vectorWriter.setOffset(2);
+    auto& mapWriter = vectorWriter.current();
+    mapWriter.copy_from(folly::F14FastMap<int64_t, int64_t>{{3, 4}});
+
+    vectorWriter.commit();
+    vectorWriter.finish();
+  }
+
+  // Verify sizes of keys and values vectors.
+  EXPECT_EQ(8, result->mapKeys()->size());
+  EXPECT_EQ(8, result->mapValues()->size());
+
+  auto expected = makeMapVector<int32_t, int32_t>({
+      {{1, 2}},
+      {{0, 2}, {1, 3}},
+      {{3, 4}},
+  });
+
+  assertEqualVectors(expected, result);
+}
+
 // Make sure copy from MapView correctly resizes children vectors.
 TEST_F(MapWriterTest, copyFromViewTypeResizedChildren) {
   using out_t = Map<int64_t, Map<int64_t, int64_t>>;
@@ -695,6 +760,118 @@ TEST_F(MapWriterTest, copyFromViewTypeResizedChildren) {
 
   ASSERT_EQ(outerValues->mapKeys()->asFlatVector<int64_t>()->size(), 6);
   ASSERT_EQ(outerValues->mapValues()->asFlatVector<int64_t>()->size(), 6);
+}
+
+// Throws an error if n is even, otherwise creates a map of maps.
+template <typename T>
+struct ThrowsErrorsFunc {
+  template <typename TOut>
+  void call(TOut& out, const int64_t& n) {
+    for (auto i = 0; i < 3; i++) {
+      auto [keyWriter, valueWriter] = out.add_item();
+      keyWriter = i + n * 3;
+      for (auto j = 0; j < 3; j++) {
+        // If commit isn't called as part of error handling, the first inner
+        // map in odd number rows will pick up the entries from the last
+        // inner map of the previous row.
+        auto [innerKeyWriter, innerValueWriter] = valueWriter.add_item();
+        innerKeyWriter.copy_from(std::string(1, 'a' + (i * 3 + j)));
+        innerValueWriter = n * 10 + i * 3 + j;
+      }
+    }
+
+    VELOX_USER_CHECK_EQ(n % 2, 1);
+  }
+};
+
+TEST_F(MapWriterTest, errorHandlingE2E) {
+  registerFunction<
+      ThrowsErrorsFunc,
+      Map<int64_t, Map<Varchar, float>>,
+      int64_t>({"throws_errors"});
+
+  auto result = evaluate(
+      "try(throws_errors(c0))",
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})}));
+
+  auto innerKeys = makeFlatVector<StringView>(
+      {"a", "b", "c", "d", "e", "f", "g", "h", "i", "a", "b", "c", "d", "e",
+       "f", "g", "h", "i", "a", "b", "c", "d", "e", "f", "g", "h", "i"});
+  auto innerValues = makeFlatVector<float>(
+      {10, 11, 12, 13, 14, 15, 16, 17, 18, 30, 31, 32, 33, 34,
+       35, 36, 37, 38, 50, 51, 52, 53, 54, 55, 56, 57, 58});
+  std::vector<vector_size_t> innerOffsets{0, 3, 6, 9, 12, 15, 18, 21, 24};
+  auto innerMaps = makeMapVector(innerOffsets, innerKeys, innerValues);
+
+  auto outerKeys = makeFlatVector<int64_t>({3, 4, 5, 9, 10, 11, 15, 16, 17});
+  std::vector<vector_size_t> outerOffsets{0, 3, 3, 6, 6, 9};
+  auto expected = makeMapVector(outerOffsets, outerKeys, innerMaps, {1, 3, 5});
+
+  assertEqualVectors(result, expected);
+}
+
+DEBUG_ONLY_TEST_F(MapWriterTest, resizeErrorHandling) {
+  // When resizing the child Vectors it's possible that an error is thrown, e.g.
+  // due to running out of memory or the Driver shutting down, ensure the Writer
+  // does not end up in an inconsistent state when this happens.
+  auto [result, vectorWriter] = makeTestWriter();
+  const auto keysVector = vectorWriter->vector().mapKeys();
+  const auto valuesVector = vectorWriter->vector().mapValues();
+
+  vectorWriter->setOffset(0);
+  auto& mapWriter = vectorWriter->current();
+  mapWriter.add_item() = std::make_tuple(100, 100);
+
+  // Simulate an error growing the Values Buffer in the key's Vector.
+  {
+    const std::string errorMessage = "Simulated failure in memory allocation";
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::FlatVector::resizeValues",
+        std::function<void(FlatVector<int64_t>*)>(
+            [&](FlatVector<int64_t>*) { VELOX_FAIL(errorMessage); }));
+    VELOX_ASSERT_THROW(mapWriter.add_item(), errorMessage);
+  }
+
+  // The child Vectors should not have been resized due to the error.
+  VELOX_CHECK_EQ(keysVector->size(), 1);
+  VELOX_CHECK_EQ(valuesVector->size(), 1);
+
+  // If we call add_item again it should resize the child Vectors to accommodate
+  // the new entry. If the MapWriter is in an invalid state it will think the
+  // children have already been resized.
+  mapWriter.add_item() = std::make_tuple(200, 200);
+  VELOX_CHECK_EQ(keysVector->size(), 2);
+  VELOX_CHECK_EQ(valuesVector->size(), 2);
+
+  // Simulate an error growing the Values Buffer in the value's Vector.
+  {
+    const std::string errorMessage = "Simulated failure in memory allocation";
+    // Fail on the second call since the first call will be for the key's
+    // Vector.
+    size_t callCount = 0;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::FlatVector::resizeValues",
+        std::function<void(FlatVector<int64_t>*)>([&](FlatVector<int64_t>*) {
+          callCount++;
+
+          if (callCount == 2) {
+            VELOX_FAIL(errorMessage);
+          }
+        }));
+    VELOX_ASSERT_THROW(mapWriter.add_item(), errorMessage);
+  }
+
+  // The key Vector should have been resized by the value Vector should not have
+  // been due to the error.
+  VELOX_CHECK_EQ(keysVector->size(), 4);
+  VELOX_CHECK_EQ(valuesVector->size(), 2);
+
+  // If we call add_item again it should resize the value Vector to accommodate
+  // the new entry. If the MapWriter is in an invalid state it will think the
+  // children have already been resized.
+  mapWriter.add_item() = std::make_tuple(300, 300);
+  VELOX_CHECK_EQ(keysVector->size(), 4);
+  VELOX_CHECK_EQ(valuesVector->size(), 4);
 }
 
 } // namespace

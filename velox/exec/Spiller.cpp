@@ -17,286 +17,147 @@
 #include "velox/exec/Spiller.h"
 #include <folly/ScopeGuard.h>
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/PrefixSort.h"
+#include "velox/external/timsort/TimSort.hpp"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-namespace {
-constexpr int32_t kLogEveryN = 32;
-}
 
-Spiller::Spiller(
-    Type type,
+SpillerBase::SpillerBase(
     RowContainer* container,
-    RowContainer::Eraser eraser,
-    RowTypePtr rowType,
-    int32_t numSortingKeys,
-    const std::vector<CompareFlags>& sortCompareFlags,
-    const std::string& path,
-    uint64_t targetFileSize,
-    uint64_t minSpillRunSize,
-    memory::MemoryPool& pool,
-    folly::Executor* executor)
-    : Spiller(
-          type,
-          container,
-          eraser,
-          std::move(rowType),
-          HashBitRange{},
-          numSortingKeys,
-          sortCompareFlags,
-          path,
-          targetFileSize,
-          minSpillRunSize,
-          pool,
-          executor) {
-  VELOX_CHECK_EQ(type_, Type::kOrderBy);
-}
-
-Spiller::Spiller(
-    Type type,
     RowTypePtr rowType,
     HashBitRange bits,
-    const std::string& path,
+    const std::vector<SpillSortKey>& sortingKeys,
     uint64_t targetFileSize,
-    uint64_t minSpillRunSize,
-    memory::MemoryPool& pool,
-    folly::Executor* FOLLY_NULLABLE executor)
-    : Spiller(
-          type,
-          nullptr,
-          nullptr,
-          std::move(rowType),
-          bits,
-          0,
-          {},
-          path,
-          targetFileSize,
-          minSpillRunSize,
-          pool,
-          executor) {
-  VELOX_CHECK_EQ(type_, Type::kHashJoinProbe);
-}
-
-Spiller::Spiller(
-    Type type,
-    RowContainer* container,
-    RowContainer::Eraser eraser,
-    RowTypePtr rowType,
-    HashBitRange bits,
-    int32_t numSortingKeys,
-    const std::vector<CompareFlags>& sortCompareFlags,
-    const std::string& path,
-    uint64_t targetFileSize,
-    uint64_t minSpillRunSize,
-    memory::MemoryPool& pool,
-    folly::Executor* executor)
-    : type_(type),
-      container_(container),
-      eraser_(eraser),
+    uint64_t maxSpillRunRows,
+    std::optional<SpillPartitionId> parentId,
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats)
+    : container_(container),
+      executor_(spillConfig->executor),
       bits_(bits),
-      rowType_(std::move(rowType)),
-      minSpillRunSize_(minSpillRunSize),
+      rowType_(rowType),
+      maxSpillRunRows_(maxSpillRunRows),
+      parentId_(parentId),
+      spillStats_(spillStats),
+      compareFlags_([&sortingKeys]() {
+        std::vector<CompareFlags> compareFlags;
+        compareFlags.reserve(sortingKeys.size());
+        for (const auto& [_, flags] : sortingKeys) {
+          compareFlags.push_back(flags);
+        }
+        return compareFlags;
+      }()),
       state_(
-          path,
-          bits.numPartitions(),
-          numSortingKeys,
-          sortCompareFlags,
+          spillConfig->getSpillDirPathCb,
+          spillConfig->updateAndCheckSpillLimitCb,
+          spillConfig->fileNamePrefix,
+          sortingKeys,
           targetFileSize,
-          pool),
-      pool_(pool),
-      executor_(executor) {
-  TestValue::adjust(
-      "facebook::velox::exec::Spiller", const_cast<HashBitRange*>(&bits_));
-
-  VELOX_CHECK_EQ(container_ == nullptr, type_ == Type::kHashJoinProbe);
-  // kOrderBy spiller type must only have one partition.
-  VELOX_CHECK((type_ != Type::kOrderBy) || (state_.maxPartitions() == 1));
-  spillRuns_.reserve(state_.maxPartitions());
-  for (int i = 0; i < state_.maxPartitions(); ++i) {
-    spillRuns_.emplace_back(pool_);
-  }
+          spillConfig->writeBufferSize,
+          spillConfig->compressionKind,
+          spillConfig->prefixSortConfig,
+          memory::spillMemoryPool(),
+          spillStats,
+          spillConfig->fileCreateConfig) {
+  TestValue::adjust("facebook::velox::exec::SpillerBase", this);
 }
 
-void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
-  if (!resultPtr) {
-    resultPtr =
-        BaseVector::create<RowVector>(rowType_, rows.size(), &spillPool());
-  } else {
-    resultPtr->prepareForReuse();
-    resultPtr->resize(rows.size());
-  }
-  auto result = resultPtr.get();
-  auto& types = container_->columnTypes();
-  for (auto i = 0; i < types.size(); ++i) {
-    container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
+void SpillerBase::spill(const RowContainerIterator* startRowIter) {
+  VELOX_CHECK(!finalized_);
+
+  RowContainerIterator rowIter;
+  if (startRowIter != nullptr) {
+    rowIter = *startRowIter;
   }
 
-  auto& accumulators = container_->accumulators();
+  bool lastRun{false};
+  do {
+    lastRun = fillSpillRuns(&rowIter);
+    runSpill(lastRun);
+  } while (!lastRun);
 
-  auto numKeys = types.size();
-  for (auto i = 0; i < accumulators.size(); ++i) {
-    accumulators[i].aggregateForSpill()->extractAccumulators(
-        rows.data(), rows.size(), &result->childAt(i + numKeys));
-  }
+  checkEmptySpillRuns();
 }
 
-int64_t Spiller::extractSpillVector(
-    SpillRows& rows,
-    int32_t maxRows,
-    int64_t maxBytes,
-    RowVectorPtr& spillVector,
-    size_t& nextBatchIndex) {
-  VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
+bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
+  checkEmptySpillRuns();
 
-  auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
-  assert(!rows.empty());
-  int32_t numRows = 0;
-  int64_t bytes = 0;
-  for (; numRows < limit; ++numRows) {
-    bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
-    if (bytes > maxBytes) {
-      // Increment because the row that went over the limit is part
-      // of the result. We must spill at least one row.
-      ++numRows;
-      break;
-    }
-  }
-  extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
-  nextBatchIndex += numRows;
-  return bytes;
-}
+  bool lastRun{false};
+  uint64_t execTimeNs{0};
+  {
+    NanosecondTimer timer(&execTimeNs);
 
-namespace {
-// A stream of ordered rows being read from the in memory
-// container. This is the part of a spillable range that is not yet
-// spilled when starting to produce output. This is only used for
-// sorted spills since for hash join spilling we just use the data in
-// the RowContainer as is.
-class RowContainerSpillMergeStream : public SpillMergeStream {
- public:
-  RowContainerSpillMergeStream(
-      int32_t numSortingKeys,
-      const std::vector<CompareFlags>& sortCompareFlags,
-      Spiller::SpillRows&& rows,
-      Spiller& spiller)
-      : numSortingKeys_(numSortingKeys),
-        sortCompareFlags_(sortCompareFlags),
-        rows_(std::move(rows)),
-        spiller_(spiller) {
-    if (!rows_.empty()) {
-      nextBatch();
-    }
-  }
+    // Number of rows to hash and divide into spill partitions at a time.
+    constexpr int32_t kHashBatchSize = 4096;
+    std::vector<uint64_t> hashes(kHashBatchSize);
+    std::vector<char*> rows(kHashBatchSize);
+    const bool isSinglePartition = bits_.numPartitions() == 1;
 
- private:
-  int32_t numSortingKeys() const override {
-    return numSortingKeys_;
-  }
+    uint64_t totalRows{0};
+    for (;;) {
+      const auto numRows = container_->listRows(
+          iterator, rows.size(), RowContainer::kUnlimited, rows.data());
+      if (numRows == 0) {
+        lastRun = true;
+        break;
+      }
 
-  const std::vector<CompareFlags>& sortCompareFlags() const override {
-    return sortCompareFlags_;
-  }
+      // Calculate hashes for this batch of spill candidates.
+      auto rowSet = folly::Range<char**>(rows.data(), numRows);
 
-  void nextBatch() override {
-    // Extracts up to 64 rows at a time. Small batch size because may
-    // have wide data and no advantage in large size for narrow data
-    // since this is all processed row by row.
-    static constexpr vector_size_t kMaxRows = 64;
-    constexpr uint64_t kMaxBytes = 1 << 18;
-    if (nextBatchIndex_ >= rows_.size()) {
-      index_ = 0;
-      size_ = 0;
-      return;
-    }
-    spiller_.extractSpillVector(
-        rows_, kMaxRows, kMaxBytes, rowVector_, nextBatchIndex_);
-    size_ = rowVector_->size();
-    index_ = 0;
-  }
+      if (!isSinglePartition) {
+        for (auto i = 0; i < container_->keyTypes().size(); ++i) {
+          container_->hash(i, rowSet, i > 0, hashes.data());
+        }
+      }
 
-  const int32_t numSortingKeys_;
-  const std::vector<CompareFlags> sortCompareFlags_;
+      // Put each in its run.
+      for (auto i = 0; i < numRows; ++i) {
+        // TODO: consider to cache the hash bits in row container so we only
+        // need to calculate them once.
+        const auto partitionNum =
+            isSinglePartition ? 0 : bits_.partition(hashes[i]);
+        VELOX_DCHECK_GE(partitionNum, 0);
+        // TODO: Fully integrate nested spill id into spiller partitioning,
+        // replacing integer based partitioning.
+        auto& spillRun = createOrGetSpillRun(SpillPartitionId(partitionNum));
+        spillRun.rows.push_back(rows[i]);
+        spillRun.numBytes += container_->rowSize(rows[i]);
+      }
 
-  Spiller::SpillRows rows_;
-  Spiller& spiller_;
-  size_t nextBatchIndex_ = 0;
-};
-} // namespace
-
-std::unique_ptr<SpillMergeStream> Spiller::spillMergeStreamOverRows(
-    int32_t partition) {
-  VELOX_CHECK(spillFinalized_);
-  VELOX_CHECK_LT(partition, state_.maxPartitions());
-
-  if (!state_.isPartitionSpilled(partition)) {
-    return nullptr;
-  }
-  ensureSorted(spillRuns_[partition]);
-  return std::make_unique<RowContainerSpillMergeStream>(
-      container_->keyTypes().size(),
-      state_.sortCompareFlags(),
-      std::move(spillRuns_[partition].rows),
-      *this);
-}
-
-void Spiller::ensureSorted(SpillRun& run) {
-  // The spill data of a hash join doesn't need to be sorted.
-  if (!run.sorted && needSort()) {
-    std::sort(
-        run.rows.begin(),
-        run.rows.end(),
-        [&](const char* left, const char* right) {
-          return container_->compareRows(
-                     left, right, state_.sortCompareFlags()) < 0;
-        });
-    run.sorted = true;
-  }
-}
-
-std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
-  VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
-  VELOX_CHECK_EQ(pendingSpillPartitions_.count(partition), 1);
-  // Target size of a single vector of spilled content. One of
-  // these will be materialized at a time for each stream of the
-  // merge.
-  constexpr int32_t kTargetBatchBytes = 1 << 18; // 256K
-  constexpr int32_t kTargetBatchRows = 64;
-
-  RowVectorPtr spillVector;
-  auto& run = spillRuns_[partition];
-  try {
-    ensureSorted(run);
-    int64_t totalBytes = 0;
-    size_t written = 0;
-    while (written < run.rows.size()) {
-      totalBytes += extractSpillVector(
-          run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
-      state_.appendToPartition(partition, spillVector);
-      if (totalBytes > state_.targetFileSize()) {
+      totalRows += numRows;
+      if (maxSpillRunRows_ > 0 && totalRows >= maxSpillRunRows_) {
         break;
       }
     }
-    return std::make_unique<SpillStatus>(partition, written, nullptr);
-  } catch (const std::exception& e) {
-    // The exception is passed to the caller thread which checks this in
-    // advanceSpill().
-    return std::make_unique<SpillStatus>(
-        partition, 0, std::current_exception());
+    markSeenPartitionsSpilled();
   }
+  updateSpillFillTime(execTimeNs);
+  return lastRun;
 }
 
-void Spiller::advanceSpill() {
+void SpillerBase::runSpill(bool lastRun) {
+  ++spillStats_->wlock()->spillRuns;
+
   std::vector<std::shared_ptr<AsyncSource<SpillStatus>>> writes;
-  for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
-    if (pendingSpillPartitions_.count(partition) == 0) {
+  for (const auto& [id, spillRun] : spillRuns_) {
+    VELOX_CHECK(
+        state_.isPartitionSpilled(id),
+        "Partition {} is not marked as spilled",
+        id.toString());
+    if (spillRun.rows.empty()) {
       continue;
     }
-    writes.push_back(std::make_shared<AsyncSource<SpillStatus>>(
-        [partition, this]() { return writeSpill(partition); }));
-    if (executor_) {
+    writes.push_back(
+        memory::createAsyncMemoryReclaimTask<SpillStatus>(
+            [partitionId = id, this]() { return writeSpill(partitionId); }));
+    if ((writes.size() > 1) && executor_ != nullptr) {
       executor_->add([source = writes.back()]() { source->prepare(); });
     }
   }
@@ -307,7 +168,7 @@ void Spiller::advanceSpill() {
       // already captured before this runs.
       try {
         write->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });
@@ -318,349 +179,305 @@ void Spiller::advanceSpill() {
     results.push_back(write->move());
   }
   for (auto& result : results) {
-    if (result->error) {
+    if (result->error != nullptr) {
       std::rethrow_exception(result->error);
     }
-    auto numWritten = result->rowsWritten;
-    spilledRows_ += numWritten;
-    auto partition = result->partition;
-    auto& run = spillRuns_[partition];
-    auto spilled = folly::Range<char**>(run.rows.data(), numWritten);
-    eraser_(spilled);
-    if (!container_->numRows()) {
-      // If the container became empty, free its memory.
-      container_->clear();
-    }
-    run.rows.erase(run.rows.begin(), run.rows.begin() + numWritten);
-    if (run.rows.empty()) {
-      // Run ends, start with a new file next time.
-      run.clear();
-      if (needSort()) {
-        state_.finishWrite(partition);
-      }
-      pendingSpillPartitions_.erase(partition);
+    const auto numWritten = result->rowsWritten;
+    auto partitionId = result->partitionId;
+    auto& run = spillRuns_.at(partitionId);
+    VELOX_CHECK_EQ(numWritten, run.rows.size());
+    run.clear();
+    // When a sorted run ends, we start with a new file next time.
+    if (needSort()) {
+      state_.finishFile(partitionId);
     }
   }
 }
 
-bool Spiller::needSort() const {
-  return type_ != Type::kHashJoinProbe && type_ != Type::kHashJoinBuild;
+std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
+    const SpillPartitionId& id) {
+  // Target size of a single vector of spilled content. One of
+  // these will be materialized at a time for each stream of the
+  // merge.
+  constexpr int32_t kTargetBatchBytes = 1 << 18; // 256K
+  constexpr int32_t kTargetBatchRows = 64;
+
+  RowVectorPtr spillVector;
+  auto& run = spillRuns_.at(id);
+  try {
+    ensureSorted(run);
+    size_t written = 0;
+    while (written < run.rows.size()) {
+      extractSpillVector(
+          run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
+      state_.appendToPartition(id, spillVector);
+    }
+    return std::make_unique<SpillStatus>(id, written, nullptr);
+  } catch (const std::exception&) {
+    // The exception is passed to the caller thread which checks this in
+    // advanceSpill().
+    return std::make_unique<SpillStatus>(id, 0, std::current_exception());
+  }
 }
 
-void Spiller::spill(uint64_t targetRows, uint64_t targetBytes) {
-  VELOX_CHECK(!spillFinalized_);
-
-  if (type_ == Type::kHashJoinBuild || type_ == Type::kHashJoinProbe) {
-    VELOX_FAIL("Don't support incremental spill on type: {}", typeName(type_));
+void SpillerBase::ensureSorted(SpillRun& run) {
+  // The spill data of a hash join doesn't need to be sorted.
+  if (run.sorted || !needSort()) {
+    return;
   }
 
-  bool hasFilledRuns = false;
-  for (;;) {
-    auto rowsLeft = container_->numRows();
-    auto spaceLeft = container_->stringAllocator().retainedSize() -
-        container_->stringAllocator().freeSpace();
-    if (rowsLeft == 0 || (rowsLeft <= targetRows && spaceLeft <= targetBytes)) {
-      break;
-    }
-    if (!pendingSpillPartitions_.empty()) {
-      advanceSpill();
-      // Check if we have released sufficient memory after spilling.
-      continue;
+  uint64_t sortTimeNs{0};
+  {
+    NanosecondTimer timer(&sortTimeNs);
+
+    if (!state_.prefixSortConfig().has_value()) {
+      gfx::timsort(
+          run.rows.begin(),
+          run.rows.end(),
+          [&](const char* left, const char* right) {
+            return container_->compareRows(left, right, compareFlags_) < 0;
+          });
+    } else {
+      PrefixSort::sort(
+          container_,
+          compareFlags_,
+          state_.prefixSortConfig().value(),
+          memory::spillMemoryPool(),
+          run.rows);
     }
 
-    // Fill the spill runs once per each spill run.
-    //
-    // NOTE: there might be some leftover from previous spill run so that we
-    // finish spilling them first.
-    if (!hasFilledRuns) {
-      fillSpillRuns();
-      hasFilledRuns = true;
-    }
+    run.sorted = true;
+  }
 
-    while (rowsLeft > 0 && (rowsLeft > targetRows || spaceLeft > targetBytes)) {
-      const int32_t partition = pickNextPartitionToSpill();
-      if (partition == -1) {
-        VELOX_FAIL(
-            "No partition has spillable data but still doesn't reach the spill target, target rows {}, target bytes {}, rows left {}, bytes left {}",
-            targetRows,
-            targetBytes,
-            rowsLeft,
-            spaceLeft);
+  // NOTE: Always set a non-zero sort time to avoid flakiness in tests which
+  // check sort time.
+  updateSpillSortTime(std::max<uint64_t>(1, sortTimeNs));
+}
+
+int64_t SpillerBase::extractSpillVector(
+    SpillRows& rows,
+    int32_t maxRows,
+    int64_t maxBytes,
+    RowVectorPtr& spillVector,
+    size_t& nextBatchIndex) {
+  uint64_t extractNs{0};
+  auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
+  VELOX_CHECK(!rows.empty());
+  int32_t numRows = 0;
+  int64_t bytes = 0;
+  {
+    NanosecondTimer timer(&extractNs);
+    for (; numRows < limit; ++numRows) {
+      bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
+      if (bytes > maxBytes) {
+        // Increment because the row that went over the limit is part
+        // of the result. We must spill at least one row.
+        ++numRows;
         break;
       }
-      if (!state_.isPartitionSpilled(partition)) {
-        state_.setPartitionSpilled(partition);
-      }
-      VELOX_DCHECK_EQ(pendingSpillPartitions_.count(partition), 0);
-      pendingSpillPartitions_.insert(partition);
-      rowsLeft =
-          std::max<int64_t>(0, rowsLeft - spillRuns_[partition].rows.size());
-      spaceLeft =
-          std::max<int64_t>(0, spaceLeft - spillRuns_[partition].numBytes);
     }
-    // Quit this spill run if we have spilled all the partitions.
-    if (pendingSpillPartitions_.empty()) {
-      LOG_EVERY_N(WARNING, kLogEveryN)
-          << spaceLeft << " bytes and " << rowsLeft
-          << " rows left after spilled all partitions, spiller: " << toString();
-      break;
-    }
+    extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
+    nextBatchIndex += numRows;
   }
-
-  // Clear the non-spilling runs on exit.
-  clearNonSpillingRuns();
+  updateSpillExtractVectorTime(extractNs);
+  return bytes;
 }
 
-void Spiller::spill(const SpillPartitionNumSet& partitions) {
-  VELOX_CHECK(!spillFinalized_);
-  if (type_ == Type::kHashJoinProbe) {
-    VELOX_FAIL("There is no row container for {}", typeName(type_));
-  }
-  if (!pendingSpillPartitions_.empty()) {
-    VELOX_FAIL(
-        "There are pending spilling operations on partitions: {}",
-        folly::join(",", pendingSpillPartitions_));
-  }
-
-  std::vector<uint32_t> partitionsToSpill(partitions.begin(), partitions.end());
-  if (partitionsToSpill.empty()) {
-    partitionsToSpill.resize(state_.maxPartitions());
-    std::iota(partitionsToSpill.begin(), partitionsToSpill.end(), 0);
+void SpillerBase::extractSpill(
+    folly::Range<char**> rows,
+    RowVectorPtr& resultPtr) {
+  if (resultPtr == nullptr) {
+    resultPtr = BaseVector::create<RowVector>(
+        rowType_, rows.size(), memory::spillMemoryPool());
+  } else {
+    resultPtr->prepareForReuse();
+    resultPtr->resize(rows.size());
   }
 
-  for (auto partition : partitionsToSpill) {
-    if (!state_.isPartitionSpilled(partition)) {
-      state_.setPartitionSpilled(partition);
-      if (!spillRuns_[partition].rows.empty()) {
-        pendingSpillPartitions_.insert(partition);
-      }
-    }
+  auto* result = resultPtr.get();
+  const auto& types = container_->columnTypes();
+  for (auto i = 0; i < types.size(); ++i) {
+    container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
   }
-
-  while (!pendingSpillPartitions_.empty()) {
-    advanceSpill();
+  const auto& accumulators = container_->accumulators();
+  column_index_t accumulatorColumnOffset = types.size();
+  for (auto i = 0; i < accumulators.size(); ++i) {
+    accumulators[i].extractForSpill(
+        rows, result->childAt(i + accumulatorColumnOffset));
   }
 }
 
-void Spiller::spill(uint32_t partition, const RowVectorPtr& spillVector) {
-  VELOX_CHECK(!spillFinalized_);
+void SpillerBase::updateSpillExtractVectorTime(uint64_t timeNs) {
+  spillStats_->wlock()->spillExtractVectorTimeNanos += timeNs;
+  common::updateGlobalSpillExtractVectorTime(timeNs);
+}
 
-  if (FOLLY_UNLIKELY(needSort())) {
-    VELOX_FAIL(
-        "Do not support to spill vector for sorted spiller: {}", toString());
-  }
-  if (FOLLY_UNLIKELY(!state_.isPartitionSpilled(partition))) {
-    VELOX_FAIL(
-        "Can't spill vector to a non-spilling partition: {}, {}",
-        partition,
-        toString());
-  }
-  VELOX_DCHECK(spillRuns_[partition].rows.empty());
+void SpillerBase::updateSpillSortTime(uint64_t timeNs) {
+  spillStats_->wlock()->spillSortTimeNanos += timeNs;
+  common::updateGlobalSpillSortTime(timeNs);
+}
 
+void SpillerBase::checkEmptySpillRuns() const {
+  if (spillRuns_.empty()) {
+    return;
+  }
+  for (const auto& [partitionId, spillRun] : spillRuns_) {
+    VELOX_CHECK(spillRun.rows.empty());
+  }
+}
+
+void SpillerBase::updateSpillFillTime(uint64_t timeNs) {
+  spillStats_->wlock()->spillFillTimeNanos += timeNs;
+  common::updateGlobalSpillFillTime(timeNs);
+}
+
+void SpillerBase::finishSpill(SpillPartitionSet& partitionSet) {
+  finalizeSpill();
+
+  for (const auto& partitionId : state_.spilledPartitionIdSet()) {
+    auto wholePartitionId = partitionId;
+    if (parentId_.has_value()) {
+      // TODO: Fully integrate nested spill id into spiller partitioning,
+      // replacing integer based partitioning.
+      wholePartitionId =
+          SpillPartitionId(parentId_.value(), partitionId.partitionNumber());
+    }
+    if (partitionSet.count(wholePartitionId) == 0) {
+      partitionSet.emplace(
+          wholePartitionId,
+          std::make_unique<SpillPartition>(
+              wholePartitionId, state_.finish(partitionId)));
+    } else {
+      partitionSet[wholePartitionId]->addFiles(state_.finish(partitionId));
+    }
+  }
+}
+
+common::SpillStats SpillerBase::stats() const {
+  return spillStats_->copy();
+}
+
+std::string SpillerBase::toString() const {
+  return fmt::format(
+      "{}\t{}\tFINALIZED:{}", type(), rowType_->toString(), finalized_);
+}
+
+void SpillerBase::finalizeSpill() {
+  VELOX_CHECK(!finalized_);
+  finalized_ = true;
+}
+
+SpillerBase::SpillRun& SpillerBase::createOrGetSpillRun(
+    const SpillPartitionId& id) {
+  if (FOLLY_UNLIKELY(!spillRuns_.contains(id))) {
+    spillRuns_.emplace(id, SpillRun(*memory::spillMemoryPool()));
+  }
+  return spillRuns_.at(id);
+}
+
+void SpillerBase::markSeenPartitionsSpilled() {
+  for (const auto& [partitionId, spillRun] : spillRuns_) {
+    if (!state_.isPartitionSpilled(partitionId)) {
+      state_.setPartitionSpilled(partitionId);
+    }
+  }
+}
+
+NoRowContainerSpiller::NoRowContainerSpiller(
+    RowTypePtr rowType,
+    std::optional<SpillPartitionId> parentId,
+    HashBitRange bits,
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats)
+    : NoRowContainerSpiller(
+          std::move(rowType),
+          parentId,
+          bits,
+          {},
+          spillConfig,
+          spillStats) {}
+
+NoRowContainerSpiller::NoRowContainerSpiller(
+    RowTypePtr rowType,
+    std::optional<SpillPartitionId> parentId,
+    HashBitRange bits,
+    const std::vector<SpillSortKey>& sortingKeys,
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats)
+    : SpillerBase(
+          nullptr,
+          std::move(rowType),
+          bits,
+          sortingKeys,
+          spillConfig->maxFileSize,
+          0,
+          parentId,
+          spillConfig,
+          spillStats) {}
+
+void NoRowContainerSpiller::spill(
+    const SpillPartitionId& partitionId,
+    const RowVectorPtr& spillVector) {
+  VELOX_CHECK(!finalized_);
   if (FOLLY_UNLIKELY(spillVector == nullptr)) {
     return;
   }
-
-  state_.appendToPartition(partition, spillVector);
-}
-
-int32_t Spiller::pickNextPartitionToSpill() {
-  VELOX_DCHECK_EQ(spillRuns_.size(), state_.maxPartitions());
-
-  // Sort the partitions based on spiller type to pick.
-  std::vector<int32_t> partitionIndices(spillRuns_.size());
-  std::iota(partitionIndices.begin(), partitionIndices.end(), 0);
-  std::sort(
-      partitionIndices.begin(),
-      partitionIndices.end(),
-      [&](int32_t lhs, int32_t rhs) {
-        // If one of the partition has been spilled, then select the spilled one
-        // if its number of bytes exceeds 'minSpillRunSize_' limit.
-        if (state_.isPartitionSpilled(lhs) != state_.isPartitionSpilled(rhs)) {
-          if (state_.isPartitionSpilled(lhs) &&
-              spillRuns_[lhs].numBytes > minSpillRunSize_) {
-            return true;
-          }
-          if (state_.isPartitionSpilled(rhs) &&
-              spillRuns_[rhs].numBytes > minSpillRunSize_) {
-            return false;
-          }
-        }
-        return spillRuns_[lhs].numBytes > spillRuns_[rhs].numBytes;
-      });
-  for (auto partition : partitionIndices) {
-    if (pendingSpillPartitions_.count(partition) != 0) {
-      continue;
-    }
-    if (spillRuns_[partition].numBytes == 0) {
-      continue;
-    }
-    return partition;
+  if (!state_.isPartitionSpilled(partitionId)) {
+    state_.setPartitionSpilled(partitionId);
   }
-  return -1;
+  state_.appendToPartition(partitionId, spillVector);
 }
 
-Spiller::SpillRows Spiller::finishSpill() {
-  VELOX_CHECK(!spillFinalized_);
-  spillFinalized_ = true;
+void SortInputSpiller::spill() {
+  SpillerBase::spill(nullptr);
+}
 
-  SpillRows rowsFromNonSpillingPartitions(
-      0, memory::StlAllocator<char*>(pool_));
-  if (type_ != Spiller::Type::kHashJoinProbe) {
-    fillSpillRuns(&rowsFromNonSpillingPartitions);
+SortOutputSpiller::SortOutputSpiller(
+    RowContainer* container,
+    RowTypePtr rowType,
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats)
+    : SpillerBase(
+          container,
+          std::move(rowType),
+          HashBitRange{},
+          {},
+          std::numeric_limits<uint64_t>::max(),
+          spillConfig->maxSpillRunRows,
+          std::nullopt,
+          spillConfig,
+          spillStats) {}
+
+void SortOutputSpiller::spill(SpillRows& rows) {
+  VELOX_CHECK(!finalized_);
+  VELOX_CHECK(!rows.empty());
+
+  VELOX_CHECK_EQ(bits_.numPartitions(), 1);
+  checkEmptySpillRuns();
+  uint64_t execTimeNs{0};
+  {
+    NanosecondTimer timer(&execTimeNs);
+    auto& spillRun = createOrGetSpillRun(SpillPartitionId(0));
+    spillRun.rows =
+        SpillRows(rows.begin(), rows.end(), spillRun.rows.get_allocator());
+    for (const auto* row : rows) {
+      spillRun.numBytes += container_->rowSize(row);
+    }
+    markSeenPartitionsSpilled();
   }
-  return rowsFromNonSpillingPartitions;
+
+  updateSpillFillTime(execTimeNs);
+  runSpill(true);
+
+  checkEmptySpillRuns();
 }
 
-void Spiller::finishSpill(SpillPartitionSet& partitionSet) {
-  VELOX_CHECK(!spillFinalized_);
-  spillFinalized_ = true;
-
-  for (auto& partition : state_.spilledPartitionSet()) {
-    const SpillPartitionId partitionId(bits_.begin(), partition);
-    if (FOLLY_UNLIKELY(partitionSet.count(partitionId) == 0)) {
-      partitionSet.emplace(
-          partitionId,
-          std::make_unique<SpillPartition>(
-              partitionId, state_.files(partition)));
-    } else {
-      partitionSet[partitionId]->addFiles(state_.files(partition));
+void SortOutputSpiller::runSpill(bool lastRun) {
+  SpillerBase::runSpill(lastRun);
+  if (lastRun) {
+    for (const auto& [partitionId, spillRun] : spillRuns_) {
+      state_.finishFile(partitionId);
     }
   }
 }
-
-void Spiller::clearSpillRuns() {
-  for (auto& run : spillRuns_) {
-    run.clear();
-  }
-}
-
-void Spiller::fillSpillRuns(SpillRows* rowsFromNonSpillingPartitions) {
-  clearSpillRuns();
-
-  RowContainerIterator iterator;
-  // Number of rows to hash and divide into spill partitions at a time.
-  constexpr int32_t kHashBatchSize = 4096;
-  std::vector<uint64_t> hashes(kHashBatchSize);
-  std::vector<char*> rows(kHashBatchSize);
-  for (;;) {
-    auto numRows = container_->listRows(
-        &iterator, rows.size(), RowContainer::kUnlimited, rows.data());
-    // Calculate hashes for this batch of spill candidates.
-    auto rowSet = folly::Range<char**>(rows.data(), numRows);
-    for (auto i = 0; i < container_->keyTypes().size(); ++i) {
-      container_->hash(i, rowSet, i > 0, hashes.data());
-    }
-
-    // Put each in its run.
-    for (auto i = 0; i < numRows; ++i) {
-      // TODO: consider to cache the hash bits in row container so we only need
-      // to calculate them once.
-      const auto partition = (type_ == Type::kOrderBy)
-          ? 0
-          : bits_.partition(hashes[i], state_.maxPartitions());
-      VELOX_DCHECK_GE(partition, 0);
-      // If 'rowsFromNonSpillingPartitions' is not null, it is used to collect
-      // the rows from non-spilling partitions when finishes spilling.
-      if (FOLLY_UNLIKELY(
-              rowsFromNonSpillingPartitions != nullptr &&
-              !state_.isPartitionSpilled(partition))) {
-        rowsFromNonSpillingPartitions->push_back(rows[i]);
-        continue;
-      }
-      spillRuns_[partition].rows.push_back(rows[i]);
-      spillRuns_[partition].numBytes += container_->rowSize(rows[i]);
-    }
-    if (numRows == 0) {
-      break;
-    }
-  }
-}
-
-void Spiller::clearNonSpillingRuns() {
-  for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
-    if (pendingSpillPartitions_.count(partition) == 0) {
-      spillRuns_[partition].clear();
-    }
-  }
-}
-
-std::string Spiller::toString() const {
-  return fmt::format(
-      "{}\t{}\tMAX_PARTITIONS:{}\tFINALIZED:{}",
-      typeName(type_),
-      rowType_->toString(),
-      state_.maxPartitions(),
-      spillFinalized_);
-}
-
-int32_t Spiller::Config::spillLevel(uint8_t startBitOffset) const {
-  const auto numPartitionBits = hashBitRange.numBits();
-  VELOX_CHECK_LE(
-      startBitOffset + numPartitionBits,
-      64,
-      "startBitOffset:{} numPartitionsBits:{}",
-      startBitOffset,
-      numPartitionBits);
-  const int32_t deltaBits = startBitOffset - hashBitRange.begin();
-  VELOX_CHECK_GE(deltaBits, 0, "deltaBits:{}", deltaBits);
-  VELOX_CHECK_EQ(
-      deltaBits % numPartitionBits,
-      0,
-      "deltaBits:{} numPartitionsBits{}",
-      deltaBits,
-      numPartitionBits);
-  return deltaBits / numPartitionBits;
-}
-
-bool Spiller::Config::exceedSpillLevelLimit(uint8_t startBitOffset) const {
-  if (startBitOffset + hashBitRange.numBits() > 64) {
-    return true;
-  }
-  if (maxSpillLevel == -1) {
-    return false;
-  }
-  return spillLevel(startBitOffset) > maxSpillLevel;
-}
-
-// static
-std::string Spiller::typeName(Type type) {
-  switch (type) {
-    case Type::kOrderBy:
-      return "ORDER_BY";
-    case Type::kHashJoinBuild:
-      return "HASH_JOIN_BUILD";
-    case Type::kHashJoinProbe:
-      return "HASH_JOIN_PROBE";
-    case Type::kAggregate:
-      return "AGGREGATE";
-    default:
-      VELOX_UNREACHABLE("Unknown type: {}", static_cast<int>(type));
-      return fmt::format("UNKNOWN TYPE: {}", static_cast<int>(type));
-  }
-}
-
-void Spiller::fillSpillRuns(std::vector<SpillableStats>& statsList) {
-  if (FOLLY_UNLIKELY(type_ == Type::kHashJoinProbe)) {
-    VELOX_FAIL("There is no row container for {}", typeName(type_));
-  }
-  statsList.resize(state_.maxPartitions());
-  if (isAllSpilled()) {
-    return;
-  }
-  fillSpillRuns(nullptr);
-  for (int partitionNum = 0; partitionNum < state_.maxPartitions();
-       ++partitionNum) {
-    const auto& spillRun = spillRuns_[partitionNum];
-    statsList[partitionNum].numBytes += spillRun.numBytes;
-    statsList[partitionNum].numRows += spillRun.rows.size();
-  }
-}
-
-// static
-memory::MemoryPool& Spiller::spillPool() {
-  static auto pool = memory::addDefaultLeafMemoryPool("spilling");
-  return *pool;
-}
-
 } // namespace facebook::velox::exec
