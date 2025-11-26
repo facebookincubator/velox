@@ -16,12 +16,14 @@
 
 #pragma once
 
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
 namespace facebook::velox::dwrf {
 
+using dwio::common::ArenaCreate;
 using dwio::common::BufferedOutputStream;
 using dwio::common::PositionRecorder;
 
@@ -40,11 +42,8 @@ class IndexBuilder : public PositionRecorder {
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF)
       : out_{std::move(out)},
         arena_(std::make_unique<google::protobuf::Arena>()) {
-    auto rowIndex =
-        google::protobuf::Arena::CreateMessage<proto::RowIndex>(arena_.get());
-    auto rowIndexEntry =
-        google::protobuf::Arena::CreateMessage<proto::RowIndexEntry>(
-            arena_.get());
+    auto rowIndex = ArenaCreate<proto::RowIndex>(arena_.get());
+    auto rowIndexEntry = ArenaCreate<proto::RowIndexEntry>(arena_.get());
 
     index_ = std::make_unique<RowIndexWriteWrapper>(rowIndex);
     entry_ = std::make_unique<RowIndexEntryWriteWrapper>(rowIndexEntry);

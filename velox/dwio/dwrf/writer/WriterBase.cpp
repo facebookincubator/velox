@@ -58,8 +58,7 @@ void WriterBase::writeFooter(const Type& type) {
 
   // write postscript
   pos = writerSink_->size();
-  auto dwrfPostScript =
-      google::protobuf::Arena::CreateMessage<proto::PostScript>(arena_.get());
+  auto dwrfPostScript = ArenaCreate<proto::PostScript>(arena_.get());
   std::unique_ptr<PostScriptWriteWrapper> ps =
       std::make_unique<PostScriptWriteWrapper>(dwrfPostScript);
   ps->setWriterVersion(writerVersion);
