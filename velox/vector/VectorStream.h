@@ -507,6 +507,12 @@ folly::IOBuf rowVectorToIOBuf(
     memory::MemoryPool& pool,
     VectorSerde* serde = nullptr);
 
+folly::IOBuf rowVectorToIOBufUsingBatchSerializer(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool& pool,
+    VectorSerde* serde = nullptr,
+    const VectorSerde::Options* options = nullptr);
+
 /// Convenience function to deserialize an IOBuf into a rowVector. If `serde` is
 /// nullptr, use the default installed serializer.
 RowVectorPtr IOBufToRowVector(

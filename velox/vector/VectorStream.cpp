@@ -313,6 +313,23 @@ folly::IOBuf rowVectorToIOBuf(
   return std::move(*stream.getIOBuf());
 }
 
+folly::IOBuf rowVectorToIOBufUsingBatchSerializer(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool& pool,
+    VectorSerde* serde,
+    const VectorSerde::Options* options) {
+  // Use BatchVectorSerializer with provided options (e.g., preserveEncodings)
+  // to maintain encoding through serialization
+  auto serializer = serde->createBatchSerializer(&pool, options);
+
+  IOBufOutputStream stream(pool);
+  IndexRange range{0, rowVector->size()};
+  Scratch scratch;
+  serializer->serialize(rowVector, folly::Range(&range, 1), scratch, &stream);
+
+  return std::move(*stream.getIOBuf());
+}
+
 RowVectorPtr IOBufToRowVector(
     const folly::IOBuf& ioBuf,
     const RowTypePtr& outputType,

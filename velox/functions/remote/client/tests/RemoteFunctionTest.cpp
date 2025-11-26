@@ -263,6 +263,80 @@ TEST_P(RemoteFunctionTest, connectionError) {
   }
 }
 
+TEST_P(RemoteFunctionTest, preserveEncoding) {
+  // This test is only relevant for PRESTO_PAGE format which supports encoding
+  // preservation.
+  if (GetParam() != remote::PageFormat::PRESTO_PAGE) {
+    return;
+  }
+
+  // Register a remote function with preserveEncoding enabled
+  auto params = startLocalThriftServiceAndGetParams();
+  RemoteThriftVectorFunctionMetadata metadata;
+  metadata.serdeFormat = GetParam();
+  metadata.location = params.serverAddress;
+  metadata.preserveEncoding = true;
+
+  auto plusSignatures = {exec::FunctionSignatureBuilder()
+                             .returnType("bigint")
+                             .argumentType("bigint")
+                             .argumentType("bigint")
+                             .build()};
+  registerRemoteFunction(
+      "remote_plus_preserve_encoding", plusSignatures, metadata, true);
+
+  // Register the actual server-side function
+  registerFunction<PlusFunction, int64_t, int64_t, int64_t>(
+      {params.functionPrefix + ".remote_plus_preserve_encoding"});
+
+  // Create a constant vector (which uses constant encoding)
+  auto constantVector =
+      BaseVector::createConstant(BIGINT(), variant(42L), 100, execCtx_.pool());
+  auto flatVector = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+
+  auto rowVectorWithConstant = makeRowVector({constantVector, flatVector});
+
+  // Serialize with preserveEncoding enabled
+  serializer::presto::PrestoVectorSerde::PrestoOptions optionsWithPreserve;
+  optionsWithPreserve.preserveEncodings = true;
+  auto serde = std::make_unique<serializer::presto::PrestoVectorSerde>();
+
+  auto payloadWithPreserveEncoding = rowVectorToIOBufUsingBatchSerializer(
+      rowVectorWithConstant,
+      *execCtx_.pool(),
+      serde.get(),
+      &optionsWithPreserve);
+
+  // Serialize without preserveEncoding (should flatten the constant vector)
+  auto payloadWithoutPreserveEncoding = rowVectorToIOBuf(
+      rowVectorWithConstant, 100, *execCtx_.pool(), serde.get());
+
+  // The payload with preserved encoding should be significantly smaller
+  // because the constant vector is stored efficiently
+  auto sizeWithPreserveEncoding =
+      payloadWithPreserveEncoding.computeChainDataLength();
+  auto sizeWithoutPreserveEncoding =
+      payloadWithoutPreserveEncoding.computeChainDataLength();
+
+  // With 100 rows of constant int64_t values, preserving encoding should
+  // result in significantly smaller payload (at least 25% smaller)
+  EXPECT_LT(sizeWithPreserveEncoding, sizeWithoutPreserveEncoding * 0.75)
+      << "Expected preserved encoding to be at least 25% smaller. "
+      << "With preserve: " << sizeWithPreserveEncoding
+      << ", without: " << sizeWithoutPreserveEncoding;
+
+  // Also verify functional correctness
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus_preserve_encoding(c0, c1)",
+      makeRowVector(
+          {BaseVector::createConstant(
+               BIGINT(), variant(42L), 5, execCtx_.pool()),
+           makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
+
+  auto expected = makeFlatVector<int64_t>({43, 44, 45, 46, 47});
+  assertEqualVectors(expected, results);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     RemoteFunctionTestFixture,
     RemoteFunctionTest,
