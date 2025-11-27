@@ -106,7 +106,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
-  std::vector<std::unique_ptr<SerializedPage>>
+  std::vector<std::unique_ptr<SerializedPageBase>>
   next(int consumerId, uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   std::string toString() const;
