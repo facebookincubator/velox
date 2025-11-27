@@ -294,6 +294,11 @@ class Checker : public PlanNodeVisitor {
       }
     }
 
+    if (expr->isLambdaKind()) {
+      const auto& lambda = expr->asUnchecked<core::LambdaTypedExpr>();
+      checkInputs(lambda->body(), lambda->signature()->unionWith(rowType));
+    }
+
     for (const auto& input : expr->inputs()) {
       checkInputs(input, rowType);
     }

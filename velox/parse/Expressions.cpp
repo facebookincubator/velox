@@ -88,7 +88,11 @@ size_t CastExpr::localHash() const {
 
 std::string CastExpr::toString() const {
   return appendAliasIfExists(
-      "cast(" + input()->toString() + " as " + type_->toString() + ")");
+      fmt::format(
+          "{}({} as {})",
+          isTryCast_ ? "try_cast" : "cast",
+          input()->toString(),
+          type_->toString()));
 }
 
 bool ConstantExpr::operator==(const IExpr& other) const {

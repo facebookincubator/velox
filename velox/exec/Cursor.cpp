@@ -67,7 +67,8 @@ exec::BlockingReason TaskQueue::enqueue(
     consumerPromise_.setValue();
   }
   if (totalBytes_ > maxBytes_) {
-    auto [unblockPromise, unblockFuture] = makeVeloxContinuePromiseContract();
+    auto [unblockPromise, unblockFuture] =
+        makeVeloxContinuePromiseContract("TaskQueue::enqueue");
     producerUnblockPromises_.emplace_back(std::move(unblockPromise));
     *future = std::move(unblockFuture);
     return exec::BlockingReason::kWaitForConsumer;
@@ -99,7 +100,7 @@ RowVectorPtr TaskQueue::dequeue() {
       }
       if (!vector) {
         consumerBlocked_ = true;
-        consumerPromise_ = ContinuePromise();
+        consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
       }
     }

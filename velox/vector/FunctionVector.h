@@ -207,6 +207,11 @@ class FunctionVector : public BaseVector {
   }
 
  private:
+  uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const override {
+    VELOX_UNREACHABLE("retainedSize should not be called on FunctionVector");
+  }
+
   std::vector<std::shared_ptr<Callable>> functions_;
   std::vector<SelectivityVector> rowSets_;
 };

@@ -228,6 +228,8 @@ add_executable(
   PrestoQueryRunnerIntermediateTypeTransformTestBase.cpp
   PrestoQueryRunnerTDigestTransformTest.cpp
   PrestoQueryRunnerQDigestTransformTest.cpp
+  PrestoQueryRunnerKHyperLogLogTransformTest.cpp
+  PrestoQueryRunnerSetDigestTransformTest.cpp
   PrestoQueryRunnerJsonTransformTest.cpp
   PrestoQueryRunnerIntervalTransformTest.cpp
   PrestoQueryRunnerTimeTransformTest.cpp

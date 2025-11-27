@@ -28,6 +28,7 @@ class ExprSet;
 std::vector<std::shared_ptr<Expr>> compileExpressions(
     const std::vector<core::TypedExprPtr>& sources,
     core::ExecCtx* execCtx,
-    ExprSet* exprSet);
+    ExprSet* exprSet,
+    bool enableConstantFolding = true);
 
 } // namespace facebook::velox::exec

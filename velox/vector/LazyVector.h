@@ -366,11 +366,6 @@ class LazyVector : public BaseVector {
     return loadedVector()->containsNullAt(index);
   }
 
-  uint64_t retainedSize() const override {
-    return isLoaded() ? loadedVector()->retainedSize()
-                      : BaseVector::retainedSize();
-  }
-
   /// Returns zero if vector has not been loaded yet.
   uint64_t estimateFlatSize() const override {
     return isLoaded() ? loadedVector()->estimateFlatSize() : 0;
@@ -431,6 +426,11 @@ class LazyVector : public BaseVector {
       SelectivityVector& baseRows);
 
   void loadVectorInternal() const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return isLoaded() ? loadedVector()->retainedSize(totalStringBufferSize)
+                      : BaseVector::retainedSizeImpl();
+  }
 
   std::unique_ptr<VectorLoader> loader_;
 

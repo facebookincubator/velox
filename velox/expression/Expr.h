@@ -739,7 +739,7 @@ class ExprSet {
   explicit ExprSet(
       const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* execCtx,
-      bool optimize = true,
+      bool enableConstantFolding = true,
       bool lazyDereference = false);
 
   virtual ~ExprSet();
@@ -842,7 +842,7 @@ class ExprSetSimplified : public ExprSet {
   ExprSetSimplified(
       const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* execCtx)
-      : ExprSet(source, execCtx, /*optimize*/ false) {}
+      : ExprSet(source, execCtx, /*enableConstantFolding*/ false) {}
 
   virtual ~ExprSetSimplified() override {}
 

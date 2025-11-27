@@ -251,6 +251,18 @@ TEST_F(JsonFunctionsTest, jsonFormat) {
   velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(JsonFunctionsTest, jsonParseErrorContext) {
+  auto data = makeRowVector(
+      {makeFlatVector<StringView>({"1]"}), makeFlatVector<StringView>({"2]"})});
+  // Verify that exceptions thrown have the correct error context information.
+  testContextMessageOnThrow(
+      "json_parse(c0)", data, "Top-level Expression: json_parse(c0)");
+  // Test twice to ensure that the context is correctly generated for each
+  // expression and not cached and reused.
+  testContextMessageOnThrow(
+      "json_parse(c1)", data, "Top-level Expression: json_parse(c1)");
+}
+
 TEST_F(JsonFunctionsTest, jsonParse) {
   const auto jsonParse = [&](std::optional<std::string> value) {
     return evaluateOnce<StringView>("json_parse(c0)", value);

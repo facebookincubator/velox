@@ -1379,6 +1379,7 @@ TEST_P(
           if (e.errorCode() != error_code::kMemCapExceeded.c_str() &&
               e.errorCode() != error_code::kMemAborted.c_str() &&
               e.errorCode() != error_code::kMemAllocError.c_str() &&
+              e.errorCode() != error_code::kMemArbitrationTimeout.c_str() &&
               (e.message() != "Aborted for external error")) {
             std::rethrow_exception(std::current_exception());
           }

@@ -1401,7 +1401,6 @@ uint64_t SharedArbitrator::reclaim(
   if (participant->aborted()) {
     removeGlobalArbitrationWaiter(participant->id());
   }
-  freeCapacity(reclaimedBytes);
 
   updateMemoryReclaimStats(
       reclaimedBytes, reclaimTimeNs, localArbitration, stats);
@@ -1413,6 +1412,8 @@ uint64_t SharedArbitrator::reclaim(
                       << " stats " << succinctBytes(stats.reclaimedBytes)
                       << " numNonReclaimableAttempts "
                       << stats.numNonReclaimableAttempts;
+
+  freeCapacity(reclaimedBytes);
   if (reclaimedBytes == 0) {
     FB_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
         "Nothing reclaimed from memory pool {} with reclaim target {},  memory pool stats:\n{}\n{}",

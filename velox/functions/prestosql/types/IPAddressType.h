@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/IPAddress.h>
@@ -21,8 +22,8 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
-
 namespace ipaddress {
+
 constexpr int kIPV4AddressBytes = 4;
 constexpr int kIPV4ToV6FFIndex = 10;
 constexpr int kIPV4ToV6Index = 12;
@@ -31,6 +32,7 @@ constexpr int kIPAddressBytes = 16;
 inline folly::ByteArray16 toIPv6ByteArray(const int128_t& ipAddr) {
   folly::ByteArray16 bytes{{0}};
   memcpy(bytes.data(), &ipAddr, sizeof(ipAddr));
+
   // Reverse because the velox is always on little endian system
   // and the byte array needs to be big endian (network byte order)
   std::reverse(bytes.begin(), bytes.end());
@@ -38,7 +40,7 @@ inline folly::ByteArray16 toIPv6ByteArray(const int128_t& ipAddr) {
 }
 
 inline folly::Expected<int128_t, folly::IPAddressFormatError>
-tryGetIPv6asInt128FromString(const std::string& ipAddressStr) {
+tryGetIPv6asInt128FromString(const std::string_view& ipAddressStr) {
   auto maybeIp = folly::IPAddress::tryFromString(ipAddressStr);
   if (maybeIp.hasError()) {
     return folly::makeUnexpected(maybeIp.error());
@@ -51,6 +53,7 @@ tryGetIPv6asInt128FromString(const std::string& ipAddressStr) {
   memcpy(&intAddr, &addrBytes, kIPAddressBytes);
   return intAddr;
 }
+
 } // namespace ipaddress
 
 class IPAddressType final : public HugeintType {

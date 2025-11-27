@@ -26,7 +26,6 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprCompiler.h"
-#include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
 #include "velox/expression/PeeledEncoding.h"
@@ -1847,20 +1846,10 @@ void validateLazyDereference(const std::vector<std::shared_ptr<Expr>>& exprs) {
 ExprSet::ExprSet(
     const std::vector<core::TypedExprPtr>& sources,
     core::ExecCtx* execCtx,
-    bool optimize,
+    bool enableConstantFolding,
     bool lazyDereference)
     : execCtx_(execCtx), lazyDereference_(lazyDereference) {
-  if (optimize) {
-    std::vector<core::TypedExprPtr> optimizedExprs;
-    for (const auto& source : sources) {
-      optimizedExprs.push_back(
-          expression::optimize(source, execCtx->queryCtx(), execCtx->pool()));
-    }
-    exprs_ = compileExpressions(optimizedExprs, execCtx, this);
-  } else {
-    exprs_ = compileExpressions(sources, execCtx, this);
-  }
-
+  exprs_ = compileExpressions(sources, execCtx, this, enableConstantFolding);
   if (lazyDereference_) {
     validateLazyDereference(exprs_);
   }
@@ -2145,9 +2134,10 @@ VectorPtr tryEvaluateConstantExpressionInternal(
     memory::MemoryPool* pool,
     core::ExecCtx* execCtx,
     bool suppressEvaluationFailures) {
-  // Disable expression optimization to avoid an infinite loop between
-  // ExprOptimizer and ExprSet.
-  velox::exec::ExprSet exprSet({expr}, execCtx, /*optimize*/ false);
+  // Disable constant folding to avoid an infinite loop between ExprOptimizer
+  // and ExprCompiler.
+  velox::exec::ExprSet exprSet(
+      {expr}, execCtx, /*enableConstantFolding*/ false);
 
   // The construction of ExprSet involves compiling and constant folding the
   // expression. If constant folding succeeded, then we get a ConstantExpr.
