@@ -17,6 +17,7 @@
 #include "velox/dwio/common/ParallelUnitLoader.h"
 #include <numeric>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
 namespace facebook::velox::dwio::common {
@@ -55,7 +56,9 @@ class ParallelUnitLoader : public UnitLoader {
       std::vector<std::unique_ptr<LoadUnit>> units,
       folly::Executor* ioExecutor,
       uint16_t maxConcurrentLoads)
-      : loadUnits_(std::move(units)),
+      : loadUnits_(
+            std::make_move_iterator(units.begin()),
+            std::make_move_iterator(units.end())),
         ioExecutor_(ioExecutor),
         maxConcurrentLoads_(maxConcurrentLoads) {
     VELOX_CHECK_NOT_NULL(ioExecutor, "ParallelUnitLoader ioExecutor is null");
@@ -74,7 +77,6 @@ class ParallelUnitLoader : public UnitLoader {
     for (auto& future : futures_) {
       if (future.valid()) {
         future.cancel();
-        future.wait();
       }
     }
   }
@@ -141,9 +143,17 @@ class ParallelUnitLoader : public UnitLoader {
   void load(uint32_t unitIndex) {
     VELOX_CHECK_LT(unitIndex, loadUnits_.size(), "Unit index out of bounds");
     VELOX_CHECK_NOT_NULL(ioExecutor_, "ParallelUnitLoader ioExecutor is null");
+    VELOX_DCHECK(!loadUnits_.empty(), "loadUnits_ should not be empty");
 
-    futures_[unitIndex] = folly::via(
-        ioExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
+    // Capture shared_ptr by value to prevent use-after-free if
+    // ParallelUnitLoader is destroyed while async operation is running
+    auto unit = loadUnits_[unitIndex];
+    futures_[unitIndex] = folly::via(ioExecutor_, [unit]() {
+      velox::common::testutil::TestValue::adjust(
+          "facebook::velox::dwio::common::ParallelUnitLoader::load",
+          const_cast<std::shared_ptr<LoadUnit>*>(&unit));
+      unit->load();
+    });
     unitsLoaded_[unitIndex] = true;
   }
 
@@ -158,7 +168,7 @@ class ParallelUnitLoader : public UnitLoader {
   }
 
   std::vector<bool> unitsLoaded_;
-  std::vector<std::unique_ptr<LoadUnit>> loadUnits_;
+  std::vector<std::shared_ptr<LoadUnit>> loadUnits_;
   std::vector<folly::Future<folly::Unit>> futures_;
   std::vector<folly::Future<folly::Unit>> unloadFutures_;
   folly::Executor* ioExecutor_;
