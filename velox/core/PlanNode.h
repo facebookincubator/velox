@@ -34,6 +34,21 @@ class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
 
+struct ReusedHashTableInfo {
+ public:
+  ReusedHashTableInfo() {}
+
+  ReusedHashTableInfo(bool joinHasNullKeys)
+      : joinHasNullKeys_(joinHasNullKeys) {}
+
+  bool joinHasNullKeys() const {
+    return joinHasNullKeys_;
+  }
+
+ private:
+  bool joinHasNullKeys_{false};
+};
+
 /// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
@@ -3107,7 +3122,9 @@ class HashJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      RowTypePtr outputType)
+      RowTypePtr outputType,
+      std::shared_ptr<const ReusedHashTableInfo> reusedHashTableInfo = nullptr,
+      void* reusedHashTableAddress = nullptr)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3117,9 +3134,10 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(left),
             std::move(right),
             std::move(outputType)),
-        nullAware_{nullAware} {
+        nullAware_{nullAware},
+        reusedHashTableAddress_(reusedHashTableAddress),
+        reusedHashTableInfo_(std::move(reusedHashTableInfo)) {
     validate();
-
     if (nullAware) {
       VELOX_USER_CHECK(
           isNullAwareSupported(joinType),
@@ -3202,6 +3220,15 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  const std::shared_ptr<const ReusedHashTableInfo>& reusedHashTableInfo()
+      const {
+    return reusedHashTableInfo_;
+  }
+
+  void* reusedHashTableAddress() const {
+    return reusedHashTableAddress_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3210,6 +3237,10 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+
+  void* reusedHashTableAddress_;
+
+  const std::shared_ptr<const ReusedHashTableInfo> reusedHashTableInfo_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;

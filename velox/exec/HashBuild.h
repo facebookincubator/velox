@@ -68,6 +68,9 @@ class HashBuild final : public Operator {
   }
 
   bool needsInput() const override {
+    if (reusedHashTableAddress_ != nullptr) {
+      return false;
+    }
     return !noMoreInput_;
   }
 
@@ -103,6 +106,14 @@ class HashBuild final : public Operator {
   void setRunning();
   bool isRunning() const;
   void checkRunning() const;
+
+  // Reuse the pre-built hash table.
+  void reuseHashTable(
+      exec::BaseHashTable* baseHashTable,
+      std::shared_ptr<const core::ReusedHashTableInfo> reusedHashTableInfo);
+
+  // Build the hash table.
+  void buildHashTable();
 
   // Invoked to set up hash table to build.
   void setupTable();
@@ -310,6 +321,8 @@ class HashBuild final : public Operator {
 
   // Maps key channel in 'input_' to channel in key.
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap_;
+
+  void* reusedHashTableAddress_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
