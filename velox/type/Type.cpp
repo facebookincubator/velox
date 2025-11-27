@@ -570,11 +570,13 @@ bool RowType::equals(const Type& other) const {
 }
 
 size_t RowType::hashKind() const {
-  if (!hashKindComputed_.load(std::memory_order_relaxed)) {
-    hashKind_ = TypeBase<TypeKind::ROW>::hashKind();
-    hashKindComputed_ = true;
+  if (!hashKindComputed_.load(std::memory_order_acquire)) {
+    const auto v = TypeBase<TypeKind::ROW>::hashKind();
+    hashKind_.store(v, std::memory_order_relaxed);
+    hashKindComputed_.store(true, std::memory_order_release);
+    return v;
   }
-  return hashKind_;
+  return hashKind_.load(std::memory_order_relaxed);
 }
 
 void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
