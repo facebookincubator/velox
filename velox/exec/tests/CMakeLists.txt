@@ -373,6 +373,32 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_exec_test_lib
     velox_spiller_aggregate_benchmark_base
   )
+
+  add_library(
+    velox_spiller_sort_benchmark_base
+    SortSpillInputBenchmarkBase.cpp
+    SpillerBenchmarkBase.cpp
+  )
+  target_link_libraries(
+    velox_spiller_sort_benchmark_base
+    velox_exec
+    velox_exec_test_lib
+    velox_memory
+    velox_vector_fuzzer
+    glog::glog
+    gflags::gflags
+    Folly::folly
+    pthread
+  )
+
+  add_executable(velox_spiller_sort_benchmark SpillerSortBenchmarkTest.cpp)
+  target_link_libraries(
+    velox_spiller_sort_benchmark
+    velox_exec
+    velox_exec_test_lib
+    velox_spiller_sort_benchmark_base
+    Folly::follybenchmark
+  )
 endif()
 
 add_executable(velox_driver_test OperatorReplacementTest.cpp Main.cpp)

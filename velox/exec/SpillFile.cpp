@@ -16,7 +16,9 @@
 
 #include "velox/exec/SpillFile.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/serializers/SerializedPageFile.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -104,6 +106,51 @@ SpillFiles SpillWriter::finish() {
             .compressionKind = serdeOptions_->compressionKind});
   }
   return spillFiles;
+}
+
+uint64_t SpillWriter::write(
+    const SpillRows& rows,
+    RowContainer* container,
+    const RowVectorPtr& vector,
+    bool hasProbedFlag) {
+  if (rows.size() == 0) {
+    return 0;
+  }
+
+  checkNotFinished();
+
+  uint64_t timeNs{0};
+  {
+    NanosecondTimer timer(&timeNs);
+    if (batch_ == nullptr) {
+      batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
+      batch_->createStreamTree(type_, rows.size(), serdeOptions_.get());
+    }
+    if (vector == nullptr) {
+      batch_->appendNumRows(rows.size());
+    } else {
+      IndexRange range{0, vector->size()};
+      batch_->append(
+          vector,
+          folly::Range<IndexRange*>(&range, 1),
+          container->columnTypes().size());
+    }
+    const auto& types = container->columnTypes();
+    for (auto i = 0; i < types.size(); ++i) {
+      container->extractColumn(
+          rows.data(), rows.size(), i, types[i], batch_->streamAt(i));
+    }
+    if (hasProbedFlag) {
+      VELOX_CHECK_EQ(container->accumulators().size(), 0);
+      container->extractProbedFlags(
+          rows.data(), rows.size(), batch_->streamAt(types.size()));
+    }
+  }
+  updateAppendStats(rows.size(), timeNs);
+  if (batch_->size() < writeBufferSize_) {
+    return 0;
+  }
+  return flush();
 }
 
 std::vector<std::string> SpillWriter::testingSpilledFilePaths() const {

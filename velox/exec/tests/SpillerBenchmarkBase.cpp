@@ -52,7 +52,7 @@ DEFINE_uint32(
     "The number of vectors for spilling");
 DEFINE_uint32(
     spiller_benchmark_num_key_columns,
-    2,
+    1,
     "The number of key columns");
 DEFINE_uint32(
     spiller_benchmark_spill_executor_size,
@@ -79,25 +79,26 @@ using namespace facebook::velox::memory;
 
 namespace facebook::velox::exec::test {
 
-void SpillerBenchmarkBase::setUp() {
+void SpillerBenchmarkBase::setUp(RowTypePtr rowType, int32_t stringMaxLength) {
   rootPool_ =
       memory::memoryManager()->addRootPool(FLAGS_spiller_benchmark_name);
   pool_ = rootPool_->addLeafChild(FLAGS_spiller_benchmark_name);
 
-  rowType_ =
-      ROW({"c0", "c1", "c2", "c3", "c4"},
-          {INTEGER(), BIGINT(), VARCHAR(), VARBINARY(), DOUBLE()});
+  rowType_ = rowType;
 
   numInputVectors_ = FLAGS_spiller_benchmark_num_spill_vectors;
   inputVectorSize_ = FLAGS_spiller_benchmark_spill_vector_size;
   {
     VectorFuzzer::Options options;
     options.vectorSize = inputVectorSize_;
+    options.nullRatio = 0.1;
+    options.stringLength = stringMaxLength;
+    options.stringVariableLength = false;
     vectorFuzzer_ = std::make_unique<VectorFuzzer>(options, pool_.get());
   }
   rowVectors_.reserve(numInputVectors_);
   for (int i = 0; i < numInputVectors_; ++i) {
-    rowVectors_.push_back(vectorFuzzer_->fuzzRow(rowType_));
+    rowVectors_.push_back(vectorFuzzer_->fuzzRow(rowType));
   }
 
   if (FLAGS_spiller_benchmark_spill_executor_size != 0) {

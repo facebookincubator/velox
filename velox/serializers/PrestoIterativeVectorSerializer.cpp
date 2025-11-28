@@ -40,14 +40,16 @@ PrestoIterativeVectorSerializer::PrestoIterativeVectorSerializer(
 void PrestoIterativeVectorSerializer::append(
     const RowVectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
-    Scratch& scratch) {
+    Scratch& scratch,
+    const column_index_t columnStartOffset) {
   const auto numNewRows = rangesTotalSize(ranges);
   if (numNewRows == 0) {
     return;
   }
   numRows_ += numNewRows;
   for (int32_t i = 0; i < vector->childrenSize(); ++i) {
-    serializeColumn(vector->childAt(i), ranges, &streams_[i], scratch);
+    serializeColumn(
+        vector->childAt(i), ranges, &streams_[i + columnStartOffset], scratch);
   }
 }
 

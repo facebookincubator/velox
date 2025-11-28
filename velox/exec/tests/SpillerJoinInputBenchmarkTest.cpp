@@ -25,6 +25,7 @@ int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   filesystems::registerLocalFileSystem();
   auto test = std::make_unique<exec::test::JoinSpillInputBenchmarkBase>();
   test->setUp();
