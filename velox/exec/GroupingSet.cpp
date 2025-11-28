@@ -1032,6 +1032,7 @@ void GroupingSet::spill() {
         spillConfig_,
         spillStats_);
   }
+  table_->freePointerTable();
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations
   // allocate/deallocate memory during spilling it can lead to concurrency bugs.
@@ -1068,13 +1069,8 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
   outputSpiller_ = std::make_unique<AggregationOutputSpiller>(
       rows, makeSpillType(), spillConfig_, spillStats_);
 
-  // Spilling may execute on multiple partitions in parallel, and
-  // HashStringAllocator is not thread safe. If any aggregations
-  // allocate/deallocate memory during spilling it can lead to concurrency bugs.
-  // Freeze the HashStringAllocator to make it effectively immutable and
-  // guarantee we don't accidentally enter an unsafe situation.
-  rows->stringAllocator().freezeAndExecute(
-      [&]() { outputSpiller_->spill(rowIterator); });
+  table_->freePointerTable();
+  outputSpiller_->spill(rowIterator);
   table_->clear(/*freeTable=*/true);
 }
 
