@@ -45,7 +45,29 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
   readCommon(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls);
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
-    getFlatValues<TData, TRequested>(rows, result, requestedType_);
+    switch (requestedType_->kind()) {
+      case TypeKind::REAL:
+        // Call getFlatValues<TData, FloatType>
+        // Note: Parquet does NOT allow double-to-float downcast.
+        // This case only handles: TData=float, TRequested=float
+        // The schema validation in ParquetReader.cpp ensures TData is float
+        // when REAL type is requested.
+        getFlatValues<TData, typename TypeTraits<TypeKind::REAL>::NativeType>(
+            rows, result, requestedType_);
+        break;
+      case TypeKind::DOUBLE:
+        // Call getFlatValues<TData, DoubleType>
+        // This case handles:
+        //   - TData=double, TRequested=double (no conversion)
+        //   - TData=float, TRequested=double (upcast allowed)
+        getFlatValues<TData, typename TypeTraits<TypeKind::DOUBLE>::NativeType>(
+            rows, result, requestedType_);
+        break;
+      default:
+        VELOX_FAIL(
+            "Not a valid type for floating point reader: {}",
+            requestedType_->toString());
+    }
   }
 
  protected:
