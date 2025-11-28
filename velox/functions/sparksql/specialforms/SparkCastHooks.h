@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/core/QueryCtx.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/CastHooks.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -26,7 +26,8 @@ class SparkCastHooks : public exec::CastHooks {
  public:
   explicit SparkCastHooks(
       const velox::core::QueryConfig& config,
-      bool allowOverflow);
+      bool allowOverflow,
+      bool matchRowFieldsByName = false);
 
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
@@ -78,6 +79,10 @@ class SparkCastHooks : public exec::CastHooks {
 
   exec::PolicyType getPolicy() const override;
 
+  bool matchRowFieldsByName() const override {
+    return matchRowFieldsByName_;
+  }
+
  private:
   // Casts a number to a timestamp. The number is treated as the number of
   // seconds since the epoch (1970-01-01 00:00:00 UTC).
@@ -89,6 +94,9 @@ class SparkCastHooks : public exec::CastHooks {
 
   // If true, the cast will truncate the overflow value to fit the target type.
   const bool allowOverflow_;
+
+  // If true, struct fields will be matched by name when casting rows.
+  const bool matchRowFieldsByName_;
 
   /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
   /// microsecond. 3) Does not append trailing zeros. 4) Adds a positive
