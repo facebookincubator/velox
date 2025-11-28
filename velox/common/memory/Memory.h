@@ -41,7 +41,6 @@
 #include "velox/common/memory/MemoryPool.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
-DECLARE_bool(velox_memory_pool_debug_enabled);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
 namespace facebook::velox::memory {
