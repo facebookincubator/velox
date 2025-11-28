@@ -57,7 +57,7 @@ uint64_t OutputBufferManager::numBuffers() const {
 bool OutputBufferManager::enqueue(
     const std::string& taskId,
     int destination,
-    std::unique_ptr<SerializedPage> data,
+    std::unique_ptr<SerializedPageBase> data,
     ContinueFuture* future) {
   return getBuffer(taskId)->enqueue(destination, std::move(data), future);
 }
