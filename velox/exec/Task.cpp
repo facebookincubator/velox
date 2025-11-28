@@ -1641,7 +1641,7 @@ void Task::addSplitToStoreLocked(
     return;
   }
   auto* queueSplitsStore =
-      checked_pointer_cast<QueueSplitsStore>(splitsStore.get());
+      checkedPointerCast<QueueSplitsStore>(splitsStore.get());
   queueSplitsStore->addSplit(split, promises);
 }
 

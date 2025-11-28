@@ -29,7 +29,7 @@ core::PlanNodePtr TopNRowNumberReplayer::createPlanNode(
     const core::PlanNodeId& nodeId,
     const core::PlanNodePtr& source) const {
   const auto* topNRowNumberNode =
-      checked_pointer_cast<const core::TopNRowNumberNode>(node);
+      checkedPointerCast<const core::TopNRowNumberNode>(node);
   const auto generateRowNumber = topNRowNumberNode->generateRowNumber();
   return std::make_shared<core::TopNRowNumberNode>(
       nodeId,
