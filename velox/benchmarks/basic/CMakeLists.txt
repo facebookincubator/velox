@@ -107,6 +107,9 @@ target_link_libraries(
 add_executable(velox_cast_benchmark CastBenchmark.cpp)
 target_link_libraries(velox_cast_benchmark ${velox_benchmark_deps} velox_vector_test_lib)
 
+add_executable(velox_numeric_upcast_benchmark NumericUpcastBenchmark.cpp)
+target_link_libraries(velox_numeric_upcast_benchmark ${velox_benchmark_deps} velox_vector_test_lib)
+
 add_executable(velox_format_datetime_benchmark FormatDateTimeBenchmark.cpp)
 target_link_libraries(
   velox_format_datetime_benchmark
