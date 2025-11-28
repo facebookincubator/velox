@@ -28,4 +28,10 @@ bool checkNestedNulls(
     const vector_size_t* indices,
     vector_size_t index,
     bool throwOnNestedNulls = false);
+
+bool checkNestedNulls(
+    const DecodedVector& decoded,
+    vector_size_t baseIndex,
+    vector_size_t index,
+    bool throwOnNestedNulls = false);
 } // namespace facebook::velox::functions
