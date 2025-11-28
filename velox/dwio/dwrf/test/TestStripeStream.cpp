@@ -840,9 +840,11 @@ class TestStripeStreams : public StripeStreamsBase {
   MOCK_CONST_METHOD2(
       getEncodingOrcProxy,
       proto::orc::ColumnEncoding*(uint32_t, uint32_t));
-  MOCK_CONST_METHOD2(
+  MOCK_METHOD(
+      uint32_t,
       visitStreamsOfNode,
-      uint32_t(uint32_t, std::function<void(const StreamInformation&)>));
+      (uint32_t, std::function<void(const StreamInformation&)>),
+      (const, override));
   MOCK_CONST_METHOD4(
       getStreamProxy,
       SeekableInputStream*(uint32_t, uint32_t, proto::Stream_Kind, bool));
