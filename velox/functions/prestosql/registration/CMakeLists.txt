@@ -28,6 +28,7 @@ velox_add_library(
   GeneralFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
   IntegerFunctionsRegistration.cpp
+  KHyperLogLogFunctionsRegistration.cpp
   FloatingPointFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp

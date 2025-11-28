@@ -16,6 +16,7 @@ velox_add_library(
   TimestampWithTimeZoneInputGenerator.cpp
   TimeWithTimezoneInputGenerator.cpp
   HyperLogLogInputGenerator.cpp
+  KHyperLogLogInputGenerator.cpp
   P4HyperLogLogInputGenerator.cpp
   SfmSketchInputGenerator.cpp
 )
