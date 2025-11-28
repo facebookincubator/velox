@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/NullsBuilder.h"
@@ -282,6 +283,43 @@ VectorPtr extractDistinctKeys(VectorPtr allKeys, memory::MemoryPool* pool) {
         allKeys->getDistinctValueCount().value(),
         "extracted distinct keys size should match input distinct value count");
   return result;
+}
+
+template <TypeKind kind>
+void fuzzBehindNullsFlatPrimitive(VectorPtr& vector, FuzzerGenerator& rng) {
+  using TCpp = typename TypeTraits<kind>::NativeType;
+  auto size = vector->size();
+  auto rawNulls = vector->rawNulls();
+  auto rawValues = vector->asFlatVector<TCpp>()->mutableRawValues();
+  // Since this is adding garbage data, we don't care about generating valid
+  // values for custom types.
+  bits::forEachUnsetBit(
+      rawNulls, 0, size, [&](auto row) { rawValues[row] = rand<TCpp>(rng); });
+}
+
+template <TypeKind kind>
+vector_size_t* getMutableDictionaryIndices(VectorPtr& vector) {
+  using TCpp = typename TypeTraits<kind>::NativeType;
+  return vector->as<DictionaryVector<TCpp>>()
+      ->mutableIndices(vector->size())
+      ->template asMutable<vector_size_t>();
+}
+
+void fuzzBehindNullsDictionary(VectorPtr& vector, FuzzerGenerator& rng) {
+  auto size = vector->size();
+  auto rawNulls = vector->rawNulls();
+  vector_size_t* rawIndices = nullptr;
+  if (vector->type()->isPrimitiveType()) {
+    rawIndices = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+        getMutableDictionaryIndices, vector->typeKind(), vector);
+  } else {
+    rawIndices = vector->as<DictionaryVector<ComplexType>>()
+                     ->mutableIndices(vector->size())
+                     ->template asMutable<vector_size_t>();
+  }
+  bits::forEachUnsetBit(rawNulls, 0, size, [&](auto row) {
+    rawIndices[row] = rand<vector_size_t>(rng);
+  });
 }
 
 } // namespace
@@ -1090,6 +1128,30 @@ RowVectorPtr VectorFuzzer::fuzzRowChildrenToLazy(
       std::move(newNulls),
       rowVector->size(),
       std::move(children));
+}
+
+void VectorFuzzer::fuzzDataBehindNulls(VectorPtr& vector) {
+  const auto& type = vector->type();
+  if (vector->encoding() == VectorEncoding::Simple::DICTIONARY) {
+    fuzzBehindNullsDictionary(vector, rng_);
+  } else if (vector->isConstantEncoding()) {
+    return;
+  } else if (type->isPrimitiveType()) {
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+        fuzzBehindNullsFlatPrimitive, vector->typeKind(), vector, rng_);
+  } else if (type->isArray() || type->isMap()) {
+    auto size = vector->size();
+    const auto& rawNulls = vector->rawNulls();
+    ArrayVectorBase* arrayBase = vector->as<ArrayVectorBase>();
+    auto mutableOffsets = arrayBase->mutableOffsets(size);
+    auto rawMutableOffsets = mutableOffsets->asMutable<vector_size_t>();
+    auto mutableSizes = arrayBase->mutableSizes(size);
+    auto rawMutableSizes = mutableSizes->asMutable<vector_size_t>();
+    bits::forEachUnsetBit(rawNulls, 0, size, [&](auto row) {
+      rawMutableOffsets[row] = rand<vector_size_t>(rng_);
+      rawMutableSizes[row] = rand<vector_size_t>(rng_);
+    });
+  }
 }
 
 VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
