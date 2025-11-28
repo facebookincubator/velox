@@ -111,6 +111,10 @@ cmake-cudf:
 build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
 
+install:
+	CMAKE_INSTALL_LOCAL_ONLY=TRUE \
+	cmake --install $(BUILD_BASE_DIR)/$(BUILD_DIR) --prefix $(BUILD_BASE_DIR)/$(BUILD_DIR)
+
 debug:					#: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
 	$(MAKE) build BUILD_DIR=debug
