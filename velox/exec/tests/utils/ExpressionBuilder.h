@@ -320,6 +320,11 @@ inline detail::ExprWrapper lit(int8_t value) {
   return {std::make_shared<core::ConstantExpr>(TINYINT(), value, std::nullopt)};
 }
 
+// Overload for long type to avoid ambiguity on macOS.
+inline detail::ExprWrapper lit(long value) {
+  return lit(static_cast<int64_t>(value));
+}
+
 inline detail::ExprWrapper lit(bool value) {
   return {std::make_shared<core::ConstantExpr>(BOOLEAN(), value, std::nullopt)};
 }
