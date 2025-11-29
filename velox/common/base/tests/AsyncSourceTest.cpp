@@ -296,3 +296,134 @@ TEST(AsyncSourceTest, setContexts) {
 
   verifyContexts("test2", "task_id2");
 }
+
+TEST(AsyncSourceTest, cancel) {
+  DataCounter::reset();
+
+  // Cancel before prepare() - task should not run and resources cleaned up
+  {
+    auto dataCounter = std::make_shared<DataCounter>();
+    auto asyncSource = std::make_shared<AsyncSource<uint64_t>>([dataCounter]() {
+      return std::make_unique<uint64_t>(dataCounter->objectNumber());
+    });
+    dataCounter.reset();
+
+    asyncSource->cancel();
+    EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
+  }
+  DataCounter::reset();
+
+  // Cancel while task is running in prepare() - should not affect the
+  // prepare() result
+  {
+    folly::Baton<> startBaton;
+    folly::Baton<> finishBaton;
+    auto asyncSource = std::make_shared<AsyncSource<DataCounter>>(
+        [&startBaton, &finishBaton]() {
+          startBaton.post();
+          finishBaton.wait();
+          return std::make_unique<DataCounter>();
+        });
+
+    auto thread = std::thread([&asyncSource] { asyncSource->prepare(); });
+    EXPECT_TRUE(
+        startBaton.try_wait_for(1s)); // Make sure prepare() gets lock first
+
+    asyncSource->cancel(); // Should be no-op
+
+    finishBaton.post();
+    thread.join();
+
+    EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
+    EXPECT_TRUE(asyncSource->hasValue());
+  }
+  DataCounter::reset();
+
+  // Cancel after prepare() completes - should not destroy the result
+  {
+    auto asyncSource = std::make_shared<AsyncSource<DataCounter>>(
+        []() { return std::make_unique<DataCounter>(); });
+    asyncSource->prepare();
+
+    asyncSource->cancel(); // Should be no-op since make_ was taken
+
+    EXPECT_TRUE(asyncSource->hasValue());
+    EXPECT_NE(asyncSource->move(), nullptr);
+  }
+  DataCounter::reset();
+
+  // prepare() and move() are no-ops after cancel()
+  {
+    std::atomic<bool> taskExecuted{false};
+    auto asyncSource =
+        std::make_shared<AsyncSource<DataCounter>>([&taskExecuted]() {
+          taskExecuted = true;
+          return std::make_unique<DataCounter>();
+        });
+
+    asyncSource->cancel();
+    asyncSource->prepare(); // No-op
+    EXPECT_FALSE(taskExecuted);
+    EXPECT_FALSE(asyncSource->hasValue());
+
+    EXPECT_EQ(asyncSource->move(), nullptr); // No-op
+    EXPECT_FALSE(taskExecuted);
+  }
+
+  // Multiple cancel calls are idempotent
+  {
+    auto dataCounter = std::make_shared<DataCounter>();
+    auto asyncSource = std::make_shared<AsyncSource<uint64_t>>([dataCounter]() {
+      return std::make_unique<uint64_t>(dataCounter->objectNumber());
+    });
+    dataCounter.reset();
+
+    asyncSource->cancel();
+    asyncSource->cancel(); // Should be safe
+    EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
+  }
+  DataCounter::reset();
+
+  // Cancel called during move() execution - should be no-op
+  {
+    folly::Baton<> moveStarted;
+    folly::Baton<> continueMove;
+    auto asyncSource = std::make_shared<AsyncSource<DataCounter>>(
+        [&moveStarted, &continueMove]() {
+          moveStarted.post();
+          continueMove.wait();
+          return std::make_unique<DataCounter>();
+        });
+
+    // move() will execute the lambda inline since prepare() wasn't called
+    auto moveThread = std::thread([&asyncSource] {
+      auto result = asyncSource->move();
+      EXPECT_NE(result, nullptr);
+    });
+
+    EXPECT_TRUE(moveStarted.try_wait_for(1s)); // Wait for move to start
+
+    asyncSource->cancel(); // Should be no-op - make_ already taken
+
+    continueMove.post();
+    moveThread.join();
+    EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
+  }
+  DataCounter::reset();
+
+  // Cancel called after move() completes - should be no-op
+  {
+    auto asyncSource = std::make_shared<AsyncSource<DataCounter>>(
+        []() { return std::make_unique<DataCounter>(); });
+
+    auto result = asyncSource->move(); // Complete move
+    EXPECT_NE(result, nullptr);
+    EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
+
+    asyncSource->cancel(); // Should be no-op - moved_ is true, make_ is null
+
+    // Item was already consumed
+    EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
+  }
+  DataCounter::reset();
+}
