@@ -323,7 +323,7 @@ TEST_F(PlanBuilderTest, filter) {
   VELOX_CHECK_EQ(
       PlanBuilder()
           .tableScan("tmp", data)
-          .filter(col("c0") + 10L > 100L)
+          .filter(col("c0") + 10LL > 100LL)
           .planNode()
           ->toString(true, false),
       expectation);
