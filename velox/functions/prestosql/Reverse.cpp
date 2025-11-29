@@ -204,6 +204,12 @@ class ReverseFunction : public exec::VectorFunction {
             .returnType("varchar")
             .argumentType("varchar")
             .build(),
+        // varchar(x) -> varchar(x)
+        exec::FunctionSignatureBuilder()
+            .integerVariable("x")
+            .returnType("varchar(x)")
+            .argumentType("varchar(x)")
+            .build(),
         // varbinary -> varbinary
         exec::FunctionSignatureBuilder()
             .returnType("varbinary")

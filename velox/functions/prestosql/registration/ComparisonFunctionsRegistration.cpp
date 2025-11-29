@@ -95,6 +95,12 @@ void registerComparisonFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, Varchar, Varchar, Varchar>(
       {prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      VarcharN<L1>,
+      VarcharN<L2>,
+      VarcharN<L3>>({prefix + "between"});
   registerFunction<BetweenFunction, bool, Date, Date, Date>(
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, Timestamp, Timestamp, Timestamp>(

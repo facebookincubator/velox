@@ -411,43 +411,33 @@ bool isLambdaSignature(
   return match;
 }
 
-const exec::FunctionSignature* FOLLY_NULLABLE findLambdaSignature(
+std::vector<const exec::FunctionSignature*> findLambdaSignature(
     const std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
         signatures,
     const std::shared_ptr<const CallExpr>& callExpr) {
-  const exec::FunctionSignature* matchingSignature = nullptr;
+  std::vector<const exec::FunctionSignature*> candidateSignatures;
   for (const auto& signature : signatures) {
-    if (isLambdaSignature(*signature, callExpr)) {
-      VELOX_CHECK_NULL(
-          matchingSignature,
-          "Cannot resolve ambiguous lambda function signatures for {}.",
-          callExpr->name());
-      matchingSignature = signature.get();
-    }
+    candidateSignatures.push_back(signature.get());
   }
 
-  return matchingSignature;
+  return candidateSignatures;
 }
 
-const exec::FunctionSignature* FOLLY_NULLABLE findLambdaSignature(
+std::vector<const exec::FunctionSignature*> findLambdaSignature(
     const std::vector<const exec::FunctionSignature*>& signatures,
     const std::shared_ptr<const CallExpr>& callExpr) {
-  const exec::FunctionSignature* matchingSignature = nullptr;
+  std::vector<const exec::FunctionSignature*> candidateSignatures;
   for (const auto& signature : signatures) {
     if (isLambdaSignature(*signature, callExpr)) {
-      VELOX_CHECK_NULL(
-          matchingSignature,
-          "Cannot resolve ambiguous lambda function signatures for {}.",
-          callExpr->name());
-      matchingSignature = signature;
+      candidateSignatures.push_back(signature);
     }
   }
 
-  return matchingSignature;
+  return candidateSignatures;
 }
 } // namespace
 
-const exec::FunctionSignature* findLambdaSignature(
+std::vector<const exec::FunctionSignature*> findLambdaSignature(
     const std::shared_ptr<const CallExpr>& callExpr) {
   // Look for a scalar lambda function.
   auto scalarSignatures = getFunctionSignatures(callExpr->name());
@@ -460,8 +450,7 @@ const exec::FunctionSignature* findLambdaSignature(
           exec::getAggregateFunctionSignatures(callExpr->name())) {
     return findLambdaSignature(signatures.value(), callExpr);
   }
-
-  return nullptr;
+  return {};
 }
 
 // static
@@ -470,32 +459,41 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
     const TypePtr& inputRow,
     memory::MemoryPool* pool,
     const VectorPtr& complexConstants) {
-  auto signature = findLambdaSignature(callExpr);
-
-  if (signature == nullptr) {
-    return nullptr;
-  }
-
-  // Resolve non-lambda arguments first.
+  auto signatures = findLambdaSignature(callExpr);
+  const exec::FunctionSignature* signature = nullptr;
+  exec::SignatureBinder* binder = nullptr;
   auto numArgs = callExpr->inputs().size();
   std::vector<TypedExprPtr> children(numArgs);
   std::vector<TypePtr> childTypes(numArgs);
-  for (auto i = 0; i < numArgs; ++i) {
-    if (!signature->isLambdaArgumentAt(i)) {
-      children[i] =
-          inferTypes(callExpr->inputAt(i), inputRow, pool, complexConstants);
-      childTypes[i] = children[i]->type();
+  for (const auto& signatureCandidate : signatures) {
+    // Resolve non-lambda arguments first.
+    for (auto i = 0; i < numArgs; ++i) {
+      if (!signatureCandidate->isLambdaArgumentAt(i)) {
+        children[i] =
+            inferTypes(callExpr->inputAt(i), inputRow, pool, complexConstants);
+        childTypes[i] = children[i]->type();
+      }
+    }
+
+    auto candidateBinder = std::make_unique<exec::SignatureBinder>(
+        *signatureCandidate, childTypes);
+    if (candidateBinder->tryBindPartial()) {
+      signature = signatureCandidate;
+      binder = candidateBinder.release();
+      break;
     }
   }
 
+  if (signature == nullptr || binder == nullptr) {
+    return nullptr;
+  }
+
   // Resolve lambda arguments.
-  exec::SignatureBinder binder(*signature, childTypes);
-  binder.tryBind();
   for (auto i = 0; i < numArgs; ++i) {
     if (signature->isLambdaArgumentAt(i)) {
       const auto& lambdaSignature = signature->argumentTypeAt(i);
       const auto& params = lambdaSignature.parameters();
-      const auto lambdaTypes = binder.tryResolveTypes(
+      const auto lambdaTypes = binder->tryResolveTypes(
           folly::Range(params.data(), params.size() - 1));
 
       children[i] = inferTypes(

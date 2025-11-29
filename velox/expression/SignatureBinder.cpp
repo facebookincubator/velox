@@ -29,7 +29,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -111,21 +111,38 @@ bool checkNamedRowField(
   return true;
 }
 
+bool typesAreBoundedVarchar(const TypePtr& left, const TypePtr& right) {
+  return (
+      left->kind() == TypeKind::VARCHAR && right->kind() == TypeKind::VARCHAR &&
+      left->isVarcharN() && right->isVarcharN() &&
+      left->asVarcharN().parameters().size() == 1 &&
+      right->asVarcharN().parameters().size() == 1);
+}
+
 } // namespace
 
 bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
-  return tryBind(true, coercions);
+  return tryBindImpl<true, false>(coercions);
 }
 
 bool SignatureBinder::tryBind() {
   std::vector<Coercion> coercions;
-  return tryBind(false, coercions);
+  return tryBindImpl<false, false>(coercions);
 }
 
-bool SignatureBinder::tryBind(
-    bool allowCoercions,
+bool SignatureBinder::tryBindPartialWithCoercions(
     std::vector<Coercion>& coercions) {
-  if (allowCoercions) {
+  return tryBindImpl<true, true>(coercions);
+}
+
+bool SignatureBinder::tryBindPartial() {
+  std::vector<Coercion> coercions;
+  return tryBindImpl<false, true>(coercions);
+}
+
+template <bool AllowCoercions, bool AllowPartialBind>
+bool SignatureBinder::tryBindImpl(std::vector<Coercion>& coercions) {
+  if (AllowCoercions) {
     coercions.clear();
     coercions.resize(actualTypes_.size());
   }
@@ -143,7 +160,11 @@ bool SignatureBinder::tryBind(
         auto& type = actualTypes_[formalArgsCnt - 1];
         for (auto i = formalArgsCnt; i < actualTypes_.size(); i++) {
           if (!type->equivalent(*actualTypes_[i]) &&
-              actualTypes_[i]->kind() != TypeKind::UNKNOWN) {
+              actualTypes_[i]->kind() != TypeKind::UNKNOWN &&
+              // Support variableArity for bounded Varchar because the type
+              // signature variable is fixed for the variable type defintion and
+              // are not equivalent as a result.
+              !(typesAreBoundedVarchar(actualTypes_[i], type))) {
             return false;
           }
         }
@@ -156,10 +177,34 @@ bool SignatureBinder::tryBind(
   }
 
   for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
-    if (actualTypes_[i]) {
-      if (allowCoercions) {
+    if constexpr (AllowPartialBind) {
+      VLOG(0) << "Processing actualTypes_[" << i << "] = "
+              << (actualTypes_[i] ? actualTypes_[i]->toString() : "null");
+      if (!actualTypes_[i]) {
+        continue;
+      }
+    } else {
+      if (!actualTypes_[i]) {
+        return false;
+      }
+    }
+
+    if constexpr (AllowCoercions) {
+      if constexpr (AllowPartialBind) {
+        if (!SignatureBinderBase::tryBindPartialWithCoercion(
+                formalArgs[i], actualTypes_[i], coercions[i])) {
+          return false;
+        }
+      } else {
         if (!SignatureBinderBase::tryBindWithCoercion(
                 formalArgs[i], actualTypes_[i], coercions[i])) {
+          return false;
+        }
+      }
+    } else {
+      if constexpr (AllowPartialBind) {
+        if (!SignatureBinderBase::tryBindPartial(
+                formalArgs[i], actualTypes_[i])) {
           return false;
         }
       } else {
@@ -167,8 +212,6 @@ bool SignatureBinder::tryBind(
           return false;
         }
       }
-    } else {
-      return false;
     }
   }
 
@@ -233,24 +276,44 @@ bool SignatureBinderBase::tryBindWithCoercion(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType,
     Coercion& coercion) {
-  return tryBind(typeSignature, actualType, true, coercion);
+  return tryBindImpl<true, false>(typeSignature, actualType, coercion);
 }
 
 bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType) {
   Coercion coercion;
-  return tryBind(typeSignature, actualType, false, coercion);
+  return tryBindImpl<false, false>(typeSignature, actualType, coercion);
 }
 
-bool SignatureBinderBase::tryBind(
+bool SignatureBinderBase::tryBindPartial(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType) {
+  Coercion coercion;
+  return tryBindImpl<false, true>(typeSignature, actualType, coercion);
+}
+
+bool SignatureBinderBase::tryBindPartialWithCoercion(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType,
-    bool allowCoercion,
+    Coercion& coercion) {
+  return tryBindImpl<true, true>(typeSignature, actualType, coercion);
+}
+
+template <bool AllowCoercion, bool AllowPartialBind>
+bool SignatureBinderBase::tryBindImpl(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
     Coercion& coercion) {
   coercion.reset();
   if (isAny(typeSignature)) {
     return true;
+  }
+
+  if constexpr (AllowPartialBind) {
+    if (!actualType) {
+      return true;
+    }
   }
 
   const auto& baseName = typeSignature.baseName();
@@ -291,7 +354,7 @@ bool SignatureBinderBase::tryBind(
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
   if (typeName != actualTypeName) {
-    if (allowCoercion) {
+    if constexpr (AllowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
         coercion = availableCoercion.value();
@@ -337,7 +400,7 @@ bool SignatureBinderBase::tryBind(
         return true;
       }
     } else {
-      return tryBind(typeParam, actualChildType);
+      return tryBindImpl<false, false>(typeParam, actualChildType, coercion);
     }
   }
 
@@ -374,7 +437,8 @@ bool SignatureBinderBase::tryBind(
           return false;
         }
 
-        if (!tryBind(params[i], actualParameter.type)) {
+        if (!tryBindImpl<false, false>(
+                params[i], actualParameter.type, coercion)) {
           // TODO Allow coercions for complex types.
           return false;
         }

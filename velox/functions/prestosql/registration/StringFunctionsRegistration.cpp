@@ -38,20 +38,42 @@ void registerSimpleFunctions(const std::string& prefix) {
   using namespace stringImpl;
 
   // Register string functions.
-  registerFunction<ChrFunction, Varchar, int64_t>({prefix + "chr"});
+  registerFunction<ChrFunction, VarcharN<C1>, int64_t>({prefix + "chr"});
   registerFunction<CodePointFunction, int32_t, Varchar>({prefix + "codepoint"});
+  registerFunction<CodePointFunction, int32_t, VarcharN<L1>>(
+      {prefix + "codepoint"});
   registerFunction<HammingDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "hamming_distance"});
+  registerFunction<
+      HammingDistanceFunction,
+      int64_t,
+      VarcharN<L1>,
+      VarcharN<L2>>({prefix + "hamming_distance"});
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
+  registerFunction<
+      LevenshteinDistanceFunction,
+      int64_t,
+      VarcharN<L1>,
+      VarcharN<L2>>({prefix + "levenshtein_distance"});
   registerFunction<JaroWinklerSimilarityFunction, double, Varchar, Varchar>(
       {prefix + "jarowinkler_similarity"});
+  //registerFunction<JaroWinklerSimilarityFunction, double, VarcharN<L1>, VarcharN<L2>(
+  //    {prefix + "jarowinkler_similarity"});
   registerFunction<LongestCommonPrefixFunction, Varchar, Varchar, Varchar>(
       {prefix + "longest_common_prefix"});
+  // registerFunction<LongestCommonPrefixFunction, Varchar, VarcharN<L1>, VarcharN<L2>>(
+  //     {prefix + "longest_common_prefix"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
+  registerFunction<LengthFunction, int64_t, VarcharN<L1>>({prefix + "length"});
   registerFunction<BitLengthFunction, int64_t, Varchar>(
       {prefix + "bit_length"});
+  registerFunction<BitLengthFunction, int64_t, VarcharN<L1>>(
+      {prefix + "bit_length"});
+
   registerFunction<XxHash64StringFunction, int64_t, Varchar>(
+      {prefix + "xxhash64_internal"});
+  registerFunction<XxHash64StringFunction, int64_t, VarcharN<L1>>(
       {prefix + "xxhash64_internal"});
 
   // Length for varbinary have different semantics.
@@ -60,18 +82,34 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
       {prefix + "starts_with"});
+  registerFunction<StartsWithFunction, bool, VarcharN<L1>, VarcharN<L2>>(
+      {prefix + "starts_with"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
+      {prefix + "ends_with"});
+  registerFunction<EndsWithFunction, bool, VarcharN<L1>, VarcharN<L2>>(
       {prefix + "ends_with"});
   registerFunction<EndsWithFunction, bool, Varchar, UnknownValue>(
       {prefix + "ends_with"});
+  registerFunction<EndsWithFunction, bool, VarcharN<L1>, UnknownValue>(
+      {prefix + "ends_with"});
 
   registerFunction<TrailFunction, Varchar, Varchar, int32_t>(
+      {prefix + "trail"});
+  registerFunction<TrailFunction, VarcharN<L1>, VarcharN<L1>, int32_t>(
       {prefix + "trail"});
 
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t>(
       {prefix + "substr", prefix + "substring"});
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t, int64_t>(
       {prefix + "substr", prefix + "substring"});
+  registerFunction<SubstrFunction, VarcharN<L1>, VarcharN<L1>, int64_t>(
+      {prefix + "substr", prefix + "substring"});
+  registerFunction<
+      SubstrFunction,
+      VarcharN<L1>,
+      VarcharN<L1>,
+      int64_t,
+      int64_t>({prefix + "substr", prefix + "substring"});
 
   // TODO Presto doesn't allow INTEGER types for 2nd and 3rd arguments. Remove
   // these signatures.
@@ -91,6 +129,12 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<SplitPart, Varchar, Varchar, Varchar, int64_t>(
       {prefix + "split_part"});
+  registerFunction<
+      SplitPart,
+      VarcharN<L1>,
+      VarcharN<L1>,
+      VarcharN<L2>,
+      int64_t>({prefix + "split_part"});
 
   registerFunction<TrimFunction, Varchar, Varchar>({prefix + "trim"});
   registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
@@ -100,10 +144,25 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<RTrimFunction, Varchar, Varchar>({prefix + "rtrim"});
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
+  registerFunction<TrimFunction, VarcharN<L1>, VarcharN<L1>>({prefix + "trim"});
+  registerFunction<TrimFunction, VarcharN<L1>, VarcharN<L1>, VarcharN<L2>>(
+      {prefix + "trim"});
+  registerFunction<LTrimFunction, VarcharN<L1>, VarcharN<L1>>(
+      {prefix + "ltrim"});
+  registerFunction<LTrimFunction, VarcharN<L1>, VarcharN<L1>, VarcharN<L2>>(
+      {prefix + "ltrim"});
+  registerFunction<RTrimFunction, VarcharN<L1>, VarcharN<L1>>(
+      {prefix + "rtrim"});
+  registerFunction<RTrimFunction, VarcharN<L1>, VarcharN<L1>, VarcharN<L2>>(
+      {prefix + "rtrim"});
 
   registerFunction<LPadFunction, Varchar, Varchar, int64_t, Varchar>(
       {prefix + "lpad"});
   registerFunction<RPadFunction, Varchar, Varchar, int64_t, Varchar>(
+      {prefix + "rpad"});
+  registerFunction<LPadFunction, Varchar, VarcharN<L1>, int64_t, VarcharN<L2>>(
+      {prefix + "lpad"});
+  registerFunction<RPadFunction, Varchar, VarcharN<L1>, int64_t, VarcharN<L2>>(
       {prefix + "rpad"});
 
   exec::registerStatefulVectorFunction(
@@ -232,20 +291,44 @@ void registerStringFunctions(const std::string& prefix) {
 
   registerFunction<StrLPosFunction, int64_t, Varchar, Varchar>(
       {prefix + "strpos"});
+  registerFunction<StrLPosFunction, int64_t, VarcharN<L1>, VarcharN<L2>>(
+      {prefix + "strpos"});
   registerFunction<StrLPosFunction, int64_t, Varchar, Varchar, int64_t>(
       {prefix + "strpos"});
+  registerFunction<
+      StrLPosFunction,
+      int64_t,
+      VarcharN<L1>,
+      VarcharN<L2>,
+      int64_t>({prefix + "strpos"});
   registerFunction<StrRPosFunction, int64_t, Varchar, Varchar>(
+      {prefix + "strrpos"});
+  registerFunction<StrRPosFunction, int64_t, VarcharN<L1>, VarcharN<L2>>(
       {prefix + "strrpos"});
   registerFunction<StrRPosFunction, int64_t, Varchar, Varchar, int64_t>(
       {prefix + "strrpos"});
+  registerFunction<
+      StrRPosFunction,
+      int64_t,
+      VarcharN<L1>,
+      VarcharN<L2>,
+      int64_t>({prefix + "strrpos"});
 
   registerFunction<NormalizeFunction, Varchar, Varchar>({prefix + "normalize"});
+  registerFunction<NormalizeFunction, Varchar, VarcharN<L1>>(
+      {prefix + "normalize"});
   registerFunction<NormalizeFunction, Varchar, Varchar, Varchar>(
+      {prefix + "normalize"});
+  registerFunction<NormalizeFunction, Varchar, VarcharN<L1>, VarcharN<L2>>(
       {prefix + "normalize"});
 
   // word_stem function
   registerFunction<WordStemFunction, Varchar, Varchar>({prefix + "word_stem"});
+  registerFunction<WordStemFunction, VarcharN<L1>, VarcharN<L1>>(
+      {prefix + "word_stem"});
   registerFunction<WordStemFunction, Varchar, Varchar, Varchar>(
+      {prefix + "word_stem"});
+  registerFunction<WordStemFunction, VarcharN<L1>, VarcharN<L1>, VarcharN<C2>>(
       {prefix + "word_stem"});
 }
 } // namespace facebook::velox::functions
