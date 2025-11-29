@@ -40,11 +40,72 @@ void ensureCastSucceeded(To* casted, From* original) {
 
 } // namespace detail
 
-// `checked_pointer_cast` is a dynamic casting tool to throw a Velox exception
+// `checkedPointerCast` is a dynamic casting tool to throw a Velox exception
 // when the casting failed. Use this instead of `std::dynamic_pointer_cast`
 // when:
 //   1) Casting must happen
 //   2) We want a stack trace if it failed.
+template <typename To, typename From>
+std::shared_ptr<To> checkedPointerCast(const std::shared_ptr<From>& input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto casted = std::dynamic_pointer_cast<To>(input);
+  detail::ensureCastSucceeded(casted.get(), input.get());
+  return casted;
+}
+
+template <typename To, typename From>
+std::unique_ptr<To> checkedPointerCast(std::unique_ptr<From> input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* released = input.release();
+  To* casted{nullptr};
+  try {
+    casted = dynamic_cast<To*>(released);
+    detail::ensureCastSucceeded(casted, released);
+  } catch (...) {
+    input.reset(released);
+    throw;
+  }
+  return std::unique_ptr<To>(casted);
+}
+
+template <typename To, typename From>
+To* checkedPointerCast(From* input) {
+  VELOX_CHECK_NOT_NULL(input);
+  auto* casted = dynamic_cast<To*>(input);
+  detail::ensureCastSucceeded(casted, input);
+  return casted;
+}
+
+template <typename To, typename From>
+std::unique_ptr<To> staticUniquePointerCast(std::unique_ptr<From> input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* released = input.release();
+  auto* casted = static_cast<To*>(released);
+  return std::unique_ptr<To>(casted);
+}
+
+template <typename To, typename From>
+bool isInstanceOf(const std::shared_ptr<From>& input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* casted = dynamic_cast<const To*>(input.get());
+  return casted != nullptr;
+}
+
+template <typename To, typename From>
+bool isInstanceOf(const std::unique_ptr<From>& input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* casted = dynamic_cast<const To*>(input.get());
+  return casted != nullptr;
+}
+
+template <typename To, typename From>
+bool isInstanceOf(const From* input) {
+  VELOX_CHECK_NOT_NULL(input);
+  auto* casted = dynamic_cast<const To*>(input);
+  return casted != nullptr;
+}
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 template <typename To, typename From>
 std::shared_ptr<To> checked_pointer_cast(const std::shared_ptr<From>& input) {
   VELOX_CHECK_NOT_NULL(input.get());
@@ -104,5 +165,6 @@ bool is_instance_of(const From* input) {
   auto* casted = dynamic_cast<const To*>(input);
   return casted != nullptr;
 }
+#endif
 
 } // namespace facebook::velox
