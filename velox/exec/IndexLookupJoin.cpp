@@ -140,6 +140,7 @@ IndexLookupJoin::IndexLookupJoin(
           operatorId,
           joinNode->id(),
           "IndexLookupJoin"),
+      splitOutput_{driverCtx->queryConfig().indexLookupJoinSplitOutput()},
       // TODO: support to update output batch size with output size stats during
       // the lookup processing.
       outputBatchSize_{
@@ -575,6 +576,106 @@ void IndexLookupJoin::prepareLookup(InputBatchState& batch) {
   }
 }
 
+void IndexLookupJoin::mergeLookupResults(InputBatchState& batch) {
+  VELOX_CHECK(!batch.partialOutputs.empty());
+  VELOX_CHECK_NULL(batch.lookupResult);
+
+  if (batch.partialOutputs.size() == 1) {
+    batch.lookupResult = std::move(batch.partialOutputs[0]);
+    batch.partialOutputs.clear();
+    return;
+  }
+
+  // Calculate total size.
+  vector_size_t totalSize = 0;
+  for (const auto& result : batch.partialOutputs) {
+    totalSize += static_cast<vector_size_t>(result->size());
+  }
+
+  // Merge inputHits buffers.
+  auto mergedInputHits = allocateIndices(totalSize, pool());
+  auto* rawMergedInputHits = mergedInputHits->asMutable<vector_size_t>();
+  vector_size_t offset = 0;
+  for (const auto& result : batch.partialOutputs) {
+    std::memcpy(
+        rawMergedInputHits + offset,
+        result->inputHits->as<const vector_size_t>(),
+        result->size() * sizeof(vector_size_t));
+    offset += static_cast<vector_size_t>(result->size());
+  }
+
+  // Merge output RowVectors.
+  auto mergedOutput = BaseVector::create<RowVector>(
+      batch.partialOutputs[0]->output->type(), 0, pool());
+  for (const auto& result : batch.partialOutputs) {
+    mergedOutput->append(result->output.get());
+  }
+
+  batch.lookupResult = std::make_unique<connector::IndexSource::LookupResult>(
+      std::move(mergedInputHits), std::move(mergedOutput));
+  batch.partialOutputs.clear();
+}
+
+bool IndexLookupJoin::getLookupResults(InputBatchState& batch) {
+  VELOX_CHECK_NOT_NULL(batch.lookupInput);
+  VELOX_CHECK(!batch.lookupFuture.valid());
+
+  // Create iterator and fetch first result if this is the initial call.
+  if (batch.lookupResultIter == nullptr) {
+    VELOX_CHECK_NULL(batch.lookupResult);
+    VELOX_CHECK(batch.partialOutputs.empty());
+
+    // Create the lookup result iterator.
+    batch.lookupResultIter = indexSource_->lookup(
+        connector::IndexSource::LookupRequest{batch.lookupInput});
+
+    // Fetch the first result.
+    auto lookupResultOr =
+        batch.lookupResultIter->next(outputBatchSize_, batch.lookupFuture);
+    if (!lookupResultOr.has_value()) {
+      VELOX_CHECK(batch.lookupFuture.valid());
+      return false;
+    }
+    VELOX_CHECK(!batch.lookupFuture.valid());
+    batch.lookupResult = std::move(lookupResultOr).value();
+
+    // Either splitOutput_ is true, or no more results, or first result is null.
+    if (splitOutput_ || batch.lookupResult == nullptr ||
+        !batch.lookupResultIter->hasNext()) {
+      return true;
+    }
+
+    // Otherwise start accumulating results.
+    batch.partialOutputs.push_back(std::move(batch.lookupResult));
+  }
+
+  // Continue accumulating remaining results when splitOutput_ is false.
+  // This handles both initial accumulation and resuming after async
+  // interruption.
+  VELOX_CHECK(!splitOutput_);
+  VELOX_CHECK(!batch.partialOutputs.empty());
+  VELOX_CHECK_NULL(batch.lookupResult);
+
+  while (batch.lookupResultIter->hasNext()) {
+    auto nextResultOr =
+        batch.lookupResultIter->next(outputBatchSize_, batch.lookupFuture);
+    if (!nextResultOr.has_value()) {
+      // Need to wait for async operation.
+      VELOX_CHECK(batch.lookupFuture.valid());
+      return false;
+    }
+    VELOX_CHECK(!batch.lookupFuture.valid());
+    auto nextResult = std::move(nextResultOr).value();
+    if (nextResult != nullptr) {
+      batch.partialOutputs.push_back(std::move(nextResult));
+    }
+  }
+
+  // All results accumulated, merge them.
+  mergeLookupResults(batch);
+  return true;
+}
+
 void IndexLookupJoin::decodeAndDetectNonNullKeys(InputBatchState& batch) {
   const auto numRows = batch.input->size();
   batch.nonNullInputRows.resize(numRows);
@@ -610,16 +711,7 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
     return;
   }
 
-  batch.lookupResultIter = indexSource_->lookup(
-      connector::IndexSource::LookupRequest{batch.lookupInput});
-  auto lookupResultOr =
-      batch.lookupResultIter->next(outputBatchSize_, batch.lookupFuture);
-  if (!lookupResultOr.has_value()) {
-    VELOX_CHECK(batch.lookupFuture.valid());
-    return;
-  }
-  VELOX_CHECK(!batch.lookupFuture.valid());
-  batch.lookupResult = std::move(lookupResultOr).value();
+  getLookupResults(batch);
 }
 
 RowVectorPtr IndexLookupJoin::getOutputFromLookupResult(
@@ -633,6 +725,18 @@ RowVectorPtr IndexLookupJoin::getOutputFromLookupResult(
   }
 
   VELOX_CHECK_NOT_NULL(batch.lookupResultIter);
+
+  // Continue accumulating results if we have partial accumulated results from
+  // startLookup when splitOutput_ is false.
+  if (!splitOutput_ && !batch.partialOutputs.empty()) {
+    if (!getLookupResults(batch)) {
+      // Async operation pending, need to wait.
+      VELOX_CHECK(batch.lookupFuture.valid());
+      return nullptr;
+    }
+    VELOX_CHECK(!batch.lookupFuture.valid());
+    VELOX_CHECK(batch.partialOutputs.empty());
+  }
 
   if (batch.lookupResult == nullptr) {
     auto resultOptional =
