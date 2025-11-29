@@ -165,3 +165,11 @@ struct IExprEqual {
 };
 
 } // namespace facebook::velox::core
+
+template <>
+struct fmt::formatter<facebook::velox::core::IExpr> : formatter<std::string> {
+  auto format(const facebook::velox::core::IExpr& s, format_context& ctx)
+      const {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};
