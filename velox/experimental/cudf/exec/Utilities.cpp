@@ -23,15 +23,16 @@
 #include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
+#include <cudf/utilities/prefetch.hpp>
 
-#include <rmm/mr/device/arena_memory_resource.hpp>
-#include <rmm/mr/device/cuda_async_memory_resource.hpp>
-#include <rmm/mr/device/cuda_memory_resource.hpp>
-#include <rmm/mr/device/device_memory_resource.hpp>
-#include <rmm/mr/device/managed_memory_resource.hpp>
-#include <rmm/mr/device/owning_wrapper.hpp>
-#include <rmm/mr/device/pool_memory_resource.hpp>
-#include <rmm/mr/device/prefetch_resource_adaptor.hpp>
+#include <rmm/mr/arena_memory_resource.hpp>
+#include <rmm/mr/cuda_async_memory_resource.hpp>
+#include <rmm/mr/cuda_memory_resource.hpp>
+#include <rmm/mr/device_memory_resource.hpp>
+#include <rmm/mr/managed_memory_resource.hpp>
+#include <rmm/mr/owning_wrapper.hpp>
+#include <rmm/mr/pool_memory_resource.hpp>
+#include <rmm/mr/prefetch_resource_adaptor.hpp>
 
 #include <common/base/Exceptions.h>
 
@@ -83,11 +84,7 @@ namespace {
 }
 
 void enablePrefetching() {
-  cudf::experimental::prefetch::enable_prefetching("hash_join");
-  cudf::experimental::prefetch::enable_prefetching("gather");
-  cudf::experimental::prefetch::enable_prefetching("column_view::get_data");
-  cudf::experimental::prefetch::enable_prefetching(
-      "mutable_column_view::get_data");
+  cudf::prefetch::enable();
 }
 
 } // namespace
