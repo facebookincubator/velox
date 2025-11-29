@@ -3521,7 +3521,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
-    bool hasMarker_;
+    bool hasMarker_{false};
   };
 
   bool supportsBarrier() const override {
