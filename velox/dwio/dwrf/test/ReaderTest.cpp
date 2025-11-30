@@ -84,6 +84,7 @@ class TestReaderP
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    facebook::velox::common::testutil::TestValue::enable();
   }
 
   folly::Executor* executor() {
@@ -106,6 +107,7 @@ class TestReader : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    facebook::velox::common::testutil::TestValue::enable();
   }
 
   std::vector<VectorPtr> createBatches(
@@ -2855,10 +2857,9 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
   std::atomic<int> asyncLoadsCompleted{0};
   folly::Baton<> readerDestroyed;
 
-  facebook::velox::common::testutil::TestValue::enable();
-  facebook::velox::common::testutil::TestValue::set(
+  SCOPED_TESTVALUE_SET(
       "facebook::velox::dwio::common::ParallelUnitLoader::load",
-      std::function<void(std::shared_ptr<LoadUnit>*)>([&](auto*) {
+      std::function<void(void*)>([&](void*) {
         // Only block the second stripe (index 1) - let the first stripe load
         // normally so rowReader->next() can complete
         // fetch_add returns the value before increment: 0 for first, 1 for
@@ -2916,7 +2917,6 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
 
   // Clean up
   ioExecutor->join();
-  facebook::velox::common::testutil::TestValue::disable();
 }
 
 } // namespace
