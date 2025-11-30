@@ -86,7 +86,7 @@ class AsyncSource {
     {
       std::lock_guard<std::mutex> l(mutex_);
       VELOX_CHECK_NULL(item_);
-      if (FOLLY_LIKELY(exception_ == nullptr)) {
+      if (exception_ == nullptr) [[likely]] {
         item_ = std::move(item);
       }
       making_ = false;
