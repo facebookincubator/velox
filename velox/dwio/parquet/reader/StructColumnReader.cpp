@@ -116,13 +116,14 @@ void StructColumnReader::read(
 
 std::shared_ptr<dwio::common::BufferedInput> StructColumnReader::loadRowGroup(
     uint32_t index,
-    const std::shared_ptr<dwio::common::BufferedInput>& input) {
+    const std::shared_ptr<dwio::common::BufferedInput>& input,
+    dwio::common::RowRanges& rowRanges) {
   if (isRowGroupBuffered(index, *input)) {
-    enqueueRowGroup(index, *input);
+    enqueueRowGroup(index, *input, rowRanges);
     return input;
   }
   auto newInput = input->clone();
-  enqueueRowGroup(index, *newInput);
+  enqueueRowGroup(index, *newInput, rowRanges);
   newInput->load(dwio::common::LogType::STRIPE);
   return newInput;
 }
@@ -137,16 +138,62 @@ bool StructColumnReader::isRowGroupBuffered(
 
 void StructColumnReader::enqueueRowGroup(
     uint32_t index,
-    dwio::common::BufferedInput& input) {
+    dwio::common::BufferedInput& input,
+    dwio::common::RowRanges& rowRanges) {
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
-      structChild->enqueueRowGroup(index, input);
+      structChild->enqueueRowGroup(index, input, rowRanges);
     } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
-      listChild->enqueueRowGroup(index, input);
+      listChild->enqueueRowGroup(index, input, rowRanges);
     } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
-      mapChild->enqueueRowGroup(index, input);
+      mapChild->enqueueRowGroup(index, input, rowRanges);
     } else {
-      child->formatData().as<ParquetData>().enqueueRowGroup(index, input);
+      child->formatData().as<ParquetData>().enqueueRowGroup(
+          index, input, rowRanges);
+    }
+  }
+}
+
+bool StructColumnReader::collectIndexPageInfoMap(
+    uint32_t index,
+    PageIndexInfoMap& map) {
+  auto shouldApplyPagePruning = false;
+  for (auto& child : children_) {
+    if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
+      return false;
+    } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
+      return false;
+    } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
+      return false;
+    } else {
+      shouldApplyPagePruning |=
+          child->formatData().as<ParquetData>().collectIndexPageInfoMap(
+              index, map);
+    }
+  }
+  return shouldApplyPagePruning;
+}
+
+void StructColumnReader::filterDataPages(
+    uint32_t index,
+    folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
+    dwio::common::RowRanges& range,
+    std::vector<std::pair<
+        const velox::common::MetadataFilter::LeafNode*,
+        dwio::common::RowRanges>>& metadataFilterResults) {
+  for (auto& child : children_) {
+    if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
+      structChild->filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
+    } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
+      listChild->filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
+    } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
+      mapChild->filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
+    } else {
+      child->formatData().as<ParquetData>().filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
     }
   }
 }
