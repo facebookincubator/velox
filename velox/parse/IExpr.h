@@ -165,3 +165,23 @@ struct IExprEqual {
 };
 
 } // namespace facebook::velox::core
+
+template <>
+struct fmt::formatter<facebook::velox::core::IExpr>
+    : fmt::formatter<std::string> {
+  auto format(const facebook::velox::core::IExpr& expr, format_context& ctx)
+      const {
+    return fmt::formatter<std::string>::format(expr.toString(), ctx);
+  }
+};
+
+// For ExprPtr (shared_ptr)
+template <>
+struct fmt::formatter<facebook::velox::core::ExprPtr>
+    : fmt::formatter<std::string> {
+  auto format(const facebook::velox::core::ExprPtr& expr, format_context& ctx)
+      const {
+    return fmt::formatter<std::string>::format(
+        expr ? expr->toString() : "null", ctx);
+  }
+};
