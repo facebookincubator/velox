@@ -1,4 +1,5 @@
 <img src="static/logo.svg" alt="Velox logo" width="50%" align="center" />
+<!-- Velox is an extensible C++ execution engine.-->
 
 Velox is a composable execution engine distributed as an open source C++
 library. It provides reusable, extensible, and high-performance data processing

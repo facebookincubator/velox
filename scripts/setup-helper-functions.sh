@@ -16,6 +16,8 @@
 # github_checkout $REPO $VERSION $GIT_CLONE_PARAMS clones or re-uses an existing clone of the
 # specified repo, checking out the requested version.
 
+# Comment to trigger CI build.
+
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 OS_CXXFLAGS=${OS_CXXFLAGS:-""}
 EXTRA_PKG_CXXFLAGS=${EXTRA_PKG_CXXFLAGS:-""}
