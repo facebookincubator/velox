@@ -116,6 +116,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
     partition_ = partition;
 
     previousFrameMetadata_.reset();
+    for (auto& argVector : argVectors_) {
+      argVector->prepareForReuse();
+    }
   }
 
   void apply(
