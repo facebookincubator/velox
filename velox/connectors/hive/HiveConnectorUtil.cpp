@@ -634,11 +634,6 @@ void configureRowReaderOptions(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
-    // When parallel unit loader is enabled, all units would be loaded by
-    // ParallelUnitLoader, thus disable eagerFirstStripeLoad.
-    if (hiveConfig->parallelUnitLoadCount(sessionProperties) > 0) {
-      rowReaderOptions.setEagerFirstStripeLoad(false);
-    }
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
