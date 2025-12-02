@@ -269,7 +269,8 @@ ExprPtr compileCall(
     const TypedExprPtr& expr,
     std::vector<ExprPtr> inputs,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    memory::MemoryPool* pool) {
   const auto* call = expr->asUnchecked<core::CallTypedExpr>();
   const auto& resultType = expr->type();
 
@@ -302,8 +303,11 @@ ExprPtr compileCall(
         resultType,
         folly::join(", ", inputTypes));
 
+    // Create a shared_ptr as the memory pool is managed by the ExecCtx
+    auto poolPtr = std::shared_ptr<memory::MemoryPool>(
+        pool, [](memory::MemoryPool*) { /* no-op deleter */ });
     auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-        inputTypes, getConstantInputs(inputs), config);
+        inputTypes, getConstantInputs(inputs), config, &poolPtr);
     return std::make_shared<Expr>(
         resultType,
         std::move(inputs),
@@ -411,7 +415,7 @@ ExprPtr compileRewrittenExpression(
     }
     case core::ExprKind::kCall: {
       result = compileCall(
-          expr, compiledInputs, trackCpuUsage, queryCtx->queryConfig());
+          expr, compiledInputs, trackCpuUsage, queryCtx->queryConfig(), pool);
       break;
     }
     case core::ExprKind::kFieldAccess: {
