@@ -626,6 +626,7 @@ void CudfHiveDataSource::resetSplit() {
   splitReader_.reset();
   exptSplitReader_.reset();
   tableMaterialized_.reset();
+  dataSource_.reset();
 }
 
 std::unordered_map<std::string, RuntimeMetric>
