@@ -50,6 +50,7 @@
 #include "velox/functions/prestosql/aggregates/QDigestAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/ReduceAgg.h"
 #include "velox/functions/prestosql/aggregates/SetAggregates.h"
+#include "velox/functions/prestosql/aggregates/SetDigestAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
 #include "velox/functions/prestosql/aggregates/VarianceAggregates.h"
@@ -120,6 +121,10 @@ extern void registerMapUnionAggregate(
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerMapUnionSumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerMakeSetDigestAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
@@ -223,6 +228,7 @@ void registerAllAggregateFunctions(
   registerMapAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionSumAggregate(prefix, withCompanionFunctions, overwrite);
+  registerMakeSetDigestAggregate(prefix, withCompanionFunctions, overwrite);
   registerMaxDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerMultiMapAggAggregate(prefix, withCompanionFunctions, overwrite);

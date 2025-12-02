@@ -19,6 +19,7 @@ target_link_libraries(
   velox_core
   velox_aggregation_fuzzer_base
   velox_exec_test_lib
+  velox_functions_lib
   velox_vector
   velox_vector_test_lib
 )
