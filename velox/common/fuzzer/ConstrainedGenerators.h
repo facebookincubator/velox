@@ -527,6 +527,27 @@ class TDigestInputGenerator : public AbstractInputGenerator {
   variant generate() override;
 };
 
+class SetDigestInputGenerator : public AbstractInputGenerator {
+ public:
+  SetDigestInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      memory::MemoryPool* pool);
+
+  ~SetDigestInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  template <typename T>
+  variant generateTyped();
+
+  TypePtr baseType_;
+  memory::MemoryPool* pool_;
+  std::shared_ptr<memory::MemoryPool> ownedPool_;
+};
+
 class BingTileInputGenerator : public AbstractInputGenerator {
  public:
   BingTileInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
