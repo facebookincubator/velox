@@ -289,9 +289,15 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
   writeToFile(filePath->getPath(), vectors, "c");
 
   createDuckDbTable(vectors);
-  const std::string duckDbSql = "SELECT * FROM tmp";
+  const std::string duckDbSql =
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp";
 
-  auto splits = makeCudfHiveConnectorSplits({filePath});
+  auto splits = makeCudfHiveConnectorSplits(
+      {filePath, filePath, filePath, filePath, filePath});
 
   // Helper to test scan all columns for the given splits
   auto testScanAllColumnsUsingExperimentalReader =
