@@ -325,13 +325,13 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));
 
-  // Test scan all columns with CudfHiveConnectorSplits
+  // Test scan all columns with buffered input datasource(s)
   {
     auto plan = tableScanNode();
     testScanAllColumnsUsingExperimentalReader(plan);
   }
 
-  // Test scan all columns with CudfHiveConnectorSplits
+  // Test scan all columns with kvikIO datasource(s)
   {
     config.insert(
         {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
