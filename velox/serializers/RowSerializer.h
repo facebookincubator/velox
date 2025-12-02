@@ -52,7 +52,8 @@ class RowSerializer : public IterativeVectorSerializer {
   void append(
       const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges,
-      Scratch& /*scratch*/) override {
+      Scratch& /*scratch*/,
+      const column_index_t /*columnStartOffset*/) override {
     size_t totalSize = 0;
     const auto totalRows = std::accumulate(
         ranges.begin(),

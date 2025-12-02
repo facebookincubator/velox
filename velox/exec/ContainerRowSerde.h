@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/memory/ByteStream.h"
+#include "velox/serializers/VectorStream.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -39,6 +40,11 @@ class ContainerRowSerde {
 
   static void
   deserialize(ByteInputStream& in, vector_size_t index, BaseVector* result);
+
+  static void deserialize(
+      ByteInputStream& in,
+      serializer::presto::VectorStream* out,
+      TypePtr type);
 
   /// Returns < 0 if 'left' is less than 'right' at 'index', 0 if
   /// equal and > 0 otherwise. flags.nullHandlingMode can be only NullAsValue

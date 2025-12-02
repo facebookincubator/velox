@@ -45,7 +45,11 @@ class SpillerBenchmarkBase {
   virtual ~SpillerBenchmarkBase() = default;
 
   /// Sets up the test.
-  virtual void setUp() = 0;
+  virtual void setUp(
+      RowTypePtr rowType =
+          ROW({"c0", "c1", "c2", "c3", "c4"},
+              {INTEGER(), BIGINT(), VARCHAR(), VARBINARY(), DOUBLE()}),
+      int32_t stringMaxLength = 10) = 0;
 
   /// Runs the test.
   virtual void run() = 0;

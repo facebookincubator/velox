@@ -14,20 +14,22 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/SpillerBenchmarkBase.h"
+#include "SpillerBenchmarkBase.h"
 
 namespace facebook::velox::exec::test {
-class AggregateSpillBenchmarkBase : public SpillerBenchmarkBase {
+/// This test measures the spill input overhead in spill join & probe.
+class SortSpillInputBenchmarkBase : public SpillerBenchmarkBase {
  public:
-  explicit AggregateSpillBenchmarkBase(std::string spillerType)
-      : spillerType_(spillerType) {};
+  SortSpillInputBenchmarkBase() = default;
 
+  void setUp(RowTypePtr rowType, int32_t stringMaxLength) override {
+    setUp(rowType, false, stringMaxLength);
+  };
   /// Sets up the test.
   void setUp(
-      RowTypePtr rowType =
-          ROW({"c0", "c1", "c2", "c3", "c4"},
-              {INTEGER(), BIGINT(), VARCHAR(), VARBINARY(), DOUBLE()}),
-      int32_t stringMaxLength = 10) override;
+      RowTypePtr rowType,
+      bool serializeRowContainer,
+      int32_t stringMaxLength);
 
   /// Runs the test.
   void run() override;
@@ -41,5 +43,6 @@ class AggregateSpillBenchmarkBase : public SpillerBenchmarkBase {
   const std::string spillerType_;
   std::unique_ptr<RowContainer> rowContainer_;
   std::shared_ptr<velox::memory::MemoryPool> spillerPool_;
+  bool serializeRowContainer_;
 };
 } // namespace facebook::velox::exec::test

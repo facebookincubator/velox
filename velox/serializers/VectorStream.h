@@ -19,7 +19,7 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
 
-namespace facebook::velox::serializer::presto::detail {
+namespace facebook::velox::serializer::presto {
 // Appendable container for serialized values. To append a value at a
 // time, call appendNull or appendNonNull first. Then call appendLength if the
 // type has a length. A null value has a length of 0. Then call appendValue if
@@ -149,6 +149,10 @@ class VectorStream {
     append(folly::Range(&value, 1));
   }
 
+  ByteOutputStream& getValueSteam() {
+    return values_;
+  }
+
   bool isDictionaryStream() const {
     return isDictionaryStream_;
   }
@@ -242,4 +246,4 @@ void VectorStream::append(folly::Range<const bool*> values);
 
 template <>
 void VectorStream::append(folly::Range<const int128_t*> values);
-} // namespace facebook::velox::serializer::presto::detail
+} // namespace facebook::velox::serializer::presto

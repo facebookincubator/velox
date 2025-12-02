@@ -80,7 +80,8 @@ struct SpillConfig {
       const std::string& _compressionKind,
       std::optional<PrefixSortConfig> _prefixSortConfig = std::nullopt,
       const std::string& _fileCreateConfig = {},
-      uint32_t _windowMinReadBatchRows = 1'000);
+      uint32_t _windowMinReadBatchRows = 1'000,
+      bool serializeRowContainer = false);
 
   /// Returns the spilling level with given 'startBitOffset' and
   /// 'numPartitionBits'.
@@ -168,5 +169,9 @@ struct SpillConfig {
 
   /// The minimum number of rows to read when processing spilled window data.
   uint32_t windowMinReadBatchRows;
+
+  /// Directly serialize rows in RowContainer for spilling, or extract them for
+  /// serialization.
+  bool serializeRowContainer;
 };
 } // namespace facebook::velox::common

@@ -137,6 +137,49 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     testNegativeRowNumbers(container, rows, column, expected);
   }
 
+  std::unique_ptr<ByteInputStream> toByteStream(const std::string& input) {
+    ByteRange byteRange{
+        reinterpret_cast<uint8_t*>(const_cast<char*>(input.data())),
+        (int32_t)input.length(),
+        0};
+    return std::make_unique<BufferInputStream>(
+        std::vector<ByteRange>{{byteRange}});
+  }
+
+  void testSerializeRows(
+      RowContainer& container,
+      const std::vector<char*>& rows,
+      RowTypePtr rowType,
+      const VectorPtr& expected) {
+    std::ostringstream output;
+    serializer::presto::PrestoVectorSerde serde;
+    serializer::presto::PrestoVectorSerde::PrestoOptions options = {
+        false,
+        common::CompressionKind::CompressionKind_LZ4,
+        0.8,
+        /*nullsFirst=*/true};
+    auto batch = std::make_unique<VectorStreamGroup>(pool_.get(), &serde);
+    batch->createStreamTree(rowType, rows.size(), &options);
+    batch->appendNumRows(rows.size());
+    const auto& types = container.columnTypes();
+    for (auto i = 0; i < types.size(); ++i) {
+      container.extractColumn(
+          rows.data(), rows.size(), i, types[i], batch->streamAt(i));
+    }
+
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream out(&output, &listener);
+    batch->flush(&out);
+
+    auto str = output.str();
+    auto byteStream = toByteStream(str);
+    RowVectorPtr result;
+    serde.deserialize(
+        byteStream.get(), pool_.get(), rowType, &result, 0, &options);
+
+    assertEqualVectors(expected, result);
+  }
+
   void testExtractColumnAllRows(
       RowContainer& container,
       const std::vector<char*>& rows,
@@ -393,6 +436,28 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     auto rows = store(*rowContainer, decoded, size);
 
     testExtractColumn(*rowContainer, rows, 0, input);
+    return rowContainer;
+  }
+
+  std::unique_ptr<RowContainer> roundTripSerde(const RowVectorPtr& input) {
+    // Create row container.
+    std::vector<TypePtr> types;
+    for (int i = 0; i < input->childrenSize(); ++i) {
+      types.push_back(input->childAt(i)->type());
+    }
+
+    // Store the vector in the rowContainer.
+    auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
+    auto size = input->size();
+    std::vector<char*> rows(input->size());
+    for (int row = 0; row < input->size(); ++row) {
+      rows[row] = rowContainer->newRow();
+    }
+    for (int i = 0; i < input->childrenSize(); ++i) {
+      DecodedVector decoded(*input->childAt(i));
+      rowContainer->store(decoded, folly::Range(rows.data(), input->size()), i);
+    }
+    testSerializeRows(*rowContainer, rows, input->rowType(), input);
     return rowContainer;
   }
 
@@ -1044,6 +1109,69 @@ TEST_F(RowContainerTest, storeExtractArrayOfVarchar) {
   elements[1].emplace_back(strings[3]);
   auto input = vectorMaker.arrayVector<StringView>(elements);
   roundTrip(input);
+}
+
+TEST_F(RowContainerTest, serialize) {
+  facebook::velox::test::VectorMaker vectorMaker{pool_.get()};
+  int32_t vecSize = 1000;
+  auto input = vectorMaker.rowVector(
+      {"int", "bool", "str", "array", "map", "row"},
+      {vectorMaker.flatVector<int64_t>(
+           vecSize,
+           [&](auto row) { return row; },
+           [](auto j) { return j % 5 == 0; }),
+       vectorMaker.flatVector<bool>(
+           vecSize,
+           [&](auto row) { return row % 2 == 0; },
+           [](auto j) { return j % 5 == 0; }),
+       vectorMaker.flatVector<StringView>(
+           vecSize,
+           [&](auto row) {
+             return row % 2 == 0 ? "inline" : "not-inline-string-aaaaaaaaa";
+           },
+           [](auto j) { return j % 5 == 0; }),
+       vectorMaker.arrayVector<int64_t>(
+           vecSize,
+           [](auto j) { return 7 + (j % 3); },
+           [](auto j) { return j; },
+           [](auto j) { return j % 5 == 0; },
+           [](auto j) { return j % 5 == 0; }),
+       vectorMaker.mapVector<int64_t, bool>(
+           vecSize,
+           [](auto j) { return 7 + (j % 3); },
+           [](auto j) { return j; },
+           [](auto j) { return j % 3 == 0; },
+           [](auto j) { return j % 5 == 0; },
+           [](auto j) { return j % 5 == 0; }),
+       vectorMaker.rowVector(
+           {"int", "str", "arr"},
+           {vectorMaker.flatVector<int64_t>(
+                vecSize, [&](auto row) { return row; }),
+            vectorMaker.flatVector<StringView>(
+                vecSize,
+                [&](auto row) {
+                  return row % 2 == 0 ? "inline"
+                                      : "not-inline-string-aaaaaaaaa";
+                },
+                [](auto j) { return j % 5 == 0; }),
+            vectorMaker.arrayVector<int64_t>(
+                vecSize,
+                [](auto j) { return 7 + (j % 3); },
+                [](auto j) { return j; },
+                [](auto j) { return j % 5 == 0; },
+                [](auto j) { return j % 5 == 0; })})});
+
+  roundTripSerde(input);
+}
+
+TEST_F(RowContainerTest, serializeLongString) {
+  facebook::velox::test::VectorMaker vectorMaker{pool_.get()};
+  int32_t vecSize = 1000;
+  auto input = vectorMaker.rowVector(
+      {"str"}, {vectorMaker.flatVector<StringView>(vecSize, [&](auto row) {
+        return "l&1mjT4i6'Y#!&7We|o2YtImnZ},I?R~svBP>/<HcLin:t.7%YCY.:y+*jTRp-MNpo6^N(]M>ky)XYEl5gslT%`#5X%[MBbE&%{`5)~5a]5)wJh[!Um3UKkf3gnji.Z\\\\";
+      })});
+  roundTripSerde(input);
 }
 
 TEST_F(RowContainerTest, types) {

@@ -596,6 +596,23 @@ class HashStringAllocator::InputStream : public ByteInputStream {
     }
   }
 
+  void readBytes(ByteOutputStream& out, int32_t size) {
+    nextHeaderIfNeed();
+    for (;;) {
+      const auto available = range_.size - range_.position;
+      const uint8_t* data = range_.buffer + range_.position;
+      if (size <= available) {
+        out.append(folly::Range(data, size));
+        range_.position += size;
+        return;
+      }
+      out.append(folly::Range(data, available));
+      size -= available;
+      VELOX_CHECK(header_->isContinued(), "Reading past end of stream");
+      setHeader(header_->nextContinued());
+    }
+  }
+
   std::string_view nextView(int64_t size) final {
     if (atEnd()) {
       return {};

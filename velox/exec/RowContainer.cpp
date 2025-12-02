@@ -788,6 +788,23 @@ void RowContainer::extractString(
   values->setNoCopy(index, StringView(rawBuffer, value.size()));
 }
 
+void RowContainer::extractString(
+    StringView value,
+    serializer::presto::VectorStream* stream) {
+  int32_t size = value.size();
+  if (value.isInline() ||
+      reinterpret_cast<const HashStringAllocator::Header*>(value.data())[-1]
+              .size() >= size) {
+    // The string is inline or all in one piece out of line.
+    stream->appendOne(value);
+    return;
+  }
+  stream->appendLength(size);
+  HashStringAllocator::InputStream intputStream(
+      HashStringAllocator::headerOf(value.data()));
+  intputStream.readBytes(stream->getValueSteam(), size);
+}
+
 void RowContainer::storeComplexType(
     const DecodedVector& decoded,
     vector_size_t index,

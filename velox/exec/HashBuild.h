@@ -347,6 +347,10 @@ class HashBuildSpiller : public SpillerBase {
   void extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr)
       override;
 
+  bool hasProbedFlag() const override {
+    return spillProbeFlag_;
+  }
+
   bool needSort() const override {
     return false;
   }
