@@ -32,6 +32,7 @@
 #include "velox/functions/prestosql/aggregates/EntropyAggregates.h"
 #include "velox/functions/prestosql/aggregates/GeometricMeanAggregate.h"
 #include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
+#include "velox/functions/prestosql/aggregates/KHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionSumAggregate.h"
@@ -54,6 +55,7 @@
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
 #include "velox/functions/prestosql/aggregates/VarianceAggregates.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -190,6 +192,15 @@ extern void registerVarianceAggregates(
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
+extern void registerKHyperLogLogAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
+extern void registerKHyperLogLogAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
 
 void registerAllAggregateFunctions(
     const std::string& prefix,
@@ -198,6 +209,7 @@ void registerAllAggregateFunctions(
     bool overwrite) {
   registerJsonType();
   registerTDigestType();
+  registerKHyperLogLogType();
   registerApproxDistinctAggregates(prefix, withCompanionFunctions, overwrite);
   registerApproxMostFrequentAggregate(
       prefix, withCompanionFunctions, overwrite);
@@ -246,6 +258,7 @@ void registerAllAggregateFunctions(
   registerTDigestAggregate(prefix, overwrite);
   registerNoisyApproxSfmAggregate(prefix, withCompanionFunctions, overwrite);
   registerNumericHistogramAggregate(prefix, withCompanionFunctions, overwrite);
+  registerKHyperLogLogAggregates(prefix, withCompanionFunctions, overwrite);
 }
 
 void registerInternalAggregateFunctions(const std::string& prefix) {
