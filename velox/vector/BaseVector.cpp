@@ -1187,7 +1187,7 @@ uint64_t BaseVector::estimateFlatSize() const {
     const auto& leafType = leaf->type();
     return length_ *
         (leafType->isFixedWidth() ? leafType->cppSizeInBytes() : 0) +
-        BaseVector::retainedSize();
+        BaseVector::retainedSizeImpl();
   }
 
   auto avgRowSize = 1.0 * leaf->retainedSize() / leaf->size();

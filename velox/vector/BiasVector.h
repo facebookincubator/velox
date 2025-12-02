@@ -146,10 +146,6 @@ class BiasVector : public SimpleVector<T> {
     return valueType_;
   }
 
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + values_->capacity();
-  }
-
   /**
    * Returns a shared_ptr to the underlying arrow array holding the values for
    * this vector. This is used during execution to process over the subset of
@@ -198,6 +194,11 @@ class BiasVector : public SimpleVector<T> {
     return xsimd::batch<T>::load_unaligned(mem);
   }
 #endif
+
+  uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const override {
+    return BaseVector::retainedSizeImpl() + values_->capacity();
+  }
 
   TypeKind valueType_;
   BufferPtr values_;

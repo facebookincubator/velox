@@ -19,8 +19,10 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
 
+namespace facebook::velox::dwio::catalog::fbhive {
+namespace {
+
 using namespace ::testing;
-using namespace facebook::velox::dwio::catalog::fbhive;
 
 TEST(FileUtilsTests, makePartName) {
   std::vector<std::pair<std::string, std::string>> pairs{
@@ -31,6 +33,7 @@ TEST(FileUtilsTests, makePartName) {
   ASSERT_EQ(
       FileUtils::makePartName(pairs, false),
       "ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Dc");
+  ASSERT_THROW(FileUtils::makePartName({}, false), VeloxException);
 }
 
 TEST(FileUtilsTests, makePartNameWithoutDefaultPartitionValue) {
@@ -100,3 +103,6 @@ TEST(FileUtilsTests, extractPartitionName) {
         FileUtils::extractPartitionName(testCase.filePath));
   }
 }
+
+} // namespace
+} // namespace facebook::velox::dwio::catalog::fbhive

@@ -38,6 +38,9 @@ RowVectorPtr mergeRowVectors(
     const std::vector<RowVectorPtr>& results,
     velox::memory::MemoryPool* pool) {
   VELOX_NVTX_FUNC_RANGE();
+  if (results.size() == 1) {
+    return results[0];
+  }
   vector_size_t totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();

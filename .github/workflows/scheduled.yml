@@ -435,6 +435,7 @@ jobs:
                 --velox_fuzzer_enable_expression_reuse \
                 --max_expression_trees_per_step 2 \
                 --retry_with_try \
+                --special_forms="and,or,cast,coalesce,if" \
                 --enable_dereference \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
@@ -549,6 +550,7 @@ jobs:
           chmod +x velox_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/presto_bias_functions)"
           ./velox_expression_fuzzer_test \
                 --seed ${random_seed} \
                 --lazy_vector_generation_ratio 0.2 \
@@ -646,6 +648,7 @@ jobs:
           chmod +x spark_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/spark_bias_functions)"
           ./spark_expression_fuzzer_test \
                 --seed ${random_seed} \
                 --duration_sec $DURATION \

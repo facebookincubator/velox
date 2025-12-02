@@ -257,6 +257,8 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_to_bing_tiles",
     "geometry_to_dissolved_bing_tiles",
     "geometry_union",
+    "to_geometry",
+    "to_spherical_geography",
     "localtime",
 };
 
@@ -310,6 +312,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
     "array_position", // https://github.com/facebookincubator/velox/issues/10580
     "chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/12327
+    "map_except",
     "bitwise_left_shift", // https://github.com/facebookincubator/velox/issues/12330
     "log2", // https://github.com/facebookincubator/velox/issues/12338
     "bitwise_right_shift", // https://github.com/facebookincubator/velox/issues/12339
@@ -412,10 +415,12 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     // https://github.com/prestodb/presto/pull/25521
     "xxhash64(varbinary,bigint) -> varbinary",
     "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
+    "$internal$split_to_map",
     "$internal$canonicalize",
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
-                 // https://github.com/facebookincubator/velox/issues/14937
+                 // https://github.com/facebookincubator/velox/issues/14937,
+    "jarowinkler_similarity",
 };
 
 int main(int argc, char** argv) {

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/iceberg/IcebergConnector.h"
+
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -24,17 +26,8 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-constexpr std::string_view kDefaultTestIcebergFunctionNamePrefix{
-    "$internal$.test_iceberg."};
-
 class TransformTest : public test::IcebergTestBase {
  protected:
-  void SetUp() override {
-    IcebergTestBase::SetUp();
-    functions::iceberg::registerFunctions(
-        std::string(kDefaultTestIcebergFunctionNamePrefix));
-  }
-
   void testTransform(
       const IcebergPartitionSpecPtr& spec,
       const RowVectorPtr& input,
@@ -48,7 +41,7 @@ class TransformTest : public test::IcebergTestBase {
         spec,
         partitionChannels,
         input->rowType(),
-        std::string(kDefaultTestIcebergFunctionNamePrefix));
+        std::string(kDefaultIcebergFunctionPrefix));
     auto transformEvaluator = std::make_unique<TransformEvaluator>(
         transformExprs, connectorQueryCtx_.get());
     auto result = transformEvaluator->evaluate(input);

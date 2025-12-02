@@ -29,6 +29,8 @@
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
+extern const std::string kIcebergConnectorId;
+
 struct PartitionField {
   // 0-based column index.
   int32_t id;

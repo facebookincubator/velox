@@ -13,19 +13,66 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/iceberg/IcebergPartitionPath.h"
+#include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
+#include "velox/functions/prestosql/URLFunctions.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
-std::string IcebergPartitionPath::toPartitionString(
+namespace {
+
+std::string escapePathName(const std::string& name) {
+  std::string encoded;
+  // Pre-allocate for worst case: every byte is invalid UTF-8.
+  // urlEscape() writes directly into the pre-allocated buffer and
+  // calls resize() at the end to shrink to the actual size used.
+  encoded.resize(name.size() * 9);
+  functions::detail::urlEscape(encoded, name);
+  return encoded;
+}
+
+} // namespace
+
+IcebergPartitionName::IcebergPartitionName(
+    const IcebergPartitionSpecPtr& partitionSpec) {
+  VELOX_CHECK_NOT_NULL(partitionSpec);
+  transformTypes_.reserve(partitionSpec->fields.size());
+  for (const auto& field : partitionSpec->fields) {
+    transformTypes_.emplace_back(field.transformType);
+  }
+}
+
+std::string IcebergPartitionName::partitionName(
+    uint32_t partitionId,
+    const RowVectorPtr& partitionValues,
+    bool partitionKeyAsLowerCase) const {
+  auto toPartitionName = [this](
+                             auto value, const TypePtr& type, int columnIndex) {
+    return IcebergPartitionName::toName(
+        value, type, transformTypes_[columnIndex]);
+  };
+
+  return dwio::catalog::fbhive::FileUtils::makePartName(
+      HivePartitionName::partitionKeyValues(
+          partitionId,
+          partitionValues,
+          /*nullValueString=*/"null",
+          toPartitionName),
+      partitionKeyAsLowerCase,
+      /*useDefaultPartitionValue=*/false,
+      escapePathName);
+}
+
+std::string IcebergPartitionName::toName(
     int32_t value,
-    const TypePtr& type) const {
+    const TypePtr& type,
+    TransformType transformType) {
   constexpr int32_t kEpochYear = 1970;
-  switch (transformType_) {
+  switch (transformType) {
     case TransformType::kIdentity: {
       if (type->isDate()) {
-        return DATE()->toString(value);
+        return DateType::toIso8601(value);
       }
       return fmt::to_string(value);
     }
@@ -61,10 +108,11 @@ std::string IcebergPartitionPath::toPartitionString(
   }
 }
 
-std::string IcebergPartitionPath::toPartitionString(
+std::string IcebergPartitionName::toName(
     Timestamp value,
-    const TypePtr& type) const {
-  VELOX_CHECK(transformType_ == TransformType::kIdentity);
+    const TypePtr& type,
+    TransformType transformType) {
+  VELOX_CHECK(transformType == TransformType::kIdentity);
   TimestampToStringOptions options;
   options.precision = TimestampPrecision::kMilliseconds;
   options.zeroPaddingYear = true;
@@ -73,9 +121,13 @@ std::string IcebergPartitionPath::toPartitionString(
   return value.toString(options);
 }
 
-std::string IcebergPartitionPath::toPartitionString(
+std::string IcebergPartitionName::toName(
     StringView value,
-    const TypePtr& type) const {
+    const TypePtr& type,
+    TransformType transformType) {
+  VELOX_CHECK(
+      transformType == TransformType::kIdentity ||
+      transformType == TransformType::kTruncate);
   if (type->isVarbinary()) {
     return encoding::Base64::encode(value.data(), value.size());
   }

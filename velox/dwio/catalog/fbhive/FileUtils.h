@@ -43,7 +43,8 @@ class FileUtils {
 
   /// Creates the partition directory path from the list of partition key/value
   /// pairs, will do url-encoding when needed.
-  /// @param entries Vector of (key, value) pairs for partition columns
+  /// @param entries Vector of (key, value) pairs for partition columns. Cannot
+  ///        be empty.
   /// @param partitionPathAsLowerCase Whether to convert keys to lowercase
   /// @param useDefaultPartitionValue If true, empty values are replaced with
   ///        kDefaultPartitionValue. If false, empty values are encoded as-is.

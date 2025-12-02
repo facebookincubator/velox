@@ -39,6 +39,7 @@
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::functions {
@@ -89,6 +90,27 @@ struct StAsTextFunction {
   call(out_type<Varchar>& result, const arg_type<Geometry>& geometry) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(geometry);
+
+    GEOS_TRY(
+        {
+          geos::io::WKTWriter writer;
+          writer.setTrim(true);
+          result = writer.write(geosGeometry.get());
+        },
+        "Failed to write WKT");
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct SphericalAsTextFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Varchar>& result,
+      const arg_type<SphericalGeography>& geography) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geography);
 
     GEOS_TRY(
         {
@@ -1982,6 +2004,196 @@ struct StMultiPointFunction {
 
  private:
   geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct ToGeometryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<SphericalGeography>& input) {
+    // Every SphericalGeography object is a valid geometry object
+    result = input;
+  }
+};
+
+template <typename T>
+struct ToSphericalGeographyFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<SphericalGeography>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::GeometryDeserializer::deserializeEnvelope(input);
+    Status status = Status::OK();
+    if (!env->isNull()) {
+      status =
+          geospatial::validateLatitudeLongitude(env->getMinY(), env->getMinX());
+      if (FOLLY_UNLIKELY(!status.ok())) {
+        return status;
+      }
+      status =
+          geospatial::validateLatitudeLongitude(env->getMaxY(), env->getMaxX());
+      if (FOLLY_UNLIKELY(!status.ok())) {
+        return status;
+      }
+    }
+
+    result = input;
+    return status;
+  }
+};
+
+template <typename T>
+struct StSphericalCentroidFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  StSphericalCentroidFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<SphericalGeography>& result,
+      const arg_type<SphericalGeography>& input) {
+    std::unique_ptr<geos::geom::Geometry> geometry =
+        geospatial::GeometryDeserializer::deserialize(input);
+
+    if (geometry->isEmpty()) {
+      return false;
+    }
+
+    // Validate type is POINT or MULTI_POINT
+    auto validate = geospatial::validateType(
+        *geometry,
+        {geos::geom::GeometryTypeId::GEOS_POINT,
+         geos::geom::GeometryTypeId::GEOS_MULTIPOINT},
+        "ST_Centroid[SphericalGeography]");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+
+    auto geometryType = geometry->getGeometryTypeId();
+    // Handle single point case
+    if (geometryType == geos::geom::GeometryTypeId::GEOS_POINT) {
+      geospatial::GeometrySerializer::serialize(*geometry, result);
+      return true;
+    }
+
+    const geos::geom::MultiPoint& multiPoint =
+        static_cast<const geos::geom::MultiPoint&>(*geometry);
+
+    // Compute the spherical centroid
+    auto centroidCoords = geospatial::computeSphericalCentroid(multiPoint);
+
+    // Create a Point geometry from the spherical coordinates
+    auto centroidPoint =
+        std::unique_ptr<geos::geom::Point>(factory_->createPoint(
+            geos::geom::Coordinate(
+                centroidCoords.first, centroidCoords.second)));
+
+    geospatial::GeometrySerializer::serialize(*centroidPoint, result);
+    return true;
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StSphericalDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SphericalGeography>& left,
+      const arg_type<SphericalGeography>& right) {
+    std::unique_ptr<geos::geom::Geometry> leftGeom =
+        geospatial::GeometryDeserializer::deserialize(left);
+    std::unique_ptr<geos::geom::Geometry> rightGeom =
+        geospatial::GeometryDeserializer::deserialize(right);
+
+    auto validateLeft = geospatial::validateType(
+        *leftGeom,
+        {geos::geom::GeometryTypeId::GEOS_POINT},
+        "ST_Distance[SphericalGeography]");
+    if (!validateLeft.ok()) {
+      VELOX_USER_FAIL(validateLeft.message());
+    };
+
+    auto validateRight = geospatial::validateType(
+        *rightGeom,
+        {geos::geom::GeometryTypeId::GEOS_POINT},
+        "ST_Distance[SphericalGeography]");
+    if (!validateRight.ok()) {
+      VELOX_USER_FAIL(validateRight.message());
+    }
+
+    if (leftGeom->isEmpty() || rightGeom->isEmpty()) {
+      return false;
+    }
+
+    geos::geom::Point* leftPoint =
+        static_cast<geos::geom::Point*>(leftGeom.get());
+    geos::geom::Point* rightPoint =
+        static_cast<geos::geom::Point*>(rightGeom.get());
+
+    result = BingTileType::greatCircleDistance(
+                 leftPoint->getY(),
+                 leftPoint->getX(),
+                 rightPoint->getY(),
+                 rightPoint->getX()) *
+        1000;
+
+    return true;
+  }
+};
+
+template <typename T>
+struct StSphericalLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SphericalGeography>& input) {
+    std::unique_ptr<geos::geom::Geometry> geom =
+        geospatial::GeometryDeserializer::deserialize(input);
+    if (geom->isEmpty()) {
+      return false;
+    }
+
+    auto validate = geospatial::validateType(
+        *geom,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING,
+         geos::geom::GeometryTypeId::GEOS_MULTILINESTRING},
+        "ST_Length[SphericalGeography]");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+
+    double sum = 0.0;
+    if (geom->getGeometryTypeId() ==
+        geos::geom::GeometryTypeId::GEOS_LINESTRING) {
+      const geos::geom::LineString* lineString =
+          static_cast<const geos::geom::LineString*>(geom.get());
+      sum += geospatial::getSphericalLength(*lineString);
+
+    } else { // Multipoint
+      geos::geom::MultiLineString* multiLineString =
+          static_cast<geos::geom::MultiLineString*>(geom.get());
+      auto numLineStrings = multiLineString->getNumGeometries();
+      for (int i = 0; i < numLineStrings; i++) {
+        const geos::geom::LineString* lineString =
+            multiLineString->getGeometryN(i);
+        sum += geospatial::getSphericalLength(*lineString);
+      }
+    }
+
+    result = sum * 1000;
+    return true;
+  }
 };
 
 } // namespace facebook::velox::functions
