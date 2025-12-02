@@ -26,8 +26,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
-  // TODO: remove this after Operator::kBackgroundCpuTimeNanos is fully used.
-  static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
+
   ExchangeClient(
       std::string taskId,
       int destination,
@@ -106,7 +105,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
-  std::vector<std::unique_ptr<SerializedPage>>
+  std::vector<std::unique_ptr<SerializedPageBase>>
   next(int consumerId, uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   std::string toString() const;
