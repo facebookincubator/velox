@@ -33,6 +33,8 @@ void registerJsonFunctions(const std::string& prefix = "");
 
 void registerHyperLogFunctions(const std::string& prefix = "");
 
+void registerKHyperLogLogFunctions(const std::string& prefix = "");
+
 void registerTDigestFunctions(const std::string& prefix = "");
 
 void registerQDigestFunctions(const std::string& prefix = "");
