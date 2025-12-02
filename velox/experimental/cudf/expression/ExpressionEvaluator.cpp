@@ -601,9 +601,6 @@ class LikeFunction : public CudfFunction {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "like expects 2 inputs");
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-
     auto patternExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(patternExpr, "like pattern must be a constant");
