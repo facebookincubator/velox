@@ -90,7 +90,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       if (data.empty()) {
         sequence = requestedSequence;
       }
-      std::vector<std::unique_ptr<SerializedPage>> pages;
+      std::vector<std::unique_ptr<SerializedPageBase>> pages;
       bool atEnd = false;
       int64_t totalBytes = 0;
       for (auto& inputPage : data) {
@@ -101,7 +101,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
         }
         totalBytes += inputPage->length();
         inputPage->unshare();
-        pages.push_back(std::make_unique<SerializedPage>(std::move(inputPage)));
+        pages.push_back(
+            std::make_unique<PrestoSerializedPage>(std::move(inputPage)));
         inputPage = nullptr;
       }
       numPages_ += pages.size();
