@@ -166,6 +166,9 @@ class ExprWrapper;
 template <typename T>
 inline ExprWrapper toExprWrapper(T value);
 
+// Specialization for long to avoid ambiguity.
+inline ExprWrapper toExprWrapper(long value);
+
 template <>
 inline ExprWrapper toExprWrapper<ExprWrapper>(ExprWrapper expr);
 
@@ -459,6 +462,10 @@ namespace detail {
 template <typename T>
 inline ExprWrapper toExprWrapper(T value) {
   return lit(value);
+}
+
+inline ExprWrapper toExprWrapper(long value) {
+  return lit(static_cast<int64_t>(value));
 }
 
 template <>
