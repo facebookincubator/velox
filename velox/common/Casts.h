@@ -105,4 +105,66 @@ bool is_instance_of(const From* input) {
   return casted != nullptr;
 }
 
+// Camel case versions, sneak case will be removed in the future for
+// compatibility since nimble/presto/velox all using it.
+template <typename To, typename From>
+std::shared_ptr<To> checkedPointerCast(const std::shared_ptr<From>& input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto casted = std::dynamic_pointer_cast<To>(input);
+  detail::ensureCastSucceeded(casted.get(), input.get());
+  return casted;
+}
+
+template <typename To, typename From>
+std::unique_ptr<To> checkedPointerCast(std::unique_ptr<From> input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* released = input.release();
+  To* casted{nullptr};
+  try {
+    casted = dynamic_cast<To*>(released);
+    detail::ensureCastSucceeded(casted, released);
+  } catch (...) {
+    input.reset(released);
+    throw;
+  }
+  return std::unique_ptr<To>(casted);
+}
+
+template <typename To, typename From>
+To* checkedPointerCast(From* input) {
+  VELOX_CHECK_NOT_NULL(input);
+  auto* casted = dynamic_cast<To*>(input);
+  detail::ensureCastSucceeded(casted, input);
+  return casted;
+}
+
+template <typename To, typename From>
+std::unique_ptr<To> staticUniquePointerCast(std::unique_ptr<From> input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* released = input.release();
+  auto* casted = static_cast<To*>(released);
+  return std::unique_ptr<To>(casted);
+}
+
+template <typename To, typename From>
+bool isInstanceOf(const std::shared_ptr<From>& input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* casted = dynamic_cast<const To*>(input.get());
+  return casted != nullptr;
+}
+
+template <typename To, typename From>
+bool isInstanceOf(const std::unique_ptr<From>& input) {
+  VELOX_CHECK_NOT_NULL(input.get());
+  auto* casted = dynamic_cast<const To*>(input.get());
+  return casted != nullptr;
+}
+
+template <typename To, typename From>
+bool isInstanceOf(const From* input) {
+  VELOX_CHECK_NOT_NULL(input);
+  auto* casted = dynamic_cast<const To*>(input);
+  return casted != nullptr;
+}
+
 } // namespace facebook::velox
