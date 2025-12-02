@@ -897,13 +897,16 @@ void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
   RETURN_IF_TRUE(maybeGrowFromSelf(op));
 
   if (!ensureCapacity(op)) {
+    const auto maxCapacity = op.participant()->maxCapacity();
     MEM_POOL_CAP_EXCEEDED(
         fmt::format(
-            "Can't grow {} capacity with {}. This will exceed its max capacity "
+            "Can't grow {} capacity with {}. This will exceed its {} "
             "{}, current capacity {}.",
             op.participant()->name(),
             succinctBytes(op.requestBytes()),
-            succinctBytes(op.participant()->maxCapacity()),
+            capacity_ < maxCapacity ? "arbitrator capacity"
+                                    : "memory pool capacity",
+            succinctBytes(std::min(capacity_, maxCapacity)),
             succinctBytes(op.participant()->capacity())),
         op.participant()->pool());
   }
@@ -1401,7 +1404,6 @@ uint64_t SharedArbitrator::reclaim(
   if (participant->aborted()) {
     removeGlobalArbitrationWaiter(participant->id());
   }
-  freeCapacity(reclaimedBytes);
 
   updateMemoryReclaimStats(
       reclaimedBytes, reclaimTimeNs, localArbitration, stats);
@@ -1413,6 +1415,8 @@ uint64_t SharedArbitrator::reclaim(
                       << " stats " << succinctBytes(stats.reclaimedBytes)
                       << " numNonReclaimableAttempts "
                       << stats.numNonReclaimableAttempts;
+
+  freeCapacity(reclaimedBytes);
   if (reclaimedBytes == 0) {
     FB_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
         "Nothing reclaimed from memory pool {} with reclaim target {},  memory pool stats:\n{}\n{}",

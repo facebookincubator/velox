@@ -71,9 +71,10 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
         pool_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
-        std::is_sorted(requests.begin(), requests.end(), [](auto* x, auto* y) {
-          return x->region.offset < y->region.offset;
-        }));
+        std::is_sorted(
+            requests.cbegin(), requests.cend(), [](auto* x, auto* y) {
+              return x->region.offset < y->region.offset;
+            }));
     requests_.reserve(requests.size());
     for (auto i = 0; i < requests.size(); ++i) {
       requests_.push_back(std::move(*requests[i]));

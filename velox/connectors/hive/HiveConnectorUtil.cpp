@@ -634,11 +634,6 @@ void configureRowReaderOptions(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
-    // When parallel unit loader is enabled, all units would be loaded by
-    // ParallelUnitLoader, thus disable eagerFirstStripeLoad.
-    if (hiveConfig->parallelUnitLoadCount(sessionProperties) > 0) {
-      rowReaderOptions.setEagerFirstStripeLoad(false);
-    }
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
@@ -890,10 +885,10 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
   }
   common::Filter* oldFilter = nullptr;
   try {
-    common::Subfield subfield;
-    if (auto filter = exec::ExprToSubfieldFilterParser::getInstance()
-                          ->leafCallToSubfieldFilter(
-                              *call, subfield, evaluator, negated)) {
+    if (auto subfieldAndFilter =
+            exec::ExprToSubfieldFilterParser::getInstance()
+                ->leafCallToSubfieldFilter(*call, evaluator, negated)) {
+      auto& [subfield, filter] = subfieldAndFilter.value();
       if (auto it = filters.find(subfield); it != filters.end()) {
         oldFilter = it->second.get();
         filter = filter->mergeWith(oldFilter);

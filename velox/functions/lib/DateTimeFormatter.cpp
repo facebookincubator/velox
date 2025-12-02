@@ -1222,10 +1222,10 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
         break;
       case DateTimeFormatSpecifier::TIMEZONE:
         if (token.pattern.minRepresentDigits <= 3) {
-          // The longest timezone abbreviation is 6 in the case of negative or
-          // explicitly positive numeric representations (e.g., +01:00, -08:00)
-          // https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-          size += 6;
+          // The longest timezone abbreviation is 9 in the case of timezones
+          // that do not have an abbreviation and use GMT offset (e.g.,
+          // GMT+01:00, GMT-08:00)
+          size += 9;
         } else {
           // The longest time zone long name is 40, Australian Central Western
           // Standard Time.
@@ -2020,7 +2020,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
         case 'D':
           builder.appendDayOfYear(count);
           break;
-        case 'e':
+        case 'u':
           builder.appendDayOfWeek1Based(count);
           break;
         case 'E':

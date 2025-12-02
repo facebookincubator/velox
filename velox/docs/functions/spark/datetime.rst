@@ -287,7 +287,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: timestampadd(unit, value, timestamp) -> timestamp
 
-    Adds an interval ``value`` of type ``unit`` to ``timestamp``.
+    Adds an int or bigint interval ``value`` of type ``unit`` to ``timestamp``.
     Subtraction can be performed by using a negative ``value``.
     Throws exception if ``unit`` is invalid.
     ``unit`` is case insensitive and must be one of the following:

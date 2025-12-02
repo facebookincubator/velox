@@ -15,18 +15,11 @@
  */
 #pragma once
 
-#include <algorithm>
-#include <cmath>
-#include <memory>
-#include <sstream>
-#include <string>
-#include <vector>
-
 #include <folly/Range.h>
 #include <folly/container/F14Set.h>
-
+#include <xsimd/xsimd.hpp>
+#include "velox/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/SimdUtil.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
@@ -59,15 +52,16 @@ enum class FilterKind {
   kHugeintValuesUsingHashTable,
 };
 
+VELOX_DECLARE_ENUM_NAME(FilterKind);
+
 class Filter;
 using FilterPtr = std::shared_ptr<Filter>;
 
 using SubfieldFilters = std::unordered_map<Subfield, FilterPtr>;
 
-/**
- * A simple filter (e.g. comparison with literal) that can be applied
- * efficiently while extracting values from an ORC stream.
- */
+/// A simple filter (e.g. comparison with literal) that can be applied
+/// efficiently while extracting values from an ORC, DWRF, Parquet, or Nimble
+/// stream.
 class Filter : public velox::ISerializable {
  protected:
   Filter(bool _deterministic, bool _nullAllowed, FilterKind _kind)
@@ -80,13 +74,35 @@ class Filter : public velox::ISerializable {
 
   static void registerSerDe();
 
-  // Templates parametrized on filter need to know determinism at compile
-  // time. If this is false, deterministic() will be consulted at
-  // runtime.
+  /// Templates parametrized on filter need to know determinism at compile
+  /// time. If this is false, deterministic() will be consulted at
+  /// runtime.
   static constexpr bool deterministic = true;
 
   FilterKind kind() const {
     return kind_;
+  }
+
+  std::string_view kindName() const {
+    return FilterKindName::toName(kind_);
+  }
+
+  bool is(FilterKind kind) const {
+    return kind_ == kind;
+  }
+
+  /// @pre The caller must ensure this filter's kind matches TFilter.
+  template <typename TFilter>
+  TFilter* as() {
+    static_assert(std::is_base_of_v<Filter, TFilter>);
+    return static_cast<TFilter*>(this);
+  }
+
+  /// @pre The caller must ensure this filter's kind matches TFilter.
+  template <typename TFilter>
+  const TFilter* as() const {
+    static_assert(std::is_base_of_v<Filter, TFilter>);
+    return static_cast<const TFilter*>(this);
   }
 
   bool nullAllowed() const {
@@ -98,43 +114,30 @@ class Filter : public velox::ISerializable {
   virtual std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const = 0;
 
-  /**
-   * A filter becomes non-deterministic when applies to nested column,
-   * e.g. a[1] > 10 is non-deterministic because > 10 filter applies only to
-   * some positions, e.g. first entry in a set of entries that correspond to a
-   * single top-level position.
-   */
+  /// A filter becomes non-deterministic when applied to a nested column,
+  /// e.g. a[1] > 10 is non-deterministic because > 10 filter applies only to
+  /// some positions, e.g. first entry in a set of entries that correspond to a
+  /// single top-level position.
   virtual bool isDeterministic() const {
     return deterministic_;
   }
 
-  /**
-   * When a filter applied to a nested column fails, the whole top-level
-   * position should fail. To enable this functionality, the filter keeps track
-   * of the boundaries of top-level positions and allows the caller to find out
-   * where the current top-level position started and how far it continues.
-   * @return number of positions from the start of the current top-level
-   * position up to the current position (excluding current position)
-   */
+  /// When a filter applied to a nested column fails, the whole top-level
+  /// position should fail. To enable this functionality, the filter keeps track
+  /// of the boundaries of top-level positions and allows the caller to find out
+  /// where the current top-level position started and how far it continues.
+  /// @return number of positions from the start of the current top-level
+  /// position up to the current position (excluding current position)
   virtual int getPrecedingPositionsToFail() const {
     return 0;
   }
 
-  /**
-   * Only used in test code.
-   * @return Whether an object is the same as itself.
-   */
+  /// Only used in test code.
+  /// @return Whether an object is the same as itself.
   virtual bool testingEquals(const Filter& other) const = 0;
 
-  bool testingBaseEquals(const Filter& other) const {
-    return deterministic_ == other.isDeterministic() &&
-        nullAllowed_ == other.nullAllowed_ && kind_ == other.kind();
-  }
-
-  /**
-   * @return number of positions remaining until the end of the current
-   * top-level position
-   */
+  /// @return number of positions remaining until the end of the current
+  /// top-level position
   virtual int getSucceedingPositionsToFail() const {
     return 0;
   }
@@ -143,15 +146,13 @@ class Filter : public velox::ISerializable {
     return nullAllowed_;
   }
 
-  /**
-   * Used to apply is [not] null filters to complex types, e.g.
-   * a[1] is null AND a[3] is not null, where a is an array(array(T)).
-   *
-   * In these case, the exact values are not known, but it is known whether they
-   * are null or not. Furthermore, for some positions only nulls are allowed
-   * (a[1] is null), for others only non-nulls (a[3] is not null), and for the
-   * rest both are allowed (a[2] and a[N], where N > 3).
-   */
+  /// Used to apply is [not] null filters to complex types, e.g.
+  /// a[1] is null AND a[3] is not null, where a is an array(array(T)).
+  ///
+  /// In these case, the exact values are not known, but it is known whether
+  /// they are null or not. Furthermore, for some positions only nulls are
+  /// allowed (a[1] is null), for others only non-nulls (a[3] is not null), and
+  /// for the rest both are allowed (a[2] and a[N], where N > 3).
   virtual bool testNonNull() const {
     VELOX_UNSUPPORTED("{}: testNonNull() is not supported.", toString());
   }
@@ -208,35 +209,33 @@ class Filter : public velox::ISerializable {
     VELOX_UNSUPPORTED("{}: testTimestamp() is not supported.", toString());
   }
 
-  // Returns true if it is useful to call testLength before other
-  // tests. This should be true for string IN and equals because it is
-  // possible to fail these based on the length alone. This would
-  // typically be false of string ranges because these cannot be
-  // generally decided without looking at the string itself.
+  /// Returns true if it is useful to call testLength before other
+  /// tests. This should be true for string IN and equals because it is
+  /// possible to fail these based on the length alone. This would
+  /// typically be false of string ranges because these cannot be
+  /// generally decided without looking at the string itself.
   virtual bool hasTestLength() const {
     return false;
   }
 
-  /**
-   * Filters like string equality and IN, as well as conditions on cardinality
-   * of lists and maps can be at least partly decided by looking at lengths
-   * alone. If this is false, then no further checks are needed. If true,
-   * eventual filters on the data itself need to be evaluated.
-   */
+  /// Filters like string equality and IN, as well as conditions on cardinality
+  /// of lists and maps can be at least partly decided by looking at lengths
+  /// alone. If this is false, then no further checks are needed. If true,
+  /// eventual filters on the data itself need to be evaluated.
   virtual bool testLength(int32_t /* unused */) const {
     VELOX_UNSUPPORTED("{}: testLength() is not supported.", toString());
   }
 
-  // Tests multiple lengths at a time.
+  /// Tests multiple lengths at a time.
   virtual xsimd::batch_bool<int32_t> testLengths(
       xsimd::batch<int32_t> lengths) const {
     return genericTestValues(
         lengths, [this](int32_t x) { return testLength(x); });
   }
 
-  // Returns true if at least one value in the specified range can pass the
-  // filter. The range is defined as all values between min and max inclusive
-  // plus null if hasNull is true.
+  /// Returns true if at least one value in the specified range can pass the
+  /// filter. The range is defined as all values between min and max inclusive
+  /// plus null if hasNull is true.
   virtual bool
   testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/) const {
     VELOX_UNSUPPORTED("{}: testInt64Range() is not supported.", toString());
@@ -249,9 +248,9 @@ class Filter : public velox::ISerializable {
     VELOX_UNSUPPORTED("{}: testInt128Range() is not supported.", toString());
   }
 
-  // Returns true if at least one value in the specified range can pass the
-  // filter. The range is defined as all values between min and max inclusive
-  // plus null if hasNull is true.
+  /// Returns true if at least one value in the specified range can pass the
+  /// filter. The range is defined as all values between min and max inclusive
+  /// plus null if hasNull is true.
   virtual bool testDoubleRange(double /*min*/, double /*max*/, bool /*hasNull*/)
       const {
     VELOX_UNSUPPORTED("{}: testDoubleRange() is not supported.", toString());
@@ -271,7 +270,7 @@ class Filter : public velox::ISerializable {
     VELOX_UNSUPPORTED("{}: testTimestampRange() is not supported.", toString());
   }
 
-  // Combines this filter with another filter using 'AND' logic.
+  /// Combines this filter with another filter using 'AND' logic.
   virtual std::unique_ptr<Filter> mergeWith(const Filter* /*other*/) const {
     VELOX_UNSUPPORTED("{}: mergeWith() is not supported.", toString());
   }
@@ -289,7 +288,17 @@ class Filter : public velox::ISerializable {
   virtual std::string toString() const;
 
  protected:
-  folly::dynamic serializeBase(std::string_view name) const;
+  template <typename TFilter>
+  const TFilter* testingBaseEquals(const Filter& other) const {
+    if (deterministic_ == other.isDeterministic() &&
+        nullAllowed_ == other.nullAllowed_ && kind_ == other.kind()) {
+      return other.as<TFilter>();
+    }
+
+    return nullptr;
+  }
+
+  folly::dynamic serializeBase() const;
 
  protected:
   const bool nullAllowed_;
@@ -323,7 +332,7 @@ class AlwaysFalse final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<AlwaysFalse>(other);
   }
 
   std::unique_ptr<Filter> clone(
@@ -419,7 +428,7 @@ class AlwaysTrue final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<AlwaysTrue>(other);
   }
 
   bool testNull() const final {
@@ -505,7 +514,7 @@ class IsNull final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<IsNull>(other);
   }
 
   std::unique_ptr<Filter> clone(
@@ -593,7 +602,7 @@ class IsNotNull final : public Filter {
   static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
 
   bool testingEquals(const Filter& other) const final {
-    return Filter::testingBaseEquals(other);
+    return Filter::testingBaseEquals<IsNotNull>(other);
   }
 
   std::unique_ptr<Filter> clone(
@@ -1062,7 +1071,8 @@ class BigintValuesUsingHashTable final : public Filter {
   mergeWith(int64_t min, int64_t max, const Filter* other) const;
 
   static constexpr int64_t kEmptyMarker = 0xdeadbeefbadefeedL;
-  // from Murmur hash
+
+  // From Murmur hash.
   static constexpr uint64_t M = 0xc6a4a7935bd1e995L;
 
   const int64_t min_;
@@ -1374,16 +1384,30 @@ class AbstractRange : public Filter {
       FilterKind kind)
       : Filter(true, nullAllowed, kind),
         lowerUnbounded_(lowerUnbounded),
-        lowerExclusive_(lowerExclusive),
+        lowerExclusive_(lowerUnbounded ? true : lowerExclusive),
         upperUnbounded_(upperUnbounded),
-        upperExclusive_(upperExclusive) {
+        upperExclusive_(upperUnbounded ? true : upperExclusive) {
     VELOX_CHECK(
         !lowerUnbounded_ || !upperUnbounded_,
-        "A range filter must have  a lower or upper  bound");
+        "A range filter must have a lower or upper bound");
   }
 
-  folly::dynamic serializeBase(std::string_view name) const {
-    auto obj = Filter::serializeBase(name);
+  template <typename TFilter>
+  const TFilter* testingBaseEquals(const Filter& other) const {
+    if (const auto* otherRange = Filter::testingBaseEquals<TFilter>(other)) {
+      if (lowerUnbounded_ == otherRange->lowerUnbounded_ &&
+          lowerExclusive_ == otherRange->lowerExclusive_ &&
+          upperUnbounded_ == otherRange->upperUnbounded_ &&
+          upperExclusive_ == otherRange->upperExclusive_) {
+        return otherRange;
+      }
+    }
+
+    return nullptr;
+  }
+
+  folly::dynamic serializeBase() const {
+    auto obj = Filter::serializeBase();
     obj["lowerUnbounded"] = lowerUnbounded_;
     obj["lowerExclusive"] = lowerExclusive_;
     obj["upperUnbounded"] = upperUnbounded_;
@@ -1452,7 +1476,12 @@ class FloatingPointRange final : public AbstractRange {
     VELOX_CHECK(upperUnbounded_ || !std::isnan(upper_));
   }
 
-  folly::dynamic serialize() const override;
+  folly::dynamic serialize() const override {
+    auto obj = AbstractRange::serializeBase();
+    obj["lower"] = lower_;
+    obj["upper"] = upper_;
+    return obj;
+  }
 
   double lower() const {
     return lower_;
@@ -1550,17 +1579,32 @@ class FloatingPointRange final : public AbstractRange {
 
   std::string toString() const override;
 
-  bool testingEquals(const Filter& other) const final;
+  bool testingEquals(const Filter& other) const final {
+    if (const auto* otherRange =
+            AbstractRange::testingBaseEquals<FloatingPointRange<T>>(other)) {
+      return (lowerUnbounded_ ||
+              approximatelyEqual(lower_, otherRange->lower_)) &&
+          (upperUnbounded_ || approximatelyEqual(upper_, otherRange->upper_));
+    }
+
+    return false;
+  }
 
  private:
+  static bool approximatelyEqual(T a, T b) {
+    return std::fabs(a - b) < std::numeric_limits<T>::epsilon();
+  }
+
   std::string toString(const std::string& name) const {
     return fmt::format(
         "{}: {}{}, {}{} {}",
         name,
-        (lowerExclusive_ || lowerUnbounded_) ? "(" : "[",
+        (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
         lowerUnbounded_ ? "-inf" : std::to_string(lower_),
+        // "nan" is considered valid value(s) and
+        // "nan > +inf" so "nan" is the upper bound in case of unbounded range.
         upperUnbounded_ ? "nan" : std::to_string(upper_),
-        (upperExclusive_ && !upperUnbounded_) ? ")" : "]",
+        (upperUnbounded_ || upperExclusive_) ? ")" : "]",
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
@@ -1631,18 +1675,6 @@ inline std::string FloatingPointRange<double>::toString() const {
 template <>
 inline std::string FloatingPointRange<float>::toString() const {
   return toString("FloatRange");
-}
-
-template <>
-inline bool FloatingPointRange<float>::testingEquals(
-    const Filter& other) const {
-  return toString() == other.toString();
-}
-
-template <>
-inline bool FloatingPointRange<double>::testingEquals(
-    const Filter& other) const {
-  return toString() == other.toString();
 }
 
 template <>
@@ -1905,8 +1937,8 @@ class NegatedBytesRange final : public Filter {
       bool hasNull) const final;
 
   bool testLength(int length) const final {
-    // a range nearly never covers all values of a particular length,
-    // so at least one value of each length is probably accepted
+    // A range almost never covers all values of a particular length,
+    // so at least one value of each length is probably accepted.
     return true;
   }
 
@@ -2110,6 +2142,7 @@ class BytesValues final : public Filter {
 class BigintMultiRange final : public Filter {
  public:
   /// @param ranges List of range filters. Must contain at least two entries.
+  /// Ranges must be sorted in ascending order and must not overlap.
   /// @param nullAllowed Null values are passing the filter if true. nullAllowed
   /// flags in the 'ranges' filters are ignored.
   BigintMultiRange(
@@ -2135,15 +2168,7 @@ class BigintMultiRange final : public Filter {
     return ranges_;
   }
 
-  std::string toString() const override {
-    std::ostringstream out;
-    out << "BigintMultiRange: [";
-    for (const auto& range : ranges_) {
-      out << " " << range->toString();
-    }
-    out << " ]" << (nullAllowed_ ? "with nulls" : "no nulls");
-    return out.str();
-  }
+  std::string toString() const override;
 
   bool testingEquals(const Filter& other) const final;
 
@@ -2179,7 +2204,7 @@ class NegatedBytesValues final : public Filter {
   }
 
   bool testLength(int32_t /* unused */) const final {
-    // it is very rare that we will reject all strings of a given length
+    // It is very rare that we will reject all strings of a given length
     // using a NegatedBytesValues filter.
     return true;
   }
@@ -2302,7 +2327,7 @@ static inline bool applyFilter(TFilter& filter, StringView value) {
   return filter.testStringView(value);
 }
 
-// Creates a hash or bitmap based IN filter depending on value distribution.
+/// Create a hash or bitmap based IN filter depending on value distribution.
 std::unique_ptr<Filter> createBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed);
@@ -2311,7 +2336,7 @@ std::unique_ptr<Filter> createHugeintValues(
     const std::vector<int128_t>& values,
     bool nullAllowed);
 
-// Creates a hash or bitmap based NOT IN filter depending on value distribution.
+/// Create a hash or bitmap based NOT IN filter depending on value distribution.
 std::unique_ptr<Filter> createNegatedBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed);
