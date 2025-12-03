@@ -1793,7 +1793,8 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
 
 TEST_F(ParquetReaderTest, floatToDoubleTypeConversion) {
   // Test reading a FLOAT column from Parquet file as DOUBLE type.
-  // This tests the type conversion capability in SelectiveFloatingPointColumnReader.
+  // This tests the type conversion capability in
+  // SelectiveFloatingPointColumnReader.
 
   // Create an in-memory writer with FLOAT column.
   auto sink = std::make_unique<MemorySink>(
@@ -1801,10 +1802,9 @@ TEST_F(ParquetReaderTest, floatToDoubleTypeConversion) {
   auto sinkPtr = sink.get();
 
   // Create test data with float values
-  auto floatData = makeRowVector({
-      makeFlatVector<float>({1.5f, 2.5f, 3.5f, 4.5f, 5.5f}),
-      makeFlatVector<int64_t>({1, 2, 3, 4, 5})
-  });
+  auto floatData = makeRowVector(
+      {makeFlatVector<float>({1.5f, 2.5f, 3.5f, 4.5f, 5.5f}),
+       makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
 
   parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
@@ -1825,7 +1825,8 @@ TEST_F(ParquetReaderTest, floatToDoubleTypeConversion) {
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, readerOptions.memoryPool());
-  auto reader = std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
 
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
@@ -1835,10 +1836,9 @@ TEST_F(ParquetReaderTest, floatToDoubleTypeConversion) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // Expected data with double values (converted from float)
-  auto expected = makeRowVector({
-      makeFlatVector<double>({1.5, 2.5, 3.5, 4.5, 5.5}),
-      makeFlatVector<int64_t>({1, 2, 3, 4, 5})
-  });
+  auto expected = makeRowVector(
+      {makeFlatVector<double>({1.5, 2.5, 3.5, 4.5, 5.5}),
+       makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
 
   assertReadWithReaderAndExpected(readSchema, *rowReader, expected, *leafPool_);
 }
@@ -1853,14 +1853,13 @@ TEST_F(ParquetReaderTest, floatToDoubleTypeConversionWithNulls) {
   auto sinkPtr = sink.get();
 
   // Create test data with float values and nulls (every other value is null)
-  auto floatData = makeRowVector({
-      makeFlatVector<float>(
-          100,
-          [](auto row) { return static_cast<float>(row) * 1.5f; },
-          [](auto row) { return row % 2 == 0; }  // Every even index is null
-      ),
-      makeFlatVector<int64_t>(100, [](auto row) { return row; })
-  });
+  auto floatData = makeRowVector(
+      {makeFlatVector<float>(
+           100,
+           [](auto row) { return static_cast<float>(row) * 1.5f; },
+           [](auto row) { return row % 2 == 0; } // Every even index is null
+           ),
+       makeFlatVector<int64_t>(100, [](auto row) { return row; })});
 
   parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
@@ -1881,7 +1880,8 @@ TEST_F(ParquetReaderTest, floatToDoubleTypeConversionWithNulls) {
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, readerOptions.memoryPool());
-  auto reader = std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
 
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
@@ -1890,16 +1890,15 @@ TEST_F(ParquetReaderTest, floatToDoubleTypeConversionWithNulls) {
   rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  // Expected data with double values (converted from float) and same null pattern
-  auto expected = makeRowVector({
-      makeFlatVector<double>(
-          100,
-          [](auto row) { return static_cast<double>(row) * 1.5; },
-          [](auto row) { return row % 2 == 0; }  // Every even index is null
-      ),
-      makeFlatVector<int64_t>(100, [](auto row) { return row; })
-  });
+  // Expected data with double values (converted from float) and same null
+  // pattern
+  auto expected = makeRowVector(
+      {makeFlatVector<double>(
+           100,
+           [](auto row) { return static_cast<double>(row) * 1.5; },
+           [](auto row) { return row % 2 == 0; } // Every even index is null
+           ),
+       makeFlatVector<int64_t>(100, [](auto row) { return row; })});
 
   assertReadWithReaderAndExpected(readSchema, *rowReader, expected, *leafPool_);
 }
-
