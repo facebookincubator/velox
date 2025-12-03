@@ -373,6 +373,11 @@ class IndexSource {
    public:
     virtual ~LookupResultIterator() = default;
 
+    /// Invoked to check if there are more lookup results available to fetch.
+    /// Returns true if there are more results, false otherwise. This allows
+    /// the caller to determine whether to continue calling 'next()'.
+    virtual bool hasNext() = 0;
+
     /// Invoked to fetch up to 'size' number of output rows. Returns nullptr if
     /// all the lookup results have been fetched. Returns std::nullopt and sets
     /// the 'future' if started asynchronous work and needs to wait for it to
