@@ -74,6 +74,13 @@ class QueryConfig {
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
 
+  /// Takes a comma separated list of function names to track CPU usage for.
+  /// Only applicable when kExprTrackCpuUsage is set to false. Is empty by
+  /// default. This allows fine-grained control over CPU tracking overhead when
+  /// only specific functions need to be monitored.
+  static constexpr const char* kExprTrackCpuUsageForFunctions =
+      "expression.track_cpu_usage_for_functions";
+
   /// Controls whether non-deterministic expressions are deduplicated during
   /// compilation. This is intended for testing and debugging purposes. By
   /// default, this is set to true to preserve standard behavior. If set to
@@ -1166,6 +1173,10 @@ class QueryConfig {
 
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
+  }
+
+  std::string exprTrackCpuUsageForFunctions() const {
+    return get<std::string>(kExprTrackCpuUsageForFunctions, "");
   }
 
   bool exprDedupNonDeterministic() const {
