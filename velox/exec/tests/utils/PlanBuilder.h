@@ -1089,8 +1089,7 @@ class PlanBuilder {
   /// Add an ExpandNode using specified projectExprs. See comments for
   /// ExpandNode class for description of this plan node.
   ///
-  /// @param projectExprs A list of projection expressions. Each expression is
-  /// either a column name, null or non-null constant.
+  /// @param projectExprs A list of projection expressions.
   /// @param names The name of the columns.
   ///
   PlanBuilder& expand(
