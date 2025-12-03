@@ -151,6 +151,7 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
+  velox_dwio_orc_reader
   velox_exec
   velox_exec_test_lib
   velox_file_test_utils
