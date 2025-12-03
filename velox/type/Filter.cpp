@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <boost/multiprecision/cpp_int.hpp>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -53,6 +54,9 @@ const auto& filterKindNames() {
       {FilterKind::kHugeintRange, "HugeintRange"},
       {FilterKind::kTimestampRange, "TimestampRange"},
       {FilterKind::kHugeintValuesUsingHashTable, "HugeintValuesUsingHashTable"},
+      {FilterKind::kNegatedHugeintRange, "NegatedHugeintRange"},
+      {FilterKind::kNegatedHugeintValuesUsingHashTable,
+       "NegatedHugeintValuesUsingHashTable"},
   };
   return kNames;
 }
@@ -96,6 +100,44 @@ std::vector<int128_t> deserializeHugeintValues(const folly::dynamic& obj) {
   }
   return values;
 }
+
+// Test range for negated bigint and hugeint values using hash table.
+template <typename T, typename TNegatedFilter, typename TFilter>
+bool testNegatedIntRange(
+    T min,
+    T max,
+    const TNegatedFilter& filter,
+    const TFilter& nonNegated) {
+  if (min == max) {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      return filter.testInt64(min);
+    } else {
+      return filter.testInt128(min);
+    }
+  }
+
+  if (max > nonNegated.max() || min < nonNegated.min()) {
+    return true;
+  }
+
+  auto lo = std::lower_bound(
+      nonNegated.values().begin(), nonNegated.values().end(), min);
+  auto hi = std::lower_bound(
+      nonNegated.values().begin(), nonNegated.values().end(), max);
+  // Min is already tested to be <= max_.
+  assert(lo != nonNegated.values().end());
+  if (min != *lo || max != *hi) {
+    // At least one of the endpoints of the range succeeds.
+    return true;
+  }
+  // Check if all values in this range are in values_ by counting the number
+  // of things between min and max. If distance is any less, then we are missing
+  // an element => something in the range is accepted.
+  // Use int256_t to avoid overflow in the case of int128_t ranges.
+  using int256_t = boost::multiprecision::int256_t;
+  return std::distance(lo, hi) != static_cast<int256_t>(max) - min;
+}
+
 } // namespace
 
 void Filter::registerSerDe() {
@@ -109,6 +151,7 @@ void Filter::registerSerDe() {
   registry.Register("BigintRange", BigintRange::create);
   registry.Register("NegatedBigintRange", NegatedBigintRange::create);
   registry.Register("HugeintRange", HugeintRange::create);
+  registry.Register("NegatedHugeintRange", NegatedHugeintRange::create);
   registry.Register(
       "BigintValuesUsingHashTable", BigintValuesUsingHashTable::create);
   registry.Register(
@@ -121,6 +164,9 @@ void Filter::registerSerDe() {
       NegatedBigintValuesUsingBitmask::create);
   registry.Register(
       "HugeintValuesUsingHashTable", HugeintValuesUsingHashTable::create);
+  registry.Register(
+      "NegatedHugeintValuesUsingHashTable",
+      NegatedHugeintValuesUsingHashTable::create);
   registry.Register("FloatRange", AbstractRange::create);
   registry.Register("DoubleRange", AbstractRange::create);
   registry.Register("BytesRange", BytesRange::create);
@@ -963,7 +1009,8 @@ HugeintValuesUsingHashTable::HugeintValuesUsingHashTable(
     const bool nullAllowed)
     : Filter(true, nullAllowed, FilterKind::kHugeintValuesUsingHashTable),
       min_(min),
-      max_(max) {
+      max_(max),
+      vec_(values) {
   VELOX_CHECK(!values.empty(), "values must not be empty");
   VELOX_CHECK_LE(
       min_,
@@ -974,6 +1021,7 @@ HugeintValuesUsingHashTable::HugeintValuesUsingHashTable(
   for (auto value : values) {
     values_.insert(value);
   }
+  std::sort(vec_.begin(), vec_.end());
 }
 
 bool HugeintValuesUsingHashTable::testInt128(const int128_t& value) const {
@@ -1055,31 +1103,10 @@ bool NegatedBigintValuesUsingHashTable::testInt64Range(
   if (hasNull && nullAllowed_) {
     return true;
   }
-
-  if (min == max) {
-    return testInt64(min);
-  }
-
-  if (max > nonNegated_->max() || min < nonNegated_->min()) {
-    return true;
-  }
-
-  auto lo = std::lower_bound(
-      nonNegated_->values().begin(), nonNegated_->values().end(), min);
-  auto hi = std::lower_bound(
-      nonNegated_->values().begin(), nonNegated_->values().end(), max);
-  assert(
-      lo !=
-      nonNegated_->values().end()); // min is already tested to be <= max_.
-  if (min != *lo || max != *hi) {
-    // at least one of the endpoints of the range succeeds
-    return true;
-  }
-  // Check if all values in this range are in values_ by counting the number
-  // of things between min and max
-  // if distance is any less, then we are missing an element => something
-  // in the range is accepted
-  return std::distance(lo, hi) != static_cast<int128_t>(max) - min;
+  return testNegatedIntRange<
+      int64_t,
+      NegatedBigintValuesUsingHashTable,
+      BigintValuesUsingHashTable>(min, max, *this, *nonNegated_);
 }
 
 namespace {
@@ -2351,6 +2378,85 @@ std::unique_ptr<Filter> BigintMultiRange::mergeWith(const Filter* other) const {
     default:
       VELOX_UNREACHABLE();
   }
+}
+
+folly::dynamic NegatedHugeintRange::serialize() const {
+  auto obj = Filter::serializeBase();
+  obj["lower"] = nonNegated_->lower();
+  obj["upper"] = nonNegated_->upper();
+  return obj;
+}
+
+std::unique_ptr<Filter> NegatedHugeintRange::create(const folly::dynamic& obj) {
+  auto lower = HugeInt::parse(obj["lower"].asString());
+  auto upper = HugeInt::parse(obj["upper"].asString());
+  auto nullAllowed = deserializeNullAllowed(obj);
+  return std::make_unique<NegatedHugeintRange>(lower, upper, nullAllowed);
+}
+
+bool NegatedHugeintRange::testingEquals(const Filter& other) const {
+  if (const auto* otherRange =
+          Filter::testingBaseEquals<NegatedHugeintRange>(other)) {
+    return nonNegated_->testingEquals(*(otherRange->nonNegated_));
+  }
+
+  return false;
+}
+
+NegatedHugeintValuesUsingHashTable::NegatedHugeintValuesUsingHashTable(
+    const int128_t& min,
+    const int128_t& max,
+    const std::vector<int128_t>& values,
+    bool nullAllowed)
+    : Filter(
+          true,
+          nullAllowed,
+          FilterKind::kNegatedHugeintValuesUsingHashTable) {
+  nonNegated_ = std::make_unique<HugeintValuesUsingHashTable>(
+      min, max, values, !nullAllowed);
+}
+
+folly::dynamic NegatedHugeintValuesUsingHashTable::serialize() const {
+  auto obj = Filter::serializeBase();
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
+}
+
+std::unique_ptr<Filter> NegatedHugeintValuesUsingHashTable::create(
+    const folly::dynamic& obj) {
+  auto nullAllowed = deserializeNullAllowed(obj);
+  auto nonNegated = ISerializable::deserialize<HugeintValuesUsingHashTable>(
+      obj["nonNegated"]);
+  auto min = nonNegated->min();
+  auto max = nonNegated->max();
+  auto values = nonNegated->values();
+  auto res = std::make_unique<NegatedHugeintValuesUsingHashTable>(
+      min, max, values, nullAllowed);
+  return res;
+}
+
+bool NegatedHugeintValuesUsingHashTable::testInt128Range(
+    const int128_t& min,
+    const int128_t& max,
+    bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+  return testNegatedIntRange<
+      int128_t,
+      NegatedHugeintValuesUsingHashTable,
+      HugeintValuesUsingHashTable>(min, max, *this, *nonNegated_);
+}
+
+bool NegatedHugeintValuesUsingHashTable::testingEquals(
+    const Filter& other) const {
+  if (const auto* otherNegated =
+          Filter::testingBaseEquals<NegatedHugeintValuesUsingHashTable>(
+              other)) {
+    return nonNegated_->testingEquals(*(otherNegated->nonNegated_));
+  }
+
+  return false;
 }
 
 namespace {

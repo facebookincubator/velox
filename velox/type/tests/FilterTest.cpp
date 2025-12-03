@@ -1985,6 +1985,123 @@ TEST(FilterTest, hugeIntRange) {
   EXPECT_FALSE(filter->testInt128Range(min, max, false));
 }
 
+TEST(FilterTest, negatedHugeintRange) {
+  auto filter = notEqualHugeint(HugeInt::build(1, 1), false);
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 1)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 0)));
+
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 0), HugeInt::build(1, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 0), HugeInt::build(1, 2), true));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(0, 2), HugeInt::build(1, 0), false));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(1, 2), HugeInt::build(1, 0), true));
+
+  const auto max = DecimalUtil::kLongDecimalMax;
+  const auto min = DecimalUtil::kLongDecimalMin;
+
+  filter = notEqualHugeint(max, false);
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(HugeInt::build(1, 2), max, false));
+  EXPECT_TRUE(filter->testInt128Range(min, HugeInt::build(1, 2), false));
+
+  filter = notEqualHugeint(min, false);
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128Range(min, HugeInt::build(1, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(HugeInt::build(1, 2), max, false));
+
+  filter = notBetweenHugeint(HugeInt::build(1, 1), HugeInt::build(2, 2), false);
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 3)));
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(2, 1)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 0)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(2, 3)));
+
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(1, 3), HugeInt::build(2, 0), false));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(2, 0), HugeInt::build(2, 2), true));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(0, 0), HugeInt::build(1, 0), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(2, 3), HugeInt::build(3, 5), true));
+
+  filter = notBetweenHugeint(HugeInt::build(1, 1), max, false);
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_FALSE(filter->testInt128Range(HugeInt::build(2, 2), max, true));
+  EXPECT_TRUE(filter->testInt128Range(min, HugeInt::build(1, 0), false));
+
+  filter = notBetweenHugeint(min, HugeInt::build(1, 1), false);
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128Range(min, HugeInt::build(0, 1), true));
+  EXPECT_TRUE(filter->testInt128Range(HugeInt::build(1, 2), max, false));
+
+  filter = notGreaterThanHugeint(HugeInt::build(1, 1), true);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 0)));
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 2)));
+
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 0), HugeInt::build(1, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(0, 0), HugeInt::build(1, 1), true));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(2, 1), HugeInt::build(2, 2), true));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(0, 0), HugeInt::build(0, 1), false));
+
+  filter = notGreaterThanHugeint(min, true);
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(min, max, false));
+
+  filter = notGreaterThanHugeint(max, true);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128Range(min, max, false));
+}
+
+TEST(FilterTest, negatedHugeintValuesUsingHashTable) {
+  auto filter = notInHugeint({HugeInt::build(1, 1), HugeInt::build(2, 2)});
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 1)));
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(2, 2)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 0)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(2, 3)));
+
+  filter = notInHugeint({HugeInt::build(1, 1), HugeInt::build(2, 2)}, true);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(3, 1), HugeInt::build(3, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(2, 1), HugeInt::build(2, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 1), HugeInt::build(2, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 1), HugeInt::build(2, 2), true));
+
+  filter = notInHugeint({HugeInt::build(1, 1), HugeInt::build(1, 2)}, true);
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(1, 1), HugeInt::build(1, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 1), HugeInt::build(1, 2), true));
+
+  filter = notInHugeint(
+      {HugeInt::parse("-123456789123456789123456789123456789"),
+       HugeInt::parse("170141183460469231731687303715884105727")},
+      false);
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::parse("-123456789123456789123456789123456789"),
+      HugeInt::parse("170141183460469231731687303715884105727"),
+      false));
+}
+
 TEST(FilterTest, dateRange) {
   auto filter =
       between(DATE()->toDays("1970-01-01"), DATE()->toDays("1980-01-01"));
