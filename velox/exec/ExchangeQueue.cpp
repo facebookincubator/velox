@@ -22,35 +22,6 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
-SerializedPage::SerializedPage(
-    std::unique_ptr<folly::IOBuf> iobuf,
-    std::function<void(folly::IOBuf&)> onDestructionCb,
-    std::optional<int64_t> numRows)
-    : iobuf_(std::move(iobuf)),
-      iobufBytes_(chainBytes(*iobuf_.get())),
-      numRows_(numRows),
-      onDestructionCb_(onDestructionCb) {
-  VELOX_CHECK_NOT_NULL(iobuf_);
-  for (auto& buf : *iobuf_) {
-    int32_t bufSize = buf.size();
-    ranges_.push_back(
-        ByteRange{
-            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
-            bufSize,
-            0});
-  }
-}
-
-SerializedPage::~SerializedPage() {
-  if (onDestructionCb_) {
-    onDestructionCb_(*iobuf_.get());
-  }
-}
-
-std::unique_ptr<ByteInputStream> SerializedPage::prepareStreamForDeserialize() {
-  return std::make_unique<BufferInputStream>(std::move(ranges_));
-}
-
 void ExchangeQueue::noMoreSources() {
   std::vector<ContinuePromise> promises;
   {
@@ -80,7 +51,7 @@ int64_t ExchangeQueue::minOutputBatchBytesLocked() const {
 }
 
 void ExchangeQueue::enqueueLocked(
-    std::unique_ptr<SerializedPage>&& page,
+    std::unique_ptr<SerializedPageBase>&& page,
     std::vector<ContinuePromise>& promises) {
   if (page == nullptr) {
     ++numCompleted_;
@@ -134,7 +105,7 @@ void ExchangeQueue::addPromiseLocked(
   VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
 }
 
-std::vector<std::unique_ptr<SerializedPage>> ExchangeQueue::dequeueLocked(
+std::vector<std::unique_ptr<SerializedPageBase>> ExchangeQueue::dequeueLocked(
     int consumerId,
     uint32_t maxBytes,
     bool* atEnd,
@@ -157,7 +128,7 @@ std::vector<std::unique_ptr<SerializedPage>> ExchangeQueue::dequeueLocked(
     return {};
   }
 
-  std::vector<std::unique_ptr<SerializedPage>> pages;
+  std::vector<std::unique_ptr<SerializedPageBase>> pages;
   uint32_t pageBytes = 0;
   for (;;) {
     if (queue_.empty()) {

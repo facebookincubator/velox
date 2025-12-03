@@ -17,13 +17,14 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <filesystem>
-
+#include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
-#include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
+
+const std::string kIcebergConnectorId{"test-iceberg"};
 
 void IcebergTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
@@ -33,8 +34,14 @@ void IcebergTestBase::SetUp() {
 #endif
   Type::registerSerDe();
 
-  functions::iceberg::registerFunctions(
-      std::string(kDefaultTestIcebergFunctionNamePrefix));
+  // Register IcebergConnector.
+  IcebergConnectorFactory icebergFactory;
+  auto icebergConnector = icebergFactory.newConnector(
+      kIcebergConnectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor_.get());
+  registerConnector(icebergConnector);
 
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), true);
@@ -57,6 +64,7 @@ void IcebergTestBase::TearDown() {
   opPool_.reset();
   root_.reset();
   queryCtx_.reset();
+  unregisterConnector(kIcebergConnectorId);
   HiveConnectorTestBase::TearDown();
 }
 
@@ -187,7 +195,8 @@ std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
       tableHandle,
       connectorQueryCtx_.get(),
       CommitStrategy::kNoCommit,
-      connectorConfig_);
+      connectorConfig_,
+      std::string(kDefaultIcebergFunctionPrefix));
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
@@ -232,7 +241,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
                           ->openFileForRead(filePath);
     splits.push_back(
         std::make_shared<HiveIcebergSplit>(
-            exec::test::kHiveConnectorId,
+            kIcebergConnectorId,
             filePath,
             fileFormat_,
             0,

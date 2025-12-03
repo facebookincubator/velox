@@ -119,13 +119,13 @@ folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
   return stats;
 }
 
-std::vector<std::unique_ptr<SerializedPage>> ExchangeClient::next(
+std::vector<std::unique_ptr<SerializedPageBase>> ExchangeClient::next(
     int consumerId,
     uint32_t maxBytes,
     bool* atEnd,
     ContinueFuture* future) {
   std::vector<RequestSpec> requestSpecs;
-  std::vector<std::unique_ptr<SerializedPage>> pages;
+  std::vector<std::unique_ptr<SerializedPageBase>> pages;
   ContinuePromise stalePromise = ContinuePromise::makeEmpty();
   {
     std::lock_guard<std::mutex> l(queue_->mutex());

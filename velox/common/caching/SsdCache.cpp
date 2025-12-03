@@ -209,7 +209,7 @@ void SsdCache::shutdown() {
 
   VELOX_SSD_CACHE_LOG(INFO) << "SSD cache is shutting down";
   while (writesInProgress_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+    std::this_thread::sleep_for(kWriteWaitMs);
   }
   for (auto& file : files_) {
     file->checkpoint(true);
@@ -225,7 +225,7 @@ void SsdCache::clear() {
 
 void SsdCache::waitForWriteToFinish() {
   while (writesInProgress_ != 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+    std::this_thread::sleep_for(kWriteWaitMs);
   }
 }
 

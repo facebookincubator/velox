@@ -77,6 +77,25 @@ TEST_F(PlanConsistencyCheckerTest, filter) {
 
   VELOX_ASSERT_THROW(
       PlanConsistencyChecker::check(filterNode), "Field not found: x");
+
+  // Non-existent column referenced in a lambda expression.
+  filterNode = std::make_shared<FilterNode>(
+      nextId(),
+      std::make_shared<CallTypedExpr>(
+          BOOLEAN(),
+          "any_match",
+          Lit(Variant::array({1, 2, 3})),
+          std::make_shared<LambdaTypedExpr>(
+              ROW("x", INTEGER()),
+              std::make_shared<CallTypedExpr>(
+                  BOOLEAN(),
+                  "lt",
+                  Col(INTEGER(), "x"),
+                  Col(INTEGER(), "blah")))),
+      projectNode);
+
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(filterNode), "Field not found: blah");
 }
 
 TEST_F(PlanConsistencyCheckerTest, project) {

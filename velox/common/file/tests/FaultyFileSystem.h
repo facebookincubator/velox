@@ -176,7 +176,7 @@ class FaultyFileSystem : public FileSystem {
   mutable std::mutex mu_;
   std::optional<FileInjections> fileInjections_;
   std::optional<FileSystemInjections> fsInjections_;
-  folly::Executor* executor_;
+  folly::Executor* executor_{nullptr};
 };
 
 /// Registers the faulty filesystem.

@@ -152,11 +152,6 @@ class DictionaryVector : public SimpleVector<T> {
     return indices_;
   }
 
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + dictionaryValues_->retainedSize() +
-        indices_->capacity();
-  }
-
   bool isScalar() const override {
     return dictionaryValues_->isScalar();
   }
@@ -270,6 +265,12 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setInternalState();
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return BaseVector::retainedSizeImpl() +
+        dictionaryValues_->retainedSize(totalStringBufferSize) +
+        indices_->capacity();
+  }
 
   BufferPtr indices_;
   const vector_size_t* rawIndices_ = nullptr;

@@ -50,5 +50,66 @@ TEST(TypeCoercerTest, basic) {
   testNoCoercion(ARRAY(TINYINT()), MAP(INTEGER(), REAL()));
 }
 
+TEST(TypeCoercerTest, unknown) {
+  ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BOOLEAN()));
+  ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BIGINT()));
+  ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), VARCHAR()));
+  ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), ARRAY(INTEGER())));
+}
+
+TEST(TypeCoercerTest, array) {
+  ASSERT_TRUE(TypeCoercer::coercible(ARRAY(UNKNOWN()), ARRAY(INTEGER())));
+  ASSERT_TRUE(
+      TypeCoercer::coercible(ARRAY(UNKNOWN()), ARRAY(ARRAY(VARCHAR()))));
+
+  ASSERT_FALSE(TypeCoercer::coercible(ARRAY(BIGINT()), ARRAY(REAL())));
+  ASSERT_FALSE(
+      TypeCoercer::coercible(ARRAY(UNKNOWN()), MAP(INTEGER(), REAL())));
+  ASSERT_FALSE(TypeCoercer::coercible(ARRAY(UNKNOWN()), ROW({UNKNOWN()})));
+  ASSERT_FALSE(TypeCoercer::coercible(ARRAY(VARCHAR()), VARCHAR()));
+}
+
+TEST(TypeCoercerTest, map) {
+  ASSERT_TRUE(
+      TypeCoercer::coercible(
+          MAP(UNKNOWN(), UNKNOWN()), MAP(INTEGER(), REAL())));
+  ASSERT_TRUE(
+      TypeCoercer::coercible(MAP(VARCHAR(), REAL()), MAP(VARCHAR(), DOUBLE())));
+  ASSERT_TRUE(
+      TypeCoercer::coercible(MAP(INTEGER(), REAL()), MAP(BIGINT(), DOUBLE())));
+
+  ASSERT_FALSE(
+      TypeCoercer::coercible(MAP(INTEGER(), REAL()), MAP(BIGINT(), INTEGER())));
+  ASSERT_FALSE(
+      TypeCoercer::coercible(MAP(UNKNOWN(), UNKNOWN()), ARRAY(BIGINT())));
+  ASSERT_FALSE(
+      TypeCoercer::coercible(
+          MAP(UNKNOWN(), UNKNOWN()), ROW({INTEGER(), BIGINT()})));
+}
+
+TEST(TypeCoercerTest, row) {
+  ASSERT_TRUE(
+      TypeCoercer::coercible(
+          ROW({UNKNOWN(), INTEGER(), REAL()}),
+          ROW({SMALLINT(), BIGINT(), DOUBLE()})));
+
+  ASSERT_FALSE(
+      TypeCoercer::coercible(
+          ROW({UNKNOWN(), INTEGER(), REAL()}),
+          ROW({SMALLINT(), VARCHAR(), DOUBLE()})));
+
+  ASSERT_FALSE(
+      TypeCoercer::coercible(
+          ROW({UNKNOWN(), INTEGER(), REAL()}), ARRAY(INTEGER())));
+  ASSERT_FALSE(
+      TypeCoercer::coercible(
+          ROW({UNKNOWN(), INTEGER(), REAL()}), MAP(INTEGER(), REAL())));
+  ASSERT_FALSE(
+      TypeCoercer::coercible(
+          ROW({UNKNOWN(), INTEGER(), REAL()}), ROW({UNKNOWN(), INTEGER()})));
+  ASSERT_FALSE(
+      TypeCoercer::coercible(ROW({UNKNOWN(), INTEGER(), REAL()}), BIGINT()));
+}
+
 } // namespace
 } // namespace facebook::velox

@@ -56,8 +56,8 @@ class AsyncSource {
 
   ~AsyncSource() {
     VELOX_CHECK(
-        moved_ || closed_,
-        "AsyncSource should be properly consumed or closed.");
+        moved_ || closed_ || (cancelled_ && !making_),
+        "AsyncSource should be properly consumed, closed, or cancelled.");
   }
 
   // Makes an item if it is not already made. To be called on a background
@@ -121,7 +121,7 @@ class AsyncSource {
         return nullptr;
       }
       if (making_) {
-        promise_ = std::make_unique<ContinuePromise>();
+        promise_ = std::make_unique<ContinuePromise>("AsyncSource::move");
         wait = promise_->getSemiFuture();
       } else {
         if (!make_) {
@@ -163,6 +163,18 @@ class AsyncSource {
     return timing_;
   }
 
+  /// Cancels the task if it hasn't started yet.
+  /// If the task has already started, the task will continue but AsyncSource
+  /// is marked as cancelled to allow proper cleanup in destructor.
+  void cancel() {
+    std::lock_guard<std::mutex> l(mutex_);
+    cancelled_ = true;
+    if (make_ == nullptr) {
+      return;
+    }
+    make_ = nullptr;
+  }
+
   /// This function assists the caller in ensuring that resources allocated in
   /// AsyncSource are promptly released:
   /// 1. Waits for the completion of the 'make_' function if it is executing
@@ -178,7 +190,7 @@ class AsyncSource {
     {
       std::lock_guard<std::mutex> l(mutex_);
       if (making_) {
-        promise_ = std::make_unique<ContinuePromise>();
+        promise_ = std::make_unique<ContinuePromise>("AsyncSource::close");
         wait = promise_->getSemiFuture();
       } else if (make_) {
         make_ = nullptr;
@@ -217,5 +229,6 @@ class AsyncSource {
   CpuWallTiming timing_;
   bool closed_{false};
   bool moved_{false};
+  bool cancelled_{false};
 };
 } // namespace facebook::velox

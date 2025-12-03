@@ -307,8 +307,8 @@ bool SsdFile::growOrEvictLocked() {
     }
   }
 
-  auto candidates =
-      tracker_.findEvictionCandidates(3, numRegions_, regionPins_);
+  auto candidates = tracker_.findEvictionCandidates(
+      kNumEvictionCandidates, numRegions_, regionPins_);
   if (candidates.empty()) {
     suspended_ = true;
     return false;
@@ -965,7 +965,7 @@ void SsdFile::readCheckpoint() {
     auto checkpointReadFile = fs_->openFileForRead(checkpointPath);
     stream = std::make_unique<common::FileInputStream>(
         std::move(checkpointReadFile),
-        1 << 20,
+        kCheckpointReadBufferSize,
         memory::memoryManager()->cachePool());
   } catch (std::exception& e) {
     ++stats_.openCheckpointErrors;

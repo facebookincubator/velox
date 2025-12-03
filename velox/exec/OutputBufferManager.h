@@ -53,7 +53,7 @@ class OutputBufferManager {
   bool enqueue(
       const std::string& taskId,
       int destination,
-      std::unique_ptr<SerializedPage> data,
+      std::unique_ptr<SerializedPageBase> data,
       ContinueFuture* future);
 
   void noMoreData(const std::string& taskId);

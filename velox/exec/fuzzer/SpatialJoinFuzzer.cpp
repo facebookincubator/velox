@@ -65,6 +65,7 @@ constexpr int32_t kClusterSpreadRange = 100;
 constexpr int32_t kClusterSpreadHalf = kClusterSpreadRange / 2;
 constexpr double kPolygonSize = 10.0;
 constexpr double kSparseSpread = 2000.0;
+constexpr uint32_t kMaxRadius = 100;
 
 // Base class for geometry string generators.
 class GeometryInputGenerator : public AbstractInputGenerator {
@@ -290,7 +291,14 @@ core::JoinType SpatialJoinFuzzer::pickJoinType() {
 std::string SpatialJoinFuzzer::pickSpatialPredicate() {
   // Common spatial predicates supported by spatial joins.
   static std::vector<std::string> kPredicates = {
-      "ST_Intersects", "ST_Contains", "ST_Within", "ST_Distance"};
+      "ST_Intersects",
+      "ST_Contains",
+      "ST_Within",
+      "ST_Distance",
+      "ST_Overlaps",
+      "ST_Crosses",
+      "ST_Touches",
+      "ST_Equals"};
 
   const size_t idx = randInt(0, kPredicates.size() - 1);
   return kPredicates[idx];
@@ -467,6 +475,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
 
   std::string joinCondition;
   std::optional<std::string> radiusColumn;
+  std::optional<std::string> radiusExpression;
   if (predicate == "ST_Distance") {
     // ST_Distance returns a value, use it with a threshold.
     // For ST_Distance, we use a radius column instead of embedding the
@@ -474,6 +483,9 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
     joinCondition =
         fmt::format("{}(probe_geom, build_geom) < radius", predicate);
     radiusColumn = "radius";
+    radiusExpression = fmt::format(
+        "CAST({} AS DOUBLE) AS radius",
+        static_cast<double>(randInt(0, kMaxRadius)));
   } else {
     // Other predicates return boolean.
     joinCondition = fmt::format("{}(probe_geom, build_geom)", predicate);
@@ -496,7 +508,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
                       radiusColumn.has_value()
                           ? std::vector<
                                 std::
-                                    string>{"build_id", "ST_GeometryFromText(build_geom_wkt) AS build_geom", "build_geom_wkt", "50.0 AS radius"}
+                                    string>{"build_id", "ST_GeometryFromText(build_geom_wkt) AS build_geom", "build_geom_wkt", radiusExpression.value()}
                           : std::vector<
                                 std::
                                     string>{"build_id", "ST_GeometryFromText(build_geom_wkt) AS build_geom", "build_geom_wkt"})
@@ -526,7 +538,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
                       radiusColumn.has_value()
                           ? std::vector<
                                 std::
-                                    string>{"build_id", "ST_GeometryFromText(build_geom_wkt) AS build_geom", "build_geom_wkt", "50.0 AS radius"}
+                                    string>{"build_id", "ST_GeometryFromText(build_geom_wkt) AS build_geom", "build_geom_wkt", radiusExpression.value()}
                           : std::vector<
                                 std::
                                     string>{"build_id", "ST_GeometryFromText(build_geom_wkt) AS build_geom", "build_geom_wkt"})

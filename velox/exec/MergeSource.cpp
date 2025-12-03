@@ -287,7 +287,7 @@ class MergeExchangeSource : public MergeSource {
 
   std::shared_ptr<ExchangeClient> client_;
   std::unique_ptr<ByteInputStream> inputStream_;
-  std::unique_ptr<SerializedPage> currentPage_;
+  std::unique_ptr<SerializedPageBase> currentPage_;
   bool atEnd_ = false;
 };
 } // namespace

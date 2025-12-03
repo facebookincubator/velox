@@ -132,7 +132,7 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
+      std::make_unique<PrestoSerializedPage>(
           stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
 

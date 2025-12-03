@@ -136,8 +136,9 @@ class IPAddressCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto ipAddressString = ipAddressStrings->valueAt(row);
-      auto maybeIpAsInt128 =
-          ipaddress::tryGetIPv6asInt128FromString(ipAddressString);
+      // TODO: Remove explicit std::string_view cast.
+      auto maybeIpAsInt128 = ipaddress::tryGetIPv6asInt128FromString(
+          std::string_view(ipAddressString));
 
       if (maybeIpAsInt128.hasError()) {
         if (threadSkipErrorDetails()) {

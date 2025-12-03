@@ -69,7 +69,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
   // why).
   std::vector<std::string> expectedTexts = {
       "Can't grow ",
-      "capacity with 2.00MB. This will exceed its max capacity 5.00MB, current "
+      "capacity with 2.00MB. This will exceed its memory pool capacity 5.00MB, current "
       "capacity 5.00MB.\n"
       "ARBITRATOR[SHARED CAPACITY[6.00GB] STATS[numRequests 1 numRunning 1 "
       "numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "

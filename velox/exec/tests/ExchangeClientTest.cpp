@@ -109,9 +109,9 @@ class ExchangeClientTest
     return pageSize;
   }
 
-  std::vector<std::unique_ptr<SerializedPage>>
+  std::vector<std::unique_ptr<SerializedPageBase>>
   fetchPages(int consumerId, ExchangeClient& client, int32_t numPages) {
-    std::vector<std::unique_ptr<SerializedPage>> allPages;
+    std::vector<std::unique_ptr<SerializedPageBase>> allPages;
     for (auto i = 0; i < numPages; ++i) {
       bool atEnd{false};
       ContinueFuture future;
@@ -139,7 +139,7 @@ class ExchangeClientTest
 
   static void enqueue(
       ExchangeQueue& queue,
-      std::unique_ptr<SerializedPage> page) {
+      std::unique_ptr<SerializedPageBase> page) {
     std::vector<ContinuePromise> promises;
     {
       std::lock_guard<std::mutex> l(queue.mutex());
@@ -150,10 +150,10 @@ class ExchangeClientTest
     }
   }
 
-  static std::unique_ptr<SerializedPage> makePage(uint64_t size) {
+  static std::unique_ptr<SerializedPageBase> makePage(uint64_t size) {
     auto ioBuf = folly::IOBuf::create(size);
     ioBuf->append(size);
-    return std::make_unique<SerializedPage>(std::move(ioBuf), nullptr, 1);
+    return std::make_unique<PrestoSerializedPage>(std::move(ioBuf), nullptr, 1);
   }
 
   folly::Executor* executor() const {

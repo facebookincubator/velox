@@ -258,7 +258,7 @@ class MultiFragmentTest : public HiveConnectorTestBase,
         exchangeStats.at("localExchangeSource.numPages").count);
     ASSERT_EQ(
         expectedBackgroundCpuCount,
-        exchangeStats.at(ExchangeClient::kBackgroundCpuTimeMs).count);
+        exchangeStats.at(Operator::kBackgroundCpuTimeNanos).count);
     ASSERT_EQ(
         expectedBackgroundCpuCount, taskStats.at("0").backgroundTiming.count);
   }

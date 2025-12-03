@@ -389,10 +389,6 @@ void SortBuffer::prepareOutput(vector_size_t batchSize) {
         BaseVector::create(input_, batchSize, pool_));
   }
 
-  for (auto& child : output_->children()) {
-    child->resize(batchSize);
-  }
-
   if (hasSpilled()) {
     spillSources_.resize(batchSize);
     spillSourceRows_.resize(batchSize);

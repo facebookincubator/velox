@@ -33,6 +33,7 @@ add_executable(
   VectorPoolTest.cpp
   VectorPrepareForReuseTest.cpp
   VectorPrinterTest.cpp
+  VectorRetainedSizeTest.cpp
   VectorSaverTest.cpp
   VectorStreamTest.cpp
   VectorStreamGroupTest.cpp

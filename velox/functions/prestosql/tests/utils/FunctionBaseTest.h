@@ -393,6 +393,21 @@ class FunctionBaseTest : public testing::Test,
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   parse::ParseOptions options_;
 
+  void testContextMessageOnThrow(
+      const std::string& expression,
+      const RowVectorPtr& data,
+      const std::string& expectedContextMessage) {
+    try {
+      evaluate(expression, data);
+      FAIL() << "Expected an exception";
+    } catch (const VeloxUserError& e) {
+      ASSERT_TRUE(e.context().find(expectedContextMessage) != std::string::npos)
+          << "Expected additional context in error message to contain '"
+          << expectedContextMessage << "', but received '" << e.context()
+          << "'.";
+    }
+  }
+
  private:
   template <typename T>
   std::shared_ptr<T> castEvaluateResult(

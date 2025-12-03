@@ -390,7 +390,18 @@ class SsdFile {
   // Magic number at end of completed checkpoint file.
   static constexpr int64_t kCheckpointEndMarker = 0xcbedf11e;
 
+  // Maximum percentage of erased entries in a region before it becomes
+  // eligible for clearing and reuse. When more than 50% of a region's
+  // entries have been erased (e.g., via TTL eviction), the region can be
+  // cleared and added back to the writable regions pool.
   static constexpr int kMaxErasedSizePct = 50;
+
+  // Number of eviction candidates to consider when selecting regions to
+  // evict.
+  static constexpr int32_t kNumEvictionCandidates = 3;
+
+  // Buffer size for reading checkpoint files during recovery.
+  static constexpr int32_t kCheckpointReadBufferSize = 1 << 20; // 1MB
 
   // Updates the read count of a region.
   void regionRead(int32_t region, int32_t size) {

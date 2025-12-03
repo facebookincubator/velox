@@ -108,6 +108,12 @@ class GeometryFunctionsTest : public FunctionBaseTest {
     auto vec = makeNullableFlatVector<std::string>({input});
     return makeRowVector({vec});
   }
+
+  bool aboutEquals(double a, double b) {
+    double diff = std::abs(a - b);
+    double scale = std::max(std::abs(a), std::abs(b));
+    return diff <= std::max(1e-5, 1e-5 * scale);
+  }
 };
 
 TEST_F(GeometryFunctionsTest, errorStGeometryFromTextAndParsing) {
@@ -2337,8 +2343,12 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
       "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
       "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))");
   testStEnvelopeFunc(
-      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2868119, 119.094024 -27.2871725)))",
-      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2846569, 119.094024 -27.2871725, 119.094024 -27.2871725))");
+      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094124 -27.2846569, 119.094124 -27.2868119, 119.094024 -27.2871725)))",
+      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094124 -27.2846569, 119.094124 -27.2871725, 119.094024 -27.2871725))");
+
+  // Zero area envelope is valid
+  testStEnvelopeFunc(
+      "LINESTRING (1 1, 1 2)", "POLYGON ((1 1, 1 2, 1 2, 1 1, 1 1))");
 
   testStEnvelopeFunc("POLYGON EMPTY", "POLYGON EMPTY");
   testStEnvelopeFunc("MULTIPOLYGON EMPTY", "POLYGON EMPTY");
@@ -4292,4 +4302,258 @@ TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
       testStSphericalCentroidFunction(
           "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
       "ST_Centroid[SphericalGeography] only applies to Point or MultiPoint. Input type is: Polygon");
+}
+TEST_F(GeometryFunctionsTest, testStSphericalDistance) {
+  const auto testStSphericalDistanceFunc = [&](const std::optional<std::string>&
+                                                   leftWkt,
+                                               const std::optional<std::string>&
+                                                   rightWkt,
+                                               const std::optional<double>&
+                                                   expected) {
+    std::optional<double> result = evaluateOnce<double>(
+        "st_distance(to_spherical_geography(ST_GeometryFromText(c0)), to_spherical_geography(ST_GeometryFromText(c1)))",
+        leftWkt,
+        rightWkt);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testStSphericalDistanceFunc(
+      "POINT (-86.67 36.12)", "POINT (-118.40 33.94)", 2886448.973436703);
+  testStSphericalDistanceFunc(
+      "POINT (-118.40 33.94)", "POINT (-86.67 36.12)", 2886448.973436703);
+  testStSphericalDistanceFunc(
+      "POINT (-71.0589 42.3601)",
+      "POINT (-71.2290 42.4430)",
+      16734.69743457461);
+  testStSphericalDistanceFunc(
+      "POINT (-86.67 36.12)", "POINT (-86.67 36.12)", 0.0);
+
+  // Non-point geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalDistanceFunc(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))",
+          "POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))",
+          std::nullopt),
+      "ST_Distance[SphericalGeography] only applies to Point. Input type is: Polygon");
+
+  // Empty points should return null
+  testStSphericalDistanceFunc("POINT EMPTY", "POINT (40 30)", std::nullopt);
+  testStSphericalDistanceFunc("POINT (20 10)", "POINT EMPTY", std::nullopt);
+  testStSphericalDistanceFunc("POINT EMPTY", "POINT EMPTY", std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testStSphericalLength) {
+  const auto testStSphericalLengthFunction =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& expected) {
+        std::optional<double> result = evaluateOnce<double>(
+            "st_length(to_spherical_geography(ST_GeometryFromText(c0)))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  double length = 4350866.6362;
+
+  // Empty linestring returns null
+  testStSphericalLengthFunction("LINESTRING EMPTY", std::nullopt);
+
+  // ST_Length is equivalent to sums of ST_DISTANCE between points in the
+  // LineString
+  testStSphericalLengthFunction(
+      "LINESTRING (-71.05 42.36, -87.62 41.87, -122.41 37.77)", length);
+
+  // Linestring has same length as its reverse
+  testStSphericalLengthFunction(
+      "LINESTRING (-122.41 37.77, -87.62 41.87, -71.05 42.36)", length);
+
+  // Path north pole -> south pole -> north pole should be roughly the
+  // circumference of the Earth
+  testStSphericalLengthFunction(
+      "LINESTRING (0.0 90.0, 0.0 -90.0, 0.0 90.0)", 4.003e7);
+
+  // Empty multi-linestring returns null
+  testStSphericalLengthFunction("MULTILINESTRING EMPTY", std::nullopt);
+
+  // Multi-linestring with one path is equivalent to a single linestring
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87, -122.41 37.77))", length);
+
+  // Multi-linestring with two disjoint paths has length equal to sum of lengths
+  // of lines
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87, -122.41 37.77), (-73.05 42.36, -89.62 41.87, -124.41 37.77))",
+      2 * length);
+
+  // Multi-linestring with adjacent paths is equivalent to a single linestring
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87), (-87.62 41.87, -122.41 37.77))",
+      length);
+
+  // Non-linestring geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalLengthFunction(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
+      "ST_Length[SphericalGeography] only applies to LineString or MultiLineString. Input type is: Polygon");
+
+  // Invalid linestring should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalLengthFunction("LINESTRING (0.0)", std::nullopt),
+      "Failed to parse WKT: ParseException: Expected number but encountered ')'");
+}
+
+TEST_F(GeometryFunctionsTest, testDegeneratePolygons) {
+  const auto testDegeneratePolygonsFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        auto res = evaluateOnce<std::string>(
+            "ST_AsText(ST_GeometryFromText(c0))", wkt);
+        if (expected.has_value()) {
+          ASSERT_TRUE(res.has_value());
+          ASSERT_EQ(expected.value(), res.value());
+        } else {
+          ASSERT_FALSE(res.has_value());
+        }
+      };
+
+  // Single polygon with CCW orientation - should orient to CW
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 3 4, 5 7, 1 2))",
+      "POLYGON ((1 2, 5 7, 3 4, 1 2))"); // note: this should be fine
+
+  // Single polygons with no area- should not reverse these
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 5 6, 3 4, 1 2))", "POLYGON ((1 2, 5 6, 3 4, 1 2))");
+
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 3 4, 5 6, 1 2))", "POLYGON ((1 2, 3 4, 5 6, 1 2))");
+
+  // Single polygons with interior rings- should canonicalize so any shells have
+  // CW orientation and holes have CCW orientation.
+  testDegeneratePolygonsFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3))",
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))");
+
+  testDegeneratePolygonsFunc(
+      "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))",
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))");
+
+  // Multipolygons where polygons after the first are CCW for shell or CW for
+  // hole. These should be correctly oriented after serde.
+
+  // First polygon has CW shell and CCW hole, second polygon has CCW
+  // shell and CCW hole -> second polygon shell should be reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CW hole, second polygon has CCW
+  // shell and CCW hole -> first polygon hole and second polygon shell should be
+  // reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CCW shell and CW hole, second polygon has CCW
+  // shell and CW hole -> both polygons should have shell and hole reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CCW shell and CCW hole, second polygon has CCW
+  // shell and CCW hole -> both polygons should have shells reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CW hole, second polygon has CW
+  // shell and CW hole -> both polygons should have holes reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // MultiPolygons with zero-area rings. These need to fail because our
+  // serialization format holds MultiPolygons as single vectors that rely on
+  // orientation for determining shell start points.
+
+  // Second polygon is zero area
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((1 1, 2 1, 2 2, 1 1)), ((1 1, 2 2, 3 3, 2 2, 1 1)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // Single polygon with zero area
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((5 10, 25 30, 15 20, 5 10)))", ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc("MULTIPOLYGON (((1 1, 1 2, 1 3, 1 1)))", ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has CW shell and
+  // zero-area hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has zero-area shell
+  // and CCW hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has CW shell
+  // and zero-area hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and CCW hole, second polygon has zero-area shell
+  // and zero-area hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has zero-area shell and CCW hole, second polygon has CW shell
+  // and CCW hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 0 15, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6))))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has CW shell and zero-area hole, second polygon has CW shell
+  // and CCW hole-
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
+
+  // First polygon has zero-area shell and zero-area hole, second polygon has CW
+  // shell and CCW hole
+  VELOX_ASSERT_USER_THROW(
+      testDegeneratePolygonsFunc(
+          "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+          ""),
+      "Input MultiPolygon contains one or more zero-area rings.");
 }

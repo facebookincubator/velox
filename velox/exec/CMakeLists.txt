@@ -34,6 +34,7 @@ velox_add_library(
   ExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSource.cpp
+  SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
   GroupId.cpp

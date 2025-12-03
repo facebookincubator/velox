@@ -1003,6 +1003,7 @@ TEST_F(AggregationTest, distinctWithGroupingKeysReordered) {
   options.vectorSize = vectorSize;
   options.stringVariableLength = false;
   options.stringLength = 128;
+  options.nullRatio = 0.1;
   VectorFuzzer fuzzer(options, pool());
   const int numVectors{5};
   std::vector<RowVectorPtr> vectors;

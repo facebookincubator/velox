@@ -117,13 +117,13 @@ class Exchange : public SourceOperator {
   // Reusable result vector.
   RowVectorPtr result_;
 
-  std::vector<std::unique_ptr<SerializedPage>> currentPages_;
+  std::vector<std::unique_ptr<SerializedPageBase>> currentPages_;
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
 
   // Memory holders for deserialization across 'getOutput' calls.
   // The merged pages for row serialization.
-  std::unique_ptr<SerializedPage> mergedRowPage_;
+  std::unique_ptr<SerializedPageBase> mergedRowPage_;
   std::unique_ptr<RowIterator> rowIterator_;
 
   // State for columnar page deserialization.
