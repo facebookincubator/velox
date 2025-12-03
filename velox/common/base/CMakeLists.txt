@@ -31,6 +31,7 @@ velox_add_library(
   SkewedPartitionBalancer.cpp
   SpillConfig.cpp
   SpillStats.cpp
+  SplitBlockBloomFilter.cpp
   StatsReporter.cpp
   SuccinctPrinter.cpp
   TraceConfig.cpp
