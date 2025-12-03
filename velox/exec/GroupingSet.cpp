@@ -1033,12 +1033,7 @@ void GroupingSet::spill() {
         spillStats_);
   }
   table_->freePointerTable();
-  // Spilling may execute on multiple partitions in parallel, and
-  // HashStringAllocator is not thread safe. If any aggregations
-  // allocate/deallocate memory during spilling it can lead to concurrency bugs.
-  // Freeze the HashStringAllocator to make it effectively immutable and
-  // guarantee we don't accidentally enter an unsafe situation.
-  rows->stringAllocator().freezeAndExecute([&]() { inputSpiller_->spill(); });
+  inputSpiller_->spill();
   if (isDistinct() && numDistinctSpillFilesPerPartition_.empty()) {
     size_t totalNumDistinctSpilledFiles{0};
     const auto maxPartitions = 1 << spillConfig_->numPartitionBits;
