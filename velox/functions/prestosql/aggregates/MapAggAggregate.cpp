@@ -48,7 +48,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
       const auto* indices = decodedKeys.indices();
       rows.applyToSelected([&](vector_size_t i) {
         velox::functions::checkNestedNulls(
-            decodedKeys, indices, i, throwOnNestedNulls_);
+            decodedKeys, i, indices[i], throwOnNestedNulls_);
       });
     }
 
@@ -105,7 +105,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
 
     rows.applyToSelected([&](vector_size_t row) {
       if (velox::functions::checkNestedNulls(
-              Base::decodedKeys_, indices, row, throwOnNestedNulls_)) {
+              Base::decodedKeys_, row, indices[row], throwOnNestedNulls_)) {
         return;
       }
 
@@ -131,7 +131,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
     auto tracker = Base::trackRowSize(group);
     rows.applyToSelected([&](vector_size_t row) {
       if (velox::functions::checkNestedNulls(
-              Base::decodedKeys_, indices, row, throwOnNestedNulls_)) {
+              Base::decodedKeys_, row, indices[row], throwOnNestedNulls_)) {
         return;
       }
 

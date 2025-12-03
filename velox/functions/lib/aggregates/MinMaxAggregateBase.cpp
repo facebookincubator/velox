@@ -327,7 +327,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
       auto indices = decoded.indices();
       rows.applyToSelected([&](vector_size_t i) {
         velox::functions::checkNestedNulls(
-            decoded, indices, i, throwOnNestedNulls_);
+            decoded, i, indices[i], throwOnNestedNulls_);
       });
     }
 
@@ -406,7 +406,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
     rows.applyToSelected([&](vector_size_t i) {
       if (velox::functions::checkNestedNulls(
-              decoded, indices, i, throwOnNestedNulls_)) {
+              decoded, i, indices[i], throwOnNestedNulls_)) {
         return;
       }
 
@@ -467,7 +467,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
     auto indices = decoded.indices();
     rows.applyToSelected([&](vector_size_t i) {
       if (velox::functions::checkNestedNulls(
-              decoded, indices, i, throwOnNestedNulls_)) {
+              decoded, i, indices[i], throwOnNestedNulls_)) {
         return;
       }
       if (!accumulator->hasValue() ||
