@@ -292,24 +292,27 @@ void VectorStreamGroup::read(
 folly::IOBuf rowVectorToIOBuf(
     const RowVectorPtr& rowVector,
     memory::MemoryPool& pool,
-    VectorSerde* serde) {
-  return rowVectorToIOBuf(rowVector, rowVector->size(), pool, serde);
+    VectorSerde* serde,
+    const VectorSerde::Options* options) {
+  return rowVectorToIOBuf(rowVector, rowVector->size(), pool, serde, options);
 }
 
 folly::IOBuf rowVectorToIOBuf(
     const RowVectorPtr& rowVector,
     vector_size_t rangeEnd,
     memory::MemoryPool& pool,
-    VectorSerde* serde) {
-  auto streamGroup = std::make_unique<VectorStreamGroup>(&pool, serde);
-  streamGroup->createStreamTree(asRowType(rowVector->type()), rangeEnd);
-
-  IndexRange range{0, rangeEnd};
-  Scratch scratch;
-  streamGroup->append(rowVector, folly::Range<IndexRange*>(&range, 1), scratch);
+    VectorSerde* serde,
+    const VectorSerde::Options* options) {
+  // Use BatchVectorSerializer with provided options (e.g., preserveEncodings).
+  // If serde is null, use the default registered serde.
+  auto* serdeToUse = serde != nullptr ? serde : getVectorSerde();
+  auto serializer = serdeToUse->createBatchSerializer(&pool, options);
 
   IOBufOutputStream stream(pool);
-  streamGroup->flush(&stream);
+  IndexRange range{0, rangeEnd};
+  Scratch scratch;
+  serializer->serialize(rowVector, folly::Range(&range, 1), scratch, &stream);
+
   return std::move(*stream.getIOBuf());
 }
 
