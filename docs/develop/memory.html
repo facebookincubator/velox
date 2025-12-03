@@ -142,7 +142,7 @@ document describes each memory component in detail.</p>
 <a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" />
 </a>
 <p>The memory manager is created on server startup with the provided
-<em>MemoryManagerOption</em>. It creates a memory allocator instance to manage the
+<em>MemoryManager::Options</em>. It creates a memory allocator instance to manage the
 physical memory allocations for both query memory allocated through memory pool
 and cache memory allocated through the file cache. It ensures the total
 allocated memory is within the system memory limit (specified by

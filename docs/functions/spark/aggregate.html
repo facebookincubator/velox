@@ -48,11 +48,12 @@
 <dt class="sig sig-object spark" id="avg">
 <span class="sig-name descname"><span class="pre">avg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">decimal</span></span></span><a class="headerlink" href="#avg" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the average (arithmetic mean) of all non-null input values.
-When x is of type DECIMAL, the result type is DECIMAL,
-and the intermediate results are varbinarys or (sum, count) pairs represented as row(decimal, bigint).
+When <code class="docutils literal notranslate"><span class="pre">x</span></code> is of type DECIMAL(p, s), the result type is DECIMAL(p + 4, s + 4),
+and the intermediate results are (sum, count) pairs represented as ROW(DECIMAL(p + 10, s), BIGINT).
+The current implementation for DECIMAL matches Spark avg’s default behavior with spark.sql.decimalOperations.allowPrecisionLoss=true.
 For all other input types, the result type is DOUBLE,
-and the intermediate results are (sum, count) pairs represented as row(double, bigint).
-When all inputs are nulls, the intermediate result is row(0, 0),
+and the intermediate results are (sum, count) pairs represented as ROW(DOUBLE, BIGINT).
+When all inputs are nulls, the intermediate result is ROW(0, 0),
 and the final result is null.</p>
 </dd></dl>
 
