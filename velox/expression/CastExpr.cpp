@@ -17,370 +17,17 @@
 #include "velox/expression/CastExpr.h"
 
 #include <fmt/format.h>
-#include <stdexcept>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/PeeledEncoding.h"
-#include "velox/expression/PrestoCastHooks.h"
+#include "velox/expression/PrestoCastKernel.h"
 #include "velox/expression/ScopedVarSetter.h"
-#include "velox/external/tzdb/time_zone.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/Type.h"
-#include "velox/type/tz/TimeZoneMap.h"
-#include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
-
-namespace {
-
-const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    const auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return tz::locateZone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
-
-} // namespace
-
-VectorPtr CastExpr::castFromDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int32_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output = DATE()->toString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      static const int64_t kMillisPerDay{86'400'000};
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timestamp = Timestamp::fromMillis(
-            inputFlatVector->valueAt(row) * kMillisPerDay);
-        if (timeZone) {
-          timestamp.toGMT(*timeZone);
-        }
-        resultFlatVector->set(row, timestamp);
-      });
-
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from DATE to {} is not supported", toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castToDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, DATE(), castResult);
-  (*castResult).clearNulls(rows);
-  auto* resultFlatVector = castResult->as<FlatVector<int32_t>>();
-  switch (fromType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* inputVector = input.as<SimpleVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        bool wrapException = true;
-        try {
-          const auto result =
-              hooks_->castStringToDate(inputVector->valueAt(row));
-          if (result.hasError()) {
-            wrapException = false;
-            if (setNullInResultAtError()) {
-              resultFlatVector->setNull(row, true);
-            } else {
-              if (context.captureErrorDetails()) {
-                context.setStatus(
-                    row,
-                    Status::UserError(
-                        "{} {}",
-                        makeErrorMessage(input, row, DATE()),
-                        result.error().message()));
-              } else {
-                context.setStatus(row, Status::UserError());
-              }
-            }
-          } else {
-            resultFlatVector->set(row, result.value());
-          }
-        } catch (const VeloxUserError& ue) {
-          if (!wrapException) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, DATE()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, DATE()) + " " + e.what());
-        }
-      });
-
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      auto* inputVector = input.as<SimpleVector<Timestamp>>();
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        const auto days = util::toDate(inputVector->valueAt(row), timeZone);
-        resultFlatVector->set(row, days);
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to DATE is not supported", fromType->toString());
-  }
-}
-
-VectorPtr CastExpr::castFromIntervalDayTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output =
-              INTERVAL_DAY_TIME()->valueToString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          INTERVAL_DAY_TIME()->toString(),
-          toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castFromTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      // Get session timezone
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      // Get session start time
-      const auto startTimeMs =
-          context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
-      auto systemDay = std::chrono::milliseconds{startTimeMs} / kMillisInDay;
-
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-
-      Buffer* buffer = resultFlatVector->getBufferWithSpace(
-          rows.countSelected() * TimeType::kTimeToVarcharRowSize,
-          true /*exactSize*/);
-      char* rawBuffer = buffer->asMutable<char>() + buffer->size();
-
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // Use timezone-aware conversion
-          auto systemTime =
-              systemDay.count() * kMillisInDay + inputFlatVector->valueAt(row);
-
-          int64_t adjustedTime{0};
-          if (timeZone) {
-            adjustedTime =
-                (timeZone->to_local(std::chrono::milliseconds{systemTime}) %
-                 kMillisInDay)
-                    .count();
-          } else {
-            adjustedTime = systemTime % kMillisInDay;
-          }
-
-          if (adjustedTime < 0) {
-            adjustedTime += kMillisInDay;
-          }
-
-          auto output = TIME()->valueToString(adjustedTime, rawBuffer);
-          resultFlatVector->setNoCopy(row, output);
-          rawBuffer += output.size();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-
-      buffer->setSize(rawBuffer - buffer->asMutable<char>());
-      return castResult;
-    }
-    case TypeKind::BIGINT: {
-      // if input is constant, create a constant output vector
-      if (input.isConstantEncoding()) {
-        auto constantInput = input.as<ConstantVector<int64_t>>();
-        if (constantInput->isNullAt(0)) {
-          return BaseVector::createNullConstant(
-              toType, rows.end(), context.pool());
-        } else {
-          auto constantValue = constantInput->valueAt(0);
-          return std::make_shared<ConstantVector<int64_t>>(
-              context.pool(),
-              rows.end(),
-              false, // isNull
-              toType,
-              std::move(constantValue));
-        }
-      }
-
-      // fallback to element-wise copy for non-constant inputs
-      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        resultFlatVector->set(row, inputFlatVector->valueAt(row));
-      });
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      // if input is constant, create a constant output vector
-      if (input.isConstantEncoding()) {
-        auto constantInput = input.as<ConstantVector<int64_t>>();
-        if (constantInput->isNullAt(0)) {
-          return BaseVector::createNullConstant(
-              toType, rows.end(), context.pool());
-        } else {
-          auto timeMillis = constantInput->valueAt(0);
-          return std::make_shared<ConstantVector<Timestamp>>(
-              context.pool(),
-              rows.end(),
-              false, // isNull
-              toType,
-              Timestamp::fromMillis(timeMillis));
-        }
-      }
-
-      // fallback to element-wise copy for non-constant inputs
-      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timeMillis = inputFlatVector->valueAt(row);
-        resultFlatVector->set(row, Timestamp::fromMillis(timeMillis));
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from TIME to {} is not supported", toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castToTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType) {
-  switch (fromType->kind()) {
-    case TypeKind::VARCHAR: {
-      VectorPtr castResult;
-      context.ensureWritable(rows, TIME(), castResult);
-      (*castResult).clearNulls(rows);
-
-      // Get session timezone and start time for timezone conversions
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      const auto sessionStartTimeMs =
-          context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
-
-      auto* inputVector = input.as<SimpleVector<StringView>>();
-      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
-
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
-        }
-      });
-
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to TIME is not supported", fromType->toString());
-  }
-}
 
 namespace {
 void propagateErrorsOrSetNulls(
@@ -403,354 +50,6 @@ void propagateErrorsOrSetNulls(
   }
 }
 } // namespace
-
-#define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
-    TEMPLATE_FUNC, decimalTypePtr, ...)            \
-  [&]() {                                          \
-    if (decimalTypePtr->isLongDecimal()) {         \
-      return TEMPLATE_FUNC<int128_t>(__VA_ARGS__); \
-    } else {                                       \
-      return TEMPLATE_FUNC<int64_t>(__VA_ARGS__);  \
-    }                                              \
-  }()
-
-VectorPtr CastExpr::applyMap(
-    const SelectivityVector& rows,
-    const MapVector* input,
-    exec::EvalCtx& context,
-    const MapType& fromType,
-    const MapType& toType) {
-  // Cast input keys/values vector to output keys/values vector using
-  // their element selectivity vector
-
-  // Initialize nested rows
-  auto mapKeys = input->mapKeys();
-  auto mapValues = input->mapValues();
-
-  SelectivityVector nestedRows;
-  BufferPtr elementToTopLevelRows;
-  if (fromType.keyType() != toType.keyType() ||
-      fromType.valueType() != toType.valueType()) {
-    nestedRows = functions::toElementRows(mapKeys->size(), rows, input);
-    elementToTopLevelRows = functions::getElementToTopLevelRows(
-        mapKeys->size(), rows, input, context.pool());
-  }
-
-  EvalErrorsPtr oldErrors;
-  context.swapErrors(oldErrors);
-
-  // Cast keys
-  VectorPtr newMapKeys;
-  if (*fromType.keyType() == *toType.keyType()) {
-    newMapKeys = input->mapKeys();
-  } else {
-    {
-      ScopedVarSetter holder(&inTopLevel, false);
-      apply(
-          nestedRows,
-          mapKeys,
-          context,
-          fromType.keyType(),
-          toType.keyType(),
-          newMapKeys);
-    }
-  }
-
-  // Cast values
-  VectorPtr newMapValues;
-  if (*fromType.valueType() == *toType.valueType()) {
-    newMapValues = mapValues;
-  } else {
-    {
-      ScopedVarSetter holder(&inTopLevel, false);
-      apply(
-          nestedRows,
-          mapValues,
-          context,
-          fromType.valueType(),
-          toType.valueType(),
-          newMapValues);
-    }
-  }
-
-  // Returned map vector should be addressable for every element, even
-  // those that are not selected.
-  BufferPtr sizes = input->sizes();
-  if (newMapKeys->isConstantEncoding() && newMapValues->isConstantEncoding()) {
-    // We extends size since that is cheap.
-    newMapKeys->resize(input->mapKeys()->size());
-    newMapValues->resize(input->mapValues()->size());
-  } else if (
-      newMapKeys->size() < input->mapKeys()->size() ||
-      newMapValues->size() < input->mapValues()->size()) {
-    sizes =
-        AlignedBuffer::allocate<vector_size_t>(rows.end(), context.pool(), 0);
-    auto* inputSizes = input->rawSizes();
-    auto* rawSizes = sizes->asMutable<vector_size_t>();
-
-    rows.applyToSelected(
-        [&](vector_size_t row) { rawSizes[row] = inputSizes[row]; });
-  }
-
-  // Assemble the output map
-  VectorPtr result = std::make_shared<MapVector>(
-      context.pool(),
-      MAP(toType.keyType(), toType.valueType()),
-      input->nulls(),
-      rows.end(),
-      input->offsets(),
-      sizes,
-      newMapKeys,
-      newMapValues);
-
-  propagateErrorsOrSetNulls(
-      setNullInResultAtError(),
-      context,
-      nestedRows,
-      elementToTopLevelRows,
-      result,
-      oldErrors);
-
-  // Restore original state.
-  context.swapErrors(oldErrors);
-  return result;
-}
-
-VectorPtr CastExpr::applyArray(
-    const SelectivityVector& rows,
-    const ArrayVector* input,
-    exec::EvalCtx& context,
-    const ArrayType& fromType,
-    const ArrayType& toType) {
-  // Cast input array elements to output array elements based on their
-  // types using their linear selectivity vector
-  auto arrayElements = input->elements();
-
-  auto nestedRows =
-      functions::toElementRows(arrayElements->size(), rows, input);
-  auto elementToTopLevelRows = functions::getElementToTopLevelRows(
-      arrayElements->size(), rows, input, context.pool());
-
-  EvalErrorsPtr oldErrors;
-  context.swapErrors(oldErrors);
-
-  VectorPtr newElements;
-  {
-    ScopedVarSetter holder(&inTopLevel, false);
-    apply(
-        nestedRows,
-        arrayElements,
-        context,
-        fromType.elementType(),
-        toType.elementType(),
-        newElements);
-  }
-
-  // Returned array vector should be addressable for every element,
-  // even those that are not selected.
-  BufferPtr sizes = input->sizes();
-  if (newElements->isConstantEncoding()) {
-    // If the newElements we extends its size since that is cheap.
-    newElements->resize(input->elements()->size());
-  } else if (newElements->size() < input->elements()->size()) {
-    sizes =
-        AlignedBuffer::allocate<vector_size_t>(rows.end(), context.pool(), 0);
-    auto* inputSizes = input->rawSizes();
-    auto* rawSizes = sizes->asMutable<vector_size_t>();
-    rows.applyToSelected(
-        [&](vector_size_t row) { rawSizes[row] = inputSizes[row]; });
-  }
-
-  VectorPtr result = std::make_shared<ArrayVector>(
-      context.pool(),
-      ARRAY(toType.elementType()),
-      input->nulls(),
-      rows.end(),
-      input->offsets(),
-      sizes,
-      newElements);
-
-  propagateErrorsOrSetNulls(
-      setNullInResultAtError(),
-      context,
-      nestedRows,
-      elementToTopLevelRows,
-      result,
-      oldErrors);
-  // Restore original state.
-  context.swapErrors(oldErrors);
-  return result;
-}
-
-VectorPtr CastExpr::applyRow(
-    const SelectivityVector& rows,
-    const RowVector* input,
-    exec::EvalCtx& context,
-    const RowType& fromType,
-    const TypePtr& toType) {
-  const RowType& toRowType = toType->asRow();
-  int numInputChildren = input->children().size();
-  int numOutputChildren = toRowType.size();
-
-  // Extract the flag indicating matching of children must be done by
-  // name or position
-  auto matchByName =
-      context.execCtx()->queryCtx()->queryConfig().isMatchStructByName();
-
-  // Cast each row child to its corresponding output child
-  std::vector<VectorPtr> newChildren;
-  newChildren.reserve(numOutputChildren);
-
-  EvalErrorsPtr oldErrors;
-  if (setNullInResultAtError()) {
-    // We need to isolate errors that happen during the cast from
-    // previous errors since those translate to nulls, unlike
-    // exisiting errors.
-    context.swapErrors(oldErrors);
-  }
-
-  for (auto toChildrenIndex = 0; toChildrenIndex < numOutputChildren;
-       toChildrenIndex++) {
-    // For each child, find the corresponding column index in the
-    // output
-    const auto& toFieldName = toRowType.nameOf(toChildrenIndex);
-    bool matchNotFound = false;
-
-    // If match is by field name and the input field name is not found
-    // in the output row type, do not consider it in the output
-    int fromChildrenIndex = -1;
-    if (matchByName) {
-      if (!fromType.containsChild(toFieldName)) {
-        matchNotFound = true;
-      } else {
-        fromChildrenIndex = fromType.getChildIdx(toFieldName);
-        toChildrenIndex = toRowType.getChildIdx(toFieldName);
-      }
-    } else {
-      fromChildrenIndex = toChildrenIndex;
-      if (fromChildrenIndex >= numInputChildren) {
-        matchNotFound = true;
-      }
-    }
-
-    // Updating output types and names
-    VectorPtr outputChild;
-    const auto& toChildType = toRowType.childAt(toChildrenIndex);
-
-    if (matchNotFound) {
-      // Create a vector for null for this child
-      context.ensureWritable(rows, toChildType, outputChild);
-      outputChild->addNulls(rows);
-    } else {
-      const auto& inputChild = input->children()[fromChildrenIndex];
-      if (*toChildType == *inputChild->type()) {
-        outputChild = inputChild;
-      } else {
-        // Apply cast for the child.
-        ScopedVarSetter holder(&inTopLevel, false);
-        apply(
-            rows,
-            inputChild,
-            context,
-            inputChild->type(),
-            toChildType,
-            outputChild);
-      }
-    }
-    newChildren.emplace_back(std::move(outputChild));
-  }
-
-  // Assemble the output row
-  VectorPtr result = std::make_shared<RowVector>(
-      context.pool(),
-      toType,
-      input->nulls(),
-      rows.end(),
-      std::move(newChildren));
-
-  if (setNullInResultAtError()) {
-    // Set errors as nulls.
-    if (auto errors = context.errors()) {
-      rows.applyToSelected([&](auto row) {
-        if (errors->hasErrorAt(row)) {
-          result->setNull(row, true);
-        }
-      });
-    }
-    // Restore original state.
-    context.swapErrors(oldErrors);
-  }
-
-  return result;
-}
-
-template <typename toDecimalType>
-VectorPtr CastExpr::applyDecimal(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  // toType is a decimal
-  switch (fromType->kind()) {
-    case TypeKind::BOOLEAN:
-      applyIntToDecimalCastKernel<bool, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::TINYINT:
-      applyIntToDecimalCastKernel<int8_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::SMALLINT:
-      applyIntToDecimalCastKernel<int16_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::INTEGER:
-      applyIntToDecimalCastKernel<int32_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::REAL:
-      applyFloatingPointToDecimalCastKernel<float, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::DOUBLE:
-      applyFloatingPointToDecimalCastKernel<double, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::BIGINT: {
-      if (fromType->isShortDecimal()) {
-        applyDecimalCastKernel<int64_t, toDecimalType>(
-            rows, input, context, fromType, toType, castResult);
-        break;
-      }
-      applyIntToDecimalCastKernel<int64_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    }
-    case TypeKind::HUGEINT: {
-      if (fromType->isLongDecimal()) {
-        applyDecimalCastKernel<int128_t, toDecimalType>(
-            rows, input, context, fromType, toType, castResult);
-        break;
-      }
-      [[fallthrough]];
-    }
-    case TypeKind::VARCHAR:
-      applyVarcharToDecimalCastKernel<toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-  }
-  return castResult;
-}
 
 void CastExpr::applyPeeled(
     const SelectivityVector& rows,
@@ -779,7 +78,7 @@ void CastExpr::applyPeeled(
 
     auto applyCustomCast = [&]() {
       if (castToOperator) {
-        castToOperator->castTo(input, context, rows, toType, result, hooks_);
+        castToOperator->castTo(input, context, rows, toType, result, kernel_);
       } else {
         castFromOperator->castFrom(input, context, rows, toType, result);
       }
@@ -811,176 +110,136 @@ void CastExpr::applyPeeled(
       applyCustomCast();
     }
   } else if (fromType->isDate()) {
-    result = castFromDate(rows, input, context, toType);
+    result = kernel_->castFromDate(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isDate()) {
-    result = castToDate(rows, input, context, fromType);
+    result = kernel_->castToDate(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isIntervalDayTime()) {
-    result = castFromIntervalDayTime(rows, input, context, toType);
+    result = kernel_->castFromIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isIntervalDayTime()) {
-    VELOX_UNSUPPORTED(
-        "Cast from {} to {} is not supported",
-        fromType->toString(),
-        toType->toString());
+    result = kernel_->castToIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isTime()) {
-    result = castFromTime(rows, input, context, toType);
+    result = kernel_->castFromTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isTime()) {
-    result = castToTime(rows, input, context, fromType);
-  } else if (toType->isShortDecimal()) {
-    result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
-  } else if (toType->isLongDecimal()) {
-    result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+    result = kernel_->castToTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isDecimal()) {
-    switch (toType->kind()) {
-      case TypeKind::VARCHAR:
-        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-            applyDecimalToVarcharCast,
-            fromType,
-            rows,
-            input,
-            context,
-            fromType);
-        break;
-      default:
-        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-            applyDecimalToPrimitiveCast,
-            fromType,
-            rows,
-            input,
-            context,
-            fromType,
-            toType);
-    }
-  } else if (
-      fromType->kind() == TypeKind::TIMESTAMP &&
-      (toType->kind() == TypeKind::VARCHAR ||
-       toType->kind() == TypeKind::VARBINARY)) {
-    result = applyTimestampToVarcharCast(toType, rows, context, input);
-  } else if (toType->kind() == TypeKind::VARBINARY) {
-    switch (fromType->kind()) {
-      case TypeKind::TINYINT:
-        result = applyIntToBinaryCast<int8_t>(rows, context, input);
-        break;
-      case TypeKind::SMALLINT:
-        result = applyIntToBinaryCast<int16_t>(rows, context, input);
-        break;
-      case TypeKind::INTEGER:
-        result = applyIntToBinaryCast<int32_t>(rows, context, input);
-        break;
-      case TypeKind::BIGINT:
-        result = applyIntToBinaryCast<int64_t>(rows, context, input);
-        break;
-      default:
-        // Handle primitive type conversions.
-        applyCastPrimitivesDispatch<TypeKind::VARBINARY>(
-            fromType, toType, rows, context, input, result);
-        break;
-    }
+    result = kernel_->castFromDecimal(
+        rows, input, context, toType, setNullInResultAtError());
+  } else if (toType->isDecimal()) {
+    result = kernel_->castToDecimal(
+        rows, input, context, toType, setNullInResultAtError());
   } else {
     switch (toType->kind()) {
-      case TypeKind::MAP:
-        result = applyMap(
-            rows,
-            input.asUnchecked<MapVector>(),
-            context,
-            fromType->asMap(),
-            toType->asMap());
+      case TypeKind::BOOLEAN:
+        result = kernel_->castToBoolean(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::TINYINT:
+        result = kernel_->castToTinyInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::SMALLINT:
+        result = kernel_->castToSmallInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::INTEGER:
+        result = kernel_->castToInteger(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::BIGINT:
+        result = kernel_->castToBigInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::HUGEINT:
+        result = kernel_->castToHugeInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::REAL:
+        result = kernel_->castToReal(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::DOUBLE:
+        result = kernel_->castToDouble(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::VARCHAR:
+        result = kernel_->castToVarchar(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::VARBINARY:
+        result = kernel_->castToVarbinary(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::TIMESTAMP:
+        result = kernel_->castToTimestamp(
+            rows, input, context, toType, setNullInResultAtError());
         break;
       case TypeKind::ARRAY:
-        result = applyArray(
+        result = kernel_->castArray(
             rows,
-            input.asUnchecked<ArrayVector>(),
+            input,
             context,
-            fromType->asArray(),
-            toType->asArray());
+            toType,
+            setNullInResultAtError(),
+            [this](
+                const SelectivityVector& rows,
+                const VectorPtr& input,
+                exec::EvalCtx& context,
+                const TypePtr& fromType,
+                const TypePtr& toType,
+                VectorPtr& result) {
+              ScopedVarSetter holder(&inTopLevel, false);
+              apply(rows, input, context, fromType, toType, result);
+            });
+        break;
+      case TypeKind::MAP:
+        result = kernel_->castMap(
+            rows,
+            input,
+            context,
+            toType,
+            setNullInResultAtError(),
+            [this](
+                const SelectivityVector& rows,
+                const VectorPtr& input,
+                exec::EvalCtx& context,
+                const TypePtr& fromType,
+                const TypePtr& toType,
+                VectorPtr& result) {
+              ScopedVarSetter holder(&inTopLevel, false);
+              apply(rows, input, context, fromType, toType, result);
+            });
         break;
       case TypeKind::ROW:
-        result = applyRow(
+        result = kernel_->castRow(
             rows,
-            input.asUnchecked<RowVector>(),
-            context,
-            fromType->asRow(),
-            toType);
-        break;
-      default: {
-        // Handle primitive type conversions.
-        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            applyCastPrimitivesDispatch,
-            toType->kind(),
-            fromType,
-            toType,
-            rows,
-            context,
             input,
-            result);
-      }
+            context,
+            toType,
+            setNullInResultAtError(),
+            [this](
+                const SelectivityVector& rows,
+                const VectorPtr& input,
+                exec::EvalCtx& context,
+                const TypePtr& fromType,
+                const TypePtr& toType,
+                VectorPtr& result) {
+              ScopedVarSetter holder(&inTopLevel, false);
+              apply(rows, input, context, fromType, toType, result);
+            });
+        break;
+      default:
+        VELOX_UNREACHABLE(
+            "Unsupported cast from {} to {}.",
+            fromType->toString(),
+            toType->toString());
     }
   }
-}
-
-VectorPtr CastExpr::applyTimestampToVarcharCast(
-    const TypePtr& toType,
-    const SelectivityVector& rows,
-    exec::EvalCtx& context,
-    const BaseVector& input) {
-  VectorPtr result;
-  context.ensureWritable(rows, toType, result);
-  (*result).clearNulls(rows);
-  auto flatResult = result->asFlatVector<StringView>();
-  const auto simpleInput = input.as<SimpleVector<Timestamp>>();
-
-  const auto& options = hooks_->timestampToStringOptions();
-  const uint32_t rowSize = getMaxStringLength(options);
-
-  Buffer* buffer = flatResult->getBufferWithSpace(
-      rows.countSelected() * rowSize, true /*exactSize*/);
-  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
-
-  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    // Adjust input timestamp according the session timezone.
-    Timestamp inputValue(simpleInput->valueAt(row));
-    if (options.timeZone) {
-      inputValue.toTimezone(*(options.timeZone));
-    }
-    const auto stringView =
-        Timestamp::tsToStringView(inputValue, options, rawBuffer);
-    flatResult->setNoCopy(row, stringView);
-    // The result of both Presto and Spark contains more than 12
-    // digits even when 'zeroPaddingYear' is disabled.
-    VELOX_DCHECK(!stringView.isInline());
-    rawBuffer += stringView.size();
-  });
-
-  // Update the exact buffer size.
-  buffer->setSize(rawBuffer - buffer->asMutable<char>());
-  return result;
-}
-
-template <typename TInput>
-VectorPtr CastExpr::applyIntToBinaryCast(
-    const SelectivityVector& rows,
-    exec::EvalCtx& context,
-    const BaseVector& input) {
-  auto result = BaseVector::create(VARBINARY(), rows.end(), context.pool());
-  const auto flatResult = result->asFlatVector<StringView>();
-  const auto simpleInput = input.as<SimpleVector<TInput>>();
-
-  // The created string view is always inlined for int types.
-  char inlined[sizeof(TInput)];
-  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    TInput input = simpleInput->valueAt(row);
-    if constexpr (std::is_same_v<TInput, int8_t>) {
-      inlined[0] = static_cast<char>(input & 0xFF);
-    } else {
-      for (int i = sizeof(TInput) - 1; i >= 0; --i) {
-        inlined[i] = static_cast<char>(input & 0xFF);
-        input >>= 8;
-      }
-    }
-    const auto stringView = StringView(inlined, sizeof(TInput));
-    flatResult->setNoCopy(row, stringView);
-  });
-
-  return result;
 }
 
 void CastExpr::apply(
@@ -1144,7 +403,7 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       false,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastKernel>(config));
 }
 
 TypePtr TryCastCallToSpecialForm::resolveType(
@@ -1167,6 +426,6 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastKernel>(config));
 }
 } // namespace facebook::velox::exec

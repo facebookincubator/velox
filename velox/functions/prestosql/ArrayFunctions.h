@@ -18,7 +18,7 @@
 #include <type_traits>
 
 #include "velox/expression/ComplexViewTypes.h"
-#include "velox/expression/PrestoCastHooks.h"
+#include "velox/expression/PrestoCastKernel.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/lib/ComparatorUtil.h"
@@ -182,8 +182,8 @@ struct ArrayJoinFunction {
       const arg_type<velox::Array<T>>* /*arr*/,
       const arg_type<Varchar>* /*delimiter*/,
       const arg_type<Varchar>* /*nullReplacement*/) {
-    const exec::PrestoCastHooks hooks{config};
-    options_ = hooks.timestampToStringOptions();
+    const exec::PrestoCastKernel kernel{config};
+    options_ = kernel.timestampToStringOptions();
     VELOX_CHECK(
         inputTypes[0]->isArray(),
         "Array join's first parameter type has to be array");
