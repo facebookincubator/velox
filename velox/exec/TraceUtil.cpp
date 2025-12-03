@@ -245,10 +245,12 @@ bool canTrace(const std::string& operatorType) {
   static const std::unordered_set<std::string> kSupportedOperatorTypes{
       "Aggregation",
       "CallbackSink",
+      "Exchange",
       "FilterProject",
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
+      "MergeExchange",
       "MergeJoin",
       "OrderBy",
       "PartialAggregation",
@@ -452,6 +454,23 @@ core::PlanNodePtr getTraceNode(
         topNRowNumberNode->limit(),
         std::make_shared<DummySourceNode>(
             topNRowNumberNode->sources().front()->outputType()));
+  }
+
+  if (const auto* exchangeNode =
+          dynamic_cast<const core::ExchangeNode*>(traceNode)) {
+    // Check if it's a MergeExchangeNode
+    if (const auto* mergeExchangeNode =
+            dynamic_cast<const core::MergeExchangeNode*>(traceNode)) {
+      return std::make_shared<core::MergeExchangeNode>(
+          nodeId,
+          mergeExchangeNode->outputType(),
+          mergeExchangeNode->sortingKeys(),
+          mergeExchangeNode->sortingOrders(),
+          mergeExchangeNode->serdeKind());
+    }
+    // Regular ExchangeNode
+    return std::make_shared<core::ExchangeNode>(
+        nodeId, exchangeNode->outputType(), exchangeNode->serdeKind());
   }
 
   for (const auto& factory : traceNodeRegistry()) {
