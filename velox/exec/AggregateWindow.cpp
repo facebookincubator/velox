@@ -151,6 +151,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
         // aggregate_ function object should be initialized.
         auto singleGroup = std::vector<vector_size_t>{0};
         aggregate_->clear();
+        aggregate_->destroy(folly::Range<char**>(&rawSingleGroupRow_, 1));
         aggregate_->initializeNewGroups(&rawSingleGroupRow_, singleGroup);
         aggregateInitialized_ = true;
       }
@@ -332,6 +333,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       // the aggregation based on the frame changes with each row. This would
       // require adding new APIs to the Aggregate framework.
       aggregate_->clear();
+      aggregate_->destroy(folly::Range<char**>(&rawSingleGroupRow_, 1));
       aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
       aggregateInitialized_ = true;
 
