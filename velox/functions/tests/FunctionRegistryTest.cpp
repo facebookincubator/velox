@@ -115,16 +115,61 @@ class FunctionRegistryTest : public testing::Test {
     }
   }
 
-  void testCoercions(
+  struct ResolveFuncs {
+    std::function<TypePtr(const std::string&, const std::vector<TypePtr>&)>
+        resolveFunc;
+
+    std::function<TypePtr(
+        const std::string&,
+        const std::vector<TypePtr>&,
+        std::vector<TypePtr>&)>
+        resolveWithCoercionsFunc;
+
+    static ResolveFuncs function() {
+      return {
+          .resolveFunc = resolveFunction,
+          .resolveWithCoercionsFunc = resolveFunctionWithCoercions,
+      };
+    }
+
+    static ResolveFuncs specialForm() {
+      return {
+          .resolveFunc = [](const auto& name, const auto& argTypes) -> TypePtr {
+            try {
+              return resolveCallableSpecialForm(name, argTypes);
+            } catch (const VeloxException&) {
+              return nullptr;
+            }
+          },
+          .resolveWithCoercionsFunc = [](const auto& name,
+                                         const auto& argTypes,
+                                         auto& coercions) -> TypePtr {
+            try {
+              return resolveCallableSpecialFormWithCoercions(
+                  name, argTypes, coercions);
+            } catch (const VeloxException&) {
+              return nullptr;
+            }
+          },
+      };
+    }
+  };
+
+  void testCoercionsInt(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
+      const ResolveFuncs& resolveFuncs,
       const TypePtr& expectedReturnType,
       const std::vector<TypePtr>& expectedCoercions) {
-    auto type = resolveFunction(name, argTypes);
+    auto type = resolveFuncs.resolveFunc(name, argTypes);
+    if (type) {
+      LOG(ERROR) << type->toString();
+    }
+
     ASSERT_TRUE(type == nullptr);
 
     std::vector<TypePtr> coercions;
-    type = resolveFunctionWithCoercions(name, argTypes, coercions);
+    type = resolveFuncs.resolveWithCoercionsFunc(name, argTypes, coercions);
 
     VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
 
@@ -133,7 +178,8 @@ class FunctionRegistryTest : public testing::Test {
 
     for (auto i = 0; i < coercions.size(); ++i) {
       if (expectedCoercions[i] == nullptr) {
-        EXPECT_EQ(coercions[i], nullptr);
+        EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
+                                         << ": " << coercions[i]->toString();
       } else {
         ASSERT_NE(coercions[i], nullptr);
         EXPECT_EQ(*coercions[i], *expectedCoercions[i])
@@ -143,15 +189,16 @@ class FunctionRegistryTest : public testing::Test {
     }
   }
 
-  void testNoCoercions(
+  void testNoCoercionsInt(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
+      const ResolveFuncs& resolveFuncs,
       const TypePtr& expectedReturnType) {
-    auto type = resolveFunction(name, argTypes);
+    auto type = resolveFuncs.resolveFunc(name, argTypes);
     VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
 
     std::vector<TypePtr> coercions;
-    type = resolveFunctionWithCoercions(name, argTypes, coercions);
+    type = resolveFuncs.resolveWithCoercionsFunc(name, argTypes, coercions);
 
     VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
 
@@ -161,15 +208,70 @@ class FunctionRegistryTest : public testing::Test {
     }
   }
 
-  void testCannotResolve(
+  void testCannotResolveInt(
       const std::string& name,
-      const std::vector<TypePtr>& argTypes) {
-    auto type = resolveFunction(name, argTypes);
+      const std::vector<TypePtr>& argTypes,
+      const ResolveFuncs& resolveFuncs) {
+    auto type = resolveFuncs.resolveFunc(name, argTypes);
     ASSERT_TRUE(type == nullptr);
 
     std::vector<TypePtr> coercions;
-    type = resolveFunctionWithCoercions(name, argTypes, coercions);
+    type = resolveFuncs.resolveWithCoercionsFunc(name, argTypes, coercions);
     ASSERT_TRUE(type == nullptr);
+  }
+
+  void testCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      const std::vector<TypePtr>& expectedCoercions) {
+    testCoercionsInt(
+        name,
+        argTypes,
+        ResolveFuncs::function(),
+        expectedReturnType,
+        expectedCoercions);
+  }
+
+  void testNoCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType) {
+    testNoCoercionsInt(
+        name, argTypes, ResolveFuncs::function(), expectedReturnType);
+  }
+
+  void testCannotResolve(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes) {
+    testCannotResolveInt(name, argTypes, ResolveFuncs::function());
+  }
+
+  void testSpecialFormCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      const std::vector<TypePtr>& expectedCoercions) {
+    testCoercionsInt(
+        name,
+        argTypes,
+        ResolveFuncs::specialForm(),
+        expectedReturnType,
+        expectedCoercions);
+  }
+
+  void testSpecialFormNoCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType) {
+    testNoCoercionsInt(
+        name, argTypes, ResolveFuncs::specialForm(), expectedReturnType);
+  }
+
+  void testSpecialFormCannotResolve(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes) {
+    testCannotResolveInt(name, argTypes, ResolveFuncs::specialForm());
   }
 
   exec::FunctionSignaturePtr makeSignature(
@@ -745,6 +847,75 @@ TEST_F(FunctionRegistryTest, resolveSpecialForms) {
 
   auto tryResult = resolveFunctionOrCallableSpecialForm("try", {REAL()});
   ASSERT_EQ(*tryResult, *REAL());
+}
+
+TEST_F(FunctionRegistryTest, resolveIfWithCoercions) {
+  testSpecialFormCoercions(
+      "if",
+      {BOOLEAN(), UNKNOWN(), BIGINT()},
+      BIGINT(),
+      {nullptr, BIGINT(), nullptr});
+
+  testSpecialFormCoercions(
+      "if",
+      {BOOLEAN(), BIGINT(), UNKNOWN()},
+      BIGINT(),
+      {nullptr, nullptr, BIGINT()});
+
+  testSpecialFormCoercions(
+      "if",
+      {BOOLEAN(), SMALLINT(), INTEGER()},
+      INTEGER(),
+      {nullptr, INTEGER(), nullptr});
+
+  testSpecialFormCoercions(
+      "if",
+      {BOOLEAN(), INTEGER(), SMALLINT()},
+      INTEGER(),
+      {nullptr, nullptr, INTEGER()});
+
+  testSpecialFormNoCoercions(
+      "if", {BOOLEAN(), INTEGER(), INTEGER()}, INTEGER());
+
+  testSpecialFormCannotResolve("if", {BOOLEAN(), INTEGER(), VARCHAR()});
+}
+
+TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
+  testSpecialFormCoercions(
+      "switch",
+      {BOOLEAN(),
+       UNKNOWN(),
+       BOOLEAN(),
+       INTEGER(),
+       BOOLEAN(),
+       BIGINT(),
+       SMALLINT()},
+      BIGINT(),
+      {nullptr, BIGINT(), nullptr, BIGINT(), nullptr, nullptr, BIGINT()});
+
+  testSpecialFormCoercions(
+      "switch",
+      {BOOLEAN(),
+       BIGINT(),
+       BOOLEAN(),
+       INTEGER(),
+       BOOLEAN(),
+       UNKNOWN(),
+       SMALLINT()},
+      BIGINT(),
+      {nullptr, nullptr, nullptr, BIGINT(), nullptr, BIGINT(), BIGINT()});
+
+  testSpecialFormCoercions(
+      "switch",
+      {BOOLEAN(),
+       TINYINT(),
+       BOOLEAN(),
+       INTEGER(),
+       BOOLEAN(),
+       UNKNOWN(),
+       BIGINT()},
+      BIGINT(),
+      {nullptr, BIGINT(), nullptr, BIGINT(), nullptr, BIGINT(), nullptr});
 }
 
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
