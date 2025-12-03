@@ -56,9 +56,8 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
     ConnectorInsertTableHandlePtr connectorInsertTableHandle,
     ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy) {
-  auto icebergInsertHandle =
-      checked_pointer_cast<const IcebergInsertTableHandle>(
-          connectorInsertTableHandle);
+  auto icebergInsertHandle = checkedPointerCast<const IcebergInsertTableHandle>(
+      connectorInsertTableHandle);
 
   return std::make_unique<IcebergDataSink>(
       inputType,
