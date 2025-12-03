@@ -1279,6 +1279,18 @@ PlanBuilder& PlanBuilder::expand(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::expand(
+    std::vector<std::vector<core::TypedExprPtr>> projectExprs,
+    std::vector<std::string> names) {
+  VELOX_CHECK(!projectExprs.empty(), "projections must not be empty.");
+  const auto numColumns = projectExprs[0].size();
+  VELOX_CHECK_EQ(names.size(), numColumns);
+  planNode_ = std::make_shared<core::ExpandNode>(
+      nextPlanNodeId(), projectExprs, std::move(names), planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::localMerge(
     const std::vector<std::string>& keys,
     std::vector<core::PlanNodePtr> sources) {
