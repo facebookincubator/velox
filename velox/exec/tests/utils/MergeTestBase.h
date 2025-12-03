@@ -17,12 +17,12 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/TreeOfLosers.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/Spill.h"
 
 #include <folly/Random.h>
 
 #include <gtest/gtest.h>
 
-#include <exec/Spill.h>
 #include <algorithm>
 #include <optional>
 
