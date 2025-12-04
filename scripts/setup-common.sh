@@ -27,6 +27,7 @@ BUILD_GEOS="${BUILD_GEOS:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
+SIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION:-"OFF"}
 
 USE_CLANG="${USE_CLANG:-false}"
 
@@ -193,7 +194,7 @@ function install_xsimd {
 
 function install_simdjson {
   wget_and_untar https://github.com/simdjson/simdjson/archive/refs/tags/v"${SIMDJSON_VERSION}".tar.gz simdjson
-  cmake_install_dir simdjson -DSIMDJSON_SKIPUTF8VALIDATION=ON
+  cmake_install_dir simdjson -DSIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION}
 }
 
 function install_arrow {
