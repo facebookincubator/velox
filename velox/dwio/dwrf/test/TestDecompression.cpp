@@ -1065,8 +1065,8 @@ class TestingSeekableInputStream : public SeekableInputStream {
     return true;
   }
 
-  google::protobuf::int64 ByteCount() const override {
-    return position_;
+  int64_t ByteCount() const override {
+    return static_cast<int64_t>(position_);
   }
 
   void seekToPosition(PositionProvider& position) override {
