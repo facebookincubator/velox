@@ -1130,7 +1130,9 @@ TEST_F(OperatorTraceTest, canTrace) {
       {"Aggregation", true},
       {"TableWrite", true},
       {"TableScan", true},
-      {"FilterProject", true}};
+      {"FilterProject", true},
+      {"Exchange", true},
+      {"MergeExchange", true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     ASSERT_EQ(testData.canTrace, trace::canTrace(testData.operatorType));
