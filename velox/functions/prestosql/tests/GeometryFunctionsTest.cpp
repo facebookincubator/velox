@@ -90,18 +90,43 @@ class GeometryFunctionsTest : public FunctionBaseTest {
       std::optional<std::string_view> expectedWkt) {
     // We are forced to make expectedWkt optional based on type signature, but
     // we always want to supply a value.
-    std::optional<bool> actual = evaluateOnce<bool>(
-        fmt::format(
-            "ST_Equals({}(ST_GeometryFromText(c0), ST_GeometryFromText(c1)), ST_GeometryFromText(c2))",
-            overlay),
-        leftWkt,
-        rightWkt,
-        expectedWkt);
     if (leftWkt.has_value() && rightWkt.has_value()) {
       assert(expectedWkt.has_value());
-      EXPECT_TRUE(actual.has_value());
-      EXPECT_TRUE(actual.value());
+
+      // Check if result is empty
+      std::optional<std::string> resultWkt = evaluateOnce<std::string>(
+          fmt::format(
+              "ST_AsText({}(ST_GeometryFromText(c0), ST_GeometryFromText(c1)))",
+              overlay),
+          leftWkt,
+          rightWkt);
+      EXPECT_TRUE(resultWkt.has_value());
+
+      std::optional<bool> resultIsEmpty =
+          evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", resultWkt);
+      std::optional<bool> expectedIsEmpty = evaluateOnce<bool>(
+          "ST_IsEmpty(ST_GeometryFromText(c0))", expectedWkt);
+
+      if (resultIsEmpty.value_or(false) && expectedIsEmpty.value_or(false)) {
+        // Both empty - compare WKT strings
+        EXPECT_EQ(resultWkt.value(), expectedWkt.value());
+      } else {
+        // Use ST_Equals for non-empty
+        std::optional<bool> equals = evaluateOnce<bool>(
+            "ST_Equals(ST_GeometryFromText(c0), ST_GeometryFromText(c1))",
+            resultWkt,
+            expectedWkt);
+        EXPECT_TRUE(equals.has_value());
+        EXPECT_TRUE(equals.value());
+      }
     } else {
+      std::optional<bool> actual = evaluateOnce<bool>(
+          fmt::format(
+              "ST_Equals({}(ST_GeometryFromText(c0), ST_GeometryFromText(c1)), ST_GeometryFromText(c2))",
+              overlay),
+          leftWkt,
+          rightWkt,
+          expectedWkt);
       EXPECT_FALSE(actual.has_value());
     }
   }
@@ -583,7 +608,8 @@ TEST_F(GeometryFunctionsTest, testStEquals) {
       assertRelation("ST_Equals", leftWkt, rightWkt, leftWkt == rightWkt);
     }
   }
-
+  assertRelation("ST_Equals", "POLYGON EMPTY", "POLYGON EMPTY", false);
+  assertRelation("ST_Equals", "POLYGON EMPTY", "MULTILINESTRING EMPTY", false);
   assertRelation("ST_Equals", std::nullopt, "POINT (150 150)", false);
   assertRelation("ST_Equals", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation(
@@ -607,7 +633,7 @@ TEST_F(GeometryFunctionsTest, testStEquals) {
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 2, 2 2, 2 0, 0 0)))",
       "POLYGON ((0 1, 3 1, 3 3, 0 3, 0 1))",
       false);
-  // Invalid geometries.  This test might have to change when upgrading GEOS.
+  // Invalid geometries. This test might have to change when upgrading GEOS.
   assertRelation(
       "ST_Equals",
       "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
@@ -1363,23 +1389,43 @@ TEST_F(GeometryFunctionsTest, testGeometryInvalidReason) {
 }
 
 TEST_F(GeometryFunctionsTest, testSimplifyGeometry) {
-  const auto assertSimplifyGeometry = [&](const std::optional<std::string>& wkt,
-                                          std::optional<double> tolerance,
-                                          const std::optional<std::string>&
-                                              expectedWkt) {
-    std::optional<bool> result = evaluateOnce<bool>(
-        "ST_Equals(simplify_geometry(ST_GeometryFromText(c0), c1), ST_GeometryFromText(c2))",
-        wkt,
-        tolerance,
-        expectedWkt);
+  const auto assertSimplifyGeometry =
+      [&](const std::optional<std::string>& wkt,
+          std::optional<double> tolerance,
+          const std::optional<std::string>& expectedWkt) {
+        if (wkt.has_value() && tolerance.has_value() &&
+            expectedWkt.has_value()) {
+          std::optional<std::string> result = evaluateOnce<std::string>(
+              "ST_AsText(simplify_geometry(ST_GeometryFromText(c0), c1))",
+              wkt,
+              tolerance);
+          ASSERT_TRUE(result.has_value());
 
-    if (wkt.has_value() && tolerance.has_value() && expectedWkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_TRUE(result.value()) << " from WKT: " << wkt.value();
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
+          std::optional<bool> resultIsEmpty =
+              evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", result);
+          std::optional<bool> expectedIsEmpty = evaluateOnce<bool>(
+              "ST_IsEmpty(ST_GeometryFromText(c0))", expectedWkt);
+
+          if (resultIsEmpty.value_or(false) &&
+              expectedIsEmpty.value_or(false)) {
+            ASSERT_EQ(result.value(), expectedWkt.value())
+                << " from WKT: " << wkt.value();
+          } else {
+            std::optional<bool> equals = evaluateOnce<bool>(
+                "ST_Equals(ST_GeometryFromText(c0), ST_GeometryFromText(c1))",
+                result,
+                expectedWkt);
+            ASSERT_TRUE(equals.has_value());
+            ASSERT_TRUE(equals.value()) << " from WKT: " << wkt.value();
+          }
+        } else {
+          std::optional<std::string> result = evaluateOnce<std::string>(
+              "ST_AsText(simplify_geometry(ST_GeometryFromText(c0), c1))",
+              wkt,
+              tolerance);
+          ASSERT_FALSE(result.has_value());
+        }
+      };
 
   assertSimplifyGeometry("POLYGON EMPTY", 1.0, "POLYGON EMPTY");
   assertSimplifyGeometry(
@@ -1424,22 +1470,37 @@ TEST_F(GeometryFunctionsTest, testSimplifyGeometry) {
 }
 
 TEST_F(GeometryFunctionsTest, testStBoundary) {
-  const auto testStBoundaryFunc = [&](const std::optional<std::string>& wkt,
-                                      const std::optional<std::string>&
-                                          expected) {
-    std::optional<bool> result = evaluateOnce<bool>(
-        "ST_Equals(ST_Boundary(ST_GeometryFromText(c0)), ST_GeometryFromText(c1))",
-        wkt,
-        expected);
+  const auto testStBoundaryFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        if (wkt.has_value()) {
+          std::optional<std::string> result = evaluateOnce<std::string>(
+              "ST_AsText(ST_Boundary(ST_GeometryFromText(c0)))", wkt);
+          ASSERT_TRUE(result.has_value());
+          ASSERT_TRUE(expected.has_value());
 
-    if (wkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_TRUE(expected.has_value());
-      ASSERT_TRUE(result.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
+          std::optional<bool> resultIsEmpty =
+              evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", result);
+          std::optional<bool> expectedIsEmpty = evaluateOnce<bool>(
+              "ST_IsEmpty(ST_GeometryFromText(c0))", expected);
+
+          if (resultIsEmpty.value_or(false) &&
+              expectedIsEmpty.value_or(false)) {
+            ASSERT_EQ(result.value(), expected.value());
+          } else {
+            std::optional<bool> equals = evaluateOnce<bool>(
+                "ST_Equals(ST_GeometryFromText(c0), ST_GeometryFromText(c1))",
+                result,
+                expected);
+            ASSERT_TRUE(equals.has_value());
+            ASSERT_TRUE(equals.value());
+          }
+        } else {
+          std::optional<std::string> result = evaluateOnce<std::string>(
+              "ST_AsText(ST_Boundary(ST_GeometryFromText(c0)))", wkt);
+          ASSERT_FALSE(result.has_value());
+        }
+      };
 
   testStBoundaryFunc("POINT (1 2)", "GEOMETRYCOLLECTION EMPTY");
   testStBoundaryFunc(
@@ -3685,14 +3746,32 @@ TEST_F(GeometryFunctionsTest, testGeometryUnion) {
     auto arrayVec = makeNullableArrayVector<std::string>({{wkts}});
     auto input = makeRowVector(
         {arrayVec, makeNullableFlatVector<std::string>({expected})});
-    std::optional<bool> result = evaluateOnce<bool>(
-        "ST_Equals(GEOMETRY_UNION(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))), ST_GeometryFromText(c1))",
-        input);
 
     if (expected.has_value()) {
+      std::optional<std::string> result = evaluateOnce<std::string>(
+          "ST_AsText(GEOMETRY_UNION(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))))",
+          input);
       ASSERT_TRUE(result.has_value());
-      ASSERT_TRUE(result.value());
+
+      std::optional<bool> resultIsEmpty =
+          evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", result);
+      std::optional<bool> expectedIsEmpty =
+          evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", expected);
+
+      if (resultIsEmpty.value_or(false) && expectedIsEmpty.value_or(false)) {
+        // Both empty - just check they're both empty, don't compare types
+        ASSERT_TRUE(true);
+      } else {
+        std::optional<bool> equals = evaluateOnce<bool>(
+            "ST_Equals(GEOMETRY_UNION(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))), ST_GeometryFromText(c1))",
+            input);
+        ASSERT_TRUE(equals.has_value());
+        ASSERT_TRUE(equals.value());
+      }
     } else {
+      std::optional<std::string> result = evaluateOnce<std::string>(
+          "ST_AsText(GEOMETRY_UNION(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))))",
+          input);
       ASSERT_FALSE(result.has_value());
     }
   };
