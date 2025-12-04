@@ -50,13 +50,12 @@ T singleValue(const VectorPtr& vector) {
   return simpleVector->valueAt(0);
 }
 
-common::BigintRange* asBigintRange(std::unique_ptr<common::Filter>& filter) {
-  return dynamic_cast<common::BigintRange*>(filter.get());
+bool isBigintRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBigintRange);
 }
 
-common::BigintMultiRange* asBigintMultiRange(
-    std::unique_ptr<common::Filter>& filter) {
-  return dynamic_cast<common::BigintMultiRange*>(filter.get());
+bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBigintMultiRange);
 }
 
 template <typename T, typename U>
@@ -64,11 +63,17 @@ std::unique_ptr<T> asUniquePtr(std::unique_ptr<U> ptr) {
   return std::unique_ptr<T>(static_cast<T*>(ptr.release()));
 }
 
+std::unique_ptr<common::BigintRange> asBigintRange(
+    std::unique_ptr<common::Filter>& ptr) {
+  return asUniquePtr<common::BigintRange>(std::move(ptr));
+}
+
 template <typename T>
 std::vector<int64_t>
 toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
   auto ints = vector->as<SimpleVector<T>>();
   std::vector<int64_t> values;
+  values.reserve(size);
   for (auto i = 0; i < size; i++) {
     values.push_back(ints->valueAt(start + i));
   }
@@ -132,41 +137,37 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
     return nullptr;
   }
 
-  std::unique_ptr<common::Filter> lessThanFilter =
-      makeLessThanFilter(valueExpr, evaluator);
+  auto lessThanFilter = makeLessThanFilter(valueExpr, evaluator);
   if (!lessThanFilter) {
     return nullptr;
   }
-  std::unique_ptr<common::Filter> greaterThanFilter =
-      makeGreaterThanFilter(valueExpr, evaluator);
+
+  auto greaterThanFilter = makeGreaterThanFilter(valueExpr, evaluator);
   if (!greaterThanFilter) {
     return nullptr;
   }
 
-  if (value->typeKind() == TypeKind::TINYINT ||
-      value->typeKind() == TypeKind::SMALLINT ||
-      value->typeKind() == TypeKind::INTEGER ||
-      value->typeKind() == TypeKind::BIGINT) {
-    // Cast lessThanFilter and greaterThanFilter to
-    // std::unique_ptr<common::BigintRange>.
-    std::vector<std::unique_ptr<common::BigintRange>> ranges;
-    auto lessRange =
-        dynamic_cast<common::BigintRange*>(lessThanFilter.release());
-    VELOX_CHECK_NOT_NULL(lessRange, "Less-than range is null");
-    ranges.emplace_back(std::unique_ptr<common::BigintRange>(lessRange));
+  const auto typeKind = value->typeKind();
 
-    auto greaterRange =
-        dynamic_cast<common::BigintRange*>(greaterThanFilter.release());
-    VELOX_CHECK_NOT_NULL(greaterRange, "Greater-than range is null");
-    ranges.emplace_back(std::unique_ptr<common::BigintRange>(greaterRange));
+  if (typeKind == TypeKind::TINYINT || typeKind == TypeKind::SMALLINT ||
+      typeKind == TypeKind::INTEGER || typeKind == TypeKind::BIGINT) {
+    VELOX_CHECK(isBigintRange(lessThanFilter));
+    VELOX_CHECK(isBigintRange(greaterThanFilter));
 
-    return std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
-  } else if (value->typeKind() == TypeKind::HUGEINT) {
+    std::vector<std::unique_ptr<common::BigintRange>> filters;
+    filters.emplace_back(asBigintRange(lessThanFilter));
+    filters.emplace_back(asBigintRange(greaterThanFilter));
+    return std::make_unique<common::BigintMultiRange>(
+        std::move(filters), false);
+  }
+
+  if (typeKind == TypeKind::HUGEINT) {
     VELOX_NYI();
   } else {
     std::vector<std::unique_ptr<common::Filter>> filters;
     filters.emplace_back(std::move(lessThanFilter));
     filters.emplace_back(std::move(greaterThanFilter));
+
     return std::make_unique<common::MultiRange>(std::move(filters), false);
   }
 }
@@ -438,38 +439,249 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeBetweenFilter(
   }
 }
 
-// static
-std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
-    std::unique_ptr<common::Filter> a,
-    std::unique_ptr<common::Filter> b) {
-  if (asBigintRange(a) && asBigintRange(b)) {
-    return bigintOr(
-        asUniquePtr<common::BigintRange>(std::move(a)),
-        asUniquePtr<common::BigintRange>(std::move(b)));
-  }
+namespace {
 
-  if (asBigintRange(a) && asBigintMultiRange(b)) {
-    const auto& ranges = asBigintMultiRange(b)->ranges();
-    std::vector<std::unique_ptr<common::BigintRange>> newRanges;
-    newRanges.emplace_back(asUniquePtr<common::BigintRange>(std::move(a)));
-    for (const auto& range : ranges) {
-      newRanges.emplace_back(asUniquePtr<common::BigintRange>(range->clone()));
+bool isNullAllowed(
+    const std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  return std::any_of(
+      disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->nullAllowed();
+      });
+}
+
+// Combines overlapping ranges into one using OR semantic. Returns nullptr if
+// ranges do not overlap. Ignores nullAllowed flag.
+// @pre a.lower() <= b.lower()
+std::unique_ptr<common::BigintRange> tryMergeOverlappingRanges(
+    const common::BigintRange& a,
+    const common::BigintRange& b,
+    bool& alwaysTrue) {
+  static constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  static constexpr auto kMin = std::numeric_limits<int64_t>::min();
+
+  if (a.upper() == kMax || a.upper() + 1 >= b.lower()) {
+    if (a.lower() == kMin && (a.upper() == kMax || b.upper() == kMax)) {
+      alwaysTrue = true;
+      return nullptr;
     }
 
-    std::sort(
-        newRanges.begin(), newRanges.end(), [](const auto& a, const auto& b) {
-          return a->lower() < b->lower();
-        });
+    return std::make_unique<common::BigintRange>(
+        a.lower(), std::max(a.upper(), b.upper()), /*nullAllowed=*/false);
+  }
+  return nullptr;
+}
 
-    return std::make_unique<common::BigintMultiRange>(
-        std::move(newRanges), false);
+// Returns a single range that represents "a OR b" or nullptr if no such range
+// exists.
+// @pre a.lower() <= b.lower()
+template <typename T>
+std::unique_ptr<common::FloatingPointRange<T>> tryMergeOverlappingRanges(
+    const common::FloatingPointRange<T>& a,
+    const common::FloatingPointRange<T>& b,
+    bool& alwaysTrue) {
+  if (!a.upperUnbounded() && !b.lowerUnbounded() &&
+      (a.upper() < b.lower() ||
+       (a.upper() == b.lower() && a.upperExclusive() && b.lowerExclusive()))) {
+    return nullptr;
   }
 
-  if (asBigintMultiRange(a) && asBigintRange(b)) {
-    return makeOrFilter(std::move(b), std::move(a));
+  const bool lowerUnbounded = a.lowerUnbounded() || b.lowerUnbounded();
+  const bool upperUnbounded = a.upperUnbounded() || b.upperUnbounded();
+
+  const T lower = lowerUnbounded ? std::numeric_limits<T>::lowest()
+                                 : std::min(a.lower(), b.lower());
+
+  bool lowerExclusive = lowerUnbounded;
+  if (!lowerUnbounded) {
+    if (a.lower() < b.lower()) {
+      lowerExclusive = a.lowerExclusive();
+    } else {
+      lowerExclusive = a.lowerExclusive() && b.lowerExclusive();
+    }
   }
 
-  return orFilter(std::move(a), std::move(b));
+  const T upper = upperUnbounded ? std::numeric_limits<T>::max()
+                                 : std::max(a.upper(), b.upper());
+
+  bool upperExclusive = upperUnbounded;
+  if (!upperUnbounded) {
+    if (a.upper() > b.upper()) {
+      upperExclusive = a.upperExclusive();
+    } else if (a.upper() < b.upper()) {
+      upperExclusive = b.upperExclusive();
+    } else {
+      upperExclusive = a.upperExclusive() && b.upperExclusive();
+    }
+  }
+
+  if (lowerUnbounded && upperUnbounded) {
+    alwaysTrue = true;
+    return nullptr;
+  }
+
+  return std::make_unique<common::FloatingPointRange<T>>(
+      lower,
+      lowerUnbounded,
+      lowerExclusive,
+      upper,
+      upperUnbounded,
+      upperExclusive,
+      /*nullAllowed=*/false);
+}
+
+template <typename T, typename TToMultiRange>
+std::unique_ptr<common::Filter> mergeOverlappingDisjuncts(
+    std::vector<std::unique_ptr<T>>& ranges,
+    bool nullAllowed,
+    const TToMultiRange& toMultiRange) {
+  std::vector<std::unique_ptr<T>> newRanges;
+  newRanges.emplace_back(asUniquePtr<T>(ranges.front()->clone(nullAllowed)));
+
+  for (auto i = 1; i < ranges.size(); i++) {
+    bool alwaysTrue = false;
+    if (auto merged = tryMergeOverlappingRanges(
+            *newRanges.back(), *ranges[i], alwaysTrue)) {
+      newRanges.back() = std::move(merged);
+    } else {
+      if (alwaysTrue) {
+        if (nullAllowed) {
+          return std::make_unique<common::AlwaysTrue>();
+        }
+        return isNotNull();
+      }
+      newRanges.emplace_back(std::move(ranges[i]));
+    }
+  }
+
+  if (newRanges.size() == 1) {
+    return std::move(newRanges.front());
+  }
+
+  return toMultiRange(newRanges, nullAllowed);
+}
+
+std::unique_ptr<common::Filter> tryMergeBigintRanges(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  // Check if all filters are single-value equalities: a = 5. Convert these to
+  // an IN list.
+  if (std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBigintRange(filter) &&
+            filter->template as<common::BigintRange>()->isSingleValue();
+      })) {
+    std::vector<int64_t> values;
+    values.reserve(disjuncts.size());
+
+    for (auto& filter : disjuncts) {
+      values.emplace_back(filter->as<common::BigintRange>()->lower());
+    }
+
+    return common::createBigintValues(values, isNullAllowed(disjuncts));
+  }
+
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBigintRange(filter) || isBigintMultiRange(filter);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  for (auto& filter : disjuncts) {
+    if (isBigintRange(filter)) {
+      ranges.emplace_back(asBigintRange(filter));
+    } else {
+      for (const auto& range :
+           filter->as<common::BigintMultiRange>()->ranges()) {
+        ranges.emplace_back(std::make_unique<common::BigintRange>(*range));
+      }
+    }
+  }
+
+  std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
+    return a->lower() < b->lower();
+  });
+
+  return mergeOverlappingDisjuncts(
+      ranges, nullAllowed, [](auto& newRanges, bool nullAllowed) {
+        return std::make_unique<common::BigintMultiRange>(
+            std::move(newRanges), nullAllowed);
+      });
+}
+
+template <typename T>
+std::unique_ptr<common::Filter> tryMergeFloatingPointRanges(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  constexpr auto filterKind = std::is_same_v<T, double>
+      ? common::FilterKind::kDoubleRange
+      : common::FilterKind::kFloatRange;
+
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(filterKind);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  std::vector<std::unique_ptr<common::FloatingPointRange<T>>> ranges;
+  ranges.reserve(disjuncts.size());
+  for (auto& filter : disjuncts) {
+    ranges.emplace_back(
+        asUniquePtr<common::FloatingPointRange<T>>(std::move(filter)));
+  }
+
+  std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
+    if (a->lowerUnbounded() && b->lowerUnbounded()) {
+      return false;
+    }
+
+    if (a->lowerUnbounded()) {
+      return true;
+    }
+
+    if (b->lowerUnbounded()) {
+      return false;
+    }
+
+    return a->lower() < b->lower();
+  });
+
+  return mergeOverlappingDisjuncts(
+      ranges, nullAllowed, [](auto& newRanges, bool nullAllowed) {
+        std::vector<std::unique_ptr<common::Filter>> filters;
+        filters.reserve(newRanges.size());
+        for (auto& range : newRanges) {
+          filters.emplace_back(std::move(range));
+        }
+        return std::make_unique<common::MultiRange>(
+            std::move(filters), nullAllowed);
+      });
+}
+
+} // namespace
+
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
+    std::vector<std::unique_ptr<common::Filter>> disjuncts) {
+  VELOX_CHECK_GE(disjuncts.size(), 2);
+
+  if (auto merged = tryMergeBigintRanges(disjuncts)) {
+    return merged;
+  }
+
+  if (auto merged = tryMergeFloatingPointRanges<double>(disjuncts)) {
+    return merged;
+  }
+
+  if (auto merged = tryMergeFloatingPointRanges<float>(disjuncts)) {
+    return merged;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  return std::make_unique<common::MultiRange>(
+      std::move(disjuncts), nullAllowed);
 }
 
 namespace {

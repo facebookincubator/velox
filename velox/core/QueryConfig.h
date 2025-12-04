@@ -74,6 +74,13 @@ class QueryConfig {
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
 
+  /// Takes a comma separated list of function names to track CPU usage for.
+  /// Only applicable when kExprTrackCpuUsage is set to false. Is empty by
+  /// default. This allows fine-grained control over CPU tracking overhead when
+  /// only specific functions need to be monitored.
+  static constexpr const char* kExprTrackCpuUsageForFunctions =
+      "expression.track_cpu_usage_for_functions";
+
   /// Controls whether non-deterministic expressions are deduplicated during
   /// compilation. This is intended for testing and debugging purposes. By
   /// default, this is set to true to preserve standard behavior. If set to
@@ -686,6 +693,12 @@ class QueryConfig {
   static constexpr const char* kStreamingAggregationEagerFlush =
       "streaming_aggregation_eager_flush";
 
+  // If true, skip request data size if there is only single source.
+  // This is used to optimize the Presto-on-Spark use case where each
+  // exchange client has only one shuffle partition source.
+  static constexpr const char* kSkipRequestDataSizeWithSingleSourceEnabled =
+      "skip_request_data_size_with_single_source_enabled";
+
   /// If this is true, then it allows you to get the struct field names
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
@@ -1162,6 +1175,10 @@ class QueryConfig {
     return get<bool>(kExprTrackCpuUsage, false);
   }
 
+  std::string exprTrackCpuUsageForFunctions() const {
+    return get<std::string>(kExprTrackCpuUsageForFunctions, "");
+  }
+
   bool exprDedupNonDeterministic() const {
     return get<bool>(kExprDedupNonDeterministic, true);
   }
@@ -1288,6 +1305,10 @@ class QueryConfig {
 
   int32_t streamingAggregationMinOutputBatchRows() const {
     return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
+  }
+
+  bool singleSourceExchangeOptimizationEnabled() const {
+    return get<bool>(kSkipRequestDataSizeWithSingleSourceEnabled, false);
   }
 
   bool isFieldNamesInJsonCastEnabled() const {

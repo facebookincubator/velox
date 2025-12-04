@@ -44,7 +44,7 @@ void RemoteConnectorSplit::registerSerDe() {
 
 namespace {
 std::unique_ptr<folly::IOBuf> mergePages(
-    std::vector<std::unique_ptr<SerializedPage>>& pages) {
+    std::vector<std::unique_ptr<SerializedPageBase>>& pages) {
   VELOX_CHECK(!pages.empty());
   std::unique_ptr<folly::IOBuf> mergedBufs;
   for (const auto& page : pages) {
@@ -109,7 +109,7 @@ void Exchange::getSplits(ContinueFuture* future) {
 
     if (split.hasConnectorSplit()) {
       auto remoteSplit =
-          checked_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
+          checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit);
       if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
         splitTracer_->write(split);
       }
@@ -278,7 +278,8 @@ RowVectorPtr Exchange::getOutputFromRowPages(VectorSerde* serde) {
   if (inputStream_ == nullptr) {
     std::unique_ptr<folly::IOBuf> mergedBufs = mergePages(currentPages_);
     rawInputBytes += mergedBufs->computeChainDataLength();
-    mergedRowPage_ = std::make_unique<SerializedPage>(std::move(mergedBufs));
+    mergedRowPage_ =
+        std::make_unique<PrestoSerializedPage>(std::move(mergedBufs));
     inputStream_ = mergedRowPage_->prepareStreamForDeserialize();
   }
 
@@ -365,14 +366,13 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  const auto backgroundCpuTimeMs =
-      exchangeClientStats.find(ExchangeClient::kBackgroundCpuTimeMs);
-  if (backgroundCpuTimeMs != exchangeClientStats.end()) {
+  const auto backgroundCpuTimeNanos =
+      exchangeClientStats.find(Operator::kBackgroundCpuTimeNanos);
+  if (backgroundCpuTimeNanos != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(backgroundCpuTimeMs->second.count),
+        static_cast<uint64_t>(backgroundCpuTimeNanos->second.count),
         0,
-        static_cast<uint64_t>(backgroundCpuTimeMs->second.sum) *
-            Timestamp::kNanosecondsInMillisecond};
+        static_cast<uint64_t>(backgroundCpuTimeNanos->second.sum)};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }

@@ -152,6 +152,11 @@ class Operator : public BaseRuntimeStatWriter {
     }
   };
 
+  /// The name for background cpu time metric if operator has background cpu
+  /// usages outside its driver thread.
+  static inline const std::string kBackgroundCpuTimeNanos =
+      "backgroundCpuTimeNanos";
+
   /// The name of the runtime spill stats collected and reported by operators
   /// that support spilling.
 

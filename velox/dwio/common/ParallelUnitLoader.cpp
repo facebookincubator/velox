@@ -16,7 +16,9 @@
 
 #include "velox/dwio/common/ParallelUnitLoader.h"
 #include <numeric>
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
 namespace facebook::velox::dwio::common {
@@ -55,7 +57,9 @@ class ParallelUnitLoader : public UnitLoader {
       std::vector<std::unique_ptr<LoadUnit>> units,
       folly::Executor* ioExecutor,
       uint16_t maxConcurrentLoads)
-      : loadUnits_(std::move(units)),
+      : loadUnits_(
+            std::make_move_iterator(units.begin()),
+            std::make_move_iterator(units.end())),
         ioExecutor_(ioExecutor),
         maxConcurrentLoads_(maxConcurrentLoads) {
     VELOX_CHECK_NOT_NULL(ioExecutor, "ParallelUnitLoader ioExecutor is null");
@@ -63,17 +67,17 @@ class ParallelUnitLoader : public UnitLoader {
         maxConcurrentLoads_,
         0,
         "ParallelUnitLoader maxConcurrentLoads should be larger than 0");
-    futures_.resize(loadUnits_.size());
-    unloadFutures_.resize(loadUnits_.size());
+    asyncSources_.resize(loadUnits_.size());
     unitsLoaded_.resize(loadUnits_.size());
   }
 
   /// Destructor ensures all pending load operations are properly cancelled
   /// and waited for to prevent resource leaks and dangling references.
   ~ParallelUnitLoader() override {
-    for (auto& future : futures_) {
-      future.cancel();
-      future.wait();
+    for (auto& source : asyncSources_) {
+      if (source) {
+        source->cancel();
+      }
     }
   }
 
@@ -94,7 +98,7 @@ class ParallelUnitLoader : public UnitLoader {
     uint64_t unitLoadNanos{0};
     try {
       NanosecondTimer timer{&unitLoadNanos};
-      futures_[unit].wait();
+      asyncSources_[unit]->move();
     } catch (const std::exception& e) {
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
     }
@@ -137,9 +141,22 @@ class ParallelUnitLoader : public UnitLoader {
   void load(uint32_t unitIndex) {
     VELOX_CHECK_LT(unitIndex, loadUnits_.size(), "Unit index out of bounds");
     VELOX_CHECK_NOT_NULL(ioExecutor_, "ParallelUnitLoader ioExecutor is null");
+    VELOX_DCHECK(!loadUnits_.empty(), "loadUnits_ should not be empty");
 
-    futures_[unitIndex] = folly::via(
-        ioExecutor_, [this, unitIndex]() { loadUnits_[unitIndex]->load(); });
+    // Capture shared_ptr by value to prevent use-after-free if
+    // ParallelUnitLoader is destroyed while async operation is running
+    auto unit = loadUnits_[unitIndex];
+    auto asyncSource = std::make_shared<AsyncSource<folly::Unit>>([unit] {
+      unit->load();
+      return std::make_unique<folly::Unit>();
+    });
+    asyncSources_[unitIndex] = asyncSource;
+    ioExecutor_->add([asyncSource] {
+      velox::common::testutil::TestValue::adjust(
+          "facebook::velox::dwio::common::ParallelUnitLoader::load",
+          asyncSource.get());
+      asyncSource->prepare();
+    });
     unitsLoaded_[unitIndex] = true;
   }
 
@@ -154,9 +171,8 @@ class ParallelUnitLoader : public UnitLoader {
   }
 
   std::vector<bool> unitsLoaded_;
-  std::vector<std::unique_ptr<LoadUnit>> loadUnits_;
-  std::vector<folly::Future<folly::Unit>> futures_;
-  std::vector<folly::Future<folly::Unit>> unloadFutures_;
+  std::vector<std::shared_ptr<LoadUnit>> loadUnits_;
+  std::vector<std::shared_ptr<AsyncSource<folly::Unit>>> asyncSources_;
   folly::Executor* ioExecutor_;
   size_t maxConcurrentLoads_;
 

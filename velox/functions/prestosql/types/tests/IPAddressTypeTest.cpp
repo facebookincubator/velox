@@ -25,7 +25,7 @@ class IPAddressTypeTest : public testing::Test, public TypeTestBase {
     registerIPAddressType();
   }
 
-  int128_t getIPv6asInt128FromStringUnchecked(const std::string& ipAddr) {
+  int128_t getIPv6asInt128FromStringUnchecked(std::string_view ipAddr) {
     auto ret = ipaddress::tryGetIPv6asInt128FromString(ipAddr);
     return ret.value();
   }

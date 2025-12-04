@@ -110,6 +110,12 @@ void registerDatetimeFunctions(const std::string& prefix) {
       Varchar,
       int32_t,
       Timestamp>({prefix + "timestampadd"});
+  registerFunction<
+      TimestampAddFunction,
+      Timestamp,
+      Varchar,
+      int64_t,
+      Timestamp>({prefix + "timestampadd"});
   registerFunction<MonthsBetweenFunction, double, Timestamp, Timestamp, bool>(
       {prefix + "months_between"});
 }

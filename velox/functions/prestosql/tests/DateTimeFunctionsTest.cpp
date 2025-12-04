@@ -6815,3 +6815,21 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
 
   assertEqualVectors(expected, result);
 }
+
+TEST_F(DateTimeFunctionsTest, currentTimezone) {
+  {
+    setQueryTimeZone("Asia/Kolkata");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "Asia/Kolkata");
+  }
+
+  {
+    setQueryTimeZone("America/New_York");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "America/New_York");
+  }
+}

@@ -1641,7 +1641,7 @@ void Task::addSplitToStoreLocked(
     return;
   }
   auto* queueSplitsStore =
-      checked_pointer_cast<QueueSplitsStore>(splitsStore.get());
+      checkedPointerCast<QueueSplitsStore>(splitsStore.get());
   queueSplitsStore->addSplit(split, promises);
 }
 
@@ -3427,7 +3427,8 @@ void Task::createExchangeClientLocked(
       queryCtx()->queryConfig().minExchangeOutputBatchBytes(),
       addExchangeClientPool(planNodeId, pipelineId),
       queryCtx()->executor(),
-      queryCtx()->queryConfig().requestDataSizesMaxWaitSec());
+      queryCtx()->queryConfig().requestDataSizesMaxWaitSec(),
+      queryCtx()->queryConfig().singleSourceExchangeOptimizationEnabled());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 

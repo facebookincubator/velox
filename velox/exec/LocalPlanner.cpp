@@ -203,7 +203,15 @@ OperatorSupplier makeOperatorSupplier(
               return source->enqueue(std::move(input), future);
             }
           };
-      return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
+      // NOTE: Pass planNodeId to associate CallbackSink with the MergeJoin
+      // node for proper operator identification and input collection.
+      // Operator::maybeSetTracer() uses this to enable tracing.
+      return std::make_unique<CallbackSink>(
+          operatorId,
+          ctx,
+          consumer,
+          nullptr,
+          ctx->queryConfig().queryTraceEnabled() ? planNodeId : "N/A");
     };
   }
 

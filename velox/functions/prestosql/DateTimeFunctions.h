@@ -1782,6 +1782,21 @@ struct CurrentDateFunction {
 };
 
 template <typename T>
+struct CurrentTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  std::string tzName_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>&,
+      const core::QueryConfig& config) {
+    tzName_ = config.sessionTimezone();
+  }
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
+    result = std::string_view(tzName_);
+  }
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

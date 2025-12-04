@@ -229,9 +229,9 @@ TEST_F(HashJoinReplayerTest, basic) {
                                    task->taskId(),
                                    traceNodeId_,
                                    "HashJoin",
-                                   "",
-                                   "",
-                                   0,
+                                   /*spillBaseDir=*/"",
+                                   /*driverIds=*/"",
+                                   /*queryCapacity=*/0,
                                    executor_.get())
                                    .run();
   assertEqualResults({result}, {replayingResult});
