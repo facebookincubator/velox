@@ -82,6 +82,12 @@ inline bool isS3File(const std::string_view filename) {
       isOssFile(filename) || isCosFile(filename) || isCosNFile(filename);
 }
 
+// Structure to hold parsed path information.
+struct S3PathInfo {
+  std::string_view scheme;
+  std::string_view path;
+};
+
 // The input `path` must not have the S3 prefix.
 inline void getBucketAndKeyFromPath(
     std::string_view path,
@@ -105,24 +111,29 @@ inline std::string s3URI(std::string_view bucket, std::string_view key) {
   return ss.str();
 }
 
-inline std::string_view getPath(std::string_view path) {
-  // Remove one of the prefixes 's3://', 'oss://', 's3a://' if any from the
-  // given path.
+inline S3PathInfo parseS3Path(std::string_view fullPath) {
+  // Parse the full path to extract scheme and path components.
   // TODO: Each prefix should be implemented as its own filesystem.
-  if (isS3AwsFile(path)) {
-    return path.substr(kS3Scheme.length());
-  } else if (isS3aFile(path)) {
-    return path.substr(kS3aScheme.length());
-  } else if (isS3nFile(path)) {
-    return path.substr(kS3nScheme.length());
-  } else if (isOssFile(path)) {
-    return path.substr(kOssScheme.length());
-  } else if (isCosFile(path)) {
-    return path.substr(kCosScheme.length());
-  } else if (isCosNFile(path)) {
-    return path.substr(kCosNScheme.length());
+  if (isS3AwsFile(fullPath)) {
+    return {kS3Scheme, fullPath.substr(kS3Scheme.length())};
+  } else if (isS3aFile(fullPath)) {
+    return {kS3aScheme, fullPath.substr(kS3aScheme.length())};
+  } else if (isS3nFile(fullPath)) {
+    return {kS3nScheme, fullPath.substr(kS3nScheme.length())};
+  } else if (isOssFile(fullPath)) {
+    return {kOssScheme, fullPath.substr(kOssScheme.length())};
+  } else if (isCosFile(fullPath)) {
+    return {kCosScheme, fullPath.substr(kCosScheme.length())};
+  } else if (isCosNFile(fullPath)) {
+    return {kCosNScheme, fullPath.substr(kCosNScheme.length())};
   }
-  return path;
+  // Default to s3:// if no known scheme is found
+  return {kS3Scheme, fullPath};
+}
+
+inline std::string_view getPath(std::string_view path) {
+  // Backward compatibility: just return the path part.
+  return parseS3Path(path).path;
 }
 
 inline Aws::String awsString(const std::string& s) {
