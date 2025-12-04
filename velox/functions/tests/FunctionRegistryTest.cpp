@@ -162,10 +162,6 @@ class FunctionRegistryTest : public testing::Test {
       const TypePtr& expectedReturnType,
       const std::vector<TypePtr>& expectedCoercions) {
     auto type = resolveFuncs.resolveFunc(name, argTypes);
-    if (type) {
-      LOG(ERROR) << type->toString();
-    }
-
     ASSERT_TRUE(type == nullptr);
 
     std::vector<TypePtr> coercions;
@@ -181,7 +177,7 @@ class FunctionRegistryTest : public testing::Test {
         EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
                                          << ": " << coercions[i]->toString();
       } else {
-        ASSERT_NE(coercions[i], nullptr);
+        ASSERT_NE(coercions[i], nullptr) << "at " << i;
         EXPECT_EQ(*coercions[i], *expectedCoercions[i])
             << "Expected: " << expectedCoercions[i]->toString()
             << ", but got: " << coercions[i]->toString();
@@ -916,6 +912,20 @@ TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
        BIGINT()},
       BIGINT(),
       {nullptr, BIGINT(), nullptr, BIGINT(), nullptr, BIGINT(), nullptr});
+}
+
+TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
+  testSpecialFormCoercions(
+      "coalesce", {UNKNOWN(), BIGINT()}, BIGINT(), {BIGINT(), nullptr});
+
+  testSpecialFormCoercions(
+      "coalesce", {BIGINT(), UNKNOWN()}, BIGINT(), {nullptr, BIGINT()});
+
+  testSpecialFormCoercions(
+      "coalesce",
+      {SMALLINT(), INTEGER(), BIGINT(), TINYINT()},
+      BIGINT(),
+      {BIGINT(), BIGINT(), nullptr, BIGINT()});
 }
 
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
