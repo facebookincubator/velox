@@ -471,7 +471,7 @@ SpillFileInfo mergeSpillFiles(
   while (mergeTree->next()) {
     VectorPtr tmpRowVector = std::move(mergeParams.rowVector);
     BaseVector::prepareForReuse(tmpRowVector, batchRows);
-    mergeParams.rowVector = checked_pointer_cast<RowVector>(tmpRowVector);
+    mergeParams.rowVector = checkedPointerCast<RowVector>(tmpRowVector);
     mergeParams.rowVector->resize(batchRows);
     int32_t outputRow = 0;
     gatherMerge(
