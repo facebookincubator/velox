@@ -83,6 +83,8 @@ struct RowContainerIterator {
   char* rowBegin{nullptr};
   /// First byte after the end of the range containing 'currentRow'.
   char* endOfRun{nullptr};
+  /// Cursor of the list row operation.
+  int32_t listRowCursor{0};
 
   /// Returns the current row, skipping a possible normalized key below the
   /// first byte of row.
@@ -637,6 +639,23 @@ class RowContainer {
     return count;
   }
 
+  template <ProbeType probeType>
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  __attribute__((__no_sanitize__("thread")))
+#endif
+#endif
+  int32_t
+  listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows) const {
+    int32_t count = 0;
+    while (count < maxRows && iter->listRowCursor < rowPointers_.size()) {
+      char* row = rowPointers_[iter->listRowCursor];
+      rows[count++] = row;
+      ++iter->listRowCursor;
+    }
+    return count;
+  }
+
   /// Extracts up to 'maxRows' rows starting at the position of 'iter'. A
   /// default constructed or reset iter starts at the beginning. Returns the
   /// number of rows written to 'rows'. Returns 0 when at end. Stops after the
@@ -652,6 +671,14 @@ class RowContainer {
   int32_t listRows(RowContainerIterator* iter, int32_t maxRows, char** rows)
       const {
     return listRows<ProbeType::kAll>(iter, maxRows, kUnlimited, rows);
+  }
+
+  /// Fast path for `listRows` that returns `rowPointers_` directly. Used by
+  /// `SortBuffer` and `SortInputSpiller`, so it skips checking the free and
+  /// probe flags.
+  int32_t listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows)
+      const {
+    return listRowsFast<ProbeType::kAll>(iter, maxRows, rows);
   }
 
   /// Sets 'probed' flag for the specified rows. Used by the right and
@@ -1527,6 +1554,7 @@ class RowContainer {
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
+  std::vector<char*, memory::StlAllocator<char*>> rowPointers_;
 
   int alignment_ = 1;
 

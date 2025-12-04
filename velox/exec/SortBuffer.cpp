@@ -130,7 +130,7 @@ void SortBuffer::noMoreInput() {
     // the rows.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
-    data_->listRows(&iter, numInputRows_, sortedRows_.data());
+    data_->listRowsFast(&iter, numInputRows_, sortedRows_.data());
     PrefixSort::sort(
         data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
   } else {

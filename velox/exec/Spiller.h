@@ -124,6 +124,10 @@ class SpillerBase {
   // existed.
   inline SpillRun& createOrGetSpillRun(const SpillPartitionId& id);
 
+  virtual int32_t listRows(
+      RowContainerIterator* iterator,
+      std::vector<char*>& rows);
+
   struct SpillStatus {
     const SpillPartitionId partitionId;
     const int32_t rowsWritten;
@@ -278,6 +282,10 @@ class SortInputSpiller : public SpillerBase {
             spillStats) {}
 
   void spill();
+
+ protected:
+  int32_t listRows(RowContainerIterator* iterator, std::vector<char*>& rows)
+      override;
 
  private:
   std::string type() const override {

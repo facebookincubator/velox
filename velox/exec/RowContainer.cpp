@@ -143,7 +143,8 @@ RowContainer::RowContainer(
       hasNormalizedKeys_(hasNormalizedKeys),
       stringAllocator_(std::make_unique<HashStringAllocator>(pool)),
       accumulators_(accumulators),
-      rows_(pool) {
+      rows_(pool),
+      rowPointers_(memory::StlAllocator<char*>(pool)) {
   // Compute the layout of the payload row.  The row has keys, null flags,
   // accumulators, dependent fields. All fields are fixed width. If variable
   // width data is referenced, this is done with StringView(for VARCHAR) and
@@ -279,6 +280,7 @@ char* RowContainer::newRow() {
     if (normalizedKeySize_) {
       ++numRowsWithNormalizedKey_;
     }
+    rowPointers_.push_back(row);
   }
   return initializeRow(row, false /* reuse */);
 }
@@ -964,6 +966,7 @@ void RowContainer::clear() {
   hasDuplicateRows_ = false;
 
   rows_.clear();
+  rowPointers_.clear();
   stringAllocator_->clear();
   numRows_ = 0;
   numRowsWithNormalizedKey_ = 0;
