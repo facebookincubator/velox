@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/expression/CastHooks.h"
+#include "velox/expression/CastKernel.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
@@ -56,7 +56,7 @@ class CastOperator {
       const SelectivityVector& rows,
       const TypePtr& resultType,
       VectorPtr& result,
-      const std::shared_ptr<CastHooks>& /* hooks */) const {
+      const std::shared_ptr<CastKernel>& /* kernel */) const {
     castTo(input, context, rows, resultType, result);
   }
 
@@ -86,7 +86,7 @@ class CastExpr : public SpecialForm {
       ExprPtr&& expr,
       bool trackCpuUsage,
       bool isTryCast,
-      std::shared_ptr<CastHooks> hooks)
+      std::shared_ptr<CastKernel> kernel)
       : SpecialForm(
             SpecialFormKind::kCast,
             type,
@@ -95,7 +95,7 @@ class CastExpr : public SpecialForm {
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
         isTryCast_(isTryCast),
-        hooks_(std::move(hooks)) {}
+        kernel_(std::move(kernel)) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -122,39 +122,6 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
-  VectorPtr applyMap(
-      const SelectivityVector& rows,
-      const MapVector* input,
-      exec::EvalCtx& context,
-      const MapType& fromType,
-      const MapType& toType);
-
-  VectorPtr applyArray(
-      const SelectivityVector& rows,
-      const ArrayVector* input,
-      exec::EvalCtx& context,
-      const ArrayType& fromType,
-      const ArrayType& toType);
-
-  VectorPtr applyRow(
-      const SelectivityVector& rows,
-      const RowVector* input,
-      exec::EvalCtx& context,
-      const RowType& fromType,
-      const TypePtr& toType);
-
-  /// Apply the cast between decimal vectors.
-  /// @param rows Non-null rows of the input vector.
-  /// @param input The input decimal vector. It is guaranteed to be flat or
-  /// constant.
-  template <typename ToDecimalType>
-  VectorPtr applyDecimal(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
   // Apply the cast to a vector after vector encodings being peeled off. The
   // input vector is guaranteed to be flat or constant.
   void applyPeeled(
@@ -172,154 +139,12 @@ class CastExpr : public SpecialForm {
       VectorPtr& result,
       Func&& func);
 
-  /// The per-row level Kernel
-  /// @tparam ToKind The cast target type
-  /// @tparam FromKind The expression type
-  /// @tparam TPolicy The policy used by the cast
-  /// @param row The index of the current row
-  /// @param input The input vector (of type FromKind)
-  /// @param result The output vector (of type ToKind)
-  template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
-  void applyCastKernel(
-      vector_size_t row,
-      EvalCtx& context,
-      const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
-      FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
-
-  VectorPtr castFromDate(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
-
-  VectorPtr castToDate(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
-
-  VectorPtr castFromIntervalDayTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
-
-  VectorPtr castFromTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
-
-  VectorPtr castToTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
-
-  template <typename TInput, typename TOutput>
-  void applyDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename TInput, typename TOutput>
-  void applyIntToDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename TInput>
-  VectorPtr applyIntToBinaryCast(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input);
-
-  template <typename TInput, typename TOutput>
-  void applyFloatingPointToDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename T>
-  void applyVarcharToDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename FromNativeType, TypeKind ToKind>
-  VectorPtr applyDecimalToFloatCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
-  template <typename FromNativeType, TypeKind ToKind>
-  VectorPtr applyDecimalToIntegralCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
-  template <typename FromNativeType>
-  VectorPtr applyDecimalToBooleanCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context);
-
-  template <typename FromNativeType>
-  VectorPtr applyDecimalToPrimitiveCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
-  template <TypeKind ToKind, TypeKind FromKind>
-  void applyCastPrimitives(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
-  template <typename FromNativeType>
-  VectorPtr applyDecimalToVarcharCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
-
-  template <TypeKind ToKind>
-  void applyCastPrimitivesDispatch(
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
-  VectorPtr applyTimestampToVarcharCast(
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input);
-
   bool isTryCast() const {
     return isTryCast_;
   }
 
   bool setNullInResultAtError() const {
-    return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
+    return isTryCast() && (inTopLevel || kernel_->applyTryCastRecursively());
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);
@@ -328,7 +153,7 @@ class CastExpr : public SpecialForm {
   folly::F14FastMap<std::string, CastOperatorPtr> castOperators_;
 
   bool isTryCast_;
-  std::shared_ptr<CastHooks> hooks_;
+  std::shared_ptr<CastKernel> kernel_;
 
   bool inTopLevel = false;
 };
