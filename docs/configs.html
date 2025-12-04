@@ -325,53 +325,61 @@ explicitly enable it.</p></td>
 <td><p>Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
 when processing small batches, e.g. &lt; 10K rows.</p></td>
 </tr>
-<tr class="row-even"><td><p>legacy_cast</p></td>
+<tr class="row-even"><td><p>expression.track_cpu_usage_for_functions</p></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>Comma-separated list of function names to selectively track CPU usage for. Only applicable when
+<code class="docutils literal notranslate"><span class="pre">expression.track_cpu_usage</span></code> is set to false. Function names are case-insensitive and will be normalized
+to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
+be monitored.</p></td>
+</tr>
+<tr class="row-odd"><td><p>legacy_cast</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Enables legacy CAST semantics if set to true. CAST(timestamp AS varchar) uses ‘T’ as separator between date and
 time (instead of a space), and the year part is not padded.</p></td>
 </tr>
-<tr class="row-odd"><td><p>cast_match_struct_by_name</p></td>
+<tr class="row-even"><td><p>cast_match_struct_by_name</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.</p></td>
 </tr>
-<tr class="row-even"><td><p>expression.max_array_size_in_reduce</p></td>
+<tr class="row-odd"><td><p>expression.max_array_size_in_reduce</p></td>
 <td><p>integer</p></td>
 <td><p>100000</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Reduce</span></code> function will throw an error if encountered an array of size greater than this.</p></td>
 </tr>
-<tr class="row-odd"><td><p>expression.max_compiled_regexes</p></td>
+<tr class="row-even"><td><p>expression.max_compiled_regexes</p></td>
 <td><p>integer</p></td>
 <td><p>100</p></td>
 <td><p>Controls maximum number of compiled regular expression patterns per batch.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug_disable_expression_with_peeling</p></td>
+<tr class="row-odd"><td><p>debug_disable_expression_with_peeling</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to peel common dictionary layer from inputs. Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-odd"><td><p>debug_disable_common_sub_expressions</p></td>
+<tr class="row-even"><td><p>debug_disable_common_sub_expressions</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to re-use cached results for common sub-expressions. Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug_disable_expression_with_memoization</p></td>
+<tr class="row-odd"><td><p>debug_disable_expression_with_memoization</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to re-use cached results between subsequent input batches that are dictionary encoded and have the same alphabet(underlying flat vector). Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-odd"><td><p>debug_disable_expression_with_lazy_inputs</p></td>
+<tr class="row-even"><td><p>debug_disable_expression_with_lazy_inputs</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug_lambda_function_evaluation_batch_size</p></td>
+<tr class="row-odd"><td><p>debug_lambda_function_evaluation_batch_size</p></td>
 <td><p>integer</p></td>
 <td><p>10000</p></td>
 <td><p>Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.</p></td>
 </tr>
-<tr class="row-odd"><td><p>debug_bing_tile_children_max_zoom_shift</p></td>
+<tr class="row-even"><td><p>debug_bing_tile_children_max_zoom_shift</p></td>
 <td><p>integer</p></td>
 <td><p>5</p></td>
 <td><p>The UDF <cite>bing_tile_children</cite> generates the children of a Bing tile based on a specified target zoom level. The number of children produced is determined by the difference between the target zoom level and the zoom level of the input tile. This configuration limits the number of children by capping the maximum zoom level difference, with a default value set to 5. This cap is necessary to prevent excessively large array outputs, which can exceed the size limits of the elements vector in the Velox array vector.</p></td>
