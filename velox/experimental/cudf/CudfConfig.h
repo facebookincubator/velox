@@ -64,7 +64,7 @@ struct CudfConfig {
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
 
-  /// Enable AST in expression evaluation
+  /// Enable AST in expression evaluation.
   bool astExpressionEnabled{true};
 
   /// Priority of AST expression. Expression with higher priority is chosen for
