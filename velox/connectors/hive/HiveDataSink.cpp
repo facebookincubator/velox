@@ -1318,10 +1318,10 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
       exec::MemoryReclaimer::reclaim(pool, targetBytes, maxWaitMs, stats);
   const auto earlyFlushedRawBytes =
       ioStats_->rawBytesWritten() - writtenBytesBeforeReclaim;
-  addThreadLocalRuntimeStat(
-      kEarlyFlushedRawBytes,
-      RuntimeCounter(earlyFlushedRawBytes, RuntimeCounter::Unit::kBytes));
   if (earlyFlushedRawBytes > 0) {
+    addThreadLocalRuntimeStat(
+        kEarlyFlushedRawBytes,
+        RuntimeCounter(earlyFlushedRawBytes, RuntimeCounter::Unit::kBytes));
     RECORD_METRIC_VALUE(
         kMetricFileWriterEarlyFlushedRawBytes, earlyFlushedRawBytes);
   }
