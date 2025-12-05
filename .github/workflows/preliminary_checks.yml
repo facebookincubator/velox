@@ -93,6 +93,22 @@ jobs:
 
       - run: uv tool install clang-tidy==18.1.8
 
+      # Will remove once https://github.com/facebookincubator/velox/pull/14915 lands
+      - name: Reinstall AWS SDK
+        shell: bash
+        env:
+          FILES: ${{ needs.get-changes.outputs.changed-files }}
+        run: |
+          if echo "$FILES" | grep -q "scripts/setup-"; then
+            echo "Using the new setup script since the AWS_SDK_VERSION got updated"
+            rm -rf /usr/local/include/s2n /usr/local/lib64/s2n
+            rm -rf /usr/local/include/aws
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            bash /setup-centos-adapters.sh install_s3
+          fi
+
       - name: Configure Maximal Build
         env:
           CUDA_VERSION: "12.8"
