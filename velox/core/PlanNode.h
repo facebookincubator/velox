@@ -1134,7 +1134,28 @@ class AggregationNode : public PlanNode {
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
+      bool noGroupsSpanBatches,
       PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      bool ignoreNullKeys,
+      PlanNodePtr source)
+      : AggregationNode(
+            id,
+            step,
+            groupingKeys,
+            preGroupedKeys,
+            aggregateNames,
+            aggregates,
+            ignoreNullKeys,
+            /*noGroupsSpanBatches=*/false,
+            source) {}
 
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
   /// by the preceding GroupId node
@@ -1155,7 +1176,32 @@ class AggregationNode : public PlanNode {
       const std::vector<vector_size_t>& globalGroupingSets,
       const std::optional<FieldAccessTypedExprPtr>& groupId,
       bool ignoreNullKeys,
+      bool noGroupsSpanBatches,
       PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      const std::vector<vector_size_t>& globalGroupingSets,
+      const std::optional<FieldAccessTypedExprPtr>& groupId,
+      bool ignoreNullKeys,
+      PlanNodePtr source)
+      : AggregationNode(
+            id,
+            step,
+            groupingKeys,
+            preGroupedKeys,
+            aggregateNames,
+            aggregates,
+            globalGroupingSets,
+            groupId,
+            ignoreNullKeys,
+            /*noGroupsSpanBatches=*/false,
+            source) {}
 
   class Builder {
    public:
@@ -1171,6 +1217,7 @@ class AggregationNode : public PlanNode {
       globalGroupingSets_ = other.globalGroupingSets();
       groupId_ = other.groupId();
       ignoreNullKeys_ = other.ignoreNullKeys();
+      noGroupsSpanBatches_ = other.noGroupsSpanBatches();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -1221,6 +1268,11 @@ class AggregationNode : public PlanNode {
       return *this;
     }
 
+    Builder& noGroupsSpanBatches(bool noGroupsSpanBatches) {
+      noGroupsSpanBatches_ = noGroupsSpanBatches;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -1255,6 +1307,7 @@ class AggregationNode : public PlanNode {
           globalGroupingSets_,
           groupId_,
           ignoreNullKeys_.value(),
+          noGroupsSpanBatches_,
           source_.value());
     }
 
@@ -1268,6 +1321,7 @@ class AggregationNode : public PlanNode {
     std::vector<vector_size_t> globalGroupingSets_ = kDefaultGlobalGroupingSets;
     std::optional<FieldAccessTypedExprPtr> groupId_ = kDefaultGroupId;
     std::optional<bool> ignoreNullKeys_;
+    bool noGroupsSpanBatches_{false};
     std::optional<PlanNodePtr> source_;
   };
 
@@ -1327,8 +1381,17 @@ class AggregationNode : public PlanNode {
     return globalGroupingSets_;
   }
 
-  std::optional<FieldAccessTypedExprPtr> groupId() const {
+  const std::optional<FieldAccessTypedExprPtr>& groupId() const {
     return groupId_;
+  }
+
+  /// When true, indicates that for streaming aggregation, no sort group spans
+  /// across input batches. Each input batch contains complete data for its
+  /// groups - no group will appear in any subsequent input batch. This allows
+  /// the streaming aggregation operator to immediately produce the aggregation
+  /// result for all the groups in each input batch.
+  bool noGroupsSpanBatches() const {
+    return noGroupsSpanBatches_;
   }
 
   std::string_view name() const override {
@@ -1367,8 +1430,15 @@ class AggregationNode : public PlanNode {
   const std::vector<Aggregate> aggregates_;
   const bool ignoreNullKeys_;
 
-  std::optional<FieldAccessTypedExprPtr> groupId_;
-  std::vector<vector_size_t> globalGroupingSets_;
+  const std::optional<FieldAccessTypedExprPtr> groupId_;
+  const std::vector<vector_size_t> globalGroupingSets_;
+
+  // When true, indicates that for streaming aggregation, no sort group spans
+  // across input batches. Each input batch contains complete data for its
+  // groups - no group will appear in any subsequent input batch. This allows
+  // the streaming aggregation operator to immediately produce the aggregation
+  // result for all the groups in each input batch.
+  const bool noGroupsSpanBatches_;
 
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
