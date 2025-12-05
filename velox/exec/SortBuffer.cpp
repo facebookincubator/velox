@@ -74,7 +74,7 @@ SortBuffer::SortBuffer(
   }
 
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes, nonSortedColumnTypes, pool_);
+      sortedColumnTypes, nonSortedColumnTypes, true, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
@@ -130,7 +130,7 @@ void SortBuffer::noMoreInput() {
     // the rows.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
-    data_->listRowsFast(&iter, numInputRows_, sortedRows_.data());
+    data_->listRows(&iter, numInputRows_, sortedRows_.data());
     PrefixSort::sort(
         data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
   } else {

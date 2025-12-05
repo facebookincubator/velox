@@ -85,13 +85,6 @@ void SpillerBase::spill(const RowContainerIterator* startRowIter) {
   checkEmptySpillRuns();
 }
 
-int32_t SpillerBase::listRows(
-    RowContainerIterator* iterator,
-    std::vector<char*>& rows) {
-  return container_->listRows(
-      iterator, rows.size(), RowContainer::kUnlimited, rows.data());
-}
-
 bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
   checkEmptySpillRuns();
 
@@ -108,7 +101,8 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
 
     uint64_t totalRows{0};
     for (;;) {
-      const auto numRows = listRows(iterator, rows);
+      const auto numRows = container_->listRows(
+          iterator, rows.size(), RowContainer::kUnlimited, rows.data());
       if (numRows == 0) {
         lastRun = true;
         break;
@@ -436,12 +430,6 @@ void NoRowContainerSpiller::spill(
 
 void SortInputSpiller::spill() {
   SpillerBase::spill(nullptr);
-}
-
-int32_t SortInputSpiller::listRows(
-    RowContainerIterator* iterator,
-    std::vector<char*>& rows) {
-  return container_->listRowsFast(iterator, rows.size(), rows.data());
 }
 
 SortOutputSpiller::SortOutputSpiller(

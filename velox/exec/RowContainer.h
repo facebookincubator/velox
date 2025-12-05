@@ -277,6 +277,17 @@ class RowContainer {
       memory::MemoryPool* pool)
       : RowContainer(
             keyTypes,
+            dependentTypes,
+            false, // useListRowIndex
+            pool) {}
+
+  RowContainer(
+      const std::vector<TypePtr>& keyTypes,
+      const std::vector<TypePtr>& dependentTypes,
+      bool useListRowIndex,
+      memory::MemoryPool* pool)
+      : RowContainer(
+            keyTypes,
             true, // nullableKeys
             std::vector<Accumulator>{},
             dependentTypes,
@@ -284,6 +295,7 @@ class RowContainer {
             false, // isJoinBuild
             false, // hasProbedFlag
             false, // hasNormalizedKey
+            useListRowIndex,
             pool) {}
 
   ~RowContainer();
@@ -315,6 +327,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
+      bool useListRowIndex,
       memory::MemoryPool* pool);
 
   /// Allocates a new row and initializes possible aggregates to null.
@@ -670,6 +683,9 @@ class RowContainer {
 
   int32_t listRows(RowContainerIterator* iter, int32_t maxRows, char** rows)
       const {
+    if (useListRowIndex_) {
+      return listRowsFast(iter, maxRows, rows);
+    }
     return listRows<ProbeType::kAll>(iter, maxRows, kUnlimited, rows);
   }
 
@@ -678,6 +694,7 @@ class RowContainer {
   /// probe flags.
   int32_t listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows)
       const {
+    VELOX_CHECK(useListRowIndex_);
     return listRowsFast<ProbeType::kAll>(iter, maxRows, rows);
   }
 
@@ -1498,7 +1515,8 @@ class RowContainer {
   const bool isJoinBuild_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
-
+  // True iif use 'listRowsFast'.
+  const bool useListRowIndex_;
   const std::unique_ptr<HashStringAllocator> stringAllocator_;
 
   // Indicates if we can add new row to this row container. It is set to false

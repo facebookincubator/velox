@@ -1515,6 +1515,7 @@ TEST_F(RowContainerTest, alignment) {
       false,
       true,
       true,
+      false,
       pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
@@ -1682,6 +1683,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
+      false, // useListRowIndex
       pool_.get());
 
   auto input = makeRowVector({
@@ -2733,6 +2735,7 @@ TEST_F(RowContainerTest, setAllNull) {
       std::vector<TypePtr>{},
       false,
       true,
+      false,
       false,
       false,
       pool_.get());

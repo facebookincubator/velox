@@ -136,11 +136,13 @@ RowContainer::RowContainer(
     bool isJoinBuild,
     bool hasProbedFlag,
     bool hasNormalizedKeys,
+    bool useListRowIndex,
     memory::MemoryPool* pool)
     : keyTypes_(keyTypes),
       nullableKeys_(nullableKeys),
       isJoinBuild_(isJoinBuild),
       hasNormalizedKeys_(hasNormalizedKeys),
+      useListRowIndex_(useListRowIndex),
       stringAllocator_(std::make_unique<HashStringAllocator>(pool)),
       accumulators_(accumulators),
       rows_(pool),
@@ -280,7 +282,10 @@ char* RowContainer::newRow() {
     if (normalizedKeySize_) {
       ++numRowsWithNormalizedKey_;
     }
-    rowPointers_.push_back(row);
+
+    if (useListRowIndex_) {
+      rowPointers_.push_back(row);
+    }
   }
   return initializeRow(row, false /* reuse */);
 }

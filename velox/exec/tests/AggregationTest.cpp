@@ -384,6 +384,7 @@ class AggregationTest : public OperatorTestBase {
         false,
         true,
         true,
+        false,
         pool_.get());
   }
 
@@ -1293,7 +1294,7 @@ TEST_F(AggregationTest, memoryAllocations) {
   // hash table, 1 for the RowContainer holding accumulators, 2 for results (1
   // for values of the grouping key column, 1 for sum column).
   planStats = toPlanStats(task->taskStats());
-  ASSERT_LE(8, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(8, planStats.at(aggNodeId).numMemoryAllocations);
 }
 
 TEST_F(AggregationTest, groupingSets) {
@@ -4026,6 +4027,7 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       false, // isJoinBuild
       false, // hasProbedFlag
       false, // hasNormalizedKeys
+      false, // useListRowIndex
       pool());
   const auto rowColumn = rows.columnAt(0);
   agg.setOffsets(
