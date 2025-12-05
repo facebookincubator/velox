@@ -839,6 +839,10 @@ class RowContainer {
     return 0;
   }
 
+  const std::vector<char*, StlAllocator<char*>>& rowPointers() const {
+    return rowPointers_;
+  }
+
   memory::MemoryPool* pool() const {
     return stringAllocator_->pool();
   }

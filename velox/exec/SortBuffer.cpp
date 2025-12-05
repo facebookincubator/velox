@@ -128,6 +128,7 @@ void SortBuffer::noMoreInput() {
     updateEstimatedOutputRowSize();
     // Sort the pointers to the rows in RowContainer (data_) instead of sorting
     // the rows.
+    // TODO: Reuse 'RowContainer::rowPointers_'.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numInputRows_, sortedRows_.data());

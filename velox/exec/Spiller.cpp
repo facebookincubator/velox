@@ -101,6 +101,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
 
     uint64_t totalRows{0};
     for (;;) {
+      // TODO: Reuse 'RowContainer::rowPointers_'.
       const auto numRows =
           container_->listRows(iterator, rows.size(), rows.data());
       if (numRows == 0) {
