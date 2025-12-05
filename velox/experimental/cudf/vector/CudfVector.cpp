@@ -21,6 +21,7 @@
 #include "velox/vector/TypeAliases.h"
 
 #include <cudf/column/column.hpp>
+#include <cudf/contiguous_split.hpp>
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -110,10 +111,50 @@ CudfVector::CudfVector(
           std::vector<VectorPtr>(),
           std::nullopt),
       table_{std::move(table)},
+      packedTable_{nullptr},
       stream_{stream} {
   auto [bytes, tableOut] = getTableSize(std::move(table_));
   flatSize_ = bytes;
   table_ = std::move(tableOut);
+  tabView_ = table_->view();
+}
+
+CudfVector::CudfVector(
+    velox::memory::MemoryPool* pool,
+    TypePtr type,
+    vector_size_t size,
+    std::unique_ptr<cudf::packed_table>&& packedTable,
+    rmm::cuda_stream_view stream)
+    : RowVector(
+          pool,
+          std::move(type),
+          BufferPtr(nullptr),
+          size,
+          std::vector<VectorPtr>(),
+          std::nullopt),
+      table_{nullptr},
+      packedTable_{std::move(packedTable)},
+      tabView_{packedTable_->table},
+      stream_{stream} {
+  // For packed table, flatSize is the size of the GPU data buffer
+  flatSize_ = packedTable_->data.gpu_data->size();
+}
+
+std::unique_ptr<cudf::table> CudfVector::release() {
+  flatSize_ = 0;
+  if (table_) {
+    // Constructed from owned table - just move it out
+    return std::move(table_);
+  }
+  // Constructed from packed_table - materialize a table from the view.
+  // This copies the data since the view references the packed buffer.
+  auto mr = cudf::get_current_device_resource_ref();
+  auto materializedTable =
+      std::make_unique<cudf::table>(tabView_, stream_, mr);
+  stream_.synchronize();
+  // Clear the packed table since we've materialized
+  packedTable_.reset();
+  return materializedTable;
 }
 
 uint64_t CudfVector::estimateFlatSize() const {
