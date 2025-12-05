@@ -482,7 +482,8 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<std::string>{"agg"},
               aggregates,
-              false,
+              /*ignoreNullKeys=*/false,
+              /*noGroupsSpanBatches=*/false,
               std::move(source));
         })
         .planNode();
@@ -543,7 +544,8 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<std::string>{"agg"},
                         aggregates,
-                        false,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/false,
                         std::move(source));
                   })
                   .planNode();
