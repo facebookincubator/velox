@@ -6471,6 +6471,45 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
   EXPECT_EQ(-3599997350390034763, xxhash64(1234)); // Arbitrary value
 }
 
+TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+  const auto callCurrentTimestamp =
+      [&](int64_t sessionStartTime,
+          const std::optional<std::string>& timeZone) {
+        if (timeZone.has_value()) {
+          setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+        } else {
+          setQuerySessionStartTime(sessionStartTime);
+        }
+
+        auto rowVector = makeRowVector({});
+        rowVector->resize(1);
+
+        auto result = evaluate("current_timestamp()", rowVector);
+        DecodedVector decoded(*result);
+        return decoded.valueAt<int64_t>(0);
+      };
+
+  // Test without timezone
+  EXPECT_THROW(
+      {
+        try {
+          callCurrentTimestamp(0, std::nullopt);
+        } catch (const VeloxException& e) {
+          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
+          throw;
+        }
+      },
+      VeloxException);
+
+  // Test with timezone America/Los_Angeles
+  auto laPacked = callCurrentTimestamp(1758499200000, "America/Los_Angeles");
+  auto la = TimestampWithTimezone::unpack(laPacked);
+  ASSERT_TRUE(la.has_value());
+
+  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
+  EXPECT_EQ(la->milliSeconds_, 1758499200000);
+}
+
 TEST_F(DateTimeFunctionsTest, localtime) {
   const auto localtime = [&](int64_t sessionStartTime,
                              const std::optional<std::string>& timeZone) {
