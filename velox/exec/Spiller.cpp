@@ -101,8 +101,8 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
 
     uint64_t totalRows{0};
     for (;;) {
-      const auto numRows = container_->listRows(
-          iterator, rows.size(), RowContainer::kUnlimited, rows.data());
+      const auto numRows =
+          container_->listRows(iterator, rows.size(), rows.data());
       if (numRows == 0) {
         lastRun = true;
         break;

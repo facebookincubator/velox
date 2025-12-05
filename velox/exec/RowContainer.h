@@ -278,9 +278,13 @@ class RowContainer {
       : RowContainer(
             keyTypes,
             dependentTypes,
-            false, // useListRowIndex
+            /*useListRowIndex=*/false,
             pool) {}
 
+  /// If 'useListRowIndex' is true, the container maintains an internal array of
+  /// row pointers so that listRowsFast() can return rows without scanning
+  /// underlying allocations or checking free/probe flags. It is intended to be
+  /// used in SortBuffer and SortInputSpiller to improve performance.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
       const std::vector<TypePtr>& dependentTypes,
@@ -1572,7 +1576,7 @@ class RowContainer {
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
-  std::vector<char*, memory::StlAllocator<char*>> rowPointers_;
+  std::vector<char*, StlAllocator<char*>> rowPointers_;
 
   int alignment_ = 1;
 
