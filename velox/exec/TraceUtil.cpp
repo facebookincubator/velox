@@ -356,7 +356,6 @@ core::PlanNodePtr getTraceNode(
         aggregationNode->globalGroupingSets(),
         aggregationNode->groupId(),
         aggregationNode->ignoreNullKeys(),
-        aggregationNode->noGroupsSpanBatches(),
         std::make_shared<DummySourceNode>(
             aggregationNode->sources().front()->outputType()));
   }

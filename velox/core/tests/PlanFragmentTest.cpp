@@ -188,8 +188,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
         testData.hasPreAggregation ? preGroupingKeys : emptyPreGroupingKeys,
         testData.isDistinct ? emptyAggregateNames : aggregateNames,
         testData.isDistinct ? emptyAggregates : aggregates,
-        /*ignoreNullKeys=*/false,
-        /*noGroupsSpanBatches=*/false,
+        false,
         valueNode_);
     auto queryCtx = getSpillQueryCtx(
         testData.isSpillEnabled,

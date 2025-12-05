@@ -44,8 +44,7 @@ StreamingAggregation::StreamingAggregation(
       maxOutputBatchBytes_{
           operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes()},
       aggregationNode_{aggregationNode},
-      step_{aggregationNode->step()},
-      noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()} {
+      step_{aggregationNode->step()} {
   if (aggregationNode_->ignoreNullKeys()) {
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
@@ -368,31 +367,21 @@ RowVectorPtr StreamingAggregation::getOutput() {
   const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
   const bool outputDueToBatchBytes =
       numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
-  if ((noGroupsSpanBatches_ || numPrevGroups > 0) &&
-      (outputDueToBatchSize || outputDueToBatchBytes)) {
+  if (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes)) {
     size_t numOutputGroups{0};
-    if (noGroupsSpanBatches_) {
-      numOutputGroups = numGroups_;
+    // NOTE: we only want to apply the single group output optimization if
+    // 'minOutputBatchSize_' is set to one for eagerly streaming output
+    // producing.
+    if (!prevGroupAssigned || numPrevGroups == 1 || minOutputBatchSize_ != 1) {
+      numOutputGroups = std::min(numGroups_ - 1, numPrevGroups);
     } else {
-      // NOTE: we only want to apply the single group output optimization if
-      // 'minOutputBatchSize_' is set to one for eagerly streaming output
-      // producing.
-      if (!prevGroupAssigned || numPrevGroups == 1 ||
-          minOutputBatchSize_ != 1) {
-        numOutputGroups = std::min(numGroups_ - 1, numPrevGroups);
-      } else {
-        numOutputGroups = std::min(numGroups_ - 1, numPrevGroups - 1);
-        outputFirstGroup_ = (numGroups_ - numOutputGroups) > 1;
-      }
+      numOutputGroups = std::min(numGroups_ - 1, numPrevGroups - 1);
+      outputFirstGroup_ = (numGroups_ - numOutputGroups) > 1;
     }
     VELOX_CHECK_GT(numOutputGroups, 0);
     output = createOutput(numOutputGroups);
   }
   prevInput_ = input_;
-  if (numGroups_ == 0) {
-    VELOX_CHECK(noGroupsSpanBatches_);
-    prevInput_ = nullptr;
-  }
   input_ = nullptr;
   return output;
 }
