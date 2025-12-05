@@ -32,6 +32,15 @@ TypePtr resolveResultType(
       }
     }
 
+    // If no direct match was found re-try with coercions.
+    for (const auto& signature : signatures.value()) {
+      SignatureBinder binder(*signature, argTypes);
+      std::vector<Coercion> coercions;
+      if (binder.tryBindWithCoercions(coercions)) {
+        return binder.tryResolveReturnType();
+      }
+    }
+
     std::stringstream error;
     error << "Aggregate function signature is not supported: "
           << toString(name, argTypes)
@@ -49,6 +58,15 @@ TypePtr resolveIntermediateType(
     for (const auto& signature : signatures.value()) {
       SignatureBinder binder(*signature, argTypes);
       if (binder.tryBind()) {
+        return binder.tryResolveType(signature->intermediateType());
+      }
+    }
+
+    // If no direct match was found re-try with coercions.
+    for (const auto& signature : signatures.value()) {
+      SignatureBinder binder(*signature, argTypes);
+      std::vector<Coercion> coercions;
+      if (binder.tryBindWithCoercions(coercions)) {
         return binder.tryResolveType(signature->intermediateType());
       }
     }

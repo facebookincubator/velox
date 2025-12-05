@@ -850,6 +850,9 @@ TEST(TypeTest, equivalent) {
       {{"b0", ARRAY(ROW({{"b1", DECIMAL(20, 8)}}))},
        {"b2", MAP(VARCHAR(), ROW({{"b3", DECIMAL(20, 5)}}))}});
   EXPECT_FALSE(complexTypeA->equivalent(*complexTypeB));
+  EXPECT_FALSE(VARCHAR(10)->equivalent(*VARCHAR(20)));
+  EXPECT_TRUE(VARCHAR(10)->equivalent(*VARCHAR()));
+  EXPECT_FALSE(VARCHAR()->equivalent(*VARCHAR(10)));
 }
 
 TEST(TypeTest, kindEquals) {

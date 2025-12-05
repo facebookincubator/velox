@@ -29,7 +29,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -109,6 +109,15 @@ bool checkNamedRowField(
     return false;
   }
   return true;
+}
+
+bool hasCoercion(const std::vector<Coercion>& coercions) {
+  for (const auto& coercion : coercions) {
+    if (coercion.type != nullptr) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace
@@ -290,7 +299,11 @@ bool SignatureBinderBase::tryBind(
   auto actualTypeName =
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
-  if (typeName != actualTypeName) {
+  const auto& params = typeSignature.parameters();
+
+  if (typeName != actualTypeName ||
+      (actualType->isPrimitiveType() &&
+       params.size() != actualType->parameters().size())) {
     if (allowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
@@ -300,8 +313,6 @@ bool SignatureBinderBase::tryBind(
     }
     return false;
   }
-
-  const auto& params = typeSignature.parameters();
 
   // Handle homogeneous row case: row(T, ...)
   if (typeSignature.isHomogeneousRow()) {
@@ -346,6 +357,7 @@ bool SignatureBinderBase::tryBind(
     return false;
   }
 
+  std::vector<Coercion> parameterCoercions(params.size());
   for (auto i = 0; i < params.size(); i++) {
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
@@ -373,12 +385,56 @@ bool SignatureBinderBase::tryBind(
         if (!checkNamedRowField(params[i], actualType, i)) {
           return false;
         }
-
-        if (!tryBind(params[i], actualParameter.type)) {
-          // TODO Allow coercions for complex types.
+        if (!tryBind(
+                params[i],
+                actualParameter.type,
+                allowCoercion,
+                parameterCoercions[i])) {
           return false;
         }
         break;
+    }
+  }
+  // There was a type coercion for the parameter.
+  // Now construct the type from the parameter and set it as output type.
+  // Now that the parameters are resolved, create the coerced type from them.
+  if (allowCoercion && !actualType->isPrimitiveType() &&
+      hasCoercion(parameterCoercions)) {
+    if (actualType->kind() == TypeKind::ARRAY) {
+      VELOX_CHECK_EQ(
+          parameterCoercions.size(),
+          1,
+          "Unexpected number ({}) of coerced parameters for Array",
+          parameterCoercions.size());
+      coercion.type = ARRAY(parameterCoercions[0].type);
+      coercion.cost += parameterCoercions[0].cost;
+    } else if (actualType->kind() == TypeKind::MAP) {
+      VELOX_CHECK_EQ(
+          parameterCoercions.size(),
+          2,
+          "Unexpected number ({}) of coerced parameters for Map",
+          parameterCoercions.size());
+      auto kType = parameterCoercions[0].type
+          ? parameterCoercions[0].type
+          : actualType->parameters()[0].type;
+      auto vType = parameterCoercions[1].type
+          ? parameterCoercions[1].type
+          : actualType->parameters()[1].type;
+      coercion.type = MAP(kType, vType);
+      coercion.cost += parameterCoercions[0].cost;
+      coercion.cost += parameterCoercions[1].cost;
+    } else if (actualType->kind() == TypeKind::ROW) {
+      std::vector<TypePtr> children(params.size());
+      int64_t coercionCost{0};
+      for (auto i = 0; i < params.size(); i++) {
+        auto childType = parameterCoercions[i].type
+            ? parameterCoercions[i].type
+            : actualType->parameters()[i].type;
+        coercionCost += coercion.cost;
+        children[i] = std::move(childType);
+      }
+      coercion.type = ROW(std::move(children));
+      coercion.cost += coercionCost;
     }
   }
   return true;
