@@ -117,5 +117,66 @@ TEST(S3ConfigTest, overrideBucketConfig) {
   ASSERT_EQ(s3Config.credentialsProvider(), "override-credentials-provider");
 }
 
+TEST(S3ConfigTest, overrideBucketConfigOCI) {
+  std::string_view bucket = "bucket";
+
+  std::unordered_map<std::string, std::string> bucketConfigFromFile = {
+      // Set path-style-access to be false here, we expect it to be true
+      // later on during the check since OCI requires path-style-access to
+      // be set to true.
+      {S3Config::baseConfigKey(S3Config::Keys::kPathStyleAccess), "false"},
+      {S3Config::baseConfigKey(S3Config::Keys::kSSLEnabled), "false"},
+      {S3Config::baseConfigKey(S3Config::Keys::kUseInstanceCredentials),
+       "true"},
+      {S3Config::baseConfigKey(S3Config::Keys::kEndpoint), "endpoint"},
+
+      // OCI endpoint instead of AWS one.
+      {S3Config::bucketConfigKey(S3Config::Keys::kEndpoint, bucket),
+       "objectstorage.us-ashburn-1.oraclecloud.com"},
+
+      {S3Config::baseConfigKey(S3Config::Keys::kAccessKey), "access"},
+      {S3Config::bucketConfigKey(S3Config::Keys::kAccessKey, bucket),
+       "bucket-access"},
+      {"hive.s3.payload-signing-policy", "Always"},
+      {S3Config::baseConfigKey(S3Config::Keys::kSecretKey), "secret"},
+      {S3Config::bucketConfigKey(S3Config::Keys::kSecretKey, bucket),
+       "bucket-secret"},
+      {S3Config::baseConfigKey(S3Config::Keys::kIamRole), "iam"},
+      {S3Config::baseConfigKey(S3Config::Keys::kIamRoleSessionName), "velox"},
+      {S3Config::baseConfigKey(S3Config::Keys::kCredentialsProvider),
+       "my-credentials-provider"},
+      {S3Config::bucketConfigKey(S3Config::Keys::kCredentialsProvider, bucket),
+       "override-credentials-provider"}};
+
+  auto configBase =
+      std::make_shared<config::ConfigBase>(std::move(bucketConfigFromFile));
+  auto s3Config = S3Config(bucket, configBase);
+
+  // Validate general settings.
+  // Expect useVirtualAddressing() to be false
+  // since path-style-access should be true.
+  ASSERT_EQ(s3Config.useVirtualAddressing(), false);
+  ASSERT_EQ(s3Config.useSSL(), false);
+  ASSERT_EQ(s3Config.useInstanceCredentials(), true);
+
+  // Endpoint is the OCI one.
+  ASSERT_EQ(s3Config.endpoint(), "objectstorage.us-ashburn-1.oraclecloud.com");
+
+  // Inferred region from OCI endpoint.
+  ASSERT_EQ(s3Config.endpointRegion(), "us-ashburn-1");
+
+  ASSERT_EQ(s3Config.accessKey(), std::optional("bucket-access"));
+  ASSERT_EQ(s3Config.secretKey(), std::optional("bucket-secret"));
+  ASSERT_EQ(s3Config.iamRole(), std::optional("iam"));
+  ASSERT_EQ(s3Config.iamRoleSessionName(), "velox");
+  ASSERT_EQ(s3Config.payloadSigningPolicy(), "Always");
+
+  ASSERT_EQ(
+      s3Config.cacheKey(bucket, configBase),
+      "objectstorage.us-ashburn-1.oraclecloud.com-bucket");
+  ASSERT_EQ(s3Config.cacheKey("foo", configBase), "endpoint-foo");
+  ASSERT_EQ(s3Config.credentialsProvider(), "override-credentials-provider");
+}
+
 } // namespace
 } // namespace facebook::velox::filesystems

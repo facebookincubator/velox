@@ -32,6 +32,9 @@
 
 namespace facebook::velox::filesystems {
 
+constexpr std::string_view kAWSHostSuffix{".amazonaws.com"};
+constexpr std::string_view kOCIHostSuffix{".oraclecloud.com"};
+
 namespace {
 static std::string_view kSep{"/"};
 // AWS S3 EMRFS, Hadoop block storage filesystem on-top of Amazon S3 buckets.
@@ -193,13 +196,17 @@ std::string getHttpProxyEnvVar();
 std::string getHttpsProxyEnvVar();
 std::string getNoProxyEnvVar();
 
+bool isAWSEndpoint(const std::string_view& endpoint);
+bool isOCIEndpoint(const std::string_view& endpoint);
+
 // Adopted from the AWS Java SDK
-// Endpoint can be 'service.[region].amazonaws.com' or
+// For AWS, endpoint can be 'service.[region].amazonaws.com' or
 // 'bucket.s3-[region].amazonaws.com' or bucket.s3.[region].amazonaws.com'
+// For OCI, endpoint can be 'service.[region].oraclecloud.com' or
+// 'namespace.compat.objectstorage.[region].oraclecloud.com'.
 // Return value is a region string value if present.
 // The endpoint may contain a trailing '/' that is handled.
-std::optional<std::string> parseAWSStandardRegionName(
-    std::string_view endpoint);
+std::optional<std::string> parseStandardRegionName(std::string_view endpoint);
 
 class S3ProxyConfigurationBuilder {
  public:
