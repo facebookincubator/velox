@@ -8493,5 +8493,91 @@ DEBUG_ONLY_TEST_F(
 
   ASSERT_TRUE(spillTriggered.load());
 }
+
+TEST_F(HashJoinTest, reuseHashTable) {
+  auto probe = makeRowVector(
+      {"t0"},
+      {
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 2}),
+      });
+  auto build = makeRowVector(
+      {"u0"},
+      {
+          makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt}),
+      });
+  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), {probe});
+
+  std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
+  writeToFile(buildFile->getPath(), {build});
+
+  createDuckDbTable("t", {probe});
+  createDuckDbTable("u", {build});
+
+  // Build the HashTable for build side data
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+
+  auto table = HashTable<false>::createForJoin(
+      std::move(hashers),
+      {}, /*dependentTypes*/
+      true /*allowDuplicates*/,
+      true /*hasProbedFlag*/,
+      1 /*minTableSizeForParallelJoinBuild*/,
+      pool());
+
+  auto rowContainer = table->rows();
+  std::vector<DecodedVector> decodedVectors;
+  for (auto& vector : build->children()) {
+    decodedVectors.emplace_back(*vector);
+  }
+
+  std::vector<char*> rows;
+  for (auto i = 0; i < build->size(); ++i) {
+    auto* row = rowContainer->newRow();
+
+    for (auto j = 0; j < decodedVectors.size(); ++j) {
+      rowContainer->store(decodedVectors[j], i, row, j);
+    }
+  }
+
+  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  auto reusedHashTableInfo = std::make_shared<core::ReusedHashTableInfo>();
+
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId buildScanId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(asRowType(probe->type()))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(asRowType(build->type()))
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "",
+                      {"u0", "match"},
+                      core::JoinType::kRightSemiProject,
+                      true /*nullAware*/,
+                      reusedHashTableInfo,
+                      table.get())
+                  .planNode();
+
+  SplitInput splitInput = {
+      {probeScanId,
+       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+      {buildScanId,
+       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+  };
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .planNode(plan)
+      .inputSplits(splitInput)
+      .checkSpillStats(false)
+      .referenceQuery("SELECT u0, u0 IN (SELECT t0 FROM t) FROM u")
+      .run();
+}
 } // namespace
 } // namespace facebook::velox::exec

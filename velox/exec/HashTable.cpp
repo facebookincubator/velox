@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/HashTable.h"
+#include <mutex>
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
@@ -1720,9 +1721,8 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   buildExecutor_ = executor;
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
-    otherTables_.emplace_back(
-        std::unique_ptr<HashTable<ignoreNullKeys>>(
-            dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
+    otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
+        dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
 
   // If there are multiple tables, we need to merge the 'columnHasNulls' flags

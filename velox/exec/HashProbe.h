@@ -441,6 +441,9 @@ class HashProbe : public Operator {
   // side. Used by anti and left semi project join.
   bool buildSideHasNullKeys_{false};
 
+  // Indicates whether the hash table can be reused.
+  bool reused_{false};
+
   // Indicates whether there are rows with null join keys on the probe
   // side. Used by right semi project join.
   bool probeSideHasNullKeys_{false};
