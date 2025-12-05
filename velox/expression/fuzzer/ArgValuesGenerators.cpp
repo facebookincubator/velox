@@ -544,4 +544,36 @@ FbDedupNormalizeTextArgValuesGenerator::generate(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> AtTimezoneArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_EQ(signature.args.size(), 2);
+  populateInputTypesAndNames(signature, state);
+
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+
+  // First argument - use default generation (TIME WITH TIME ZONE or TIMESTAMP
+  // WITH TIME ZONE)
+  state.customInputGenerators_.emplace_back(nullptr);
+  inputExpressions[0] = std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0], state.inputRowNames_[state.inputRowNames_.size() - 2]);
+
+  // Second argument - constrain to valid timezone offset formats
+  // Valid formats: "+HH:mm" or "-HH:mm" (Presto-compatible)
+  // Offset range: -14:00 to +14:00
+  // Uses shared timezone generation utility (25% frequently used, 75% random)
+  state.customInputGenerators_.emplace_back(nullptr);
+
+  // Generate random timezone offset and convert to string
+  int16_t offsetMinutes = generateRandomTimezoneOffset(rng);
+  std::string timezoneString = timezoneOffsetToString(offsetMinutes);
+  inputExpressions[1] = std::make_shared<core::ConstantTypedExpr>(
+      VARCHAR(), variant(timezoneString));
+
+  return inputExpressions;
+}
+
 } // namespace facebook::velox::fuzzer

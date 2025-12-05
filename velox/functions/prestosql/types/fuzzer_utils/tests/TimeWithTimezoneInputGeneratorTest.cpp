@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/type/Time.h"
 #include "velox/type/Variant.h"
 
@@ -54,8 +55,8 @@ TEST(TimeWithTimezoneInputGeneratorTest, generatesBothOffsetTypes) {
   TimeWithTimezoneInputGenerator generator(12345, 0.0); // Fixed seed, no nulls
 
   std::unordered_set<int16_t> frequentlyUsed(
-      TimeWithTimezoneInputGenerator::kFrequentlyUsedOffsets.begin(),
-      TimeWithTimezoneInputGenerator::kFrequentlyUsedOffsets.end());
+      kFrequentlyUsedTimezoneOffsets.begin(),
+      kFrequentlyUsedTimezoneOffsets.end());
 
   bool foundFrequentlyUsed = false;
   bool foundOther = false;
