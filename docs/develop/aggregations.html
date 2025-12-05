@@ -144,23 +144,6 @@ HashAggregation includes an optimization where it flushes groups whenever it
 encounters a row with a different values in pre-grouped keys. This helps reduce
 the total amount of memory used and allows to unblock downstream operators
 faster.</p>
-<section id="nogroupsspanbatches-optimization">
-<h3>noGroupsSpanBatches Optimization<a class="headerlink" href="#nogroupsspanbatches-optimization" title="Link to this heading">¶</a></h3>
-<p>AggregationNode supports an optional <code class="docutils literal notranslate"><span class="pre">noGroupsSpanBatches</span></code> flag that can be set
-to true for streaming aggregations. When enabled, this flag indicates that no
-sort group spans across input batches - each input batch contains complete data
-for its groups, and no group will appear in any subsequent input batch.</p>
-<p>This optimization allows the StreamingAggregation operator to immediately produce
-aggregation results for all groups in each input batch without waiting to see if
-more data for those groups will arrive in subsequent batches. This can
-significantly improve output latency and reduce memory usage since the operator
-doesn’t need to hold onto partial aggregation state across batches.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">noGroupsSpanBatches</span></code> flag can only be set when the aggregation is
-pre-grouped (streaming). Setting it on a non-streaming aggregation will result
-in an error.</p>
-<p>This optimization is typically set automatically by query optimizers when they can
-guarantee that the input data meets the required properties.</p>
-</section>
 </section>
 <section id="push-down-into-table-scan">
 <h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Link to this heading">¶</a></h2>
@@ -406,10 +389,7 @@ partial aggregation was abandoned.</p>
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Aggregations</a><ul>
-<li><a class="reference internal" href="#hashaggregation-and-streamingaggregation-operators">HashAggregation and StreamingAggregation Operators</a><ul>
-<li><a class="reference internal" href="#nogroupsspanbatches-optimization">noGroupsSpanBatches Optimization</a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#hashaggregation-and-streamingaggregation-operators">HashAggregation and StreamingAggregation Operators</a></li>
 <li><a class="reference internal" href="#push-down-into-table-scan">Push-Down into Table Scan</a></li>
 <li><a class="reference internal" href="#adaptive-array-based-aggregation">Adaptive Array-Based Aggregation</a><ul>
 <li><a class="reference internal" href="#hash-mode">Hash mode</a></li>
