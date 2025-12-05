@@ -39,7 +39,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
       velox::memory::MemoryPool* pool,
       HashStringAllocator* stringAllocator,
       const core::QueryConfig& config)
-      : WindowFunction(resultType, pool, stringAllocator) {
+      : WindowFunction(resultType, pool, stringAllocator),
+        maxBatchSize_(config.maxOutputBatchRows()) {
     VELOX_USER_CHECK(
         !ignoreNulls, "Aggregate window functions do not support IGNORE NULLS");
     argTypes_.reserve(args.size());
@@ -116,6 +117,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
     partition_ = partition;
 
     previousFrameMetadata_.reset();
+    cachedSameFrameResult_.reset();
+    cachedSameFrameBounds_.reset();
   }
 
   void apply(
@@ -136,7 +139,18 @@ class AggregateWindowFunction : public exec::WindowFunction {
     FrameMetadata frameMetadata =
         analyzeFrameValues(validRows, rawFrameStarts, rawFrameEnds);
 
-    if (frameMetadata.incrementalAggregation) {
+    if (frameMetadata.allSameFrame) {
+      // All rows have identical frame (e.g., UNBOUNDED...UNBOUNDED).
+      // Use batch loading to avoid allocating a huge vector for the entire
+      // partition at once, which can cause memory spike. Compute once and
+      // cache the result for reuse in subsequent output blocks.
+      sameFrameAggregation(
+          validRows,
+          frameMetadata.firstRow,
+          frameMetadata.lastRow,
+          resultOffset,
+          result);
+    } else if (frameMetadata.incrementalAggregation) {
       vector_size_t startRow;
       if (frameMetadata.usePreviousAggregate) {
         // If incremental aggregation can be resumed from the previous block,
@@ -193,6 +207,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
     // Resume incremental aggregation from the prior block.
     bool usePreviousAggregate;
+
+    // True if all rows in this block have exactly the same frame
+    // (same frameStart and same frameEnd). This is the case for
+    // UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING.
+    bool allSameFrame;
   };
 
   bool handleAllEmptyFrames(
@@ -225,6 +244,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
     vector_size_t prevFrameEnds = lastRow;
 
     bool incrementalAggregation = true;
+    bool allSameFrame = true;
+    auto fixedFrameEndRow = lastRow;
     validRows.applyToSelected([&](auto i) {
       firstRow = std::min(firstRow, rawFrameStarts[i]);
       lastRow = std::max(lastRow, rawFrameEnds[i]);
@@ -235,6 +256,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
       incrementalAggregation &= (rawFrameStarts[i] == fixedFrameStartRow);
       incrementalAggregation &= rawFrameEnds[i] >= prevFrameEnds;
       prevFrameEnds = rawFrameEnds[i];
+
+      // Check if all frames are identical (UNBOUNDED...UNBOUNDED case).
+      allSameFrame &= (rawFrameStarts[i] == fixedFrameStartRow);
+      allSameFrame &= (rawFrameEnds[i] == fixedFrameEndRow);
     });
 
     bool usePreviousAggregate = false;
@@ -251,7 +276,12 @@ class AggregateWindowFunction : public exec::WindowFunction {
       }
     }
 
-    return {firstRow, lastRow, incrementalAggregation, usePreviousAggregate};
+    return {
+        firstRow,
+        lastRow,
+        incrementalAggregation,
+        usePreviousAggregate,
+        allSameFrame};
   }
 
   void fillArgVectors(vector_size_t firstRow, vector_size_t lastRow) {
@@ -286,6 +316,57 @@ class AggregateWindowFunction : public exec::WindowFunction {
     aggregate_->addSingleGroupRawInput(
         rawSingleGroupRow_, rows, argVectors_, false);
     aggregate_->extractValues(&rawSingleGroupRow_, 1, &aggregateResultVector_);
+  }
+
+  // Optimized path for allSameFrame case (e.g., UNBOUNDED...UNBOUNDED).
+  // All rows have the same frame, so we compute once and cache the result.
+  void sameFrameAggregation(
+      const SelectivityVector& validRows,
+      vector_size_t firstRow,
+      vector_size_t lastRow,
+      vector_size_t resultOffset,
+      const VectorPtr& result) {
+    // Check if we have a valid cached result with matching frame bounds.
+    // If cached, all subsequent blocks in this partition can reuse it directly.
+    if (cachedSameFrameResult_.has_value() &&
+        cachedSameFrameBounds_->first == firstRow &&
+        cachedSameFrameBounds_->second == lastRow) {
+      validRows.applyToSelected([&](auto i) {
+        result->copy(
+            cachedSameFrameResult_.value().get(), resultOffset + i, 0, 1);
+      });
+    } else {
+      // First block: compute the aggregate in batches and cache the result.
+      static const auto kSingleGroup = std::vector<vector_size_t>{0};
+      aggregate_->clear();
+      aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
+      aggregateInitialized_ = true;
+
+      // Process in batches to prevent memory explosion for large partitions.
+      for (vector_size_t batchStart = firstRow; batchStart <= lastRow;
+           batchStart += maxBatchSize_) {
+        auto batchEnd = std::min(batchStart + maxBatchSize_ - 1, lastRow);
+        fillArgVectors(batchStart, batchEnd);
+
+        SelectivityVector rows(batchEnd - batchStart + 1);
+        rows.setAll();
+        aggregate_->addSingleGroupRawInput(
+            rawSingleGroupRow_, rows, argVectors_, false);
+      }
+
+      BaseVector::prepareForReuse(aggregateResultVector_, 1);
+      aggregate_->extractValues(
+          &rawSingleGroupRow_, 1, &aggregateResultVector_);
+
+      // Copy result to all output rows and cache for subsequent blocks.
+      validRows.applyToSelected([&](auto i) {
+        result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+      });
+      cachedSameFrameResult_ = aggregateResultVector_;
+      cachedSameFrameBounds_ = {firstRow, lastRow};
+    }
+
+    setEmptyFramesResult(validRows, resultOffset, emptyResult_, result);
   }
 
   void incrementalAggregation(
@@ -398,6 +479,20 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // return the default value of an aggregate (aggregation with no rows) for
   // empty frames. e.g. count for empty frames should return 0 and not null.
   VectorPtr emptyResult_;
+
+  // Maximum batch size for loading data to prevent memory explosion.
+  // Configured via QueryConfig::maxOutputBatchRows().
+  const vector_size_t maxBatchSize_;
+
+  // Cached result for allSameFrame case (UNBOUNDED...UNBOUNDED).
+  // When all rows in a partition have the same frame, we compute the
+  // aggregate once and cache the result for subsequent blocks.
+  std::optional<VectorPtr> cachedSameFrameResult_;
+
+  // The frame bounds [firstRow, lastRow] when cachedSameFrameResult_ was
+  // computed. Used to validate that subsequent blocks have the same frame
+  // before using cache.
+  std::optional<std::pair<vector_size_t, vector_size_t>> cachedSameFrameBounds_;
 };
 
 } // namespace
