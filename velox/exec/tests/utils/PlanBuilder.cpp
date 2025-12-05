@@ -928,6 +928,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->aggregateNames(),
       aggregates,
       partialAggNode->ignoreNullKeys(),
+      partialAggNode->noGroupsSpanBatches(),
       planNode_);
   VELOX_CHECK_EQ(
       aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
@@ -1133,6 +1134,7 @@ PlanBuilder& PlanBuilder::aggregation(
       globalGroupingSets,
       groupId,
       ignoreNullKeys,
+      /*noGroupsSpanBatches=*/false,
       planNode_);
   VELOX_CHECK_EQ(
       aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
@@ -1145,7 +1147,8 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
-    bool ignoreNullKeys) {
+    bool ignoreNullKeys,
+    bool noGroupsSpanBatches) {
   auto aggregatesAndNames =
       createAggregateExpressionsAndNames(aggregates, masks, step);
   auto aggregationNode = std::make_shared<core::AggregationNode>(
@@ -1156,6 +1159,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
       ignoreNullKeys,
+      noGroupsSpanBatches,
       planNode_);
   VELOX_CHECK_EQ(
       aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
