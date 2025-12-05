@@ -601,24 +601,31 @@ spilled files.</p></td>
 efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
 none means no compression.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_prefixsort_enabled</p></td>
+<tr class="row-odd"><td><p>spill_num_max_merge_files</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The max number of files to merge at a time when merging sorted files into a single ordered stream. 0 means unlimited.
+This is used to reduce memory pressure by capping the number of open files when merging spilled sorted files to
+avoid using too much memory and causing OOM. Note that this is only applicable for ordered spill.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_prefixsort_enabled</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
 memory to build normalized prefix keys, which might have potential risk of running out of server memory.</p></td>
 </tr>
-<tr class="row-even"><td><p>spiller_start_partition_bit</p></td>
+<tr class="row-odd"><td><p>spiller_start_partition_bit</p></td>
 <td><p>integer</p></td>
 <td><p>29</p></td>
 <td><p>The start partition bit which is used with <cite>spiller_num_partition_bits</cite> together to calculate the spilling partition number.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spiller_num_partition_bits</p></td>
+<tr class="row-even"><td><p>spiller_num_partition_bits</p></td>
 <td><p>integer</p></td>
 <td><p>3</p></td>
 <td><p>The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
 value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 </tr>
-<tr class="row-even"><td><p>testing.spill_pct</p></td>
+<tr class="row-odd"><td><p>testing.spill_pct</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
