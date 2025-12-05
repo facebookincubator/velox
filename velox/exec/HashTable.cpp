@@ -433,6 +433,9 @@ inline uint64_t mixNormalizedKey(uint64_t k, uint8_t bits) {
 }
 
 void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
+  if (lookup.normalizedKeysInitialized) {
+    return;
+  }
   lookup.normalizedKeys.resize(lookup.rows.back() + 1);
   uint64_t* __restrict hashes = lookup.hashes.data();
   uint64_t* __restrict keys = lookup.normalizedKeys.data();
@@ -445,6 +448,7 @@ void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
       keys[row] = hash; // NOLINT
       hashes[row] = mixNormalizedKey(hash, sizeBits);
     }
+    lookup.normalizedKeysInitialized = true;
     return;
   }
   for (auto row : lookup.rows) {
@@ -452,6 +456,7 @@ void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
     keys[row] = hash; // NOLINT
     hashes[row] = mixNormalizedKey(hash, sizeBits);
   }
+  lookup.normalizedKeysInitialized = true;
 }
 } // namespace
 
@@ -875,8 +880,20 @@ bool HashTable<ignoreNullKeys>::canApplyParallelJoinBuild() const {
   if (otherTables_.empty()) {
     return false;
   }
-  return (capacity_ / (1 + otherTables_.size())) >
-      minTableSizeForParallelJoinBuild_;
+  auto minSize = minTableSizeForParallelJoinBuild_;
+  // auto minSize = (kBucketSize / 8) * kHashTableBucketsPerBloomFilterBucket *
+  // 2;
+  return (capacity_ / (1 + otherTables_.size())) > minSize;
+}
+
+template <bool ignoreNullKeys>
+bool HashTable<ignoreNullKeys>::isBloomFilterEnabled(const DriverCtx& ctx) {
+  return isJoinBuild_ && hashMode_ != BaseHashTable::HashMode::kArray &&
+      // 1 byte per value = 256MB bloom filter at most. Don't build larger since
+      // they wont fit in L3 anyway
+      // TODO: make it configurable
+      capacity_ <= 268435456 &&
+      ctx.queryConfig().isHashTableBloomFilterEnabled();
 }
 
 template <bool ignoreNullKeys>
@@ -886,11 +903,11 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       "facebook::velox::exec::HashTable::parallelJoinBuild", rows_->pool());
   VELOX_CHECK_LE(1 + otherTables_.size(), std::numeric_limits<uint8_t>::max());
   const uint8_t numPartitions = 1 + otherTables_.size();
-  VELOX_CHECK_GT(
-      capacity_ / numPartitions,
-      minTableSizeForParallelJoinBuild_,
-      "Less than {} entries per partition for parallel build",
-      minTableSizeForParallelJoinBuild_);
+  // VELOX_CHECK_GT(
+  //     capacity_ / numPartitions,
+  //     minTableSizeForParallelJoinBuild_,
+  //     "Less than {} entries per partition for parallel build",
+  //     minTableSizeForParallelJoinBuild_);
   buildPartitionBounds_.resize(numPartitions + 1);
   // Pad the tail of buildPartitionBounds_ to max int.
   std::fill(
@@ -898,12 +915,27 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       buildPartitionBounds_.begin() + buildPartitionBounds_.capacity(),
       std::numeric_limits<PartitionBoundIndexType>::max());
 
+  // Passing driver context directly to avoid cross thread access to thread
+  // local driver thread context.
+  const DriverCtx* driverCtx{nullptr};
+  if (const auto* driverThreadCtx = driverThreadContext()) {
+    driverCtx = driverThreadCtx->driverCtx();
+    if (driverCtx && isBloomFilterEnabled(*driverCtx)) {
+      bloomFilter_ = std::make_unique<BloomFilter>(
+          numBuckets_ / kHashTableBucketsPerBloomFilterBucket,
+          bucketOffsetMask_,
+          pool_);
+    }
+  }
+
   // The partitioning is in terms of ranges of bucket offset.
   for (auto i = 0; i < numPartitions; ++i) {
     // The bounds are the closes tag/row pointer group bound, always cache
     // line aligned.
-    buildPartitionBounds_[i] =
-        bits::roundUp(((sizeMask_ + 1) / numPartitions) * i, kBucketSize);
+    buildPartitionBounds_[i] = bits::roundUp(
+        ((sizeMask_ + 1) / numPartitions) * i,
+        // to align hash table buckets with bloom filter buckets
+        kBucketSize * kHashTableBucketsPerBloomFilterBucket);
     // Bounds must always be positive
     VELOX_CHECK_GE(
         buildPartitionBounds_[i],
@@ -939,13 +971,6 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = getTable(i);
     rowPartitions.push_back(table->rows()->createRowPartitions(*rows_->pool()));
-  }
-
-  // Passing driver context directly to avoid cross thread access to thread
-  // local driver thread context.
-  const DriverCtx* driverCtx{nullptr};
-  if (const auto* driverThreadCtx = driverThreadContext()) {
-    driverCtx = driverThreadCtx->driverCtx();
   }
 
   // The parallel table partitioning step.
@@ -1074,6 +1099,13 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
     while (const auto numRows = table->rows_->listPartitionRows(
                iter, partition, kBatch, *rowPartitions[i], rows.data())) {
       hashRows(folly::Range(rows.data(), numRows), false, hashes);
+      if (bloomFilter_) {
+        BloomFilter& bloomFilter = *bloomFilter_;
+        for (int32_t i = 0; i < numRows; i++) {
+          uint64_t hash = hashes[i];
+          bloomFilter.add(hash);
+        }
+      }
       insertForJoin(rows.data(), hashes.data(), numRows, &partitionInfo);
       table->numParallelBuildRows_ += numRows;
     }
@@ -1300,6 +1332,17 @@ void HashTable<ignoreNullKeys>::rehash(
     parallelJoinBuild();
     return;
   }
+
+  if (const auto* driverThreadCtx = driverThreadContext()) {
+    const DriverCtx* driverCtx = driverThreadCtx->driverCtx();
+    if (driverCtx && isBloomFilterEnabled(*driverCtx)) {
+      bloomFilter_ = std::make_unique<BloomFilter>(
+          numBuckets_ / kHashTableBucketsPerBloomFilterBucket,
+          bucketOffsetMask_,
+          pool_);
+    }
+  }
+
   raw_vector<uint64_t> hashes(pool_);
   hashes.resize(kHashBatchSize);
   char* groups[kHashBatchSize];
@@ -1318,6 +1361,12 @@ void HashTable<ignoreNullKeys>::rehash(
         VELOX_CHECK_NE(hashMode_, HashMode::kHash);
         setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
         return;
+      } else if (bloomFilter_) {
+        BloomFilter& bloomFilter = *bloomFilter_;
+        for (int32_t i = 0; i < numGroups; i++) {
+          uint64_t hash = hashes[i];
+          bloomFilter.add(hash);
+        }
       }
     } while (numGroups > 0);
   }
@@ -2225,6 +2274,32 @@ void HashTable<ignoreNullKeys>::prepareForJoinProbe(
   }
 
   populateLookupRows(rows, lookup.rows);
+
+  if (!isBloomFilterActive()) {
+    return;
+  }
+
+  if (mode == BaseHashTable::HashMode::kNormalizedKey) {
+    populateNormalizedKeys(lookup, sizeBits_);
+  }
+
+  numBloomFilterProbes_ += lookup.rows.size();
+
+  const BloomFilter& bloomFilter = *bloomFilter_;
+  for (int64_t rowIndex = 0; rowIndex < lookup.rows.size(); ++rowIndex) {
+    auto row = lookup.rows[rowIndex];
+    auto hash = lookup.hashes[row];
+    lookup.rows[rowIndex] = bloomFilter.contains(hash) ? row : -1;
+  }
+
+  int64_t writeIndex = 0;
+  for (int64_t rowIndex = 0; rowIndex < lookup.rows.size(); ++rowIndex) {
+    if (lookup.rows[rowIndex] != -1) {
+      lookup.rows[writeIndex++] = lookup.rows[rowIndex];
+    }
+  }
+  lookup.rows.resize(writeIndex);
+  numBloomFilterHits_ += lookup.rows.size();
 }
 
 } // namespace facebook::velox::exec
