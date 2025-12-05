@@ -49,6 +49,8 @@ allowedCoercions() {
   add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
+  add(VARCHAR(),
+      {VARCHAR()}); // Allow coercion between different VARCHAR lengths.
 
   return coercions;
 }
@@ -59,7 +61,11 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const std::string& toTypeName) {
   static const auto kAllowedCoercions = allowedCoercions();
-  if (fromType->name() == toTypeName) {
+  // Allow name coercion on name alone for primitive types without parameters
+  // and non-primitive types.
+  if (fromType->name() == toTypeName &&
+      ((fromType->isPrimitiveType() && fromType->parameters().empty()) ||
+       !fromType->isPrimitiveType())) {
     return Coercion{.type = fromType, .cost = 0};
   }
 

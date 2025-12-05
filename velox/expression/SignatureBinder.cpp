@@ -29,7 +29,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -113,6 +113,15 @@ bool checkNamedRowField(
     return false;
   }
   return true;
+}
+
+bool hasCoercion(const std::vector<Coercion>& coercions) {
+  for (const auto& coercion : coercions) {
+    if (coercion.type != nullptr) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace
@@ -405,7 +414,14 @@ bool SignatureBinderBase::tryBind(
   // Type is not a variable.
   const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
-  if (!boost::algorithm::iequals(typeName, actualType->name())) {
+  auto actualTypeName =
+      boost::algorithm::to_upper_copy(std::string(actualType->name()));
+
+  const auto& params = typeSignature.parameters();
+
+  if (!boost::algorithm::iequals(typeName, actualType->name()) ||
+      (actualType->isPrimitiveType() &&
+       params.size() != actualType->parameters().size())) {
     if (allowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
@@ -415,8 +431,6 @@ bool SignatureBinderBase::tryBind(
     }
     return false;
   }
-
-  const auto& params = typeSignature.parameters();
 
   // Handle homogeneous row case: row(T, ...)
   if (typeSignature.isHomogeneousRow()) {

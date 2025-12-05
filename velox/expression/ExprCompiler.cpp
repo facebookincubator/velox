@@ -331,6 +331,29 @@ ExprPtr compileCall(
         trackCpuUsage);
   }
 
+  std::vector<TypePtr> coercedInputTypes;
+  if (auto simpleFunctionEntry = simpleFunctions().resolveFunctionWithCoercions(
+          call->name(), inputTypes, coercedInputTypes)) {
+    VELOX_USER_CHECK(
+        resultType->equivalent(*simpleFunctionEntry->type().get()),
+        "Found incompatible return types for '{}' ({} vs. {}) "
+        "for input types ({}).",
+        call->name(),
+        simpleFunctionEntry->type(),
+        resultType,
+        folly::join(", ", inputTypes));
+
+    auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
+        inputTypes, getConstantInputs(inputs), ctx.queryCtx->queryConfig());
+    return std::make_shared<Expr>(
+        resultType,
+        std::move(inputs),
+        std::move(func),
+        simpleFunctionEntry->metadata(),
+        call->name(),
+        trackCpuUsage);
+  }
+
   const auto& functionName = call->name();
   auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
   auto simpleFunctionSignatures =

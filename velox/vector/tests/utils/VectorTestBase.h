@@ -299,7 +299,8 @@ class VectorTestBase {
   template <typename T>
   ArrayVectorPtr makeNullableNestedArrayVector(
       const std::vector<std::optional<
-          std::vector<std::optional<std::vector<std::optional<T>>>>>>& data) {
+          std::vector<std::optional<std::vector<std::optional<T>>>>>>& data,
+      TypePtr type = ARRAY(CppToType<T>::create())) {
     vector_size_t size = data.size();
     BufferPtr offsets = allocateOffsets(size, pool());
     BufferPtr sizes = allocateSizes(size, pool());
@@ -329,18 +330,11 @@ class VectorTestBase {
     }
 
     // Create the underlying vector.
-    auto baseArray = makeNullableArrayVector<T>(flattenedData);
+    auto baseArray = makeNullableArrayVector<T>(flattenedData, type);
 
     // Build and return a second-level of ArrayVector on top of baseArray.
     return std::make_shared<ArrayVector>(
-        pool(),
-        ARRAY(ARRAY(CppToType<T>::create())),
-        nulls,
-        size,
-        offsets,
-        sizes,
-        baseArray,
-        0);
+        pool(), ARRAY(type), nulls, size, offsets, sizes, baseArray, 0);
   }
 
   // Create an ArrayVector<MapVector<TKey, TValue>> from nested std::vectors of
