@@ -360,6 +360,10 @@ struct StTouchesFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (leftGeosGeometry->isEmpty() && rightGeosGeometry->isEmpty()) {
+      result = false;
+      return Status::OK();
+    }
     GEOS_TRY(
         result = leftGeosGeometry->touches(&*rightGeosGeometry);
         , "Failed to check geometry touches");
