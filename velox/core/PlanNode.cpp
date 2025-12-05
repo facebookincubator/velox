@@ -167,6 +167,7 @@ AggregationNode::AggregationNode(
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
+    bool noGroupsSpanBatches,
     PlanNodePtr source)
     : PlanNode(id),
       step_(step),
@@ -177,6 +178,7 @@ AggregationNode::AggregationNode(
       ignoreNullKeys_(ignoreNullKeys),
       groupId_(groupId),
       globalGroupingSets_(globalGroupingSets),
+      noGroupsSpanBatches_(noGroupsSpanBatches),
       sources_{source},
       outputType_(getAggregationOutputType(
           groupingKeys_,
@@ -221,6 +223,10 @@ AggregationNode::AggregationNode(
     VELOX_USER_CHECK(
         groupId_.has_value(), "Global grouping sets require GroupId key");
   }
+
+  VELOX_USER_CHECK(
+      !noGroupsSpanBatches_ || isPreGrouped(),
+      "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
 }
 
 AggregationNode::AggregationNode(
@@ -231,6 +237,7 @@ AggregationNode::AggregationNode(
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
+    bool noGroupsSpanBatches,
     PlanNodePtr source)
     : AggregationNode(
           id,
@@ -242,6 +249,7 @@ AggregationNode::AggregationNode(
           kDefaultGlobalGroupingSets,
           kDefaultGroupId,
           ignoreNullKeys,
+          noGroupsSpanBatches,
           source) {}
 
 namespace {
@@ -336,6 +344,10 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   if (groupId_.has_value()) {
     stream << " Group Id key: " << groupId_.value()->name();
   }
+
+  if (noGroupsSpanBatches_) {
+    stream << " noGroupsSpanBatches";
+  }
 }
 
 namespace {
@@ -374,6 +386,7 @@ folly::dynamic AggregationNode::serialize() const {
     obj["groupId"] = ISerializable::serialize(groupId_.value());
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
+  obj["noGroupsSpanBatches"] = noGroupsSpanBatches_;
   return obj;
 }
 
@@ -494,6 +507,8 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       globalGroupingSets,
       groupId,
       obj["ignoreNullKeys"].asBool(),
+      obj.count("noGroupsSpanBatches") ? obj["noGroupsSpanBatches"].asBool()
+                                       : false,
       deserializeSingleSource(obj, context));
 }
 
