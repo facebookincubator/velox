@@ -27,12 +27,6 @@ namespace {
 
 class ReservoirSampleTest : public AggregationTestBase {
  protected:
-  void SetUp() override {
-    AggregationTestBase::SetUp();
-    disableTestStreaming();
-    disableTestIncremental();
-  }
-
   RowVectorPtr makeResultDouble(
       int64_t seenCount,
       const std::vector<std::optional<double>>& sample) {
