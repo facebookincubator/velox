@@ -289,6 +289,55 @@ void VectorStreamGroup::read(
   }
 }
 
+namespace {
+// Recursively materializes any null children in a RowVector (at all nesting
+// levels) by replacing them with null constant vectors of the appropriate size
+// and type. Uses BaseVector::createNullConstant() which is the standard Velox
+// utility for creating null constant vectors (see velox/vector/BaseVector.h).
+RowVectorPtr materializeNullChildrenRecursive(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool& pool) {
+  std::vector<VectorPtr> newChildren;
+  newChildren.reserve(rowVector->childrenSize());
+  bool hasChanges = false;
+
+  for (int i = 0; i < rowVector->childrenSize(); ++i) {
+    auto child = rowVector->childAt(i);
+
+    if (child == nullptr) {
+      // Replace null child with null constant vector.
+      newChildren.push_back(
+          BaseVector::createNullConstant(
+              rowVector->type()->childAt(i), rowVector->size(), &pool));
+      hasChanges = true;
+    } else if (child->encoding() == VectorEncoding::Simple::ROW) {
+      // Recursively process nested RowVectors.
+      auto childRow = std::dynamic_pointer_cast<RowVector>(child);
+      auto materialized = materializeNullChildrenRecursive(childRow, pool);
+      newChildren.push_back(materialized);
+      if (materialized != childRow) {
+        hasChanges = true;
+      }
+    } else {
+      // Keep non-null, non-row children as-is.
+      newChildren.push_back(child);
+    }
+  }
+
+  // Only create a new RowVector if changes were made.
+  if (!hasChanges) {
+    return rowVector;
+  }
+
+  return std::make_shared<RowVector>(
+      &pool,
+      rowVector->type(),
+      rowVector->nulls(),
+      rowVector->size(),
+      std::move(newChildren));
+}
+} // namespace
+
 folly::IOBuf rowVectorToIOBuf(
     const RowVectorPtr& rowVector,
     memory::MemoryPool& pool,
@@ -303,6 +352,9 @@ folly::IOBuf rowVectorToIOBuf(
     memory::MemoryPool& pool,
     VectorSerde* serde,
     const VectorSerde::Options* options) {
+  // Recursively materialize any null children before serialization.
+  auto materializedVector = materializeNullChildrenRecursive(rowVector, pool);
+
   // Use BatchVectorSerializer with provided options (e.g., preserveEncodings).
   // If serde is null, use the default registered serde.
   auto* serdeToUse = serde != nullptr ? serde : getVectorSerde();
@@ -311,7 +363,8 @@ folly::IOBuf rowVectorToIOBuf(
   IOBufOutputStream stream(pool);
   IndexRange range{0, rangeEnd};
   Scratch scratch;
-  serializer->serialize(rowVector, folly::Range(&range, 1), scratch, &stream);
+  serializer->serialize(
+      materializedVector, folly::Range(&range, 1), scratch, &stream);
 
   return std::move(*stream.getIOBuf());
 }
