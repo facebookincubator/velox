@@ -54,6 +54,10 @@ target_link_libraries(velox_py_type_lib velox_type pybind11::module)
 pyvelox_add_module(type MODULE type/type.cpp)
 target_link_libraries(type PRIVATE velox_py_type_lib)
 
+# pyvelox.expression library:
+pyvelox_add_module(expression MODULE expression/expression.cpp)
+target_link_libraries(expression PRIVATE velox_type velox_parse_expression pybind11::module)
+
 # pyvelox.file library:
 add_library(velox_py_file_lib file/PyFile.cpp)
 target_link_libraries(velox_py_file_lib velox_dwio_common velox_py_init pybind11::module)
