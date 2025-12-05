@@ -170,6 +170,7 @@ CachePin CacheShard::findOrCreate(
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++eventCounter_;
+    ++numLookup_;
     auto it = entryMap_.find(key);
     if (it != entryMap_.end()) {
       auto* foundEntry = it->second;
@@ -558,6 +559,7 @@ void CacheShard::updateStats(CacheStats& stats) {
       ++stats.numTinyEntries;
     }
   }
+  stats.numLookup += numLookup_;
   stats.numHit += numHit_;
   stats.hitBytes += hitBytes_;
   stats.numNew += numNew_;
@@ -647,6 +649,7 @@ bool CacheShard::removeFileEntries(
 
 CacheStats CacheStats::operator-(const CacheStats& other) const {
   CacheStats result;
+  result.numLookup = numLookup - other.numLookup;
   result.numHit = numHit - other.numHit;
   result.hitBytes = hitBytes - other.hitBytes;
   result.numNew = numNew - other.numNew;
