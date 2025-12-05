@@ -75,22 +75,43 @@ inline int64_t pack(int64_t millisUtc, int16_t timeZoneKey) {
 }
 
 /// Encodes timezone offset using bias encoding to ensure positive values
+/// This aligns with the bias encoding used in Presto for offsets
 /// Converts timezone offset from range [-840, 840] to [0, 1680]
+/// 0 -> 0
+/// [-840, -1] -> [1, 840]
+/// [1, 840] -> [841, 1680]
 inline int16_t biasEncode(int16_t timeZoneOffsetMinutes) {
   VELOX_CHECK(
       -kTimeZoneBias <= timeZoneOffsetMinutes &&
           timeZoneOffsetMinutes <= kTimeZoneBias,
       "Timezone offset must be between -840 and 840 minutes. Got: {}",
       timeZoneOffsetMinutes);
+
+  if (timeZoneOffsetMinutes == 0) {
+    return 0;
+  }
+  if (timeZoneOffsetMinutes < 0) {
+    return timeZoneOffsetMinutes + kTimeZoneBias + 1;
+  }
   return timeZoneOffsetMinutes + kTimeZoneBias;
 }
 
 /// Decode timezone offset from bias-encoded value
 /// Converts from bias-encoded range [0, 1680] to signed offset [-840, 840]
+/// This is the inverse of biasEncode():
+///   - 0 → 0 (UTC)
+///   - [1, 840] → [-840, -1] (negative offsets)
+///   - [841, 1680] → [1, 840] (positive offsets)
 ///
 /// @param encodedTimezone Bias-encoded timezone [0, 1680]
 /// @return Timezone offset in minutes [-840, 840]
 inline int16_t decodeTimezoneOffset(int16_t encodedTimezone) {
+  if (encodedTimezone == 0) {
+    return 0;
+  }
+  if (encodedTimezone <= kTimeZoneBias) {
+    return encodedTimezone - kTimeZoneBias - 1;
+  }
   return encodedTimezone - kTimeZoneBias;
 }
 
