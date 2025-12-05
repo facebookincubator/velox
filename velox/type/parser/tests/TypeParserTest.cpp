@@ -90,7 +90,7 @@ TEST_F(TypeParserTest, integerType) {
 
 TEST_F(TypeParserTest, varcharType) {
   ASSERT_EQ(*parseType("varchar"), *VARCHAR());
-  ASSERT_EQ(*parseType("varchar(4)"), *VARCHAR());
+  ASSERT_EQ(*parseType("varchar(4)"), *VARCHAR(4));
 }
 
 TEST_F(TypeParserTest, charType) {
@@ -100,6 +100,7 @@ TEST_F(TypeParserTest, charType) {
 
 TEST_F(TypeParserTest, varbinary) {
   ASSERT_EQ(*parseType("varbinary"), *VARBINARY());
+  ASSERT_EQ(*parseType("varbinary(20)"), *VARBINARY(20));
 }
 
 TEST_F(TypeParserTest, arrayType) {
@@ -140,6 +141,14 @@ TEST_F(TypeParserTest, mapType) {
   ASSERT_EQ(
       *parseType("map(timestamp with time zone, varchar)"),
       *MAP(TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()));
+
+  ASSERT_EQ(
+      *parseType("map(timestamp with time zone, varchar(20))"),
+      *MAP(TIMESTAMP_WITH_TIME_ZONE(), VARCHAR(20)));
+
+  ASSERT_EQ(
+      *parseType("map(timestamp with time zone, varbinary(20))"),
+      *MAP(TIMESTAMP_WITH_TIME_ZONE(), VARBINARY(20)));
 
   ASSERT_EQ(
       *parseType("map(bigint,map(bigint,map(varchar,bigint)))"),
@@ -212,8 +221,20 @@ TEST_F(TypeParserTest, rowType) {
           {BIGINT(), ARRAY(VARCHAR()), TIMESTAMP_WITH_TIME_ZONE()}));
 
   ASSERT_EQ(
+      *parseType("row(a varchar,b row(a bigint))"),
+      *ROW({"a", "b"}, {VARCHAR(), ROW({"a"}, {BIGINT()})}));
+
+  ASSERT_EQ(
+      *parseType("row(a varchar(10),b row(a bigint))"),
+      *ROW({"a", "b"}, {VARCHAR(10), ROW({"a"}, {BIGINT()})}));
+
+  ASSERT_NE(
       *parseType("row(a varchar(10),b row(a bigint))"),
       *ROW({"a", "b"}, {VARCHAR(), ROW({"a"}, {BIGINT()})}));
+
+  ASSERT_NE(
+      *parseType("row(a varbinary(10),b row(a bigint))"),
+      *ROW({"a", "b"}, {VARBINARY(), ROW({"a"}, {BIGINT()})}));
 
   ASSERT_EQ(
       *parseType("array(row(col0 bigint,col1 double))"),
@@ -231,7 +252,11 @@ TEST_F(TypeParserTest, rowType) {
 
   ASSERT_EQ(
       *parseType("row(varchar(10),b row(bigint))"),
-      *ROW({"", "b"}, {VARCHAR(), ROW({BIGINT()})}));
+      *ROW({"", "b"}, {VARCHAR(10), ROW({BIGINT()})}));
+
+  ASSERT_EQ(
+      *parseType("row(varbinary(10),b row(bigint))"),
+      *ROW({"", "b"}, {VARBINARY(10), ROW({BIGINT()})}));
 
   ASSERT_EQ(
       *parseType("array(row(col0 bigint,double))"),

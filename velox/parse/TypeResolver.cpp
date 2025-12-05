@@ -152,6 +152,9 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
       [[fallthrough]];
     case TypeKind::DOUBLE:
       break;
+    case TypeKind::VARCHAR:
+      targetTypes.emplace_back(VARCHAR()); // different lengths
+      break;
     case TypeKind::ARRAY: {
       auto childTargetTypes = implicitCastTargets(type->childAt(0));
       for (const auto& childTarget : childTargetTypes) {
