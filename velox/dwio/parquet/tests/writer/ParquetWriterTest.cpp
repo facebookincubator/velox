@@ -69,44 +69,6 @@ class ParquetWriterTest : public ParquetTestBase {
     return rowReader;
   }
 
-  std::unique_ptr<facebook::velox::parquet::ParquetReader> createReaderInMemory(
-      const dwio::common::MemorySink& sink,
-      const dwio::common::ReaderOptions& opts) {
-    std::string data(sink.data(), sink.size());
-    return std::make_unique<facebook::velox::parquet::ParquetReader>(
-        std::make_unique<dwio::common::BufferedInput>(
-            std::make_shared<InMemoryReadFile>(std::move(data)),
-            opts.memoryPool()),
-        opts);
-  }
-
-  MemorySink* write(
-      const RowVectorPtr& data,
-      const parquet::WriterOptions& writerOptions) {
-    auto sink = std::make_unique<MemorySink>(
-        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-    auto* sinkPtr = sink.get();
-    auto writer = std::make_unique<parquet::Writer>(
-        std::move(sink), writerOptions, data->rowType());
-    writer->write(data);
-    writer->close();
-    writers_.push_back(std::move(writer));
-    return sinkPtr;
-  }
-
-  MemorySink* write(
-      const RowVectorPtr& data,
-      std::unordered_map<std::string, std::string> configFromFile = {},
-      std::unordered_map<std::string, std::string> sessionProperties = {}) {
-    parquet::WriterOptions writerOptions;
-    writerOptions.memoryPool = rootPool_.get();
-    auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-    auto connectorSessionProperties =
-        config::ConfigBase(std::move(sessionProperties));
-    writerOptions.processConfigs(connectorConfig, connectorSessionProperties);
-    return write(data, writerOptions);
-  }
-
   RowVectorPtr makeSmallintTestData(int64_t rows) {
     auto data = makeRowVector({
         makeFlatVector<int16_t>(rows, [](auto row) { return row + 1; }),
@@ -149,8 +111,6 @@ class ParquetWriterTest : public ParquetTestBase {
 
   inline static const std::string kHiveConnectorId = "test-hive";
   dwio::common::ColumnReaderStatistics stats;
-  // Stores writers created by write() helper to keep sinks alive for reading.
-  std::vector<std::unique_ptr<parquet::Writer>> writers_;
 };
 
 class ArrowMemoryPool final : public ::arrow::MemoryPool {
