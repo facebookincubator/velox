@@ -498,16 +498,14 @@ class VectorStreamGroup : public StreamArena {
 folly::IOBuf rowVectorToIOBuf(
     const RowVectorPtr& rowVector,
     memory::MemoryPool& pool,
-    VectorSerde* serde = nullptr,
-    const VectorSerde::Options* options = nullptr);
+    VectorSerde* serde = nullptr);
 
 /// Same as above but serializes up until row `rangeEnd`.
 folly::IOBuf rowVectorToIOBuf(
     const RowVectorPtr& rowVector,
     vector_size_t rangeEnd,
     memory::MemoryPool& pool,
-    VectorSerde* serde = nullptr,
-    const VectorSerde::Options* options = nullptr);
+    VectorSerde* serde = nullptr);
 
 /// Convenience function to deserialize an IOBuf into a rowVector. If `serde` is
 /// nullptr, use the default installed serializer.

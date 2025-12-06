@@ -64,7 +64,6 @@ class RemoteVectorFunction : public exec::VectorFunction {
   const std::string functionName_;
 
   remote::PageFormat serdeFormat_;
-  std::unique_ptr<VectorSerde::Options> serdeOptions_;
   std::unique_ptr<VectorSerde> serde_;
 
   // Structures we construct once to cache:
