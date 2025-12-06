@@ -249,6 +249,17 @@ std::optional<TimestampPrecision> getTimestampUnit(
   return std::nullopt;
 }
 
+// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
+// "6" (micro), or "9" (nano).
+TimestampPrecision stringToTimestampPrecision(const std::string& value) {
+  auto unit = folly::to<uint8_t>(value);
+  VELOX_CHECK(
+      unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
+      "Invalid timestamp unit: {}",
+      unit);
+  return static_cast<TimestampPrecision>(unit);
+}
+
 std::optional<std::string> getTimestampTimeZone(
     const config::ConfigBase& config,
     const char* configKey) {
@@ -561,6 +572,24 @@ void WriterOptions::processConfigs(
   auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
   VELOX_CHECK_NOT_NULL(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");
+
+  // Check serdeParameters for timestamp settings first (highest priority).
+  auto serdeTimestampUnitIt = serdeParameters.find(kParquetSerdeTimestampUnit);
+  if (serdeTimestampUnitIt != serdeParameters.end()) {
+    parquetWriteTimestampUnit =
+        stringToTimestampPrecision(serdeTimestampUnitIt->second);
+  }
+
+  auto serdeTimestampTimezoneIt =
+      serdeParameters.find(kParquetSerdeTimestampTimezone);
+  if (serdeTimestampTimezoneIt != serdeParameters.end()) {
+    // Empty string means no timezone conversion (nullopt).
+    if (serdeTimestampTimezoneIt->second.empty()) {
+      parquetWriteTimestampTimeZone = std::nullopt;
+    } else {
+      parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second;
+    }
+  }
 
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =
