@@ -83,6 +83,8 @@ struct RowContainerIterator {
   char* rowBegin{nullptr};
   /// First byte after the end of the range containing 'currentRow'.
   char* endOfRun{nullptr};
+  /// Cursor of the list row operation.
+  int32_t listRowCursor{0};
 
   /// Returns the current row, skipping a possible normalized key below the
   /// first byte of row.
@@ -275,6 +277,21 @@ class RowContainer {
       memory::MemoryPool* pool)
       : RowContainer(
             keyTypes,
+            dependentTypes,
+            /*useListRowIndex=*/false,
+            pool) {}
+
+  /// If 'useListRowIndex' is true, the container maintains an internal array of
+  /// row pointers so that listRowsFast() can return rows without scanning
+  /// underlying allocations or checking free/probe flags. It is intended to be
+  /// used in SortBuffer and SortInputSpiller to improve performance.
+  RowContainer(
+      const std::vector<TypePtr>& keyTypes,
+      const std::vector<TypePtr>& dependentTypes,
+      bool useListRowIndex,
+      memory::MemoryPool* pool)
+      : RowContainer(
+            keyTypes,
             true, // nullableKeys
             std::vector<Accumulator>{},
             dependentTypes,
@@ -282,6 +299,7 @@ class RowContainer {
             false, // isJoinBuild
             false, // hasProbedFlag
             false, // hasNormalizedKey
+            useListRowIndex,
             pool) {}
 
   ~RowContainer();
@@ -313,6 +331,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
+      bool useListRowIndex,
       memory::MemoryPool* pool);
 
   /// Allocates a new row and initializes possible aggregates to null.
@@ -637,6 +656,20 @@ class RowContainer {
     return count;
   }
 
+  /// Fast path for `listRows` that returns `rowPointers_` directly. Used by
+  /// `SortBuffer` and `SortInputSpiller`, so it skips checking the free and
+  /// probe flags.
+  int32_t listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows)
+      const {
+    int32_t count = 0;
+    while (count < maxRows && iter->listRowCursor < rowPointers_.size()) {
+      char* row = rowPointers_[iter->listRowCursor];
+      rows[count++] = row;
+      ++iter->listRowCursor;
+    }
+    return count;
+  }
+
   /// Extracts up to 'maxRows' rows starting at the position of 'iter'. A
   /// default constructed or reset iter starts at the beginning. Returns the
   /// number of rows written to 'rows'. Returns 0 when at end. Stops after the
@@ -651,6 +684,9 @@ class RowContainer {
 
   int32_t listRows(RowContainerIterator* iter, int32_t maxRows, char** rows)
       const {
+    if (useListRowIndex_) {
+      return listRowsFast(iter, maxRows, rows);
+    }
     return listRows<ProbeType::kAll>(iter, maxRows, kUnlimited, rows);
   }
 
@@ -789,6 +825,10 @@ class RowContainer {
       }
     }
     return 0;
+  }
+
+  const std::vector<char*, StlAllocator<char*>>& testingRowPointers() const {
+    return rowPointers_;
   }
 
   memory::MemoryPool* pool() const {
@@ -1471,7 +1511,8 @@ class RowContainer {
   const bool isJoinBuild_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
-
+  // True if use 'listRowsFast'.
+  const bool useListRowIndex_;
   const std::unique_ptr<HashStringAllocator> stringAllocator_;
 
   // Indicates if we can add new row to this row container. It is set to false
@@ -1527,6 +1568,7 @@ class RowContainer {
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
+  std::vector<char*, StlAllocator<char*>> rowPointers_;
 
   int alignment_ = 1;
 

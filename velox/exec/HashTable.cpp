@@ -75,6 +75,7 @@ HashTable<ignoreNullKeys>::HashTable(
       isJoinBuild,
       hasProbedFlag,
       hashMode_ != HashMode::kHash,
+      /*useListRowIndex=*/false,
       pool);
   nextOffset_ = rows_->nextOffset();
 }

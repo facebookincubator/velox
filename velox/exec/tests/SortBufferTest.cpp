@@ -615,6 +615,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
     ASSERT_GE(
         memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
   }
+  ASSERT_EQ(pool_->usedBytes(), 0);
 }
 
 DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
