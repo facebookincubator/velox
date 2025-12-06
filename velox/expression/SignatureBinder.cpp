@@ -29,7 +29,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -290,7 +290,11 @@ bool SignatureBinderBase::tryBind(
   auto actualTypeName =
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
-  if (typeName != actualTypeName) {
+  const auto& params = typeSignature.parameters();
+
+  if (typeName != actualTypeName ||
+      (actualType->isPrimitiveType() &&
+       params.size() != actualType->parameters().size())) {
     if (allowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
@@ -300,8 +304,6 @@ bool SignatureBinderBase::tryBind(
     }
     return false;
   }
-
-  const auto& params = typeSignature.parameters();
 
   // Handle homogeneous row case: row(T, ...)
   if (typeSignature.isHomogeneousRow()) {

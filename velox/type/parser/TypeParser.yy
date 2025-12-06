@@ -73,7 +73,7 @@ special_type : array_type     { $$ = $1; }
              | enum_type { $$ = $1; }
 
 /*
- * Types with spaces have at least two words. They are joined in an
+ * Types with spaces have at least two words. They are joined in a
  * std::vector here, and resolved by `inferTypeWithSpaces()`. The first
  * word is special to allow for tokens such as "map", "array", etc, to
  * be used as field names.
@@ -96,7 +96,7 @@ field_name : WORD     { $$ = $1; }
  * Varchar and varbinary have an optional `(int)`
  * e.g. both `varchar` and `varchar(4)` are valid.
  */
-variable_type : VARIABLE LPAREN NUMBER RPAREN  { $$ = typeFromString($1); }
+variable_type : VARIABLE LPAREN NUMBER RPAREN  { $$ = variableTypeFromString($1, $3); }
               | VARIABLE                       { $$ = typeFromString($1); }
               ;
 
