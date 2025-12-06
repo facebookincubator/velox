@@ -1087,6 +1087,16 @@ class PlanBuilder {
   ///
   PlanBuilder& expand(const std::vector<std::vector<std::string>>& projections);
 
+  /// Add an ExpandNode using specified projectExprs. See comments for
+  /// ExpandNode class for description of this plan node.
+  ///
+  /// @param projectExprs A list of projection expressions.
+  /// @param names The name of the columns.
+  ///
+  PlanBuilder& expand(
+      std::vector<std::vector<core::TypedExprPtr>> projectExprs,
+      std::vector<std::string> names);
+
   /// Add a LocalMergeNode using specified ORDER BY clauses.
   ///
   /// For example,

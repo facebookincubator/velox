@@ -39,6 +39,20 @@ class ExpandTest : public OperatorTestBase {
 };
 } // anonymous namespace
 
+TEST_F(ExpandTest, complexConstant) {
+  auto data = makeRowVectorData(1);
+
+  createDuckDbTable({data});
+
+  auto arrayVector = makeArrayVector<int32_t>({{1, 2, 3}});
+  auto constantExpr = std::make_shared<core::ConstantTypedExpr>(arrayVector);
+
+  auto plan =
+      PlanBuilder().values({data}).expand({{constantExpr}}, {"c1"}).planNode();
+  auto expected = makeRowVector({arrayVector});
+  assertQuery(plan, expected);
+}
+
 TEST_F(ExpandTest, groupingSets) {
   auto data = makeRowVectorData(1'000);
 
