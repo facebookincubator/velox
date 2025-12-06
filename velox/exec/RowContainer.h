@@ -656,14 +656,11 @@ class RowContainer {
     return count;
   }
 
-  template <ProbeType probeType>
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer)
-  __attribute__((__no_sanitize__("thread")))
-#endif
-#endif
-  int32_t
-  listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows) const {
+  /// Fast path for `listRows` that returns `rowPointers_` directly. Used by
+  /// `SortBuffer` and `SortInputSpiller`, so it skips checking the free and
+  /// probe flags.
+  int32_t listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows)
+      const {
     int32_t count = 0;
     while (count < maxRows && iter->listRowCursor < rowPointers_.size()) {
       char* row = rowPointers_[iter->listRowCursor];
@@ -691,15 +688,6 @@ class RowContainer {
       return listRowsFast(iter, maxRows, rows);
     }
     return listRows<ProbeType::kAll>(iter, maxRows, kUnlimited, rows);
-  }
-
-  /// Fast path for `listRows` that returns `rowPointers_` directly. Used by
-  /// `SortBuffer` and `SortInputSpiller`, so it skips checking the free and
-  /// probe flags.
-  int32_t listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows)
-      const {
-    VELOX_CHECK(useListRowIndex_);
-    return listRowsFast<ProbeType::kAll>(iter, maxRows, rows);
   }
 
   /// Sets 'probed' flag for the specified rows. Used by the right and
@@ -839,7 +827,7 @@ class RowContainer {
     return 0;
   }
 
-  const std::vector<char*, StlAllocator<char*>>& rowPointers() const {
+  const std::vector<char*, StlAllocator<char*>>& testingRowPointers() const {
     return rowPointers_;
   }
 
@@ -1523,7 +1511,7 @@ class RowContainer {
   const bool isJoinBuild_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
-  // True iif use 'listRowsFast'.
+  // True if use 'listRowsFast'.
   const bool useListRowIndex_;
   const std::unique_ptr<HashStringAllocator> stringAllocator_;
 

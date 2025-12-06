@@ -345,7 +345,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       sum += data.rowSize(row) - data.fixedRowSize();
     }
     auto usage = data.stringAllocator().currentBytes();
-    if (data.rowPointers().empty()) {
+    if (data.testingRowPointers().empty()) {
       EXPECT_EQ(usage, sum);
     }
   }

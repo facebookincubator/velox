@@ -74,7 +74,7 @@ SortBuffer::SortBuffer(
   }
 
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes, nonSortedColumnTypes, true, pool_);
+      sortedColumnTypes, nonSortedColumnTypes, /*useListRowIndex=*/true, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
