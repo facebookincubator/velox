@@ -23,6 +23,8 @@
 #include "velox/dwio/common/FileSink.h"
 #endif
 
+#include <string_view>
+
 namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_HDFS
@@ -103,6 +105,12 @@ void registerHdfsFileSystem() {
 #ifdef VELOX_ENABLE_HDFS
   registerFileSystem(HdfsFileSystem::isHdfsFile, hdfsFileSystemGenerator());
   dwio::common::FileSink::registerFactory(hdfsWriteFileSinkGenerator());
+#endif
+}
+
+void setHdfsExtraSupportedSchemes(std::string_view schemesStr) {
+#ifdef VELOX_ENABLE_HDFS
+  HdfsFileSystem::setExtraSupportedSchemes(schemesStr);
 #endif
 }
 
