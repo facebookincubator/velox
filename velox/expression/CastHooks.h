@@ -76,5 +76,8 @@ class CastHooks {
 
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;
+
+  /// Returns whether to match struct fields by name when casting rows.
+  virtual bool matchRowFieldsByName() const = 0;
 };
 } // namespace facebook::velox::exec
