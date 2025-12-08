@@ -318,7 +318,10 @@ ExprPtr compileCall(
         folly::join(", ", inputTypes));
 
     auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-        inputTypes, getConstantInputs(inputs), ctx.queryCtx->queryConfig());
+        inputTypes,
+        getConstantInputs(inputs),
+        ctx.queryCtx->queryConfig(),
+        ctx.pool);
     return std::make_shared<Expr>(
         resultType,
         std::move(inputs),
