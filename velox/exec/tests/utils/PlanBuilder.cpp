@@ -1705,7 +1705,9 @@ PlanBuilder& PlanBuilder::hashJoin(
     const std::string& filter,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType,
-    bool nullAware) {
+    bool nullAware,
+    std::shared_ptr<const core::ReusedHashTableInfo> reusedHashTableInfo,
+    void* reusedHashTableAddress) {
   VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
 
@@ -1746,7 +1748,9 @@ PlanBuilder& PlanBuilder::hashJoin(
       std::move(filterExpr),
       std::move(planNode_),
       build,
-      outputType);
+      outputType,
+      reusedHashTableInfo,
+      reusedHashTableAddress);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
