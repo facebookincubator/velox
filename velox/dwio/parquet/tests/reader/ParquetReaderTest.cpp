@@ -63,213 +63,7 @@ class ParquetReaderTest : public ParquetTestBase {
     assertReadWithReaderAndFilters(
         std::move(reader), fileName, fileSchema, std::move(filters), expected);
   }
-
-    enum class FloatToDoubleFilter {
-        kNone,
-        kIsNull,
-        kIsNotNull,
-    };
-
-    struct FloatToDoubleSpec {
-        std::vector<std::optional<float>> values;
-        std::vector<int64_t> ids;
-        bool enableDictionary{true};
-        bool useParentStruct{false};
-        std::vector<vector_size_t> parentNullIndices;
-        FloatToDoubleFilter filter{FloatToDoubleFilter::kNone};
-        std::vector<vector_size_t> deletedRows;
-    };
-
-    void runFloatToDoubleScenario(const FloatToDoubleSpec& spec);
 };
-
-void ParquetReaderTest::runFloatToDoubleScenario(
-        const FloatToDoubleSpec& spec) {
-    ASSERT_EQ(spec.values.size(), spec.ids.size());
-    const vector_size_t numRows = spec.ids.size();
-
-    auto floatVector = makeNullableFlatVector<float>(spec.values);
-    std::vector<bool> parentNullFlags(numRows, false);
-    for (auto index : spec.parentNullIndices) {
-        ASSERT_LT(index, numRows);
-        parentNullFlags[index] = true;
-    }
-
-    RowVectorPtr writeData;
-    RowTypePtr writeSchema;
-    if (spec.useParentStruct) {
-        auto structVector = vectorMaker_.rowVector({"float_col"}, {floatVector});
-        for (auto index : spec.parentNullIndices) {
-            structVector->setNull(index, true);
-        }
-        auto idVector = makeFlatVector<int64_t>(
-                numRows, [&](auto row) { return spec.ids[row]; });
-        writeData = vectorMaker_.rowVector(
-                {"struct_col", "id"}, {structVector, idVector});
-        writeSchema = ROW(
-                {"struct_col", "id"},
-                {ROW({"float_col"}, {REAL()}), BIGINT()});
-    } else {
-        auto idVector = makeFlatVector<int64_t>(
-                numRows, [&](auto row) { return spec.ids[row]; });
-        writeData = makeRowVector({floatVector, idVector});
-        writeSchema = ROW({"float_col", "id"}, {REAL(), BIGINT()});
-    }
-
-    auto sink = std::make_unique<MemorySink>(
-            1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
-    auto sinkPtr = sink.get();
-
-    parquet::WriterOptions writerOptions;
-    writerOptions.memoryPool = leafPool_.get();
-    writerOptions.enableDictionary = spec.enableDictionary;
-
-    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-            std::move(sink), writerOptions, rootPool_, writeSchema);
-    writer->write(writeData);
-    writer->close();
-
-    RowTypePtr readSchema;
-    if (spec.useParentStruct) {
-        readSchema = ROW(
-                {"struct_col", "id"},
-                {ROW({"float_col"}, {DOUBLE()}), BIGINT()});
-    } else {
-        readSchema = ROW({"float_col", "id"}, {DOUBLE(), BIGINT()});
-    }
-
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-    readerOptions.setFileSchema(readSchema);
-
-    std::string dataBuf(sinkPtr->data(), sinkPtr->size());
-    auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
-    auto buffer = std::make_unique<dwio::common::BufferedInput>(
-            file, readerOptions.memoryPool());
-    auto reader =
-            std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
-
-    RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-            std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-                    readSchema, readSchema->names()));
-    auto scanSpec = makeScanSpec(readSchema);
-
-    // Apply IsNull or IsNotNull filter if specified
-    switch (spec.filter) {
-        case FloatToDoubleFilter::kNone:
-            break;
-        case FloatToDoubleFilter::kIsNull: {
-            auto* floatChild =
-                    scanSpec->getOrCreateChild(common::Subfield("float_col"));
-            floatChild->setFilter(exec::isNull());
-            break;
-        }
-        case FloatToDoubleFilter::kIsNotNull: {
-            auto* floatChild =
-                    scanSpec->getOrCreateChild(common::Subfield("float_col"));
-            floatChild->setFilter(exec::isNotNull());
-            break;
-        }
-    }
-
-    rowReaderOpts.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
-
-    std::vector<bool> deletedFlags(numRows, false);
-    for (auto index : spec.deletedRows) {
-        ASSERT_LT(index, numRows);
-        deletedFlags[index] = true;
-    }
-
-    std::vector<vector_size_t> expectedIndices;
-    expectedIndices.reserve(numRows);
-    for (vector_size_t row = 0; row < numRows; ++row) {
-        if (deletedFlags[row]) {
-            continue;
-        }
-
-        bool passes = false;
-        switch (spec.filter) {
-            case FloatToDoubleFilter::kNone:
-                passes = true;
-                break;
-            case FloatToDoubleFilter::kIsNull:
-                passes = parentNullFlags[row] || !spec.values[row].has_value();
-                break;
-            case FloatToDoubleFilter::kIsNotNull:
-                passes = !parentNullFlags[row] && spec.values[row].has_value();
-                break;
-        }
-
-        if (passes) {
-            expectedIndices.push_back(row);
-        }
-    }
-
-    std::vector<std::optional<double>> expectedDoubles(expectedIndices.size());
-    for (size_t i = 0; i < expectedIndices.size(); ++i) {
-        const auto originalIndex = expectedIndices[i];
-        if (parentNullFlags[originalIndex] ||
-            !spec.values[originalIndex].has_value()) {
-            expectedDoubles[i] = std::nullopt;
-        } else {
-            expectedDoubles[i] = static_cast<double>(*spec.values[originalIndex]);
-        }
-    }
-
-    RowVectorPtr expected;
-    if (spec.useParentStruct) {
-        auto childVector = makeNullableFlatVector<double>(expectedDoubles);
-        auto expectedStruct =
-                vectorMaker_.rowVector({"float_col"}, {childVector});
-        for (size_t i = 0; i < expectedIndices.size(); ++i) {
-            if (parentNullFlags[expectedIndices[i]]) {
-                expectedStruct->setNull(i, true);
-            }
-        }
-        auto expectedId = makeFlatVector<int64_t>(
-                expectedIndices.size(),
-                [&](auto row) { return spec.ids[expectedIndices[row]]; });
-        expected = vectorMaker_.rowVector(
-                {"struct_col", "id"}, {expectedStruct, expectedId});
-    } else {
-        auto expectedFloat = makeNullableFlatVector<double>(expectedDoubles);
-        auto expectedId = makeFlatVector<int64_t>(
-                expectedIndices.size(),
-                [&](auto row) { return spec.ids[expectedIndices[row]]; });
-        expected = makeRowVector({expectedFloat, expectedId});
-    }
-
-    if (spec.deletedRows.empty() &&
-            spec.filter != FloatToDoubleFilter::kIsNull &&
-            spec.filter != FloatToDoubleFilter::kIsNotNull) {
-        assertReadWithReaderAndExpected(
-                readSchema, *rowReader, expected, *leafPool_);
-        return;
-    }
-
-    VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
-    vector_size_t scanned = 0;
-    std::vector<uint64_t> deleted(bits::nwords(numRows), 0);
-    if (spec.deletedRows.empty()) {
-        scanned = rowReader->next(numRows, result);
-    } else {
-        for (auto index : spec.deletedRows) {
-            bits::setBit(deleted.data(), index);
-        }
-        dwio::common::Mutation mutation;
-        mutation.deletedRows = deleted.data();
-        scanned = rowReader->next(numRows, result, &mutation);
-    }
-
-    EXPECT_GT(scanned, 0);
-    EXPECT_GE(scanned, expected->size());
-    ASSERT_TRUE(result != nullptr);
-    auto rowVector = result->as<RowVector>();
-    ASSERT_TRUE(rowVector != nullptr);
-    ASSERT_EQ(rowVector->size(), expected->size());
-    assertEqualVectorPart(expected, result, 0);
-}
 
 TEST_F(ParquetReaderTest, parseSample) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
@@ -1998,433 +1792,290 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversion) {
-  FloatToDoubleSpec spec;
-  spec.values = {
-      1.5f,
-      2.5f,
-      3.5f,
-      4.5f,
-      5.5f,
-  };
-  spec.ids = {1, 2, 3, 4, 5};
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionWithNulls) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 100;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 2 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 1.5f;
-    }
-    spec.ids[row] = row;
-  }
-
-  runFloatToDoubleScenario(spec);
-}
-
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionWithParentNulls) {
-  FloatToDoubleSpec spec;
-  spec.useParentStruct = true;
-  spec.parentNullIndices = {1, 4};
-  spec.values = {
-      -1.0f,
-      7.0f,
-      std::nullopt,
-      3.0f,
-      11.0f,
-      18.5f,
-  };
-  spec.ids = {0, 1, 2, 3, 4, 5};
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionWithDeletions) {
-  FloatToDoubleSpec spec;
-  spec.values = {
-      -1.0f,
-      std::nullopt,
-      2.0f,
-      std::nullopt,
-      55.0f,
-      std::nullopt,
-  };
-  spec.ids = {0, 1, 2, 3, 4, 5};
-  spec.deletedRows = {1, 4};
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionNoDictionary) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 200;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    spec.values[row] = static_cast<float>(row) * 1.234f + 0.567f;
-    spec.ids[row] = row;
-  }
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionNoDictionaryWithNulls) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 96;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 5 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.42f + 7.0f;
-    }
-    spec.ids[row] = row;
-  }
-
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionIsNullFilter) {
-  FloatToDoubleSpec spec;
-  spec.enableDictionary = false;
-  spec.values = {
-      -4.0f,
-      std::nullopt,
-      8.5f,
-      std::nullopt,
-      1.25f,
-      std::nullopt,
-  };
-  spec.ids = {0, 1, 2, 3, 4, 5};
-  spec.filter = FloatToDoubleFilter::kIsNull;
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleTypeConversionIsNotNullFilter) {
-  FloatToDoubleSpec spec;
-  spec.enableDictionary = false;
-  spec.values = {
-      -4.0f,
-      std::nullopt,
-      8.5f,
-      std::nullopt,
-      1.25f,
-      std::nullopt,
-  };
-  spec.ids = {0, 1, 2, 3, 4, 5};
-  spec.filter = FloatToDoubleFilter::kIsNotNull;
-
-  runFloatToDoubleScenario(spec);
-}
-
 // Comprehensive test matrix covering all combinations:
 // - Nulls: No nulls, With nulls
 // - Dictionary: Enabled, Disabled
 // - Filter: None, IsNull, IsNotNull, Value filter
 // - Density: Dense (no deletions), Non-dense (with deletions/mutations)
 
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_NoNulls_Dict_NoFilter_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 100;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    spec.values[row] = static_cast<float>(row) * 0.5f;
-    spec.ids[row] = row;
+enum class FloatToDoubleFilter {
+  kNone,
+  kIsNull,
+  kIsNotNull,
+  kGreaterThanOrEqual, // Value filter: greater than or equal to a threshold
+};
+
+struct FloatToDoubleSpec {
+  std::vector<std::optional<float>> values;
+  std::vector<int64_t> ids;
+  bool enableDictionary{true};
+  FloatToDoubleFilter filter{FloatToDoubleFilter::kNone};
+  std::optional<double> filterValue; // Value for value-based filters
+  std::vector<vector_size_t> deletedRows;
+};
+
+struct FloatToDoubleTestParam {
+  bool hasNulls;
+  bool enableDictionary;
+  FloatToDoubleFilter filter;
+  bool isDense;
+
+  std::string toString() const {
+    return fmt::format(
+        "Nulls_{}_Dict_{}_Filter_{}_Dense_{}",
+        hasNulls ? "Yes" : "No",
+        enableDictionary ? "Yes" : "No",
+        filterName(filter),
+        isDense ? "Yes" : "No");
   }
 
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_NoNulls_Dict_NoFilter_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 100;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    spec.values[row] = static_cast<float>(row) * 0.5f;
-    spec.ids[row] = row;
+  static std::string filterName(FloatToDoubleFilter filter) {
+    switch (filter) {
+      case FloatToDoubleFilter::kNone:
+        return "None";
+      case FloatToDoubleFilter::kIsNull:
+        return "IsNull";
+      case FloatToDoubleFilter::kIsNotNull:
+        return "IsNotNull";
+      case FloatToDoubleFilter::kGreaterThanOrEqual:
+        return "GreaterThanOrEqual";
+      default:
+        return "Unknown";
+    }
   }
-  spec.deletedRows = {5, 17, 33, 51, 72, 95};
+};
 
-  runFloatToDoubleScenario(spec);
-}
+class FloatToDoubleEvolutionTest
+    : public ParquetReaderTest,
+      public testing::WithParamInterface<FloatToDoubleTestParam> {
+ public:
+  static std::vector<FloatToDoubleTestParam> getTestParams() {
+    std::vector<FloatToDoubleTestParam> params;
+    for (bool hasNulls : {false, true}) {
+      for (bool enableDictionary : {false, true}) {
+        // When hasNulls is false, only test kNone and kGreaterThan filter
+        // (kIsNull would match nothing, kIsNotNull is equivalent to kNone)
+        std::vector<FloatToDoubleFilter> filters;
+        if (hasNulls) {
+          filters = {
+              FloatToDoubleFilter::kNone,
+              FloatToDoubleFilter::kIsNull,
+              FloatToDoubleFilter::kIsNotNull,
+              FloatToDoubleFilter::kGreaterThanOrEqual};
+        } else {
+          filters = {
+              FloatToDoubleFilter::kNone,
+              FloatToDoubleFilter::kGreaterThanOrEqual};
+        }
 
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_NoNulls_NoDict_NoFilter_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 150;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    spec.values[row] = static_cast<float>(row) * 1.234f + 0.567f;
-    spec.ids[row] = row;
+        for (auto filter : filters) {
+          for (bool isDense : {true, false}) {
+            params.push_back({hasNulls, enableDictionary, filter, isDense});
+          }
+        }
+      }
+    }
+    return params;
   }
 
-  runFloatToDoubleScenario(spec);
-}
+  void runFloatToDoubleScenario(const FloatToDoubleSpec& spec);
+};
 
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_NoNulls_NoDict_NoFilter_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 150;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    spec.values[row] = static_cast<float>(row) * 1.234f + 0.567f;
-    spec.ids[row] = row;
+void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
+    const FloatToDoubleSpec& spec) {
+  ASSERT_EQ(spec.values.size(), spec.ids.size());
+  const vector_size_t numRows = spec.ids.size();
+
+  auto floatVector = makeNullableFlatVector<float>(spec.values);
+  auto idVector =
+      makeFlatVector<int64_t>(numRows, [&](auto row) { return spec.ids[row]; });
+
+  RowVectorPtr writeData = makeRowVector({floatVector, idVector});
+  RowTypePtr writeSchema = ROW({"float_col", "id"}, {REAL(), BIGINT()});
+
+  auto sink = std::make_unique<MemorySink>(
+      1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+  writerOptions.enableDictionary = spec.enableDictionary;
+
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, writeSchema);
+  writer->write(writeData);
+  writer->close();
+
+  RowTypePtr readSchema = ROW({"float_col", "id"}, {DOUBLE(), BIGINT()});
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setFileSchema(readSchema);
+
+  std::string dataBuf(sinkPtr->data(), sinkPtr->size());
+  auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
+  auto buffer = std::make_unique<dwio::common::BufferedInput>(
+      file, readerOptions.memoryPool());
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.select(
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          readSchema, readSchema->names()));
+  auto scanSpec = makeScanSpec(readSchema);
+
+  // Apply IsNull or IsNotNull filter if specified
+  switch (spec.filter) {
+    case FloatToDoubleFilter::kNone:
+      break;
+    case FloatToDoubleFilter::kIsNull: {
+      auto* floatChild =
+          scanSpec->getOrCreateChild(common::Subfield("float_col"));
+      floatChild->setFilter(exec::isNull());
+      break;
+    }
+    case FloatToDoubleFilter::kIsNotNull: {
+      auto* floatChild =
+          scanSpec->getOrCreateChild(common::Subfield("float_col"));
+      floatChild->setFilter(exec::isNotNull());
+      break;
+    }
+    case FloatToDoubleFilter::kGreaterThanOrEqual: {
+      ASSERT_TRUE(spec.filterValue.has_value());
+      auto* floatChild =
+          scanSpec->getOrCreateChild(common::Subfield("float_col"));
+      floatChild->setFilter(
+          exec::greaterThanOrEqualDouble(spec.filterValue.value()));
+      break;
+    }
   }
-  spec.deletedRows = {3, 11, 29, 47, 88, 101, 137};
 
-  runFloatToDoubleScenario(spec);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  std::vector<bool> deletedFlags(numRows, false);
+  for (auto index : spec.deletedRows) {
+    ASSERT_LT(index, numRows);
+    deletedFlags[index] = true;
+  }
+
+  std::vector<vector_size_t> expectedIndices;
+  expectedIndices.reserve(numRows);
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    if (deletedFlags[row]) {
+      continue;
+    }
+
+    bool passes = false;
+    switch (spec.filter) {
+      case FloatToDoubleFilter::kNone:
+        passes = true;
+        break;
+      case FloatToDoubleFilter::kIsNull:
+        passes = !spec.values[row].has_value();
+        break;
+      case FloatToDoubleFilter::kIsNotNull:
+        passes = spec.values[row].has_value();
+        break;
+      case FloatToDoubleFilter::kGreaterThanOrEqual:
+        passes = spec.values[row].has_value() &&
+            static_cast<double>(*spec.values[row]) >= spec.filterValue.value();
+        break;
+    }
+
+    if (passes) {
+      expectedIndices.push_back(row);
+    }
+  }
+
+  std::vector<std::optional<double>> expectedDoubles(expectedIndices.size());
+  for (size_t i = 0; i < expectedIndices.size(); ++i) {
+    const auto originalIndex = expectedIndices[i];
+    if (!spec.values[originalIndex].has_value()) {
+      expectedDoubles[i] = std::nullopt;
+    } else {
+      expectedDoubles[i] = static_cast<double>(*spec.values[originalIndex]);
+    }
+  }
+
+  auto expectedFloat = makeNullableFlatVector<double>(expectedDoubles);
+  auto expectedId = makeFlatVector<int64_t>(
+      expectedIndices.size(),
+      [&](auto row) { return spec.ids[expectedIndices[row]]; });
+  RowVectorPtr expected = makeRowVector({expectedFloat, expectedId});
+
+  if (spec.deletedRows.empty() && spec.filter != FloatToDoubleFilter::kIsNull &&
+      spec.filter != FloatToDoubleFilter::kIsNotNull &&
+      spec.filter != FloatToDoubleFilter::kGreaterThanOrEqual) {
+    assertReadWithReaderAndExpected(
+        readSchema, *rowReader, expected, *leafPool_);
+    return;
+  }
+
+  VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
+  vector_size_t scanned = 0;
+  std::vector<uint64_t> deleted(bits::nwords(numRows), 0);
+  if (spec.deletedRows.empty()) {
+    scanned = rowReader->next(numRows, result);
+  } else {
+    for (auto index : spec.deletedRows) {
+      bits::setBit(deleted.data(), index);
+    }
+    dwio::common::Mutation mutation;
+    mutation.deletedRows = deleted.data();
+    scanned = rowReader->next(numRows, result, &mutation);
+  }
+
+  EXPECT_GT(scanned, 0);
+  EXPECT_GE(scanned, expected->size());
+  ASSERT_TRUE(result != nullptr);
+  auto rowVector = result->as<RowVector>();
+  ASSERT_TRUE(rowVector != nullptr);
+  ASSERT_EQ(rowVector->size(), expected->size());
+  assertEqualVectorPart(expected, result, 0);
 }
 
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_Dict_NoFilter_Dense) {
+TEST_P(FloatToDoubleEvolutionTest, readFloatToDouble) {
+  const auto& param = GetParam();
   FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 120;
-  spec.enableDictionary = true;
+  constexpr vector_size_t kSize = 200;
+  spec.enableDictionary = param.enableDictionary;
   spec.values.resize(kSize);
   spec.ids.resize(kSize);
+
   for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 3 == 0) {
+    if (param.hasNulls && row % 5 == 0) {
       spec.values[row] = std::nullopt;
     } else {
-      spec.values[row] = static_cast<float>(row) * 2.5f;
+      // Use a value pattern that works for both dictionary and direct encoding
+      float val =
+          static_cast<float>(row % 10) * 1.1f + static_cast<float>(row) * 0.01f;
+      spec.values[row] = val;
     }
     spec.ids[row] = row;
   }
 
-  runFloatToDoubleScenario(spec);
-}
+  spec.filter = param.filter;
 
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_Dict_NoFilter_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 120;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 3 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 2.5f;
-    }
-    spec.ids[row] = row;
+  // Set filter value for value-based filters
+  if (param.filter == FloatToDoubleFilter::kGreaterThanOrEqual) {
+    // Filter values greater than or equal to 5.0 (this should match
+    // approximately half the rows)
+    spec.filterValue = 5.0;
   }
-  spec.deletedRows = {2, 18, 45, 72, 99, 111};
 
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_Dict_IsNull_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 80;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 4 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 1.1f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNull;
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_Dict_IsNull_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 80;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 4 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 1.1f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNull;
-  spec.deletedRows = {4, 16, 32, 60};
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_Dict_IsNotNull_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 90;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 5 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.75f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNotNull;
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_Dict_IsNotNull_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 90;
-  spec.enableDictionary = true;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 5 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.75f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNotNull;
-  spec.deletedRows = {5, 21, 37, 55, 73};
-
-  runFloatToDoubleScenario(spec);
-}
-
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_NoDict_NoFilter_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 140;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 6 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.987f + 1.23f;
-    }
-    spec.ids[row] = row;
+  if (!param.isDense) {
+    // Add some deleted rows scattered throughout
+    spec.deletedRows = {5, 20, 55, 99, 150, 199};
   }
 
   runFloatToDoubleScenario(spec);
 }
 
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_NoDict_NoFilter_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 140;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 6 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.987f + 1.23f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.deletedRows = {6, 24, 54, 84, 120, 132};
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_NoDict_IsNull_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 96;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 8 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.42f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNull;
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_NoDict_IsNull_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 96;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 8 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.42f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNull;
-  spec.deletedRows = {8, 32, 56, 88};
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_NoDict_IsNotNull_Dense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 110;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 9 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.333f + 2.5f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNotNull;
-
-  runFloatToDoubleScenario(spec);
-}
-
-TEST_F(ParquetReaderTest, floatToDoubleComprehensive_WithNulls_NoDict_IsNotNull_NonDense) {
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 110;
-  spec.enableDictionary = false;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (row % 9 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      spec.values[row] = static_cast<float>(row) * 0.333f + 2.5f;
-    }
-    spec.ids[row] = row;
-  }
-  spec.filter = FloatToDoubleFilter::kIsNotNull;
-  spec.deletedRows = {9, 27, 63, 90};
-
-  runFloatToDoubleScenario(spec);
-}
-
-
+INSTANTIATE_TEST_SUITE_P(
+    FloatToDoubleEvolution,
+    FloatToDoubleEvolutionTest,
+    testing::ValuesIn(FloatToDoubleEvolutionTest::getTestParams()),
+    [](const testing::TestParamInfo<FloatToDoubleTestParam>& info) {
+      return info.param.toString();
+    });

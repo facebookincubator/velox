@@ -26,6 +26,8 @@ namespace facebook::velox {
 using RowSet = folly::Range<const int32_t*>;
 namespace common {
 class AlwaysTrue;
+template <typename T>
+class FloatingPointRange;
 template <typename TFilter, typename T>
 static bool applyFilter(TFilter& filter, T value);
 } // namespace common
@@ -419,7 +421,15 @@ bool useFastPath(Visitor& visitor) {
            is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue> ||
        !hasNulls || !visitor.allowNulls()) &&
       (std::is_same_v<typename Visitor::HookType, NoHook> || !hasNulls ||
-       Visitor::HookType::kSkipNulls);
+       Visitor::HookType::kSkipNulls) &&
+      (!std::is_same_v<
+           typename Visitor::FilterType,
+           velox::common::FloatingPointRange<float>> ||
+       std::is_same_v<typename Visitor::DataType, float>) &&
+      (!std::is_same_v<
+           typename Visitor::FilterType,
+           velox::common::FloatingPointRange<double>> ||
+       std::is_same_v<typename Visitor::DataType, double>);
 }
 
 template <typename Visitor>
