@@ -1282,6 +1282,65 @@ TEST_F(DateTimeFunctionsTest, timeMinusIntervalDayTime) {
   EXPECT_EQ(3600000, timeMinusInterval(time7, -threeHours));
 }
 
+TEST_F(DateTimeFunctionsTest, timeMinusTime) {
+  // Test TIME - TIME arithmetic returning INTERVAL_DAY_TIME
+
+  const auto timeMinusTime = [&](int64_t time1,
+                                 int64_t time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time1}, TIME()),
+            makeNullableFlatVector<int64_t>({time2}, TIME()),
+        }));
+  };
+
+  // Test basic subtraction: 10:00:00 - 08:00:00 = 2 hours = 7200000 ms
+  const int64_t tenAM = 10 * kMillisInHour; // 36000000 ms
+  const int64_t eightAM = 8 * kMillisInHour; // 28800000 ms
+  const int64_t twoHours = 2 * kMillisInHour; // 7200000 ms
+  EXPECT_EQ(twoHours, timeMinusTime(tenAM, eightAM));
+
+  // Test reverse (negative result): 08:00:00 - 10:00:00 = -2 hours
+  EXPECT_EQ(-twoHours, timeMinusTime(eightAM, tenAM));
+
+  // Test same time: 10:00:00 - 10:00:00 = 0
+  EXPECT_EQ(0, timeMinusTime(tenAM, tenAM));
+
+  // Test with millisecond precision
+  // 12:30:45.123 - 06:04:05.321 = 23199802 ms
+  const int64_t time1 = 12 * kMillisInHour + 30 * kMillisInMinute +
+      45 * kMillisInSecond + 123; // 45045123
+  const int64_t time2 = 6 * kMillisInHour + 4 * kMillisInMinute +
+      5 * kMillisInSecond + 321; // 21845321
+  EXPECT_EQ(23199802, timeMinusTime(time1, time2));
+
+  // Test midnight cases
+  // 23:59:59.999 - 00:00:00.000 = 86399999 ms (almost full day)
+  const int64_t almostMidnight = kMillisInDay - 1; // 86399999
+  const int64_t midnight = 0;
+  EXPECT_EQ(86399999, timeMinusTime(almostMidnight, midnight));
+
+  // 00:00:00.000 - 23:59:59.999 = -86399999 ms (negative almost full day)
+  EXPECT_EQ(-86399999, timeMinusTime(midnight, almostMidnight));
+
+  // Test with NULL values
+  const auto timeMinusTimeWithNull =
+      [&](std::optional<int64_t> time1,
+          std::optional<int64_t> time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time1}, TIME()),
+            makeNullableFlatVector<int64_t>({time2}, TIME()),
+        }));
+  };
+
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(tenAM, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, eightAM));
+}
+
 // Comprehensive tests for TimePlusIntervalYearMonthVectorFunction optimizations
 // and IntervalYearMonthPlusTimeVectorFunction optimizations
 TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
