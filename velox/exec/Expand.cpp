@@ -86,16 +86,7 @@ RowVectorPtr Expand::getOutput() {
 
   for (auto i = 0; i < numColumns; ++i) {
     if (rowProjection[i] == kConstantChannel) {
-      const auto& constantExpr = constantProjection[i];
-      if (constantExpr->value().isNull()) {
-        // Add null column.
-        outputColumns[i] = BaseVector::createNullConstant(
-            outputType_->childAt(i), numInput, pool());
-      } else {
-        // Add constant column.
-        outputColumns[i] = BaseVector::createConstant(
-            constantExpr->type(), constantExpr->value(), numInput, pool());
-      }
+      outputColumns[i] = constantProjection[i]->toConstantVector(pool());
     } else {
       outputColumns[i] = input_->childAt(rowProjection[i]);
     }
