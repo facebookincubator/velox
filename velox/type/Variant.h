@@ -22,6 +22,7 @@
 #include <folly/Conv.h>
 
 #include "folly/dynamic.h"
+#include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/CppToType.h"
@@ -617,7 +618,8 @@ class Variant {
 
   struct NullEqualsNullsComparator {
     bool operator()(const Variant& a, const Variant& b) const {
-      return a.equalsWithNullEqualsNull(b);
+      return a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue)
+          .value_or(false);
     }
   };
 
@@ -648,9 +650,24 @@ class Variant {
 
   bool operator<(const Variant& other) const;
 
-  bool equals(const Variant& other) const;
+  /// Compares two `Variant`s using the provided `nullHandlingMode`.
+  ///
+  /// Returns:
+  ///  - `std::nullopt` when `nullHandlingMode` is `kNullAsIndeterminate` and
+  ///     the comparison is indeterminate.
+  ///  - `true` or `false` when `nullHandlingMode` is `kNullAsValue` and the
+  ///     comparison is determinate.
+  ///
+  /// See `CompareFlags::NullHandlingMode` for the interpretation of the
+  /// null-handling semantics for different types.
+  std::optional<bool> equals(
+      const Variant& other,
+      CompareFlags::NullHandlingMode nullHandlingMode) const;
 
-  bool equalsWithNullEqualsNull(const Variant& other) const;
+  /// Shortcut for equals(..., CompareFlags::NullHandlingMode::kNullAsValue).
+  /// Treats two null Variants as equal and returns false for any comparison
+  /// involving a null value and a non-null value.
+  bool equals(const Variant& other) const;
 
   std::string toJson(const TypePtr& type) const;
 
