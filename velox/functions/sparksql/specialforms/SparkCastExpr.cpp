@@ -32,13 +32,13 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   // Velox's try_cast, so we set 'isTryCast' to true by default in CastExpr.
   // The distinction between CAST (ANSI off) and TRY_CAST is limited to
   // overflow handling, which is managed by the 'allowOverflow' flag in
-  // SparkCastHooks.
+  // SparkCastKernel.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<SparkCastHooks>(config, true));
+      std::make_shared<SparkCastKernel>(config, true));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -56,6 +56,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<SparkCastHooks>(config, false));
+      std::make_shared<SparkCastKernel>(config, false));
 }
 } // namespace facebook::velox::functions::sparksql

@@ -20,6 +20,7 @@
 
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 
 namespace facebook::velox {
