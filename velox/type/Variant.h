@@ -22,6 +22,7 @@
 #include <folly/Conv.h>
 
 #include "folly/dynamic.h"
+#include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/CppToType.h"
@@ -187,7 +188,7 @@ class Variant {
 
   struct NullEqualsNullsComparator {
     bool operator()(const Variant& a, const Variant& b) const {
-      return a.equalsWithNullEqualsNull(b);
+      return a.equals<CompareFlags::NullHandlingMode::kNullAsValue>(b);
     }
   };
 
@@ -409,7 +410,8 @@ class Variant {
 
   bool equals(const Variant& other) const;
 
-  bool equalsWithNullEqualsNull(const Variant& other) const;
+  template <CompareFlags::NullHandlingMode nullHandlingMode>
+  std::optional<bool> equals(const Variant& other) const;
 
   Variant(Variant&& other) noexcept
       : ptr_{other.ptr_},

@@ -330,6 +330,8 @@ TEST(VariantTest, equalsWithEpsilonFloat) {
   ASSERT_FALSE(Variant(sum1).equalsWithEpsilon(Variant(sum3)));
 }
 
+TEST(VariantTest, equalsWithNullAsIndeterminate) {}
+
 TEST(VariantTest, mapWithNaNKey) {
   // Verify that map variants treat all NaN keys as equivalent and comparable
   // (consider them the largest) with other values.
