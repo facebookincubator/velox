@@ -136,14 +136,17 @@ RowContainer::RowContainer(
     bool isJoinBuild,
     bool hasProbedFlag,
     bool hasNormalizedKeys,
+    bool useListRowIndex,
     memory::MemoryPool* pool)
     : keyTypes_(keyTypes),
       nullableKeys_(nullableKeys),
       isJoinBuild_(isJoinBuild),
       hasNormalizedKeys_(hasNormalizedKeys),
+      useListRowIndex_(useListRowIndex),
       stringAllocator_(std::make_unique<HashStringAllocator>(pool)),
       accumulators_(accumulators),
-      rows_(pool) {
+      rows_(pool),
+      rowPointers_(StlAllocator<char*>(stringAllocator_.get())) {
   // Compute the layout of the payload row.  The row has keys, null flags,
   // accumulators, dependent fields. All fields are fixed width. If variable
   // width data is referenced, this is done with StringView(for VARCHAR) and
@@ -278,6 +281,10 @@ char* RowContainer::newRow() {
         normalizedKeySize_;
     if (normalizedKeySize_) {
       ++numRowsWithNormalizedKey_;
+    }
+
+    if (useListRowIndex_) {
+      rowPointers_.push_back(row);
     }
   }
   return initializeRow(row, false /* reuse */);
@@ -964,6 +971,8 @@ void RowContainer::clear() {
   hasDuplicateRows_ = false;
 
   rows_.clear();
+  rowPointers_.clear();
+  rowPointers_.shrink_to_fit();
   stringAllocator_->clear();
   numRows_ = 0;
   numRowsWithNormalizedKey_ = 0;
@@ -1025,7 +1034,8 @@ std::optional<int64_t> RowContainer::estimateRowSize() const {
   }
   int64_t freeBytes = rows_.freeBytes() + fixedRowSize_ * numFreeRows_;
   int64_t usedSize = rows_.allocatedBytes() - freeBytes +
-      stringAllocator_->retainedSize() - stringAllocator_->freeSpace();
+      stringAllocator_->retainedSize() - stringAllocator_->freeSpace() -
+      rowPointers_.capacity() * sizeof(char*);
   int64_t rowSize = usedSize / numRows_;
   VELOX_CHECK_GT(
       rowSize, 0, "Estimated row size of the RowContainer must be positive.");

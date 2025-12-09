@@ -344,6 +344,16 @@ TestIndexSource::ResultIterator::ResultIterator(
   lookupResultIter_->reset(*lookupResult_);
 }
 
+bool TestIndexSource::ResultIterator::hasNext() {
+  // If we have an async result ready, we have more to return.
+  if (asyncResult_.has_value()) {
+    return true;
+  }
+
+  // If the iterator is not at end, there are more results to fetch.
+  return !lookupResultIter_->atEnd();
+}
+
 std::optional<std::unique_ptr<connector::IndexSource::LookupResult>>
 TestIndexSource::ResultIterator::next(
     vector_size_t size,

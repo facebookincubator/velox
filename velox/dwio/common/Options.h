@@ -17,7 +17,8 @@
 #pragma once
 
 #include <limits>
-#include <unordered_set>
+#include <string>
+#include <unordered_map>
 
 #include <folly/Executor.h>
 #include "velox/common/base/RandomUtil.h"
@@ -534,6 +535,13 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Sets the property bag.
+  ReaderOptions& setProperties(
+      std::unordered_map<std::string, std::string> properties) {
+    properties_ = std::move(properties);
+    return *this;
+  }
+
   /// Sets the current table schema of the file (a Type tree).  This could be
   /// different from the actual schema in file if schema evolution happened.
   /// For "dwrf" format, a default schema is derived from the file. For "rc"
@@ -605,6 +613,11 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the file format.
   FileFormat fileFormat() const {
     return fileFormat_;
+  }
+
+  /// Gets the property bag.
+  const std::unordered_map<std::string, std::string>& properties() const {
+    return properties_;
   }
 
   /// Gets the file schema.
@@ -697,6 +710,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_;
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
+  std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t footerEstimatedSize_{kDefaultFooterEstimatedSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};

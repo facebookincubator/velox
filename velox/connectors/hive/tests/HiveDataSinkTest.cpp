@@ -113,7 +113,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         0,
         0,
         writerFlushThreshold,
-        "none");
+        "none",
+        0);
   }
 
   void setupMemoryPools() {

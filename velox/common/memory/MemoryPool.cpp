@@ -599,7 +599,7 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
     return false;
   }
   VELOX_CHECK_NOT_NULL(dest);
-  auto* destImpl = checked_pointer_cast<MemoryPoolImpl, MemoryPool>(dest);
+  auto* destImpl = checkedPointerCast<MemoryPoolImpl, MemoryPool>(dest);
   if (allocator_ != destImpl->allocator_) {
     return false;
   }

@@ -232,6 +232,13 @@ Expression Evaluation Configuration
      - false
      - Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
        when processing small batches, e.g. < 10K rows.
+   * - expression.track_cpu_usage_for_functions
+     - string
+     - ""
+     - Comma-separated list of function names to selectively track CPU usage for. Only applicable when
+       ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
+       to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
+       be monitored.
    * - legacy_cast
      - bool
      - false
@@ -445,6 +452,12 @@ Spilling
      - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
        efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
        none means no compression.
+   * - spill_num_max_merge_files
+     - integer
+     - 0
+     - The max number of files to merge at a time when merging sorted files into a single ordered stream. 0 means unlimited.
+       This is used to reduce memory pressure by capping the number of open files when merging spilled sorted files to
+       avoid using too much memory and causing OOM. Note that this is only applicable for ordered spill.
    * - spill_prefixsort_enabled
      - bool
      - false

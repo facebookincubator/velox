@@ -80,6 +80,11 @@ class TypeCoercer {
   static std::optional<Coercion> coerceTypeBase(
       const TypePtr& fromType,
       const std::string& toTypeName);
+
+  /// Checks if 'fromType' can be implicitly converted to 'toType'.
+  ///
+  /// @return true if conversion is possible.
+  static bool coercible(const TypePtr& fromType, const TypePtr& toType);
 };
 
 } // namespace facebook::velox

@@ -71,4 +71,32 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
   return std::nullopt;
 }
 
+// static
+bool TypeCoercer::coercible(const TypePtr& fromType, const TypePtr& toType) {
+  if (fromType->isUnKnown()) {
+    return true;
+  }
+
+  if (fromType->size() == 0) {
+    if (auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name())) {
+      return true;
+    }
+
+    return false;
+  }
+
+  if (fromType->name() != toType->name() ||
+      fromType->size() != toType->size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < fromType->size(); i++) {
+    if (!coercible(fromType->childAt(i), toType->childAt(i))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 } // namespace facebook::velox

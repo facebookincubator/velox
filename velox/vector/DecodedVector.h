@@ -152,6 +152,9 @@ class DecodedVector {
 
   /// Returns the mapping from top-level rows to rows in the base vector or
   /// data() buffer.
+  ///
+  /// NOTE: This method allocates non-trivial amount of memory and should not
+  /// be called if encoding is constant or flat.
   const vector_size_t* indices() const {
     if (!indices_) {
       fillInIndices();
