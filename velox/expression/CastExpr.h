@@ -16,10 +16,13 @@
 
 #pragma once
 
-#include "velox/expression/CastHooks.h"
+#include "velox/expression/CastKernel.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
+#include "velox/expression/PeeledEncoding.h"
+#include "velox/expression/ScopedVarSetter.h"
 #include "velox/expression/SpecialForm.h"
+#include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::exec {
 
@@ -56,7 +59,7 @@ class CastOperator {
       const SelectivityVector& rows,
       const TypePtr& resultType,
       VectorPtr& result,
-      const std::shared_ptr<CastHooks>& /* hooks */) const {
+      const std::shared_ptr<CastKernel>& /* kernel */) const {
     castTo(input, context, rows, resultType, result);
   }
 
@@ -86,7 +89,7 @@ class CastExpr : public SpecialForm {
       ExprPtr&& expr,
       bool trackCpuUsage,
       bool isTryCast,
-      std::shared_ptr<CastHooks> hooks)
+      std::shared_ptr<CastKernel> kernel)
       : SpecialForm(
             SpecialFormKind::kCast,
             type,
@@ -95,16 +98,55 @@ class CastExpr : public SpecialForm {
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
         isTryCast_(isTryCast),
-        hooks_(std::move(hooks)) {}
+        kernel_(std::move(kernel)) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
       EvalCtx& context,
-      VectorPtr& result) override;
+      VectorPtr& result) override {
+    VectorPtr input;
+    inputs_[0]->eval(rows, context, input);
+    auto fromType = inputs_[0]->type();
+    auto toType = std::const_pointer_cast<const Type>(type_);
 
-  std::string toString(bool recursive = true) const override;
+    inTopLevel = true;
+    if (isTryCast()) {
+      ScopedVarSetter holder{context.mutableThrowOnError(), false};
+      ScopedVarSetter captureErrorDetails(
+          context.mutableCaptureErrorDetails(), false);
 
-  std::string toSql(std::vector<VectorPtr>*) const override;
+      ScopedThreadSkipErrorDetails skipErrorDetails(true);
+
+      apply(rows, input, context, fromType, toType, result);
+    } else {
+      apply(rows, input, context, fromType, toType, result);
+    }
+    // Return 'input' back to the vector pool in 'context' so it can be
+    // reused.
+    context.releaseVector(input);
+  }
+
+  std::string toString(bool recursive = true) const override {
+    std::stringstream out;
+    out << name() << "(";
+    if (recursive) {
+      appendInputs(out);
+    } else {
+      out << inputs_[0]->toString(false);
+    }
+    out << " as " << type_->toString() << ")";
+    return out.str();
+  }
+
+  std::string toSql(std::vector<VectorPtr>* complexConstants) const override {
+    std::stringstream out;
+    out << name() << "(";
+    appendInputsSql(out, complexConstants);
+    out << " as ";
+    toTypeSql(type_, out);
+    out << ")";
+    return out.str();
+  }
 
  private:
   /// Apply the cast after generating the input vectors
@@ -120,40 +162,72 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& fromType,
       const TypePtr& toType,
-      VectorPtr& result);
+      VectorPtr& result) {
+    LocalSelectivityVector remainingRows(context, rows);
 
-  VectorPtr applyMap(
-      const SelectivityVector& rows,
-      const MapVector* input,
-      exec::EvalCtx& context,
-      const MapType& fromType,
-      const MapType& toType);
+    context.deselectErrors(*remainingRows);
 
-  VectorPtr applyArray(
-      const SelectivityVector& rows,
-      const ArrayVector* input,
-      exec::EvalCtx& context,
-      const ArrayType& fromType,
-      const ArrayType& toType);
+    LocalDecodedVector decoded(context, *input, *remainingRows);
+    auto* rawNulls = decoded->nulls(remainingRows.get());
 
-  VectorPtr applyRow(
-      const SelectivityVector& rows,
-      const RowVector* input,
-      exec::EvalCtx& context,
-      const RowType& fromType,
-      const TypePtr& toType);
+    if (rawNulls) {
+      remainingRows->deselectNulls(
+          rawNulls, remainingRows->begin(), remainingRows->end());
+    }
 
-  /// Apply the cast between decimal vectors.
-  /// @param rows Non-null rows of the input vector.
-  /// @param input The input decimal vector. It is guaranteed to be flat or
-  /// constant.
-  template <typename ToDecimalType>
-  VectorPtr applyDecimal(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
+    VectorPtr localResult;
+    if (!remainingRows->hasSelections()) {
+      localResult =
+          BaseVector::createNullConstant(toType, rows.end(), context.pool());
+    } else if (decoded->isIdentityMapping()) {
+      applyPeeled(
+          *remainingRows,
+          *decoded->base(),
+          context,
+          fromType,
+          toType,
+          localResult);
+    } else {
+      withContextSaver([&](ContextSaver& saver) {
+        LocalSelectivityVector newRowsHolder(*context.execCtx());
+
+        LocalDecodedVector localDecoded(context);
+        std::vector<VectorPtr> peeledVectors;
+        auto peeledEncoding = PeeledEncoding::peel(
+            {input}, *remainingRows, localDecoded, true, peeledVectors);
+        VELOX_CHECK_EQ(peeledVectors.size(), 1);
+        if (peeledVectors[0]->isLazy()) {
+          peeledVectors[0] =
+              peeledVectors[0]->as<LazyVector>()->loadedVectorShared();
+        }
+        auto newRows =
+            peeledEncoding->translateToInnerRows(*remainingRows, newRowsHolder);
+        // Save context and set the peel.
+        context.saveAndReset(saver, *remainingRows);
+        context.setPeeledEncoding(peeledEncoding);
+        applyPeeled(
+            *newRows,
+            *peeledVectors[0],
+            context,
+            fromType,
+            toType,
+            localResult);
+
+        localResult = context.getPeeledEncoding()->wrap(
+            toType, context.pool(), localResult, *remainingRows);
+      });
+    }
+    context.moveOrCopyResult(localResult, *remainingRows, result);
+    context.releaseVector(localResult);
+
+    // If there are nulls or rows that encountered errors in the input,
+    // add nulls to the result at the same rows.
+    VELOX_CHECK_NOT_NULL(result);
+    if (rawNulls || context.errors()) {
+      EvalCtx::addNulls(
+          rows, remainingRows->asRange().bits(), context, toType, result);
+    }
+  }
 
   // Apply the cast to a vector after vector encodings being peeled off. The
   // input vector is guaranteed to be flat or constant.
@@ -163,172 +237,222 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& fromType,
       const TypePtr& toType,
-      VectorPtr& result);
+      VectorPtr& result) {
+    auto castFromOperator = getCastOperator(fromType);
+    if (castFromOperator && !castFromOperator->isSupportedToType(toType)) {
+      VELOX_USER_FAIL(
+          "Cannot cast {} to {}.", fromType->toString(), toType->toString());
+    }
 
-  template <typename Func>
-  void applyToSelectedNoThrowLocal(
-      EvalCtx& context,
-      const SelectivityVector& rows,
-      VectorPtr& result,
-      Func&& func);
+    auto castToOperator = getCastOperator(toType);
+    if (castToOperator && !castToOperator->isSupportedFromType(fromType)) {
+      VELOX_USER_FAIL(
+          "Cannot cast {} to {}.", fromType->toString(), toType->toString());
+    }
 
-  /// The per-row level Kernel
-  /// @tparam ToKind The cast target type
-  /// @tparam FromKind The expression type
-  /// @tparam TPolicy The policy used by the cast
-  /// @param row The index of the current row
-  /// @param input The input vector (of type FromKind)
-  /// @param result The output vector (of type ToKind)
-  template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
-  void applyCastKernel(
-      vector_size_t row,
-      EvalCtx& context,
-      const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
-      FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
+    if (castFromOperator || castToOperator) {
+      VELOX_USER_CHECK(
+          *fromType != *toType,
+          "Attempting to cast from {} to itself.",
+          fromType->toString());
 
-  VectorPtr castFromDate(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
+      auto applyCustomCast = [&]() {
+        if (castToOperator) {
+          castToOperator->castTo(input, context, rows, toType, result, kernel_);
+        } else {
+          castFromOperator->castFrom(input, context, rows, toType, result);
+        }
+      };
 
-  VectorPtr castToDate(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
+      if (setNullInResultAtError()) {
+        // This can be optimized by passing setNullInResultAtError() to
+        // castTo and castFrom operations.
 
-  VectorPtr castFromIntervalDayTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
+        EvalErrorsPtr oldErrors;
+        context.swapErrors(oldErrors);
 
-  VectorPtr castFromTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
+        applyCustomCast();
 
-  VectorPtr castToTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
+        if (context.errors()) {
+          auto errors = context.errors();
+          auto rawNulls = result->mutableRawNulls();
 
-  template <typename TInput, typename TOutput>
-  void applyDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      VectorPtr& castResult);
+          rows.applyToSelected([&](auto row) {
+            if (errors->hasErrorAt(row)) {
+              bits::setNull(rawNulls, row, true);
+            }
+          });
+        };
+        // Restore original state.
+        context.swapErrors(oldErrors);
 
-  template <typename TInput, typename TOutput>
-  void applyIntToDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename TInput>
-  VectorPtr applyIntToBinaryCast(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input);
-
-  template <typename TInput, typename TOutput>
-  void applyFloatingPointToDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename T>
-  void applyVarcharToDecimalCastKernel(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType,
-      VectorPtr& castResult);
-
-  template <typename FromNativeType, TypeKind ToKind>
-  VectorPtr applyDecimalToFloatCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
-  template <typename FromNativeType, TypeKind ToKind>
-  VectorPtr applyDecimalToIntegralCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
-  template <typename FromNativeType>
-  VectorPtr applyDecimalToBooleanCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context);
-
-  template <typename FromNativeType>
-  VectorPtr applyDecimalToPrimitiveCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType);
-
-  template <TypeKind ToKind, TypeKind FromKind>
-  void applyCastPrimitives(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
-  template <typename FromNativeType>
-  VectorPtr applyDecimalToVarcharCast(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
-
-  template <TypeKind ToKind>
-  void applyCastPrimitivesDispatch(
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
-  VectorPtr applyTimestampToVarcharCast(
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input);
+      } else {
+        applyCustomCast();
+      }
+    } else if (fromType->isDate()) {
+      result = kernel_->castFromDate(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (toType->isDate()) {
+      result = kernel_->castToDate(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (fromType->isIntervalDayTime()) {
+      result = kernel_->castFromIntervalDayTime(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (toType->isIntervalDayTime()) {
+      result = kernel_->castToIntervalDayTime(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (fromType->isTime()) {
+      result = kernel_->castFromTime(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (toType->isTime()) {
+      result = kernel_->castToTime(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (fromType->isDecimal()) {
+      result = kernel_->castFromDecimal(
+          rows, input, context, toType, setNullInResultAtError());
+    } else if (toType->isDecimal()) {
+      result = kernel_->castToDecimal(
+          rows, input, context, toType, setNullInResultAtError());
+    } else {
+      switch (toType->kind()) {
+        case TypeKind::BOOLEAN:
+          result = kernel_->castToBoolean(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::TINYINT:
+          result = kernel_->castToTinyInt(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::SMALLINT:
+          result = kernel_->castToSmallInt(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::INTEGER:
+          result = kernel_->castToInteger(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::BIGINT:
+          result = kernel_->castToBigInt(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::HUGEINT:
+          result = kernel_->castToHugeInt(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::REAL:
+          result = kernel_->castToReal(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::DOUBLE:
+          result = kernel_->castToDouble(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::VARCHAR:
+          result = kernel_->castToVarchar(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::VARBINARY:
+          result = kernel_->castToVarbinary(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::TIMESTAMP:
+          result = kernel_->castToTimestamp(
+              rows, input, context, toType, setNullInResultAtError());
+          break;
+        case TypeKind::ARRAY:
+          result = kernel_->castArray(
+              rows,
+              input,
+              context,
+              toType,
+              setNullInResultAtError(),
+              [this](
+                  const SelectivityVector& rows,
+                  const VectorPtr& input,
+                  exec::EvalCtx& context,
+                  const TypePtr& fromType,
+                  const TypePtr& toType,
+                  VectorPtr& result) {
+                ScopedVarSetter holder(&inTopLevel, false);
+                apply(rows, input, context, fromType, toType, result);
+              });
+          break;
+        case TypeKind::MAP:
+          result = kernel_->castMap(
+              rows,
+              input,
+              context,
+              toType,
+              setNullInResultAtError(),
+              [this](
+                  const SelectivityVector& rows,
+                  const VectorPtr& input,
+                  exec::EvalCtx& context,
+                  const TypePtr& fromType,
+                  const TypePtr& toType,
+                  VectorPtr& result) {
+                ScopedVarSetter holder(&inTopLevel, false);
+                apply(rows, input, context, fromType, toType, result);
+              });
+          break;
+        case TypeKind::ROW:
+          result = kernel_->castRow(
+              rows,
+              input,
+              context,
+              toType,
+              setNullInResultAtError(),
+              [this](
+                  const SelectivityVector& rows,
+                  const VectorPtr& input,
+                  exec::EvalCtx& context,
+                  const TypePtr& fromType,
+                  const TypePtr& toType,
+                  VectorPtr& result) {
+                ScopedVarSetter holder(&inTopLevel, false);
+                apply(rows, input, context, fromType, toType, result);
+              });
+          break;
+        default:
+          VELOX_UNREACHABLE(
+              "Unsupported cast from {} to {}.",
+              fromType->toString(),
+              toType->toString());
+      }
+    }
+  }
 
   bool isTryCast() const {
     return isTryCast_;
   }
 
   bool setNullInResultAtError() const {
-    return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
+    return isTryCast() && (inTopLevel || kernel_->applyTryCastRecursively());
   }
 
-  CastOperatorPtr getCastOperator(const TypePtr& type);
+  CastOperatorPtr getCastOperator(const TypePtr& type) {
+    const auto* key = type->name();
 
-  // Custom cast operators for to and from top-level as well as nested types.
+    auto it = castOperators_.find(key);
+    if (it != castOperators_.end()) {
+      return it->second;
+    }
+
+    auto castOperator = getCustomTypeCastOperator(key);
+    if (castOperator == nullptr) {
+      return nullptr;
+    }
+
+    castOperators_.emplace(key, castOperator);
+    return castOperator;
+  }
+
+  // Custom cast operators for to and from top-level as well as nested
+  // types.
   folly::F14FastMap<std::string, CastOperatorPtr> castOperators_;
 
   bool isTryCast_;
-  std::shared_ptr<CastHooks> hooks_;
+  std::shared_ptr<CastKernel> kernel_;
 
   bool inTopLevel = false;
 };
@@ -355,5 +479,3 @@ class TryCastCallToSpecialForm : public FunctionCallToSpecialForm {
       const core::QueryConfig& config) override;
 };
 } // namespace facebook::velox::exec
-
-#include "velox/expression/CastExpr-inl.h"

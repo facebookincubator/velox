@@ -268,8 +268,7 @@ void Expr::computeMetadata() {
   // (3) Compute propagatesNulls_.
   // propagatesNulls_ is true iff a null in any of the columns this
   // depends on makes the Expr null.
-  if (isSpecialForm() && !is<ConstantExpr>() && !is<FieldReference>() &&
-      !is<CastExpr>()) {
+  if (isSpecialForm() && !isConstant() && !isFieldAccess() && !isCast()) {
     as<SpecialForm>()->computePropagatesNulls();
   } else {
     if (vectorFunction_ && !vectorFunctionMetadata_.defaultNullBehavior) {
@@ -2145,7 +2144,7 @@ VectorPtr tryEvaluateConstantExpressionInternal(
   // an error happened during evaluation (5 / 0 fails with "division by zero").
   // If constant folding didn't succeed, but suppressEvaluationFailures is
   // false, we need to re-evaluate the expression to propagate the failure.
-  const bool doEvaluate = exprSet.expr(0)->is<ConstantExpr>() ||
+  const bool doEvaluate = exprSet.expr(0)->isConstant() ||
       (!suppressEvaluationFailures && exprSet.expr(0)->isConstantExpr());
 
   if (doEvaluate) {

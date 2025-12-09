@@ -19,6 +19,7 @@
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/expression/CastExpr.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/P4HyperLogLogInputGenerator.h"

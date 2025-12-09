@@ -71,7 +71,7 @@ TEST_F(FunctionCallToSpecialFormTest, castCall) {
           vectorMaker_.constantVector<int32_t>({0}))},
       false,
       config_);
-  ASSERT_EQ(typeid(*specialForm), typeid(const CastExpr&));
+  ASSERT_TRUE(specialForm->isCast());
 }
 
 TEST_F(FunctionCallToSpecialFormTest, coalesceCall) {
