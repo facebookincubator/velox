@@ -67,21 +67,62 @@ inline uint64_t hashOne<StringView, true>(const StringView& value) {
 
 } // namespace detail
 
-template <typename T, bool HllAsFinalResult>
+template <
+    typename T,
+    bool HllAsFinalResult,
+    typename TAllocator = HashStringAllocator>
 struct HllAccumulator {
-  explicit HllAccumulator(HashStringAllocator* allocator)
+  explicit HllAccumulator(TAllocator* allocator)
       : sparseHll_{allocator}, denseHll_{allocator} {}
+
+  explicit HllAccumulator(int8_t indexBitLength, TAllocator* allocator)
+      : isSparse_(true),
+        indexBitLength_(indexBitLength),
+        sparseHll_(allocator),
+        denseHll_(allocator) {
+    // Set soft memory limit for sparse HLL to convert to dense when exceeded.
+    sparseHll_.setSoftMemoryLimit(
+        DenseHlls::estimateInMemorySize(indexBitLength_));
+  }
 
   void setIndexBitLength(int8_t indexBitLength) {
     indexBitLength_ = indexBitLength;
     sparseHll_.setSoftMemoryLimit(
-        common::hll::DenseHlls::estimateInMemorySize(indexBitLength_));
+        DenseHlls::estimateInMemorySize(indexBitLength_));
+  }
+
+  /// Creates an HllAccumulator instance from serialized data.
+  static std::unique_ptr<HllAccumulator> deserialize(
+      const char* data,
+      TAllocator* allocator) {
+    if (SparseHlls::canDeserialize(data)) {
+      int8_t indexBitLength = SparseHlls::deserializeIndexBitLength(data);
+      auto wrapper =
+          std::make_unique<HllAccumulator>(indexBitLength, allocator);
+      wrapper->sparseHll_ = SparseHll<TAllocator>(data, allocator);
+      wrapper->sparseHll_.setSoftMemoryLimit(
+          DenseHlls::estimateInMemorySize(indexBitLength));
+      return wrapper;
+    } else if (DenseHlls::canDeserialize(data)) {
+      int8_t indexBitLength = DenseHlls::deserializeIndexBitLength(data);
+      auto wrapper =
+          std::make_unique<HllAccumulator>(indexBitLength, allocator);
+      wrapper->denseHll_ = DenseHll<TAllocator>(data, allocator);
+      wrapper->isSparse_ = false;
+      return wrapper;
+    } else {
+      VELOX_FAIL("Cannot deserialize HyperLogLog");
+    }
   }
 
   void append(T value) {
     const auto hash = detail::hashOne<T, HllAsFinalResult>(value);
+    insertHash(hash);
+  }
 
+  void insertHash(uint64_t hash) {
     if (isSparse_) {
+      // insertHash returns true if soft memory limit exceeded
       if (sparseHll_.insertHash(hash)) {
         toDense();
       }
@@ -94,33 +135,29 @@ struct HllAccumulator {
     return isSparse_ ? sparseHll_.cardinality() : denseHll_.cardinality();
   }
 
-  void mergeWith(StringView serialized, HashStringAllocator* allocator) {
+  void mergeWith(StringView serialized, TAllocator* allocator) {
     auto input = serialized.data();
-    if (common::hll::SparseHlls::canDeserialize(input)) {
-      if (isSparse_) {
-        sparseHll_.mergeWith(input);
-        if (indexBitLength_ < 0) {
-          setIndexBitLength(
-              common::hll::DenseHlls::deserializeIndexBitLength(input));
-        }
-        if (sparseHll_.overLimit()) {
-          toDense();
-        }
-      } else {
-        common::hll::SparseHll<> other{input, allocator};
-        other.toDense(denseHll_);
-      }
-    } else if (common::hll::DenseHlls::canDeserialize(input)) {
-      if (isSparse_) {
-        if (indexBitLength_ < 0) {
-          setIndexBitLength(
-              common::hll::DenseHlls::deserializeIndexBitLength(input));
-        }
-        toDense();
-      }
-      denseHll_.mergeWith(input);
+    if (indexBitLength_ < 0) {
+      // deserializeIndexBitLength is the same between Dense and Sparse HLL
+      setIndexBitLength(DenseHlls::deserializeIndexBitLength(input));
+    }
+
+    if (SparseHlls::canDeserialize(input)) {
+      SparseHll<TAllocator> other{input, allocator};
+      mergeWithSparse(other);
+    } else if (DenseHlls::canDeserialize(input)) {
+      DenseHll<TAllocator> other{input, allocator};
+      mergeWithDense(other);
     } else {
       VELOX_USER_FAIL("Unexpected type of HLL");
+    }
+  }
+
+  void mergeWith(const HllAccumulator& other) {
+    if (other.isSparse_) {
+      mergeWithSparse(other.sparseHll_);
+    } else {
+      mergeWithDense(other.denseHll_);
     }
   }
 
@@ -133,6 +170,10 @@ struct HllAccumulator {
                      : denseHll_.serialize(outputBuffer);
   }
 
+  bool isSparse() const {
+    return isSparse_;
+  }
+
  private:
   void toDense() {
     isSparse_ = false;
@@ -141,10 +182,28 @@ struct HllAccumulator {
     sparseHll_.reset();
   }
 
+  void mergeWithSparse(SparseHll<TAllocator> other) {
+    if (isSparse_) {
+      sparseHll_.mergeWith(other);
+      if (sparseHll_.overLimit()) {
+        toDense();
+      }
+    } else {
+      other.toDense(denseHll_);
+    }
+  }
+
+  void mergeWithDense(DenseHll<TAllocator> other) {
+    if (isSparse_) {
+      toDense();
+    }
+    denseHll_.mergeWith(other);
+  }
+
   bool isSparse_{true};
   int8_t indexBitLength_{-1};
-  common::hll::SparseHll<> sparseHll_;
-  common::hll::DenseHll<> denseHll_;
+  SparseHll<TAllocator> sparseHll_;
+  DenseHll<TAllocator> denseHll_;
 };
 
 template <>
@@ -187,5 +246,4 @@ struct HllAccumulator<bool, false> {
  private:
   int8_t approxDistinctState_{0};
 };
-
 } // namespace facebook::velox::common::hll
