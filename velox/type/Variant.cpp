@@ -25,19 +25,18 @@
 namespace facebook::velox {
 namespace {
 
-bool dispatchDynamicVariantEquality(
+std::optional<bool> dispatchDynamicVariantEquality(
     const Variant& a,
     const Variant& b,
-    const bool& enableNullEqualsNull);
+    CompareFlags::NullHandlingMode nullHandlingMode);
 
-template <bool nullEqualsNull>
-bool evaluateNullEquality(const Variant& a, const Variant& b) {
-  if constexpr (nullEqualsNull) {
-    if (a.isNull() && b.isNull()) {
-      return true;
-    }
+template <CompareFlags::NullHandlingMode nullHandlingMode>
+std::optional<bool> evaluateNullEquality(const Variant& a, const Variant& b) {
+  if constexpr (
+      nullHandlingMode == CompareFlags::NullHandlingMode::kNullAsValue) {
+    return a.isNull() && b.isNull();
   }
-  return false;
+  return std::nullopt;
 }
 
 template <TypeKind KIND>
@@ -46,10 +45,10 @@ struct VariantEquality;
 // scalars
 template <TypeKind KIND>
 struct VariantEquality {
-  template <bool NullEqualsNull>
-  static bool equals(const Variant& a, const Variant& b) {
+  template <CompareFlags::NullHandlingMode nullHandlingMode>
+  static std::optional<bool> equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
+      return evaluateNullEquality<nullHandlingMode>(a, b);
     }
     return a.value<KIND>() == b.value<KIND>();
   }
@@ -58,10 +57,10 @@ struct VariantEquality {
 // timestamp
 template <>
 struct VariantEquality<TypeKind::TIMESTAMP> {
-  template <bool NullEqualsNull>
-  static bool equals(const Variant& a, const Variant& b) {
+  template <CompareFlags::NullHandlingMode nullHandlingMode>
+  static std::optional<bool> equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
+      return evaluateNullEquality<nullHandlingMode>(a, b);
     } else {
       return a.value<TypeKind::TIMESTAMP>() == b.value<TypeKind::TIMESTAMP>();
     }
@@ -71,10 +70,10 @@ struct VariantEquality<TypeKind::TIMESTAMP> {
 // array
 template <>
 struct VariantEquality<TypeKind::ARRAY> {
-  template <bool NullEqualsNull>
-  static bool equals(const Variant& a, const Variant& b) {
+  template <CompareFlags::NullHandlingMode nullHandlingMode>
+  static std::optional<bool> equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
+      return evaluateNullEquality<nullHandlingMode>(a, b);
     }
     auto& aArray = a.value<TypeKind::ARRAY>();
     auto& bArray = b.value<TypeKind::ARRAY>();
@@ -83,8 +82,15 @@ struct VariantEquality<TypeKind::ARRAY> {
     }
     for (size_t i = 0; i != aArray.size(); ++i) {
       // todo(youknowjack): switch outside the loop
-      bool result =
-          dispatchDynamicVariantEquality(aArray[i], bArray[i], NullEqualsNull);
+      auto compareResult = dispatchDynamicVariantEquality(
+          aArray[i], bArray[i], nullHandlingMode);
+      if (nullHandlingMode ==
+          CompareFlags::NullHandlingMode::kNullAsIndeterminate) {
+        if (!compareResult.has_value()) {
+          return std::nullopt;
+        }
+      }
+      auto result = compareResult.value();
       if (!result) {
         return false;
       }
@@ -95,10 +101,10 @@ struct VariantEquality<TypeKind::ARRAY> {
 
 template <>
 struct VariantEquality<TypeKind::ROW> {
-  template <bool NullEqualsNull>
-  static bool equals(const Variant& a, const Variant& b) {
+  template <CompareFlags::NullHandlingMode nullHandlingMode>
+  static std::optional<bool> equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
+      return evaluateNullEquality<nullHandlingMode>(a, b);
     }
     auto& aRow = a.value<TypeKind::ROW>();
     auto& bRow = b.value<TypeKind::ROW>();
@@ -109,9 +115,12 @@ struct VariantEquality<TypeKind::ROW> {
     }
     // compare array values
     for (size_t i = 0; i != aRow.size(); ++i) {
-      bool result =
-          dispatchDynamicVariantEquality(aRow[i], bRow[i], NullEqualsNull);
-      if (!result) {
+      auto compareResult =
+          dispatchDynamicVariantEquality(aRow[i], bRow[i], nullHandlingMode);
+      if (!compareResult.has_value()) {
+        return std::nullopt;
+      }
+      if (!compareResult.value()) {
         return false;
       }
     }
@@ -121,10 +130,10 @@ struct VariantEquality<TypeKind::ROW> {
 
 template <>
 struct VariantEquality<TypeKind::MAP> {
-  template <bool NullEqualsNull>
-  static bool equals(const Variant& a, const Variant& b) {
+  template <CompareFlags::NullHandlingMode nullHandlingMode>
+  static std::optional<bool> equals(const Variant& a, const Variant& b) {
     if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
+      return evaluateNullEquality<nullHandlingMode>(a, b);
     }
 
     auto& aMap = a.value<TypeKind::MAP>();
@@ -137,12 +146,21 @@ struct VariantEquality<TypeKind::MAP> {
     for (auto it_a = aMap.begin(), it_b = bMap.begin();
          it_a != aMap.end() && it_b != bMap.end();
          ++it_a, ++it_b) {
-      if (dispatchDynamicVariantEquality(
-              it_a->first, it_b->first, NullEqualsNull) &&
-          dispatchDynamicVariantEquality(
-              it_a->second, it_b->second, NullEqualsNull)) {
-        continue;
-      } else {
+      auto keysCompareResult = dispatchDynamicVariantEquality(
+          it_a->first, it_b->first, nullHandlingMode);
+      if (!keysCompareResult.has_value()) {
+        return std::nullopt;
+      }
+      if (!keysCompareResult.value()) {
+        return false;
+      }
+
+      auto valuesCompareResult = dispatchDynamicVariantEquality(
+          it_a->second, it_b->second, nullHandlingMode);
+      if (!valuesCompareResult.has_value()) {
+        return std::nullopt;
+      }
+      if (!valuesCompareResult.value()) {
         return false;
       }
     }
@@ -150,16 +168,24 @@ struct VariantEquality<TypeKind::MAP> {
   }
 };
 
-bool dispatchDynamicVariantEquality(
+std::optional<bool> dispatchDynamicVariantEquality(
     const Variant& a,
     const Variant& b,
-    const bool& enableNullEqualsNull) {
-  if (enableNullEqualsNull) {
+    CompareFlags::NullHandlingMode nullHandlingMode) {
+  if (nullHandlingMode == CompareFlags::NullHandlingMode::kNullAsValue) {
     return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
-        VariantEquality, equals<true>, a.kind(), a, b);
+        VariantEquality,
+        equals<CompareFlags::NullHandlingMode::kNullAsValue>,
+        a.kind(),
+        a,
+        b);
   }
   return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
-      VariantEquality, equals<false>, a.kind(), a, b);
+      VariantEquality,
+      equals<CompareFlags::NullHandlingMode::kNullAsIndeterminate>,
+      a.kind(),
+      a,
+      b);
 }
 
 } // namespace
@@ -856,10 +882,12 @@ bool Variant::operator<(const Variant& other) const {
 }
 
 template <TypeKind KIND>
-bool Variant::equals(const Variant& other) const {
+std::optional<bool> Variant::equals(
+    const Variant& other,
+    CompareFlags::NullHandlingMode nullHandlingMode) const {
   using namespace facebook::velox::util::floating_point;
   if (isNull() || other.isNull()) {
-    return false;
+    return dispatchDynamicVariantEquality(*this, other, nullHandlingMode);
   }
   using T = typename TypeTraits<KIND>::NativeType;
 
@@ -876,14 +904,14 @@ bool Variant::equals(const Variant& other) const {
   return value<KIND>() == other.value<KIND>();
 }
 
-bool Variant::equals(const Variant& other) const {
+std::optional<bool> Variant::equals(
+    const Variant& other,
+    CompareFlags::NullHandlingMode nullHandlingMode) const {
   if (other.kind_ != this->kind_) {
     return false;
   }
-  if (other.isNull()) {
-    return this->isNull();
-  }
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, other);
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      equals, kind_, other, nullHandlingMode);
 }
 
 template <TypeKind KIND>
@@ -1079,8 +1107,12 @@ bool Variant::equalsWithEpsilon(const Variant& other) const {
       return compareComplexTypeWithEpsilon<TypeKind::MAP>(*this, other);
     case TypeKind::ROW:
       return compareComplexTypeWithEpsilon<TypeKind::ROW>(*this, other);
-    default:
-      return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, other);
+    default: {
+      std::optional<bool> compareResult = VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          equals, kind_, other, CompareFlags::NullHandlingMode::kNullAsValue);
+      VELOX_CHECK(compareResult.has_value());
+      return compareResult.value();
+    }
   }
 }
 
@@ -1111,7 +1143,10 @@ bool Variant::equalsWithNullEqualsNull(const Variant& other) const {
   if (other.kind_ != this->kind_) {
     return false;
   }
-  return dispatchDynamicVariantEquality(*this, other, true);
+  std::optional<bool> compareResult = dispatchDynamicVariantEquality(
+      *this, other, CompareFlags::NullHandlingMode::kNullAsValue);
+  VELOX_CHECK(compareResult.has_value());
+  return compareResult.value();
 }
 
 TypePtr Variant::inferType() const {
