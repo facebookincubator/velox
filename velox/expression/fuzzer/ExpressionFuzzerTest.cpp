@@ -424,7 +424,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
-    "jarowinkler_similarity",
+    "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
 };
 
 int main(int argc, char** argv) {
