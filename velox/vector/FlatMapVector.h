@@ -109,6 +109,10 @@ class FlatMapVector : public BaseVector {
         inMaps_(std::move(inMaps)),
         sortedKeys_(sortedKeys) {
     VELOX_CHECK(type->isMap(), "FlatMapVector requires a MAP type.");
+    VELOX_CHECK(
+        distinctKeys &&
+            distinctKeys->encoding() == VectorEncoding::Simple::FLAT,
+        "FlatMapVector does not currently support encoded keys");
     distinctKeys_ = BaseVector::getOrCreateEmpty(
         std::move(distinctKeys), type->childAt(0), pool);
     setDistinctKeysImpl(distinctKeys_);

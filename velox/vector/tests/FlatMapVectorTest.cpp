@@ -148,6 +148,31 @@ TEST_F(FlatMapVectorTest, empty) {
       flatMapVector->toString(0), "Vector index should be less than length.");
 }
 
+TEST_F(FlatMapVectorTest, encodedKeys) {
+  const auto constructFlatMap = [&](VectorPtr keys) {
+    auto result = std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(BIGINT(), REAL()),
+        nullptr,
+        0,
+        keys,
+        std::vector<VectorPtr>{nullptr, nullptr, nullptr},
+        std::vector<BufferPtr>{nullptr, nullptr, nullptr});
+  };
+
+  auto flatVector = maker_.flatVector<int64_t>({1, 2, 3});
+
+  VELOX_ASSERT_THROW(
+      constructFlatMap(wrapInDictionary(
+          makeIndices({0, 1, 2}), flatVector->size(), flatVector)),
+      "FlatMapVector does not currently support encoded keys");
+  VELOX_ASSERT_THROW(
+      constructFlatMap(BaseVector::wrapInConstant(3, 0, flatVector)),
+      "FlatMapVector does not currently support encoded keys");
+  // This should pass.
+  constructFlatMap(flatVector);
+}
+
 TEST_F(FlatMapVectorTest, simple) {
   auto flatMapVector = maker_.flatMapVector<std::string, std::string>({
       {{"a", "1"}, {"b", "2"}},
