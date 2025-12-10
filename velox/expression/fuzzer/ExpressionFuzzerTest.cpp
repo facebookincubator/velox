@@ -262,7 +262,6 @@ std::unordered_set<std::string> skipFunctions = {
     "to_geometry",
     "to_spherical_geography",
     "localtime",
-    "map_keys_overlap",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
