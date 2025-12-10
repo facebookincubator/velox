@@ -28,7 +28,9 @@ class ConjunctRewrite {
   /// is only one input to the conjunct after its inputs are pruned, rewrites
   /// the conjunct expression to this input. Otherwise, returns an optimized
   /// conjunct expression with pruned inputs.
-  static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+  static core::TypedExprPtr rewrite(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/);
 
   static void registerRewrite();
 };
