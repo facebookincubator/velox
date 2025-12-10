@@ -17,6 +17,7 @@ add_executable(
   TimestampWithTimeZoneInputGeneratorTest.cpp
   TimeWithTimezoneInputGeneratorTest.cpp
   HyperLogLogInputGeneratorTest.cpp
+  KHyperLogLogInputGeneratorTest.cpp
   P4HyperLogLogInputGeneratorTest.cpp
   SfmSketchInputGeneratorTest.cpp
 )
