@@ -3501,7 +3501,9 @@ void Task::maybeInitTrace() {
     return;
   }
 
-  trace::createTraceDirectory(traceConfig_->queryTraceDir);
+  trace::createTraceDirectory(
+      traceConfig_->queryTraceDir,
+      queryCtx_->queryConfig().taskTraceDirectoryCreateConfig());
   const auto metadataWriter = std::make_unique<trace::TaskTraceMetadataWriter>(
       traceConfig_->queryTraceDir, memory::traceMemoryPool());
   auto traceNode =
