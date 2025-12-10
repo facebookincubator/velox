@@ -283,6 +283,189 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBigint) {
   }
 }
 
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterBigintValues) {
+  // (a in (100)) + (a in (200)) -> a in (100, 200)
+  {
+    auto values1 = in({100});
+    auto values2 = in({200});
+    auto expected = in({100, 200});
+
+    VELOX_ASSERT_FILTER(expected, makeOr(values1->clone(), values2->clone()));
+  }
+
+  // (a in (100)) + (a = 200) -> a in (100, 200)
+  {
+    auto values = in({100});
+    auto singleValueRange = equal(200);
+    auto expected = in({100, 200});
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(values->clone(), singleValueRange->clone()));
+  }
+
+  // (a in (5)) + (a between 10 and 20) -> a = 5 or a between 10 and 20
+  {
+    auto values = in({5});
+    auto multiValueRange = between(10, 20);
+    auto expected = bigintOr(equal(5), between(10, 20));
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(values->clone(), multiValueRange->clone()));
+  }
+
+  // (a = 100 or a = 200) + (a = 300) -> a in (100, 200, 300)
+  {
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.emplace_back(std::make_unique<common::BigintRange>(100, 100, false));
+    ranges.emplace_back(std::make_unique<common::BigintRange>(200, 200, false));
+    auto multiRangeAllSingle =
+        std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
+
+    auto singleValueRange = equal(300);
+    auto expected = in({100, 200, 300});
+
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(singleValueRange->clone(), multiRangeAllSingle->clone()));
+  }
+
+  // (a = 5 or a between 10 and 20) + (a = 100) ->
+  //     (a = 5 or a between 10 and 20 or a = 100)
+  {
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.emplace_back(std::make_unique<common::BigintRange>(5, 5, false));
+    ranges.emplace_back(std::make_unique<common::BigintRange>(10, 20, false));
+    auto multiRangeMixed =
+        std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
+
+    auto singleValueRange = equal(100);
+
+    std::vector<std::unique_ptr<common::BigintRange>> expectedRanges;
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(5, 5, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(10, 20, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(100, 100, false));
+    auto expected = std::make_unique<common::BigintMultiRange>(
+        std::move(expectedRanges), false);
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(singleValueRange->clone(), multiRangeMixed->clone()));
+  }
+
+  // (a = 5 or a = 15) + (a between 10 and 20) -> (a = 5 or a between 10 and 20)
+  {
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.emplace_back(std::make_unique<common::BigintRange>(5, 5, false));
+    ranges.emplace_back(std::make_unique<common::BigintRange>(15, 15, false));
+    auto multiRangeAllSingle =
+        std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
+
+    auto multiValueRange = between(10, 20);
+
+    std::vector<std::unique_ptr<common::BigintRange>> expectedRanges;
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(5, 5, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(10, 20, false));
+    auto expected = std::make_unique<common::BigintMultiRange>(
+        std::move(expectedRanges), false);
+
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(multiValueRange->clone(), multiRangeAllSingle->clone()));
+  }
+
+  // (a = 5 or a between 25 and 30) + (a between 10 and 20) ->
+  //      (a = 5 or a between 10 and 20 or a between 25 and 30)
+  {
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.emplace_back(std::make_unique<common::BigintRange>(5, 5, false));
+    ranges.emplace_back(std::make_unique<common::BigintRange>(25, 30, false));
+    auto multiRangeMixed =
+        std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
+
+    auto multiValueRange = between(10, 20);
+
+    std::vector<std::unique_ptr<common::BigintRange>> expectedRanges;
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(5, 5, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(10, 20, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(25, 30, false));
+    auto expected = std::make_unique<common::BigintMultiRange>(
+        std::move(expectedRanges), false);
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(multiValueRange->clone(), multiRangeMixed->clone()));
+  }
+
+  // (a not in (5)) + (a = 10) -> all values except 5
+  {
+    auto negatedValues = notIn({5});
+    auto singleValue = equal(10);
+    auto expected = bigintOr(
+        between(std::numeric_limits<int64_t>::min(), 4), greaterThanOrEqual(6));
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(negatedValues->clone(), singleValue->clone()));
+  }
+
+  // (a not in (1, 3)) + (a in (1, 2)) ->
+  //     (a between INT64_MIN and 2 or a between 3 and INT64_MAX)
+  {
+    auto negatedValues = notIn({1, 3});
+    auto values = in({1, 2});
+    auto expected = bigintOr(
+        between(std::numeric_limits<int64_t>::min(), 2), greaterThanOrEqual(4));
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(negatedValues->clone(), values->clone()));
+  }
+
+  // (a != 10) + (a = 10) -> all non-null values
+  {
+    auto negatedRange = notEqual(10);
+    auto singleValue = equal(10);
+
+    VELOX_ASSERT_FILTER(
+        isNotNull(), makeOr(negatedRange->clone(), singleValue->clone()));
+  }
+
+  // (a not in (5, 10, 15)) + (a between 8 and 12) ->
+  //    [INT64_MIN, 4] or [6, 14] or [16, INT64_MAX]
+  {
+    auto negatedValues = notIn({5, 10, 15});
+    auto range = between(8, 12);
+
+    std::vector<std::unique_ptr<common::BigintRange>> expectedRanges;
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(
+            std::numeric_limits<int64_t>::min(), 4, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(6, 14, false));
+    expectedRanges.emplace_back(
+        std::make_unique<common::BigintRange>(
+            16, std::numeric_limits<int64_t>::max(), false));
+    auto expected = std::make_unique<common::BigintMultiRange>(
+        std::move(expectedRanges), false);
+
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(negatedValues->clone(), range->clone()));
+  }
+
+  // (a != 5) + (a != 10) -> all non-null values
+  {
+    auto negated1 = notEqual(5);
+    auto negated2 = notEqual(10);
+
+    VELOX_ASSERT_FILTER(
+        isNotNull(), makeOr(negated1->clone(), negated2->clone()));
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, makeOrFilterDouble) {
   // a < 1.5 or a > 1.0 ==> not null
   {
