@@ -309,6 +309,21 @@ TEST_F(MapFilterTest, fuzzFlatMap) {
   }
 }
 
+TEST_F(MapFilterTest, verifyFlatKeys) {
+  auto result = evaluate(
+      "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+      makeRowVector({
+          makeFlatMapVectorFromJson<int64_t, int32_t>({
+              "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+          }),
+      }));
+
+  // Ensure that the keys vector is not dictionary-encoded after map_filter.
+  auto keys = result->as<FlatMapVector>()->distinctKeys();
+  EXPECT_NE(keys->encoding(), VectorEncoding::Simple::DICTIONARY);
+  EXPECT_EQ(keys->encoding(), VectorEncoding::Simple::FLAT);
+}
+
 TEST_F(MapFilterTest, fromFlatMapEncodings) {
   // Case 1: Verify value filter
   assertEqualVectors(
