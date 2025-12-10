@@ -138,6 +138,8 @@ int main(int argc, char** argv) {
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
+      "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
+      // verifier is added.
   };
 
   if (!FLAGS_presto_url.empty()) {
