@@ -477,15 +477,16 @@ TEST(VariantTest, opaqueSerializationNotRegistered) {
 TEST(VariantTest, toJsonRow) {
   auto rowType = ROW({{"c0", DECIMAL(20, 3)}});
   EXPECT_EQ(
-      "[123456.789]",
+      "[{\"c0\":\"123456.789\"}]",
       Variant::row({static_cast<int128_t>(123456789)}).toJson(rowType));
 
   rowType = ROW({{"c0", DECIMAL(10, 2)}});
-  EXPECT_EQ("[12345.67]", Variant::row({1234567LL}).toJson(rowType));
+  EXPECT_EQ(
+      "[{\"c0\":\"12345.67\"}]", Variant::row({1234567LL}).toJson(rowType));
 
   rowType = ROW({{"c0", DECIMAL(20, 1)}, {"c1", BOOLEAN()}, {"c3", VARCHAR()}});
   EXPECT_EQ(
-      R"([1234567890.1,true,"test works fine"])",
+      "[{\"c0\":\"1234567890.1\"},{\"c1\":\"true\"},{\"c3\":\"\\\"test works fine\\\"\"}]",
       Variant::row({static_cast<int128_t>(12345678901),
                     Variant((bool)true),
                     Variant((std::string) "test works fine")})
@@ -522,7 +523,7 @@ TEST(VariantTest, toJsonRow) {
 
   // Row Variant tests that contains NULL variants.
   EXPECT_EQ(
-      "[null,null,null]",
+      "[{\"c0\":\"null\"},{\"c1\":\"null\"},{\"c2\":\"null\"}]",
       Variant::row({Variant::null(TypeKind::HUGEINT),
                     Variant::null(TypeKind::VARCHAR),
                     Variant::null(TypeKind::BIGINT)})
@@ -650,7 +651,7 @@ TEST(VariantTest, toString) {
       R"([{"key":1,"value":2},{"key":3,"value":4}])");
   EXPECT_EQ(
       Variant::row({1, 2, 3}).toString(ROW({INTEGER(), INTEGER(), INTEGER()})),
-      "[1,2,3]");
+      "[{\"\":\"1\"},{\"\":\"2\"},{\"\":\"3\"}]");
 }
 
 template <typename T>
