@@ -313,13 +313,17 @@ class MapFilterFunction : public FilterFunctionBase {
     // Resize filtered distinct keys indices in order to wrap in dictionary and
     // create our result filtered flat map vector
     filteredKeysIndices->setSize(numDistinct * sizeof(vector_size_t));
+    // Wrap and flatten keys to avoid type dispatch. We can remove this logic if
+    // we commit to supporting encoded keys.
+    auto keys = BaseVector::wrapInDictionary(
+        BufferPtr(nullptr), filteredKeysIndices, numDistinct, distinctKeys);
+    BaseVector::flattenVector(keys);
     auto localResult = std::make_shared<FlatMapVector>(
         context.pool(),
         outputType,
         flatMap.nulls(),
         flatMap.size(),
-        BaseVector::wrapInDictionary(
-            BufferPtr(nullptr), filteredKeysIndices, numDistinct, distinctKeys),
+        keys,
         std::move(filteredMapValues),
         std::move(filteredInMaps));
 
