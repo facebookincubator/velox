@@ -72,6 +72,7 @@ const char* const kRegrSxy = "regr_sxy";
 const char* const kRegrSxx = "regr_sxx";
 const char* const kRegrSyy = "regr_syy";
 const char* const kRegrR2 = "regr_r2";
+const char* const kReservoirSample = "reservoir_sample";
 const char* const kSetAgg = "set_agg";
 const char* const kSetUnion = "set_union";
 const char* const kSkewness = "skewness";

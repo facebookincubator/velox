@@ -50,6 +50,7 @@ add_executable(
   PrestoHasherTest.cpp
   QDigestAggTest.cpp
   ReduceAggTest.cpp
+  ReservoirSampleTest.cpp
   SetAggTest.cpp
   SetUnionTest.cpp
   SumDataSizeForStatsTest.cpp
