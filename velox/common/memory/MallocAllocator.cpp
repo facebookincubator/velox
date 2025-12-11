@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/MallocAllocator.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/memory/Memory.h"
 
 #include <sys/mman.h>
@@ -33,7 +34,7 @@ MallocAllocator::MallocAllocator(size_t capacity, uint32_t reservationByteLimit)
             decrementUsageWithReservationFunc(counter, decrement, lock);
             return true;
           }),
-      reservations_(std::thread::hardware_concurrency()) {}
+      reservations_(folly::hardware_concurrency()) {}
 
 MallocAllocator::~MallocAllocator() {
   // TODO: Remove the check when memory leak issue is resolved.

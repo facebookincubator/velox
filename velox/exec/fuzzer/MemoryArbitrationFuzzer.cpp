@@ -18,6 +18,7 @@
 #include <boost/random/uniform_int_distribution.hpp>
 
 #include <folly/concurrency/ConcurrentHashMap.h>
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/fuzzer/Utils.h"
@@ -272,7 +273,7 @@ class MemoryArbitrationFuzzer {
   VectorFuzzer vectorFuzzer_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   folly::Synchronized<Stats> stats_;
 };
 
