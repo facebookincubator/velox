@@ -51,6 +51,7 @@ add_executable(
   QDigestAggTest.cpp
   ReduceAggTest.cpp
   SetAggTest.cpp
+  SetDigestAggregateTest.cpp
   SetUnionTest.cpp
   SumDataSizeForStatsTest.cpp
   SumTest.cpp
