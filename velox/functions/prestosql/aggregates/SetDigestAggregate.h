@@ -25,4 +25,9 @@ void registerMakeSetDigestAggregate(
     bool withCompanionFunctions = true,
     bool overwrite = true);
 
+void registerMergeSetDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions = true,
+    bool overwrite = true);
+
 } // namespace facebook::velox::aggregate::prestosql
