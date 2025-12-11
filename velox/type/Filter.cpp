@@ -20,8 +20,6 @@
 #include <set>
 #include <string>
 
-#include "velox/common/base/Exceptions.h"
-#include "velox/common/base/SimdUtil.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::common {
@@ -728,13 +726,6 @@ BigintValuesUsingBitmask::BigintValuesUsingBitmask(
   }
 }
 
-bool BigintValuesUsingBitmask::testInt64(int64_t value) const {
-  if (value < min_ || value > max_) {
-    return false;
-  }
-  return bitmask_[value - min_];
-}
-
 std::vector<int64_t> BigintValuesUsingBitmask::values() const {
   std::vector<int64_t> values;
   for (int i = 0; i < bitmask_.size(); i++) {
@@ -809,98 +800,6 @@ BigintValuesUsingHashTable::BigintValuesUsingHashTable(
     hashTable_[sizeMask_ + 1 + i] = hashTable_[sizeMask_];
   }
   std::sort(values_.begin(), values_.end());
-}
-
-bool BigintValuesUsingHashTable::testInt64(int64_t value) const {
-  if (containsEmptyMarker_ && value == kEmptyMarker) {
-    return true;
-  }
-  if (value < min_ || value > max_) {
-    return false;
-  }
-  uint32_t pos = (value * M) & sizeMask_;
-  for (auto i = pos; i <= pos + sizeMask_; i++) {
-    int32_t idx = i & sizeMask_;
-    int64_t l = hashTable_[idx];
-    if (l == kEmptyMarker) {
-      return false;
-    }
-    if (l == value) {
-      return true;
-    }
-  }
-  return false;
-}
-
-xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
-    xsimd::batch<int64_t> x) const {
-  auto outOfRange = (x < xsimd::broadcast<int64_t>(min_)) |
-      (x > xsimd::broadcast<int64_t>(max_));
-  if (simd::toBitMask(outOfRange) == simd::allSetBitMask<int64_t>()) {
-    return xsimd::batch_bool<int64_t>(false);
-  }
-  if (containsEmptyMarker_) {
-    return Filter::testValues(x);
-  }
-  auto allEmpty = xsimd::broadcast<int64_t>(kEmptyMarker);
-  // Temporarily casted to unsigned to suppress overflow error.
-  auto indices = simd::reinterpretBatch<int64_t>(
-      simd::reinterpretBatch<uint64_t>(x) * M & sizeMask_);
-  auto data =
-      simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
-  // The lanes with kEmptyMarker missed, the lanes matching x hit and the other
-  // lanes must check next positions.
-
-  auto result = x == data;
-  auto resultBits = simd::toBitMask(result);
-  auto missed = simd::toBitMask(data == allEmpty);
-  static_assert(decltype(result)::size <= 16);
-  uint16_t unresolved = simd::allSetBitMask<int64_t>() ^ (resultBits | missed);
-  if (!unresolved) {
-    return result;
-  }
-  constexpr int kAlign = xsimd::default_arch::alignment();
-  constexpr int kArraySize = xsimd::batch<int64_t>::size;
-  alignas(kAlign) int64_t indicesArray[kArraySize];
-  alignas(kAlign) int64_t valuesArray[kArraySize];
-  (indices + 1).store_aligned(indicesArray);
-  x.store_aligned(valuesArray);
-  while (unresolved) {
-    auto lane = bits::getAndClearLastSetBit(unresolved);
-    // Loop for each unresolved (not hit and
-    // not empty) until finding hit or empty.
-    int64_t index = indicesArray[lane];
-    int64_t value = valuesArray[lane];
-    auto allValue = xsimd::broadcast<int64_t>(value);
-    for (;;) {
-      auto line = xsimd::load_unaligned(hashTable_.data() + index);
-
-      if (simd::toBitMask(line == allValue)) {
-        resultBits |= 1 << lane;
-        break;
-      }
-      if (simd::toBitMask(line == allEmpty)) {
-        resultBits &= ~(1 << lane);
-        break;
-      }
-      index += line.size;
-      if (index > sizeMask_) {
-        index = 0;
-      }
-    }
-  }
-  return simd::fromBitMask<int64_t>(resultBits);
-}
-
-xsimd::batch_bool<int32_t> BigintValuesUsingHashTable::testValues(
-    xsimd::batch<int32_t> x) const {
-  // Calls 4x64 twice since the hash table is 64 bits wide in any
-  // case. A 32-bit hash table would be possible but all the use
-  // cases seen are in the 64 bit range.
-  auto first = simd::toBitMask(testValues(simd::getHalf<int64_t, 0>(x)));
-  auto second = simd::toBitMask(testValues(simd::getHalf<int64_t, 1>(x)));
-  return simd::fromBitMask<int32_t>(
-      first | (second << xsimd::batch<int64_t>::size));
 }
 
 bool BigintValuesUsingHashTable::testInt64Range(
