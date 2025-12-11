@@ -160,6 +160,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<TimeMinusInterval, Time, Time, IntervalDayTime>(
       {prefix + "minus"});
 
+  // Register Time - Time function (returns IntervalDayTime)
+  registerFunction<TimeMinusFunction, IntervalDayTime, Time, Time>(
+      {prefix + "minus"});
+
   // Use optimized vector function for Time + IntervalYearMonth (identity
   // function)
   exec::registerVectorFunction(

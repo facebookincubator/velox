@@ -42,3 +42,11 @@ target_link_libraries(
   PUBLIC Folly::follybenchmark
   PRIVATE velox_common_base Folly::folly
 )
+
+add_executable(velox_common_split_block_bloom_filter_benchmark SplitBlockBloomFilterBenchmark.cpp)
+
+target_link_libraries(
+  velox_common_split_block_bloom_filter_benchmark
+  PUBLIC Folly::follybenchmark
+  PRIVATE velox_common_base Folly::folly
+)

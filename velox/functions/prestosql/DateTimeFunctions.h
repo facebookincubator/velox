@@ -565,6 +565,29 @@ struct TimeMinusInterval {
   }
 };
 
+template <typename T>
+struct TimeMinusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<Time>& a,
+      const arg_type<Time>& b) {
+    // Validate inputs are in valid TIME range [0, 86400000)
+    VELOX_USER_CHECK(
+        a >= 0 && a < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        a);
+    VELOX_USER_CHECK(
+        b >= 0 && b < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        b);
+
+    // Simple subtraction returns interval in milliseconds
+    result = a - b;
+  }
+};
+
 // Optimized vector function for Time +/- IntervalYearMonth
 // This case is special because result = time (identity function), allowing
 // for significant optimizations.

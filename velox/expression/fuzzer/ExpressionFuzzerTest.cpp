@@ -262,7 +262,6 @@ std::unordered_set<std::string> skipFunctions = {
     "to_geometry",
     "to_spherical_geography",
     "localtime",
-    "map_keys_overlap",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
@@ -273,6 +272,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "remap_keys", // Velox-only function, not available in Presto
     "map_intersect", // Velox-only function, not available in Presto
     "map_keys_overlap", // Velox-only function, not available in Presto
+    "map_append", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -424,7 +424,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
-    "jarowinkler_similarity",
+    "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
 };
 
 int main(int argc, char** argv) {

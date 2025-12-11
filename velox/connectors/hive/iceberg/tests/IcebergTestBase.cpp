@@ -54,7 +54,7 @@ void IcebergTestBase::SetUp() {
 
   fuzzerOptions_.vectorSize = 100;
   fuzzerOptions_.nullRatio = 0.1;
-  fuzzer_ = std::make_unique<VectorFuzzer>(fuzzerOptions_, opPool_.get());
+  fuzzer_ = std::make_unique<VectorFuzzer>(fuzzerOptions_, opPool_.get(), 1);
 }
 
 void IcebergTestBase::TearDown() {
@@ -200,10 +200,12 @@ std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
-    const RowTypePtr& rowType,
     const std::vector<RowVectorPtr>& vectors,
     const std::string& dataPath,
     const std::vector<PartitionField>& partitionFields) {
+  VELOX_CHECK(!vectors.empty(), "vectors cannot be empty");
+
+  auto rowType = vectors.front()->rowType();
   auto dataSink = createDataSink(rowType, dataPath, partitionFields);
 
   for (const auto& vector : vectors) {
@@ -229,6 +231,29 @@ std::vector<std::string> IcebergTestBase::listFiles(
   return files;
 }
 
+std::unordered_map<std::string, std::optional<std::string>>
+IcebergTestBase::extractPartitionKeys(const std::string& filePath) {
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+
+  std::vector<std::string> pathComponents;
+  folly::split("/", filePath, pathComponents);
+  for (const auto& component : pathComponents) {
+    if (component.find('=') != std::string::npos) {
+      std::vector<std::string> keys;
+      folly::split('=', component, keys);
+      if (keys.size() == 2) {
+        if (keys[1] == "null") {
+          partitionKeys[keys[0]] = std::nullopt;
+        } else {
+          partitionKeys[keys[0]] = keys[1];
+        }
+      }
+    }
+  }
+
+  return partitionKeys;
+}
+
 std::vector<std::shared_ptr<ConnectorSplit>>
 IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
@@ -237,6 +262,8 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
 
   auto files = listFiles(directory);
   for (const auto& filePath : files) {
+    auto partitionKeys = extractPartitionKeys(filePath);
+
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
     splits.push_back(
@@ -246,7 +273,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
             fileFormat_,
             0,
             file->size(),
-            std::unordered_map<std::string, std::optional<std::string>>{},
+            partitionKeys,
             std::nullopt,
             customSplitInfo,
             nullptr,
