@@ -384,10 +384,20 @@ void HashProbe::pushdownDynamicFilters() {
         if (dynamicFiltersProducedOnChannels_.contains(sourceChannel)) {
           return true;
         }
-        filter = table_->hashers()[sourceChannel]->getFilter(false);
+        auto& hasher = *table_->hashers()[sourceChannel];
+        filter = hasher.getFilter(false);
         if (!filter) {
-          return false;
+          filter = hasher.getBloomFilter();
+          if (!filter) {
+            return false;
+          }
+          auto* bloomFilter =
+              checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
+                  filter.get());
+          addRuntimeStat(
+              "bloomFilterSize", RuntimeCounter(bloomFilter->blocksByteSize()));
         }
+        dynamicFiltersProducedOnChannels_.insert(sourceChannel);
         for (auto* peer : findPeerOperators()) {
           peer->dynamicFiltersProducedOnChannels_.insert(sourceChannel);
         }
@@ -399,7 +409,7 @@ void HashProbe::pushdownDynamicFilters() {
   //  * build side has no dependent columns.
   if (keyChannels_.size() == 1 && !table_->hasDuplicateKeys() &&
       tableOutputProjections_.empty() && !filter_ && numFilters > 0 &&
-      !isRightJoin(joinType_)) {
+      !table_->hashers()[0]->getBloomFilter() && !isRightJoin(joinType_)) {
     canReplaceWithDynamicFilter_ = true;
   }
 }
@@ -460,6 +470,9 @@ void HashProbe::asyncWaitForHashTable() {
        (isRightSemiProjectJoin(joinType_) && !nullAware_) ||
        isRightJoin(joinType_)) &&
       table_->hashMode() != BaseHashTable::HashMode::kHash && !isSpillInput() &&
+      operatorCtx_->driverCtx()
+          ->queryConfig()
+          .hashProbeDynamicFilterPushdownEnabled() &&
       !hasMoreSpillData()) {
     // Find out whether there are any upstream operators that can accept dynamic
     // filters on all or a subset of the join keys. Create dynamic filters to

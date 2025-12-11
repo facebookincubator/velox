@@ -52,13 +52,16 @@ HashTable<ignoreNullKeys>::HashTable(
     bool isJoinBuild,
     bool hasProbedFlag,
     uint32_t minTableSizeForParallelJoinBuild,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    uint64_t bloomFilterMaxSize)
     : BaseHashTable(std::move(hashers)),
       pool_(pool),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
+      bloomFilterMaxSize_(bloomFilterMaxSize),
       isJoinBuild_(isJoinBuild),
       allowDuplicates_(allowDuplicates),
       buildPartitionBounds_(raw_vector<PartitionBoundIndexType>(pool)) {
+  VELOX_CHECK(bloomFilterMaxSize_ == 0 || (isJoinBuild && ignoreNullKeys));
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
@@ -841,12 +844,88 @@ bool HashTable<ignoreNullKeys>::hashRows(
 }
 
 namespace {
+
+template <typename T>
+void partitionBloomFilterRowsImpl(
+    int32_t offset,
+    const common::BigintValuesUsingBloomFilter& filter,
+    const RowContainer& rowContainer,
+    uint8_t partitionMask,
+    RowPartitions& rowPartitions) {
+  constexpr int32_t kBatch = 1024;
+  char* rows[kBatch];
+  uint8_t partitions[kBatch];
+  RowContainerIterator iter;
+  while (auto numRows = rowContainer.listRows(
+             &iter, kBatch, RowContainer::kUnlimited, rows)) {
+    for (int i = 0; i < numRows; ++i) {
+      auto value = folly::loadUnaligned<T>(rows[i] + offset);
+      partitions[i] = filter.blockIndex(value) & partitionMask;
+    }
+    rowPartitions.appendPartitions(
+        folly::Range<const uint8_t*>(partitions, numRows));
+  }
+}
+
+void partitionBloomFilterRows(
+    const VectorHasher& hasher,
+    int32_t offset,
+    const common::BigintValuesUsingBloomFilter& filter,
+    const RowContainer& rowContainer,
+    uint8_t numPartitions,
+    RowPartitions& rowPartitions) {
+  VELOX_DCHECK(hasher.supportsBloomFilter());
+  VELOX_DCHECK(bits::isPowerOfTwo(numPartitions));
+  switch (hasher.typeKind()) {
+    case TypeKind::INTEGER:
+      partitionBloomFilterRowsImpl<int32_t>(
+          offset, filter, rowContainer, numPartitions - 1, rowPartitions);
+      break;
+    case TypeKind::BIGINT:
+      partitionBloomFilterRowsImpl<int64_t>(
+          offset, filter, rowContainer, numPartitions - 1, rowPartitions);
+      break;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+template <typename T>
+void buildBloomFilterImpl(
+    int32_t offset,
+    char** rows,
+    int numRows,
+    common::BigintValuesUsingBloomFilter& filter) {
+  for (int i = 0; i < numRows; ++i) {
+    filter.insert(folly::loadUnaligned<T>(rows[i] + offset));
+  }
+}
+
+void buildBloomFilter(
+    const VectorHasher& hasher,
+    int32_t offset,
+    char** rows,
+    int numRows,
+    common::BigintValuesUsingBloomFilter& filter) {
+  VELOX_DCHECK(hasher.supportsBloomFilter());
+  switch (hasher.typeKind()) {
+    case TypeKind::INTEGER:
+      buildBloomFilterImpl<int32_t>(offset, rows, numRows, filter);
+      break;
+    case TypeKind::BIGINT:
+      buildBloomFilterImpl<int64_t>(offset, rows, numRows, filter);
+      break;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 template <typename Source>
 void syncWorkItems(
     std::vector<std::shared_ptr<Source>>& items,
-    std::exception_ptr& error,
     std::vector<CpuWallTiming>& timings,
-    bool log = false) {
+    bool throwError) {
+  std::exception_ptr error;
   // All items must be synced also in case of error because the items
   // hold references to the table and rows which could be destructed
   // if unwinding the stack did not pause to sync.
@@ -857,14 +936,41 @@ void syncWorkItems(
         timings.push_back(item->prepareTiming());
       }
     } catch (const std::exception& e) {
-      if (log) {
+      if (!throwError) {
         LOG(ERROR) << "Error in async hash build: " << e.what();
+      } else {
+        error = std::current_exception();
       }
-      error = std::current_exception();
     }
   }
+  if (error) {
+    std::rethrow_exception(error);
+  }
 }
+
 } // namespace
+
+template <>
+bool HashTable<true>::enableBloomFilter() const {
+  if (!(bloomFilterMaxSize_ > 0 &&
+        common::BigintValuesUsingBloomFilter::numBlocks(numDistinct_) *
+                sizeof(SplitBlockBloomFilter::Block) <=
+            bloomFilterMaxSize_)) {
+    return false;
+  }
+  for (auto& hasher : hashers_) {
+    if (hasher->supportsBloomFilter()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+template <>
+bool HashTable<false>::enableBloomFilter() const {
+  VELOX_CHECK_EQ(bloomFilterMaxSize_, 0);
+  return false;
+}
 
 template <bool ignoreNullKeys>
 bool HashTable<ignoreNullKeys>::canApplyParallelJoinBuild() const {
@@ -915,23 +1021,50 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   buildPartitionBounds_.back() = sizeMask_ + 1;
   std::vector<std::shared_ptr<AsyncSource<bool>>> partitionSteps;
   std::vector<std::shared_ptr<AsyncSource<bool>>> buildSteps;
+  std::vector<std::shared_ptr<AsyncSource<bool>>> bloomFilterPartitionSteps;
+  std::vector<std::shared_ptr<AsyncSource<bool>>> bloomFilterBuildSteps;
   // rowPartitions are used in the async threads, so declare them before the
   // sync guard.
   std::vector<std::unique_ptr<RowPartitions>> rowPartitions;
   auto sync = folly::makeGuard([&]() {
     // This is executed on returning path, possibly in unwinding, so must not
     // throw.
-    std::exception_ptr error;
     syncWorkItems(
-        partitionSteps, error, parallelJoinBuildStats_.partitionTimings, true);
+        partitionSteps, parallelJoinBuildStats_.partitionTimings, false);
+    syncWorkItems(buildSteps, parallelJoinBuildStats_.buildTimings, false);
     syncWorkItems(
-        buildSteps, error, parallelJoinBuildStats_.buildTimings, true);
+        bloomFilterPartitionSteps,
+        parallelJoinBuildStats_.bloomFilterPartitionTimings,
+        false);
+    syncWorkItems(
+        bloomFilterBuildSteps,
+        parallelJoinBuildStats_.bloomFilterBuildTimings,
+        false);
     // Release the partition bounds to reduce memory usage.
     buildPartitionBounds_ = raw_vector<PartitionBoundIndexType>(pool_);
   });
 
+  // Passing driver context directly to avoid cross thread access to thread
+  // local driver thread context.
+  const DriverCtx* driverCtx{nullptr};
+  if (const auto* driverThreadCtx = driverThreadContext()) {
+    driverCtx = driverThreadCtx->driverCtx();
+  }
+
   const auto getTable = [this](size_t i) INLINE_LAMBDA {
     return i == 0 ? this : otherTables_[i - 1].get();
+  };
+
+  const auto prepareStep = [&](auto& steps, auto&& work) {
+    auto step = std::make_shared<AsyncSource<bool>>([work = std::move(work)] {
+      work();
+      return std::make_unique<bool>(true);
+    });
+    steps.push_back(step);
+    buildExecutor_->add([driverCtx, step]() {
+      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
+      step->prepare();
+    });
   };
 
   // This step can involve large memory allocations, so there is a chance of
@@ -943,65 +1076,82 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     rowPartitions.push_back(table->rows()->createRowPartitions(*rows_->pool()));
   }
 
-  // Passing driver context directly to avoid cross thread access to thread
-  // local driver thread context.
-  const DriverCtx* driverCtx{nullptr};
-  if (const auto* driverThreadCtx = driverThreadContext()) {
-    driverCtx = driverThreadCtx->driverCtx();
-  }
-
   // The parallel table partitioning step.
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = getTable(i);
-    partitionSteps.push_back(
-        std::make_shared<AsyncSource<bool>>(
-            [this, table, rawRowPartitions = rowPartitions[i].get()]() {
-              partitionRows(*table, *rawRowPartitions);
-              return std::make_unique<bool>(true);
-            }));
-    VELOX_CHECK(!partitionSteps.empty());
-    buildExecutor_->add([driverCtx, step = partitionSteps.back()]() {
-      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
-      step->prepare();
-    });
+    prepareStep(
+        partitionSteps,
+        [this, table, rawRowPartitions = rowPartitions[i].get()] {
+          partitionRows(*table, *rawRowPartitions);
+        });
   }
-
-  std::exception_ptr error;
-  syncWorkItems(
-      partitionSteps, error, parallelJoinBuildStats_.partitionTimings);
-  if (error != nullptr) {
-    std::rethrow_exception(error);
-  }
+  syncWorkItems(partitionSteps, parallelJoinBuildStats_.partitionTimings, true);
 
   // The parallel table building step.
   std::vector<std::vector<char*>> overflowPerPartition(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    buildSteps.push_back(
-        std::make_shared<AsyncSource<bool>>(
-            [this, i, &overflowPerPartition, &rowPartitions]() {
-              buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
-              return std::make_unique<bool>(true);
-            }));
-    VELOX_CHECK(!buildSteps.empty());
-    buildExecutor_->add([driverCtx, step = buildSteps.back()]() {
-      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
-      step->prepare();
+    prepareStep(buildSteps, [this, i, &overflowPerPartition, &rowPartitions] {
+      buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
     });
   }
-  syncWorkItems(buildSteps, error, parallelJoinBuildStats_.buildTimings);
+  syncWorkItems(buildSteps, parallelJoinBuildStats_.buildTimings, true);
 
-  if (error != nullptr) {
-    std::rethrow_exception(error);
+  if (enableBloomFilter()) {
+    const auto numBloomFilterPartitions = bits::isPowerOfTwo(numPartitions)
+        ? numPartitions
+        : bits::nextPowerOfTwo(numPartitions) / 2;
+    VELOX_CHECK_GT(numBloomFilterPartitions, 0);
+    for (int i = 0; i < hashers_.size(); ++i) {
+      if (!hashers_[i]->supportsBloomFilter()) {
+        continue;
+      }
+      auto filter = std::make_shared<common::BigintValuesUsingBloomFilter>(
+          numDistinct_, false);
+      hashers_[i]->setBloomFilter(filter);
+      for (auto j = 0; j < numPartitions; ++j) {
+        auto* rows = getTable(j)->rows();
+        rowPartitions[j]->reset();
+        prepareStep(
+            bloomFilterPartitionSteps,
+            [hasher = hashers_[i].get(),
+             offset = rows->columnAt(i).offset(),
+             filter,
+             rows,
+             numBloomFilterPartitions,
+             rowPartitions = rowPartitions[j].get()] {
+              partitionBloomFilterRows(
+                  *hasher,
+                  offset,
+                  *filter,
+                  *rows,
+                  numBloomFilterPartitions,
+                  *rowPartitions);
+            });
+      }
+      syncWorkItems(
+          bloomFilterPartitionSteps,
+          parallelJoinBuildStats_.bloomFilterPartitionTimings,
+          true);
+      for (auto j = 0; j < numBloomFilterPartitions; ++j) {
+        prepareStep(bloomFilterBuildSteps, [this, i, j, &rowPartitions] {
+          buildBloomFilterPartition(i, j, rowPartitions);
+        });
+      }
+      syncWorkItems(
+          bloomFilterBuildSteps,
+          parallelJoinBuildStats_.bloomFilterBuildTimings,
+          true);
+    }
   }
 
   raw_vector<uint64_t> hashes(pool_);
   for (auto i = 0; i < numPartitions; ++i) {
     auto& overflows = overflowPerPartition[i];
     hashes.resize(overflows.size());
-    hashRows(
+    VELOX_CHECK(hashRows(
         folly::Range<char**>(overflows.data(), overflows.size()),
         false,
-        hashes);
+        hashes));
     auto table = i == 0 ? this : otherTables_[i - 1].get();
     insertForJoin(overflows.data(), hashes.data(), overflows.size(), nullptr);
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
@@ -1041,7 +1191,8 @@ void HashTable<ignoreNullKeys>::partitionRows(
   RowContainerIterator iter;
   while (auto numRows = subtable.rows_->listRows(
              &iter, kBatch, RowContainer::kUnlimited, rows.data())) {
-    hashRows(folly::Range<char**>(rows.data(), numRows), true, hashes);
+    VELOX_CHECK(
+        hashRows(folly::Range<char**>(rows.data(), numRows), true, hashes));
     VELOX_DCHECK_EQ(
         0,
         buildPartitionBounds_.capacity() %
@@ -1075,11 +1226,40 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
     RowContainerIterator iter;
     while (const auto numRows = table->rows_->listPartitionRows(
                iter, partition, kBatch, *rowPartitions[i], rows.data())) {
-      hashRows(folly::Range(rows.data(), numRows), false, hashes);
+      VELOX_CHECK(hashRows(folly::Range(rows.data(), numRows), false, hashes));
       insertForJoin(rows.data(), hashes.data(), numRows, &partitionInfo);
       table->numParallelBuildRows_ += numRows;
     }
   }
+}
+
+template <>
+void HashTable<true>::buildBloomFilterPartition(
+    column_index_t columnIndex,
+    uint8_t partition,
+    const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions) {
+  constexpr int32_t kBatch = 1024;
+  char* rows[kBatch];
+  for (auto i = 0; i < 1 + otherTables_.size(); ++i) {
+    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto rowColumn = table->rows_->columnAt(columnIndex);
+    auto* filter = checkedPointerCast<common::BigintValuesUsingBloomFilter>(
+        hashers_[columnIndex]->getBloomFilter().get());
+    RowContainerIterator iter;
+    while (auto numRows = table->rows_->listPartitionRows(
+               iter, partition, kBatch, *rowPartitions[i], rows)) {
+      buildBloomFilter(
+          *hashers_[columnIndex], rowColumn.offset(), rows, numRows, *filter);
+    }
+  }
+}
+
+template <>
+void HashTable<false>::buildBloomFilterPartition(
+    column_index_t /*columnIndex*/,
+    uint8_t /*partition*/,
+    const std::vector<std::unique_ptr<RowPartitions>>& /*rowPartitions*/) {
+  VELOX_UNREACHABLE();
 }
 
 template <bool ignoreNullKeys>
@@ -1102,7 +1282,7 @@ bool HashTable<ignoreNullKeys>::insertBatch(
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::insertForGroupBy(
     char** groups,
-    uint64_t* hashes,
+    const uint64_t* hashes,
     int32_t numGroups) {
   if (hashMode_ == HashMode::kArray) {
     for (auto i = 0; i < numGroups; ++i) {
@@ -1236,7 +1416,7 @@ template <bool ignoreNullKeys>
 template <bool isNormailizedKeyMode>
 FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinWithPrefetch(
     char** groups,
-    uint64_t* hashes,
+    const uint64_t* hashes,
     int32_t numGroups,
     TableInsertPartitionInfo* partitionInfo) {
   auto i = 0;
@@ -1272,7 +1452,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinWithPrefetch(
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::insertForJoin(
     char** groups,
-    uint64_t* hashes,
+    const uint64_t* hashes,
     int32_t numGroups,
     TableInsertPartitionInfo* partitionInfo) {
   // The insertable rows are in the table, all get put in the hash table or
@@ -1305,21 +1485,47 @@ void HashTable<ignoreNullKeys>::rehash(
   raw_vector<uint64_t> hashes(pool_);
   hashes.resize(kHashBatchSize);
   char* groups[kHashBatchSize];
+  const bool shouldBuildBloomFilter = enableBloomFilter();
+  std::vector<common::BigintValuesUsingBloomFilter*> bloomFilters;
+  if (shouldBuildBloomFilter) {
+    bloomFilters.resize(hashers_.size());
+    for (int i = 0; i < hashers_.size(); ++i) {
+      if (!hashers_[i]->supportsBloomFilter()) {
+        continue;
+      }
+      auto filter = std::make_shared<common::BigintValuesUsingBloomFilter>(
+          numDistinct_, false);
+      bloomFilters[i] = filter.get();
+      hashers_[i]->setBloomFilter(filter);
+    }
+  }
   // A join build can have multiple payload tables. Loop over 'this'
   // and the possible other tables and put all the data in the table
   // of 'this'.
   for (int32_t i = 0; i <= otherTables_.size(); ++i) {
     RowContainerIterator iterator;
     int32_t numGroups;
+    auto* table = i == 0 ? this : otherTables_[i - 1].get();
     do {
-      numGroups = (i == 0 ? this : otherTables_[i - 1].get())
-                      ->rows()
-                      ->listRows(&iterator, kHashBatchSize, groups);
+      numGroups = table->rows()->listRows(&iterator, kHashBatchSize, groups);
       if (!insertBatch(
               groups, numGroups, hashes, initNormalizedKeys || i != 0)) {
         VELOX_CHECK_NE(hashMode_, HashMode::kHash);
         setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
         return;
+      }
+      if (shouldBuildBloomFilter) {
+        for (int j = 0; j < hashers_.size(); ++j) {
+          if (!hashers_[j]->supportsBloomFilter()) {
+            continue;
+          }
+          buildBloomFilter(
+              *hashers_[j],
+              table->rows()->columnAt(j).offset(),
+              groups,
+              numGroups,
+              *bloomFilters[j]);
+        }
       }
     } while (numGroups > 0);
   }

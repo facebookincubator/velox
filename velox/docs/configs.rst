@@ -142,6 +142,17 @@ Generic Configuration
      - integer
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
+   * - hash_probe_dynamic_filter_pushdown_enabled
+     - bool
+     - true
+     - Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.
+   * - hash_probe_bloom_filter_pushdown_max_size
+     - integer
+     - 0
+     - The maximum byte size of Bloom filter that can be generated from hash
+       probe.  When set to 0, no Bloom filter will be generated.  To achieve
+       optimal performance, this should not be too larger than the CPU cache
+       size on the host.
    * - debug.validate_output_from_operators
      - bool
      - false

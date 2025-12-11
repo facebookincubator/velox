@@ -141,6 +141,7 @@ void HashBuild::setupTable() {
   for (int i = numKeys; i < tableType_->size(); ++i) {
     dependentTypes.emplace_back(tableType_->childAt(i));
   }
+  auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin()) {
     // Do not ignore null keys.
@@ -149,9 +150,7 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
-        operatorCtx_->driverCtx()
-            ->queryConfig()
-            .minTableRowsForParallelJoinBuild(),
+        queryConfig.minTableRowsForParallelJoinBuild(),
         pool());
   } else {
     // Right semi join needs to tag build rows that were probed.
@@ -164,9 +163,7 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
-          operatorCtx_->driverCtx()
-              ->queryConfig()
-              .minTableRowsForParallelJoinBuild(),
+          queryConfig.minTableRowsForParallelJoinBuild(),
           pool());
     } else {
       // Ignore null keys
@@ -175,10 +172,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
-          operatorCtx_->driverCtx()
-              ->queryConfig()
-              .minTableRowsForParallelJoinBuild(),
-          pool());
+          queryConfig.minTableRowsForParallelJoinBuild(),
+          pool(),
+          queryConfig.hashProbeBloomFilterPushdownMaxSize());
     }
   }
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
@@ -960,6 +956,36 @@ void HashBuild::addRuntimeStats() {
     lockedStats->addRuntimeStat(
         BaseHashTable::kParallelJoinBuildCpuNanos,
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
+  }
+
+  for (const auto& timing :
+       table_->parallelJoinBuildStats().bloomFilterPartitionTimings) {
+    lockedStats->getOutputTiming.add(timing);
+    if (timing.wallNanos > 0) {
+      lockedStats->addRuntimeStat(
+          BaseHashTable::kParallelJoinBloomFilterPartitionWallNanos,
+          RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
+    }
+    if (timing.cpuNanos > 0) {
+      lockedStats->addRuntimeStat(
+          BaseHashTable::kParallelJoinBloomFilterPartitionCpuNanos,
+          RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
+    }
+  }
+
+  for (const auto& timing :
+       table_->parallelJoinBuildStats().bloomFilterBuildTimings) {
+    lockedStats->getOutputTiming.add(timing);
+    if (timing.wallNanos > 0) {
+      lockedStats->addRuntimeStat(
+          BaseHashTable::kParallelJoinBloomFilterBuildWallNanos,
+          RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
+    }
+    if (timing.cpuNanos > 0) {
+      lockedStats->addRuntimeStat(
+          BaseHashTable::kParallelJoinBloomFilterBuildCpuNanos,
+          RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
+    }
   }
 
   for (auto i = 0; i < hashers.size(); i++) {
