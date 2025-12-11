@@ -99,12 +99,7 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
 
 struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
-  std::shared_ptr<::arrow::Schema> schema;
   std::shared_ptr<WriterProperties> properties;
-  uint64_t stagingRows = 0;
-  int64_t stagingBytes = 0;
-  // columns, Arrays
-  std::vector<std::vector<std::shared_ptr<::arrow::Array>>> stagingChunks;
 };
 
 Compression::type getArrowParquetCompression(
@@ -155,6 +150,8 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
+  properties = properties->max_row_group_bytes(
+      static_cast<int64_t>(flushPolicy->bytesInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
   if (options.useParquetDataPageV2.value_or(false)) {
@@ -378,62 +375,9 @@ Writer::Writer(
                   folly::to<std::string>(folly::Random::rand64()))),
           std::move(schema)} {}
 
-void Writer::flush() {
-  if (arrowContext_->stagingRows > 0) {
-    if (!arrowContext_->writer) {
-      ArrowWriterProperties::Builder builder;
-      if (writeInt96AsTimestamp_) {
-        builder.enable_deprecated_int96_timestamps();
-      }
-      auto arrowProperties = builder.build();
-      PARQUET_ASSIGN_OR_THROW(
-          arrowContext_->writer,
-          FileWriter::Open(
-              *arrowContext_->schema.get(),
-              arrowMemoryPool_.get(),
-              stream_,
-              arrowContext_->properties,
-              arrowProperties));
-    }
-
-    auto fields = arrowContext_->schema->fields();
-    std::vector<std::shared_ptr<::arrow::ChunkedArray>> chunks;
-    for (int colIdx = 0; colIdx < fields.size(); colIdx++) {
-      auto dataType = fields.at(colIdx)->type();
-      auto chunk =
-          ::arrow::ChunkedArray::Make(
-              std::move(arrowContext_->stagingChunks.at(colIdx)), dataType)
-              .ValueOrDie();
-      chunks.push_back(chunk);
-    }
-    auto table = ::arrow::Table::Make(
-        arrowContext_->schema,
-        std::move(chunks),
-        static_cast<int64_t>(arrowContext_->stagingRows));
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->WriteTable(
-        *table, static_cast<int64_t>(flushPolicy_->rowsInRowGroup())));
-    PARQUET_THROW_NOT_OK(stream_->Flush());
-    for (auto& chunk : arrowContext_->stagingChunks) {
-      chunk.clear();
-    }
-    arrowContext_->stagingRows = 0;
-    arrowContext_->stagingBytes = 0;
-  }
-}
-
-dwio::common::StripeProgress getStripeProgress(
-    uint64_t stagingRows,
-    int64_t stagingBytes) {
-  return dwio::common::StripeProgress{
-      .stripeRowCount = stagingRows, .stripeSizeEstimate = stagingBytes};
-}
+void Writer::flush() {}
 
 /**
- * This method would cache input `ColumnarBatch` to make the size of row group
- * big. It would flush when:
- * - the cached numRows bigger than `rowsInRowGroup_`
- * - the cached bytes bigger than `bytesInRowGroup_`
- *
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
@@ -466,28 +410,23 @@ void Writer::write(const VectorPtr& data) {
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch,
       ::arrow::ImportRecordBatch(&array, ::arrow::schema(newFields)));
-  if (!arrowContext_->schema) {
-    arrowContext_->schema = recordBatch->schema();
-    for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields();
-         colIdx++) {
-      arrowContext_->stagingChunks.push_back(
-          std::vector<std::shared_ptr<::arrow::Array>>());
+
+  if (!arrowContext_->writer) {
+    ArrowWriterProperties::Builder builder;
+    if (writeInt96AsTimestamp_) {
+      builder.enable_deprecated_int96_timestamps();
     }
+    auto arrowProperties = builder.build();
+    PARQUET_ASSIGN_OR_THROW(
+        arrowContext_->writer,
+        FileWriter::Open(
+            *recordBatch->schema(),
+            ::arrow::default_memory_pool(),
+            stream_,
+            arrowContext_->properties,
+            arrowProperties));
   }
-
-  auto bytes = data->estimateFlatSize();
-  auto numRows = data->size();
-  if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
-    flush();
-  }
-
-  for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
-    arrowContext_->stagingChunks.at(colIdx).push_back(
-        recordBatch->column(colIdx));
-  }
-  arrowContext_->stagingRows += numRows;
-  arrowContext_->stagingBytes += bytes;
+  arrowContext_->writer->WriteRecordBatch(*recordBatch);
 }
 
 bool Writer::isCodecAvailable(common::CompressionKind compression) {
@@ -500,15 +439,11 @@ void Writer::newRowGroup(int32_t numRows) {
 }
 
 void Writer::close() {
-  flush();
-
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());
-
-  arrowContext_->stagingChunks.clear();
 }
 
 void Writer::abort() {
