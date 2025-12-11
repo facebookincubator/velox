@@ -615,6 +615,65 @@ TEST(FilterTest, negatedBigintValuesEdgeCases) {
   EXPECT_TRUE(not_equal->testInt64(1));
 }
 
+TEST(FilterTest, bigintValuesUsingBloomFilter) {
+  BigintValuesUsingBloomFilter filter(10, false);
+  folly::F14FastSet<int64_t> inserted;
+  for (int64_t x : {2, 3, 5, 7, 11, 13, 17, 19}) {
+    filter.insert(x);
+    inserted.insert(x);
+  }
+  for (int i = 0; i < 20; ++i) {
+    ASSERT_EQ(filter.testInt64(i), inserted.contains(i));
+  }
+  ASSERT_TRUE(filter.testInt64Range(20, 30, true));
+  ASSERT_TRUE(filter.testingEquals(filter));
+  Filter::registerSerDe();
+  auto serialized = filter.serialize();
+  auto deserialized =
+      ISerializable::deserialize<BigintValuesUsingBloomFilter>(serialized);
+  ASSERT_TRUE(deserialized->testingEquals(filter));
+  ASSERT_FALSE(filter.testInt64(23));
+  filter.insert(23);
+  ASSERT_TRUE(filter.testInt64(23));
+  ASSERT_FALSE(deserialized->testingEquals(filter));
+}
+
+TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
+  BigintValuesUsingBloomFilter filter(4, false);
+  for (int64_t x : {2, 3, 5, 7}) {
+    filter.insert(x);
+  }
+  auto test = [&](const Filter& other, const Filter& expected) {
+    auto merged = filter.mergeWith(&other);
+    ASSERT_TRUE(merged->testingEquals(expected));
+    auto merged2 = other.mergeWith(&filter);
+    ASSERT_TRUE(merged->testingEquals(*merged2));
+  };
+  {
+    SCOPED_TRACE("BigintRange");
+    test(BigintRange(2, 5, true), *createBigintValues({2, 3, 5}, false));
+  }
+  {
+    SCOPED_TRACE("Huge BigintRange");
+    BigintRange other(-1, INT64_MAX, true);
+    test(other, other);
+  }
+  {
+    SCOPED_TRACE("BigintValuesUsingHashTable");
+    std::vector<int64_t> otherValues = {INT64_MIN, 0, 3, 6, 9, INT64_MAX};
+    BigintValuesUsingHashTable other(
+        otherValues.front(), otherValues.back(), otherValues, true);
+    test(other, *createBigintValues({3}, false));
+  }
+  {
+    SCOPED_TRACE("BigintValuesUsingBitmask");
+    std::vector<int64_t> otherValues = {0, 3, 6, 9};
+    BigintValuesUsingBitmask other(
+        otherValues.front(), otherValues.back(), otherValues, true);
+    test(other, *createBigintValues({3}, false));
+  }
+}
+
 TEST(FilterTest, bigintMultiRange) {
   // x between 1 and 10 or x between 100 and 120
   auto filter = bigintOr(between(1, 10), between(100, 120));
