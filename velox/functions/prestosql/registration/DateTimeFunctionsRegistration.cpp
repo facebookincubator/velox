@@ -344,6 +344,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "parse_duration"});
 
   registerFunction<LocalTimeFunction, Time>({prefix + "localtime"});
+  registerFunction<CurrentTimeFunction, TimeWithTimezone>(
+      {prefix + "current_time"});
 }
 } // namespace
 
