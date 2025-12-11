@@ -31,7 +31,6 @@
 #include "velox/common/testutil/TestValue.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
-DECLARE_bool(velox_memory_pool_debug_enabled);
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 
 using namespace ::testing;
@@ -2531,7 +2530,6 @@ TEST_P(MemoryPoolTest, concurrentUpdateToDifferentPools) {
 }
 
 TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
-  FLAGS_velox_memory_pool_debug_enabled = true;
   if (!isLeafThreadSafe_) {
     return;
   }
@@ -2717,7 +2715,6 @@ TEST(MemoryPoolTest, visitChildren) {
 }
 
 TEST(MemoryPoolTest, debugMode) {
-  FLAGS_velox_memory_pool_debug_enabled = true;
   constexpr int64_t kMaxMemory = 10 * GB;
   constexpr int64_t kNumIterations = 100;
   const std::vector<int64_t> kAllocSizes = {128, 8 * KB, 2 * MB};
@@ -2915,7 +2912,6 @@ TEST(MemoryPoolTest, debugModeWithFilter) {
 }
 
 TEST_P(MemoryPoolTest, debugModeWrapCapException) {
-  FLAGS_velox_memory_pool_debug_enabled = true;
   const uint64_t kMaxCap = 128L * MB;
   MemoryManager::Options options;
   options.allocatorCapacity = kMaxCap;

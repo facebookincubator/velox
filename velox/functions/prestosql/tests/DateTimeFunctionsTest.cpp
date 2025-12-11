@@ -1282,6 +1282,65 @@ TEST_F(DateTimeFunctionsTest, timeMinusIntervalDayTime) {
   EXPECT_EQ(3600000, timeMinusInterval(time7, -threeHours));
 }
 
+TEST_F(DateTimeFunctionsTest, timeMinusTime) {
+  // Test TIME - TIME arithmetic returning INTERVAL_DAY_TIME
+
+  const auto timeMinusTime = [&](int64_t time1,
+                                 int64_t time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time1}, TIME()),
+            makeNullableFlatVector<int64_t>({time2}, TIME()),
+        }));
+  };
+
+  // Test basic subtraction: 10:00:00 - 08:00:00 = 2 hours = 7200000 ms
+  const int64_t tenAM = 10 * kMillisInHour; // 36000000 ms
+  const int64_t eightAM = 8 * kMillisInHour; // 28800000 ms
+  const int64_t twoHours = 2 * kMillisInHour; // 7200000 ms
+  EXPECT_EQ(twoHours, timeMinusTime(tenAM, eightAM));
+
+  // Test reverse (negative result): 08:00:00 - 10:00:00 = -2 hours
+  EXPECT_EQ(-twoHours, timeMinusTime(eightAM, tenAM));
+
+  // Test same time: 10:00:00 - 10:00:00 = 0
+  EXPECT_EQ(0, timeMinusTime(tenAM, tenAM));
+
+  // Test with millisecond precision
+  // 12:30:45.123 - 06:04:05.321 = 23199802 ms
+  const int64_t time1 = 12 * kMillisInHour + 30 * kMillisInMinute +
+      45 * kMillisInSecond + 123; // 45045123
+  const int64_t time2 = 6 * kMillisInHour + 4 * kMillisInMinute +
+      5 * kMillisInSecond + 321; // 21845321
+  EXPECT_EQ(23199802, timeMinusTime(time1, time2));
+
+  // Test midnight cases
+  // 23:59:59.999 - 00:00:00.000 = 86399999 ms (almost full day)
+  const int64_t almostMidnight = kMillisInDay - 1; // 86399999
+  const int64_t midnight = 0;
+  EXPECT_EQ(86399999, timeMinusTime(almostMidnight, midnight));
+
+  // 00:00:00.000 - 23:59:59.999 = -86399999 ms (negative almost full day)
+  EXPECT_EQ(-86399999, timeMinusTime(midnight, almostMidnight));
+
+  // Test with NULL values
+  const auto timeMinusTimeWithNull =
+      [&](std::optional<int64_t> time1,
+          std::optional<int64_t> time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time1}, TIME()),
+            makeNullableFlatVector<int64_t>({time2}, TIME()),
+        }));
+  };
+
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(tenAM, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, eightAM));
+}
+
 // Comprehensive tests for TimePlusIntervalYearMonthVectorFunction optimizations
 // and IntervalYearMonthPlusTimeVectorFunction optimizations
 TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
@@ -6297,6 +6356,99 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
       std::nullopt);
 
   EXPECT_EQ(at_timezone(std::nullopt, "Pacific/Fiji"), std::nullopt);
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneTimeWithTimezoneTest) {
+  using namespace facebook::velox::util;
+
+  const auto at_timezone = [&](std::optional<int64_t> timeWithTimezone,
+                               std::optional<std::string> targetTimezone) {
+    return evaluateOnce<int64_t>(
+        "at_timezone(c0, c1)",
+        {TIME_WITH_TIME_ZONE(), VARCHAR()},
+        timeWithTimezone,
+        targetTimezone);
+  };
+
+  // Helper to create TIME WITH TIME ZONE values
+  const auto makeTimeWithTz = [](const std::string& timeStr) -> int64_t {
+    auto result = fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // Test 1: Change from +05:30 to +08:00
+  // Input: 10:30:00+05:30 (which is 05:00:00 UTC)
+  // Output: Same UTC time (05:00:00 UTC) with +08:00 offset
+  auto input1 = makeTimeWithTz("10:30:00+05:30");
+  auto expected1 = makeTimeWithTz("13:00:00+08:00"); // Same UTC moment
+  EXPECT_EQ(at_timezone(input1, "+08:00"), expected1);
+
+  // Test 2: Change from -08:00 to +00:00 (UTC)
+  // Input: 14:00:00-08:00 (which is 22:00:00 UTC)
+  // Output: Same UTC time with +00:00 offset
+  auto input2 = makeTimeWithTz("14:00:00-08:00");
+  auto expected2 = makeTimeWithTz("22:00:00+00:00");
+  EXPECT_EQ(at_timezone(input2, "+00:00"), expected2);
+
+  // Test 3: Change from +00:00 to -05:00
+  // Input: 12:00:00+00:00 (which is 12:00:00 UTC)
+  // Output: Same UTC time with -05:00 offset
+  auto input3 = makeTimeWithTz("12:00:00+00:00");
+  auto expected3 = makeTimeWithTz("07:00:00-05:00");
+  EXPECT_EQ(at_timezone(input3, "-05:00"), expected3);
+
+  // Test 4: Change from +01:00 to -11:00
+  // Input: 23:30:00+01:00 (which is 22:30:00 UTC)
+  // Output: Same UTC time with -11:00 offset
+  auto input4 = makeTimeWithTz("23:30:00+01:00");
+  auto expected4 = makeTimeWithTz("11:30:00-11:00");
+  EXPECT_EQ(at_timezone(input4, "-11:00"), expected4);
+
+  // Test 5: With milliseconds - +05:30 to -08:00
+  // Input: 10:30:45.123+05:30 (which is 05:00:45.123 UTC)
+  // Output: Same UTC time with -08:00 offset
+  auto input5 = makeTimeWithTz("10:30:45.123+05:30");
+  auto expected5 = makeTimeWithTz("21:00:45.123-08:00");
+  EXPECT_EQ(at_timezone(input5, "-08:00"), expected5);
+
+  // Test 6: Different offset format - using +HH format
+  auto input6 = makeTimeWithTz("15:00:00+02:00");
+  auto expected6 = makeTimeWithTz("08:00:00-05:00");
+  EXPECT_EQ(at_timezone(input6, "-05"), expected6);
+
+  // Test 7: Different offset format - using +HH:mm format (Presto-compatible)
+  // Note: at_timezone uses allowCompactFormat=false to match Presto behavior,
+  // so we must use +HH:mm format, not +HHmm
+  auto input7 = makeTimeWithTz("08:15:30+00:00");
+  auto expected7 = makeTimeWithTz("13:45:30+05:30");
+  EXPECT_EQ(at_timezone(input7, "+05:30"), expected7);
+
+  // Test 8: Null input time
+  EXPECT_EQ(at_timezone(std::nullopt, "+05:00"), std::nullopt);
+
+  // Test 9: Null target timezone
+  EXPECT_EQ(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), std::nullopt),
+      std::nullopt);
+
+  // Test 10: Invalid timezone offset format should throw
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "invalid"), VeloxUserError);
+
+  // Test 11: Timezone offset out of valid range should throw
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "+15:00"), VeloxUserError);
+
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "-15:00"), VeloxUserError);
+
+  // Test 12: timezone IANA Names should throw
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "America/Los_Angeles"),
+      VeloxUserError);
 }
 
 TEST_F(DateTimeFunctionsTest, toMilliseconds) {

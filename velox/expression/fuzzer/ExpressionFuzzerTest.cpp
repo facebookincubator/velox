@@ -56,6 +56,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::AtTimezoneArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
@@ -89,6 +90,7 @@ std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
 
 std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
     argValuesGenerators = {
+        {"at_timezone", std::make_shared<AtTimezoneArgValuesGenerator>()},
         {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
         {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
         {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
@@ -269,6 +271,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "array_subset", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
     "map_intersect", // Velox-only function, not available in Presto
+    "map_keys_overlap", // Velox-only function, not available in Presto
+    "map_append", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -420,7 +424,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
-    "jarowinkler_similarity",
+    "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
 };
 
 int main(int argc, char** argv) {

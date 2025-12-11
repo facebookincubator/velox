@@ -173,4 +173,20 @@ class FbDedupNormalizeTextArgValuesGenerator : public ArgValuesGenerator {
       FuzzerGenerator& rng,
       ExpressionFuzzerState& state) override;
 };
+
+/// Generates arguments for at_timezone function.
+/// Constrains the second parameter (timezone) to valid timezone offset formats
+/// (e.g., "+HH:MM", "-HH:MM", "+HH", etc.) instead of random strings.
+class AtTimezoneArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  AtTimezoneArgValuesGenerator() = default;
+  ~AtTimezoneArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
 } // namespace facebook::velox::fuzzer
