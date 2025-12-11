@@ -67,6 +67,10 @@ class Window : public Operator {
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 
+  const HashStringAllocator* testingGetHashStringAllocator() const {
+    return &stringAllocator_;
+  }
+
   /// Runtime statistics holding total number of batches read from spilled data.
   /// 0 if no spilling occurred.
   static inline const std::string kWindowSpillReadNumBatches{
