@@ -224,8 +224,11 @@ TEST_F(KHyperLogLogTest, serde) {
   size_t totalSize = khll->estimatedSerializedSize();
   std::string outputBuffer(totalSize, '\0');
   khll->serialize(outputBuffer.data());
-  auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
-      outputBuffer.data(), outputBuffer.size(), allocator_);
+  auto deserializedResult =
+      KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
+          outputBuffer.data(), outputBuffer.size(), allocator_);
+  ASSERT_TRUE(deserializedResult.hasValue());
+  auto& deserialized = deserializedResult.value();
 
   EXPECT_EQ(khll->cardinality(), deserialized->cardinality());
   EXPECT_EQ(
@@ -242,9 +245,11 @@ TEST_F(KHyperLogLogTest, serde) {
   size_t emptySize = emptyKhll->estimatedSerializedSize();
   std::string emptyOutputBuffer(emptySize, '\0');
   emptyKhll->serialize(emptyOutputBuffer.data());
-  auto deserializedEmpty =
+  auto deserializedEmptyResult =
       KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
           emptyOutputBuffer.data(), emptyOutputBuffer.size(), allocator_);
+  ASSERT_TRUE(deserializedEmptyResult.hasValue());
+  auto& deserializedEmpty = deserializedEmptyResult.value();
   EXPECT_EQ(deserializedEmpty->cardinality(), 0);
   std::string reserializedEmptyOutputBuffer(emptySize, '\0');
   deserializedEmpty->serialize(reserializedEmptyOutputBuffer.data());
@@ -458,8 +463,11 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     size_t totalSize = khll->estimatedSerializedSize();
     std::string outputBuffer(totalSize, '\0');
     khll->serialize(outputBuffer.data());
-    auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
-        outputBuffer.data(), outputBuffer.size(), allocator_);
+    auto deserializedResult =
+        KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
+            outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserializedResult.hasValue());
+    auto& deserialized = deserializedResult.value();
     std::string reserializeBuffer(totalSize, '\0');
     deserialized->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
@@ -479,8 +487,11 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     size_t totalSize = khll->estimatedSerializedSize();
     std::string outputBuffer(totalSize, '\0');
     khll->serialize(outputBuffer.data());
-    auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
-        outputBuffer.data(), outputBuffer.size(), allocator_);
+    auto deserializedResult =
+        KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
+            outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserializedResult.hasValue());
+    auto& deserialized = deserializedResult.value();
     std::string reserializeBuffer(totalSize, '\0');
     deserialized->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
@@ -502,8 +513,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -523,8 +535,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -544,8 +557,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -565,8 +579,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -586,8 +601,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -607,8 +623,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -633,8 +650,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -655,8 +673,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 
@@ -678,8 +697,9 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     khll->serialize(outputBuffer.data());
     auto deserialized = KHyperLogLog<int64_t, HashStringAllocator>::deserialize(
         outputBuffer.data(), outputBuffer.size(), allocator_);
+    ASSERT_TRUE(deserialized.hasValue());
     std::string reserializeBuffer(totalSize, '\0');
-    deserialized->serialize(reserializeBuffer.data());
+    deserialized.value()->serialize(reserializeBuffer.data());
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 }
