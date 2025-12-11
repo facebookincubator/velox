@@ -159,7 +159,9 @@ int main(int argc, char** argv) {
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
       // Come back to SetDigest and KHLL aggregate functions.
-      "make_set_digest"};
+      "make_set_digest",
+      "merge_set_digest",
+  };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
       "tdigest_agg",
