@@ -80,10 +80,13 @@ jobs:
             echo "run_clang_tidy=true" >> "$GITHUB_OUTPUT"
           fi
 
-  clang-tidy:
+  code-review-and-clang-tidy:
     needs: get-changes
     if: ${{ needs.get-changes.outputs.run-clang-tidy == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      id-token: write
     container: ghcr.io/facebookincubator/velox-dev:adapters
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -128,6 +131,39 @@ jobs:
           git config --global --add safe.directory /__w/velox/velox
 
           python ./scripts/checks/run-clang-tidy.py --commit $RANGE $FILES
+
+      - name: Run Claude Code Review
+        id: claude-review
+        continue-on-error: true
+        uses: anthropics/claude-code-action@ac1a3207f3f00b4a37e2f3a6f0935733c7c64651 # 2.0.9
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR TITLE: ${{ github.event.pull_request.title }}
+            IS_FIRST_TIME_CONTRIBUTOR: "${{ github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' }}"
+            CONTRIBUTOR: ${{ github.event.pull_request.user.login }}
+            CHANGED_FILES: ${{ needs.get-changes.outputs.changed-files }}
+
+            Review this Velox PR. Use the CLAUDE.md file for coding standards and conventions.
+
+            Focus on:
+            - Code quality, best practices, and adherence to CODING_STYLE.md
+            - Potential bugs, performance issues, and security concerns
+            - Test coverage and edge cases
+            - Documentation requirements (check CLAUDE.md Documentation section)
+
+            For first-time contributors, be thorough but constructive, checking:
+            - License headers, naming conventions, code style compliance
+            - Comprehensive tests and documentation
+            - Breaking changes properly marked
+
+            Use `gh pr comment` to post your review on PR #${{ github.event.pull_request.number }}.
+
+          claude_args: |
+            --allowed-tools "Read,Grep,Glob,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
 
   title-check:
     name: PR Title Format
