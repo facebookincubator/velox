@@ -36,6 +36,73 @@ class SetDigestAggregateTest : public AggregationTestBase {
     AggregationTestBase::SetUp();
     registerSetDigestType();
   }
+
+  // Helper to deserialize and verify a SetDigest result.
+  void verifySetDigest(
+      const RowVectorPtr& result,
+      int64_t expectedCardinality,
+      bool expectExact = true,
+      int32_t rowIndex = 0) {
+    ASSERT_LT(rowIndex, result->size());
+    auto resultVector = result->childAt(result->type()->size() - 1)
+                            ->as<FlatVector<StringView>>();
+    ASSERT_FALSE(resultVector->isNullAt(rowIndex));
+
+    auto serialized = resultVector->valueAt(rowIndex);
+    auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+    SetDigestType digest(allocator.get());
+    auto status = digest.deserialize(serialized.data(), serialized.size());
+    ASSERT_TRUE(status.ok()) << status.message();
+
+    EXPECT_EQ(digest.cardinality(), expectedCardinality);
+    if (expectExact) {
+      EXPECT_TRUE(digest.isExact());
+    }
+  }
+
+  // Helper to verify result is null.
+  void verifySetDigestNull(const RowVectorPtr& result, int32_t rowIndex = 0) {
+    ASSERT_LT(rowIndex, result->size());
+    auto resultVector = result->childAt(result->type()->size() - 1)
+                            ->as<FlatVector<StringView>>();
+    EXPECT_TRUE(resultVector->isNullAt(rowIndex));
+  }
+
+  // Helper to create a serialized SetDigest from int64_t values.
+  std::string serializeSetDigest(const std::vector<int64_t>& values) {
+    auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+    SetDigestType digest(allocator.get());
+    for (auto value : values) {
+      digest.add(value);
+    }
+    auto size = digest.estimatedSerializedSize();
+    std::string buffer(size, '\0');
+    digest.serialize(buffer.data());
+    return buffer;
+  }
+
+  // Helper to run make_set_digest and get result.
+  RowVectorPtr runMakeSetDigest(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& groupingKeys = {}) {
+    auto op = PlanBuilder()
+                  .values(input)
+                  .singleAggregation(groupingKeys, {"make_set_digest(c0)"})
+                  .planNode();
+    return AssertQueryBuilder(op).copyResults(pool());
+  }
+
+  // Helper to run merge_set_digest and get result.
+  RowVectorPtr runMergeSetDigest(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& groupingKeys = {}) {
+    auto op = PlanBuilder()
+                  .values(input)
+                  .project({"cast(a0 as setdigest)"})
+                  .singleAggregation(groupingKeys, {"merge_set_digest(p0)"})
+                  .planNode();
+    return AssertQueryBuilder(op).copyResults(pool());
+  }
 };
 
 TEST_F(SetDigestAggregateTest, intValues) {
@@ -43,26 +110,8 @@ TEST_F(SetDigestAggregateTest, intValues) {
       makeFlatVector<int64_t>({1, 1, 1, 2, 2, 3, 3, 3, 3}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 3);
-  EXPECT_TRUE(digest.isExact());
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 3);
 }
 
 TEST_F(SetDigestAggregateTest, withNullValues) {
@@ -71,26 +120,8 @@ TEST_F(SetDigestAggregateTest, withNullValues) {
           {1, std::nullopt, 2, std::nullopt, 3, std::nullopt, 1}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 3);
-  EXPECT_TRUE(digest.isExact());
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 3);
 }
 
 TEST_F(SetDigestAggregateTest, allNullValues) {
@@ -99,17 +130,8 @@ TEST_F(SetDigestAggregateTest, allNullValues) {
           {std::nullopt, std::nullopt, std::nullopt}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-
-  EXPECT_TRUE(resultVector->isNullAt(0));
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigestNull(result);
 }
 
 TEST_F(SetDigestAggregateTest, emptyInput) {
@@ -117,17 +139,8 @@ TEST_F(SetDigestAggregateTest, emptyInput) {
       makeFlatVector<int64_t>({}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-
-  EXPECT_TRUE(resultVector->isNullAt(0));
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigestNull(result);
 }
 
 TEST_F(SetDigestAggregateTest, stringValues) {
@@ -143,26 +156,8 @@ TEST_F(SetDigestAggregateTest, stringValues) {
            "a longer string with more than 12 characters"}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 5);
-  EXPECT_TRUE(digest.isExact());
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 5);
 }
 
 TEST_F(SetDigestAggregateTest, groupBy) {
@@ -205,27 +200,8 @@ TEST_F(SetDigestAggregateTest, groupBy) {
 
 TEST_F(SetDigestAggregateTest, differentNumericTypes) {
   auto testType = [&](const std::string& typeStr, auto makeVector) {
-    auto vectors = makeRowVector({makeVector});
-
-    auto op = PlanBuilder()
-                  .values({vectors})
-                  .singleAggregation({}, {"make_set_digest(c0)"})
-                  .planNode();
-
-    auto result = AssertQueryBuilder(op).copyResults(pool());
-
-    ASSERT_EQ(result->size(), 1);
-    auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-    ASSERT_FALSE(resultVector->isNullAt(0));
-
-    auto serialized = resultVector->valueAt(0);
-
-    auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-    SetDigestType digest(allocator.get());
-    auto status = digest.deserialize(serialized.data(), serialized.size());
-    ASSERT_TRUE(status.ok()) << status.message();
-
-    EXPECT_EQ(digest.cardinality(), 3) << "Failed for type: " << typeStr;
+    auto result = runMakeSetDigest({makeRowVector({makeVector})});
+    verifySetDigest(result, 3);
   };
 
   testType("TINYINT", makeFlatVector<int8_t>({1, 2, 3, 1, 2}));
@@ -241,28 +217,9 @@ TEST_F(SetDigestAggregateTest, largeExactSet) {
     values.push_back(i);
   }
 
-  auto vectors = makeRowVector({makeFlatVector<int64_t>(values)});
-
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 1000);
-  EXPECT_TRUE(digest.isExact());
+  auto result =
+      runMakeSetDigest({makeRowVector({makeFlatVector<int64_t>(values)})});
+  verifySetDigest(result, 1000);
 }
 
 TEST_F(SetDigestAggregateTest, largeApproximateSet) {
@@ -272,25 +229,14 @@ TEST_F(SetDigestAggregateTest, largeApproximateSet) {
     values.push_back(i);
   }
 
-  auto vectors = makeRowVector({makeFlatVector<int64_t>(values)});
+  auto result =
+      runMakeSetDigest({makeRowVector({makeFlatVector<int64_t>(values)})});
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
+  auto serialized =
+      result->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
   auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
   SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
+  ASSERT_TRUE(digest.deserialize(serialized.data(), serialized.size()).ok());
 
   EXPECT_FALSE(digest.isExact());
 
@@ -309,57 +255,35 @@ TEST_F(SetDigestAggregateTest, partialAggregation) {
       makeRowVector({makeFlatVector<int64_t>({5, 6, 7})}),
   };
 
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({}, {"make_set_digest(c0)"})
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
+  auto result = AssertQueryBuilder(
+                    PlanBuilder()
+                        .values(vectors)
+                        .partialAggregation({}, {"make_set_digest(c0)"})
+                        .intermediateAggregation()
+                        .finalAggregation()
+                        .planNode())
+                    .copyResults(pool());
 
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 7);
-  EXPECT_TRUE(digest.isExact());
+  verifySetDigest(result, 7);
 }
 
 TEST_F(SetDigestAggregateTest, roundTripSerialization) {
-  auto vectors = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
-  });
-
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
+  auto result = runMakeSetDigest(
+      {makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})})});
 
   auto serialized =
       result->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
 
   auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
   SetDigestType digest1(allocator.get());
-  auto status = digest1.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
+  ASSERT_TRUE(digest1.deserialize(serialized.data(), serialized.size()).ok());
 
   auto size1 = digest1.estimatedSerializedSize();
   std::vector<char> buffer1(size1);
   digest1.serialize(buffer1.data());
 
   SetDigestType digest2(allocator.get());
-  status = digest2.deserialize(buffer1.data(), size1);
-  ASSERT_TRUE(status.ok()) << status.message();
+  ASSERT_TRUE(digest2.deserialize(buffer1.data(), size1).ok());
 
   auto size2 = digest2.estimatedSerializedSize();
   std::vector<char> buffer2(size2);
@@ -376,26 +300,8 @@ TEST_F(SetDigestAggregateTest, booleanValues) {
       makeFlatVector<bool>({true, false, true, false, true}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 2);
-  EXPECT_TRUE(digest.isExact());
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 2);
 }
 
 TEST_F(SetDigestAggregateTest, javaCompatibilityInteger) {
@@ -403,75 +309,46 @@ TEST_F(SetDigestAggregateTest, javaCompatibilityInteger) {
   // with Java implementation. Unlike other tests which only verify
   // cardinality, this explicitly tests that the serialized format can be
   // deserialized correctly (serialize → deserialize → verify).
-  auto vectors = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
-  });
+  auto result = runMakeSetDigest(
+      {makeRowVector({makeFlatVector<int64_t>({1, 1, 1, 2, 2})})});
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
+  verifySetDigest(result, 2);
 
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
+  auto serialized =
+      result->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
   auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
 
-  EXPECT_EQ(digest.cardinality(), 2);
-  EXPECT_TRUE(digest.isExact());
+  SetDigestType digest(allocator.get());
+  ASSERT_TRUE(digest.deserialize(serialized.data(), serialized.size()).ok());
 
   auto size = digest.estimatedSerializedSize();
   std::vector<char> buffer(size);
   digest.serialize(buffer.data());
 
   SetDigestType digest2(allocator.get());
-  status = digest2.deserialize(buffer.data(), size);
-  ASSERT_TRUE(status.ok()) << status.message();
-  ASSERT_TRUE(status.ok()) << status.message();
+  ASSERT_TRUE(digest2.deserialize(buffer.data(), size).ok());
   EXPECT_EQ(digest2.cardinality(), 2);
 }
 
 TEST_F(SetDigestAggregateTest, javaCompatibilityString) {
-  auto vectors = makeRowVector({
-      makeFlatVector<std::string>({"abc", "def"}),
-  });
+  auto result = runMakeSetDigest(
+      {makeRowVector({makeFlatVector<std::string>({"abc", "def"})})});
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
+  verifySetDigest(result, 2);
 
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
+  auto serialized =
+      result->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
   auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
 
-  EXPECT_EQ(digest.cardinality(), 2);
-  EXPECT_TRUE(digest.isExact());
+  SetDigestType digest(allocator.get());
+  ASSERT_TRUE(digest.deserialize(serialized.data(), serialized.size()).ok());
 
   auto size = digest.estimatedSerializedSize();
   std::vector<char> buffer(size);
   digest.serialize(buffer.data());
 
   SetDigestType digest2(allocator.get());
-  status = digest2.deserialize(buffer.data(), size);
-  ASSERT_TRUE(status.ok()) << status.message();
+  ASSERT_TRUE(digest2.deserialize(buffer.data(), size).ok());
   EXPECT_EQ(digest2.cardinality(), 2);
 }
 
@@ -480,26 +357,8 @@ TEST_F(SetDigestAggregateTest, floatValues) {
       makeFlatVector<float>({1.2f, 2.3f, 1.2f, 3.4f, 2.3f}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 3);
-  EXPECT_TRUE(digest.isExact());
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 3);
 }
 
 TEST_F(SetDigestAggregateTest, doubleValues) {
@@ -507,26 +366,8 @@ TEST_F(SetDigestAggregateTest, doubleValues) {
       makeFlatVector<double>({1.5, 2.7, 1.5, 3.9, 2.7}),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
-
-  auto result = AssertQueryBuilder(op).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
-  ASSERT_FALSE(resultVector->isNullAt(0));
-
-  auto serialized = resultVector->valueAt(0);
-
-  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
-  ASSERT_TRUE(status.ok()) << status.message();
-
-  EXPECT_EQ(digest.cardinality(), 3);
-  EXPECT_TRUE(digest.isExact());
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 3);
 }
 
 TEST_F(SetDigestAggregateTest, dateValues) {
@@ -536,12 +377,168 @@ TEST_F(SetDigestAggregateTest, dateValues) {
           DATE()),
   });
 
-  auto op = PlanBuilder()
-                .values({vectors})
-                .singleAggregation({}, {"make_set_digest(c0)"})
-                .planNode();
+  auto result = runMakeSetDigest({vectors});
+  verifySetDigest(result, 3);
+}
 
-  auto result = AssertQueryBuilder(op).copyResults(pool());
+TEST_F(SetDigestAggregateTest, mergeBasic) {
+  auto data1 = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto data2 = makeRowVector({makeFlatVector<int64_t>({3, 4, 5})});
+
+  std::vector<RowVectorPtr> digestVectors;
+  for (auto& data : {data1, data2}) {
+    digestVectors.push_back(runMakeSetDigest({data}));
+  }
+
+  auto result = runMergeSetDigest(digestVectors);
+  verifySetDigest(result, 5);
+}
+
+TEST_F(SetDigestAggregateTest, mergeWithNullValues) {
+  auto data1 = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+
+  auto op1 = PlanBuilder()
+                 .values({data1})
+                 .singleAggregation({}, {"make_set_digest(c0)"})
+                 .planNode();
+  auto result1 = AssertQueryBuilder(op1).copyResults(pool());
+
+  auto combined = makeRowVector({
+      makeNullableFlatVector<StringView>(
+          {result1->childAt(0)->as<FlatVector<StringView>>()->valueAt(0),
+           std::nullopt,
+           result1->childAt(0)->as<FlatVector<StringView>>()->valueAt(0)}),
+  });
+
+  auto mergeOp = PlanBuilder()
+                     .values({combined})
+                     .project({"cast(c0 as setdigest)"})
+                     .singleAggregation({}, {"merge_set_digest(p0)"})
+                     .planNode();
+
+  auto result = AssertQueryBuilder(mergeOp).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
+  ASSERT_FALSE(resultVector->isNullAt(0));
+
+  auto serialized = resultVector->valueAt(0);
+  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+  SetDigestType digest(allocator.get());
+  auto status = digest.deserialize(serialized.data(), serialized.size());
+  ASSERT_TRUE(status.ok()) << status.message();
+
+  EXPECT_EQ(digest.cardinality(), 2);
+}
+
+TEST_F(SetDigestAggregateTest, mergeWithGroupBy) {
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 2, 2}),
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+  });
+
+  auto partialOp =
+      PlanBuilder()
+          .values({data1})
+          .singleAggregation({"c0"}, {"make_set_digest(c1) as digest"})
+          .planNode();
+  auto partialResult = AssertQueryBuilder(partialOp).copyResults(pool());
+
+  auto mergeOp = PlanBuilder()
+                     .values({partialResult})
+                     .project({"c0", "cast(digest as setdigest) as digest"})
+                     .singleAggregation({"c0"}, {"merge_set_digest(digest)"})
+                     .planNode();
+
+  auto result = AssertQueryBuilder(mergeOp).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+
+  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+  auto digestVector = result->childAt(1)->as<FlatVector<StringView>>();
+
+  for (auto i = 0; i < result->size(); ++i) {
+    auto serialized = digestVector->valueAt(i);
+
+    SetDigestType mergedDigest(allocator.get());
+    auto status =
+        mergedDigest.deserialize(serialized.data(), serialized.size());
+    ASSERT_TRUE(status.ok()) << status.message();
+
+    EXPECT_EQ(mergedDigest.cardinality(), 2);
+    EXPECT_TRUE(mergedDigest.isExact());
+  }
+}
+
+TEST_F(SetDigestAggregateTest, mergeDistributedAggregation) {
+  std::vector<RowVectorPtr> partialResults;
+
+  for (int64_t i = 0; i < 3; ++i) {
+    std::vector<int64_t> values;
+    for (int64_t j = i * 10; j < (i + 1) * 10; ++j) {
+      values.push_back(j);
+    }
+    partialResults.push_back(
+        runMakeSetDigest({makeRowVector({makeFlatVector<int64_t>(values)})}));
+  }
+
+  auto result = runMergeSetDigest(partialResults);
+  verifySetDigest(result, 30);
+}
+
+TEST_F(SetDigestAggregateTest, mergeLargeApproximateDigests) {
+  std::vector<RowVectorPtr> partialResults;
+
+  for (int64_t i = 0; i < 5; ++i) {
+    std::vector<int64_t> values;
+    values.reserve(20000);
+    for (int64_t j = i * 20000; j < (i + 1) * 20000; ++j) {
+      values.push_back(j);
+    }
+    partialResults.push_back(
+        runMakeSetDigest({makeRowVector({makeFlatVector<int64_t>(values)})}));
+  }
+
+  auto result = runMergeSetDigest(partialResults);
+
+  auto serialized =
+      result->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
+  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+  SetDigestType mergedDigest(allocator.get());
+  ASSERT_TRUE(
+      mergedDigest.deserialize(serialized.data(), serialized.size()).ok());
+
+  EXPECT_FALSE(mergedDigest.isExact());
+
+  auto estimatedCardinality = mergedDigest.cardinality();
+  double errorRate = std::abs(estimatedCardinality - 100000) / 100000.0;
+
+  EXPECT_LT(errorRate, 0.05)
+      << "HLL estimate should be within 5% of actual. "
+      << "Actual: 100000, Estimated: " << estimatedCardinality;
+}
+
+TEST_F(SetDigestAggregateTest, mergeMakeSetDigestOutput) {
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 2, 2}),
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+  });
+
+  auto partialOp =
+      PlanBuilder()
+          .values({vectors})
+          .singleAggregation({"c0"}, {"make_set_digest(c1) as digest"})
+          .planNode();
+
+  auto partialResult = AssertQueryBuilder(partialOp).copyResults(pool());
+
+  auto mergeOp = PlanBuilder()
+                     .values({partialResult})
+                     .project({"cast(digest as setdigest) as digest"})
+                     .singleAggregation({}, {"merge_set_digest(digest)"})
+                     .planNode();
+
+  auto result = AssertQueryBuilder(mergeOp).copyResults(pool());
 
   ASSERT_EQ(result->size(), 1);
   auto resultVector = result->childAt(0)->as<FlatVector<StringView>>();
@@ -550,13 +547,119 @@ TEST_F(SetDigestAggregateTest, dateValues) {
   auto serialized = resultVector->valueAt(0);
 
   auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
-  SetDigestType digest(allocator.get());
-  auto status = digest.deserialize(serialized.data(), serialized.size());
+  SetDigestType mergedDigest(allocator.get());
+  auto status = mergedDigest.deserialize(serialized.data(), serialized.size());
   ASSERT_TRUE(status.ok()) << status.message();
 
-  // Should have 3 distinct dates
-  EXPECT_EQ(digest.cardinality(), 3);
-  EXPECT_TRUE(digest.isExact());
+  EXPECT_EQ(mergedDigest.cardinality(), 4);
+  EXPECT_TRUE(mergedDigest.isExact());
+}
+
+TEST_F(SetDigestAggregateTest, mergeRoundTripSerialization) {
+  auto allocator = std::make_unique<HashStringAllocator>(pool_.get());
+
+  SetDigestType digest1(allocator.get());
+  digest1.add(1);
+  digest1.add(2);
+  digest1.add(3);
+
+  auto size1 = digest1.estimatedSerializedSize();
+  std::vector<char> buffer1(size1);
+  digest1.serialize(buffer1.data());
+
+  auto vectors = makeRowVector({
+      makeFlatVector<std::string>(
+          {std::string(buffer1.data(), size1)}, VARBINARY()),
+  });
+
+  auto op = PlanBuilder()
+                .values({vectors})
+                .project({"cast(c0 as setdigest)"})
+                .singleAggregation({}, {"merge_set_digest(p0)"})
+                .planNode();
+
+  auto result = AssertQueryBuilder(op).copyResults(pool());
+
+  auto serialized =
+      result->childAt(0)->as<FlatVector<StringView>>()->valueAt(0);
+
+  SetDigestType digest2(allocator.get());
+  auto status = digest2.deserialize(serialized.data(), serialized.size());
+  ASSERT_TRUE(status.ok()) << status.message();
+
+  auto size2 = digest2.estimatedSerializedSize();
+  std::vector<char> buffer2(size2);
+  digest2.serialize(buffer2.data());
+
+  SetDigestType digest3(allocator.get());
+  status = digest3.deserialize(buffer2.data(), size2);
+  ASSERT_TRUE(status.ok()) << status.message();
+
+  auto size3 = digest3.estimatedSerializedSize();
+  std::vector<char> buffer3(size3);
+  digest3.serialize(buffer3.data());
+
+  EXPECT_EQ(size2, size3);
+  EXPECT_EQ(digest2.cardinality(), 3);
+  EXPECT_EQ(digest3.cardinality(), 3);
+  EXPECT_EQ(
+      std::string(buffer2.begin(), buffer2.end()),
+      std::string(buffer3.begin(), buffer3.end()));
+}
+
+TEST_F(SetDigestAggregateTest, mergeSetDigestGlobalIntermediate) {
+  auto batch1 = makeRowVector({makeFlatVector<std::string>(
+      {serializeSetDigest({1, 2, 3})}, VARBINARY())});
+  auto batch2 = makeRowVector({makeFlatVector<std::string>(
+      {serializeSetDigest({4, 5, 6})}, VARBINARY())});
+  auto batch3 = makeRowVector({makeFlatVector<std::string>(
+      {serializeSetDigest({7, 8, 9})}, VARBINARY())});
+
+  auto result = AssertQueryBuilder(
+                    PlanBuilder()
+                        .values({batch1, batch2, batch3})
+                        .project({"cast(c0 as setdigest)"})
+                        .partialAggregation({}, {"merge_set_digest(p0)"})
+                        .finalAggregation()
+                        .planNode())
+                    .copyResults(pool());
+
+  verifySetDigest(result, 9);
+}
+
+TEST_F(SetDigestAggregateTest, mergeSetDigestGroupedIntermediate) {
+  auto batchWithKey1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>(
+          {serializeSetDigest({1, 2, 3}), serializeSetDigest({10, 20})},
+          VARBINARY()),
+  });
+  auto batchWithKey2 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>(
+          {serializeSetDigest({4, 5, 6}), serializeSetDigest({30, 40})},
+          VARBINARY()),
+  });
+  auto batchWithKey3 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>(
+          {serializeSetDigest({7, 8, 9}), serializeSetDigest({50, 60})},
+          VARBINARY()),
+  });
+
+  auto result =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({batchWithKey1, batchWithKey2, batchWithKey3})
+              .project({"c0", "cast(c1 as setdigest) as digest"})
+              .partialAggregation({"c0"}, {"merge_set_digest(digest)"})
+              .finalAggregation()
+              .planNode())
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+  verifySetDigest(result, 9, true, 0);
+  verifySetDigest(result, 6, true, 1);
 }
 
 } // namespace

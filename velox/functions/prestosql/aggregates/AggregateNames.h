@@ -52,6 +52,7 @@ const char* const kMapAgg = "map_agg";
 const char* const kMapUnion = "map_union";
 const char* const kMapUnionSum = "map_union_sum";
 const char* const kMakeSetDigest = "make_set_digest";
+const char* const kMergeSetDigest = "merge_set_digest";
 const char* const kMax = "max";
 const char* const kMaxBy = "max_by";
 const char* const kMerge = "merge";
