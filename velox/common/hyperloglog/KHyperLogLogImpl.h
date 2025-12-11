@@ -58,23 +58,25 @@ static int64_t hashKey(TJoinKey joinKey) {
 } // namespace detail
 
 template <typename TUii, typename TAllocator>
-std::unique_ptr<KHyperLogLog<TUii, TAllocator>>
+Expected<std::unique_ptr<KHyperLogLog<TUii, TAllocator>>>
 KHyperLogLog<TUii, TAllocator>::deserialize(
     const char* data,
     size_t size,
     TAllocator* allocator) {
-  VELOX_CHECK_GE(size, sizeof(uint8_t), "Invalid KHyperLogLog data: too small");
+  VELOX_RETURN_UNEXPECTED_IF(
+      size < sizeof(uint8_t),
+      Status::UserError("Invalid KHyperLogLog data: too small"));
 
   InputByteStream stream(data);
 
   uint8_t version = stream.read<uint8_t>();
-  VELOX_CHECK_EQ(
-      version, detail::kVersionByte, "Unsupported KHyperLogLog version");
+  VELOX_RETURN_UNEXPECTED_IF(
+      version != detail::kVersionByte,
+      Status::UserError("Unsupported KHyperLogLog version"));
 
-  VELOX_CHECK_GE(
-      size,
-      detail::kHeaderSize,
-      "Invalid KHyperLogLog data: insufficient header size");
+  VELOX_RETURN_UNEXPECTED_IF(
+      size < detail::kHeaderSize,
+      Status::UserError("Invalid KHyperLogLog data: insufficient header size"));
 
   // Header values
   int32_t maxSize = stream.read<int32_t>();
@@ -83,15 +85,15 @@ KHyperLogLog<TUii, TAllocator>::deserialize(
   int32_t totalHllSize = stream.read<int32_t>();
 
   if (minhashSize == 0) {
-    VELOX_CHECK_EQ(
-        totalHllSize,
-        0,
-        "Invalid KHyperLogLog data: minhashSize is 0 but totalHllSize is not 0");
+    VELOX_RETURN_UNEXPECTED_IF(
+        totalHllSize != 0,
+        Status::UserError(
+            "Invalid KHyperLogLog data: minhashSize is 0 but totalHllSize is not 0"));
     size_t remainingSize = size - stream.offset();
-    VELOX_CHECK_EQ(
-        remainingSize,
-        0,
-        "Invalid KHyperLogLog data: minhashSize is 0 but extra data remains");
+    VELOX_RETURN_UNEXPECTED_IF(
+        remainingSize != 0,
+        Status::UserError(
+            "Invalid KHyperLogLog data: minhashSize is 0 but extra data remains"));
     return std::make_unique<KHyperLogLog<TUii, TAllocator>>(
         maxSize, hllBuckets, allocator);
   }
@@ -100,10 +102,10 @@ KHyperLogLog<TUii, TAllocator>::deserialize(
   size_t expectedRemainingSize =
       minhashSize * (sizeof(int32_t) + sizeof(int64_t)) + totalHllSize;
   size_t remainingSize = size - stream.offset();
-  VELOX_CHECK_GE(
-      remainingSize,
-      expectedRemainingSize,
-      "Invalid KHyperLogLog data: insufficient data for minhash and HLLs");
+  VELOX_RETURN_UNEXPECTED_IF(
+      remainingSize < expectedRemainingSize,
+      Status::UserError(
+          "Invalid KHyperLogLog data: insufficient data for minhash and HLLs"));
 
   // Read HLL sizes.
   std::vector<int32_t> hllSizes(minhashSize);
@@ -126,10 +128,10 @@ KHyperLogLog<TUii, TAllocator>::deserialize(
     sumOfHllSizes += hllSize;
   }
 
-  VELOX_CHECK_GE(
-      remainingSize,
-      sumOfHllSizes,
-      "Invalid KHyperLogLog data: insufficient data for HLLs");
+  VELOX_RETURN_UNEXPECTED_IF(
+      remainingSize < sumOfHllSizes,
+      Status::UserError(
+          "Invalid KHyperLogLog data: insufficient data for HLLs"));
 
   for (int32_t i = 0; i < minhashSize; ++i) {
     int32_t hllSize = hllSizes[i];
