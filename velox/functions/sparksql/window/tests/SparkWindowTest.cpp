@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
@@ -105,6 +108,55 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SparkWindowTestInstantiation,
     SparkWindowTest,
     testing::ValuesIn(getSparkWindowTestParams()));
+
+class SparkAggregateWindowTest : public WindowTestBase {
+ public:
+  static void SetUpTestCase() {
+    OperatorTestBase::SetUpTestCase();
+    OperatorTestBase::setupMemory(
+        184 << 20, // allocatorCapacity
+        184 << 20, // arbitratorCapacity
+        0, // arbitratorReservedCapacity
+        184 << 20, // memoryPoolInitCapacity
+        0, // memoryPoolReservedCapacity
+        0, // memoryPoolMinReclaimBytes
+        0 // memoryPoolAbortCapacityLimit
+    );
+  }
+
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    WindowTestBase::options_.parseIntegerAsBigint = false;
+    velox::functions::aggregate::sparksql::registerAggregateFunctions("");
+  }
+};
+
+TEST_F(SparkAggregateWindowTest, clearStringBuffersInTime) {
+  const vector_size_t size = 1'024;
+  auto data = makeRowVector(
+      {"d", "p0", "s"},
+      {
+          // Payload Data.
+          makeFlatVector<std::string>(size, [](auto row) { return std::string(32 * 1024, 'a'); }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .streamingWindow({"first(d) over (partition by p0 order by s)"})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .assertResults(
+          "SELECT *, first(d) over (partition by p0 order by s) "
+          "FROM tmp ");
+}
 
 } // namespace
 } // namespace facebook::velox::window::test
