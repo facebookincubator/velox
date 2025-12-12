@@ -114,7 +114,8 @@ SsdFile::SsdFile(const Config& config)
       shardId_(config.shardId),
       fs_(filesystems::getFileSystem(fileName_, nullptr)),
       checkpointIntervalBytes_(config.checkpointIntervalBytes),
-      executor_(config.executor) {
+      executor_(config.executor),
+      maxEntries_(config.maxEntries) {
   process::TraceContext trace("SsdFile::SsdFile");
   filesystems::FileOptions fileOptions;
   fileOptions.shouldThrowOnFileAlreadyExists = false;
@@ -345,6 +346,16 @@ void SsdFile::clearRegionEntriesLocked(const std::vector<int32_t>& regions) {
 
 void SsdFile::write(std::vector<CachePin>& pins) {
   process::TraceContext trace("SsdFile::write");
+
+  // Check entry count limit before writing
+  if (maxEntries_ > 0) {
+    std::shared_lock<std::shared_mutex> l(mutex_);
+    if (entries_.size() + pins.size() >= maxEntries_) {
+      ++stats_.writeSsdDropped;
+      return;
+    }
+  }
+
   // Sorts the pins by their file/offset. In this way what is adjacent in
   // storage is likely adjacent on SSD.
   std::sort(pins.begin(), pins.end());
@@ -520,6 +531,7 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   stats.deleteMetaFileErrors += stats_.deleteMetaFileErrors;
   stats.growFileErrors += stats_.growFileErrors;
   stats.writeSsdErrors += stats_.writeSsdErrors;
+  stats.writeSsdDropped += stats_.writeSsdDropped;
   stats.writeCheckpointErrors += stats_.writeCheckpointErrors;
   stats.readSsdErrors += stats_.readSsdErrors;
   stats.readCheckpointErrors += stats_.readCheckpointErrors;

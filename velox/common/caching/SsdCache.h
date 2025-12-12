@@ -41,7 +41,8 @@ class SsdCache {
         uint64_t _checkpointIntervalBytes = 0,
         bool _disableFileCow = false,
         bool _checksumEnabled = false,
-        bool _checksumReadVerificationEnabled = false)
+        bool _checksumReadVerificationEnabled = false,
+        uint64_t _maxEntries = 0)
         : filePrefix(_filePrefix),
           maxBytes(_maxBytes),
           numShards(_numShards),
@@ -49,7 +50,8 @@ class SsdCache {
           disableFileCow(_disableFileCow),
           checksumEnabled(_checksumEnabled),
           checksumReadVerificationEnabled(_checksumReadVerificationEnabled),
-          executor(_executor) {}
+          executor(_executor),
+          maxEntries(_maxEntries) {}
 
     std::string filePrefix;
     uint64_t maxBytes;
@@ -70,6 +72,10 @@ class SsdCache {
 
     /// Executor for async fsync in checkpoint.
     folly::Executor* executor;
+
+    /// Maximum number of SSD cache entries allowed. A value of 0 means no
+    /// limit. When the limit is reached, new entry writes will be skipped.
+    uint64_t maxEntries;
 
     std::string toString() const {
       return fmt::format(
