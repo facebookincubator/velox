@@ -1854,8 +1854,8 @@ inline xsimd::batch_bool<double> FloatingPointRange<double>::testValues(
 
 template <>
 inline xsimd::batch_bool<float> FloatingPointRange<double>::testValues(
-    xsimd::batch<float>) const {
-  VELOX_FAIL("Not defined for double filter");
+    xsimd::batch<float> x) const {
+  return Filter::testValues(x);
 }
 
 template <>

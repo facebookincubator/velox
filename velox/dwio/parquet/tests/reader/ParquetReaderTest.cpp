@@ -1803,6 +1803,7 @@ enum class FloatToDoubleFilter {
   kIsNull,
   kIsNotNull,
   kGreaterThanOrEqual, // Value filter: greater than or equal to a threshold
+  kMultiRange, // MultiRange filter: a < X OR a > Y
 };
 
 struct FloatToDoubleSpec {
@@ -1811,6 +1812,8 @@ struct FloatToDoubleSpec {
   bool enableDictionary{true};
   FloatToDoubleFilter filter{FloatToDoubleFilter::kNone};
   std::optional<double> filterValue; // Value for value-based filters
+  std::optional<double> filterLowerValue; // Lower bound for MultiRange filter
+  std::optional<double> filterUpperValue; // Upper bound for MultiRange filter
   std::vector<vector_size_t> deletedRows;
 };
 
@@ -1839,6 +1842,8 @@ struct FloatToDoubleTestParam {
         return "IsNotNull";
       case FloatToDoubleFilter::kGreaterThanOrEqual:
         return "GreaterThanOrEqual";
+      case FloatToDoubleFilter::kMultiRange:
+        return "MultiRange";
       default:
         return "Unknown";
     }
@@ -1853,7 +1858,7 @@ class FloatToDoubleEvolutionTest
     std::vector<FloatToDoubleTestParam> params;
     for (bool hasNulls : {false, true}) {
       for (bool enableDictionary : {false, true}) {
-        // When hasNulls is false, only test kNone and kGreaterThan filter
+        // When hasNulls is false, only test kNone, kGreaterThanOrEqual, and kMultiRange filter
         // (kIsNull would match nothing, kIsNotNull is equivalent to kNone)
         std::vector<FloatToDoubleFilter> filters;
         if (hasNulls) {
@@ -1861,11 +1866,13 @@ class FloatToDoubleEvolutionTest
               FloatToDoubleFilter::kNone,
               FloatToDoubleFilter::kIsNull,
               FloatToDoubleFilter::kIsNotNull,
-              FloatToDoubleFilter::kGreaterThanOrEqual};
+              FloatToDoubleFilter::kGreaterThanOrEqual,
+              FloatToDoubleFilter::kMultiRange};
         } else {
           filters = {
               FloatToDoubleFilter::kNone,
-              FloatToDoubleFilter::kGreaterThanOrEqual};
+              FloatToDoubleFilter::kGreaterThanOrEqual,
+              FloatToDoubleFilter::kMultiRange};
         }
 
         for (auto filter : filters) {
@@ -1948,6 +1955,17 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
           exec::greaterThanOrEqualDouble(spec.filterValue.value()));
       break;
     }
+    case FloatToDoubleFilter::kMultiRange: {
+      ASSERT_TRUE(spec.filterLowerValue.has_value());
+      ASSERT_TRUE(spec.filterUpperValue.has_value());
+      auto* floatChild =
+          scanSpec->getOrCreateChild(common::Subfield("float_col"));
+      // Create a MultiRange filter: a < lower OR a > upper
+      floatChild->setFilter(exec::orFilter(
+          exec::lessThanDouble(spec.filterLowerValue.value()),
+          exec::greaterThanDouble(spec.filterUpperValue.value())));
+      break;
+    }
   }
 
   rowReaderOpts.setScanSpec(scanSpec);
@@ -1981,6 +1999,13 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
         passes = spec.values[row].has_value() &&
             static_cast<double>(*spec.values[row]) >= spec.filterValue.value();
         break;
+      case FloatToDoubleFilter::kMultiRange:
+        passes = spec.values[row].has_value() &&
+            (static_cast<double>(*spec.values[row]) <
+                 spec.filterLowerValue.value() ||
+             static_cast<double>(*spec.values[row]) >
+                 spec.filterUpperValue.value());
+        break;
     }
 
     if (passes) {
@@ -2006,7 +2031,8 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
 
   if (spec.deletedRows.empty() && spec.filter != FloatToDoubleFilter::kIsNull &&
       spec.filter != FloatToDoubleFilter::kIsNotNull &&
-      spec.filter != FloatToDoubleFilter::kGreaterThanOrEqual) {
+      spec.filter != FloatToDoubleFilter::kGreaterThanOrEqual &&
+      spec.filter != FloatToDoubleFilter::kMultiRange) {
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, expected, *leafPool_);
     return;
@@ -2062,6 +2088,10 @@ TEST_P(FloatToDoubleEvolutionTest, readFloatToDouble) {
     // Filter values greater than or equal to 5.0 (this should match
     // approximately half the rows)
     spec.filterValue = 5.0;
+  } else if (param.filter == FloatToDoubleFilter::kMultiRange) {
+    // Filter values < 3.0 OR > 7.0
+    spec.filterLowerValue = 3.0;
+    spec.filterUpperValue = 7.0;
   }
 
   if (!param.isDense) {
