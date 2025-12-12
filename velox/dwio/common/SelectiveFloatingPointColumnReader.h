@@ -36,6 +36,7 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
             scanSpec) {}
 
   // Offers a fast path only if data and result widths match.
+
   static constexpr bool kHasBulkPath = std::is_same_v<TData, TRequested>;
   bool hasBulkPath() const override {
     return kHasBulkPath;
