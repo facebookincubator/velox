@@ -165,7 +165,7 @@ FOLLY_ALWAYS_INLINE ClockwiseResult isClockwise(
     const auto& p2 = coordinates->getAt(i + 1);
     sum += (p2.x - p1.x) * (p2.y + p1.y);
   }
-  if (FOLLY_UNLIKELY(std::abs(sum) < 10e-14)) {
+  if (FOLLY_UNLIKELY(std::abs(sum) < 1e-15)) {
     return ClockwiseResult::ZERO_AREA;
   }
   return sum > 0.0 ? ClockwiseResult::CW : ClockwiseResult::CCW;

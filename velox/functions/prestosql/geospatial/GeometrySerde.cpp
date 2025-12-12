@@ -241,7 +241,7 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
         // When serializing a MultiPolygon, we should throw a user error if
         // there is a zero-area ring. This should only get hit due to a bug in
         // our serde logic.
-        VELOX_FAIL(
+        VELOX_USER_FAIL(
             "Unexpected zero-area ring in MultiPolygon deserialization.");
       }
       if (shell && clockwiseFlag == ClockwiseResult::CW) {
