@@ -140,6 +140,12 @@ class HiveConfig {
   /// request
   static constexpr const char* kFooterEstimatedSize = "footer-estimated-size";
 
+  /// The byte size threshold beyond which the Parquet reader estimates and
+  /// reports the memory usage of deserialized Thrift objects to the memory
+  /// pool.
+  static constexpr const char* kParquetFooterTrackThriftMemoryThreshold =
+      "hive.parquet.track-footer-thrift-memory-threshold";
+
   /// The threshold of file size in bytes when the whole file is fetched with
   /// meta data together. Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
@@ -268,6 +274,8 @@ class HiveConfig {
       const config::ConfigBase* session) const;
 
   uint64_t footerEstimatedSize() const;
+
+  uint64_t parquetFooterTrackThriftMemoryThreshold() const;
 
   uint64_t filePreloadThreshold() const;
 
