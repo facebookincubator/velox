@@ -516,16 +516,26 @@ void CacheShard::calibrateThresholdLocked() {
 void CacheShard::updateStats(CacheStats& stats) {
   std::lock_guard<std::mutex> l(mutex_);
   for (auto& entry : entries_) {
-    if (!entry || !entry->key_.fileNum.hasValue()) {
+    if (!entry) {
       ++stats.numEmptyEntries;
       continue;
     }
 
     if (entry->isExclusive()) {
-      stats.exclusivePinnedBytes +=
-          entry->data().byteSize() + entry->tinyData_.capacity();
+      // We cannot read data() or tinyData_ which are being allocated during
+      // initialize(). Use size_ as an approximation of the pinned bytes.
+      stats.exclusivePinnedBytes += entry->size_;
       ++stats.numExclusive;
-    } else if (entry->isShared()) {
+      // Skip rest of the field accesses while entry is being initialized.
+      continue;
+    }
+
+    if (!entry->key_.fileNum.hasValue()) {
+      ++stats.numEmptyEntries;
+      continue;
+    }
+
+    if (entry->isShared()) {
       stats.sharedPinnedBytes +=
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numShared;

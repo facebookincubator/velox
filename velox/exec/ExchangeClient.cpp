@@ -78,6 +78,11 @@ void ExchangeClient::close() {
     if (closed_) {
       return;
     }
+
+    // Capture stats BEFORE clearing sources_.
+    // This allows stats() to return meaningful data even after close().
+    stats_ = collectStatsLocked();
+
     closed_ = true;
     sources = std::move(sources_);
     producingSources = std::move(producingSources_);
@@ -91,9 +96,17 @@ void ExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
-  folly::F14FastMap<std::string, RuntimeMetric> stats;
+folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() {
   std::lock_guard<std::mutex> l(queue_->mutex());
+  if (stats_.empty()) {
+    stats_ = collectStatsLocked();
+  }
+  return stats_;
+}
+
+folly::F14FastMap<std::string, RuntimeMetric>
+ExchangeClient::collectStatsLocked() const {
+  folly::F14FastMap<std::string, RuntimeMetric> stats;
 
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {
@@ -119,13 +132,13 @@ folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
   return stats;
 }
 
-std::vector<std::unique_ptr<SerializedPage>> ExchangeClient::next(
+std::vector<std::unique_ptr<SerializedPageBase>> ExchangeClient::next(
     int consumerId,
     uint32_t maxBytes,
     bool* atEnd,
     ContinueFuture* future) {
   std::vector<RequestSpec> requestSpecs;
-  std::vector<std::unique_ptr<SerializedPage>> pages;
+  std::vector<std::unique_ptr<SerializedPageBase>> pages;
   ContinuePromise stalePromise = ContinuePromise::makeEmpty();
   {
     std::lock_guard<std::mutex> l(queue_->mutex());

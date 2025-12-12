@@ -13,19 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/core/Expressions.h"
 
-namespace facebook::velox::functions {
+#pragma once
 
-class InRewrite {
- public:
-  /// Rewrites IN special form function when the `value` being searched for is
-  /// constant and the IN-list is not constant. Returns `true` if `value` is in
-  /// the IN-list. Returns NULL if the IN-list contains a NULL. Removes constant
-  /// expressions from IN-list that are not equal to `value`.
-  static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+#include <string>
 
-  static void registerRewrite();
-};
+namespace facebook::velox::aggregate::prestosql {
 
-} // namespace facebook::velox::functions
+void registerMakeSetDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions = true,
+    bool overwrite = true);
+
+void registerMergeSetDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions = true,
+    bool overwrite = true);
+
+} // namespace facebook::velox::aggregate::prestosql

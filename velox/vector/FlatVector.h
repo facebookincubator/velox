@@ -417,21 +417,22 @@ class FlatVector final : public SimpleVector<T> {
     return this->typeKind() != TypeKind::UNKNOWN;
   }
 
-  uint64_t retainedSize() const override {
-    auto size =
-        BaseVector::retainedSize() + (values_ ? values_->capacity() : 0);
-    for (auto& buffer : stringBuffers_) {
-      size += buffer->capacity();
-    }
-    return size;
-  }
-
   /// Used for vectors of type VARCHAR and VARBINARY to hold data referenced
   /// by StringView's. It is safe to share these among multiple vectors. These
   /// buffers are append only. It is allowed to append data, but it is
   /// prohibited to modify already written data.
   const std::vector<BufferPtr>& stringBuffers() const {
     return stringBuffers_;
+  }
+
+  /// Used for vectors of type VARCHAR and VARBINARY. Returns the total size in
+  /// bytes of string buffers held by this vector.
+  uint64_t stringBufferSize() const {
+    uint64_t size = 0;
+    for (const auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+    }
+    return size;
   }
 
   /// Used for vectors of type VARCHAR and VARBINARY to replace the old data
@@ -586,6 +587,16 @@ class FlatVector final : public SimpleVector<T> {
   // reference addresses in the new buffers. Non-StringView-typed FlatVector
   // should not have string buffers.
   void transferAndUpdateStringBuffers(velox::memory::MemoryPool* pool);
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    auto size =
+        BaseVector::retainedSizeImpl() + (values_ ? values_->capacity() : 0);
+    for (auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+      totalStringBufferSize += buffer->capacity();
+    }
+    return size;
+  }
 
   // Contiguous values.
   // If strings, these are velox::StringViews into memory held by

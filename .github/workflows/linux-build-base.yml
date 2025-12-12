@@ -185,7 +185,7 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           ICU_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
           EXTRA_CMAKE_FLAGS: >-
             -DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY
             -DVELOX_ENABLE_PARQUET=ON
@@ -225,6 +225,36 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          path: velox
+          persist-credentials: false
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Install Dependencies
+        env:
+          VELOX_BUILD_SHARED: "ON"
+          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            mkdir /tmp/build
+            cd /tmp/build
+
+            # Install basic deps with GCC.
+            USE_CLANG=false bash /setup-fedora.sh
+
+            cd /
+            rm -rf /tmp/build # cleanup to avoid issues with disk space
+          fi
+
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -235,11 +265,6 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p "$CCACHE_DIR"
-
-      - uses: actions/checkout@v5
-        with:
-          path: velox
-          persist-credentials: false
 
       - name: Clear CCache Statistics
         run: |

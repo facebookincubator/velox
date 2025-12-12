@@ -226,35 +226,42 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
   std::vector<std::unique_ptr<geos::geom::LinearRing>> holes;
   std::vector<std::unique_ptr<geos::geom::Polygon>> polygons;
 
+  // Shells _should_ be clockwise and holes _should_ be counter-clockwise,
+  // but this doesn't always happen for single Polygons. For single Polygons,
+  // we read the first ring as a shell and the rest as holes. For MultiPolygons,
+  // we read the first ring as a shell, and any counter-clockwise rings as
+  // holes, then push a polygon and reset if a clockwise ring is encountered.
   for (size_t i = 0; i < partCount; i++) {
     auto coordinates = readCoordinates(input, partLengths[i]);
-    bool shouldCreateNewShell = true;
 
-    if (isClockwise(coordinates, 0, coordinates->size())) {
-      if (shell) {
+    if (multiType) {
+      ClockwiseResult clockwiseFlag =
+          isClockwise(coordinates, 0, coordinates->size());
+      if (FOLLY_UNLIKELY(clockwiseFlag == ClockwiseResult::ZERO_AREA)) {
+        // When serializing a MultiPolygon, we should throw a user error if
+        // there is a zero-area ring. This should only get hit due to a bug in
+        // our serde logic.
+        VELOX_FAIL(
+            "Unexpected zero-area ring in MultiPolygon deserialization.");
+      }
+      if (shell && clockwiseFlag == ClockwiseResult::CW) {
         // next polygon has started
-        if (FOLLY_LIKELY(multiType)) {
-          polygons.push_back(
-              getGeometryFactory()->createPolygon(
-                  std::move(shell), std::move(holes)));
-          holes.clear();
-        } else {
-          // If this is not a MultiPolygon, we only have one shell so this
-          // CoordinateSequence represents a malformed (clockwise) interior
-          // ring.
-          holes.push_back(
-              getGeometryFactory()->createLinearRing(std::move(coordinates)));
-          shouldCreateNewShell = false;
-        }
+        polygons.push_back(
+            getGeometryFactory()->createPolygon(
+                std::move(shell), std::move(holes)));
+        holes.clear();
+        shell = nullptr;
       }
-      if (FOLLY_LIKELY(shouldCreateNewShell)) {
-        shell = getGeometryFactory()->createLinearRing(std::move(coordinates));
-      }
+    }
+
+    auto ring = getGeometryFactory()->createLinearRing(std::move(coordinates));
+    if (shell == nullptr) {
+      shell = std::move(ring);
     } else {
-      holes.push_back(
-          getGeometryFactory()->createLinearRing(std::move(coordinates)));
+      holes.push_back(std::move(ring));
     }
   }
+
   polygons.push_back(
       getGeometryFactory()->createPolygon(std::move(shell), std::move(holes)));
 

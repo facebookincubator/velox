@@ -751,7 +751,10 @@ class PlanBuilder {
   /// Add a FilterNode using specified SQL expression.
   ///
   /// @param filter SQL expression of type boolean.
-  PlanBuilder& filter(const std::string& filter);
+  PlanBuilder& filter(const std::string& filterExpr);
+
+  /// Same as above, but takes an untyped expression.
+  PlanBuilder& filter(const core::ExprPtr& filterExpr);
 
   /// Similar to filter() except 'optionalFilter' could be empty and the
   /// function will skip creating a FilterNode in that case.
@@ -1046,7 +1049,8 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys);
+      bool ignoreNullKeys,
+      bool noGroupsSpanBatches = false);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
   /// aggregation inputs and a groupId column name.

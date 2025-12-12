@@ -199,6 +199,7 @@ class HashTableBenchmark : public VectorTestBase {
     topTable_->prepareJoinTable(
         std::move(otherTables),
         BaseHashTable::kNoSpillInputStartPartitionBit,
+        false,
         executor_.get());
     LOG(INFO) << "Made table " << topTable_->toString();
 

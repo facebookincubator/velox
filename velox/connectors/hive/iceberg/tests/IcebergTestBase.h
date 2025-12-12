@@ -29,8 +29,7 @@
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
-constexpr std::string_view kDefaultTestIcebergFunctionNamePrefix{
-    "$internal$.test_iceberg."};
+extern const std::string kIcebergConnectorId;
 
 struct PartitionField {
   // 0-based column index.
@@ -57,7 +56,6 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<PartitionField>& partitionFields = {});
 
   std::shared_ptr<IcebergDataSink> createDataSinkAndAppendData(
-      const RowTypePtr& rowType,
       const std::vector<RowVectorPtr>& vectors,
       const std::string& dataPath,
       const std::vector<PartitionField>& partitionFields = {});
@@ -71,7 +69,15 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::vector<PartitionField>& partitionFields);
 
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  /// Extracts partition key-value pairs from a file path.
+  /// Returns a map where keys are partition column names and values are
+  /// partition values (std::nullopt for null values).
+  /// Example: "/path/to/c1=10/c2=null/file.parquet" returns
+  /// {{"c1", "10"}, {"c2", std::nullopt}}.
+  static std::unordered_map<std::string, std::optional<std::string>>
+  extractPartitionKeys(const std::string& filePath);
+
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::PARQUET};
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
 

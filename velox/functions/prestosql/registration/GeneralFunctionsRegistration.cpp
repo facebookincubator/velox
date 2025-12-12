@@ -21,9 +21,9 @@
 #include "velox/functions/prestosql/Fail.h"
 #include "velox/functions/prestosql/GreatestLeast.h"
 #include "velox/functions/prestosql/InPredicate.h"
-#include "velox/functions/prestosql/InRewrite.h"
 #include "velox/functions/prestosql/Reduce.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::functions {
@@ -61,6 +61,8 @@ void registerAllGreatestLeastFunctions(const std::string& prefix) {
   registerGreatestLeastFunction<Timestamp>(prefix);
   registerGreatestLeastFunction<TimestampWithTimezone>(prefix);
   registerGreatestLeastFunction<IPAddress>(prefix);
+  registerGreatestLeastFunction<Time>(prefix);
+  registerGreatestLeastFunction<TimeWithTimezone>(prefix);
 }
 } // namespace
 
@@ -80,8 +82,6 @@ void registerAllSpecialFormGeneralFunctions() {
       bool,
       Generic<T1>,
       Variadic<Generic<T1>>>({"in"});
-  InRewrite::registerRewrite();
-
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, expression::kRowConstructor);
   registerIsNullFunction("is_null");
 }

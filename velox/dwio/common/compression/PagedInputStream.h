@@ -56,7 +56,7 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
   // NOTE: This always returns true.
   bool SkipInt64(int64_t count) override;
 
-  google::protobuf::int64 ByteCount() const override {
+  int64_t ByteCount() const override {
     return bytesReturned_ + pendingSkip_;
   }
 

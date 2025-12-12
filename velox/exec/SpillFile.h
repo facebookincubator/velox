@@ -71,7 +71,7 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
-      common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 

@@ -26,8 +26,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
-  // TODO: remove this after Operator::kBackgroundCpuTimeNanos is fully used.
-  static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
+
   ExchangeClient(
       std::string taskId,
       int destination,
@@ -92,7 +91,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   // Returns runtime statistics aggregated across all of the exchange sources.
   // ExchangeClient is expected to report background CPU time by including a
   // runtime metric named Operator::kBackgroundCpuTimeNanos.
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+  folly::F14FastMap<std::string, RuntimeMetric> stats();
 
   const std::shared_ptr<ExchangeQueue>& queue() const {
     return queue_;
@@ -106,7 +105,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
-  std::vector<std::unique_ptr<SerializedPage>>
+  std::vector<std::unique_ptr<SerializedPageBase>>
   next(int consumerId, uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   std::string toString() const;
@@ -164,6 +163,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         sources_.size() == 1;
   }
 
+  folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
+
   // Handy for ad-hoc logging.
   const std::string taskId_;
   const int destination_;
@@ -177,6 +178,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats_;
 
   // The minimum byte size the consumer is expected to consume from
   // the exchange queue.

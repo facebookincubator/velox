@@ -116,7 +116,7 @@ class OutputBufferManagerTest : public testing::Test {
     return task;
   }
 
-  std::unique_ptr<SerializedPage> makeSerializedPage(
+  std::unique_ptr<SerializedPageBase> makeSerializedPage(
       RowTypePtr rowType,
       vector_size_t size) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -1472,7 +1472,7 @@ TEST_P(
   std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
   iobuf->append(payloadSize);
 
-  auto page = std::make_unique<SerializedPage>(std::move(iobuf));
+  auto page = std::make_unique<PrestoSerializedPage>(std::move(iobuf));
 
   auto queue = std::make_shared<ExchangeQueue>(1, 0);
   std::vector<ContinuePromise> promises;

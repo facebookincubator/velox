@@ -798,8 +798,17 @@ class BaseVector {
   }
 
   /// Returns the byte size of memory that is kept live through 'this'.
-  virtual uint64_t retainedSize() const {
-    return nulls_ ? nulls_->capacity() : 0;
+  uint64_t retainedSize() const {
+    uint64_t totalStringBufferSize{0};
+    return retainedSizeImpl(totalStringBufferSize);
+  }
+
+  /// Returns the byte size of memory that is kept live through 'this'. Also add
+  /// the total size of all string buffers recursively carried by 'this' to
+  /// totalStringBufferSize. To get the total size of all string buffers, set
+  /// the initial value of totalStringBufferSize to 0 when calling this method.
+  uint64_t retainedSize(uint64_t& totalStringBufferSize) const {
+    return retainedSizeImpl(totalStringBufferSize);
   }
 
   /// Returns an estimate of the 'retainedSize' of a flat representation of the
@@ -970,6 +979,13 @@ class BaseVector {
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
     return nulls_ ? Buffer::slice<bool>(nulls_, offset, length, pool_) : nulls_;
+  }
+
+  virtual uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const = 0;
+
+  uint64_t retainedSizeImpl() const {
+    return nulls_ ? nulls_->capacity() : 0;
   }
 
   TypePtr type_;

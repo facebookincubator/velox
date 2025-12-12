@@ -138,6 +138,9 @@ int main(int argc, char** argv) {
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
+      // Come back to SetDigest and KHLL aggregate functions.
+      "make_set_digest",
+      "merge_set_digest",
   };
 
   if (!FLAGS_presto_url.empty()) {
