@@ -20,6 +20,7 @@
 #include <xsimd/xsimd.hpp>
 #include "velox/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/SimdUtil.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
@@ -301,15 +302,10 @@ class Filter : public velox::ISerializable {
   folly::dynamic serializeBase() const;
 
  protected:
-  const bool nullAllowed_;
-
- private:
-  const bool deterministic_;
-  const FilterKind kind_;
-
   template <typename T, typename F>
-  xsimd::batch_bool<T> genericTestValues(xsimd::batch<T> batch, F&& testValue)
-      const {
+  static xsimd::batch_bool<T> genericTestValues(
+      xsimd::batch<T> batch,
+      F&& testValue) {
     constexpr int N = decltype(batch)::size;
     constexpr int kAlign = decltype(batch)::arch_type::alignment();
     alignas(kAlign) T data[N];
@@ -320,6 +316,12 @@ class Filter : public velox::ISerializable {
     }
     return xsimd::broadcast<T>(0) != xsimd::load_aligned(res);
   }
+
+  const bool nullAllowed_;
+
+ private:
+  const bool deterministic_;
+  const FilterKind kind_;
 };
 
 /// TODO Check if this filter is needed. This should not be passed down.
@@ -1030,12 +1032,101 @@ class BigintValuesUsingHashTable final : public Filter {
     }
   }
 
-  bool testInt64(int64_t value) const final;
-  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t>) const final;
-  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t>) const final;
-  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
-    return Filter::testValues(x);
+  bool testInt64(int64_t value) const final {
+    if (containsEmptyMarker_ && value == kEmptyMarker) {
+      return true;
+    }
+    if (value < min_ || value > max_) {
+      return false;
+    }
+    uint32_t pos = (value * M) & sizeMask_;
+    for (auto i = pos; i <= pos + sizeMask_; i++) {
+      int32_t idx = i & sizeMask_;
+      int64_t l = hashTable_[idx];
+      if (l == kEmptyMarker) {
+        return false;
+      }
+      if (l == value) {
+        return true;
+      }
+    }
+    return false;
   }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    auto outOfRange = (x < xsimd::broadcast<int64_t>(min_)) |
+        (x > xsimd::broadcast<int64_t>(max_));
+    if (simd::toBitMask(outOfRange) == simd::allSetBitMask<int64_t>()) {
+      return xsimd::batch_bool<int64_t>(false);
+    }
+    if (containsEmptyMarker_) {
+      return Filter::testValues(x);
+    }
+    auto allEmpty = xsimd::broadcast<int64_t>(kEmptyMarker);
+    // Temporarily casted to unsigned to suppress overflow error.
+    auto indices = simd::reinterpretBatch<int64_t>(
+        simd::reinterpretBatch<uint64_t>(x) * M & sizeMask_);
+    auto data =
+        simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
+    // The lanes with kEmptyMarker missed, the lanes matching x hit and the
+    // other lanes must check next positions.
+
+    auto result = x == data;
+    auto resultBits = simd::toBitMask(result);
+    auto missed = simd::toBitMask(data == allEmpty);
+    static_assert(decltype(result)::size <= 16);
+    uint16_t unresolved =
+        simd::allSetBitMask<int64_t>() ^ (resultBits | missed);
+    if (!unresolved) {
+      return result;
+    }
+    constexpr int kAlign = xsimd::default_arch::alignment();
+    constexpr int kArraySize = xsimd::batch<int64_t>::size;
+    alignas(kAlign) int64_t indicesArray[kArraySize];
+    alignas(kAlign) int64_t valuesArray[kArraySize];
+    (indices + 1).store_aligned(indicesArray);
+    x.store_aligned(valuesArray);
+    while (unresolved) {
+      auto lane = bits::getAndClearLastSetBit(unresolved);
+      // Loop for each unresolved (not hit and
+      // not empty) until finding hit or empty.
+      int64_t index = indicesArray[lane];
+      int64_t value = valuesArray[lane];
+      auto allValue = xsimd::broadcast<int64_t>(value);
+      for (;;) {
+        auto line = xsimd::load_unaligned(hashTable_.data() + index);
+
+        if (simd::toBitMask(line == allValue)) {
+          resultBits |= 1 << lane;
+          break;
+        }
+        if (simd::toBitMask(line == allEmpty)) {
+          resultBits &= ~(1 << lane);
+          break;
+        }
+        index += line.size;
+        if (index > sizeMask_) {
+          index = 0;
+        }
+      }
+    }
+    return simd::fromBitMask<int64_t>(resultBits);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    // Calls 4x64 twice since the hash table is 64 bits wide in any
+    // case. A 32-bit hash table would be possible but all the use
+    // cases seen are in the 64 bit range.
+    auto first = simd::toBitMask(testValues(simd::getHalf<int64_t, 0>(x)));
+    auto second = simd::toBitMask(testValues(simd::getHalf<int64_t, 1>(x)));
+    return simd::fromBitMask<int32_t>(
+        first | (second << xsimd::batch<int64_t>::size));
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
   bool testInt64Range(int64_t min, int64_t max, bool hashNull) const final;
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
@@ -1175,7 +1266,12 @@ class BigintValuesUsingBitmask final : public Filter {
 
   std::vector<int64_t> values() const;
 
-  bool testInt64(int64_t value) const final;
+  bool testInt64(int64_t value) const final {
+    if (value < min_ || value > max_) {
+      return false;
+    }
+    return bitmask_[value - min_];
+  }
 
   bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
 

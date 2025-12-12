@@ -145,6 +145,14 @@ std::unordered_set<std::string> skipFunctions = {
     "construct_tdigest",
     "destructure_tdigest",
     "trimmed_mean",
+    // Fuzzer and the underlying engine are confused about SetDigest functions
+    // (since SetDigest is a user defined type), and tries to pass a
+    // VARBINARY (since SetDigest's implementation uses an
+    // alias to VARBINARY).
+    "cardinality(setdigest) -> bigint",
+    "intersection_cardinality(setdigest,setdigest) -> bigint",
+    "jaccard_index(setdigest,setdigest) -> double",
+    "hash_counts(setdigest) -> map(bigint,smallint)",
     // Fuzzer cannot generate valid 'comparator' lambda.
     "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",
