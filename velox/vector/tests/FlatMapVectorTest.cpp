@@ -74,6 +74,127 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
   VectorMaker maker_{pool_.get()};
 };
 
+TEST_F(FlatMapVectorTest, encodedKeys) {
+  const auto constructFlatMap = [&](VectorPtr keys) {
+    return std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(INTEGER(), INTEGER()),
+        nullptr,
+        3,
+        keys,
+        std::vector<VectorPtr>{
+            makeFlatVector<int32_t>({1, 2, 3}),
+            makeFlatVector<int32_t>({4, 5, 6}),
+            makeFlatVector<int32_t>({7, 8, 9})},
+        std::vector<BufferPtr>{nullptr, nullptr, nullptr});
+  };
+
+  // Dictionary wrapped keys
+  {
+    // Simple case
+    auto flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({0, 1, 2}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3})));
+
+    auto mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 4);
+    EXPECT_EQ(mapValues->valueAt(1), 5);
+    EXPECT_EQ(mapValues->valueAt(2), 6);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 7);
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+
+    // Random indices
+    flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({2, 0, 1}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3})));
+
+    mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 4);
+    EXPECT_EQ(mapValues->valueAt(1), 5);
+    EXPECT_EQ(mapValues->valueAt(2), 6);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 7);
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+
+    // Cardinality change
+    flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({1, 3, 5}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})));
+
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+    mapValues = flatMap->projectKey(4)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 4);
+    EXPECT_EQ(mapValues->valueAt(1), 5);
+    EXPECT_EQ(mapValues->valueAt(2), 6);
+    mapValues = flatMap->projectKey(6)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 7);
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    EXPECT_EQ(flatMap->projectKey(1)->as<FlatVector<int32_t>>(), nullptr);
+    EXPECT_EQ(flatMap->projectKey(3)->as<FlatVector<int32_t>>(), nullptr);
+    EXPECT_EQ(flatMap->projectKey(5)->as<FlatVector<int32_t>>(), nullptr);
+
+    // Repeated keys
+    flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({2, 1, 1}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3})));
+
+    mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues, nullptr);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->size(), 3);
+    EXPECT_EQ(mapValues->valueAt(0), 7); // Becomes last set vector
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+  }
+
+  // Constant wrapped keys
+  {
+    auto flatMap = constructFlatMap(
+        BaseVector::wrapInConstant(3, 0, makeFlatVector<int32_t>({1, 2, 3})));
+
+    auto mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->size(), 3);
+    EXPECT_EQ(mapValues->valueAt(0), 7); // Becomes last set vector
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues, nullptr);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues, nullptr);
+  }
+}
+
 TEST_F(FlatMapVectorTest, fail) {
   auto buildVector = [&](const TypePtr& type,
                          const VectorPtr& keys = nullptr,

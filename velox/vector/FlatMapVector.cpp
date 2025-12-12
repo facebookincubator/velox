@@ -26,7 +26,7 @@ constexpr vector_size_t kToStringMaxFlatMapElements = 5;
 constexpr std::string_view kToStringDelimiter{", "};
 
 template <typename T, typename TMap>
-std::optional<column_index_t> getKeyChannelImpl(
+std::optional<column_index_t> getKeyChannelImplFlat(
     const VectorPtr& distinctKeys,
     const TMap& keyToChannel,
     T keyValue) {
@@ -56,6 +56,57 @@ std::optional<column_index_t> getKeyChannelImpl(
     }
   }
   return std::nullopt;
+}
+
+template <typename T, typename TMap>
+std::optional<column_index_t> getKeyChannelImplEncoded(
+    const VectorPtr& distinctKeys,
+    const TMap& keyToChannel,
+    T keyValue) {
+  if (distinctKeys == nullptr) {
+    return std::nullopt;
+  }
+
+  uint64_t hash = folly::hasher<T>{}(keyValue);
+  auto range = keyToChannel.equal_range(hash);
+
+  // Key hash wasn't found on the map.
+  if (range.first == range.second) {
+    return std::nullopt;
+  }
+
+  // Here there was at least one hash match. Need to compare to the keys vector
+  // to ensure it's an actual match and not a hash collision.
+  // For encoded vectors, we need to use the generic comparison methods.
+  for (auto it = range.first; it != range.second; ++it) {
+    // Create a temporary flat vector with the single key value to compare.
+    auto pool = distinctKeys->pool();
+    auto keyVector = BaseVector::create(distinctKeys->type(), 1, pool);
+    auto flatKeyVector = keyVector->as<FlatVector<T>>();
+    flatKeyVector->set(0, keyValue);
+
+    if (distinctKeys->equalValueAt(keyVector.get(), it->second, 0)) {
+      return it->second;
+    }
+  }
+  return std::nullopt;
+}
+
+template <typename T, typename TMap>
+std::optional<column_index_t> getKeyChannelImpl(
+    const VectorPtr& distinctKeys,
+    const TMap& keyToChannel,
+    T keyValue) {
+  if (distinctKeys == nullptr) {
+    return std::nullopt;
+  }
+
+  // Check if distinctKeys is flat or encoded
+  if (distinctKeys->isFlatEncoding()) {
+    return getKeyChannelImplFlat(distinctKeys, keyToChannel, keyValue);
+  } else {
+    return getKeyChannelImplEncoded(distinctKeys, keyToChannel, keyValue);
+  }
 }
 
 } // namespace
