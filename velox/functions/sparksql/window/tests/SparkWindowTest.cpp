@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
@@ -105,6 +108,51 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SparkWindowTestInstantiation,
     SparkWindowTest,
     testing::ValuesIn(getSparkWindowTestParams()));
+
+class SparkAggregateWindowTest : public WindowTestBase {
+ public:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    WindowTestBase::options_.parseIntegerAsBigint = false;
+    velox::functions::aggregate::sparksql::registerAggregateFunctions("");
+  }
+};
+
+DEBUG_ONLY_TEST_F(SparkAggregateWindowTest, clearStringBuffersInTime) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p0", "s"},
+      {
+          // Payload Data.
+          makeFlatVector<std::string>(size, [](auto row) { return std::string(1024, 'a'); }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"last(d) over (partition by p0 order by s)"})
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::AggregateWindow::fillArgVectors",
+      std::function<void(BaseVector*)>([](BaseVector* vector) {
+        ASSERT_TRUE(vector->type()->isVarchar());
+        ASSERT_TRUE(vector->isFlatEncoding());
+        ASSERT_LE(vector->asFlatVector<StringView>()->stringBuffers().size(), 1);
+      }));
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .assertResults(
+              "SELECT *, last(d) over (partition by p0 order by s) "
+              "FROM tmp ");
+}
 
 } // namespace
 } // namespace facebook::velox::window::test
