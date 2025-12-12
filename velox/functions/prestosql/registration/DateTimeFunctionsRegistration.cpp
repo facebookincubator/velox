@@ -92,6 +92,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFromUnixtime(prefix + "from_unixtime");
   registerFunction<CurrentTimezoneFunction, Varchar>(
       {prefix + "current_timezone"});
+  registerFunction<CurrentTimestampFunction, TimestampWithTimezone>(
+      {prefix + "current_timestamp", prefix + "now"});
 
   registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
   registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
