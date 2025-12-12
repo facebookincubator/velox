@@ -696,10 +696,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
     return merged;
   }
 
-  const bool nullAllowed = isNullAllowed(disjuncts);
-
-  return std::make_unique<common::MultiRange>(
-      std::move(disjuncts), nullAllowed);
+  return nullptr;
 }
 
 namespace {
