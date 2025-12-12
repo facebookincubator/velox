@@ -120,6 +120,10 @@ class RowPartitions {
     return size_;
   }
 
+  void reset() {
+    size_ = 0;
+  }
+
  private:
   const int32_t capacity_;
 
