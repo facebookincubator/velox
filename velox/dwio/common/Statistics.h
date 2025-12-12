@@ -564,7 +564,12 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  int64_t skippedPages{0};
+
+  int64_t processedPages{0};
+
   UnitLoaderStats unitLoaderStats;
+
   ColumnReaderStatistics columnReaderStatistics;
 
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() {
@@ -611,6 +616,12 @@ struct RuntimeStatistics {
               columnReaderStatistics.pageLoadTimeNs.min(),
               columnReaderStatistics.pageLoadTimeNs.max(),
               RuntimeCounter::Unit::kNanos));
+    }
+    if (skippedPages > 0) {
+      result.emplace("skippedPages", RuntimeMetric(skippedPages));
+    }
+    if (processedPages > 0) {
+      result.emplace("processedPages", RuntimeMetric(processedPages));
     }
     return result;
   }
