@@ -89,11 +89,6 @@ class S3WriteFile::Impl {
       /// (https://github.com/apache/arrow/issues/11934). So we instead default
       /// to application/octet-stream which is less misleading.
       request.SetContentType(kApplicationOctetStream);
-      // The default algorithm used is MD5. However, MD5 is not supported with
-      // fips and can cause a SIGSEGV. Set CRC32 instead which is a standard for
-      // checksum computation and is not restricted by fips.
-      request.SetChecksumAlgorithm(Aws::S3::Model::ChecksumAlgorithm::CRC32);
-
       auto outcome = client_->CreateMultipartUpload(request);
       VELOX_CHECK_AWS_OUTCOME(
           outcome, "Failed initiating multiple part upload", bucket_, key_);
@@ -213,10 +208,6 @@ class S3WriteFile::Impl {
       request.SetContentLength(part.size());
       request.SetBody(
           std::make_shared<StringViewStream>(part.data(), part.size()));
-      // The default algorithm used is MD5. However, MD5 is not supported with
-      // fips and can cause a SIGSEGV. Set CRC32 instead which is a standard for
-      // checksum computation and is not restricted by fips.
-      request.SetChecksumAlgorithm(Aws::S3::Model::ChecksumAlgorithm::CRC32);
       auto outcome = client_->UploadPart(request);
       VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to upload", bucket_, key_);
       // Append ETag and part number for this uploaded part.
