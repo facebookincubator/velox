@@ -58,6 +58,68 @@ bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintMultiRange);
 }
 
+bool isBigintValues(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBigintValuesUsingHashTable) ||
+      filter->is(common::FilterKind::kBigintValuesUsingBitmask);
+}
+
+bool isNegatedBigintRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kNegatedBigintRange);
+}
+
+bool isNegatedBigintValues(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kNegatedBigintValuesUsingHashTable) ||
+      filter->is(common::FilterKind::kNegatedBigintValuesUsingBitmask);
+}
+
+std::vector<std::unique_ptr<common::BigintRange>> invertNegatedBigintRange(
+    const common::NegatedBigintRange* negatedRange) {
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  int64_t lower = negatedRange->lower();
+  int64_t upper = negatedRange->upper();
+
+  if (lower > std::numeric_limits<int64_t>::min()) {
+    ranges.emplace_back(
+        std::make_unique<common::BigintRange>(
+            std::numeric_limits<int64_t>::min(), lower - 1, false));
+  }
+  if (upper < std::numeric_limits<int64_t>::max()) {
+    ranges.emplace_back(
+        std::make_unique<common::BigintRange>(
+            upper + 1, std::numeric_limits<int64_t>::max(), false));
+  }
+  return ranges;
+}
+
+std::vector<std::unique_ptr<common::BigintRange>> invertNegatedBigintValues(
+    const std::vector<int64_t>& values) {
+  VELOX_CHECK(std::is_sorted(values.begin(), values.end()));
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  ranges.reserve(values.size() + 1);
+
+  if (values.front() > std::numeric_limits<int64_t>::min()) {
+    ranges.emplace_back(
+        std::make_unique<common::BigintRange>(
+            std::numeric_limits<int64_t>::min(), values.front() - 1, false));
+  }
+
+  for (size_t i = 0; i < values.size() - 1; ++i) {
+    if (values[i] + 1 <= values[i + 1] - 1) {
+      ranges.emplace_back(
+          std::make_unique<common::BigintRange>(
+              values[i] + 1, values[i + 1] - 1, false));
+    }
+  }
+
+  if (values.back() < std::numeric_limits<int64_t>::max()) {
+    ranges.emplace_back(
+        std::make_unique<common::BigintRange>(
+            values.back() + 1, std::numeric_limits<int64_t>::max(), false));
+  }
+
+  return ranges;
+}
+
 template <typename T, typename U>
 std::unique_ptr<T> asUniquePtr(std::unique_ptr<U> ptr) {
   return std::unique_ptr<T>(static_cast<T*>(ptr.release()));
@@ -597,23 +659,88 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
   }
 
   if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
-        return isBigintRange(filter) || isBigintMultiRange(filter);
+        return isBigintRange(filter) || isBigintMultiRange(filter) ||
+            isBigintValues(filter) || isNegatedBigintRange(filter) ||
+            isNegatedBigintValues(filter);
       })) {
     return nullptr;
   }
 
   const bool nullAllowed = isNullAllowed(disjuncts);
 
+  std::vector<int64_t> values;
   std::vector<std::unique_ptr<common::BigintRange>> ranges;
+
   for (auto& filter : disjuncts) {
-    if (isBigintRange(filter)) {
-      ranges.emplace_back(asBigintRange(filter));
-    } else {
-      for (const auto& range :
-           filter->as<common::BigintMultiRange>()->ranges()) {
-        ranges.emplace_back(std::make_unique<common::BigintRange>(*range));
+    switch (filter->kind()) {
+      case common::FilterKind::kBigintRange: {
+        auto* range = filter->as<common::BigintRange>();
+        if (range->isSingleValue()) {
+          values.push_back(range->lower());
+        } else {
+          ranges.emplace_back(asBigintRange(filter));
+        }
+        break;
       }
+      case common::FilterKind::kBigintMultiRange: {
+        for (const auto& range :
+             filter->as<common::BigintMultiRange>()->ranges()) {
+          if (range->isSingleValue()) {
+            values.push_back(range->lower());
+          } else {
+            ranges.emplace_back(std::make_unique<common::BigintRange>(*range));
+          }
+        }
+        break;
+      }
+      case common::FilterKind::kBigintValuesUsingHashTable:
+      case common::FilterKind::kBigintValuesUsingBitmask: {
+        std::vector<int64_t> vals;
+        if (filter->is(common::FilterKind::kBigintValuesUsingHashTable)) {
+          vals = filter->as<common::BigintValuesUsingHashTable>()->values();
+        } else {
+          vals = filter->as<common::BigintValuesUsingBitmask>()->values();
+        }
+        values.insert(values.end(), vals.begin(), vals.end());
+        break;
+      }
+      case common::FilterKind::kNegatedBigintRange: {
+        auto* negatedRange = filter->as<common::NegatedBigintRange>();
+        auto convertedRanges = invertNegatedBigintRange(negatedRange);
+        for (auto& range : convertedRanges) {
+          ranges.emplace_back(std::move(range));
+        }
+        break;
+      }
+      case common::FilterKind::kNegatedBigintValuesUsingHashTable:
+      case common::FilterKind::kNegatedBigintValuesUsingBitmask: {
+        std::vector<int64_t> vals;
+        if (filter->is(
+                common::FilterKind::kNegatedBigintValuesUsingHashTable)) {
+          vals =
+              filter->as<common::NegatedBigintValuesUsingHashTable>()->values();
+        } else {
+          vals =
+              filter->as<common::NegatedBigintValuesUsingBitmask>()->values();
+        }
+        auto convertedRanges = invertNegatedBigintValues(vals);
+        for (auto& range : convertedRanges) {
+          ranges.emplace_back(std::move(range));
+        }
+        break;
+      }
+      default:
+        VELOX_UNREACHABLE();
     }
+  }
+
+  if (ranges.empty()) {
+    return common::createBigintValues(values, nullAllowed);
+  }
+
+  for (int64_t value : values) {
+    ranges.emplace_back(
+        std::make_unique<common::BigintRange>(value, value, nullAllowed));
   }
 
   std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
