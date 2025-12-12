@@ -1858,8 +1858,9 @@ class FloatToDoubleEvolutionTest
     std::vector<FloatToDoubleTestParam> params;
     for (bool hasNulls : {false, true}) {
       for (bool enableDictionary : {false, true}) {
-        // When hasNulls is false, only test kNone, kGreaterThanOrEqual, and kMultiRange filter
-        // (kIsNull would match nothing, kIsNotNull is equivalent to kNone)
+        // When hasNulls is false, only test kNone, kGreaterThanOrEqual, and
+        // kMultiRange filter (kIsNull would match nothing, kIsNotNull is
+        // equivalent to kNone)
         std::vector<FloatToDoubleFilter> filters;
         if (hasNulls) {
           filters = {
@@ -1961,9 +1962,10 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
       auto* floatChild =
           scanSpec->getOrCreateChild(common::Subfield("float_col"));
       // Create a MultiRange filter: a < lower OR a > upper
-      floatChild->setFilter(exec::orFilter(
-          exec::lessThanDouble(spec.filterLowerValue.value()),
-          exec::greaterThanDouble(spec.filterUpperValue.value())));
+      floatChild->setFilter(
+          exec::orFilter(
+              exec::lessThanDouble(spec.filterLowerValue.value()),
+              exec::greaterThanDouble(spec.filterUpperValue.value())));
       break;
     }
   }
