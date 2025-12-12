@@ -755,6 +755,9 @@ class QueryConfig {
   static constexpr const char* kMaxNumSplitsListenedTo =
       "max_num_splits_listened_to";
 
+  static constexpr const char* kHashTableBloomFilterEnabled =
+      "hash_table_bloom_filter_enabled";
+
   /// Source of the query. Used by Presto to identify the file system username.
   static constexpr const char* kSource = "source";
 
@@ -1367,6 +1370,11 @@ class QueryConfig {
 
   int32_t maxNumSplitsListenedTo() const {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+
+  bool isHashTableBloomFilterEnabled() const {
+    return get<bool>(kHashTableBloomFilterEnabled, false);
   }
 
   std::string source() const {

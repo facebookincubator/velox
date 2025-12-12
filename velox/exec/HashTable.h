@@ -22,6 +22,9 @@
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
 
+#include <immintrin.h>
+#include <x86intrin.h>
+
 namespace facebook::velox::exec {
 
 using PartitionBoundIndexType = int64_t;
@@ -70,6 +73,7 @@ struct HashLookup {
     hashes.resize(size);
     hits.resize(size);
     newGroups.clear();
+    normalizedKeysInitialized = false;
   }
 
   /// One entry per group-by or join key.
@@ -102,6 +106,8 @@ struct HashLookup {
   /// If using valueIds, list of concatenated valueIds. 1:1 with 'hashes'.
   /// Populated by groupProbe and joinProbe.
   raw_vector<uint64_t> normalizedKeys;
+
+  bool normalizedKeysInitialized{false};
 };
 
 struct HashTableStats {
@@ -110,6 +116,10 @@ struct HashTableStats {
   int64_t numDistinct{0};
   /// Counts the number of tombstone table slots.
   int64_t numTombstones{0};
+  int64_t numRowLoads{0};
+  int64_t numHits{0};
+  int64_t numBloomFilterProbes{0};
+  int64_t numBloomFilterHits{0};
 };
 
 struct ParallelJoinBuildStats {
@@ -130,6 +140,8 @@ class BaseHashTable {
   /// The load factor of the hash table.
   static constexpr double kHashTableLoadFactor = 0.7;
 
+  static constexpr int8_t kHashTableBucketsPerBloomFilterBucket = 4;
+
   /// 2M entries, i.e. 16MB is the largest array based hash table.
   static constexpr uint64_t kArrayHashMaxSize = 2L << 20;
 
@@ -144,6 +156,12 @@ class BaseHashTable {
   static inline const std::string kNumRehashes{"hashtable.numRehashes"};
   static inline const std::string kNumDistinct{"hashtable.numDistinct"};
   static inline const std::string kNumTombstones{"hashtable.numTombstones"};
+  static inline const std::string kNumRowLoads{"hashtable.numRowLoads"};
+  static inline const std::string kNumHits{"hashtable.numHits"};
+  static inline const std::string kNumBloomFilterProbes{
+      "hashtable.numBloomFilterProbes"};
+  static inline const std::string kNumBloomFilterHits{
+      "hashtable.numBloomFilterHits"};
 
   /// The same as above but only reported by the HashBuild operator.
   static inline const std::string kBuildWallNanos{"hashtable.buildWallNanos"};
@@ -592,7 +610,14 @@ class HashTable : public BaseHashTable {
 
   HashTableStats stats() const override {
     return HashTableStats{
-        capacity_, numRehashes_, numDistinct_, numTombstones_};
+        capacity_,
+        numRehashes_,
+        numDistinct_,
+        numTombstones_,
+        numRowLoads_,
+        numHits_,
+        numBloomFilterProbes_,
+        numBloomFilterHits_};
   }
 
   bool hasDuplicateKeys() const override {
@@ -706,7 +731,7 @@ class HashTable : public BaseHashTable {
   }
 
  private:
-  // Enables debug stats for collisions for debug build.
+// Enables debug stats for collisions for debug build.
 #ifdef NDEBUG
   static constexpr bool kTrackLoads = false;
 #else
@@ -759,6 +784,98 @@ class HashTable : public BaseHashTable {
     VELOX_DCHECK_EQ(0, offset & (kBucketSize - 1));
     return reinterpret_cast<Bucket*>(reinterpret_cast<char*>(table_) + offset);
   }
+
+  class BloomFilter {
+   public:
+    BloomFilter(const BloomFilter&) = delete;
+    BloomFilter& operator=(const BloomFilter&) = delete;
+
+    BloomFilter(
+        int64_t numBuckets,
+        int64_t hashTableBucketOffsetMask,
+        memory::MemoryPool* pool)
+        : buckets_(raw_vector<__m256i>(numBuckets < 1 ? 1 : numBuckets, pool)),
+          hashTableBucketOffsetMask_(hashTableBucketOffsetMask) {
+      static_assert(kBucketSize == 128);
+      static_assert(sizeof(__m256i) == 32);
+      VELOX_CHECK_EQ(
+          buckets_.size() * kHashTableBucketsPerBloomFilterBucket * kBucketSize,
+          hashTableBucketOffsetMask + kBucketSize);
+      VELOX_CHECK(
+          bits::isPowerOfTwo(numBuckets),
+          "numBuckets must be power of 2: {}",
+          numBuckets);
+
+      memset(buckets_.data(), 0, buckets_.size() * sizeof(__m256i));
+    }
+
+    inline bool contains(uint64_t hash) const noexcept {
+      const __m256i* bucket = getBucket(hash);
+      __m256i mask = makeMask(hash >> 32);
+      return _mm256_testc_si256(*bucket, mask);
+    }
+
+    inline void add(uint64_t hash) noexcept {
+      __m256i* bucket = getBucket(hash);
+      __m256i mask = makeMask(hash >> 32);
+      _mm256_store_si256(bucket, _mm256_or_si256(*bucket, mask));
+    }
+
+   private:
+    inline __m256i* getBucket(uint64_t hash) {
+      return buckets_.data() + getBucketIndex(hash);
+    }
+
+    inline const __m256i* getBucket(uint64_t hash) const {
+      return buckets_.data() + getBucketIndex(hash);
+    }
+
+    inline uint64_t getBucketIndex(uint64_t hash) const {
+      uint64_t bucketIdx = (hash & hashTableBucketOffsetMask_) >> shift_;
+      // VELOX_CHECK_LT(
+      //     bucketIdx,
+      //     buckets_.size(),
+      //     "shift_: {}, hashTableBucketOffsetMask_: {}",
+      //     shift_,
+      //     hashTableBucketOffsetMask_);
+      return bucketIdx;
+    }
+
+    // https://github.com/FastFilter/fastfilter_cpp/blob/master/src/bloom/simd-block.h#L102C1-L117C2
+    static inline __m256i makeMask(const uint32_t hash) noexcept {
+      const __m256i ones = _mm256_set1_epi32(1);
+      // Odd contants for hashing:
+      const __m256i rehash = _mm256_setr_epi32(
+          0x47b6137bU,
+          0x44974d91U,
+          0x8824ad5bU,
+          0xa2b7289dU,
+          0x705495c7U,
+          0x2df1424bU,
+          0x9efc4947U,
+          0x5c6bfb31U);
+      // Load hash into a YMM register, repeated eight times
+      __m256i hash_data = _mm256_set1_epi32(hash);
+      // Multiply-shift hashing ala Dietzfelbinger et al.: multiply 'hash' by
+      // eight different odd constants, then keep the 5 most significant bits
+      // from each product.
+      hash_data = _mm256_mullo_epi32(rehash, hash_data);
+      hash_data = _mm256_srli_epi32(hash_data, 27);
+      // Use these 5 bits to shift a single bit to a location in each 32-bit
+      // lane
+      return _mm256_sllv_epi32(ones, hash_data);
+    }
+
+    static constexpr int32_t log2(uint64_t n) {
+      return 63 - __builtin_clzll(n);
+    }
+
+    static constexpr int32_t shift_{
+        log2(kHashTableBucketsPerBloomFilterBucket) + log2(kBucketSize)};
+
+    raw_vector<__m256i> buckets_;
+    const int64_t hashTableBucketOffsetMask_;
+  };
 
   // Returns the number of entries after which the table gets rehashed.
   static uint64_t rehashSize(int64_t size) {
@@ -891,6 +1008,8 @@ class HashTable : public BaseHashTable {
   // a set of overflow rows that are sequentially inserted after all
   // else.
   void parallelJoinBuild();
+
+  bool isBloomFilterEnabled(const DriverCtx& ctx);
 
   // Inserts the rows in 'partition' from this and 'otherTables' into 'this'.
   // The rows that would have gone past the end of the partition are returned in
@@ -1046,6 +1165,23 @@ class HashTable : public BaseHashTable {
     }
   }
 
+  bool isBloomFilterActive() const {
+    if (!bloomFilter_ || bloomFilterDisabled_) {
+      return false;
+    }
+    auto probes = numBloomFilterProbes_;
+    auto hits = numBloomFilterHits_;
+    if (probes < 1000000) {
+      return true;
+    }
+    double selectivity = hits * 1.0 / probes;
+    if (selectivity > 0.5) {
+      bloomFilterDisabled_ = true;
+      return false;
+    }
+    return true;
+  }
+
   // We don't want any overlap in the bit ranges used by bucket index and those
   // used by spill partitioning; otherwise because we receive data from only one
   // partition, the overlapped bits would be the same and only a fraction of the
@@ -1110,6 +1246,10 @@ class HashTable : public BaseHashTable {
   // Number of times a match is found.
   mutable tsan_atomic<int64_t> numHits_{0};
 
+  mutable tsan_atomic<int64_t> numBloomFilterProbes_{0};
+  mutable tsan_atomic<int64_t> numBloomFilterHits_{0};
+  mutable tsan_atomic<bool> bloomFilterDisabled_{false};
+
   // Bounds of independently buildable index ranges in the table. The
   // range of partition i starts at [i] and ends at [i +1]. Bounds are multiple
   // of cache line  size.
@@ -1126,6 +1266,8 @@ class HashTable : public BaseHashTable {
 
   // If true, avoids using VectorHasher value ranges with kArray hash mode.
   bool disableRangeArrayHash_{false};
+
+  std::unique_ptr<BloomFilter> bloomFilter_;
 
   friend class ProbeState;
   friend test::HashTableTestHelper<ignoreNullKeys>;
