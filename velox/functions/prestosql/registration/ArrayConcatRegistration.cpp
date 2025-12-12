@@ -34,6 +34,8 @@ inline void registerArrayConcatFunctions(const std::string& prefix) {
   registerFunction<
       ParameterBinder<ArrayConcatFunction, T>,
       Array<T>,
+      Array<T>,
+      Array<T>,
       Variadic<Array<T>>>({prefix + "concat"});
 }
 } // namespace
