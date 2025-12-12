@@ -499,14 +499,17 @@ class FileWriterImpl : public FileWriter {
       int64_t batch_size = std::min(
           max_row_group_length - row_group_writer_->num_rows(),
           batch.num_rows() - offset);
-      if (row_group_writer_->num_rows() > 0) {
+      int64_t group_rows = row_group_writer_->num_rows();
+      if (group_rows > 0) {
         int64_t buffered_bytes = row_group_writer_->current_buffered_bytes();
-        int64_t avg_row_bytes = buffered_bytes / row_group_writer_->num_rows();
+        double avg_row_bytes = buffered_bytes * 1.0 / group_rows;
         batch_size = std::min(
-            batch_size, (max_row_group_bytes - buffered_bytes) / avg_row_bytes);
+            batch_size,
+            static_cast<int64_t>(
+                (max_row_group_bytes - buffered_bytes) / avg_row_bytes));
       }
       if (batch_size <= 0) {
-        // Current row group is full, start a new one.
+        // Current row group is full, write remaining rows in a new group.
         if (offset < batch.num_rows()) {
           RETURN_NOT_OK(NewBufferedRowGroup());
         }
