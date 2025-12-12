@@ -181,6 +181,32 @@ struct MapExceptFunction {
     }
   }
 
+  void call(
+      out_type<Map<Generic<T1>, Generic<T2>>>& out,
+      const bool arg,
+      const arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
+      const arg_type<Array<Generic<T1>>>& keys) {
+    searchKeys_.clear();
+    for (const auto& key : keys.skipNulls()) {
+      searchKeys_.emplace(key);
+    }
+
+    for (const auto& entry : inputMap) {
+      if (searchKeys_.contains(entry.first)) {
+        continue;
+      }
+
+      if (!entry.second.has_value()) {
+        auto& keyWriter = out.add_null();
+        keyWriter.copy_from(entry.first);
+      } else {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter.copy_from(entry.first);
+        valueWriter.copy_from(entry.second.value());
+      }
+    }
+  }
+
  private:
   folly::F14FastSet<
       exec::GenericView,

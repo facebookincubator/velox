@@ -135,6 +135,13 @@ void registerMapExcept(const std::string& prefix) {
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
       Array<Generic<T1>>>({prefix + "map_except"});
+
+  registerFunction<
+      MapExceptFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      bool,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>>({prefix + "map_except"});
 }
 
 template <typename T>
