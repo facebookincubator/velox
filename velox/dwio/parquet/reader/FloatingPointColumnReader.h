@@ -37,6 +37,7 @@ class FloatingPointColumnReader
       common::ScanSpec& scanSpec);
 
   // Parquet floating point reader always supports a bulk path
+
   static constexpr bool kHasBulkPath = true;
   bool hasBulkPath() const override {
     return kHasBulkPath;
