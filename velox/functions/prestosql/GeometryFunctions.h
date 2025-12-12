@@ -575,8 +575,6 @@ struct StAreaFunction {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(input);
 
-    std::unique_ptr<geos::geom::Geometry> outputGeometry;
-
     GEOS_TRY(
         result = geosGeometry->getArea();, "Failed to compute geometry area");
 
