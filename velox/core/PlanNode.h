@@ -3186,7 +3186,8 @@ class HashJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      RowTypePtr outputType)
+      RowTypePtr outputType,
+      bool useCachedHashTable = false)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3196,7 +3197,8 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(left),
             std::move(right),
             std::move(outputType)),
-        nullAware_{nullAware} {
+        nullAware_{nullAware},
+        useCachedHashTable_{useCachedHashTable} {
     validate();
 
     if (nullAware) {
@@ -3221,10 +3223,16 @@ class HashJoinNode : public AbstractJoinNode {
     explicit Builder(const HashJoinNode& other)
         : AbstractJoinNode::Builder<HashJoinNode, Builder>(other) {
       nullAware_ = other.isNullAware();
+      useCachedHashTable_ = other.useCachedHashTable();
     }
 
     Builder& nullAware(bool value) {
       nullAware_ = value;
+      return *this;
+    }
+
+    Builder& useCachedHashTable(bool value) {
+      useCachedHashTable_ = value;
       return *this;
     }
 
@@ -3254,11 +3262,13 @@ class HashJoinNode : public AbstractJoinNode {
           filter_.value_or(nullptr),
           left_.value(),
           right_.value(),
-          outputType_.value());
+          outputType_.value(),
+          useCachedHashTable_.value_or(false));
     }
 
    private:
     std::optional<bool> nullAware_;
+    std::optional<bool> useCachedHashTable_;
   };
 
   std::string_view name() const override {
@@ -3281,6 +3291,10 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  bool useCachedHashTable() const {
+    return useCachedHashTable_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3289,6 +3303,7 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+  const bool useCachedHashTable_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;

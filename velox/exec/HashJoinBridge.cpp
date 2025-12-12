@@ -216,7 +216,7 @@ SpillPartitionSet spillHashJoinTable(
 }
 
 void HashJoinBridge::setHashTable(
-    std::unique_ptr<BaseHashTable> table,
+    std::shared_ptr<BaseHashTable> table,
     SpillPartitionSet spillPartitionSet,
     bool hasNullKeys,
     HashJoinTableSpillFunc&& tableSpillFunc) {
