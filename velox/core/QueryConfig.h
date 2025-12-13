@@ -817,7 +817,7 @@ class QueryConfig {
   }
 
   uint8_t debugBingTileChildrenMaxZoomShift() const {
-    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 6);
+    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 7);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
