@@ -17,6 +17,7 @@
 
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/HashTableCache.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
@@ -212,6 +213,27 @@ class HashBuild final : public Operator {
   // Invoked to abandon build deduped hash table.
   void abandonHashBuildDedup();
 
+  // Returns true if this operator is using a cached hash table.
+  // When enabled, the hash table is built once and cached for reuse
+  // by other tasks within the same query and stage.
+  bool isUsingCachedTable() const {
+    return cacheKey_.has_value();
+  }
+
+  // Returns the hash table cache key for this operator.
+  // Only valid if isUsingCachedTable() returns true.
+  const std::string& getCacheKey() const {
+    VELOX_CHECK(
+        isUsingCachedTable(),
+        "getCacheKey() called when table caching is not enabled");
+    return cacheKey_.value();
+  }
+
+  // Determines the memory pool to use for the hash table.
+  // For cached hash tables, uses query-level pool so the table can
+  // outlive the task. For regular joins, uses operator pool.
+  memory::MemoryPool* getTableMemoryPool() const;
+
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
@@ -243,6 +265,19 @@ class HashBuild final : public Operator {
   tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
 
   State state_{State::kRunning};
+
+  // For hash table caching: the cache key passed in at construction.
+  // If set, this operator coordinates via HashTableCache.
+  // Key format: "queryId:stageId:planNodeId"
+  std::optional<std::string> cacheKey_;
+
+  // For hash table caching: cached entry containing the shared table and pool.
+  // Retrieved from HashTableCache.
+  std::shared_ptr<HashTableEntry> cacheEntry_;
+
+  // For hash table caching: future to wait on if this is a waiter task.
+  // Set by getOrAwait() if another task is building the table.
+  ContinueFuture cacheWaitFuture_{ContinueFuture::makeEmpty()};
 
   // The row type used for hash table build and disk spilling.
   RowTypePtr tableType_;

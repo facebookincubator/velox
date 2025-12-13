@@ -18,6 +18,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashTableCache.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
@@ -75,6 +76,22 @@ HashBuild::HashBuild(
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
+  // Compute cache key if this is a cacheable join (needed before setupTable
+  // to determine which memory pool to use).
+  if (joinNode_->useCachedHashTable()) {
+    const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
+    cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+
+    // Get or create the cache entry (which includes the pool).
+    // If another task is already building, cacheWaitFuture_ will be set.
+    auto* cache = HashTableCache::getInstance();
+    auto* queryPool = operatorCtx_->task()->queryCtx()->pool();
+    cacheEntry_ = cache->getOrAwait(
+        cacheKey_.value(), queryPool, taskId(), &cacheWaitFuture_);
+    VELOX_CHECK_NOT_NULL(cacheEntry_);
+    VELOX_CHECK_NOT_NULL(cacheEntry_->tablePool);
+  }
+
   joinBridge_->addBuilder();
 
   const auto& inputType = joinNode_->sources()[1]->outputType();
@@ -111,6 +128,7 @@ HashBuild::HashBuild(
   }
 
   tableType_ = hashJoinTableType(joinNode_);
+
   setupTable();
   setupSpiller();
   stateCleared_ = false;
@@ -118,6 +136,26 @@ HashBuild::HashBuild(
 
 void HashBuild::initialize() {
   Operator::initialize();
+
+  // For hash table caching: handle cache coordination across tasks.
+  if (isUsingCachedTable()) {
+    VELOX_CHECK_NOT_NULL(cacheEntry_);
+
+    // Check if table is already built.
+    if (cacheEntry_->buildComplete.load(std::memory_order_acquire)) {
+      noMoreInput();
+      return;
+    }
+
+    // Check if we're a waiter task (future was set by getOrAwait).
+    if (cacheWaitFuture_.valid()) {
+      future_ = std::move(cacheWaitFuture_);
+      setState(State::kWaitForBuild);
+      return;
+    }
+
+    // This is the builder task - proceed with building.
+  }
 
   if (isAntiJoin(joinType_) && joinNode_->filter()) {
     setupFilterForAntiJoins(keyChannelMap_);
@@ -152,7 +190,7 @@ void HashBuild::setupTable() {
         operatorCtx_->driverCtx()
             ->queryConfig()
             .minTableRowsForParallelJoinBuild(),
-        pool());
+        getTableMemoryPool());
   } else {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
@@ -167,7 +205,7 @@ void HashBuild::setupTable() {
           operatorCtx_->driverCtx()
               ->queryConfig()
               .minTableRowsForParallelJoinBuild(),
-          pool());
+          getTableMemoryPool());
     } else {
       // Ignore null keys
       table_ = HashTable<true>::createForJoin(
@@ -178,7 +216,7 @@ void HashBuild::setupTable() {
           operatorCtx_->driverCtx()
               ->queryConfig()
               .minTableRowsForParallelJoinBuild(),
-          pool());
+          getTableMemoryPool());
     }
   }
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
@@ -321,6 +359,14 @@ void HashBuild::removeInputRowsForAntiJoinFilter() {
 
 void HashBuild::addInput(RowVectorPtr input) {
   checkRunning();
+
+  // For hash table caching: check if table is already cached by another task.
+  // If so, skip processing this input - we'll use the cached table.
+  if (isUsingCachedTable() &&
+      cacheEntry_->buildComplete.load(std::memory_order_acquire)) {
+    return;
+  }
+
   ensureInputFits(input);
 
   TestValue::adjust("facebook::velox::exec::HashBuild::addInput", this);
@@ -653,11 +699,15 @@ void HashBuild::spillPartition(
 }
 
 void HashBuild::noMoreInput() {
-  checkRunning();
-
+  // Check noMoreInput_ flag first to make this function idempotent.
+  // This allows it to be safely called multiple times (e.g., from initialize()
+  // when cache hit is detected, and later by the Driver framework).
   if (noMoreInput_) {
     return;
   }
+
+  checkRunning();
+
   Operator::noMoreInput();
 
   noMoreInputInternal();
@@ -701,6 +751,31 @@ bool HashBuild::finishHashBuild() {
       promise.setValue();
     }
   };
+
+  // For hash table caching: check if table already exists in cache (from
+  // previous task). This check is done AFTER the barrier to ensure only the
+  // last driver handles it.
+  if (isUsingCachedTable()) {
+    VELOX_CHECK_NOT_NULL(cacheEntry_);
+
+    if (cacheEntry_->buildComplete.load(std::memory_order_acquire)) {
+      // Table already built by a previous task! Use it directly.
+      // Notify the bridge with the cached table.
+      // We pass a shared_ptr copy (not std::move) since the cache retains
+      // ownership.
+      joinBridge_->setHashTable(
+          cacheEntry_->table, {}, cacheEntry_->hasNullKeys, nullptr);
+
+      // Record cache hit metric
+      stats_.wlock()->addRuntimeStat("hashTableCacheHit", RuntimeCounter(1));
+
+      return true;
+    }
+
+    // Cache miss - we need to build the table
+    // Record cache miss metric
+    stats_.wlock()->addRuntimeStat("hashTableCacheHit", RuntimeCounter(0));
+  }
 
   if (joinHasNullKeys_ && isAntiJoin(joinType_) && nullAware_ &&
       !joinNode_->filter()) {
@@ -816,11 +891,29 @@ bool HashBuild::finishHashBuild() {
               spillStats);
         };
   }
-  joinBridge_->setHashTable(
-      std::move(table_),
-      std::move(spillPartitions),
-      joinHasNullKeys_,
-      std::move(tableSpillFunc));
+
+  // For hash table caching: the last driver caches the merged table.
+  if (isUsingCachedTable()) {
+    auto* cache = HashTableCache::getInstance();
+    // Convert unique_ptr to shared_ptr and cache it.
+    std::shared_ptr<BaseHashTable> sharedTable = std::move(table_);
+
+    cache->put(getCacheKey(), sharedTable, joinHasNullKeys_);
+
+    // Pass shared_ptr to bridge (both cache and bridge hold references).
+    joinBridge_->setHashTable(
+        std::move(sharedTable),
+        std::move(spillPartitions),
+        joinHasNullKeys_,
+        std::move(tableSpillFunc));
+  } else {
+    // Regular join: pass unique_ptr to bridge (auto-converts to shared_ptr).
+    joinBridge_->setHashTable(
+        std::move(table_),
+        std::move(spillPartitions),
+        joinHasNullKeys_,
+        std::move(tableSpillFunc));
+  }
   if (canSpill()) {
     stateCleared_ = true;
   }
@@ -872,6 +965,16 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
 
 void HashBuild::postHashBuildProcess() {
   checkRunning();
+
+  // For waiter tasks with a cached hash table, skip spill handling
+  // and transition directly to finish state. The hash table was already
+  // built by the builder task and is shared via the cache.
+  if (isUsingCachedTable() && cacheEntry_ &&
+      cacheEntry_->buildComplete.load(std::memory_order_acquire) &&
+      cacheEntry_->builderTaskId.value() != taskId()) {
+    setState(State::kFinish);
+    return;
+  }
 
   if (!canSpill()) {
     setState(State::kFinish);
@@ -1181,6 +1284,19 @@ void HashBuild::reclaim(
     buildOp->table_->clear(true);
     buildOp->pool()->release();
   }
+}
+
+memory::MemoryPool* HashBuild::getTableMemoryPool() const {
+  if (isUsingCachedTable()) {
+    // Cached hash tables use a leaf pool under the query pool (from cache
+    // entry). This allows the table to outlive the task while still supporting
+    // allocations.
+    VELOX_CHECK_NOT_NULL(cacheEntry_);
+    VELOX_CHECK_NOT_NULL(cacheEntry_->tablePool);
+    return cacheEntry_->tablePool.get();
+  }
+  // Regular joins use operator pool
+  return pool();
 }
 
 bool HashBuild::nonReclaimableState() const {
