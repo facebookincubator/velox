@@ -43,9 +43,9 @@ static int64_t hashKey(TJoinKey joinKey) {
   } else if constexpr (std::is_same_v<TJoinKey, float>) {
     // Cast to double first, then extract bits, based on implicit coercion
     double dbl = static_cast<double>(joinKey);
-    result = *reinterpret_cast<int64_t*>(&dbl);
+    std::memcpy(&result, &dbl, sizeof(result));
   } else if constexpr (std::is_same_v<TJoinKey, double>) {
-    result = *reinterpret_cast<int64_t*>(&joinKey);
+    std::memcpy(&result, &joinKey, sizeof(result));
   } else if constexpr (std::is_same_v<TJoinKey, StringView>) {
     result =
         common::hll::Murmur3Hash128::hash64(joinKey.data(), joinKey.size(), 0);
