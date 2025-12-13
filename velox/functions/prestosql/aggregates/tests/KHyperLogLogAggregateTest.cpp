@@ -19,6 +19,7 @@
 #include "velox/common/hyperloglog/KHyperLogLog.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -300,6 +301,44 @@ TEST_F(KHyperLogLogAggregateTest, groupByAllNulls) {
   // Group 1 should have (0, 1, 2)
   ASSERT_FALSE(khllVector->isNullAt(1));
   EXPECT_EQ(getCardinality(khllVector->valueAt(1)), 3);
+}
+
+TEST_F(KHyperLogLogAggregateTest, mergeKHyperLogLog) {
+  // Create two separate KHLL sketches
+  auto khll1 = createKHLL({1, 2, 3, 4, 5}, {1, 1, 1, 1, 1});
+  auto khll2 = createKHLL({6, 7, 8, 9, 10}, {1, 1, 1, 1, 1});
+
+  auto khllData = makeFlatVector<StringView>(
+      {StringView(khll1), StringView(khll2)}, KHYPERLOGLOG());
+
+  // Merge the two sketches - should have cardinality 10
+  testAggregationWithCardinality(
+      {makeRowVector({khllData})}, {}, {"merge(c0)"}, {{0, 10}});
+}
+
+TEST_F(KHyperLogLogAggregateTest, mergeToIntermediate) {
+  constexpr int kSize = 1000;
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatVector<int64_t>(kSize, [](auto /*row*/) { return 1; }),
+      makeFlatVector<int64_t>(kSize, [](auto /*row*/) { return 1; }),
+  });
+
+  // Create KHLL sketches per group
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({"c0"}, {"khyperloglog_agg(c1, c2)"})
+                  .planNode();
+
+  auto digests = split(AssertQueryBuilder(plan).copyResults(pool()), 2);
+
+  // Merge the split digests - each group should still have cardinality 1
+  std::map<int32_t, int64_t> expectedCardinalities;
+  for (int32_t i = 0; i < kSize; ++i) {
+    expectedCardinalities[i] = 1;
+  }
+  testAggregationWithCardinality(
+      digests, {"c0"}, {"merge(a0)"}, expectedCardinalities);
 }
 
 } // namespace
