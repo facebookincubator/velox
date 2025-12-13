@@ -35,7 +35,6 @@ class KHyperLogLog {
 
   static constexpr int32_t kDefaultHllBuckets = 256;
   static constexpr int32_t kDefaultMaxSize = 4096;
-  static constexpr int64_t kDefaultHistogramSize = 256;
 
   explicit KHyperLogLog(TAllocator* allocator)
       : KHyperLogLog(kDefaultMaxSize, kDefaultHllBuckets, allocator) {}

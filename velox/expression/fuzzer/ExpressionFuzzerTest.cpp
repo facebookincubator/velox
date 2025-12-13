@@ -153,6 +153,14 @@ std::unordered_set<std::string> skipFunctions = {
     "intersection_cardinality(setdigest,setdigest) -> bigint",
     "jaccard_index(setdigest,setdigest) -> double",
     "hash_counts(setdigest) -> map(bigint,smallint)",
+    // Same with KHyperLogLog functions
+    "cardinality(khyperloglog) -> bigint",
+    "intersection_cardinality(khyperloglog,khyperloglog) -> bigint",
+    "jaccard_index(khyperloglog,khyperloglog) -> double",
+    "reidentification_potential(khyperloglog,bigint) -> double",
+    "uniqueness_distribution(khyperloglog) -> map(bigint,double)",
+    "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
+    "merge_khll(array(khyperloglog)) -> khyperloglog",
     // Fuzzer cannot generate valid 'comparator' lambda.
     "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",

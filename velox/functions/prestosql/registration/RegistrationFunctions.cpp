@@ -30,6 +30,7 @@ extern void registerComparisonFunctions(const std::string& prefix);
 extern void registerDateTimeFunctions(const std::string& prefix);
 extern void registerGeneralFunctions(const std::string& prefix);
 extern void registerHyperLogFunctions(const std::string& prefix);
+extern void registerKHyperLogLogFunctions(const std::string& prefix);
 extern void registerTDigestFunctions(const std::string& prefix);
 extern void registerQDigestFunctions(const std::string& prefix);
 extern void registerSetDigestFunctions(const std::string& prefix);
@@ -155,6 +156,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerArrayFunctions(prefix);
   registerJsonFunctions(prefix);
   registerHyperLogFunctions(prefix);
+  registerKHyperLogLogFunctions(prefix);
   registerTDigestFunctions(prefix);
   registerQDigestFunctions(prefix);
   registerSfmSketchFunctions(prefix);
