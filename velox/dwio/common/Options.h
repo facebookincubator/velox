@@ -52,6 +52,7 @@ enum class FileFormat {
   NIMBLE = 8,
   ORC = 9,
   SST = 10, // rocksdb sst format
+  FLUX = 11,
 };
 
 FileFormat toFileFormat(std::string_view s);
