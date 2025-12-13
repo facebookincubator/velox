@@ -55,7 +55,7 @@ int mk_w_store(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   /* begin locals declarations */
   static decimal_t dRevMin, dRevMax;
   char *sName1 = nullptr, *sName2 = nullptr, *szTemp = nullptr;
-  int32_t nHierarchyTotal, nStoreType, nPercentage, nDaysOpen, nMin, nMax;
+  int32_t nStoreType, nPercentage, nDaysOpen, nMin, nMax;
   static date_t tDate;
   static decimal_t min_rev_growth, max_rev_growth, dMinTaxPercentage,
       dMaxTaxPercentage;
@@ -65,8 +65,6 @@ int mk_w_store(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   r = &dsdGenContext.g_w_store;
 
   if (!dsdGenContext.mk_w_store_init) {
-    nHierarchyTotal = static_cast<int>(get_rowcount(DIVISIONS, dsdGenContext));
-    nHierarchyTotal *= static_cast<int>(get_rowcount(COMPANY, dsdGenContext));
     strtodt(&tDate, DATE_MINIMUM);
     strtodec(&min_rev_growth, STORE_MIN_REV_GROWTH);
     strtodec(&max_rev_growth, STORE_MAX_REV_GROWTH);
