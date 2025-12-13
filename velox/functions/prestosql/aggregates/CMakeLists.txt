@@ -77,6 +77,11 @@ velox_link_libraries(
   Folly::folly
 )
 
+if(${VELOX_ENABLE_GEO})
+  velox_add_library(velox_aggregates PRIVATE GeometryAggregate.cpp)
+  velox_link_libraries(velox_aggregates velox_functions_geo)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

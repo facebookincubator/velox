@@ -144,6 +144,8 @@ int main(int argc, char** argv) {
       "merge_set_digest",
       "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
       // verifier is added.
+      "convex_hull_agg",
+      "geometry_union_agg",
   };
 
   if (!FLAGS_presto_url.empty()) {
