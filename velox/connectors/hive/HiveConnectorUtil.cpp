@@ -963,7 +963,7 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
           exec::ExprToSubfieldFilterParser::makeOrFilter(std::move(disjuncts));
 
       if (filter == nullptr) {
-        return nullptr;
+        return expr;
       }
 
       auto it = filters.find(subfield);

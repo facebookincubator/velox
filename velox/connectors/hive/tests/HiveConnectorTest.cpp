@@ -746,6 +746,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
     double sampleRate = 1;
     auto remaining = extractFiltersFromRemainingFilter(
         expr, &evaluator, filters, sampleRate);
+    ASSERT_EQ(remaining, expr);
     ASSERT_EQ(sampleRate, 1);
     ASSERT_TRUE(filters.empty());
   }
