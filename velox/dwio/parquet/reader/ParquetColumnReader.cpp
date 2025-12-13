@@ -51,8 +51,13 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
           requestedType, fileType, params, scanSpec);
 
     case TypeKind::REAL:
-      return std::make_unique<FloatingPointColumnReader<float, float>>(
-          requestedType, fileType, params, scanSpec);
+      if (requestedType->kind() == TypeKind::REAL) {
+        return std::make_unique<FloatingPointColumnReader<float, float>>(
+            requestedType, fileType, params, scanSpec);
+      } else {
+        return std::make_unique<FloatingPointColumnReader<float, double>>(
+            requestedType, fileType, params, scanSpec);
+      }
     case TypeKind::DOUBLE:
       return std::make_unique<FloatingPointColumnReader<double, double>>(
           requestedType, fileType, params, scanSpec);
