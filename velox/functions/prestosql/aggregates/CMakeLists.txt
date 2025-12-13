@@ -46,6 +46,7 @@ velox_add_library(
   PrestoHasher.cpp
   QDigestAggAggregate.cpp
   ReduceAgg.cpp
+  ReservoirSampleAggregate.cpp
   RegisterAggregateFunctions.cpp
   NoisyAvgGaussianAggregate.cpp
   NoisyCountIfGaussianAggregate.cpp
