@@ -469,6 +469,7 @@ class ExprToSubfieldFilterParser {
   /// Detects overlapping ranges of bigint and floating point values.
   /// Detects a list of single-value bigint filters and combines them into a
   /// single IN list.
+  /// Returns nullptr if no combination has been made.
   static std::unique_ptr<common::Filter> makeOrFilter(
       std::vector<std::unique_ptr<common::Filter>> disjuncts);
 
