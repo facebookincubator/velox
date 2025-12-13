@@ -20,7 +20,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
-#include "velox/core/CoreTypeSystem.h"
 #include "velox/core/Metaprogramming.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/expression/FunctionSignature.h"
@@ -141,7 +140,7 @@ struct TypeAnalysisResults {
     // in this case (1) is picked.
     // e.g: (Any, int) will be picked before (Any, Any)
     // e.g: Variadic<Array<Any>> is picked before Variadic<Any>.
-    uint32_t getRank() {
+    CallableCost getRank() const {
       if (!hasGeneric && !hasVariadic) {
         return 1;
       }
@@ -164,9 +163,10 @@ struct TypeAnalysisResults {
       VELOX_UNREACHABLE("unreachable");
     }
 
-    uint32_t computePriority() {
-      // This assumes we wont have signature longer than 1M argument.
-      return getRank() * 1000000 - concreteCount;
+    CallableCost computePriority() const {
+      const CallableCost rank = getRank();
+      VELOX_DCHECK_LE(rank, kMaxFunctionRank);
+      return rank * kMaxFunctionArgs - concreteCount;
     }
   } stats;
 
@@ -438,7 +438,7 @@ class ISimpleFunctionMetadata {
   virtual std::string getName() const = 0;
   virtual bool isDeterministic() const = 0;
   virtual bool defaultNullBehavior() const = 0;
-  virtual uint32_t priority() const = 0;
+  virtual CallableCost priority() const = 0;
   virtual const std::shared_ptr<exec::FunctionSignature> signature() const = 0;
   virtual const TypePtr& resultPhysicalType() const = 0;
   virtual const std::vector<TypePtr>& argPhysicalTypes() const = 0;
@@ -533,7 +533,7 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
     return CreateType<return_type>::create(signature());
   }
 
-  uint32_t priority() const override {
+  CallableCost priority() const override {
     return priority_;
   }
 
@@ -693,7 +693,7 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
   const bool defaultNullBehavior_;
   exec::FunctionSignaturePtr signature_;
-  uint32_t priority_;
+  CallableCost priority_;
   TypePtr resultPhysicalType_;
   std::vector<TypePtr> argPhysicalTypes_;
 };

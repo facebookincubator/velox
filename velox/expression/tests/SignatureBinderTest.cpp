@@ -51,7 +51,7 @@ void testSignatureBinder(
   ASSERT_TRUE(binder.tryBind());
 
   std::vector<Coercion> coercions;
-  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+  ASSERT_TRUE(binder.tryBind(&coercions));
 
   ASSERT_EQ(coercions.size(), actualTypes.size());
   for (const auto& coercion : coercions) {
@@ -75,7 +75,7 @@ void assertCannotBind(
 
   if (allowCoercion) {
     std::vector<Coercion> coercions;
-    ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+    ASSERT_FALSE(binder.tryBind(&coercions));
   }
 }
 
@@ -89,7 +89,7 @@ void assertCannotResolve(
   ASSERT_TRUE(binder.tryBind());
 
   std::vector<Coercion> coercions;
-  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+  ASSERT_TRUE(binder.tryBind(&coercions));
 
   ASSERT_EQ(coercions.size(), actualTypes.size());
   for (const auto& coercion : coercions) {
@@ -1078,7 +1078,7 @@ void testCoercions(
   ASSERT_FALSE(binder.tryBind());
 
   std::vector<Coercion> coercions;
-  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+  ASSERT_TRUE(binder.tryBind(&coercions));
 
   ASSERT_EQ(expectedCoercions.size(), coercions.size());
   for (auto i = 0; i < expectedCoercions.size(); ++i) {
@@ -1114,7 +1114,7 @@ void testNoCoercions(
     exec::SignatureBinder binder(*signature, actualTypes);
 
     std::vector<Coercion> coercions;
-    ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+    ASSERT_TRUE(binder.tryBind(&coercions));
 
     auto returnType = binder.tryResolveReturnType();
     ASSERT_TRUE(returnType != nullptr);

@@ -102,39 +102,35 @@ TypePtr resolveVectorFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
     std::vector<TypePtr>& coercions) {
-  coercions.clear();
+  std::vector<Coercion> selectedCoercions;
 
   auto optionalType = applyToVectorFunctionEntry<TypePtr>(
-      functionName,
-      [&](const auto& /*name*/, const auto& entry) -> std::optional<TypePtr> {
-        std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
+      functionName, [&](const auto& /*name*/, const auto& entry) {
+        TypePtr selectedType;
+        auto selectedPriority = kImpossibleCoercionCost;
+        std::vector<Coercion> requiredCoercions;
         for (const auto& signature : entry.signatures) {
           exec::SignatureBinder binder(*signature, argTypes);
-          std::vector<Coercion> requiredCoercions;
-          if (binder.tryBindWithCoercions(requiredCoercions)) {
-            auto type = binder.tryResolveReturnType();
-            if (!hasCoercion(requiredCoercions)) {
-              coercions.resize(argTypes.size(), nullptr);
-              return type;
-            }
-
-            candidates.emplace_back(requiredCoercions, type);
+          if (!binder.tryBind(&requiredCoercions)) {
+            continue;
+          }
+          auto type = binder.tryResolveReturnType();
+          VELOX_CHECK_NOT_NULL(type);
+          const auto currentPriority = Coercion::overallCost(requiredCoercions);
+          if (currentPriority == 0) {
+            selectedCoercions = std::move(requiredCoercions);
+            return type;
+          }
+          if (currentPriority < selectedPriority) {
+            std::swap(selectedCoercions, requiredCoercions);
+            selectedType = std::move(type);
+            selectedPriority = currentPriority;
           }
         }
-
-        if (auto index = Coercion::pickLowestCost(candidates)) {
-          const auto& requiredCoercions = candidates[index.value()].first;
-          coercions.reserve(requiredCoercions.size());
-          for (const auto& coercion : requiredCoercions) {
-            coercions.push_back(coercion.type);
-          }
-
-          return candidates[index.value()].second;
-        }
-
-        return std::nullopt;
+        return selectedType;
       });
 
+  Coercion::convert(selectedCoercions, &coercions);
   return optionalType.value_or(nullptr);
 }
 
