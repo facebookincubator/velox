@@ -96,7 +96,8 @@ class SsdFileTest : public testing::Test {
       uint64_t checkpointIntervalBytes = 0,
       bool checksumEnabled = false,
       bool checksumReadVerificationEnabled = false,
-      bool disableFileCow = false) {
+      bool disableFileCow = false,
+      uint64_t maxEntries = 0) {
     SsdFile::Config config(
         fmt::format("{}/ssdtest", tempDirectory_->getPath()),
         0, // shardId
@@ -105,7 +106,8 @@ class SsdFileTest : public testing::Test {
         disableFileCow,
         checksumEnabled,
         checksumReadVerificationEnabled,
-        ssdExecutor());
+        ssdExecutor(),
+        maxEntries);
     ssdFile_ = std::make_unique<SsdFile>(config);
     if (ssdFile_ != nullptr) {
       ssdFileHelper_ =
@@ -954,6 +956,30 @@ TEST_F(SsdFileTest, evictlogFileErrorInjection) {
   SsdCacheStats statsAfterRecovery;
   ssdFile_->updateStats(statsAfterRecovery);
   ASSERT_GT(statsAfterRecovery.readCheckpointErrors, 0);
+}
+
+TEST_F(SsdFileTest, maxEntriesLimit) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  constexpr uint64_t kMaxEntries = 100;
+  FLAGS_velox_ssd_verify_write = true;
+
+  initializeCache(kSsdSize);
+  // Re-initialize SSD file with maxEntries limit
+  initializeSsdFile(kSsdSize, 0, false, false, false, kMaxEntries);
+
+  // Write more entries than the limit
+  auto pins = makePins(fileName_.id(), 0, 4096, 2048 * 1025, 62 * kMB);
+  ASSERT_GT(pins.size(), kMaxEntries);
+
+  ssdFile_->write(pins);
+
+  SsdCacheStats stats;
+  ssdFile_->updateStats(stats);
+
+  // The SSD file should have at most maxEntries
+  EXPECT_LE(stats.entriesCached, kMaxEntries);
+  // Some writes should have been dropped due to the entry limit
+  EXPECT_GT(stats.writeSsdDropped, 0);
 }
 
 #ifdef VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG

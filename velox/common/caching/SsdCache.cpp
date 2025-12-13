@@ -58,6 +58,10 @@ SsdCache::SsdCache(const Config& config)
   const uint64_t sizeQuantum = numShards_ * SsdFile::kRegionSize;
   const int32_t fileMaxRegions =
       bits::roundUp(config.maxBytes, sizeQuantum) / sizeQuantum;
+  // Distribute maxEntries across shards
+  const uint64_t maxEntriesPerShard = config.maxEntries == 0
+      ? 0
+      : (config.maxEntries + numShards_ - 1) / numShards_;
   for (auto i = 0; i < numShards_; ++i) {
     const auto fileConfig = SsdFile::Config(
         fmt::format("{}{}", filePrefix_, i),
@@ -67,7 +71,8 @@ SsdCache::SsdCache(const Config& config)
         config.disableFileCow,
         config.checksumEnabled,
         checksumReadVerificationEnabled,
-        executor_);
+        executor_,
+        maxEntriesPerShard);
     files_.push_back(std::make_unique<SsdFile>(fileConfig));
   }
 }
