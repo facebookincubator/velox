@@ -66,7 +66,6 @@ int mk_w_web_page(
     DSDGenContext& dsdGenContext) {
   int32_t bFirstRecord = 0, nFieldChangeFlags;
   date_t dToday;
-  ds_key_t nConcurrent, nRevisions;
 
   /* begin locals declarations */
   int32_t nTemp, nAccess;
@@ -86,10 +85,6 @@ int mk_w_web_page(
       CURRENT_DAY);
   strtodt(&dToday, szTemp.data());
   /* set up for the SCD handling */
-  nConcurrent =
-      static_cast<int>(get_rowcount(CONCURRENT_WEB_SITES, dsdGenContext));
-  nRevisions =
-      static_cast<int>(get_rowcount(WEB_PAGE, dsdGenContext) / nConcurrent);
 
   nullSet(&pT->kNullBitMap, WP_NULLS, dsdGenContext);
   r->wp_page_sk = index;

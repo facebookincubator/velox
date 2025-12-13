@@ -63,7 +63,6 @@ int mk_w_promotion(
 
   /* begin locals declarations */
   date_t start_date;
-  ds_key_t nTemp;
   int nFlags;
   tdef* pTdef = getSimpleTdefsByNumber(PROMOTION, dsdGenContext);
 
@@ -80,7 +79,6 @@ int mk_w_promotion(
   nullSet(&pTdef->kNullBitMap, P_NULLS, dsdGenContext);
   r->p_promo_sk = index;
   mk_bkey(&r->p_promo_id[0], index, P_PROMO_ID);
-  nTemp = index;
   r->p_start_date_id = start_date.julian +
       genrand_integer(NULL,
                       DIST_UNIFORM,
