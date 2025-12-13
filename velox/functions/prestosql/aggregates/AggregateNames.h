@@ -91,4 +91,5 @@ const char* const kNoisyApproxSetSfm = "noisy_approx_set_sfm";
 const char* const kNoisyApproxDistinctSfm = "noisy_approx_distinct_sfm";
 const char* const kNoisyApproxSetSfmFromIndexAndZeros =
     "noisy_approx_set_sfm_from_index_and_zeros";
+const char* const kKHyperLogLogAgg = "khyperloglog_agg";
 } // namespace facebook::velox::aggregate
