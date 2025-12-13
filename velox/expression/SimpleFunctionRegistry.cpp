@@ -176,7 +176,7 @@ SimpleFunctionRegistry::resolveFunction(
   using Candidate = std::pair<const FunctionEntry*, TypePtr>;
   const FunctionEntry* selectedFunction{};
   TypePtr selectedType;
-  Cost selectedPriority = kInvalidCost;
+  auto selectedPriority = kImpossibleCoercionCost;
   std::vector<Coercion> selectedCoercions;
   registeredFunctions_.withRLock([&](const auto& map) {
     const auto* signatureMap = getSignatureMap(name, map);
@@ -219,14 +219,17 @@ SimpleFunctionRegistry::resolveFunction(
         VELOX_CHECK_NOT_NULL(resultType);
 
         if (physicalTypeMatches(resultType, m.resultPhysicalType())) {
-          // Coercion cost is required to match more suitable signature. For
-          // example, let's assume function has two signatures:
+          // Coercion cost is required to match more suitable signature.
+          // For example, let's assume function has two signatures:
           // 1. BIGINT -> BIGINT
           // 2. Generic<T> -> BIGINT
-          // Then binding function to INTEGER should pick the
-          // second signature.
-          const Cost currentPriority =
-              m.priority() + Coercion::overallCost(requiredCoercions);
+          // Then binding function to INTEGER should pick the second signature.
+          // So we need to ensure that any non-zero coercion cost is higher than
+          // the maximum possible cost of function signatures without coercion.
+          const auto functionCost = m.priority();
+          const auto coercionCost = Coercion::overallCost(requiredCoercions);
+          const auto currentPriority =
+              m.priority() + kMaxFunctionRank * kMaxFunctionArgs * coercionCost;
 
           if (currentPriority < selectedPriority) {
             selectedFunction = currentCandidate.get();
@@ -239,7 +242,7 @@ SimpleFunctionRegistry::resolveFunction(
     }
   });
   Coercion::convert(selectedCoercions, coercions);
-  if (selectedPriority == kInvalidCost) {
+  if (selectedPriority == kImpossibleCoercionCost) {
     return std::nullopt;
   }
   return ResolvedSimpleFunction{*selectedFunction, selectedType};

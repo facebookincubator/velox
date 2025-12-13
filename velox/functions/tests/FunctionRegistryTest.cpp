@@ -134,15 +134,7 @@ class FunctionRegistryTest : public testing::Test {
       EXPECT_EQ(types.size(), coercions.size());
       EXPECT_EQ(expectedCoercions.size(), coercions.size());
       for (auto i = 0; i < coercions.size(); ++i) {
-        if (expectedCoercions[i] == nullptr) {
-          EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
-                                           << ": " << coercions[i]->toString();
-        } else {
-          ASSERT_NE(coercions[i], nullptr) << "at " << i;
-          EXPECT_EQ(*coercions[i], *expectedCoercions[i])
-              << "Expected: " << expectedCoercions[i]->toString()
-              << ", but got: " << coercions[i]->toString();
-        }
+        VELOX_EXPECT_EQ_TYPES(coercions[i], expectedCoercions[i]);
       }
     }
   }

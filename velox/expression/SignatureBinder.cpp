@@ -135,7 +135,7 @@ bool checkSignatureProperties(
 
 } // namespace
 
-// Traverse all types in signatures and deduces the least common type for each
+// Traverse all types in signatures and deduce the least common type for each
 // type parameter. Recursion is needed to traverse complex types like Map<K, V>,
 // Array<Array<T>>, etc
 // Returns false iff some type parameters cannot be bound.
@@ -397,7 +397,7 @@ bool SignatureBinderBase::tryBind(
     return false;
   }
 
-  Cost totalCost = 0;
+  CallableCost totalCost = 0;
   std::vector<TypeParameter> newParameters;
   newParameters.reserve(params.size());
 

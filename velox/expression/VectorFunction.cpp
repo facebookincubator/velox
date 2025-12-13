@@ -107,7 +107,7 @@ TypePtr resolveVectorFunctionWithCoercions(
   auto optionalType = applyToVectorFunctionEntry<TypePtr>(
       functionName, [&](const auto& /*name*/, const auto& entry) {
         TypePtr selectedType;
-        Cost selectedPriority = kInvalidCost;
+        auto selectedPriority = kImpossibleCoercionCost;
         std::vector<Coercion> requiredCoercions;
         for (const auto& signature : entry.signatures) {
           exec::SignatureBinder binder(*signature, argTypes);
@@ -116,7 +116,7 @@ TypePtr resolveVectorFunctionWithCoercions(
           }
           auto type = binder.tryResolveReturnType();
           VELOX_CHECK_NOT_NULL(type);
-          const Cost currentPriority = Coercion::overallCost(requiredCoercions);
+          const auto currentPriority = Coercion::overallCost(requiredCoercions);
           if (currentPriority == 0) {
             selectedCoercions = std::move(requiredCoercions);
             return type;

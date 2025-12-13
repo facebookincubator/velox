@@ -14,22 +14,16 @@
  * limitations under the License.
  */
 #include "velox/type/TypeCoercer.h"
-#include "velox/type/Cost.h"
 
 namespace facebook::velox {
 
-Cost Coercion::overallCost(const std::vector<Coercion>& coercions) {
-  Cost cost = 0;
+CallableCost Coercion::overallCost(const std::vector<Coercion>& coercions) {
+  CallableCost cost = 0;
   for (const auto& coercion : coercions) {
-    if (!coercion) {
-      return kInvalidCost;
-    }
+    VELOX_DCHECK(coercion);
     cost += coercion.cost;
   }
-  if (cost == 0) {
-    return 0;
-  }
-  return kMaxFunctionRank * kMaxFunctionArgs + cost;
+  return cost;
 }
 
 void Coercion::convert(
@@ -53,7 +47,7 @@ allowedCoercions() {
   std::unordered_map<std::pair<std::string, std::string>, Coercion> coercions;
 
   auto add = [&](const TypePtr& from, const std::vector<TypePtr>& to) {
-    Cost cost = kNullCoercionCost;
+    auto cost = kNullCoercionCost;
     for (const auto& toType : to) {
       coercions.emplace(
           std::make_pair<std::string, std::string>(
@@ -91,7 +85,7 @@ Coercion TypeCoercer::coerceTypeBase(
     return it->second;
   }
 
-  return {{}, kInvalidCost};
+  return {{}, kImpossibleCoercionCost};
 }
 
 // static
@@ -107,7 +101,7 @@ Coercion TypeCoercer::coercible(
   }
 
   if (fromType->size() != toType->size()) {
-    return {{}, kInvalidCost};
+    return {{}, kImpossibleCoercionCost};
   }
 
   if (fromType->size() == 0) {
@@ -115,15 +109,15 @@ Coercion TypeCoercer::coercible(
   }
 
   if (fromType->name() != toType->name()) {
-    return {{}, kInvalidCost};
+    return {{}, kImpossibleCoercionCost};
   }
 
-  Cost cost = 0;
+  CallableCost cost = 0;
   for (size_t i = 0; i < fromType->size(); i++) {
     if (auto c = coercible(fromType->childAt(i), toType->childAt(i))) {
       cost += c.cost;
     } else {
-      return {{}, kInvalidCost};
+      return {{}, kImpossibleCoercionCost};
     }
   }
 
