@@ -557,7 +557,8 @@ TEST_F(DecompressionTest, testSmallBufferInflate) {
       0xe, 0x0, 0x0, 0x63, 0x60, 0x64, 0x62, 0xc0, 0x8d, 0x0};
   const std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
-      std::make_unique<SeekableArrayInputStream>(buffer, std::size(buffer)),
+      std::make_unique<SeekableArrayInputStream>(
+          buffer, VELOX_ARRAY_SIZE(buffer)),
       1 // blockSize 1 to test multiple inflate calls during decompression.
   );
   const void* ptr;
