@@ -161,6 +161,8 @@ int main(int argc, char** argv) {
       // Come back to SetDigest and KHLL aggregate functions.
       "make_set_digest",
       "merge_set_digest",
+      "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
+      // verifier is added.
   };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
