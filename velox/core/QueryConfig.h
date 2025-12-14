@@ -565,6 +565,12 @@ class QueryConfig {
   static constexpr const char* kOpTraceDirectoryCreateConfig =
       "op_trace_directory_create_config";
 
+  /// Config used to create task trace directory. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kTaskTraceDirectoryCreateConfig =
+      "task_trace_directory_create_config";
+
   /// Disable optimization in expression evaluation to peel common dictionary
   /// layer from inputs.
   static constexpr const char* kDebugDisableExpressionWithPeeling =
@@ -1151,6 +1157,10 @@ class QueryConfig {
 
   std::string opTraceDirectoryCreateConfig() const {
     return get<std::string>(kOpTraceDirectoryCreateConfig, "");
+  }
+
+  std::string taskTraceDirectoryCreateConfig() const {
+    return get<std::string>(kTaskTraceDirectoryCreateConfig, "");
   }
 
   bool prestoArrayAggIgnoreNulls() const {
