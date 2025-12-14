@@ -283,3 +283,43 @@ TableScan operator shows how many rows were processed by pushing down aggregatio
 .. code-block::
 
     loadedToValueHook          sum: 50000, count: 5, min: 10000, max: 10000
+
+For Iceberg tables, TableScan operator reports Iceberg-specific statistics:
+
+.. code-block::
+
+   -> TableScan[Table: iceberg_table]
+          iceberg.numSplits     sum: 2, count: 1, min: 2, max: 2
+          iceberg.numDeletes    sum: 7, count: 1, min: 7, max: 7
+
+The `iceberg.numSplits` metric shows the total number of Iceberg splits processed,
+while `iceberg.numDeletes` shows the total number of rows deleted.
+These metrics help understand the overhead of Iceberg's delete
+operations and split processing.
+
+**Note:** These Iceberg metrics are collected by the IcebergSplitReader and are
+only available in the TableScan operator statistics after all splits have been
+processed (when the query completes or when no more splits are available).
+
+To programmatically aggregate these metrics across all operators in a task:
+
+.. code-block:: cpp
+
+   auto getAggregatedRuntimeMetric = [](const exec::TaskStats& taskStats,
+                                        const std::string& metricName) -> int64_t {
+     int64_t total = 0;
+     for (const auto& pipelineStats : taskStats.pipelineStats) {
+       for (const auto& operatorStats : pipelineStats.operatorStats) {
+         auto it = operatorStats.runtimeStats.find(metricName);
+         if (it != operatorStats.runtimeStats.end()) {
+           total += it->second.sum;
+         }
+       }
+     }
+     return total;
+   };
+
+   // Example usage:
+   const auto& taskStats = task->taskStats();
+   int64_t totalSplits = getAggregatedRuntimeMetric(taskStats, "iceberg.numSplits");
+   int64_t totalDeletes = getAggregatedRuntimeMetric(taskStats, "iceberg.numDeletes");
