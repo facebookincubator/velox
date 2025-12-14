@@ -74,6 +74,9 @@ void IcebergSplitReader::prepareSplit(
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
 
+  runtimeStats_ = &runtimeStats;
+  runtimeStats.unitLoaderStats.addCounter("iceberg.numSplits", RuntimeCounter(1));
+
   const auto& deleteFiles = icebergSplit->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes) {
@@ -136,6 +139,11 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
+
+  if (mutation.deletedRows != nullptr && runtimeStats_ != nullptr) {
+    auto numDeletes = bits::countBits(mutation.deletedRows, 0, actualSize);
+    runtimeStats_->unitLoaderStats.addCounter("iceberg.numDeletes", RuntimeCounter(numDeletes));
+  }
 
   return rowsScanned;
 }

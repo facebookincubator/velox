@@ -283,3 +283,14 @@ TableScan operator shows how many rows were processed by pushing down aggregatio
 .. code-block::
 
     loadedToValueHook          sum: 50000, count: 5, min: 10000, max: 10000
+
+For Iceberg tables, TableScan operator reports Iceberg-specific statistics:
+
+.. code-block::
+
+   -> TableScan[Table: iceberg_table]
+          iceberg.numSplits     sum: 2, count: 1, min: 2, max: 2
+          iceberg.numDeletes    sum: 7, count: 1, min: 7, max: 7
+
+The `iceberg.numSplits` metric shows the total number of Iceberg splits processed,
+while `iceberg.numDeletes` shows the total number of rows deleted.
