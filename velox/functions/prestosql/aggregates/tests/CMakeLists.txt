@@ -33,6 +33,7 @@ add_executable(
   EntropyAggregationTest.cpp
   GeometricMeanTest.cpp
   HistogramTest.cpp
+  KHyperLogLogAggregateTest.cpp
   Main.cpp
   MapAccumulatorTest.cpp
   MapAggTest.cpp
@@ -50,7 +51,9 @@ add_executable(
   PrestoHasherTest.cpp
   QDigestAggTest.cpp
   ReduceAggTest.cpp
+  ReservoirSampleTest.cpp
   SetAggTest.cpp
+  SetDigestAggregateTest.cpp
   SetUnionTest.cpp
   SumDataSizeForStatsTest.cpp
   SumTest.cpp

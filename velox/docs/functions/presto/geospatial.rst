@@ -305,6 +305,10 @@ Accessors
     returns the sum of the areas of the individual geometries. Empty geometries
     return 0.
 
+.. function:: ST_Area(sphericalgeography: SphericalGeography) -> area: double
+
+    Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.
+
 .. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
 
     Returns the point value that is the mathematical centroid of ``geometry``.

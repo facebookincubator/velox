@@ -211,6 +211,18 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
+  /// Number of input rows to receive before starting to check whether to
+  /// abandon building a HashTable without duplicates in HashBuild for left
+  /// semi/anti join.
+  static constexpr const char* kAbandonDedupHashMapMinRows =
+      "abandon_dedup_hashmap_min_rows";
+
+  /// Abandons building a HashTable without duplicates in HashBuild for left
+  /// semi/anti join if the percentage of distinct keys in the HashTable exceeds
+  /// this threshold. Zero means 'disable this optimization'.
+  static constexpr const char* kAbandonDedupHashMapMinPct =
+      "abandon_dedup_hashmap_min_pct";
+
   static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
       "max_elements_size_in_repeat_and_sequence";
 
@@ -340,6 +352,14 @@ class QueryConfig {
 
   static constexpr const char* kSpillCompressionKind =
       "spill_compression_codec";
+
+  /// The max number of files to merge at a time when merging sorted files into
+  /// a single ordered stream. 0 means unlimited. This is used to reduce memory
+  /// pressure by capping the number of open files when merging spilled sorted
+  /// files to avoid using too much memory and causing OOM. Note that this is
+  /// only applicable for ordered spill.
+  static constexpr const char* kSpillNumMaxMergeFiles =
+      "spill_num_max_merge_files";
 
   /// Enable the prefix sort or fallback to timsort in spill. The prefix sort is
   /// faster than std::sort but requires the memory to build normalized prefix
@@ -797,7 +817,7 @@ class QueryConfig {
   }
 
   uint8_t debugBingTileChildrenMaxZoomShift() const {
-    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 6);
+    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 7);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -830,6 +850,14 @@ class QueryConfig {
 
   int32_t abandonPartialTopNRowNumberMinPct() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
+  }
+
+  int32_t abandonHashBuildDedupMinRows() const {
+    return get<int32_t>(kAbandonDedupHashMapMinRows, 100'000);
+  }
+
+  int32_t abandonHashBuildDedupMinPct() const {
+    return get<int32_t>(kAbandonDedupHashMapMinPct, 0);
   }
 
   int32_t maxElementsSizeInRepeatAndSequence() const {
@@ -1059,6 +1087,11 @@ class QueryConfig {
 
   std::string spillCompressionKind() const {
     return get<std::string>(kSpillCompressionKind, "none");
+  }
+
+  uint32_t spillNumMaxMergeFiles() const {
+    constexpr uint32_t kDefaultMergeFiles = 0;
+    return get<uint32_t>(kSpillNumMaxMergeFiles, kDefaultMergeFiles);
   }
 
   bool spillPrefixSortEnabled() const {

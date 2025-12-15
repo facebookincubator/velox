@@ -2196,4 +2196,58 @@ struct StSphericalLengthFunction {
   }
 };
 
+template <typename T>
+struct StSphericalAreaFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SphericalGeography>& input) {
+    std::unique_ptr<geos::geom::Geometry> geom =
+        geospatial::GeometryDeserializer::deserialize(input);
+    if (geom->isEmpty()) {
+      return false;
+    }
+
+    auto validate = geospatial::validateType(
+        *geom,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON,
+         geos::geom::GeometryTypeId::GEOS_MULTIPOLYGON},
+        "ST_Area[SphericalGeography]");
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+
+    double sphericalExcess = 0.0;
+    if (geom->getGeometryTypeId() == geos::geom::GEOS_POLYGON) {
+      geos::geom::Polygon* polygon =
+          static_cast<geos::geom::Polygon*>(geom.get());
+      // Single polygon: calculate excess for that polygon only
+      sphericalExcess = geospatial::computeSphericalExcess(*polygon);
+    } else if (geom->getGeometryTypeId() == geos::geom::GEOS_MULTIPOLYGON) {
+      geos::geom::MultiPolygon* multiPolygon =
+          static_cast<geos::geom::MultiPolygon*>(geom.get());
+      // MultiPolygon: calculate sum excess of all Polygons
+      auto polygonCount = multiPolygon->getNumGeometries();
+      for (int i = 0; i < polygonCount; i++) {
+        sphericalExcess +=
+            geospatial::computeSphericalExcess(*multiPolygon->getGeometryN(i));
+      }
+    } else {
+      VELOX_FAIL(
+          fmt::format(
+              "Unexpected failure in ST_Area initial type validation. Type: {}",
+              geom->getGeometryType()));
+    }
+
+    // abs is required here because for Polygons with a 2D area of 0
+    // isExteriorRing returns false for the exterior ring
+    result = std::abs(
+        (sphericalExcess * (BingTileType::kEarthRadiusKm * 1000.0) *
+         (BingTileType::kEarthRadiusKm * 1000.0)));
+
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions

@@ -32,6 +32,7 @@
 #include "velox/functions/prestosql/aggregates/EntropyAggregates.h"
 #include "velox/functions/prestosql/aggregates/GeometricMeanAggregate.h"
 #include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
+#include "velox/functions/prestosql/aggregates/KHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionSumAggregate.h"
@@ -49,11 +50,15 @@
 #include "velox/functions/prestosql/aggregates/NumericHistogramAggregate.h"
 #include "velox/functions/prestosql/aggregates/QDigestAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/ReduceAgg.h"
+#include "velox/functions/prestosql/aggregates/ReservoirSampleAggregate.h"
 #include "velox/functions/prestosql/aggregates/SetAggregates.h"
+#include "velox/functions/prestosql/aggregates/SetDigestAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
 #include "velox/functions/prestosql/aggregates/VarianceAggregates.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/SetDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -120,6 +125,14 @@ extern void registerMapUnionAggregate(
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerMapUnionSumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerMakeSetDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerMergeSetDigestAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
@@ -190,6 +203,15 @@ extern void registerVarianceAggregates(
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
+extern void registerKHyperLogLogAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
+extern void registerKHyperLogLogAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
 
 void registerAllAggregateFunctions(
     const std::string& prefix,
@@ -197,7 +219,9 @@ void registerAllAggregateFunctions(
     bool onlyPrestoSignatures,
     bool overwrite) {
   registerJsonType();
+  registerSetDigestType();
   registerTDigestType();
+  registerKHyperLogLogType();
   registerApproxDistinctAggregates(prefix, withCompanionFunctions, overwrite);
   registerApproxMostFrequentAggregate(
       prefix, withCompanionFunctions, overwrite);
@@ -223,6 +247,8 @@ void registerAllAggregateFunctions(
   registerMapAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionSumAggregate(prefix, withCompanionFunctions, overwrite);
+  registerMakeSetDigestAggregate(prefix, withCompanionFunctions, overwrite);
+  registerMergeSetDigestAggregate(prefix, withCompanionFunctions, overwrite);
   registerMaxDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerMultiMapAggAggregate(prefix, withCompanionFunctions, overwrite);
@@ -239,6 +265,7 @@ void registerAllAggregateFunctions(
       prefix, withCompanionFunctions, overwrite);
   registerNoisySumGaussianAggregate(prefix, withCompanionFunctions, overwrite);
   registerReduceAgg(prefix, withCompanionFunctions, overwrite);
+  registerReservoirSampleAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerSumAggregate(prefix, withCompanionFunctions, overwrite);
@@ -246,6 +273,7 @@ void registerAllAggregateFunctions(
   registerTDigestAggregate(prefix, overwrite);
   registerNoisyApproxSfmAggregate(prefix, withCompanionFunctions, overwrite);
   registerNumericHistogramAggregate(prefix, withCompanionFunctions, overwrite);
+  registerKHyperLogLogAggregates(prefix, withCompanionFunctions, overwrite);
 }
 
 void registerInternalAggregateFunctions(const std::string& prefix) {

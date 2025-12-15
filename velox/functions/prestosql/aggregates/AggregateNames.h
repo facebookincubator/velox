@@ -51,6 +51,8 @@ const char* const kKurtosis = "kurtosis";
 const char* const kMapAgg = "map_agg";
 const char* const kMapUnion = "map_union";
 const char* const kMapUnionSum = "map_union_sum";
+const char* const kMakeSetDigest = "make_set_digest";
+const char* const kMergeSetDigest = "merge_set_digest";
 const char* const kMax = "max";
 const char* const kMaxBy = "max_by";
 const char* const kMerge = "merge";
@@ -72,6 +74,7 @@ const char* const kRegrSxy = "regr_sxy";
 const char* const kRegrSxx = "regr_sxx";
 const char* const kRegrSyy = "regr_syy";
 const char* const kRegrR2 = "regr_r2";
+const char* const kReservoirSample = "reservoir_sample";
 const char* const kSetAgg = "set_agg";
 const char* const kSetUnion = "set_union";
 const char* const kSkewness = "skewness";
@@ -89,4 +92,5 @@ const char* const kNoisyApproxSetSfm = "noisy_approx_set_sfm";
 const char* const kNoisyApproxDistinctSfm = "noisy_approx_distinct_sfm";
 const char* const kNoisyApproxSetSfmFromIndexAndZeros =
     "noisy_approx_set_sfm_from_index_and_zeros";
+const char* const kKHyperLogLogAgg = "khyperloglog_agg";
 } // namespace facebook::velox::aggregate

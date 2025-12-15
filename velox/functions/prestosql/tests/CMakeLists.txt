@@ -71,6 +71,7 @@ add_executable(
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   KHyperLogLogCastTest.cpp
+  KHyperLogLogFunctionsTest.cpp
   P4HyperLogLogCastTest.cpp
   SetDigestCastTest.cpp
   InPredicateTest.cpp
@@ -84,6 +85,7 @@ add_executable(
   MapFilterTest.cpp
   MapFromEntriesTest.cpp
   MapIntersectTest.cpp
+  MapKeysOverlapTest.cpp
   MapNormalizeTest.cpp
   RemapKeysTest.cpp
   MapTopNTest.cpp
@@ -92,6 +94,7 @@ add_executable(
   MapKeysAndValuesTest.cpp
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
+  MapAppendTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
   MapExceptTest.cpp

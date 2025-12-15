@@ -32,6 +32,7 @@ velox_add_library(
   EntropyAggregates.cpp
   GeometricMeanAggregate.cpp
   HistogramAggregate.cpp
+  KHyperLogLogAggregate.cpp
   MapAggAggregate.cpp
   MapUnionAggregate.cpp
   MapUnionSumAggregate.cpp
@@ -45,6 +46,7 @@ velox_add_library(
   PrestoHasher.cpp
   QDigestAggAggregate.cpp
   ReduceAgg.cpp
+  ReservoirSampleAggregate.cpp
   RegisterAggregateFunctions.cpp
   NoisyAvgGaussianAggregate.cpp
   NoisyCountIfGaussianAggregate.cpp
@@ -53,6 +55,7 @@ velox_add_library(
   NoisySumGaussianAggregate.cpp
   NoisyApproxSfmAggregate.cpp
   SetAggregates.cpp
+  SetDigestAggregate.cpp
   SumAggregate.cpp
   SumDataSizeForStatsAggregate.cpp
   TDigestAggregate.cpp

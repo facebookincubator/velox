@@ -59,6 +59,8 @@ void registerConstructors(const std::string& prefix) {
       SphericalGeography>({{prefix + "st_distance"}});
   registerFunction<StSphericalLengthFunction, double, SphericalGeography>(
       {{prefix + "st_length"}});
+  registerFunction<StSphericalAreaFunction, double, SphericalGeography>(
+      {{prefix + "st_area"}});
 }
 
 void registerRelationPredicates(const std::string& prefix) {
