@@ -14,11 +14,18 @@
  * limitations under the License.
  */
 #include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/case_conv.hpp>
+#include <boost/algorithm/string/predicate.hpp>
+#include <algorithm>
 #include <optional>
+#include <unordered_map>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/expression/TypeSignature.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 #include "velox/type/TypeUtil.h"
 
 namespace facebook::velox::exec {
@@ -104,8 +111,22 @@ bool checkNamedRowField(
     const TypeSignature& signature,
     const TypePtr& actualType,
     size_t idx) {
-  if (signature.rowFieldName().has_value() &&
-      (*signature.rowFieldName() != asRowType(actualType)->nameOf(idx))) {
+  if (!signature.rowFieldName()) {
+    return true;
+  }
+  return *signature.rowFieldName() == asRowType(actualType)->nameOf(idx);
+}
+
+bool checkSignatureProperties(
+    const SignatureVariable& signature,
+    const TypePtr& actualType) {
+  if (signature.knownTypesOnly() && actualType->isUnKnown()) {
+    return false;
+  }
+  if (signature.orderableTypesOnly() && !actualType->isOrderable()) {
+    return false;
+  }
+  if (signature.comparableTypesOnly() && !actualType->isComparable()) {
     return false;
   }
   return true;
@@ -113,23 +134,7 @@ bool checkNamedRowField(
 
 } // namespace
 
-bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
-  return tryBind(true, coercions);
-}
-
-bool SignatureBinder::tryBind() {
-  std::vector<Coercion> coercions;
-  return tryBind(false, coercions);
-}
-
-bool SignatureBinder::tryBind(
-    bool allowCoercions,
-    std::vector<Coercion>& coercions) {
-  if (allowCoercions) {
-    coercions.clear();
-    coercions.resize(actualTypes_.size());
-  }
-
+bool SignatureBinder::tryBind(std::vector<Coercion>* coercions) {
   const auto& formalArgs = signature_.argumentTypes();
   const auto formalArgsCnt = formalArgs.size();
 
@@ -137,37 +142,43 @@ bool SignatureBinder::tryBind(
     if (actualTypes_.size() < formalArgsCnt - 1) {
       return false;
     }
-
-    if (!isAny(signature_.argumentTypes().back())) {
-      if (actualTypes_.size() > formalArgsCnt) {
-        auto& type = actualTypes_[formalArgsCnt - 1];
-        for (auto i = formalArgsCnt; i < actualTypes_.size(); i++) {
-          if (!type->equivalent(*actualTypes_[i]) &&
-              actualTypes_[i]->kind() != TypeKind::UNKNOWN) {
-            return false;
-          }
+    if (!isAny(signature_.argumentTypes().back()) &&
+        actualTypes_.size() > formalArgsCnt) {
+      const auto& variableType = actualTypes_[formalArgsCnt - 1];
+      if (!variableType) {
+        return false;
+      }
+      for (size_t i = formalArgsCnt; i < actualTypes_.size(); ++i) {
+        if (!actualTypes_[i]) {
+          return false;
+        }
+        if (actualTypes_[i] == UNKNOWN()) {
+          continue;
+        }
+        if (!actualTypes_[i]->equivalent(*variableType)) {
+          return false;
         }
       }
     }
-  } else {
-    if (formalArgsCnt != actualTypes_.size()) {
-      return false;
-    }
+  } else if (formalArgsCnt != actualTypes_.size()) {
+    return false;
   }
 
-  for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
-    if (actualTypes_[i]) {
-      if (allowCoercions) {
-        if (!SignatureBinderBase::tryBindWithCoercion(
-                formalArgs[i], actualTypes_[i], coercions[i])) {
-          return false;
-        }
-      } else {
-        if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
-          return false;
-        }
-      }
-    } else {
+  size_t bindArgsCnt = actualTypes_.size();
+  if (coercions) {
+    coercions->clear();
+    coercions->resize(bindArgsCnt);
+  } else if (formalArgsCnt < bindArgsCnt) {
+    bindArgsCnt = formalArgsCnt;
+  }
+
+  for (size_t i = 0; i < bindArgsCnt; ++i) {
+    const auto& formalArgSignature =
+        i < formalArgsCnt ? formalArgs[i] : formalArgs.back();
+    if (!SignatureBinderBase::tryBind(
+            formalArgSignature,
+            actualTypes_[i],
+            coercions ? &(*coercions)[i] : nullptr)) {
       return false;
     }
   }
@@ -229,79 +240,52 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   return true;
 }
 
-bool SignatureBinderBase::tryBindWithCoercion(
-    const exec::TypeSignature& typeSignature,
-    const TypePtr& actualType,
-    Coercion& coercion) {
-  return tryBind(typeSignature, actualType, true, coercion);
-}
-
-bool SignatureBinderBase::tryBind(
-    const exec::TypeSignature& typeSignature,
-    const TypePtr& actualType) {
-  Coercion coercion;
-  return tryBind(typeSignature, actualType, false, coercion);
-}
-
 bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType,
-    bool allowCoercion,
-    Coercion& coercion) {
-  coercion.reset();
+    Coercion* coercion) {
+  if (!actualType) {
+    return false;
+  }
+
   if (isAny(typeSignature)) {
     return true;
   }
 
   const auto& baseName = typeSignature.baseName();
 
-  if (variables().count(baseName)) {
-    // Variables cannot have further parameters.
+  if (auto varIt = variables().find(baseName); varIt != variables().end()) {
     VELOX_CHECK(
         typeSignature.parameters().empty(),
         "Variables with parameters are not supported");
-    auto& variable = variables().at(baseName);
-    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+    VELOX_CHECK(varIt->second.isTypeParameter());
 
-    if (typeVariablesBindings_.count(baseName)) {
-      // If the the variable type is already mapped to a concrete type, make
-      // sure the mapped type is equivalent to the actual type.
-      return typeVariablesBindings_[baseName]->equivalent(*actualType);
+    auto& varType = typeVariablesBindings_[varIt->second.name()];
+    if (varType) {
+      return varType->equivalent(*actualType);
     }
-
-    if (actualType->isUnKnown() && variable.knownTypesOnly()) {
+    if (!checkSignatureProperties(varIt->second, actualType)) {
       return false;
     }
-
-    if (variable.orderableTypesOnly() && !actualType->isOrderable()) {
-      return false;
-    }
-
-    if (variable.comparableTypesOnly() && !actualType->isComparable()) {
-      return false;
-    }
-
-    typeVariablesBindings_[baseName] = actualType;
+    varType = actualType;
     return true;
   }
 
+  const auto& params = typeSignature.parameters();
+
   // Type is not a variable.
   auto typeName = boost::algorithm::to_upper_copy(baseName);
-  auto actualTypeName =
-      boost::algorithm::to_upper_copy(std::string(actualType->name()));
-
-  if (typeName != actualTypeName) {
-    if (allowCoercion) {
-      if (auto availableCoercion =
-              TypeCoercer::coerceTypeBase(actualType, typeName)) {
-        coercion = availableCoercion.value();
-        return true;
-      }
+  if (!boost::algorithm::iequals(typeName, actualType->name())) {
+    if (!coercion || !params.empty()) {
+      return false;
     }
-    return false;
+    auto availableCoercion = TypeCoercer::coerceTypeBase(actualType, typeName);
+    if (!availableCoercion) {
+      return false;
+    }
+    *coercion = *availableCoercion;
+    return true;
   }
-
-  const auto& params = typeSignature.parameters();
 
   // Handle homogeneous row case: row(T, ...)
   if (typeSignature.isHomogeneousRow()) {
@@ -346,7 +330,7 @@ bool SignatureBinderBase::tryBind(
     return false;
   }
 
-  for (auto i = 0; i < params.size(); i++) {
+  for (size_t i = 0; i < params.size(); i++) {
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
       case TypeParameterKind::kLongLiteral:
@@ -373,7 +357,6 @@ bool SignatureBinderBase::tryBind(
         if (!checkNamedRowField(params[i], actualType, i)) {
           return false;
         }
-
         if (!tryBind(params[i], actualParameter.type)) {
           // TODO Allow coercions for complex types.
           return false;

@@ -152,7 +152,8 @@ void validate(
     const TypeSignature& returnType,
     const std::vector<TypeSignature>& argumentTypes,
     const std::vector<bool>& constantArguments,
-    const std::vector<TypeSignature>& additionalTypes = {}) {
+    const std::vector<TypeSignature>& additionalTypes,
+    bool variableArity) {
   std::unordered_set<std::string> usedVariables;
   // Validate the additional types, and collect the used variables.
   for (const auto& type : additionalTypes) {
@@ -185,6 +186,10 @@ void validate(
       argumentTypes.size(),
       constantArguments.size(),
       "Argument types size is not equal to constant flags");
+
+  if (variableArity) {
+    VELOX_USER_CHECK_GE(argumentTypes.size(), 1);
+  }
 }
 
 } // namespace
@@ -224,7 +229,13 @@ FunctionSignature::FunctionSignature(
       argumentTypes_{std::move(argumentTypes)},
       constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
-  validate(variables_, returnType_, argumentTypes_, constantArguments_);
+  validate(
+      variables_,
+      returnType_,
+      argumentTypes_,
+      constantArguments_,
+      {},
+      variableArity_);
 }
 
 FunctionSignature::FunctionSignature(
@@ -244,7 +255,8 @@ FunctionSignature::FunctionSignature(
       returnType_,
       argumentTypes_,
       constantArguments_,
-      additionalTypes);
+      additionalTypes,
+      variableArity_);
 }
 
 std::string AggregateFunctionSignature::toString() const {

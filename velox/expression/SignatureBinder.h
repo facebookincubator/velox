@@ -29,20 +29,15 @@ class SignatureBinderBase {
   /// Return true if actualType can bind to typeSignature and update bindings_
   /// accordingly. The number of parameters in typeSignature and actualType
   /// must match. Return false otherwise.
+  /// Non-null 'coercion' allows implicit type conversion if actualType
+  /// doesn't match typeSignature exactly.
+  /// @param coercion Type coercion necessary to bind actualType to
+  /// typeSignature if there is no exact match. 'coercion->type' is null if
+  /// there is exact match.
   bool tryBind(
       const exec::TypeSignature& typeSignature,
-      const TypePtr& actualType);
-
-  /// Like 'tryBind', but allows implicit type conversion if actualType
-  /// doesn't match typeSignature exactly.
-  ///
-  /// @param coercion Type coercion necessary to bind actualType to
-  /// typeSignature if there is no exact match. 'coercion.type' is null if
-  /// there is exact match.
-  bool tryBindWithCoercion(
-      const exec::TypeSignature& typeSignature,
       const TypePtr& actualType,
-      Coercion& coercion);
+      Coercion* coercion = nullptr);
 
   // Return the variables of the signature.
   auto& variables() const {
@@ -84,12 +79,6 @@ class SignatureBinderBase {
   bool tryBindIntegerParameters(
       const std::vector<exec::TypeSignature>& parameters,
       const TypePtr& actualType);
-
-  bool tryBind(
-      const exec::TypeSignature& typeSignature,
-      const TypePtr& actualType,
-      bool allowCoercion,
-      Coercion& coercion);
 };
 
 /// Resolves generic type names in the function signature using actual input
@@ -109,14 +98,12 @@ class SignatureBinder : private SignatureBinderBase {
       : SignatureBinderBase{signature}, actualTypes_{actualTypes} {}
 
   /// Returns true if successfully resolved all generic type names.
-  bool tryBind();
-
-  /// Like 'tryBind', but allows implicit type conversion if actualTypes don't
+  /// Allows implicit type conversion if actualTypes don't
   /// match the signature exactly.
   /// @param coercions Type coercions necessary to bind actualTypes to the
   /// signature. There is one entry per argument. Coercion.type is null if no
   /// coercion is required for that argument.
-  bool tryBindWithCoercions(std::vector<Coercion>& coercions);
+  bool tryBind(std::vector<Coercion>* coercions = nullptr);
 
   /// Returns concrete return type or nullptr if couldn't fully resolve.
   TypePtr tryResolveReturnType() {
@@ -184,8 +171,6 @@ class SignatureBinder : private SignatureBinderBase {
           varcharEnumVariablesBindings);
 
  private:
-  bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
-
   const std::vector<TypePtr>& actualTypes_;
 };
 

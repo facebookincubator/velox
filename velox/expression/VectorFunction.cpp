@@ -111,7 +111,7 @@ TypePtr resolveVectorFunctionWithCoercions(
         for (const auto& signature : entry.signatures) {
           exec::SignatureBinder binder(*signature, argTypes);
           std::vector<Coercion> requiredCoercions;
-          if (binder.tryBindWithCoercions(requiredCoercions)) {
+          if (binder.tryBind(&requiredCoercions)) {
             auto type = binder.tryResolveReturnType();
             if (!hasCoercion(requiredCoercions)) {
               coercions.resize(argTypes.size(), nullptr);

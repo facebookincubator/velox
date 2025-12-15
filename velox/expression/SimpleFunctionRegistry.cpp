@@ -172,90 +172,85 @@ std::optional<SimpleFunctionRegistry::ResolvedSimpleFunction>
 SimpleFunctionRegistry::resolveFunction(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
-    bool allowCoercion,
-    std::vector<TypePtr>& coercions) const {
+    std::vector<TypePtr>* coercions) const {
   using Candidate = std::pair<const FunctionEntry*, TypePtr>;
 
   std::optional<Candidate> selectedCandidate;
   registeredFunctions_.withRLock([&](const auto& map) {
-    if (const auto* signatureMap = getSignatureMap(name, map)) {
-      std::vector<std::pair<std::vector<Coercion>, Candidate>> candidates;
-      std::optional<uint32_t> priority;
+    const auto* signatureMap = getSignatureMap(name, map);
+    if (!signatureMap) {
+      return;
+    }
+    std::vector<std::pair<std::vector<Coercion>, Candidate>> candidates;
+    std::optional<CallableCost> priority;
 
-      for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
-        SignatureBinder binder(candidateSignature, argTypes);
+    for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
+      SignatureBinder binder(candidateSignature, argTypes);
 
-        std::vector<Coercion> requiredCoercions;
+      std::vector<Coercion> requiredCoercions;
+      if (!binder.tryBind(coercions ? &requiredCoercions : nullptr)) {
+        continue;
+      }
 
-        bool bound;
-        if (allowCoercion) {
-          bound = binder.tryBindWithCoercions(requiredCoercions);
-        } else {
-          bound = binder.tryBind();
+      for (const auto& currentCandidate : functionEntry) {
+        const auto& m = currentCandidate->getMetadata();
+
+        // For variadic signatures, number of arguments in function call
+        // may be one less than number of arguments in the signature.
+        const auto numArgsToMatch =
+            std::min(argTypes.size(), m.argPhysicalTypes().size());
+
+        bool match = true;
+        for (auto i = 0; i < numArgsToMatch; ++i) {
+          auto argType = argTypes[i];
+          if (coercions && requiredCoercions[i].type != nullptr) {
+            argType = requiredCoercions[i].type;
+          }
+          if (!physicalTypeMatches(argType, m.argPhysicalTypes()[i])) {
+            match = false;
+            break;
+          }
         }
 
-        if (bound) {
-          for (const auto& currentCandidate : functionEntry) {
-            const auto& m = currentCandidate->getMetadata();
+        if (!match) {
+          continue;
+        }
 
-            // For variadic signatures, number of arguments in function call
-            // may be one less than number of arguments in the signature.
-            const auto numArgsToMatch =
-                std::min(argTypes.size(), m.argPhysicalTypes().size());
+        auto resultType = binder.tryResolveReturnType();
+        VELOX_CHECK_NOT_NULL(resultType);
 
-            bool match = true;
-            for (auto i = 0; i < numArgsToMatch; ++i) {
-              auto argType = argTypes[i];
-              if (allowCoercion && requiredCoercions[i].type != nullptr) {
-                argType = requiredCoercions[i].type;
-              }
-              if (!physicalTypeMatches(argType, m.argPhysicalTypes()[i])) {
-                match = false;
-                break;
-              }
-            }
+        if (physicalTypeMatches(resultType, m.resultPhysicalType())) {
+          const auto currentPriority = m.priority();
 
-            if (!match) {
-              continue;
-            }
-
-            auto resultType = binder.tryResolveReturnType();
-            VELOX_CHECK_NOT_NULL(resultType);
-
-            if (physicalTypeMatches(resultType, m.resultPhysicalType())) {
-              const auto currentPriority = m.priority();
-
-              if (!priority.has_value() || currentPriority < priority.value()) {
-                candidates.clear();
-                candidates.emplace_back(
-                    requiredCoercions,
-                    std::make_pair(currentCandidate.get(), resultType));
-                priority = currentPriority;
-              } else if (allowCoercion && currentPriority == priority.value()) {
-                candidates.emplace_back(
-                    requiredCoercions,
-                    std::make_pair(currentCandidate.get(), resultType));
-              }
-            }
+          if (!priority.has_value() || currentPriority < priority.value()) {
+            candidates.clear();
+            candidates.emplace_back(
+                requiredCoercions,
+                std::make_pair(currentCandidate.get(), resultType));
+            priority = currentPriority;
+          } else if (coercions && currentPriority == priority.value()) {
+            candidates.emplace_back(
+                requiredCoercions,
+                std::make_pair(currentCandidate.get(), resultType));
           }
         }
       }
+    }
 
-      if (!candidates.empty()) {
-        if (allowCoercion) {
-          if (auto index = Coercion::pickLowestCost(candidates)) {
-            selectedCandidate = candidates[index.value()].second;
+    if (!candidates.empty()) {
+      if (coercions) {
+        if (auto index = Coercion::pickLowestCost(candidates)) {
+          selectedCandidate = candidates[index.value()].second;
 
-            const auto& selectedCoercions = candidates[index.value()].first;
+          const auto& selectedCoercions = candidates[index.value()].first;
 
-            coercions.clear();
-            for (const auto& coercion : selectedCoercions) {
-              coercions.push_back(coercion.type);
-            }
+          coercions->clear();
+          for (const auto& coercion : selectedCoercions) {
+            coercions->push_back(coercion.type);
           }
-        } else {
-          selectedCandidate = candidates[0].second;
         }
+      } else {
+        selectedCandidate = candidates[0].second;
       }
     }
   });
