@@ -143,8 +143,7 @@ int setSCDKeys(
 ds_key_t
 scd_join(int tbl, int col, ds_key_t jDate, DSDGenContext& dsdGenContext) {
   ds_key_t res, kRowcount;
-  static int jMinimumDataDate, jMaximumDataDate, jH1DataDate, jT1DataDate,
-      jT2DataDate;
+  static int jMinimumDataDate, jMaximumDataDate, jT1DataDate, jT2DataDate;
   date_t dtTemp;
 
   if (!dsdGenContext.scd_join_init) {
@@ -152,7 +151,6 @@ scd_join(int tbl, int col, ds_key_t jDate, DSDGenContext& dsdGenContext) {
     jMinimumDataDate = dtTemp.julian;
     strtodt(&dtTemp, DATA_END_DATE);
     jMaximumDataDate = dtTemp.julian;
-    jH1DataDate = jMinimumDataDate + (jMaximumDataDate - jMinimumDataDate) / 2;
     jT2DataDate = (jMaximumDataDate - jMinimumDataDate) / 3;
     jT1DataDate = jMinimumDataDate + jT2DataDate;
     jT2DataDate += jT1DataDate;
