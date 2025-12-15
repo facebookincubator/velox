@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <filesystem>
+
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
