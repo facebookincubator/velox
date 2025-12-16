@@ -179,21 +179,9 @@ TEST_P(CompressionTest, compressOriginalString) {
   // simple, short string which will result in the original being saved
   char testData[] = "hello world!";
   compressAndVerify(
-      kind_,
-      memSink,
-      block,
-      *pool_,
-      testData,
-      sizeof(testData) / sizeof(char),
-      encrypter_);
+      kind_, memSink, block, *pool_, testData, sizeof(testData), encrypter_);
   decompressAndVerify(
-      memSink,
-      kind_,
-      block,
-      testData,
-      sizeof(testData) / sizeof(char),
-      *pool_,
-      decrypter_);
+      memSink, kind_, block, testData, sizeof(testData), *pool_, decrypter_);
 }
 
 TEST_P(CompressionTest, compressSimpleRepeatedString) {
