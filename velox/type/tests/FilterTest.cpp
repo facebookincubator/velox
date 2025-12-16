@@ -804,14 +804,16 @@ TEST(FilterTest, doubleRange) {
   filter = lessThanOrEqualDouble(1.2);
   {
     auto verifyFloat = [&](float x) { return filter->testFloat(x); };
-    float n8[] = {1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
     checkSimd(filter.get(), n8, verifyFloat);
   }
 
   filter = greaterThanDouble(1.2);
   {
     auto verifyFloat = [&](float x) { return filter->testFloat(x); };
-    float n8[] = {1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
     checkSimd(filter.get(), n8, verifyFloat);
   }
 }
