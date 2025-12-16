@@ -17,6 +17,8 @@
 
 #include "velox/exec/SerializedPage.h"
 
+#include <mutex>
+
 namespace facebook::velox::exec {
 
 /// Queue of results retrieved from source. Owned by shared_ptr by
@@ -117,9 +119,9 @@ class ExchangeQueue {
     return clearAllPromisesLocked();
   }
 
-  std::vector<ContinuePromise> checkCompleteLocked() {
+  std::vector<ContinuePromise> checkNoMoreInput() {
     if (noMoreSources_ && numCompleted_ == numSources_) {
-      atEnd_ = true;
+      noMoreInput_ = true;
       return clearAllPromisesLocked();
     }
     return {};
@@ -166,7 +168,10 @@ class ExchangeQueue {
   int numCompleted_{0};
   int numSources_{0};
   tsan_atomic<bool> noMoreSources_{false};
-  bool atEnd_{false};
+  // True if no more pages will be enqueued. This can be due to all sources
+  // completing normally or an error. Note that the queue itself may still
+  // contain data to be consumed.
+  bool noMoreInput_{false};
 
   std::mutex mutex_;
   std::deque<std::unique_ptr<SerializedPageBase>> queue_;
