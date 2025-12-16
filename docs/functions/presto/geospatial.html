@@ -314,6 +314,21 @@ at the expense of higher memory utilization. Null elements in the input
 array are ignored. Empty array input returns null.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_union_agg">
+<span class="sig-name descname"><span class="pre">geometry_union_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">union:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#geometry_union_agg" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a geometry that represents the point set union of the aggregated
+input geometries. Null geometries are ignored. Empty input returns null.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="convex_hull_agg">
+<span class="sig-name descname"><span class="pre">convex_hull_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">union:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#convex_hull_agg" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a geometry that represents the convex hull of the points in the
+aggregated input geometries.  Null geometries are ignored. Empty input
+returns null.</p>
+</dd></dl>
+
 </section>
 <section id="accessors">
 <h2>Accessors<a class="headerlink" href="#accessors" title="Link to this heading">¶</a></h2>
@@ -840,6 +855,8 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#ST_ExteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#expand_envelope"><code class="docutils literal notranslate"><span class="pre">expand_envelope()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_union"><code class="docutils literal notranslate"><span class="pre">geometry_union()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_union_agg"><code class="docutils literal notranslate"><span class="pre">geometry_union_agg()</span></code></a></li>
+<li><a class="reference internal" href="#convex_hull_agg"><code class="docutils literal notranslate"><span class="pre">convex_hull_agg()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
