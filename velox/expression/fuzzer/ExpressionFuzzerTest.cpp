@@ -277,6 +277,8 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_union",
     "to_geometry",
     "to_spherical_geography",
+    "convex_hull_agg",
+    "geometry_union_agg",
     "localtime",
 };
 

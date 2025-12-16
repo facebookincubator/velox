@@ -60,6 +60,9 @@
 #include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/SetDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
+#ifdef VELOX_ENABLE_GEO
+#include "velox/functions/prestosql/aggregates/GeometryAggregate.h"
+#endif
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -112,6 +115,11 @@ extern void registerGeometricMeanAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
+#ifdef VELOX_ENABLE_GEO
+extern void registerGeometryAggregate(
+    const std::string& prefix,
+    bool overwrite);
+#endif
 extern void registerHistogramAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
@@ -243,6 +251,9 @@ void registerAllAggregateFunctions(
   registerCovarianceAggregates(prefix, withCompanionFunctions, overwrite);
   registerEntropyAggregate(prefix, withCompanionFunctions, overwrite);
   registerGeometricMeanAggregate(prefix, withCompanionFunctions, overwrite);
+#ifdef VELOX_ENABLE_GEO
+  registerGeometryAggregate(prefix, overwrite);
+#endif
   registerHistogramAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionAggregate(prefix, withCompanionFunctions, overwrite);

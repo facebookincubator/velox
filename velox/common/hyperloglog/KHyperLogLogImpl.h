@@ -250,7 +250,8 @@ int64_t KHyperLogLog<TUii, TAllocator>::cardinality() const {
       static_cast<uint64_t>(maxKey()) - static_cast<uint64_t>(INT64_MIN);
   double halfDensity =
       static_cast<double>(hashesRange) / (minhash_.size() - 1) / 2.0;
-  return static_cast<int64_t>(detail::kHashOutputHalfRange / halfDensity);
+  return static_cast<int64_t>(
+      static_cast<double>(detail::kHashOutputHalfRange) / halfDensity);
 }
 
 template <typename TUii, typename TAllocator>

@@ -21,6 +21,7 @@
 #include "velox/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
@@ -51,6 +52,7 @@ enum class FilterKind {
   kHugeintRange,
   kTimestampRange,
   kHugeintValuesUsingHashTable,
+  kBigintValuesUsingBloomFilter,
 };
 
 VELOX_DECLARE_ENUM_NAME(FilterKind);
@@ -119,7 +121,7 @@ class Filter : public velox::ISerializable {
   /// e.g. a[1] > 10 is non-deterministic because > 10 filter applies only to
   /// some positions, e.g. first entry in a set of entries that correspond to a
   /// single top-level position.
-  virtual bool isDeterministic() const {
+  bool isDeterministic() const {
     return deterministic_;
   }
 
@@ -129,7 +131,7 @@ class Filter : public velox::ISerializable {
   /// where the current top-level position started and how far it continues.
   /// @return number of positions from the start of the current top-level
   /// position up to the current position (excluding current position)
-  virtual int getPrecedingPositionsToFail() const {
+  int getPrecedingPositionsToFail() const {
     return 0;
   }
 
@@ -139,11 +141,11 @@ class Filter : public velox::ISerializable {
 
   /// @return number of positions remaining until the end of the current
   /// top-level position
-  virtual int getSucceedingPositionsToFail() const {
+  int getSucceedingPositionsToFail() const {
     return 0;
   }
 
-  virtual bool testNull() const {
+  bool testNull() const {
     return nullAllowed_;
   }
 
@@ -346,10 +348,6 @@ class AlwaysFalse final : public Filter {
     return false;
   }
 
-  bool testNull() const final {
-    return false;
-  }
-
   bool testInt64(int64_t /* unused */) const final {
     return false;
   }
@@ -431,10 +429,6 @@ class AlwaysTrue final : public Filter {
 
   bool testingEquals(const Filter& other) const final {
     return Filter::testingBaseEquals<AlwaysTrue>(other);
-  }
-
-  bool testNull() const final {
-    return true;
   }
 
   bool testNonNull() const final {
@@ -1294,6 +1288,85 @@ class BigintValuesUsingBitmask final : public Filter {
   std::vector<bool> bitmask_;
   const int64_t min_;
   const int64_t max_;
+};
+
+class BigintValuesUsingBloomFilter final : public Filter {
+ public:
+  static int64_t numBlocks(int64_t capacity) {
+    return SplitBlockBloomFilter::numBlocks(capacity, 0.01);
+  }
+
+  BigintValuesUsingBloomFilter(int64_t capacity, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+        blocks_(numBlocks(capacity)),
+        filter_(blocks_) {}
+
+  bool testInt64(int64_t value) const final {
+    return filter_.mayContain(hash(value));
+  }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    return genericTestValues(x, [this](int64_t x) { return testInt64(x); });
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    return genericTestValues(x, [this](int32_t x) { return testInt64(x); });
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed) const override {
+    return std::unique_ptr<BigintValuesUsingBloomFilter>(
+        new BigintValuesUsingBloomFilter(
+            nullAllowed.value_or(nullAllowed_), blocks_));
+  }
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  bool testingEquals(const Filter& other) const override;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const override;
+
+  void insert(int64_t value) {
+    filter_.insert(hash(value));
+  }
+
+  uint64_t blockIndex(int64_t value) const {
+    return filter_.blockIndex(hash(value));
+  }
+
+  int64_t blocksByteSize() const {
+    return blocks_.size() * sizeof(SplitBlockBloomFilter::Block);
+  }
+
+ private:
+  static uint64_t hash(int64_t value) {
+    // Simple multiplication hash like the one in BigintValuesUsingHashTable
+    // does not distribute values evenly.  Maybe we need to reconsider the hash
+    // choice in BigintValuesUsingHashTable as well in the future.
+    return folly::hasher<int64_t>()(value);
+  }
+
+  // Private constructor used by clone() and create().
+  BigintValuesUsingBloomFilter(
+      bool nullAllowed,
+      std::vector<SplitBlockBloomFilter::Block> blocks)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+        blocks_(std::move(blocks)),
+        filter_(blocks_) {}
+
+  std::vector<SplitBlockBloomFilter::Block> blocks_;
+  SplitBlockBloomFilter filter_;
 };
 
 // NOT IN-list filter for integral data types. Implemented as a hash table. Good
