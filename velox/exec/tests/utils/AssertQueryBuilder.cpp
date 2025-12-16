@@ -285,7 +285,7 @@ std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
   return copies;
 }
 
-uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
+uint64_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
   auto [cursor, results] = readCursor();
   uint64_t count = 0;
   for (const auto& result : results) {
@@ -293,6 +293,11 @@ uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
   }
   task = cursor->task();
   return count;
+}
+
+uint64_t AssertQueryBuilder::countResults() {
+  std::shared_ptr<Task> task;
+  return countResults(task);
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>

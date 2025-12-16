@@ -191,6 +191,58 @@ PlanBuilder& PlanBuilder::tpcdsTableScan(
       .endTableScan();
 }
 
+namespace {
+
+// Analyzes 'expr' to determine if it can be expressed as a subfield filter.
+// Returns a pair of subfield and filter if so. Otherwise, throws.
+//
+// Supports all expressions supported by
+// exec::ExprToSubfieldFilterParser::leafCallToSubfieldFilter + negations and
+// disjunctions over same subfield.
+//
+//  Examples:
+//    a = 1
+//    a = 1 OR a > 10
+//    not (a = 1)
+std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator) {
+  if (expr->isCallKind();
+      auto* call = expr->asUnchecked<core::CallTypedExpr>()) {
+    if (call->name() == "or") {
+      VELOX_CHECK_EQ(call->inputs().size(), 2);
+      auto left = toSubfieldFilter(call->inputs()[0], evaluator);
+      auto right = toSubfieldFilter(call->inputs()[1], evaluator);
+      VELOX_CHECK(left.first == right.first);
+      return {
+          std::move(left.first),
+          exec::ExprToSubfieldFilterParser::makeOrFilter(
+              std::move(left.second), std::move(right.second))};
+    }
+
+    if (call->name() == "not") {
+      const auto& input = call->inputs()[0];
+      if (input->isCallKind();
+          auto* inner = input->asUnchecked<core::CallTypedExpr>()) {
+        if (auto result =
+                exec::ExprToSubfieldFilterParser::getInstance()
+                    ->leafCallToSubfieldFilter(*inner, evaluator, true)) {
+          return std::move(result.value());
+        }
+      }
+    } else {
+      if (auto result =
+              exec::ExprToSubfieldFilterParser::getInstance()
+                  ->leafCallToSubfieldFilter(*call, evaluator, false)) {
+        return std::move(result.value());
+      }
+    }
+  }
+  VELOX_UNSUPPORTED(
+      "Unsupported expression for range filter: {}", expr->toString());
+}
+} // namespace
+
 PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
     std::vector<std::string> subfieldFilters) {
   VELOX_CHECK(subfieldFiltersMap_.empty());
@@ -210,9 +262,7 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
     // Parse directly to subfieldFiltersMap_
     auto filterExpr = core::Expressions::inferTypes(
         untypedExpr, parseType, planBuilder_.pool_);
-    auto [subfield, subfieldFilter] =
-        exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
-            filterExpr, &evaluator);
+    auto [subfield, subfieldFilter] = toSubfieldFilter(filterExpr, &evaluator);
 
     auto it = columnAliases_.find(subfield.toString());
     if (it != columnAliases_.end()) {
@@ -666,13 +716,18 @@ PlanBuilder& PlanBuilder::optionalFilter(const std::string& optionalFilter) {
   return filter(optionalFilter);
 }
 
-PlanBuilder& PlanBuilder::filter(const std::string& filter) {
+PlanBuilder& PlanBuilder::filter(const core::ExprPtr& filterExpr) {
   VELOX_CHECK_NOT_NULL(planNode_, "Filter cannot be the source node");
-  auto expr = parseExpr(filter, planNode_->outputType(), options_, pool_);
-  planNode_ =
-      std::make_shared<core::FilterNode>(nextPlanNodeId(), expr, planNode_);
+  auto typedExpr =
+      core::Expressions::inferTypes(filterExpr, planNode_->outputType(), pool_);
+  planNode_ = std::make_shared<core::FilterNode>(
+      nextPlanNodeId(), typedExpr, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::filter(const std::string& filterExpr) {
+  return filter(parse::parseExpr(filterExpr, options_));
 }
 
 PlanBuilder& PlanBuilder::tableWrite(
@@ -873,6 +928,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->aggregateNames(),
       aggregates,
       partialAggNode->ignoreNullKeys(),
+      partialAggNode->noGroupsSpanBatches(),
       planNode_);
   VELOX_CHECK_EQ(
       aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
@@ -1078,6 +1134,7 @@ PlanBuilder& PlanBuilder::aggregation(
       globalGroupingSets,
       groupId,
       ignoreNullKeys,
+      /*noGroupsSpanBatches=*/false,
       planNode_);
   VELOX_CHECK_EQ(
       aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
@@ -1090,7 +1147,8 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
-    bool ignoreNullKeys) {
+    bool ignoreNullKeys,
+    bool noGroupsSpanBatches) {
   auto aggregatesAndNames =
       createAggregateExpressionsAndNames(aggregates, masks, step);
   auto aggregationNode = std::make_shared<core::AggregationNode>(
@@ -1101,6 +1159,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
       ignoreNullKeys,
+      noGroupsSpanBatches,
       planNode_);
   VELOX_CHECK_EQ(
       aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());

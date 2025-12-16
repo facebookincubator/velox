@@ -27,6 +27,7 @@ BUILD_GEOS="${BUILD_GEOS:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
+SIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION:-"OFF"}
 
 USE_CLANG="${USE_CLANG:-false}"
 
@@ -193,7 +194,7 @@ function install_xsimd {
 
 function install_simdjson {
   wget_and_untar https://github.com/simdjson/simdjson/archive/refs/tags/v"${SIMDJSON_VERSION}".tar.gz simdjson
-  cmake_install_dir simdjson
+  cmake_install_dir simdjson -DSIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION}
 }
 
 function install_arrow {
@@ -320,7 +321,7 @@ function install_minio {
   ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
 }
 
-function install_gcs-sdk-cpp {
+function install_gcs_sdk_cpp {
   # Install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
@@ -364,7 +365,7 @@ function install_gcs-sdk-cpp {
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
 }
 
-function install_azure-storage-sdk-cpp {
+function install_azure_storage_sdk_cpp {
   # Disable VCPKG to install additional static dependencies under the VCPKG installed path
   # instead of using system pre-installed dependencies.
   export AZURE_SDK_DISABLE_AUTO_VCPKG=ON

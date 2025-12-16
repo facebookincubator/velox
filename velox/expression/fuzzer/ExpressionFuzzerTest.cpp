@@ -56,6 +56,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::AtTimezoneArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
@@ -89,6 +90,7 @@ std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
 
 std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
     argValuesGenerators = {
+        {"at_timezone", std::make_shared<AtTimezoneArgValuesGenerator>()},
         {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
         {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
         {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
@@ -143,6 +145,22 @@ std::unordered_set<std::string> skipFunctions = {
     "construct_tdigest",
     "destructure_tdigest",
     "trimmed_mean",
+    // Fuzzer and the underlying engine are confused about SetDigest functions
+    // (since SetDigest is a user defined type), and tries to pass a
+    // VARBINARY (since SetDigest's implementation uses an
+    // alias to VARBINARY).
+    "cardinality(setdigest) -> bigint",
+    "intersection_cardinality(setdigest,setdigest) -> bigint",
+    "jaccard_index(setdigest,setdigest) -> double",
+    "hash_counts(setdigest) -> map(bigint,smallint)",
+    // Same with KHyperLogLog functions
+    "cardinality(khyperloglog) -> bigint",
+    "intersection_cardinality(khyperloglog,khyperloglog) -> bigint",
+    "jaccard_index(khyperloglog,khyperloglog) -> double",
+    "reidentification_potential(khyperloglog,bigint) -> double",
+    "uniqueness_distribution(khyperloglog) -> map(bigint,double)",
+    "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
+    "merge_khll(array(khyperloglog)) -> khyperloglog",
     // Fuzzer cannot generate valid 'comparator' lambda.
     "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",
@@ -257,6 +275,10 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_to_bing_tiles",
     "geometry_to_dissolved_bing_tiles",
     "geometry_union",
+    "to_geometry",
+    "to_spherical_geography",
+    "convex_hull_agg",
+    "geometry_union_agg",
     "localtime",
 };
 
@@ -266,6 +288,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
                      // instances
     "array_subset", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
+    "map_intersect", // Velox-only function, not available in Presto
+    "map_keys_overlap", // Velox-only function, not available in Presto
+    "map_append", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -309,6 +334,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
     "array_position", // https://github.com/facebookincubator/velox/issues/10580
     "chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/12327
+    "map_except",
     "bitwise_left_shift", // https://github.com/facebookincubator/velox/issues/12330
     "log2", // https://github.com/facebookincubator/velox/issues/12338
     "bitwise_right_shift", // https://github.com/facebookincubator/velox/issues/12339
@@ -411,10 +437,12 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     // https://github.com/prestodb/presto/pull/25521
     "xxhash64(varbinary,bigint) -> varbinary",
     "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
+    "$internal$split_to_map",
     "$internal$canonicalize",
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
-                 // https://github.com/facebookincubator/velox/issues/14937
+                 // https://github.com/facebookincubator/velox/issues/14937,
+    "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
 };
 
 int main(int argc, char** argv) {

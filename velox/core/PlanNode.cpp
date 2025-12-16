@@ -167,6 +167,7 @@ AggregationNode::AggregationNode(
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
+    bool noGroupsSpanBatches,
     PlanNodePtr source)
     : PlanNode(id),
       step_(step),
@@ -177,6 +178,7 @@ AggregationNode::AggregationNode(
       ignoreNullKeys_(ignoreNullKeys),
       groupId_(groupId),
       globalGroupingSets_(globalGroupingSets),
+      noGroupsSpanBatches_(noGroupsSpanBatches),
       sources_{source},
       outputType_(getAggregationOutputType(
           groupingKeys_,
@@ -221,6 +223,10 @@ AggregationNode::AggregationNode(
     VELOX_USER_CHECK(
         groupId_.has_value(), "Global grouping sets require GroupId key");
   }
+
+  VELOX_USER_CHECK(
+      !noGroupsSpanBatches_ || isPreGrouped(),
+      "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
 }
 
 AggregationNode::AggregationNode(
@@ -231,6 +237,7 @@ AggregationNode::AggregationNode(
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
+    bool noGroupsSpanBatches,
     PlanNodePtr source)
     : AggregationNode(
           id,
@@ -242,6 +249,7 @@ AggregationNode::AggregationNode(
           kDefaultGlobalGroupingSets,
           kDefaultGroupId,
           ignoreNullKeys,
+          noGroupsSpanBatches,
           source) {}
 
 namespace {
@@ -336,6 +344,10 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   if (groupId_.has_value()) {
     stream << " Group Id key: " << groupId_.value()->name();
   }
+
+  if (noGroupsSpanBatches_) {
+    stream << " noGroupsSpanBatches";
+  }
 }
 
 namespace {
@@ -374,6 +386,7 @@ folly::dynamic AggregationNode::serialize() const {
     obj["groupId"] = ISerializable::serialize(groupId_.value());
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
+  obj["noGroupsSpanBatches"] = noGroupsSpanBatches_;
   return obj;
 }
 
@@ -494,6 +507,8 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       globalGroupingSets,
       groupId,
       obj["ignoreNullKeys"].asBool(),
+      obj.count("noGroupsSpanBatches") ? obj["noGroupsSpanBatches"].asBool()
+                                       : false,
       deserializeSingleSource(obj, context));
 }
 
@@ -1138,7 +1153,7 @@ std::vector<std::string> allNames(
     const std::vector<std::string>& names,
     const std::vector<std::string>& moreNames) {
   auto result = names;
-  result.insert(result.end(), moreNames.begin(), moreNames.end());
+  result.insert(result.cend(), moreNames.cbegin(), moreNames.cend());
   return result;
 }
 
@@ -1150,7 +1165,7 @@ std::vector<TypedExprPtr> flattenExprs(
     const PlanNodePtr& input) {
   std::vector<TypedExprPtr> result;
   for (auto& group : exprs) {
-    result.insert(result.end(), group.begin(), group.end());
+    result.insert(result.cend(), group.cbegin(), group.cend());
   }
 
   const auto& sourceType = input->outputType();
@@ -1829,7 +1844,7 @@ PlanNodePtr IndexLookupJoinNode::create(
   auto sources = deserializeSources(obj, context);
   VELOX_CHECK_EQ(2, sources.size());
   TableScanNodePtr lookupSource =
-      checked_pointer_cast<const TableScanNode>(sources[1]);
+      checkedPointerCast<const TableScanNode>(sources[1]);
 
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
@@ -1910,7 +1925,7 @@ bool IndexLookupJoinNode::isSupported(JoinType joinType) {
 }
 
 bool isIndexLookupJoin(const PlanNode* planNode) {
-  return is_instance_of<IndexLookupJoinNode>(planNode);
+  return isInstanceOf<IndexLookupJoinNode>(planNode);
 }
 
 // static
@@ -2502,7 +2517,7 @@ const char* TopNRowNumberNode::rankFunctionName(
   static const auto kFunctionNames = rankFunctionNames();
   auto it = kFunctionNames.find(function);
   VELOX_CHECK(
-      it != kFunctionNames.end(),
+      it != kFunctionNames.cend(),
       "Invalid rank function {}",
       static_cast<int>(function));
   return it->second.c_str();
@@ -2513,7 +2528,7 @@ TopNRowNumberNode::RankFunction TopNRowNumberNode::rankFunctionFromName(
     std::string_view name) {
   static const auto kFunctionNames = invertMap(rankFunctionNames());
   auto it = kFunctionNames.find(name.data());
-  VELOX_CHECK(it != kFunctionNames.end(), "Invalid rank function {}", name);
+  VELOX_CHECK(it != kFunctionNames.cend(), "Invalid rank function {}", name);
   return it->second;
 }
 
@@ -3770,7 +3785,7 @@ void EqualIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(key);
   VELOX_CHECK_NOT_NULL(value);
   VELOX_CHECK_NOT_NULL(
-      checked_pointer_cast<const ConstantTypedExpr>(value),
+      checkedPointerCast<const ConstantTypedExpr>(value),
       "Equal condition value must be a constant expression: {}",
       value->toString());
 

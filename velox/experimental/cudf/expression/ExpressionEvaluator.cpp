@@ -501,6 +501,7 @@ class CoalesceFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    std::cout << "CoalesceFunction::eval" << std::endl;
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
     // Starting from first column, we keep calling replace nulls with
     // subsequent cols until we get an all valid col or run out of columns
@@ -647,12 +648,37 @@ class LikeFunction : public CudfFunction {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "like expects 2 inputs");
 
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "like pattern must be a constant");
+    pattern_ = patternExpr->value()->toString(0);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::like(
+        inputCol, pattern_, std::string_view(""), stream, mr);
+  }
+
+ private:
+  std::string pattern_;
+};
+
+class StartswithFunction : public CudfFunction {
+ public:
+  explicit StartswithFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "startswith expects 2 inputs");
+
     auto stream = cudf::get_default_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
     auto patternExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(patternExpr, "like pattern must be a constant");
+    VELOX_CHECK_NOT_NULL(patternExpr, "startswith pattern must be a constant");
     pattern_ = std::make_unique<cudf::string_scalar>(
         patternExpr->value()->toString(0), true, stream, mr);
   }
@@ -662,12 +688,63 @@ class LikeFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::like(
-        inputCol,
-        *pattern_,
-        cudf::string_scalar("", true, stream, mr),
-        stream,
-        mr);
+    return cudf::strings::starts_with(inputCol, *pattern_, stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::string_scalar> pattern_;
+};
+
+class EndswithFunction : public CudfFunction {
+ public:
+  explicit EndswithFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "endswith expects 2 inputs");
+
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "endswith pattern must be a constant");
+    pattern_ = std::make_unique<cudf::string_scalar>(
+        patternExpr->value()->toString(0), true, stream, mr);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::ends_with(inputCol, *pattern_, stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::string_scalar> pattern_;
+};
+
+class ContainsFunction : public CudfFunction {
+ public:
+  explicit ContainsFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "contains expects 2 inputs");
+
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "contains pattern must be a constant");
+    pattern_ = std::make_unique<cudf::string_scalar>(
+        patternExpr->value()->toString(0), true, stream, mr);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::contains(inputCol, *pattern_, stream, mr);
   }
 
  private:
@@ -873,7 +950,57 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<RoundFunction>(expr);
       },
-      {FunctionSignatureBuilder()
+      {// TODO(dm): Enable after adding decimal support to velox-cudf
+       //   FunctionSignatureBuilder()
+       //      .integerVariable("p")
+       //      .integerVariable("s")
+       //      .returnType("decimal(p,s)")
+       //      .argumentType("decimal(p,s)")
+       //      .build(),
+       //  FunctionSignatureBuilder()
+       //      .integerVariable("p")
+       //      .integerVariable("s")
+       //      .returnType("decimal(p,s)")
+       //      .argumentType("decimal(p,s)")
+       //      .constantArgumentType("integer")
+       //      .build(),
+       FunctionSignatureBuilder()
+           .returnType("tinyint")
+           .argumentType("tinyint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("tinyint")
+           .argumentType("tinyint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("smallint")
+           .argumentType("smallint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("smallint")
+           .argumentType("smallint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("integer")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
            .returnType("double")
            .argumentType("double")
            .build(),

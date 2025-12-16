@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include <iostream>
-#include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/PlanNodeStats.h"
 
 using namespace facebook::velox;
@@ -59,178 +59,165 @@ DEFINE_int32(
     "include in IO meter query. The columns are sorted by name and the n% first "
     "are scanned");
 
-std::shared_ptr<TpchQueryBuilder> queryBuilder;
+void TpchBenchmark::initQueryBuilder() {
+  queryBuilder_ =
+      std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
+  queryBuilder_->initialize(FLAGS_data_path);
+}
 
-class TpchBenchmark : public QueryBenchmarkBase {
- public:
-  void runMain(std::ostream& out, RunStats& runStats) override {
-    if (FLAGS_run_query_verbose == -1 && FLAGS_io_meter_column_pct == 0) {
-      folly::runBenchmarks();
-    } else {
-      const auto queryPlan = FLAGS_io_meter_column_pct > 0
-          ? queryBuilder->getIoMeterPlan(FLAGS_io_meter_column_pct)
-          : queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
-      auto [cursor, actualResults] = run(queryPlan);
-      if (!cursor) {
-        LOG(ERROR) << "Query terminated with error. Exiting";
-        exit(1);
-      }
-      auto task = cursor->task();
-      ensureTaskCompletion(task.get());
-      if (FLAGS_include_results) {
-        printResults(actualResults, out);
-        out << std::endl;
-      }
-      const auto stats = task->taskStats();
-      int64_t rawInputBytes = 0;
-      for (auto& pipeline : stats.pipelineStats) {
-        auto& first = pipeline.operatorStats[0];
-        if (first.operatorType == "TableScan") {
-          rawInputBytes += first.rawInputBytes;
-        }
-      }
-      runStats.rawInputBytes = rawInputBytes;
-      out << fmt::format(
-                 "Execution time: {}",
-                 succinctMillis(
-                     stats.executionEndTimeMs - stats.executionStartTimeMs))
-          << std::endl;
-      out << fmt::format(
-                 "Splits total: {}, finished: {}",
-                 stats.numTotalSplits,
-                 stats.numFinishedSplits)
-          << std::endl;
-      out << printPlanWithStats(
-                 *queryPlan.plan, stats, FLAGS_include_custom_stats)
-          << std::endl;
+void TpchBenchmark::initialize() {
+  QueryBenchmarkBase::initialize();
+  initQueryBuilder();
+}
+
+void TpchBenchmark::shutdown() {
+  QueryBenchmarkBase::shutdown();
+  queryBuilder_.reset();
+}
+
+void TpchBenchmark::runMain(
+    std::ostream& out,
+    facebook::velox::RunStats& runStats) {
+  if (FLAGS_run_query_verbose == -1 && FLAGS_io_meter_column_pct == 0) {
+    folly::runBenchmarks();
+  } else {
+    auto queryPlan = FLAGS_io_meter_column_pct > 0
+        ? queryBuilder_->getIoMeterPlan(FLAGS_io_meter_column_pct)
+        : queryBuilder_->getQueryPlan(FLAGS_run_query_verbose);
+    auto [cursor, actualResults] = run(queryPlan, queryConfigs_);
+    if (!cursor) {
+      LOG(ERROR) << "Query terminated with error. Exiting";
+      exit(1);
     }
+    auto task = cursor->task();
+    ensureTaskCompletion(task.get());
+    if (FLAGS_include_results) {
+      printResults(actualResults, out);
+      out << std::endl;
+    }
+    const auto stats = task->taskStats();
+    int64_t rawInputBytes = 0;
+    for (auto& pipeline : stats.pipelineStats) {
+      auto& first = pipeline.operatorStats[0];
+      if (first.operatorType == "TableScan") {
+        rawInputBytes += first.rawInputBytes;
+      }
+    }
+    runStats.rawInputBytes = rawInputBytes;
+    out << fmt::format(
+               "Execution time: {}",
+               facebook::velox::succinctMillis(
+                   stats.executionEndTimeMs - stats.executionStartTimeMs))
+        << std::endl;
+    out << fmt::format(
+               "Splits total: {}, finished: {}",
+               stats.numTotalSplits,
+               stats.numFinishedSplits)
+        << std::endl;
+    out << printPlanWithStats(
+               *queryPlan.plan, stats, FLAGS_include_custom_stats)
+        << std::endl;
   }
-};
+}
 
-TpchBenchmark benchmark;
+std::unique_ptr<TpchBenchmark> benchmark;
 
 BENCHMARK(q1) {
-  const auto planContext = queryBuilder->getQueryPlan(1);
-  benchmark.run(planContext);
+  benchmark->runQuery(1);
 }
 
 BENCHMARK(q2) {
-  const auto planContext = queryBuilder->getQueryPlan(2);
-  benchmark.run(planContext);
+  benchmark->runQuery(2);
 }
 
 BENCHMARK(q3) {
-  const auto planContext = queryBuilder->getQueryPlan(3);
-  benchmark.run(planContext);
+  benchmark->runQuery(3);
 }
 
 BENCHMARK(q4) {
-  const auto planContext = queryBuilder->getQueryPlan(4);
-  benchmark.run(planContext);
+  benchmark->runQuery(4);
 }
 
 BENCHMARK(q5) {
-  const auto planContext = queryBuilder->getQueryPlan(5);
-  benchmark.run(planContext);
+  benchmark->runQuery(5);
 }
 
 BENCHMARK(q6) {
-  const auto planContext = queryBuilder->getQueryPlan(6);
-  benchmark.run(planContext);
+  benchmark->runQuery(6);
 }
 
 BENCHMARK(q7) {
-  const auto planContext = queryBuilder->getQueryPlan(7);
-  benchmark.run(planContext);
+  benchmark->runQuery(7);
 }
 
 BENCHMARK(q8) {
-  const auto planContext = queryBuilder->getQueryPlan(8);
-  benchmark.run(planContext);
+  benchmark->runQuery(8);
 }
 
 BENCHMARK(q9) {
-  const auto planContext = queryBuilder->getQueryPlan(9);
-  benchmark.run(planContext);
+  benchmark->runQuery(9);
 }
 
 BENCHMARK(q10) {
-  const auto planContext = queryBuilder->getQueryPlan(10);
-  benchmark.run(planContext);
+  benchmark->runQuery(10);
 }
 
 BENCHMARK(q11) {
-  const auto planContext = queryBuilder->getQueryPlan(11);
-  benchmark.run(planContext);
+  benchmark->runQuery(11);
 }
 
 BENCHMARK(q12) {
-  const auto planContext = queryBuilder->getQueryPlan(12);
-  benchmark.run(planContext);
+  benchmark->runQuery(12);
 }
 
 BENCHMARK(q13) {
-  const auto planContext = queryBuilder->getQueryPlan(13);
-  benchmark.run(planContext);
+  benchmark->runQuery(13);
 }
 
 BENCHMARK(q14) {
-  const auto planContext = queryBuilder->getQueryPlan(14);
-  benchmark.run(planContext);
+  benchmark->runQuery(14);
 }
 
 BENCHMARK(q15) {
-  const auto planContext = queryBuilder->getQueryPlan(15);
-  benchmark.run(planContext);
+  benchmark->runQuery(15);
 }
 
 BENCHMARK(q16) {
-  const auto planContext = queryBuilder->getQueryPlan(16);
-  benchmark.run(planContext);
+  benchmark->runQuery(16);
 }
 
 BENCHMARK(q17) {
-  const auto planContext = queryBuilder->getQueryPlan(17);
-  benchmark.run(planContext);
+  benchmark->runQuery(17);
 }
 
 BENCHMARK(q18) {
-  const auto planContext = queryBuilder->getQueryPlan(18);
-  benchmark.run(planContext);
+  benchmark->runQuery(18);
 }
 
 BENCHMARK(q19) {
-  const auto planContext = queryBuilder->getQueryPlan(19);
-  benchmark.run(planContext);
+  benchmark->runQuery(19);
 }
 
 BENCHMARK(q20) {
-  const auto planContext = queryBuilder->getQueryPlan(20);
-  benchmark.run(planContext);
+  benchmark->runQuery(20);
 }
 
 BENCHMARK(q21) {
-  const auto planContext = queryBuilder->getQueryPlan(21);
-  benchmark.run(planContext);
+  benchmark->runQuery(21);
 }
 
 BENCHMARK(q22) {
-  const auto planContext = queryBuilder->getQueryPlan(22);
-  benchmark.run(planContext);
+  benchmark->runQuery(22);
 }
 
-int tpchBenchmarkMain() {
-  benchmark.initialize();
-  queryBuilder =
-      std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
-  queryBuilder->initialize(FLAGS_data_path);
+void tpchBenchmarkMain() {
+  VELOX_CHECK_NOT_NULL(benchmark);
+  benchmark->initialize();
   if (FLAGS_test_flags_file.empty()) {
     RunStats ignore;
-    benchmark.runMain(std::cout, ignore);
+    benchmark->runMain(std::cout, ignore);
   } else {
-    benchmark.runAllCombinations();
+    benchmark->runAllCombinations();
   }
-  benchmark.shutdown();
-  queryBuilder.reset();
-  return 0;
+  benchmark->shutdown();
 }

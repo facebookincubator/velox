@@ -376,6 +376,13 @@ jobs:
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_writer_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
+      - name: Upload spatial join fuzzer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: spatial_join_fuzzer
+          path: velox/_build/debug/velox/exec/fuzzer/velox_spatial_join_fuzzer
+          retention-days: ${{ env.RETENTION }}
+
   presto-fuzzer-run:
     name: Presto Fuzzer
     if: ${{ needs.compile.outputs.presto_bias  != 'true' }}
@@ -435,6 +442,7 @@ jobs:
                 --velox_fuzzer_enable_expression_reuse \
                 --max_expression_trees_per_step 2 \
                 --retry_with_try \
+                --special_forms="and,or,cast,coalesce" \
                 --enable_dereference \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
@@ -549,6 +557,7 @@ jobs:
           chmod +x velox_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/presto_bias_functions)"
           ./velox_expression_fuzzer_test \
                 --seed ${random_seed} \
                 --lazy_vector_generation_ratio 0.2 \
@@ -646,6 +655,7 @@ jobs:
           chmod +x spark_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/spark_bias_functions)"
           ./spark_expression_fuzzer_test \
                 --seed ${random_seed} \
                 --duration_sec $DURATION \
@@ -696,6 +706,7 @@ jobs:
                 --retry_with_try \
                 --enable_dereference \
                 --velox_fuzzer_enable_decimal_type \
+                --special_forms="and,or,cast,coalesce" \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -1421,6 +1432,42 @@ jobs:
             /tmp/writer_fuzzer_repro
             /tmp/server.log
             /var/log
+
+  spatial-join-fuzzer-run:
+    name: Spatial Join Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download spatial join fuzzer
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: spatial_join_fuzzer
+
+      - name: Run Spatial Join Fuzzer
+        run: |
+          mkdir -p /tmp/spatial_join_fuzzer_repro/logs/
+          chmod -R 777 /tmp/spatial_join_fuzzer_repro
+          chmod +x velox_spatial_join_fuzzer
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./velox_spatial_join_fuzzer \
+                --seed ${random_seed} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/spatial_join_fuzzer_repro/logs \
+          && echo -e "\n\Spatial join fuzzer run finished successfully."
+
+      - name: Archive spatial join fuzzer production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: spatial-join-fuzzer-failure-artifacts
+          path: |
+            /tmp/spatial_join_fuzzer_repro
 
   linux-clang:
     if: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch') }}

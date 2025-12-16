@@ -807,16 +807,6 @@ struct VariantToVector {
   }
 };
 
-template <>
-struct VariantToVector<TypeKind::HUGEINT> {
-  static VectorPtr makeVector(
-      TypePtr type,
-      const std::vector<Variant>& /*data*/,
-      memory::MemoryPool* /*pool*/) {
-    VELOX_NYI("Type not supported: {}", type->toString());
-  }
-};
-
 template <TypeKind KIND>
 struct VariantToVector<
     KIND,
@@ -1187,7 +1177,7 @@ uint64_t BaseVector::estimateFlatSize() const {
     const auto& leafType = leaf->type();
     return length_ *
         (leafType->isFixedWidth() ? leafType->cppSizeInBytes() : 0) +
-        BaseVector::retainedSize();
+        BaseVector::retainedSizeImpl();
   }
 
   auto avgRowSize = 1.0 * leaf->retainedSize() / leaf->size();

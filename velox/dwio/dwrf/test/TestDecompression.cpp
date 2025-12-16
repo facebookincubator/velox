@@ -1065,8 +1065,8 @@ class TestingSeekableInputStream : public SeekableInputStream {
     return true;
   }
 
-  google::protobuf::int64 ByteCount() const override {
-    return position_;
+  int64_t ByteCount() const override {
+    return static_cast<int64_t>(position_);
   }
 
   void seekToPosition(PositionProvider& position) override {
@@ -1116,7 +1116,7 @@ TEST_F(TestSeek, uncompressedLarge) {
       entry.getCompressed()[i] = static_cast<char>(i);
     }
     written += runSize + kHeaderSize;
-    data.insert(data.end(), entry.data().begin(), entry.data().end());
+    data.insert(data.end(), entry.data().cbegin(), entry.data().cend());
   }
   auto stream = createTestDecompressor(
       CompressionKind_SNAPPY,

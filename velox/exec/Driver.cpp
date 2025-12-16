@@ -142,6 +142,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.maxSpillRunRows(),
       queryConfig.writerFlushThresholdBytes(),
       queryConfig.spillCompressionKind(),
+      queryConfig.spillNumMaxMergeFiles(),
       queryConfig.spillPrefixSortEnabled()
           ? std::optional<common::PrefixSortConfig>(prefixSortConfig())
           : std::nullopt,
@@ -801,6 +802,19 @@ void Driver::closeOperators() {
   for (auto& op : operators_) {
     auto stats = op->stats(true);
     stats.numDrivers = 1;
+
+    // Calculate this driver's CPU time for this specific operator and add it as
+    // a runtime stat. This will be aggregated across all drivers, with the max
+    // field containing the CPU time from the longest running driver.
+    uint64_t operatorCpuNanos = stats.addInputTiming.cpuNanos +
+        stats.getOutputTiming.cpuNanos + stats.finishTiming.cpuNanos +
+        stats.isBlockedTiming.cpuNanos;
+
+    if (operatorCpuNanos > 0) {
+      stats.runtimeStats[OperatorStats::kDriverCpuTime] =
+          RuntimeMetric(operatorCpuNanos, RuntimeCounter::Unit::kNanos);
+    }
+
     task()->addOperatorStats(stats);
   }
 }

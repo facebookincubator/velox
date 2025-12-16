@@ -189,6 +189,8 @@ SpatialIndex SpatialJoinBuild::buildSpatialIndex(
   DecodedVector radiusCol;
   DecodedVector geometryCol;
   vector_size_t offset = 0;
+  Envelope bounds = Envelope::empty();
+
   for (auto& vector : data) {
     const auto& rawGeometryCol =
         vector->childAt(geometryIdx)->asChecked<SimpleVector<StringView>>();
@@ -214,12 +216,16 @@ SpatialIndex SpatialJoinBuild::buildSpatialIndex(
       double radius = radiusCol.valueAt<double>(i);
       const StringView geometryBytes = geometryCol.valueAt<StringView>(i);
       Envelope envelope = SpatialJoinBuild::readEnvelope(geometryBytes, radius);
+      if (FOLLY_UNLIKELY(envelope.isEmpty())) {
+        continue;
+      }
       envelope.rowIndex = offset + geometryCol.index(i);
+      bounds.merge(envelope);
       envelopes.push_back(std::move(envelope));
     }
     offset += vector->size();
   }
-  return SpatialIndex(envelopes);
+  return SpatialIndex(std::move(bounds), std::move(envelopes));
 }
 
 void SpatialJoinBuild::noMoreInput() {

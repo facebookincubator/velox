@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -192,7 +193,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange,
-                   exec::AssignUniqueId>(op) ||
+                   exec::AssignUniqueId,
+                   CudfOperator>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
             isTableScanSupported(op) || isAggregationSupported(op);
       };
@@ -211,7 +213,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                exec::TopN,
                exec::Limit,
                exec::LocalPartition,
-               exec::AssignUniqueId>(op) ||
+               exec::AssignUniqueId,
+               CudfOperator>(op) ||
         isFilterProjectSupported(op) || isJoinSupported(op) ||
         isAggregationSupported(op);
   };
@@ -224,7 +227,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                exec::TopN,
                exec::Limit,
                exec::LocalExchange,
-               exec::AssignUniqueId>(op) ||
+               exec::AssignUniqueId,
+               CudfOperator>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
         (isTableScanSupported(op)) || isAggregationSupported(op);
@@ -383,7 +387,8 @@ bool CompileState::compile(bool allowCpuFallback) {
           exec::LocalPartition,
           exec::LocalExchange,
           exec::FilterProject,
-          exec::AssignUniqueId>(op);
+          exec::AssignUniqueId,
+          CudfOperator>(op);
     };
     auto GpuRetainedOperator =
         [isTableScanSupported](const exec::Operator* op) {

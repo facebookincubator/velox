@@ -683,4 +683,239 @@ struct XxHash64StringFunction {
   }
 };
 
+/// longest_common_prefix(string1, string2) → varchar
+/// Returns the longest common prefix between two strings.
+template <typename T>
+struct LongestCommonPrefixFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    doCall<false>(result, left, right);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    doCall<true>(result, left, right);
+  }
+
+ private:
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    // Validate both strings are valid UTF-8.
+    stringImpl::stringToCodePoints(left);
+    stringImpl::stringToCodePoints(right);
+
+    if constexpr (isAscii) {
+      // Fast path for ASCII: simple byte comparison.
+      const char* leftData = left.data();
+      const char* rightData = right.data();
+      const size_t minLength = std::min(left.size(), right.size());
+
+      size_t commonLength = 0;
+      while (commonLength < minLength &&
+             leftData[commonLength] == rightData[commonLength]) {
+        commonLength++;
+      }
+
+      if (commonLength == 0) {
+        result.setEmpty();
+      } else {
+        result.setNoCopy(StringView(leftData, commonLength));
+      }
+    } else {
+      // Unicode path: lazy codepoint iteration.
+      const char* leftData = left.data();
+      const char* rightData = right.data();
+      const size_t leftLength = left.size();
+      const size_t rightLength = right.size();
+      size_t leftPos = 0;
+      size_t rightPos = 0;
+
+      while (leftPos < leftLength && rightPos < rightLength) {
+        int leftSize = 0;
+        int rightSize = 0;
+        auto codePointLeft = utf8proc_codepoint(
+            leftData + leftPos, leftData + leftLength, leftSize);
+        auto codePointRight = utf8proc_codepoint(
+            rightData + rightPos, rightData + rightLength, rightSize);
+
+        if (codePointLeft != codePointRight) {
+          break;
+        }
+
+        leftPos += leftSize;
+        rightPos += rightSize;
+      }
+
+      if (leftPos == 0) {
+        result.setEmpty();
+      } else {
+        result.setNoCopy(StringView(leftData, leftPos));
+      }
+    }
+  }
+};
+
+/// jarowinkler_similarity(string1, string2) → double
+/// Computes the Jaro-Winkler similarity between two strings.
+template <typename T>
+struct JaroWinklerSimilarityFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  void call(
+      out_type<double>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    auto leftCodePoints = stringImpl::stringToCodePoints(left);
+    auto rightCodePoints = stringImpl::stringToCodePoints(right);
+
+    // Validate size before checking equality to ensure we throw for
+    // oversized inputs even when they're identical.
+    static const int64_t kMaxCombinedInputSize = 1'000'000;
+    auto combinedInputSize = static_cast<int64_t>(leftCodePoints.size()) *
+        (static_cast<int64_t>(rightCodePoints.size()) - 1);
+    VELOX_USER_CHECK_LE(
+        combinedInputSize,
+        kMaxCombinedInputSize,
+        "The combined inputs for Jaro-Winkler similarity are too large");
+
+    // If the strings are identical (same content), return 1.0.
+    // This is deterministic and handles all cases including empty strings.
+    if (left == right) {
+      result = 1.0;
+      return;
+    }
+
+    doCall<int32_t>(
+        result,
+        leftCodePoints.data(),
+        rightCodePoints.data(),
+        leftCodePoints.size(),
+        rightCodePoints.size());
+  }
+  void callAscii(
+      out_type<double>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    // Validate size before checking equality to ensure we throw for
+    // oversized inputs even when they're identical.
+    static const int64_t kMaxCombinedInputSize = 1'000'000;
+    auto combinedInputSize = static_cast<int64_t>(left.size()) *
+        (static_cast<int64_t>(right.size()) - 1);
+    VELOX_USER_CHECK_LE(
+        combinedInputSize,
+        kMaxCombinedInputSize,
+        "The combined inputs for Jaro-Winkler similarity are too large");
+
+    // If the strings are identical (same content), return 1.0.
+    // This is deterministic and handles all cases including empty strings.
+    if (left == right) {
+      result = 1.0;
+      return;
+    }
+
+    auto leftCodePoints = reinterpret_cast<const uint8_t*>(left.data());
+    auto rightCodePoints = reinterpret_cast<const uint8_t*>(right.data());
+    doCall<uint8_t>(
+        result, leftCodePoints, rightCodePoints, left.size(), right.size());
+  }
+
+  template <typename TCodePoint>
+  void doCall(
+      out_type<double>& result,
+      const TCodePoint* leftCodePoints,
+      const TCodePoint* rightCodePoints,
+      size_t leftLength,
+      size_t rightLength) {
+    static const int64_t kMaxCombinedInputSize = 1'000'000;
+    // Cast to int64_t to avoid unsigned underflow
+    auto combinedInputSize = static_cast<int64_t>(leftLength) *
+        (static_cast<int64_t>(rightLength) - 1);
+    VELOX_USER_CHECK_LE(
+        combinedInputSize,
+        kMaxCombinedInputSize,
+        "The combined inputs for Jaro-Winkler similarity are too large");
+
+    int maxDist = std::max(leftLength, rightLength) / 2 - 1;
+    if (maxDist < 0) {
+      maxDist = 0;
+    }
+
+    int match = 0;
+    std::vector<int> leftHash(leftLength, 0);
+    std::vector<int> rightHash(rightLength, 0);
+
+    for (int i = 0; i < leftLength; i++) {
+      for (int j = std::max(0, i - maxDist);
+           j < std::min(static_cast<int>(rightLength), i + maxDist + 1);
+           j++) {
+        if (leftCodePoints[i] == rightCodePoints[j] && rightHash[j] == 0) {
+          leftHash[i] = 1;
+          rightHash[j] = 1;
+          match++;
+          break;
+        }
+      }
+    }
+
+    if (match == 0) {
+      result = 0.0;
+      return;
+    }
+
+    double t = 0;
+    int point = 0;
+
+    for (int i = 0; i < leftLength; i++) {
+      if (leftHash[i] == 1) {
+        while (rightHash[point] == 0) {
+          point++;
+        }
+
+        if (leftCodePoints[i] != rightCodePoints[point++]) {
+          t++;
+        }
+      }
+    }
+
+    t /= 2;
+
+    double jaroDist = ((static_cast<double>(match) / leftLength) +
+                       (static_cast<double>(match) / rightLength) +
+                       (static_cast<double>(match) - t) / match) /
+        3.0;
+
+    if (jaroDist > 0.7) {
+      int prefix = 0;
+
+      for (int i = 0; i < std::min(leftLength, rightLength); i++) {
+        if (leftCodePoints[i] == rightCodePoints[i]) {
+          prefix++;
+        } else {
+          break;
+        }
+      }
+
+      prefix = std::min(4, prefix);
+
+      jaroDist += 0.1 * prefix * (1 - jaroDist);
+    }
+
+    result = std::round(jaroDist * 100.0) / 100.0;
+  }
+};
+
 } // namespace facebook::velox::functions

@@ -90,6 +90,7 @@ add_executable(
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
   SpatialIndexTest.cpp
+  HilbertIndexTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp
@@ -148,6 +149,7 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
+  velox_dwio_orc_reader
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
   velox_exec
@@ -227,6 +229,8 @@ add_executable(
   PrestoQueryRunnerIntermediateTypeTransformTestBase.cpp
   PrestoQueryRunnerTDigestTransformTest.cpp
   PrestoQueryRunnerQDigestTransformTest.cpp
+  PrestoQueryRunnerKHyperLogLogTransformTest.cpp
+  PrestoQueryRunnerSetDigestTransformTest.cpp
   PrestoQueryRunnerJsonTransformTest.cpp
   PrestoQueryRunnerIntervalTransformTest.cpp
   PrestoQueryRunnerTimeTransformTest.cpp
@@ -371,14 +375,6 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_spiller_aggregate_benchmark_base
   )
 endif()
-
-add_executable(cpr_http_client_test CprHttpClientTest.cpp)
-add_test(
-  NAME cpr_http_client_test
-  COMMAND cpr_http_client_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(cpr_http_client_test cpr::cpr GTest::gtest GTest::gtest_main)
 
 add_executable(velox_driver_test OperatorReplacementTest.cpp Main.cpp)
 add_test(

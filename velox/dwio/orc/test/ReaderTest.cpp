@@ -390,8 +390,8 @@ TEST_P(
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   for (std::map<std::string, std::string>::const_iterator itr =
-           GetParam().userMeta.begin();
-       itr != GetParam().userMeta.end();
+           GetParam().userMeta.cbegin();
+       itr != GetParam().userMeta.cend();
        ++itr) {
     ASSERT_EQ(true, reader->hasMetadataValue(itr->first));
     std::string val = reader->getMetadataValue(itr->first);

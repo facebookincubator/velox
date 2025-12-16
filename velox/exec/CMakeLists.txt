@@ -34,6 +34,7 @@ velox_add_library(
   ExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSource.cpp
+  SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
   GroupId.cpp
@@ -74,6 +75,7 @@ velox_add_library(
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
+  SubPartitionedSortWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
   RowsStreamingWindowBuild.cpp

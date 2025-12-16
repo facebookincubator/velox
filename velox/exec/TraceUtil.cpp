@@ -244,10 +244,14 @@ std::vector<uint32_t> extractDriverIds(const std::string& driverIds) {
 bool canTrace(const std::string& operatorType) {
   static const std::unordered_set<std::string> kSupportedOperatorTypes{
       "Aggregation",
+      "CallbackSink",
+      "Exchange",
       "FilterProject",
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
+      "MergeExchange",
+      "MergeJoin",
       "OrderBy",
       "PartialAggregation",
       "PartitionedOutput",
@@ -281,6 +285,21 @@ core::PlanNodePtr getTraceNode(
         std::make_shared<DummySourceNode>(
             hashJoinNode->sources()[1]->outputType()),
         hashJoinNode->outputType());
+  }
+
+  if (const auto* mergeJoinNode =
+          dynamic_cast<const core::MergeJoinNode*>(traceNode)) {
+    return std::make_shared<core::MergeJoinNode>(
+        nodeId,
+        mergeJoinNode->joinType(),
+        mergeJoinNode->leftKeys(),
+        mergeJoinNode->rightKeys(),
+        mergeJoinNode->filter(),
+        std::make_shared<DummySourceNode>(
+            mergeJoinNode->sources()[0]->outputType()),
+        std::make_shared<DummySourceNode>(
+            mergeJoinNode->sources()[1]->outputType()),
+        mergeJoinNode->outputType());
   }
 
   if (const auto* filterNode =
@@ -337,6 +356,7 @@ core::PlanNodePtr getTraceNode(
         aggregationNode->globalGroupingSets(),
         aggregationNode->groupId(),
         aggregationNode->ignoreNullKeys(),
+        aggregationNode->noGroupsSpanBatches(),
         std::make_shared<DummySourceNode>(
             aggregationNode->sources().front()->outputType()));
   }
@@ -435,6 +455,23 @@ core::PlanNodePtr getTraceNode(
         topNRowNumberNode->limit(),
         std::make_shared<DummySourceNode>(
             topNRowNumberNode->sources().front()->outputType()));
+  }
+
+  if (const auto* exchangeNode =
+          dynamic_cast<const core::ExchangeNode*>(traceNode)) {
+    // Check if it's a MergeExchangeNode
+    if (const auto* mergeExchangeNode =
+            dynamic_cast<const core::MergeExchangeNode*>(traceNode)) {
+      return std::make_shared<core::MergeExchangeNode>(
+          nodeId,
+          mergeExchangeNode->outputType(),
+          mergeExchangeNode->sortingKeys(),
+          mergeExchangeNode->sortingOrders(),
+          mergeExchangeNode->serdeKind());
+    }
+    // Regular ExchangeNode
+    return std::make_shared<core::ExchangeNode>(
+        nodeId, exchangeNode->outputType(), exchangeNode->serdeKind());
   }
 
   for (const auto& factory : traceNodeRegistry()) {

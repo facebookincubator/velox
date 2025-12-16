@@ -18,6 +18,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -450,40 +451,42 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
   if (newSize == previousSize) {
     return;
   }
-  BaseVector::resize(newSize, setNotNull);
-  if (!values_) {
-    return;
+
+  if (values_) {
+    if constexpr (std::is_same_v<T, StringView>) {
+      resizeValues(newSize, previousSize, StringView());
+      if (newSize < previousSize) {
+        // If we downsize, just invalidate ascii, because we might have become
+        // 'all ascii' from 'not all ascii'.
+        SimpleVector<StringView>::invalidateIsAscii();
+      } else {
+        // Properly init stringView objects. This is useful when vectors are
+        // re-used where the size changes but not the capacity.
+        // TODO: remove this when resizeValues() checks against size() instead
+        // of capacity() when deciding to init values.
+        auto stringViews = reinterpret_cast<StringView*>(rawValues_);
+        for (auto index = previousSize; index < newSize; ++index) {
+          new (&stringViews[index]) StringView();
+        }
+        SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(newSize, false);
+      }
+      if (newSize == 0) {
+        keepAtMostOneStringBuffer();
+      }
+    } else {
+      resizeValues(newSize, previousSize, std::nullopt);
+    }
   }
 
-  if constexpr (std::is_same_v<T, StringView>) {
-    resizeValues(newSize, StringView());
-    if (newSize < previousSize) {
-      // If we downsize, just invalidate ascii, because we might have become
-      // 'all ascii' from 'not all ascii'.
-      SimpleVector<StringView>::invalidateIsAscii();
-    } else {
-      // Properly init stringView objects. This is useful when vectors are
-      // re-used where the size changes but not the capacity.
-      // TODO: remove this when resizeValues() checks against size() instead of
-      // capacity() when deciding to init values.
-      auto stringViews = reinterpret_cast<StringView*>(rawValues_);
-      for (auto index = previousSize; index < newSize; ++index) {
-        new (&stringViews[index]) StringView();
-      }
-      SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(newSize, false);
-    }
-    if (newSize == 0) {
-      keepAtMostOneStringBuffer();
-    }
-  } else {
-    resizeValues(newSize, std::nullopt);
-  }
+  // Call resize on the BaseVector at the end, so we only update length_ if we
+  // successfully resized the values Buffer.
+  BaseVector::resize(newSize, setNotNull);
 }
 
 template <typename T>
 void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (values_ && !values_->isMutable()) {
+    auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
     BufferPtr newValues;
     if constexpr (std::is_same_v<T, StringView>) {
       // Make sure to initialize StringView values so they can be safely
@@ -537,7 +540,10 @@ void FlatVector<T>::prepareForReuse() {
 template <typename T>
 void FlatVector<T>::resizeValues(
     vector_size_t newSize,
+    vector_size_t previousSize,
     const std::optional<T>& initialValue) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::FlatVector::resizeValues", this);
   // TODO: change this to isMutable(). See
   // https://github.com/facebookincubator/velox/issues/6562.
   if (values_ && !values_->isView()) {
@@ -554,16 +560,16 @@ void FlatVector<T>::resizeValues(
       AlignedBuffer::allocate<T>(newSize, BaseVector::pool_, initialValue);
 
   if (values_) {
+    auto len = std::min(newSize, previousSize);
+
     if constexpr (Buffer::is_pod_like_v<T>) {
       auto dst = newValues->asMutable<T>();
       auto src = values_->as<T>();
-      auto len = std::min(values_->size(), newValues->size());
-      memcpy(dst, src, len);
+      auto byteLen = BaseVector::byteSize<T>(len);
+      memcpy(dst, src, byteLen);
     } else {
-      const vector_size_t previousSize = BaseVector::length_;
-      auto* rawOldValues = newValues->asMutable<T>();
+      const auto* rawOldValues = values_->as<T>();
       auto* rawNewValues = newValues->asMutable<T>();
-      const auto len = std::min<vector_size_t>(newSize, previousSize);
       for (vector_size_t row = 0; row < len; ++row) {
         rawNewValues[row] = rawOldValues[row];
       }
@@ -576,7 +582,10 @@ void FlatVector<T>::resizeValues(
 template <>
 inline void FlatVector<bool>::resizeValues(
     vector_size_t newSize,
+    vector_size_t previousSize,
     const std::optional<bool>& initialValue) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::FlatVector::resizeValues", this);
   // TODO: change this to isMutable(). See
   // https://github.com/facebookincubator/velox/issues/6562.
   if (values_ && !values_->isView()) {
@@ -585,13 +594,6 @@ inline void FlatVector<bool>::resizeValues(
       AlignedBuffer::reallocate<bool>(&values_, newSize, initialValue);
     } else {
       values_->setSize(newByteSize);
-    }
-    // ensure that the newly added positions have the right initial value for
-    // the case where changes in size don't result in change in the size of
-    // the underlying buffer.
-    if (initialValue.has_value() && length_ < newSize) {
-      auto rawData = values_->asMutable<uint64_t>();
-      bits::fillBits(rawData, length_, newSize, initialValue.value());
     }
     rawValues_ = values_->asMutable<bool>();
     return;
@@ -602,11 +604,92 @@ inline void FlatVector<bool>::resizeValues(
   if (values_) {
     auto dst = newValues->asMutable<char>();
     auto src = values_->as<char>();
-    auto len = std::min(values_->size(), newValues->size());
+    auto len = BaseVector::byteSize<bool>(std::min(newSize, previousSize));
     memcpy(dst, src, len);
   }
   values_ = std::move(newValues);
   rawValues_ = values_->asMutable<bool>();
+}
+
+template <typename T>
+void FlatVector<T>::transferAndUpdateStringBuffers(
+    velox::memory::MemoryPool* /*pool*/) {
+  VELOX_CHECK(stringBuffers_.empty());
+}
+
+template <>
+inline void FlatVector<StringView>::transferAndUpdateStringBuffers(
+    velox::memory::MemoryPool* pool) {
+  struct StringBufferRemapping {
+    const char* oldStart;
+    const char* newStart;
+    size_t size;
+  };
+  std::vector<StringBufferRemapping> stringBufferRemapping;
+  for (auto& buffer : stringBuffers_) {
+    if (!buffer->transferTo(pool)) {
+      VELOX_CHECK_NE(
+          stringBufferSet_.erase(buffer.get()),
+          0,
+          "Easure of existing string buffer should always succeed.");
+      auto newBuffer = AlignedBuffer::copy<char>(buffer, pool);
+      stringBufferRemapping.push_back(
+          {buffer->as<char>(), newBuffer->as<char>(), buffer->size()});
+      buffer = std::move(newBuffer);
+      VELOX_CHECK(stringBufferSet_.insert(buffer.get()).second);
+    }
+  }
+  if (stringBufferRemapping.empty()) {
+    return;
+  }
+
+  std::sort(
+      stringBufferRemapping.begin(),
+      stringBufferRemapping.end(),
+      [](const StringBufferRemapping& lhs, const StringBufferRemapping& rhs) {
+        return lhs.oldStart < rhs.oldStart;
+      });
+  auto rawValues = values_->asMutable<StringView>();
+  for (auto i = 0; i < BaseVector::length_; ++i) {
+    if (BaseVector::isNullAt(i)) {
+      continue;
+    }
+    auto& stringView = rawValues[i];
+    if (stringView.isInline()) {
+      continue;
+    }
+    // Find the first remapping whose oldStart is strictly greater than
+    // stringView.data(). The remapping before it is the candidate that
+    // contains stringView.data().
+    auto remapping = std::upper_bound(
+        stringBufferRemapping.cbegin(),
+        stringBufferRemapping.cend(),
+        stringView.data(),
+        [](const char* lhs, const StringBufferRemapping& rhs) {
+          return lhs < rhs.oldStart;
+        });
+    // There is no remapping whose oldStart is smaller than or equal to
+    // stringView.data().
+    if (remapping == stringBufferRemapping.begin()) {
+      continue;
+    }
+    remapping--;
+    if (stringView.data() >= remapping->oldStart &&
+        stringView.data() < remapping->oldStart + remapping->size) {
+      auto offset = stringView.data() - remapping->oldStart;
+      stringView = StringView(remapping->newStart + offset, stringView.size());
+    }
+  }
+}
+
+template <typename T>
+void FlatVector<T>::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  BaseVector::transferOrCopyTo(pool);
+  if (values_ && !values_->transferTo(pool)) {
+    values_ = AlignedBuffer::copy<T>(values_, pool);
+    rawValues_ = const_cast<T*>(values_->as<T>());
+  }
+  transferAndUpdateStringBuffers(pool);
 }
 
 } // namespace facebook::velox

@@ -11,14 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# This hangs on CI and is not needed #9116
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -84,7 +84,6 @@ endif()
- include(GNUInstallDirs)
- include(FetchContent)
- include(cmake/code_coverage.cmake)
--include(cmake/sanitizer.cmake)
- include(cmake/clear_variable.cmake)
 
- # So CMake can find FindMbedTLS.cmake
+add_executable(velox_cudf_tpch_benchmark CudfTpchBenchmark.cpp)
+
+target_link_libraries(
+  velox_cudf_tpch_benchmark
+  velox_cudf_exec
+  velox_cudf_exec_test_lib
+  velox_tpch_benchmark_lib
+)

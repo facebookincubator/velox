@@ -256,7 +256,8 @@ class ExternalBlocker {
  public:
   folly::SemiFuture<folly::Unit> continueFuture() {
     if (isBlocked_) {
-      auto [promise, future] = makeVeloxContinuePromiseContract();
+      auto [promise, future] =
+          makeVeloxContinuePromiseContract("ExternalBlocker::continueFuture");
       continuePromise_ = std::move(promise);
       return std::move(future);
     }
