@@ -443,6 +443,22 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
     "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
+    // Fuzzer and the underlying engine are confused about SetDigest functions
+    // (since SetDigest is a user defined type), and tries to pass a
+    // VARBINARY (since SetDigest's implementation uses an
+    // alias to VARBINARY).
+    "cardinality(setdigest) -> bigint",
+    "intersection_cardinality(setdigest,setdigest) -> bigint",
+    "jaccard_index(setdigest,setdigest) -> double",
+    "hash_counts(setdigest) -> map(bigint,smallint)",
+    // Same with KHyperLogLog functions
+    "cardinality(khyperloglog) -> bigint",
+    "intersection_cardinality(khyperloglog,khyperloglog) -> bigint",
+    "jaccard_index(khyperloglog,khyperloglog) -> double",
+    "reidentification_potential(khyperloglog,bigint) -> double",
+    "uniqueness_distribution(khyperloglog) -> map(bigint,double)",
+    "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
+    "merge_khll(array(khyperloglog)) -> khyperloglog",
 };
 
 int main(int argc, char** argv) {
