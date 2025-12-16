@@ -60,6 +60,11 @@ add_executable(
   VarianceAggregationTest.cpp
 )
 
+if(${VELOX_ENABLE_GEO})
+  target_sources(velox_aggregates_test PRIVATE GeometryAggregateTest.cpp)
+  target_link_libraries(velox_aggregates_test velox_functions_geo)
+endif()
+
 add_test(NAME velox_aggregates_test COMMAND velox_aggregates_test WORKING_DIRECTORY .)
 
 target_link_libraries(

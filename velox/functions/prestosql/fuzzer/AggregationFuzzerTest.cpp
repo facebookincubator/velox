@@ -164,6 +164,18 @@ int main(int argc, char** argv) {
       "merge_set_digest",
       "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
       // verifier is added.
+      // The list below also contains their companion functions.
+      "convex_hull_agg",
+      "geometry_union_agg",
+      "geometry_union_agg_partial",
+      "geometry_union_agg_merge",
+      "geometry_union_agg_extract",
+      "geometry_union_agg_merge_extract",
+      "convex_hull_agg_partial",
+      "convex_hull_agg_merge",
+      "convex_hull_agg_extract",
+      "convex_hull_agg_merge_extract",
+
   };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
@@ -239,6 +251,16 @@ int main(int argc, char** argv) {
           {"noisy_count_gaussian",
            std::make_shared<NoisyCountResultVerifier>()},
           {"noisy_sum_gaussian", std::make_shared<NoisySumResultVerifier>()},
+          {"convex_hull_agg", nullptr},
+          {"geometry_union_agg", nullptr},
+          {"geometry_union_agg_partial", nullptr},
+          {"geometry_union_agg_merge", nullptr},
+          {"geometry_union_agg_extract", nullptr},
+          {"geometry_union_agg_merge_extract", nullptr},
+          {"convex_hull_agg_partial", nullptr},
+          {"convex_hull_agg_merge", nullptr},
+          {"convex_hull_agg_extract", nullptr},
+          {"convex_hull_agg_merge_extract", nullptr},
       };
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
