@@ -256,11 +256,15 @@ TEST_F(JsonFunctionsTest, jsonParseErrorContext) {
       {makeFlatVector<StringView>({"1]"}), makeFlatVector<StringView>({"2]"})});
   // Verify that exceptions thrown have the correct error context information.
   testContextMessageOnThrow(
-      "json_parse(c0)", data, "Top-level Expression: json_parse(c0)");
+      "json_parse(c0)",
+      data,
+      "Owner: velox. Top-level Expression: json_parse(c0)");
   // Test twice to ensure that the context is correctly generated for each
   // expression and not cached and reused.
   testContextMessageOnThrow(
-      "json_parse(c1)", data, "Top-level Expression: json_parse(c1)");
+      "json_parse(c1)",
+      data,
+      "Owner: velox. Top-level Expression: json_parse(c1)");
 }
 
 TEST_F(JsonFunctionsTest, jsonParse) {
@@ -410,7 +414,8 @@ TEST_F(JsonFunctionsTest, jsonParse) {
     jsonParse(R"({"k1":})");
     FAIL() << "Error expected";
   } catch (const VeloxUserError& e) {
-    ASSERT_EQ(e.context(), "Top-level Expression: json_parse(c0)");
+    ASSERT_EQ(
+        e.context(), "Owner: velox. Top-level Expression: json_parse(c0)");
   }
 
   // Test partial escape sequences.

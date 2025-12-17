@@ -1660,14 +1660,14 @@ TEST_F(DriverTest, additionalContextInRuntimeException) {
   try {
     assertQuery(op, vector);
   } catch (VeloxException& e) {
-    ASSERT_EQ(e.context(), "throwexception(c0)");
+    ASSERT_EQ(e.context(), "Owner: velox. Expression: throwexception(c0)");
     auto additionalContext = e.additionalContext();
     // Remove the string following `TaskId` from the additional context since
     // its indeterministic.
     ASSERT_EQ(
         additionalContext,
-        "Top-level Expression: plus(c0, throwexception(c0)) Operator: "
-        "FilterProject[14] 1");
+        "Owner: velox. Top-level Expression: plus(c0, throwexception(c0)) "
+        "Operator: FilterProject[14] 1");
   }
 }
 

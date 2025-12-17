@@ -1828,12 +1828,12 @@ TEST_F(JsonCastTest, uniqueErrorContextMessage) {
   testContextMessageOnThrow(
       "cast((c0) as DOUBLE)",
       makeRowVector({makeNullableFlatVector<JsonNativeType>({"\"abc\""_sv})}),
-      "Top-level Expression: cast((c0) as DOUBLE)");
+      "Owner: velox. Top-level Expression: cast((c0) as DOUBLE)");
 
   // Test twice to ensure that the context is correctly generated for each
   // expression and not cached and reused.
   testContextMessageOnThrow(
       "cast((c0) as BIGINT)",
       makeRowVector({makeNullableFlatVector<JsonNativeType>({"\"abc\""_sv})}),
-      "Top-level Expression: cast((c0) as BIGINT)");
+      "Owner: velox. Top-level Expression: cast((c0) as BIGINT)");
 }
