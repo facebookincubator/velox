@@ -27,6 +27,7 @@
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -436,13 +437,14 @@ CudfHiveDataSource::createSplitReader() {
       cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
     }
 
-    auto bufferedInput = velox::connector::hive::createBufferedInput(
-        *fileHandleCachePtr,
-        baseReaderOpts_,
-        connectorQueryCtx_,
-        ioStats_,
-        fsStats_,
-        executor_);
+    auto bufferedInput =
+        velox::connector::hive::BufferedInputBuilder::getInstance()->create(
+            *fileHandleCachePtr,
+            baseReaderOpts_,
+            connectorQueryCtx_,
+            ioStats_,
+            fsStats_,
+            executor_);
     if (not bufferedInput) {
       LOG(WARNING) << fmt::format(
           "Failed to create buffered input source for file {}, falling back to file data source for CudfHiveDataSource",
