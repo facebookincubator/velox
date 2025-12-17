@@ -416,4 +416,31 @@ TEST_F(ExprCompilerTest, exprDeduplication) {
       "Non-deterministic expressions should NOT be deduplicated when config is false");
 }
 
+TEST_F(ExprCompilerTest, simpleFunctionMemoryPool) {
+  // Test that MemoryPool is correctly passed through ExprCompiler to
+  // SimpleFunctions that have initialize() with memoryPool parameter.
+  // empty_approx_set() creates an HLL sketch.
+  auto expression = call("empty_approx_set", {});
+  auto exprSet = compile(expression);
+  ASSERT_EQ(exprSet->size(), 1);
+
+  auto input = makeRowVector(ROW({}, {}), 1);
+  SelectivityVector rows(1);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  // Verify result - eval should create the vector
+  ASSERT_TRUE(results[0] != nullptr) << "Result vector was not created";
+  ASSERT_EQ(results[0]->size(), 1) << "Result vector has wrong size";
+  ASSERT_FALSE(results[0]->isNullAt(0));
+
+  // empty_approx_set() returns a constant.
+  DecodedVector decoded(*results[0], rows);
+  ASSERT_FALSE(decoded.isNullAt(0)) << "Decoded result is null";
+
+  auto stringView = decoded.valueAt<StringView>(0);
+  ASSERT_GT(stringView.size(), 0) << "HLL sketch is empty";
+}
+
 } // namespace facebook::velox::exec::test

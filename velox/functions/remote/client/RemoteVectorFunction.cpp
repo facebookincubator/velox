@@ -103,7 +103,7 @@ void RemoteVectorFunction::applyRemote(
   requestInputs->pageFormat_ref() = serdeFormat_;
 
   // TODO: serialize only active rows.
-  requestInputs->payload_ref() = rowVectorToIOBuf(
+  requestInputs->payload_ref() = rowVectorToIOBufBatch(
       remoteRowVector, *context.pool(), serde_.get(), serdeOptions_.get());
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;

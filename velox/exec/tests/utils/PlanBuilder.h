@@ -1049,7 +1049,8 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys);
+      bool ignoreNullKeys,
+      bool noGroupsSpanBatches = false);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
   /// aggregation inputs and a groupId column name.

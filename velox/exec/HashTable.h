@@ -310,7 +310,20 @@ class BaseHashTable {
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
+      bool dropDuplicates = false,
       folly::Executor* executor = nullptr) = 0;
+
+  /// The hash table used for join build in left semi and anti join may not
+  /// retain duplicate join keys when allowDuplicates_ is false. This is
+  /// achieved by constructing the hash table in the addInput phase to eliminate
+  /// duplicate join keys. When the percentage of duplicate data is small, it
+  /// will adaptively adjust to not build the hash table in the addInput phase.
+  /// Instead, it operates like other join types by reading all the data before
+  /// building the hash table. This function is used to change the behavior of
+  /// building hash table, if allowDuplicates is true, the join hash table will
+  /// not be built during the addInput phase, and the input data will also not
+  /// be deduplicated, but it will not impact the containing row container.
+  virtual void setAllowDuplicates(bool allowDuplicates) = 0;
 
   /// Returns the memory footprint in bytes for any data structures
   /// owned by 'this'.
@@ -586,6 +599,10 @@ class HashTable : public BaseHashTable {
     return hasDuplicates_.check();
   }
 
+  void setAllowDuplicates(const bool allowDuplicates) override {
+    allowDuplicates_ = allowDuplicates;
+  }
+
   HashMode hashMode() const override {
     return hashMode_;
   }
@@ -610,6 +627,7 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
+      bool dropDuplicates = false,
       folly::Executor* executor = nullptr) override;
 
   void prepareForJoinProbe(
@@ -966,7 +984,13 @@ class HashTable : public BaseHashTable {
   // or distinct mode VectorHashers in a group by hash table. 0 for
   // join build sides.
   int32_t reservePct() const {
-    return isJoinBuild_ ? 0 : 50;
+    return (isJoinBuild_ && allowDuplicates_) ? 0 : 50;
+  }
+
+  // Used to indicate whether it is a HashTable that does not contain duplicate
+  // join keys.
+  bool joinBuildNoDuplicates() const {
+    return isJoinBuild_ && !allowDuplicates_;
   }
 
   // Returns the byte offset of the bucket for 'hash' starting from 'table_'.
@@ -1036,6 +1060,7 @@ class HashTable : public BaseHashTable {
 
   int8_t sizeBits_;
   bool isJoinBuild_ = false;
+  bool allowDuplicates_ = true;
 
   // Set at join build time if the table has duplicates, meaning that
   // the join can be cardinality increasing. Atomic for tsan because

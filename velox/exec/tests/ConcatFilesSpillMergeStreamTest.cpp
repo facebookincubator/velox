@@ -225,6 +225,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       0,
       0,
       "none",
+      0,
       std::nullopt};
 
   folly::Synchronized<common::SpillStats> spillStats_;

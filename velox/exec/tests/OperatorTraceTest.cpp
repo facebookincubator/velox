@@ -1130,7 +1130,9 @@ TEST_F(OperatorTraceTest, canTrace) {
       {"Aggregation", true},
       {"TableWrite", true},
       {"TableScan", true},
-      {"FilterProject", true}};
+      {"FilterProject", true},
+      {"Exchange", true},
+      {"MergeExchange", true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     ASSERT_EQ(testData.canTrace, trace::canTrace(testData.operatorType));
@@ -1163,7 +1165,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
       .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
       .config(core::QueryConfig::kQueryTraceNodeId, "0")
       .splits(splits)
-      .runWithoutResults(task);
+      .countResults(task);
   const auto taskTraceDir =
       getTaskTraceDirectory(traceDirPath->getPath(), *task);
   const auto reader = trace::TaskTraceMetadataReader(taskTraceDir, pool());

@@ -20,14 +20,20 @@
 #include <geos/geom/Point.h>
 
 #include "velox/common/base/IOUtils.h"
-#include "velox/functions/prestosql/geospatial/GeometrySerde.h"
+#include "velox/common/geospatial/GeometrySerde.h"
 
 using facebook::velox::common::InputByteStream;
-
 using facebook::velox::common::geospatial::EsriShapeType;
 using facebook::velox::common::geospatial::GeometrySerializationType;
 
-namespace facebook::velox::functions::geospatial {
+namespace facebook::velox::common::geospatial {
+
+geos::geom::GeometryFactory* GeometryDeserializer::getGeometryFactory() {
+  thread_local static geos::geom::GeometryFactory::Ptr geometryFactory =
+      geos::geom::GeometryFactory::create();
+  return geometryFactory.get();
+}
+
 std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readGeometry(
     velox::common::InputByteStream& stream,
     size_t size) {
@@ -236,12 +242,12 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
 
     if (multiType) {
       ClockwiseResult clockwiseFlag =
-          isClockwise(coordinates, 0, coordinates->size());
+          GeometrySerializer::isClockwise(coordinates, 0, coordinates->size());
       if (FOLLY_UNLIKELY(clockwiseFlag == ClockwiseResult::ZERO_AREA)) {
         // When serializing a MultiPolygon, we should throw a user error if
         // there is a zero-area ring. This should only get hit due to a bug in
         // our serde logic.
-        VELOX_FAIL(
+        VELOX_USER_FAIL(
             "Unexpected zero-area ring in MultiPolygon deserialization.");
       }
       if (shell && clockwiseFlag == ClockwiseResult::CW) {
@@ -321,4 +327,4 @@ GeometryDeserializer::readGeometryCollection(
       getGeometryFactory()->createGeometryCollection(rawGeometries));
 }
 
-} // namespace facebook::velox::functions::geospatial
+} // namespace facebook::velox::common::geospatial

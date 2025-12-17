@@ -57,6 +57,7 @@ velox_link_libraries(
   velox_functions_util
   velox_vector
   velox_type_tz
+  velox_common_hyperloglog
   re2::re2
   Folly::folly
 )
