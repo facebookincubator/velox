@@ -604,6 +604,8 @@ void configureReaderOptions(
 
     readerOptions.setFileFormat(hiveSplit->fileFormat);
   }
+
+  readerOptions.serDeOptions().parameters = hiveSplit->serdeParameters;
 }
 
 void configureRowReaderOptions(
