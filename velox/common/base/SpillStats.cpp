@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/SpillStats.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
@@ -24,7 +25,7 @@ namespace facebook::velox::common {
 namespace {
 std::vector<folly::Synchronized<SpillStats>>& allSpillStats() {
   static std::vector<folly::Synchronized<SpillStats>> spillStatsList(
-      std::thread::hardware_concurrency());
+      folly::hardware_concurrency());
   return spillStatsList;
 }
 
