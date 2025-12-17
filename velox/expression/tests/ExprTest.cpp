@@ -2403,6 +2403,40 @@ struct ThrowRuntimeError {
     VELOX_FAIL();
   }
 };
+
+// Simple function with custom owner that always throws.
+template <typename T>
+struct AlwaysThrowsWithCustomOwner {
+  static constexpr std::string_view owner = "custom-owner-team";
+
+  template <typename TResult, typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
+    VELOX_USER_FAIL("Expected error from custom owner function");
+  }
+};
+
+// Vector function with custom owner that always throws.
+class AlwaysThrowsVectorFunctionWithCustomOwner : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& /* args */,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& /* result */) const override {
+    auto error = std::make_exception_ptr(
+        std::invalid_argument(
+            "Expected error from custom owner vector function"));
+    context.setErrors(rows, error);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("integer")
+                .argumentType("integer")
+                .build()};
+  }
+};
 } // namespace
 
 TEST_P(ParameterizedExprTest, exceptionContext) {
@@ -2422,9 +2456,9 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("always_throws(c0) + c1", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("always_throws(c0)", e.context());
+    ASSERT_EQ("Owner: velox. Expression: always_throws(c0)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(always_throws(c0), c1)",
+        "Owner: velox. Top-level Expression: plus(always_throws(c0), c1)",
         e.additionalContext());
   }
 
@@ -2432,9 +2466,11 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("c0 + (c0 + c1) % 0", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
         e.additionalContext());
   }
 
@@ -2442,9 +2478,11 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("c0 + (c1 % 0)", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((c1) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
         e.additionalContext());
   }
 
@@ -2457,9 +2495,9 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("runtime_error(c0) + c1", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("runtime_error(c0)", e.context());
+    ASSERT_EQ("Owner: velox. Expression: runtime_error(c0)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(runtime_error(c0), c1)",
+        "Owner: velox. Top-level Expression: plus(runtime_error(c0), c1)",
         trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
@@ -2468,9 +2506,11 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("c0 + (c0 + c1) % 0", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
         e.additionalContext())
         << e.errorSource();
   }
@@ -2479,9 +2519,11 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("c0 + (c0 + c1) % 0", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
         e.additionalContext());
   }
 
@@ -2494,9 +2536,9 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("always_throws(c0) + c1", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("always_throws(c0)", e.context());
+    ASSERT_EQ("Owner: velox. Expression: always_throws(c0)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(always_throws(c0), c1)",
+        "Owner: velox. Top-level Expression: plus(always_throws(c0), c1)",
         trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
@@ -2505,9 +2547,11 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("c0 + (c0 + c1) % 0", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
         trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
@@ -2516,9 +2560,11 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluate("c0 + (c1 % 0)", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((c1) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
         trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
@@ -2527,12 +2573,58 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     evaluateMultiple({"c0 + (c1 % 0)", "c0 + c1"}, data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        "Owner: velox. Expression: mod(cast((c1) as BIGINT), 0:BIGINT)",
+        e.context());
+    ASSERT_EQ(
+        "Owner: velox. Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
         trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
+}
+
+// Test that custom owner is included in exception context.
+TEST_P(ParameterizedExprTest, exceptionContextWithCustomOwner) {
+  auto data = makeFlatVector<int32_t>({1, 2, 3});
+
+  // Register test simple function.
+  registerFunction<AlwaysThrowsWithCustomOwner, int32_t, int32_t>(
+      {"always_throws_custom_owner"});
+
+  assertError(
+      "always_throws_custom_owner(c0)",
+      data,
+      "Owner: custom-owner-team. Top-level Expression: always_throws_custom_owner(c0)",
+      "",
+      "Expected error from custom owner function");
+
+  assertError(
+      "always_throws_custom_owner(c0) + 1",
+      data,
+      "Owner: custom-owner-team. Expression: always_throws_custom_owner(c0)",
+      "Owner: velox. Top-level Expression: plus(cast((always_throws_custom_owner(c0)) as BIGINT), 1:BIGINT)",
+      "Expected error from custom owner function");
+
+  // Register and test vector function.
+  exec::registerVectorFunction(
+      "always_throws_vector_custom_owner",
+      AlwaysThrowsVectorFunctionWithCustomOwner::signatures(),
+      std::make_unique<AlwaysThrowsVectorFunctionWithCustomOwner>(),
+      exec::VectorFunctionMetadataBuilder().owner("vector-owner-team").build());
+
+  assertError(
+      "always_throws_vector_custom_owner(c0)",
+      data,
+      "Owner: vector-owner-team. Top-level Expression: always_throws_vector_custom_owner(c0)",
+      "",
+      "Expected error from custom owner vector function");
+
+  assertError(
+      "always_throws_vector_custom_owner(c0) + 1",
+      data,
+      "Owner: vector-owner-team. Expression: always_throws_vector_custom_owner(c0)",
+      "Owner: velox. Top-level Expression: plus(cast((always_throws_vector_custom_owner(c0)) as BIGINT), 1:BIGINT)",
+      "Expected error from custom owner vector function");
 }
 
 namespace {
@@ -2556,15 +2648,15 @@ TEST_P(ParameterizedExprTest, stdExceptionContext) {
   auto wrappedEx = assertError(
       "throw_invalid_argument(c0) + 5",
       data,
-      "throw_invalid_argument(c0)",
-      "Top-level Expression: plus(throw_invalid_argument(c0), 5:BIGINT)",
+      "Owner: velox. Expression: throw_invalid_argument(c0)",
+      "Owner: velox. Top-level Expression: plus(throw_invalid_argument(c0), 5:BIGINT)",
       "This is a test");
   ASSERT_THROW(std::rethrow_exception(wrappedEx), std::invalid_argument);
 
   wrappedEx = assertError(
       "throw_invalid_argument(c0 + 5)",
       data,
-      "Top-level Expression: throw_invalid_argument(plus(c0, 5:BIGINT))",
+      "Owner: velox. Top-level Expression: throw_invalid_argument(plus(c0, 5:BIGINT))",
       "",
       "This is a test");
   ASSERT_THROW(std::rethrow_exception(wrappedEx), std::invalid_argument);
@@ -3078,14 +3170,14 @@ TEST_P(ParameterizedExprTest, castExceptionContext) {
   assertError(
       "cast(c0 as bigint)",
       makeFlatVector<std::string>({"1a"}),
-      "Top-level Expression: cast((c0) as BIGINT)",
+      "Owner: velox. Top-level Expression: cast((c0) as BIGINT)",
       "",
       "Cannot cast VARCHAR '1a' to BIGINT. Non-whitespace character found after end of conversion: \"\"");
 
   assertError(
       "cast(c0 as timestamp)",
       makeFlatVector(std::vector<int8_t>{1}),
-      "Top-level Expression: cast((c0) as TIMESTAMP)",
+      "Owner: velox. Top-level Expression: cast((c0) as TIMESTAMP)",
       "",
       "Cannot cast TINYINT '1' to TIMESTAMP. Conversion to Timestamp is not supported");
 }
@@ -3094,8 +3186,8 @@ TEST_P(ParameterizedExprTest, switchExceptionContext) {
   assertError(
       "case c0 when 7 then c0 / 0 else 0 end",
       makeFlatVector(std::vector<int64_t>{7}),
-      "divide(c0, 0:BIGINT)",
-      "Top-level Expression: switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)",
+      "Owner: velox. Expression: divide(c0, 0:BIGINT)",
+      "Owner: velox. Top-level Expression: switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)",
       "division by zero");
 }
 
@@ -3105,8 +3197,8 @@ TEST_P(ParameterizedExprTest, conjunctExceptionContext) {
   assertError(
       "if (c0 % 409 < 300 and c0 / 0 < 30, 1, 2)",
       data,
-      "divide(c0, 0:BIGINT)",
-      "Top-level Expression: switch(and(lt(mod(c0, 409:BIGINT), 300:BIGINT), lt(divide(c0, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
+      "Owner: velox. Expression: divide(c0, 0:BIGINT)",
+      "Owner: velox. Top-level Expression: switch(and(lt(mod(c0, 409:BIGINT), 300:BIGINT), lt(divide(c0, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
       "division by zero");
 }
 
@@ -3117,8 +3209,8 @@ TEST_P(ParameterizedExprTest, lambdaExceptionContext) {
   assertError(
       "filter(c0, x -> (x / 0 > 1))",
       array,
-      "divide(x, 0:BIGINT)",
-      "Top-level Expression: filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
+      "Owner: velox. Expression: divide(x, 0:BIGINT)",
+      "Owner: velox. Top-level Expression: filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
       "division by zero");
 }
 
@@ -3659,8 +3751,8 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
   assertError(
       "always_throws_vector_function(c0) AND (c0 = 1)",
       makeFlatVector<int32_t>({1, 2, 3}),
-      "always_throws_vector_function(c0)",
-      "Top-level Expression: and(always_throws_vector_function(c0), eq(cast((c0) as BIGINT), 1:BIGINT))",
+      "Owner: velox. Expression: always_throws_vector_function(c0)",
+      "Owner: velox. Top-level Expression: and(always_throws_vector_function(c0), eq(cast((c0) as BIGINT), 1:BIGINT))",
       TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3671,8 +3763,8 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
   assertError(
       "no_op(c0) AND (c0 = 2)",
       makeFlatVector<int32_t>({1, 2, 3}),
-      "no_op(c0)",
-      "Top-level Expression: and(no_op(c0), eq(cast((c0) as BIGINT), 2:BIGINT))",
+      "Owner: velox. Expression: no_op(c0)",
+      "Owner: velox. Top-level Expression: and(no_op(c0), eq(cast((c0) as BIGINT), 2:BIGINT))",
       "Function neither returned results nor threw exception.");
 }
 
@@ -3802,7 +3894,7 @@ TEST_P(ParameterizedExprTest, stdExceptionInVectorFunction) {
   assertError(
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
-      "Top-level Expression: always_throws_vector_function(c0)",
+      "Owner: velox. Top-level Expression: always_throws_vector_function(c0)",
       "",
       TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
 

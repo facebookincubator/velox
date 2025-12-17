@@ -696,15 +696,19 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
     basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
   }
   if (strlen(basePath) == 0) {
-    return fmt::format("Top-level Expression: {}", context->expr()->toString());
+    return fmt::format(
+        "Owner: {}. Top-level Expression: {}",
+        context->expr()->vectorFunctionMetadata().owner,
+        context->expr()->toString());
   }
 
   // Save input vector to a file.
   context->persistDataAndSql(basePath);
 
   return fmt::format(
-      "Top-level Expression: {}. Input data: {}. SQL expression: {}."
+      "Owner: {}. Top-level Expression: {}. Input data: {}. SQL expression: {}."
       " All SQL expressions: {}. ",
+      context->expr()->vectorFunctionMetadata().owner,
       context->expr()->toString(),
       context->dataPath(),
       context->sqlPath(),
@@ -715,7 +719,11 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
 /// sub-expression. Returns the output of Expr::toString() for the
 /// sub-expression.
 std::string onException(VeloxException::Type /*exceptionType*/, void* arg) {
-  return static_cast<Expr*>(arg)->toString();
+  auto* expr = static_cast<Expr*>(arg);
+  return fmt::format(
+      "Owner: {}. Expression: {}",
+      expr->vectorFunctionMetadata().owner,
+      expr->toString());
 }
 } // namespace
 
