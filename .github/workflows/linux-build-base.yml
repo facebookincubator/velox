@@ -164,20 +164,21 @@ jobs:
         with:
           name: cudftestbinaries
           path: |
-            velox/_build/debug/velox/experimental/cudf/tests/velox_cudf*
-            velox/_build/debug/velox/experimental/cudf/tests/CTestTestfile.cmake
-            velox/_build/debug/_deps/cudf-build/libcudf.so
-            velox/_build/debug/_deps/rmm-build/librmm.so
-            velox/_build/debug/_deps/rapids_logger-build/librapids_logger.so
-            velox/_build/debug/_deps/kvikio-build/libkvikio.so
-            velox/_build/debug/_deps/nvcomp_proprietary_binary-src/lib64/libnvcomp.so.4
+            _build/debug/velox/experimental/cudf/tests/velox_cudf*
+            _build/debug/velox/experimental/cudf/tests/CTestTestfile.cmake
+            _build/debug/_deps/cudf-build/libcudf.so
+            _build/debug/_deps/rmm-build/librmm.so
+            _build/debug/_deps/rapids_logger-build/librapids_logger.so
+            _build/debug/_deps/kvikio-build/libkvikio.so
+            _build/debug/_deps/nvcomp_proprietary_binary-src/lib64/libnvcomp.so.4
+            _build/debug/_deps/curl-build/lib/libcurl.so.4
           retention-days: ${{ env.RETENTION }}
 
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
     needs: adapters
     if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes }}
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:adapters
     timeout-minutes: 2
     steps:
       - name: Download cuDF Test Binaries
@@ -187,13 +188,13 @@ jobs:
 
       - name: Run cuDF Tests
         run: |
-          mkdir cudf-test-binaries
+          cd _build/debug/velox/experimental/cudf/tests/
           chmod +x cudf_test*
-          mv cudf_test* cudf-test-binaries
-          mv CTestTestfile.cmake cudf-test-binaries
-          mv lib* cudf-test-binaries
-          cd cudf-test-binaries
-          LD_LIBRARY_PATH=$PWD ctest
+          export DEPS_PATH=../../../../_deps/
+          export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$DEPS_PATH/kvikio-build:$DEPS_PATH/curl-build:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$DEPS_PATH/rapids_logger-build:$DEPS_PATH/nvcomp_proprietary_binary-src/lib64:$LD_LIBRARY_PATH
+          ctest
 
   ubuntu-debug:
     runs-on: 8-core-ubuntu-22.04
