@@ -19,18 +19,17 @@
 #include <geos/geom/CoordinateSequence.h>
 #include <geos/geom/Geometry.h>
 
+#include "velox/common/geospatial/GeometrySerde.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/geospatial/GeometrySerde.h"
-#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 
 using namespace facebook::velox::exec;
-using namespace facebook::velox::functions::geospatial;
+using facebook::velox::common::geospatial::GeometryDeserializer;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -83,7 +82,7 @@ class ConvexHullAggregate {
     bool writeGeometry(exec::out_type<OutputType>& out) {
       std::unique_ptr<geos::geom::Geometry> hull = makeHull();
       if (hull != nullptr) {
-        GeometrySerializer::serialize(*hull, out);
+        common::geospatial::GeometrySerializer::serialize(*hull, out);
       }
       return hull != nullptr;
     }
@@ -120,14 +119,15 @@ class ConvexHullAggregate {
       std::vector<std::unique_ptr<geos::geom::Geometry>> geometries;
       geometries.reserve(geometryData_.size());
       for (const auto& data : geometryData_) {
-        auto geom = GeometryDeserializer::deserialize(data);
+        auto geom = common::geospatial::GeometryDeserializer::deserialize(data);
         VELOX_DCHECK_NOT_NULL(geom);
         if (!geom->isEmpty()) {
           geometries.push_back(std::move(geom));
         }
       }
       if (geometries.empty()) {
-        return getGeometryFactory()->createEmptyGeometry();
+        return GeometryDeserializer::getGeometryFactory()
+            ->createEmptyGeometry();
       }
 
       // Calculate total number of points for efficient memory allocation
@@ -151,7 +151,8 @@ class ConvexHullAggregate {
       }
 
       auto points = std::unique_ptr<geos::geom::MultiPoint>(
-          getGeometryFactory()->createMultiPoint(*coords));
+          GeometryDeserializer::getGeometryFactory()->createMultiPoint(
+              *coords));
       return points->convexHull();
     }
   };
@@ -239,7 +240,7 @@ class GeometryUnionAggregate {
     bool writeGeometry(exec::out_type<OutputType>& out) {
       std::unique_ptr<geos::geom::Geometry> geomUnion = makeUnion();
       if (geomUnion != nullptr) {
-        GeometrySerializer::serialize(*geomUnion, out);
+        common::geospatial::GeometrySerializer::serialize(*geomUnion, out);
       }
       return geomUnion != nullptr;
     }
@@ -276,18 +277,20 @@ class GeometryUnionAggregate {
       std::vector<std::unique_ptr<geos::geom::Geometry>> geometries;
       geometries.reserve(geometryData_.size());
       for (const auto& data : geometryData_) {
-        auto geom = GeometryDeserializer::deserialize(data);
+        auto geom = common::geospatial::GeometryDeserializer::deserialize(data);
         VELOX_DCHECK_NOT_NULL(geom);
         if (!geom->isEmpty()) {
           geometries.push_back(std::move(geom));
         }
       }
       if (geometries.empty()) {
-        return getGeometryFactory()->createEmptyGeometry();
+        return GeometryDeserializer::getGeometryFactory()
+            ->createEmptyGeometry();
       }
 
       auto collection =
-          getGeometryFactory()->createGeometryCollection(std::move(geometries));
+          GeometryDeserializer::getGeometryFactory()->createGeometryCollection(
+              std::move(geometries));
       return collection->Union();
     }
   };

@@ -17,7 +17,6 @@
 
 #include <folly/Expected.h>
 #include <cstdint>
-#include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox {
