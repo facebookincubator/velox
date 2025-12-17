@@ -94,7 +94,7 @@ size_t findNextComma(const std::string& str, size_t start) {
 
 namespace {
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -164,7 +164,7 @@ void validate(
     validateBaseTypeAndCollectTypeParams(variables, arg, usedVariables, false);
   }
 
-  // All type variables should apear in the inputs arguments.
+  // All type variables should appear in the inputs arguments.
   for (auto& [name, variable] : variables) {
     if (variable.isTypeParameter()) {
       VELOX_USER_CHECK(
