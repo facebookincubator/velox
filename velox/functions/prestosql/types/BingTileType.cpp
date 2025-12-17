@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include "velox/common/geospatial/GeometryConstants.h"
 
 namespace facebook::velox {
 

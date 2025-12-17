@@ -21,7 +21,6 @@
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/resources/GeometryTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/prestosql/types/BingTileType.h"
 
 using facebook::velox::functions::test::FunctionBaseTest;
 using namespace facebook::velox;
