@@ -29,7 +29,7 @@ by Velox. See details on bundling below.
 | double-conversion | 3.1.5           | No       ||
 | xsimd             | 10.0.0          | Yes      ||
 | re2               | 2024-07-02      | Yes      ||
-| fmt               | 11.2.0          | Yes      | Used API must be fmt 9 compatible |
+| fmt               | 12.1.0          | Yes      | Used API must be fmt 9 compatible |
 | simdjson          | 4.1.0           | Yes      ||
 | faiss             | 1.11.0          | Yes      ||
 | folly             | v2025.04.28.00  | Yes      ||
