@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Likely.h>
 #include <geos/geom/CoordinateArraySequence.h>
 #include <geos/geom/Geometry.h>
 #include <geos/geom/GeometryFactory.h>
@@ -23,10 +24,11 @@
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/expression/ComplexViewTypes.h"
-#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/type/StringView.h"
 
-namespace facebook::velox::functions::geospatial {
+namespace facebook::velox::common::geospatial {
+
+enum ClockwiseResult { CW, CCW, ZERO_AREA };
 
 /**
  * VarbinaryWriter is a utility for serializing raw binary data to a
@@ -40,7 +42,8 @@ namespace facebook::velox::functions::geospatial {
 template <typename StringWriter>
 class VarbinaryWriter {
  public:
-  VarbinaryWriter(StringWriter& stringWriter) : stringWriter_(stringWriter) {}
+  /* implicit */ VarbinaryWriter(StringWriter& stringWriter)
+      : stringWriter_(stringWriter) {}
   VarbinaryWriter() = delete;
 
   void write(const char* data, size_t size) {
@@ -79,9 +82,7 @@ class GeometrySerializer {
       double yMax,
       StringWriter& stringWriter) {
     VarbinaryWriter writer(stringWriter);
-    writer.write(
-        static_cast<uint8_t>(
-            common::geospatial::GeometrySerializationType::ENVELOPE));
+    writer.write(static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
     writer.write(xMin);
     writer.write(yMin);
     writer.write(xMax);
@@ -107,6 +108,85 @@ class GeometrySerializer {
           envelope.getMaxY(),
           stringWriter);
     }
+  }
+
+  /// Determines if a ring of coordinates (from `start` to `end`) is oriented
+  /// clockwise. A return value of CW indicates clockwise orientation, CCW
+  /// indicates counterclockwise, and ZERO_AREA represents a polygon which has
+  /// no orientation due to having an area of 0.
+  FOLLY_ALWAYS_INLINE static ClockwiseResult isClockwise(
+      const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+      size_t start,
+      size_t end) {
+    double sum = 0.0;
+    for (size_t i = start; i < end - 1; i++) {
+      const auto& p1 = coordinates->getAt(i);
+      const auto& p2 = coordinates->getAt(i + 1);
+      sum += (p2.x - p1.x) * (p2.y + p1.y);
+    }
+    if (FOLLY_UNLIKELY(std::abs(sum) < 1e-15)) {
+      return ClockwiseResult::ZERO_AREA;
+    }
+    return sum > 0.0 ? ClockwiseResult::CW : ClockwiseResult::CCW;
+  }
+
+  /// Reverses the order of coordinates in the sequence between `start` and
+  /// `end`
+  FOLLY_ALWAYS_INLINE static void reverse(
+      const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+      size_t start,
+      size_t end) {
+    for (size_t i = 0; i < (end - start) / 2; ++i) {
+      auto temp = coordinates->getAt(start + i);
+      coordinates->setAt(coordinates->getAt(end - 1 - i), start + i);
+      coordinates->setAt(temp, end - 1 - i);
+    }
+  }
+
+  /// Ensures that a polygon ring has the canonical orientation:
+  /// - Exterior rings (shells) must be clockwise.
+  /// - Interior rings (holes) must be counter-clockwise.
+  /// A return value of true indicates a zero-area ring was encountered
+  FOLLY_ALWAYS_INLINE static bool canonicalizePolygonCoordinates(
+      const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+      size_t start,
+      size_t end,
+      bool isShell) {
+    ClockwiseResult isClockwiseFlag = isClockwise(coordinates, start, end);
+    if (isClockwiseFlag == ClockwiseResult::ZERO_AREA) {
+      return true;
+    }
+
+    if ((isShell && isClockwiseFlag == ClockwiseResult::CCW) ||
+        (!isShell && isClockwiseFlag == ClockwiseResult::CW)) {
+      reverse(coordinates, start, end);
+    }
+    return false;
+  }
+
+  /// Applies `canonicalizePolygonCoordinates` to all rings in a polygon.
+  /// A return value of true indicates at least one zero-area ring was
+  /// encountered.
+  FOLLY_ALWAYS_INLINE static bool canonicalizePolygonCoordinates(
+      const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+      const std::vector<size_t>& partIndexes,
+      const std::vector<bool>& shellPart) {
+    bool zeroAreaRingEncountered = false;
+    for (size_t part = 0; part < partIndexes.size() - 1; part++) {
+      zeroAreaRingEncountered |= canonicalizePolygonCoordinates(
+          coordinates,
+          partIndexes[part],
+          partIndexes[part + 1],
+          shellPart[part]);
+    }
+    if (!partIndexes.empty()) {
+      zeroAreaRingEncountered |= canonicalizePolygonCoordinates(
+          coordinates,
+          partIndexes.back(),
+          coordinates->size(),
+          shellPart.back());
+    }
+    return zeroAreaRingEncountered;
   }
 
  private:
@@ -179,9 +259,7 @@ class GeometrySerializer {
   static void writePoint(
       const geos::geom::Geometry& point,
       VarbinaryWriter<T>& writer) {
-    writer.write(
-        static_cast<uint8_t>(
-            common::geospatial::GeometrySerializationType::POINT));
+    writer.write(static_cast<uint8_t>(GeometrySerializationType::POINT));
     if (!point.isEmpty()) {
       writeCoordinates(point.getCoordinates(), writer);
     } else {
@@ -194,11 +272,8 @@ class GeometrySerializer {
   static void writeMultiPoint(
       const geos::geom::Geometry& geometry,
       VarbinaryWriter<T>& writer) {
-    writer.write(
-        static_cast<uint8_t>(
-            common::geospatial::GeometrySerializationType::MULTI_POINT));
-    writer.write(
-        static_cast<int32_t>(common::geospatial::EsriShapeType::MULTI_POINT));
+    writer.write(static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
+    writer.write(static_cast<int32_t>(EsriShapeType::MULTI_POINT));
     writeEnvelope(geometry, writer);
     writer.write(static_cast<int32_t>(geometry.getNumPoints()));
     writeCoordinates(geometry.getCoordinates(), writer);
@@ -215,17 +290,14 @@ class GeometrySerializer {
     if (multiType) {
       numParts = geometry.getNumGeometries();
       writer.write(
-          static_cast<uint8_t>(common::geospatial::GeometrySerializationType::
-                                   MULTI_LINE_STRING));
+          static_cast<uint8_t>(GeometrySerializationType::MULTI_LINE_STRING));
     } else {
       numParts = (numPoints > 0) ? 1 : 0;
       writer.write(
-          static_cast<uint8_t>(
-              common::geospatial::GeometrySerializationType::LINE_STRING));
+          static_cast<uint8_t>(GeometrySerializationType::LINE_STRING));
     }
 
-    writer.write(
-        static_cast<int32_t>(common::geospatial::EsriShapeType::POLYLINE));
+    writer.write(static_cast<int32_t>(EsriShapeType::POLYLINE));
 
     writeEnvelope(geometry, writer);
 
@@ -267,16 +339,12 @@ class GeometrySerializer {
 
     if (multiType) {
       writer.write(
-          static_cast<uint8_t>(
-              common::geospatial::GeometrySerializationType::MULTI_POLYGON));
+          static_cast<uint8_t>(GeometrySerializationType::MULTI_POLYGON));
     } else {
-      writer.write(
-          static_cast<uint8_t>(
-              common::geospatial::GeometrySerializationType::POLYGON));
+      writer.write(static_cast<uint8_t>(GeometrySerializationType::POLYGON));
     }
 
-    writer.write(
-        static_cast<int32_t>(common::geospatial::EsriShapeType::POLYGON));
+    writer.write(static_cast<int32_t>(EsriShapeType::POLYGON));
     writeEnvelope(geometry, writer);
 
     writer.write(static_cast<int32_t>(numParts));
@@ -329,8 +397,7 @@ class GeometrySerializer {
       const geos::geom::Geometry& collection,
       VarbinaryWriter<T>& writer) {
     writer.write(
-        static_cast<uint8_t>(common::geospatial::GeometrySerializationType::
-                                 GEOMETRY_COLLECTION));
+        static_cast<uint8_t>(GeometrySerializationType::GEOMETRY_COLLECTION));
 
     for (size_t geometryIndex = 0;
          geometryIndex < collection.getNumGeometries();
@@ -387,10 +454,8 @@ class GeometryDeserializer {
       StringView view = *input[i];
 
       velox::common::InputByteStream inputStream(view.data());
-      auto geometryType =
-          inputStream.read<common::geospatial::GeometrySerializationType>();
-      if (geometryType !=
-          common::geospatial::GeometrySerializationType::POINT) {
+      auto geometryType = inputStream.read<GeometrySerializationType>();
+      if (geometryType != GeometrySerializationType::POINT) {
         VELOX_USER_FAIL(
             fmt::format(
                 "Non-point geometry in {} input at index {}.",
@@ -419,6 +484,9 @@ class GeometryDeserializer {
     }
     return coords;
   }
+
+  /// Returns the thread-local GEOS geometry factory.
+  static geos::geom::GeometryFactory* getGeometryFactory();
 
  private:
   static std::unique_ptr<geos::geom::Geometry> readGeometry(
@@ -469,4 +537,4 @@ class GeometryDeserializer {
       size_t size);
 };
 
-} // namespace facebook::velox::functions::geospatial
+} // namespace facebook::velox::common::geospatial

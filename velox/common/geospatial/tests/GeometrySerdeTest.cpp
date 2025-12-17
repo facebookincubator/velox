@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/geospatial/GeometrySerde.h"
+#include "velox/common/geospatial/GeometrySerde.h"
 #include <geos/geom/Geometry.h>
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
@@ -23,7 +23,7 @@
 
 using namespace ::testing;
 
-using namespace facebook::velox::functions::geospatial;
+using namespace facebook::velox::common::geospatial;
 
 void assertRoundtrip(const std::string& wkt) {
   geos::io::WKTReader reader;
