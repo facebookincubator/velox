@@ -48,6 +48,9 @@ void reset(
     }
   }
   vector->resize(size);
+  // Reside BaseVector::length_ as it will be updated in the subsequent copy()
+  // calls.
+  vector->BaseVector::resize(0);
 }
 
 void initializeStringVector(
@@ -368,8 +371,9 @@ vector_size_t copyNulls(
   vector_size_t nulls = 0;
   // it's assumed that initVector is called before calling this method to
   // properly allocate/clear nulls buffer. So we only need to check against
-  // target vector here.
-  target.resize(targetIndex + count, false);
+  // target vector here.  We only call BaseVector::resize here to make sure
+  // BaseVector::size() is only updated.
+  target.BaseVector::resize(targetIndex + count, false);
   if (target.mayHaveNulls()) {
     auto tgtNulls = const_cast<uint64_t*>(target.rawNulls());
     if (source.isConstantEncoding()) {
@@ -494,7 +498,10 @@ vector_size_t copyOffsets(
     vector_size_t sourceIndex,
     vector_size_t count,
     vector_size_t& childOffset) {
-  target.resize(targetIndex + count);
+  // Its expected that initVector is called before calling this method so the
+  // offsets and sizes buffers are properly allocated. We only call
+  // BaseVector::resize here to make sure BaseVector::size() is only updated.
+  target.BaseVector::resize(targetIndex + count);
   auto tgtOffsets = const_cast<vector_size_t*>(target.rawOffsets());
   auto tgtSizes = const_cast<vector_size_t*>(target.rawSizes());
   auto srcSizes = source.rawSizes();
@@ -710,8 +717,9 @@ bool copyNull(
     vector_size_t sourceIndex) {
   // it's assumed that initVector is called before calling this method to
   // properly allocate/clear nulls buffer. So we only need to check against
-  // target vector here.
-  target.resize(targetIndex + 1, false);
+  // target vector here. We only call BaseVector::resize here to make sure
+  // BaseVector::size() is only updated.
+  target.BaseVector::resize(targetIndex + 1, false);
   if (target.mayHaveNulls()) {
     bool srcIsNull =
         (source.isConstantEncoding() ||
@@ -801,7 +809,10 @@ vector_size_t copyOffset(
     const T& source,
     vector_size_t sourceIndex,
     vector_size_t& childOffset) {
-  target.resize(targetIndex + 1);
+  // Its expected that initVector is called before calling this method so the
+  // offsets and sizes buffers are properly allocated. We only call
+  // BaseVector::resize here to make sure BaseVector::size() is only updated.
+  target.BaseVector::resize(targetIndex + 1);
   auto tgtSizes = const_cast<vector_size_t*>(target.rawSizes());
   childOffset = nextChildOffset(target, targetIndex);
   const_cast<vector_size_t*>(target.rawOffsets())[targetIndex] = childOffset;
