@@ -24,5 +24,6 @@ if(VELOX_ENABLE_AVRO)
     velox_vector
     velox_expression
     Folly::folly
-    AvroCpp::avrocpp)
+    AvroCpp::avrocpp
+  )
 endif()

@@ -33,7 +33,4 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(
-  velox_avro_reader_test
-  velox_dwio_avro_reader_register
-  ${TEST_LINK_LIBS})
+target_link_libraries(velox_avro_reader_test velox_dwio_avro_reader_register ${TEST_LINK_LIBS})
