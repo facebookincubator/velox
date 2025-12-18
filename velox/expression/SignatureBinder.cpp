@@ -47,8 +47,11 @@ std::optional<int> tryResolveLongLiteral(
     return atoi(variable.c_str());
   };
 
-  if (integerVariablesBindings.count(variable)) {
-    return integerVariablesBindings.at(variable);
+  {
+    auto integerIt = integerVariablesBindings.find(variable);
+    if (integerIt != integerVariablesBindings.end()) {
+      return integerIt->second;
+    }
   }
 
   auto it = variables.find(variable);
@@ -57,7 +60,6 @@ std::optional<int> tryResolveLongLiteral(
   }
 
   const auto& constraints = it->second.constraint();
-
   if (constraints.empty()) {
     return std::nullopt;
   }
@@ -66,11 +68,13 @@ std::optional<int> tryResolveLongLiteral(
   // Check constraints and evaluate.
   const auto calculation = fmt::format("{}={}", variable, constraints);
   expression::calculation::evaluate(calculation, integerVariablesBindings);
+
+  auto integerIt = integerVariablesBindings.find(variable);
   VELOX_CHECK(
-      integerVariablesBindings.count(variable),
-      "Variable {} calculation failed.",
+      integerIt != integerVariablesBindings.end(),
+      "Variable calculation failed: {}",
       variable);
-  return integerVariablesBindings.at(variable);
+  return integerIt->second;
 }
 
 std::optional<LongEnumParameter> tryResolveLongEnumLiteral(
@@ -206,7 +210,7 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   if (isPositiveInteger(parameterName)) {
     return atoi(parameterName.c_str()) == value;
   }
-  if (!variables().count(parameterName)) {
+  if (!variables().contains(parameterName)) {
     // Return false if the parameter is not found in the signature.
     return false;
   }
@@ -217,12 +221,14 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
     return false;
   }
 
-  if (integerVariablesBindings_.count(parameterName)) {
+  auto integerIt = integerVariablesBindings_.find(parameterName);
+  if (integerIt != integerVariablesBindings_.end()) {
     // Return false if the parameter is found with a different value.
-    if (integerVariablesBindings_[parameterName] != value) {
+    if (integerIt->second != value) {
       return false;
     }
   }
+
   // Bind the variable.
   integerVariablesBindings_[parameterName] = value;
   return true;
@@ -254,18 +260,20 @@ bool SignatureBinderBase::tryBind(
 
   const auto& baseName = typeSignature.baseName();
 
-  if (variables().count(baseName)) {
+  auto variableIt = variables().find(baseName);
+  if (variableIt != variables().end()) {
     // Variables cannot have further parameters.
     VELOX_CHECK(
         typeSignature.parameters().empty(),
         "Variables with parameters are not supported");
-    auto& variable = variables().at(baseName);
+    const auto& variable = variableIt->second;
     VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
 
-    if (typeVariablesBindings_.count(baseName)) {
+    auto bindingIt = typeVariablesBindings_.find(baseName);
+    if (bindingIt != typeVariablesBindings_.end()) {
       // If the the variable type is already mapped to a concrete type, make
       // sure the mapped type is equivalent to the actual type.
-      return typeVariablesBindings_[baseName]->equivalent(*actualType);
+      return bindingIt->second->equivalent(*actualType);
     }
 
     if (actualType->isUnKnown() && variable.knownTypesOnly()) {
@@ -324,17 +332,17 @@ bool SignatureBinderBase::tryBind(
       return false;
     }
 
-    if (variables().count(paramBaseName)) {
+    if (variables().contains(paramBaseName)) {
       auto it = typeVariablesBindings_.find(paramBaseName);
       if (it != typeVariablesBindings_.end()) {
         return it->second->equivalent(*actualChildType);
-      } else {
-        typeVariablesBindings_[paramBaseName] = actualChildType;
-        return true;
       }
-    } else {
-      return tryBind(typeParam, actualChildType);
+
+      typeVariablesBindings_[paramBaseName] = actualChildType;
+      return true;
     }
+
+    return tryBind(typeParam, actualChildType);
   }
 
   // Type Parameters can recurse.
@@ -391,7 +399,7 @@ TypePtr SignatureBinder::tryResolveType(
         varcharEnumParameterVariableBindings) {
   const auto& baseName = typeSignature.baseName();
 
-  if (variables.count(baseName)) {
+  if (variables.contains(baseName)) {
     auto it = typeVariablesBindings.find(baseName);
     if (it == typeVariablesBindings.end()) {
       return nullptr;
