@@ -116,9 +116,8 @@ static bool matchCallAgainstSignatures(
     argTypes.push_back(in->type());
   }
   for (const auto& sig : sigs) {
-    std::vector<Coercion> coercions(n);
     exec::SignatureBinder binder(*sig, argTypes);
-    if (!binder.tryBindWithCoercions(coercions)) {
+    if (!binder.tryBind()) {
       continue;
     }
     // binder does not confirm whether positional arguments are
