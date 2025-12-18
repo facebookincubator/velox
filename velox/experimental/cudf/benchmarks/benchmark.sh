@@ -44,17 +44,20 @@ for query_number in ${queries}; do
       num_drivers=${NUM_DRIVERS:-32}
       BENCHMARK_EXECUTABLE=./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark
       CUDF_FLAGS=""
+      FILE_STRING="cpu_${num_drivers}_drivers"
       ;;
     "gpu")
       num_drivers=${NUM_DRIVERS:-32}
       BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
       plan_mode_flags=""
       if [[ "${cudf_exec_mode}" == "plan_rewriter" ]]; then
-        plan_mode_flags="--velox_cudf_table_scan=true --gpu_driver_count=1"
+        plan_mode_flags="--velox_cudf_table_scan=false --gpu_driver_count=1"
+        FILE_STRING="gpu_1_cpu_${num_drivers}"
       else
         # When using driver adapter, we want num cpu drivers to also be 1
         num_drivers=${NUM_DRIVERS:-1}
         plan_mode_flags="--velox_cudf_table_scan=true"
+        FILE_STRING="gpu_${num_drivers}"
       fi
       CUDF_FLAGS="\
         --cudf_chunk_read_limit=${cudf_chunk_read_limit} \
@@ -75,7 +78,7 @@ for query_number in ${queries}; do
         --cuda-memory-usage=true \
         --cuda-um-cpu-page-faults=true \
         --cuda-um-gpu-page-faults=true \
-        --output=benchmark_results/q${query_number}_${device}_${num_drivers}_drivers.nsys-rep"
+        --output=benchmark_results/q${query_number}_${FILE_STRING}.nsys-rep"
       # Enable GPU metrics if supported (Ampere or newer)
       if [[ "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader -i 0 | cut -d '.' -f 1)" -gt 7 ]]; then
         device_id=${CUDA_VISIBLE_DEVICES:-"0"}
@@ -93,7 +96,7 @@ for query_number in ${queries}; do
       --include_results=true \
       --num_drivers=${num_drivers} \
       ${CUDF_FLAGS} 2>&1 |
-      tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
+      tee benchmark_results/q${query_number}_${FILE_STRING}.txt
     { set -e +x; } &>/dev/null
   done
 done

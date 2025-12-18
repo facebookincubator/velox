@@ -55,6 +55,18 @@ struct PrecomputeInstruction {
         new_column_index(newIndex),
         nested_dependent_column_indices(nestedIndices),
         cudf_expression(node) {}
+
+  PrecomputeInstruction(
+      int depIndex,
+      const std::string& name,
+      int newIndex,
+      std::vector<int>&& nestedIndices,
+      const std::shared_ptr<CudfExpression>& node = nullptr)
+      : dependent_column_index(depIndex),
+        ins_name(name),
+        new_column_index(newIndex),
+        nested_dependent_column_indices(std::move(nestedIndices)),
+        cudf_expression(node) {}
 };
 
 cudf::ast::expression const& createAstTree(
