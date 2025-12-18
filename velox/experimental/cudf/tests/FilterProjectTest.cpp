@@ -687,7 +687,8 @@ TEST_F(CudfFilterProjectTest, round) {
 }
 
 // TODO (dm): Enable after adding decimal support to velox-cudf
-TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
+// seves DECIMAL 12/18/25 enable this test
+TEST_F(CudfFilterProjectTest, roundDecimal) {
   parse::ParseOptions options;
   options.parseIntegerAsBigint = false;
 
