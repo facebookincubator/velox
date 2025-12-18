@@ -191,7 +191,7 @@ jobs:
         run: |
           ls -R cudftests
           cd cudftests/velox/experimental/cudf/tests/
-          chmod +x cudf_test*
+          chmod +x velox_cudf*
           export DEPS_PATH=../../../../_deps/
           export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$DEPS_PATH/kvikio-build:$DEPS_PATH/curl-build:$LD_LIBRARY_PATH
