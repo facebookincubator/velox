@@ -287,10 +287,7 @@ bool SignatureBinderBase::tryBind(
 
   // Type is not a variable.
   auto typeName = boost::algorithm::to_upper_copy(baseName);
-  auto actualTypeName =
-      boost::algorithm::to_upper_copy(std::string(actualType->name()));
-
-  if (typeName != actualTypeName) {
+  if (!boost::algorithm::iequals(typeName, actualType->name())) {
     if (allowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
