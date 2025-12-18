@@ -18,7 +18,6 @@
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/GetSerde.h"
-#include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
 
 namespace facebook::velox::functions {
@@ -29,16 +28,6 @@ std::string serializeType(const TypePtr& type) {
   return type::fbhive::HiveTypeSerializer::serialize(type);
 }
 
-std::unique_ptr<VectorSerde::Options> getOptions(remote::PageFormat format) {
-  if (format == remote::PageFormat::PRESTO_PAGE) {
-    auto options = std::make_unique<
-        serializer::presto::PrestoVectorSerde::PrestoOptions>();
-    options->preserveEncodings = true;
-    return options;
-  }
-  return std::make_unique<VectorSerde::Options>();
-}
-
 } // namespace
 
 RemoteVectorFunction::RemoteVectorFunction(
@@ -47,7 +36,6 @@ RemoteVectorFunction::RemoteVectorFunction(
     const RemoteVectorFunctionMetadata& metadata)
     : functionName_(functionName),
       serdeFormat_(metadata.serdeFormat),
-      serdeOptions_(getOptions(serdeFormat_)),
       serde_(getSerde(serdeFormat_)) {
   std::vector<TypePtr> types;
   types.reserve(inputArgs.size());
@@ -103,8 +91,8 @@ void RemoteVectorFunction::applyRemote(
   requestInputs->pageFormat_ref() = serdeFormat_;
 
   // TODO: serialize only active rows.
-  requestInputs->payload_ref() = rowVectorToIOBufBatch(
-      remoteRowVector, *context.pool(), serde_.get(), serdeOptions_.get());
+  requestInputs->payload_ref() = rowVectorToIOBuf(
+      remoteRowVector, rows.end(), *context.pool(), serde_.get());
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
 
