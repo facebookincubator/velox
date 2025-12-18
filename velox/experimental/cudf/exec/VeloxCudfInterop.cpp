@@ -72,8 +72,9 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
     // case TypeKind::INTERVAL_DAY_TIME: return cudf::type_id::EMPTY;
     // seves DECIMAL 12/18/25 uncomment the two decimal types
     // concerned at apparently lack of support elsewhere for DECIMAL128
-    case TypeKind::SHORT_DECIMAL: return cudf::type_id::DECIMAL64;
-    case TypeKind::LONG_DECIMAL: return cudf::type_id::DECIMAL128;
+    // commenting them out again
+    // case TypeKind::SHORT_DECIMAL: return cudf::type_id::DECIMAL64; <--- no such TypeKind
+    // case TypeKind::LONG_DECIMAL: return cudf::type_id::DECIMAL128; <--- no such TypeKind
     case TypeKind::ARRAY:
       return cudf::type_id::LIST;
     // case TypeKind::MAP: return cudf::type_id::EMPTY;
