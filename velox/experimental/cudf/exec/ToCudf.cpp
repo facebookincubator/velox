@@ -156,8 +156,7 @@ bool CompileState::compile(bool allowCpuFallback) {
       return false;
     }
 
-    // Use the centralized canBeEvaluatedByCudf function which includes
-    // expression expansion
+    // Use aggregation-based canBeEvaluatedByCudf
     return canBeEvaluatedByCudf(
         *aggregationPlanNode, ctx->task->queryCtx().get());
   };
