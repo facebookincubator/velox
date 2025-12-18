@@ -81,15 +81,17 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
-      VELOX_FAIL("Decimal not supported");
-      /* TODO: enable after rewriting using binary ops
-     using CudfDecimalType = cudf::numeric::decimal64;
-     using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
-     auto scalar = std::make_unique<cudfScalarType>(value,
+      // VELOX_FAIL("Decimal not supported");
+      // TODO: enable after rewriting using binary ops
+      // seves DECIMAL 12/18/25 speculative enable
+      // does this need to support DECIMAL128 also?
+      using CudfDecimalType = cudf::numeric::decimal64;
+      using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
+      return std::make_unique<cudfScalarType>(value,
                    type->scale(),
                     true,
                     stream,
-                    mr);*/
+                    mr);
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {
