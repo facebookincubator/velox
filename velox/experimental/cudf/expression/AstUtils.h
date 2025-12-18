@@ -85,10 +85,10 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       // TODO: enable after rewriting using binary ops
       // seves DECIMAL 12/18/25 speculative enable
       // does this need to support DECIMAL128 also?
-      using CudfDecimalType = cudf::numeric::decimal64;
+      using CudfDecimalType = numeric::decimal64; // <--- not in cudf namespace (!)
       using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
       return std::make_unique<cudfScalarType>(value,
-                   type->scale(),
+                    numeric::scale_type{0}, // type->scale(), <--- no such function
                     true,
                     stream,
                     mr);
