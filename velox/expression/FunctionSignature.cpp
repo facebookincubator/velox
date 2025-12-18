@@ -152,16 +152,24 @@ void validate(
     const TypeSignature& returnType,
     const std::vector<TypeSignature>& argumentTypes,
     const std::vector<bool>& constantArguments,
+    bool variableArity,
     const std::vector<TypeSignature>& additionalTypes = {}) {
   std::unordered_set<std::string> usedVariables;
   // Validate the additional types, and collect the used variables.
   for (const auto& type : additionalTypes) {
     validateBaseTypeAndCollectTypeParams(variables, type, usedVariables, false);
   }
+
   // Validate the argument types.
   for (const auto& arg : argumentTypes) {
     // Is base type a type parameter or a built in type ?
     validateBaseTypeAndCollectTypeParams(variables, arg, usedVariables, false);
+  }
+
+  if (variableArity) {
+    VELOX_USER_CHECK(
+        !argumentTypes.empty(),
+        "Variable arity requires at least one argument");
   }
 
   // All type variables should apear in the inputs arguments.
@@ -224,7 +232,12 @@ FunctionSignature::FunctionSignature(
       argumentTypes_{std::move(argumentTypes)},
       constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
-  validate(variables_, returnType_, argumentTypes_, constantArguments_);
+  validate(
+      variables_,
+      returnType_,
+      argumentTypes_,
+      constantArguments_,
+      variableArity_);
 }
 
 FunctionSignature::FunctionSignature(
@@ -244,6 +257,7 @@ FunctionSignature::FunctionSignature(
       returnType_,
       argumentTypes_,
       constantArguments_,
+      variableArity_,
       additionalTypes);
 }
 
