@@ -21,7 +21,6 @@
 #include "velox/vector/TypeAliases.h"
 
 #include <cudf/column/column.hpp>
-#include <cudf/contiguous_split.hpp>
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
