@@ -312,6 +312,8 @@ class HashProbe : public Operator {
   /// Decode join key inputs and populate 'nonNullInputRows_'.
   void decodeAndDetectNonNullKeys();
 
+  void addRuntimeStats();
+
   // Invoked when there is no more input from either upstream task or spill
   // input. If there is remaining spilled data, then the last finished probe
   // operator is responsible for notifying the hash build operators to build the
