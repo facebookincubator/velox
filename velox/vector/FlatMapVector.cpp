@@ -123,12 +123,15 @@ void FlatMapVector::resize(vector_size_t newSize, bool setNotNull) {
       // to skip uniqueness check since effectively we are just changing
       // the length.
       if (newSize > oldSize) {
-        VELOX_CHECK_EQ(
-            values.use_count(), 1, "Resizing shared map values vector");
+        if (values.use_count() > 1) {
+          LOG(WARNING) << "Resizing shared map values vector";
+        }
         values->resize(newSize, setNotNull);
 
         if (i < inMaps_.size() && inMaps_[i] != nullptr) {
-          VELOX_CHECK(inMaps_[i]->unique(), "Resizing shared in map vector");
+          if (!inMaps_[i]->unique()) {
+            LOG(WARNING) << "Resizing shared in map vector";
+          }
           AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
         }
       }
