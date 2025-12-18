@@ -54,7 +54,14 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
       }
       return cudf::type_id::INT32;
     case TypeKind::BIGINT:
-      return cudf::type_id::INT64;
+      // BIGINT is used for both INT64 and DECIMAL64
+      return type->isDecimal() ? cudf::type_id::DECIMAL64 : cudf::type_id::INT64;
+    case TypeKind::HUGEINT:
+      // HUGEINT is used only for DECIMAL128
+      // per facebookincubator/velox PR 4434 (May 2, 2023)
+      // although see commented-out HUGEINT -> DURATION_DAYS below
+      VELOX_CHECK(type->isDecimal(), "HUGEINT should only be used for DECIMAL128");
+      return cudf::type_id::DECIMAL128;
     case TypeKind::REAL:
       return cudf::type_id::FLOAT32;
     case TypeKind::DOUBLE:
@@ -70,10 +77,6 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
     // https://github.com/facebookincubator/velox/commit/e480f5c03a6c47897ef4488bd56918a89719f908
     // case TypeKind::DATE: return cudf::type_id::DURATION_DAYS;
     // case TypeKind::INTERVAL_DAY_TIME: return cudf::type_id::EMPTY;
-    // TODO: Decimals are now logical types:
-    // https://github.com/facebookincubator/velox/commit/73d2f935b55f084d30557c7be94b9768efb8e56f
-    // case TypeKind::SHORT_DECIMAL: return cudf::type_id::DECIMAL64;
-    // case TypeKind::LONG_DECIMAL: return cudf::type_id::DECIMAL128;
     case TypeKind::ARRAY:
       return cudf::type_id::LIST;
     // case TypeKind::MAP: return cudf::type_id::EMPTY;
