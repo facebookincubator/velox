@@ -41,12 +41,12 @@ for query_number in ${queries}; do
     case "${device}" in
     "cpu")
       num_drivers=${NUM_DRIVERS:-32}
-      BENCHMARK_EXECUTABLE=./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark
+      BENCHMARK_EXECUTABLE=./_build/debug/velox/benchmarks/tpch/velox_tpch_benchmark
       CUDF_FLAGS=""
       ;;
     "gpu")
       num_drivers=${NUM_DRIVERS:-4}
-      BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
+      BENCHMARK_EXECUTABLE=./_build/debug/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
       CUDF_FLAGS="--velox_cudf_table_scan=true --cudf_chunk_read_limit=${cudf_chunk_read_limit} --cudf_pass_read_limit=${cudf_pass_read_limit} --cudf_memory_resource=${VELOX_CUDF_MEMORY_RESOURCE} --cudf_memory_percent=${VELOX_CUDF_MEMORY_PERCENT}"
       ;;
     esac
