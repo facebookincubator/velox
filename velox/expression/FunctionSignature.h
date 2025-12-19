@@ -53,7 +53,7 @@ enum class FunctionCanonicalName {
 /// a_precision + b_precision" in decimals).
 class SignatureVariable {
  public:
-  explicit SignatureVariable(
+  SignatureVariable(
       std::string name,
       std::optional<std::string> constraint,
       ParameterType type,
@@ -83,6 +83,10 @@ class SignatureVariable {
     VELOX_USER_CHECK(isTypeParameter());
     return comparableTypesOnly_;
   }
+
+  /// Return true if this variable describes a type and the specified type
+  /// satisfies the constraints.
+  bool isEligibleType(const Type& type) const;
 
   bool isTypeParameter() const {
     return type_ == ParameterType::kTypeParameter;

@@ -1328,6 +1328,11 @@ TEST(SignatureBinderTest, homogeneousRow) {
 
     testSignatureBinder(signature, {ROW({VARCHAR(), VARCHAR()})}, BOOLEAN());
 
+    testSignatureBinder(
+        signature,
+        {ROW({MAP(INTEGER(), REAL()), MAP(INTEGER(), REAL())})},
+        BOOLEAN());
+
     // Named row fields should also bind when types are homogeneous.
     testSignatureBinder(
         signature,
@@ -1343,6 +1348,20 @@ TEST(SignatureBinderTest, homogeneousRow) {
 
     assertCannotBind(signature, {BIGINT()});
     assertCannotBind(signature, {ARRAY(BIGINT())});
+  }
+
+  // row(T:orderable, ...) -> boolean
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .orderableTypeVariable("T")
+                         .returnType("boolean")
+                         .argumentType("row(T, ...)")
+                         .build();
+
+    testSignatureBinder(signature, {ROW({BIGINT()})}, BOOLEAN());
+
+    // MAP type is not orderable.
+    assertCannotBind(signature, {ROW({MAP(INTEGER(), REAL())})});
   }
 
   // (row(T, ...), row(T, ...)) -> T
