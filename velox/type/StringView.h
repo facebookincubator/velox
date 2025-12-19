@@ -24,7 +24,6 @@
 #include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/dynamic.h>
-#include <folly/lang/Assume.h>
 
 #include <fmt/format.h>
 
@@ -60,9 +59,6 @@ struct StringView {
     VELOX_CHECK_GE(len, 0);
     VELOX_DCHECK(data || len == 0);
     if (isInline()) {
-      // Redundant with the if-guard;
-      // helps static analysis prove memcpy is safe.
-      folly::assume(size_ <= kInlineSize);
       // Zero the inline part.
       // this makes sure that inline strings can be compared for equality with 2
       // int64 compares.
