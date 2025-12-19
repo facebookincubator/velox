@@ -221,6 +221,26 @@ SignatureVariable::SignatureVariable(
       "Type variables cannot have constraints");
 }
 
+bool SignatureVariable::isEligibleType(const Type& type) const {
+  if (!isTypeParameter()) {
+    return false;
+  }
+
+  if (knownTypesOnly_ && type.isUnKnown()) {
+    return false;
+  }
+
+  if (orderableTypesOnly_ && !type.isOrderable()) {
+    return false;
+  }
+
+  if (comparableTypesOnly_ && !type.isComparable()) {
+    return false;
+  }
+
+  return true;
+}
+
 FunctionSignature::FunctionSignature(
     std::unordered_map<std::string, SignatureVariable> variables,
     TypeSignature returnType,

@@ -257,6 +257,36 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   return true;
 }
 
+std::optional<bool> SignatureBinderBase::checkSetTypeVariable(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType) {
+  const auto& baseName = typeSignature.baseName();
+
+  auto variableIt = variables().find(baseName);
+  if (variableIt == variables().end()) {
+    return std::nullopt;
+  }
+
+  // Variables cannot have further parameters.
+  VELOX_CHECK(
+      typeSignature.parameters().empty(),
+      "Variables with parameters are not supported");
+  const auto& variable = variableIt->second;
+  VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+
+  auto bindingIt = typeVariablesBindings_.find(baseName);
+  if (bindingIt != typeVariablesBindings_.end()) {
+    return bindingIt->second->equivalent(*actualType);
+  }
+
+  if (!variable.isEligibleType(*actualType)) {
+    return false;
+  }
+
+  typeVariablesBindings_[baseName] = actualType;
+  return true;
+}
+
 bool SignatureBinderBase::tryBindWithCoercion(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType,
@@ -281,41 +311,12 @@ bool SignatureBinderBase::tryBind(
     return true;
   }
 
-  const auto& baseName = typeSignature.baseName();
-
-  auto variableIt = variables().find(baseName);
-  if (variableIt != variables().end()) {
-    // Variables cannot have further parameters.
-    VELOX_CHECK(
-        typeSignature.parameters().empty(),
-        "Variables with parameters are not supported");
-    const auto& variable = variableIt->second;
-    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
-
-    auto bindingIt = typeVariablesBindings_.find(baseName);
-    if (bindingIt != typeVariablesBindings_.end()) {
-      // If the the variable type is already mapped to a concrete type, make
-      // sure the mapped type is equivalent to the actual type.
-      return bindingIt->second->equivalent(*actualType);
-    }
-
-    if (actualType->isUnKnown() && variable.knownTypesOnly()) {
-      return false;
-    }
-
-    if (variable.orderableTypesOnly() && !actualType->isOrderable()) {
-      return false;
-    }
-
-    if (variable.comparableTypesOnly() && !actualType->isComparable()) {
-      return false;
-    }
-
-    typeVariablesBindings_[baseName] = actualType;
-    return true;
+  if (auto result = checkSetTypeVariable(typeSignature, actualType)) {
+    return result.value();
   }
 
   // Type is not a variable.
+  const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
   if (!boost::algorithm::iequals(typeName, actualType->name())) {
     if (allowCoercion) {
@@ -346,7 +347,6 @@ bool SignatureBinderBase::tryBind(
 
     // All children must unify to the same type variable T
     const auto& typeParam = params[0];
-    const auto& paramBaseName = typeParam.baseName();
 
     // First, check and extract the common child type if homogeneous.
     const auto actualChildType =
@@ -355,14 +355,8 @@ bool SignatureBinderBase::tryBind(
       return false;
     }
 
-    if (variables().contains(paramBaseName)) {
-      auto it = typeVariablesBindings_.find(paramBaseName);
-      if (it != typeVariablesBindings_.end()) {
-        return it->second->equivalent(*actualChildType);
-      }
-
-      typeVariablesBindings_[paramBaseName] = actualChildType;
-      return true;
+    if (auto result = checkSetTypeVariable(typeParam, actualChildType)) {
+      return result.value();
     }
 
     return tryBind(typeParam, actualChildType);
