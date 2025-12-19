@@ -222,6 +222,9 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
 
+  std::cout << "****** isAstExprSupported: " << expr->toString()
+            << ", name: " << name << ", len: " << len << std::endl;
+
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
