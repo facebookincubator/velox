@@ -15,13 +15,13 @@
  */
 #include "velox/expression/SignatureBinder.h"
 #include <gtest/gtest.h>
-#include <velox/type/HugeInt.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/BigintEnumRegistration.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/HugeInt.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::exec::test {
@@ -1111,16 +1111,12 @@ void testCoercions(
 
   ASSERT_EQ(expectedCoercions.size(), coercions.size());
   for (auto i = 0; i < expectedCoercions.size(); ++i) {
-    if (expectedCoercions[i] == nullptr) {
-      ASSERT_TRUE(coercions[i].type == nullptr);
-    } else {
-      ASSERT_EQ(*coercions[i].type, *expectedCoercions[i]);
-    }
+    const auto& coercionType = coercions[i].type;
+    VELOX_ASSERT_EQ_TYPES(coercionType, expectedCoercions[i]);
   }
 
   auto returnType = binder.tryResolveReturnType();
-  ASSERT_TRUE(returnType != nullptr);
-  ASSERT_EQ(*expectedReturnType, *returnType);
+  VELOX_ASSERT_EQ_TYPES(returnType, expectedReturnType);
 }
 
 void testNoCoercions(
@@ -1231,6 +1227,87 @@ TEST(SignatureBinderTest, coercions) {
     assertCannotBind(
         signature,
         {SMALLINT(), INTEGER(), BIGINT(), INTEGER(), INTEGER()},
+        /*allowCoercion*/ true);
+  }
+}
+
+TEST(SignatureBinderTest, complexTypeCoercions) {
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("array(bigint)")
+                         .argumentType("map(bigint, double)")
+                         .argumentType("row(integer, bigint, double)")
+                         .argumentType("row(a integer,b bigint,c double)")
+                         .build();
+    testCoercions(
+        signature,
+        {
+            ARRAY(INTEGER()),
+            MAP(INTEGER(), REAL()),
+            ROW({TINYINT(), SMALLINT(), REAL()}),
+            ROW({"a", "b", "c"}, {TINYINT(), SMALLINT(), REAL()}),
+        },
+        {
+            ARRAY(BIGINT()),
+            MAP(BIGINT(), DOUBLE()),
+            ROW({INTEGER(), BIGINT(), DOUBLE()}),
+            ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
+        },
+        BOOLEAN());
+
+    testNoCoercions(
+        signature,
+        {
+            ARRAY(BIGINT()),
+            MAP(BIGINT(), DOUBLE()),
+            ROW({INTEGER(), BIGINT(), DOUBLE()}),
+            ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
+        },
+        BOOLEAN());
+
+    // Wrong array type.
+    assertCannotBind(
+        signature,
+        {
+            ARRAY(VARCHAR()),
+            MAP(BIGINT(), DOUBLE()),
+            ROW({INTEGER(), BIGINT(), DOUBLE()}),
+            ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
+        },
+        /*allowCoercion*/ true);
+
+    // Wrong map value type.
+    assertCannotBind(
+        signature,
+        {
+            ARRAY(BIGINT()),
+            MAP(BIGINT(), VARCHAR()),
+            ROW({INTEGER(), BIGINT(), DOUBLE()}),
+            ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
+        },
+        /*allowCoercion*/ true);
+
+    // Wrong struct field type.
+    assertCannotBind(
+        signature,
+        {
+            ARRAY(BIGINT()),
+            MAP(BIGINT(), DOUBLE()),
+            ROW({INTEGER(), VARCHAR(), DOUBLE()}),
+            ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
+        },
+        /*allowCoercion*/ true);
+
+    // Wrong struct field name.
+    assertCannotBind(
+        signature,
+        {
+            ARRAY(BIGINT()),
+            MAP(BIGINT(), DOUBLE()),
+            ROW({INTEGER(), BIGINT(), DOUBLE()}),
+            ROW({"A", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
+        },
         /*allowCoercion*/ true);
   }
 }
