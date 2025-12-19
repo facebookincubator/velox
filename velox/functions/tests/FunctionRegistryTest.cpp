@@ -772,7 +772,15 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         },
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {ARRAY(TINYINT()), SMALLINT()});
+    testCoercions(
+        "foo",
+        {ARRAY(TINYINT()), SMALLINT()},
+        INTEGER(),
+        {ARRAY(INTEGER()), INTEGER()});
+
+    testNoCoercions("foo", {ARRAY(INTEGER()), INTEGER()}, INTEGER());
+
+    testCannotResolve("foo", {ARRAY(VARCHAR()), SMALLINT()});
   }
 
   // Coercions with variable number of arguments are not supported yet.

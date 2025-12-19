@@ -373,6 +373,11 @@ bool SignatureBinderBase::tryBind(
     return false;
   }
 
+  std::vector<Coercion> paramCoercions;
+  if (allowCoercion) {
+    paramCoercions.resize(params.size());
+  }
+
   for (auto i = 0; i < params.size(); i++) {
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
@@ -401,13 +406,42 @@ bool SignatureBinderBase::tryBind(
           return false;
         }
 
-        if (!tryBind(params[i], actualParameter.type)) {
-          // TODO Allow coercions for complex types.
+        if (allowCoercion) {
+          if (!tryBindWithCoercion(
+                  params[i], actualParameter.type, paramCoercions[i])) {
+            return false;
+          }
+
+        } else if (!tryBind(params[i], actualParameter.type)) {
           return false;
         }
+
         break;
     }
   }
+
+  if (allowCoercion) {
+    const bool hasCoercion = std::ranges::any_of(
+        paramCoercions,
+        [](const auto& coercion) { return coercion.type != nullptr; });
+
+    if (hasCoercion) {
+      std::vector<TypeParameter> newParams;
+      newParams.reserve(params.size());
+      for (auto i = 0; i < params.size(); i++) {
+        if (paramCoercions[i].type != nullptr) {
+          newParams.push_back(
+              TypeParameter(paramCoercions[i].type, params[i].rowFieldName()));
+          coercion.cost += paramCoercions[i].cost;
+        } else {
+          newParams.push_back(actualType->parameters()[i]);
+        }
+      }
+
+      coercion.type = getType(typeName, newParams);
+    }
+  }
+
   return true;
 }
 
