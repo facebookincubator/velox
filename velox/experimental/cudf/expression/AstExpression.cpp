@@ -16,7 +16,9 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstPrinter.hpp"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/vector/TableViewPrinter.hpp"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -714,6 +716,12 @@ ColumnOrView ASTExpression::eval(
             precomputedColumns[columnIndex - inputTableColumns.size()]);
       }
     } else {
+      if (CudfConfig::getInstance().debugEnabled) {
+        LOG(INFO) << cudf::ast::expression_to_string(cudfTree_.back())
+                  << std::endl;
+        LOG(INFO) << cudf::table_schema_to_string(astInputTableView)
+                  << std::endl;
+      }
       return cudf::compute_column(
           astInputTableView, cudfTree_.back(), stream, mr);
     }
