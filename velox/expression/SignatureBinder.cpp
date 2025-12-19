@@ -129,36 +129,27 @@ bool SignatureBinder::tryBind() {
 bool SignatureBinder::tryBind(
     bool allowCoercions,
     std::vector<Coercion>& coercions) {
+  const auto numActualTypes = actualTypes_.size();
+
   if (allowCoercions) {
     coercions.clear();
-    coercions.resize(actualTypes_.size());
+    coercions.resize(numActualTypes);
   }
 
   const auto& formalArgs = signature_.argumentTypes();
-  const auto formalArgsCnt = formalArgs.size();
+  const auto numFormalArgs = formalArgs.size();
 
   if (signature_.variableArity()) {
-    if (actualTypes_.size() < formalArgsCnt - 1) {
+    if (numActualTypes < numFormalArgs - 1) {
       return false;
     }
-
-    if (!isAny(signature_.argumentTypes().back())) {
-      if (actualTypes_.size() > formalArgsCnt) {
-        auto& type = actualTypes_[formalArgsCnt - 1];
-        for (auto i = formalArgsCnt; i < actualTypes_.size(); i++) {
-          if (!type->equivalent(*actualTypes_[i])) {
-            return false;
-          }
-        }
-      }
-    }
   } else {
-    if (formalArgsCnt != actualTypes_.size()) {
+    if (numFormalArgs != numActualTypes) {
       return false;
     }
   }
 
-  for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
+  for (auto i = 0; i < numFormalArgs && i < numActualTypes; i++) {
     if (actualTypes_[i]) {
       if (allowCoercions) {
         if (!SignatureBinderBase::tryBindWithCoercion(
@@ -172,6 +163,38 @@ bool SignatureBinder::tryBind(
       }
     } else {
       return false;
+    }
+  }
+
+  if (signature_.variableArity()) {
+    if (!isAny(signature_.argumentTypes().back())) {
+      if (numActualTypes > numFormalArgs) {
+        if (allowCoercions) {
+          auto firstType = actualTypes_[numFormalArgs - 1];
+          if (coercions[numFormalArgs - 1].type != nullptr) {
+            firstType = coercions[numFormalArgs - 1].type;
+          }
+
+          for (auto i = numFormalArgs; i < numActualTypes; i++) {
+            if (auto cost =
+                    TypeCoercer::coercible(actualTypes_[i], firstType)) {
+              if (cost.value() > 0) {
+                coercions[i] = Coercion(firstType, cost.value());
+              }
+            } else {
+              return false;
+            }
+          }
+
+        } else {
+          const auto& firstType = actualTypes_[numFormalArgs - 1];
+          for (auto i = numFormalArgs; i < numActualTypes; i++) {
+            if (!firstType->equivalent(*actualTypes_[i])) {
+              return false;
+            }
+          }
+        }
+      }
     }
   }
 

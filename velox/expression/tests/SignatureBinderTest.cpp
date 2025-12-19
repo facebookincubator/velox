@@ -1157,41 +1157,82 @@ void testNoCoercions(
 }
 
 TEST(SignatureBinderTest, coercions) {
-  auto signature = exec::FunctionSignatureBuilder()
-                       .returnType("boolean")
-                       .argumentType("smallint")
-                       .argumentType("integer")
-                       .argumentType("bigint")
-                       .argumentType("real")
-                       .argumentType("double")
-                       .build();
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("smallint")
+                         .argumentType("integer")
+                         .argumentType("bigint")
+                         .argumentType("real")
+                         .argumentType("double")
+                         .build();
 
-  testCoercions(
-      signature,
-      {TINYINT(), TINYINT(), TINYINT(), TINYINT(), TINYINT()},
-      {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
-      BOOLEAN());
+    testCoercions(
+        signature,
+        {TINYINT(), TINYINT(), TINYINT(), TINYINT(), TINYINT()},
+        {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
+        BOOLEAN());
 
-  testCoercions(
-      signature,
-      {SMALLINT(), SMALLINT(), SMALLINT(), REAL(), REAL()},
-      {nullptr, INTEGER(), BIGINT(), nullptr, DOUBLE()},
-      BOOLEAN());
+    testCoercions(
+        signature,
+        {SMALLINT(), SMALLINT(), SMALLINT(), REAL(), REAL()},
+        {nullptr, INTEGER(), BIGINT(), nullptr, DOUBLE()},
+        BOOLEAN());
 
-  testNoCoercions(
-      signature,
-      {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
-      BOOLEAN());
+    testNoCoercions(
+        signature,
+        {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
+        BOOLEAN());
 
-  assertCannotBind(
-      signature,
-      {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER()},
-      /*allowCoercion*/ true);
+    assertCannotBind(
+        signature,
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER()},
+        /*allowCoercion*/ true);
 
-  assertCannotBind(
-      signature,
-      {SMALLINT(), INTEGER(), VARCHAR(), INTEGER(), INTEGER()},
-      /*allowCoercion*/ true);
+    assertCannotBind(
+        signature,
+        {SMALLINT(), INTEGER(), VARCHAR(), INTEGER(), INTEGER()},
+        /*allowCoercion*/ true);
+  }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("smallint")
+                         .variableArity("integer")
+                         .build();
+
+    testCoercions(
+        signature,
+        {TINYINT(), TINYINT(), TINYINT()},
+        {SMALLINT(), INTEGER(), INTEGER()},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {TINYINT(), INTEGER(), TINYINT()},
+        {SMALLINT(), nullptr, INTEGER()},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {SMALLINT(), TINYINT(), INTEGER()},
+        {nullptr, INTEGER(), nullptr},
+        BOOLEAN());
+
+    testNoCoercions(signature, {SMALLINT(), INTEGER()}, BOOLEAN());
+    testNoCoercions(signature, {SMALLINT(), INTEGER(), INTEGER()}, BOOLEAN());
+
+    assertCannotBind(
+        signature,
+        {SMALLINT(), INTEGER(), VARCHAR(), INTEGER(), INTEGER()},
+        /*allowCoercion*/ true);
+
+    assertCannotBind(
+        signature,
+        {SMALLINT(), INTEGER(), BIGINT(), INTEGER(), INTEGER()},
+        /*allowCoercion*/ true);
+  }
 }
 
 TEST(SignatureBinderTest, homogeneousRow) {
