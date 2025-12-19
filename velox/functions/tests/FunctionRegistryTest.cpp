@@ -757,7 +757,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 
-  // Coercions with complex types are not supported yet.
+  // Coercions with complex types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -783,7 +783,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testCannotResolve("foo", {ARRAY(VARCHAR()), SMALLINT()});
   }
 
-  // Coercions with variable number of arguments are not supported yet.
+  // Coercions with variable number of arguments.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -814,7 +814,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testCannotResolve("foo", {TINYINT(), SMALLINT(), VARCHAR()});
   }
 
-  // Coercions with generic types are not supported yet.
+  // Coercions with generic types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -830,7 +830,11 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), REAL()});
+    testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
+
+    testNoCoercions("foo", {INTEGER(), INTEGER()}, INTEGER());
+
+    testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 }
 

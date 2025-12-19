@@ -87,6 +87,10 @@ class TypeCoercer {
   static std::optional<int32_t> coercible(
       const TypePtr& fromType,
       const TypePtr& toType);
+
+  /// Returns least common type for 'a' and 'b', i.e. a type that both 'a' and
+  /// 'b' are coercible to. Returns nullptr if no such type exists.
+  static TypePtr leastCommonSuperType(const TypePtr& a, const TypePtr& b);
 };
 
 } // namespace facebook::velox

@@ -149,6 +149,19 @@ bool SignatureBinder::tryBind(
     }
   }
 
+  if (allowCoercions && !variables().empty()) {
+    for (auto i = 0; i < numActualTypes; i++) {
+      if (actualTypes_[i]) {
+        const auto& typeSignature =
+            i < numFormalArgs ? formalArgs[i] : formalArgs[numFormalArgs - 1];
+
+        if (!tryBindVariablesWithCoercion(typeSignature, actualTypes_[i])) {
+          return false;
+        }
+      }
+    }
+  }
+
   for (auto i = 0; i < numFormalArgs && i < numActualTypes; i++) {
     if (actualTypes_[i]) {
       if (allowCoercions) {
@@ -259,12 +272,30 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
 
 std::optional<bool> SignatureBinderBase::checkSetTypeVariable(
     const exec::TypeSignature& typeSignature,
-    const TypePtr& actualType) {
+    const TypePtr& actualType,
+    bool allowCoercion,
+    Coercion& coercion) {
   const auto& baseName = typeSignature.baseName();
 
   auto variableIt = variables().find(baseName);
   if (variableIt == variables().end()) {
     return std::nullopt;
+  }
+
+  if (allowCoercion) {
+    // Variables must be already set.
+    auto bindingIt = typeVariablesBindings_.find(baseName);
+    VELOX_CHECK(bindingIt != typeVariablesBindings_.end());
+
+    const auto& boundType = bindingIt->second;
+    const auto cost = TypeCoercer::coercible(actualType, boundType);
+    VELOX_CHECK(cost.has_value());
+
+    if (cost.value() > 0) {
+      coercion.type = boundType;
+      coercion.cost = cost.value();
+    }
+    return true;
   }
 
   // Variables cannot have further parameters.
@@ -301,6 +332,61 @@ bool SignatureBinderBase::tryBind(
   return tryBind(typeSignature, actualType, false, coercion);
 }
 
+bool SignatureBinder::tryBindVariablesWithCoercion(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType) {
+  const auto& baseName = typeSignature.baseName();
+
+  auto variableIt = variables().find(baseName);
+  if (variableIt != variables().end()) {
+    // Variables cannot have further parameters.
+    VELOX_CHECK(
+        typeSignature.parameters().empty(),
+        "Variables with parameters are not supported");
+    const auto& variable = variableIt->second;
+    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+
+    if (!variable.isEligibleType(*actualType)) {
+      return false;
+    }
+
+    auto bindingIt = typeVariablesBindings_.find(baseName);
+    if (bindingIt == typeVariablesBindings_.end()) {
+      typeVariablesBindings_[baseName] = actualType;
+      return true;
+    }
+
+    if (auto superType =
+            TypeCoercer::leastCommonSuperType(actualType, bindingIt->second)) {
+      typeVariablesBindings_[baseName] = superType;
+      return true;
+    }
+
+    return false;
+  }
+
+  if (typeSignature.isHomogeneousRow()) {
+    // TODO Add coercion support.
+    return true;
+  }
+
+  const auto& params = typeSignature.parameters();
+  if (params.size() != actualType->parameters().size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < params.size(); i++) {
+    const auto& actualParameter = actualType->parameters()[i];
+    if (actualParameter.kind == TypeParameterKind::kType) {
+      if (!tryBindVariablesWithCoercion(params[i], actualParameter.type)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType,
@@ -311,7 +397,8 @@ bool SignatureBinderBase::tryBind(
     return true;
   }
 
-  if (auto result = checkSetTypeVariable(typeSignature, actualType)) {
+  if (auto result = checkSetTypeVariable(
+          typeSignature, actualType, allowCoercion, coercion)) {
     return result.value();
   }
 
@@ -355,7 +442,9 @@ bool SignatureBinderBase::tryBind(
       return false;
     }
 
-    if (auto result = checkSetTypeVariable(typeParam, actualChildType)) {
+    // TODO Add coercion support.
+    if (auto result = checkSetTypeVariable(
+            typeParam, actualChildType, /*allowCoercion=*/false, coercion)) {
       return result.value();
     }
 
