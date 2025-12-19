@@ -47,9 +47,12 @@ void testSignatureBinder(
   SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
-  exec::SignatureBinder binder(*signature, actualTypes);
-  ASSERT_TRUE(binder.tryBind());
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
 
+  exec::SignatureBinder binder(*signature, actualTypes);
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
 
@@ -70,10 +73,13 @@ void assertCannotBind(
   SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
-  exec::SignatureBinder binder(*signature, actualTypes);
-  ASSERT_FALSE(binder.tryBind());
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
 
   if (allowCoercion) {
+    exec::SignatureBinder binder(*signature, actualTypes);
     std::vector<Coercion> coercions;
     ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
   }
@@ -85,9 +91,12 @@ void assertCannotResolve(
   SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
-  exec::SignatureBinder binder(*signature, actualTypes);
-  ASSERT_TRUE(binder.tryBind());
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
 
+  exec::SignatureBinder binder(*signature, actualTypes);
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
 
@@ -1102,9 +1111,12 @@ void testCoercions(
   SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
-  exec::SignatureBinder binder(*signature, actualTypes);
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
 
-  ASSERT_FALSE(binder.tryBind());
+  exec::SignatureBinder binder(*signature, actualTypes);
 
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
@@ -1309,6 +1321,69 @@ TEST(SignatureBinderTest, complexTypeCoercions) {
             ROW({"A", "b", "c"}, {INTEGER(), BIGINT(), DOUBLE()}),
         },
         /*allowCoercion*/ true);
+  }
+}
+
+TEST(SignatureBinderTest, genericCoercions) {
+  // (T,..) -> boolean
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .typeVariable("T")
+                         .argumentType("T")
+                         .variableArity("T")
+                         .build();
+
+    testCoercions(
+        signature,
+        {TINYINT(), SMALLINT(), INTEGER()},
+        {INTEGER(), INTEGER(), nullptr},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {INTEGER(), SMALLINT(), TINYINT()},
+        {nullptr, INTEGER(), INTEGER()},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {ARRAY(TINYINT()), ARRAY(INTEGER())},
+        {ARRAY(INTEGER()), nullptr},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {MAP(TINYINT(), DOUBLE()), MAP(INTEGER(), REAL())},
+        {MAP(INTEGER(), DOUBLE()), MAP(INTEGER(), DOUBLE())},
+        BOOLEAN());
+
+    testNoCoercions(signature, {INTEGER(), INTEGER()}, BOOLEAN());
+
+    assertCannotBind(signature, {INTEGER(), VARCHAR()}, /*allowCoercion*/ true);
+  }
+
+  // (T, array(T)) -> boolean
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .typeVariable("T")
+                         .argumentType("T")
+                         .argumentType("array(T)")
+                         .build();
+
+    testCoercions(
+        signature,
+        {TINYINT(), ARRAY(INTEGER())},
+        {INTEGER(), nullptr},
+        BOOLEAN());
+
+    testNoCoercions(signature, {INTEGER(), ARRAY(INTEGER())}, BOOLEAN());
+
+    assertCannotBind(
+        signature, {INTEGER(), ARRAY(VARCHAR())}, /*allowCoercion=*/true);
+    assertCannotBind(
+        signature, {VARCHAR(), ARRAY(INTEGER())}, /*allowCoercion=*/true);
   }
 }
 

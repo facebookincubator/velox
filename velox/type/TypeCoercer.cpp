@@ -104,4 +104,43 @@ std::optional<int32_t> TypeCoercer::coercible(
   return totalCost;
 }
 
+// static
+TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
+  if (a->isUnKnown()) {
+    return b;
+  }
+
+  if (b->isUnKnown()) {
+    return a;
+  }
+
+  if (a->size() != b->size()) {
+    return nullptr;
+  }
+
+  if (a->size() == 0) {
+    if (TypeCoercer::coerceTypeBase(a, b->name())) {
+      return b;
+    }
+
+    if (TypeCoercer::coerceTypeBase(b, a->name())) {
+      return a;
+    }
+
+    return nullptr;
+  }
+
+  std::vector<TypeParameter> childTypes;
+  childTypes.reserve(a->size());
+  for (auto i = 0; i < a->size(); i++) {
+    if (auto childType = leastCommonSuperType(a->childAt(i), b->childAt(i))) {
+      childTypes.push_back(TypeParameter(childType));
+    } else {
+      return nullptr;
+    }
+  }
+
+  return getType(a->name(), childTypes);
+}
+
 } // namespace facebook::velox

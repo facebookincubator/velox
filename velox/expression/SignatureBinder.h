@@ -82,7 +82,9 @@ class SignatureBinderBase {
 
   std::optional<bool> checkSetTypeVariable(
       const exec::TypeSignature& typeSignature,
-      const TypePtr& actualType);
+      const TypePtr& actualType,
+      bool allowCoercion,
+      Coercion& coercion);
 
   /// Try to bind the integer parameter from the actualType.
   bool tryBindIntegerParameters(
@@ -189,6 +191,10 @@ class SignatureBinder : private SignatureBinderBase {
 
  private:
   bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
+
+  bool tryBindVariablesWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType);
 
   const std::vector<TypePtr>& actualTypes_;
 };
