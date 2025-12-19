@@ -350,13 +350,24 @@ void CheckDataPageHeader(
 
   const DataPageV1* data_page = static_cast<const DataPageV1*>(page);
   ASSERT_EQ(expected.num_values, data_page->num_values());
-  ASSERT_EQ(expected.encoding, data_page->encoding());
+  // The encoding enum for thrift::DataPageHeader isn't the same as in
+  // DataPageV1: parquet::thrift::Encoding::type vs
+  // parquet::arrow::Encoding::type.
   ASSERT_EQ(
-      expected.definition_level_encoding,
-      data_page->definition_level_encoding());
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          data_page->encoding()));
   ASSERT_EQ(
-      expected.repetition_level_encoding,
-      data_page->repetition_level_encoding());
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.definition_level_encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          data_page->definition_level_encoding()));
+  ASSERT_EQ(
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.repetition_level_encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          data_page->repetition_level_encoding()));
   CheckStatistics(expected, data_page->statistics());
 }
 
@@ -370,7 +381,14 @@ void CheckDataPageHeader(
   ASSERT_EQ(expected.num_values, data_page->num_values());
   ASSERT_EQ(expected.num_nulls, data_page->num_nulls());
   ASSERT_EQ(expected.num_rows, data_page->num_rows());
-  ASSERT_EQ(expected.encoding, data_page->encoding());
+  // The encoding enum for thrift::DataPageHeader isn't the same as in
+  // DataPageV2: parquet::thrift::Encoding::type vs
+  // parquet::arrow::Encoding::type.
+  ASSERT_EQ(
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          data_page->encoding()));
   ASSERT_EQ(
       expected.definition_levels_byte_length,
       data_page->definition_levels_byte_length());
