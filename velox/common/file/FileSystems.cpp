@@ -32,9 +32,8 @@ constexpr std::string_view kFileScheme("file:");
 
 using RegisteredFileSystems = std::vector<std::pair<
     std::function<bool(std::string_view)>,
-    std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const config::ConfigBase>,
-        std::string_view)>>>;
+    std::function<
+        std::shared_ptr<FileSystem>(config::ConfigPtr, std::string_view)>>>;
 
 RegisteredFileSystems& registeredFileSystems() {
   // Meyers singleton.
@@ -46,15 +45,15 @@ RegisteredFileSystems& registeredFileSystems() {
 
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
-    std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const config::ConfigBase>,
-        std::string_view)> fileSystemGenerator) {
+    std::function<
+        std::shared_ptr<FileSystem>(config::ConfigPtr, std::string_view)>
+        fileSystemGenerator) {
   registeredFileSystems().emplace_back(schemeMatcher, fileSystemGenerator);
 }
 
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filePath,
-    std::shared_ptr<const config::ConfigBase> properties) {
+    config::ConfigPtr properties) {
   const auto& filesystems = registeredFileSystems();
   for (const auto& p : filesystems) {
     if (p.first(filePath)) {
@@ -81,9 +80,7 @@ folly::once_flag localFSInstantiationFlag;
 // Implement Local FileSystem.
 class LocalFileSystem : public FileSystem {
  public:
-  LocalFileSystem(
-      std::shared_ptr<const config::ConfigBase> config,
-      const FileSystemOptions& options)
+  LocalFileSystem(config::ConfigPtr config, const FileSystemOptions& options)
       : FileSystem(config),
         executor_(
             options.readAheadEnabled
@@ -234,12 +231,10 @@ class LocalFileSystem : public FileSystem {
     };
   }
 
-  static std::function<std::shared_ptr<
-      FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
+  static std::function<
+      std::shared_ptr<FileSystem>(config::ConfigPtr, std::string_view)>
   fileSystemGenerator(const FileSystemOptions& options) {
-    return [options](
-               std::shared_ptr<const config::ConfigBase> properties,
-               std::string_view filePath) {
+    return [options](config::ConfigPtr properties, std::string_view filePath) {
       // One instance of Local FileSystem is sufficient.
       // Initialize on first access and reuse after that.
       static std::shared_ptr<FileSystem> lfs;
