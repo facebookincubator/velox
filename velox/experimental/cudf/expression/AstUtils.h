@@ -81,17 +81,18 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
-      // VELOX_FAIL("Decimal not supported");
-      // TODO: enable after rewriting using binary ops
-      // seves DECIMAL 12/18/25 speculative enable
-      // does this need to support DECIMAL128 also?
-      using CudfDecimalType = numeric::decimal64; // <--- not in cudf namespace (!)
-      using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
-      return std::make_unique<cudfScalarType>(value,
-                    numeric::scale_type{0}, // type->scale(), <--- no such function
-                    true,
-                    stream,
-                    mr);
+      if (auto const shortDecimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type)) {
+        VELOX_CHECK(type->kind() == TypeKind::BIGINT, "Unsupported Decimal Type");
+        using CudfDecimal64Type = cudf::fixed_point_scalar<numeric::decimal64>;
+        return std::make_unique<CudfDecimal64Type>(
+            value, numeric::scale_type{shortDecimalType->scale()}, !isNull, stream, mr);
+      } else if (auto const longDecimalType = std::dynamic_pointer_cast<const LongDecimalType>(type)) {
+        VELOX_CHECK(type->kind() == TypeKind::HUGEINT, "Unsupported Decimal Type");
+        using CudfDecimal128Type = cudf::fixed_point_scalar<numeric::decimal128>;
+        return std::make_unique<CudfDecimal128Type>(
+            value, numeric::scale_type{longDecimalType->scale()}, !isNull, stream, mr);
+      }
+      VELOX_UNREACHABLE("Unsupported Decimal Type");
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {
