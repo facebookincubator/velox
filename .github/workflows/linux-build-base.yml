@@ -164,6 +164,7 @@ jobs:
         with:
           name: cudftestbinaries
           path: |
+            velox/dwio/parquet/tests/examples/int.parquet
             _build/release/velox/experimental/cudf/tests/velox_cudf*
             _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
             _build/release/_deps/cudf-build/libcudf.so
@@ -185,12 +186,12 @@ jobs:
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: cudftestbinaries
-          path: ./cudftests
 
       - name: Run cuDF Tests
         run: |
-          ls -R cudftests
-          cd cudftests/velox/experimental/cudf/tests/
+          mv _build/release/* ./
+          ls -R .
+          cd velox/experimental/cudf/tests/
           chmod +x velox_cudf*
           export DEPS_PATH=../../../../_deps/
           export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
