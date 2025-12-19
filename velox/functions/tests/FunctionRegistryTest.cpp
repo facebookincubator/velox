@@ -786,18 +786,24 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         {velox::exec::FunctionSignatureBuilder()
              .returnType("bigint")
              .argumentType("bigint")
-             .argumentType("bigint")
-             .variableArity()
+             .variableArity("bigint")
              .build(),
          velox::exec::FunctionSignatureBuilder()
              .returnType("double")
              .argumentType("double")
-             .argumentType("double")
-             .variableArity()
+             .variableArity("double")
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), SMALLINT(), INTEGER()});
+    testCoercions(
+        "foo",
+        {TINYINT(), SMALLINT(), INTEGER()},
+        BIGINT(),
+        {BIGINT(), BIGINT(), BIGINT()});
+
+    testNoCoercions("foo", {BIGINT(), BIGINT(), BIGINT()}, BIGINT());
+
+    testCannotResolve("foo", {TINYINT(), SMALLINT(), VARCHAR()});
   }
 
   // Coercions with generic types are not supported yet.
