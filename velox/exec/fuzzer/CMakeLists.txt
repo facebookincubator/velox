@@ -31,8 +31,7 @@ add_library(
 # ExpressionFuzzerTest. More information can be found here:
 # https://github.com/facebookincubator/velox/issues/15414
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
-  target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
-  target_link_libraries(velox_fuzzer_util FBThrift::thriftcpp2)
+  target_sources(velox_fuzzer_util VeloxQueryRunner.cpp)
 endif()
 
 target_link_libraries(
@@ -230,6 +229,9 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   )
 
   target_compile_options(local_runner_service_thrift PRIVATE -Wno-error=deprecated-declarations)
+
+  # Link velox_fuzzer_util with local_runner_service_thrift for VeloxQueryRunner
+  target_link_libraries(velox_fuzzer_util local_runner_service_thrift FBThrift::thriftcpp2)
 
   # LocalRunnerService Library
   add_library(velox_local_runner_service_lib LocalRunnerService.cpp)

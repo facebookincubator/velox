@@ -18,6 +18,7 @@
 #include <unordered_set>
 
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
+#include "velox/exec/fuzzer/VeloxQueryRunner.h"
 #include "velox/expression/fuzzer/ArgTypesGenerator.h"
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
@@ -45,6 +46,12 @@ DEFINE_string(
     "Presto coordinator URI along with port. If set, we use Presto as the "
     "source of truth. Otherwise, use the Velox simplified expression evaluation. Example: "
     "--presto_url=http://127.0.0.1:8080");
+
+DEFINE_string(
+    local_runner_url,
+    "",
+    "URI for thrift requests to LocalRunnerService. Defaults to localhost on port 9091. "
+    "Example: --local_runner_url=http://127.0.0.1:9091");
 
 DEFINE_uint32(
     req_timeout_ms,
@@ -461,6 +468,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "merge_khll(array(khyperloglog)) -> khyperloglog",
 };
 
+std::unordered_set<std::string> skipFunctionsLocalRunner = {};
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
@@ -480,6 +489,7 @@ int main(int argc, char** argv) {
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
+  auto shouldAdjustTimestampToSessionTimezone = "true";
 
   if (!FLAGS_presto_url.empty()) {
     // Add additional functions to skip since we are now querying Presto
@@ -492,13 +502,23 @@ int main(int argc, char** argv) {
         "expression_fuzzer",
         static_cast<std::chrono::milliseconds>(FLAGS_req_timeout_ms));
     LOG(INFO) << "Using Presto as the reference DB.";
+  } else if (!FLAGS_local_runner_url.empty()) {
+    shouldAdjustTimestampToSessionTimezone = "false";
+    skipFunctions.insert(
+        skipFunctionsLocalRunner.begin(), skipFunctionsLocalRunner.end());
+    referenceQueryRunner = std::make_shared<VeloxQueryRunner>(
+        rootPool.get(),
+        FLAGS_local_runner_url,
+        std::chrono::milliseconds(FLAGS_req_timeout_ms));
+    LOG(INFO) << "Using LocalQueryRunner as the reference engine.";
   }
   FuzzerRunner::runFromGtest(
       initialSeed,
       skipFunctions,
       exprTransformers,
       {{"session_timezone", "America/Los_Angeles"},
-       {"adjust_timestamp_to_session_timezone", "true"}},
+       {"adjust_timestamp_to_session_timezone",
+        shouldAdjustTimestampToSessionTimezone}},
       argTypesGenerators,
       argValuesGenerators,
       referenceQueryRunner,
