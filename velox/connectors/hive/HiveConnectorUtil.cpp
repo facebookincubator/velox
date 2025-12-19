@@ -524,6 +524,20 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   return serDeOptions;
 }
 
+void parseSupportedSerdeParameters(
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const dwio::common::FileFormat fileFormat,
+    dwio::common::SerDeOptions& serDeOptions) {
+  if (fileFormat == dwio::common::FileFormat::AVRO) {
+    for (const auto& key : {"avro.schema.literal", "avro.scan.batch.bytes"}) {
+      auto it = serdeParameters.find(key);
+      if (it != serdeParameters.end()) {
+        serDeOptions.parameters.emplace(it->first, it->second);
+      }
+    }
+  }
+}
+
 void configureReaderOptions(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -605,7 +619,10 @@ void configureReaderOptions(
     readerOptions.setFileFormat(hiveSplit->fileFormat);
   }
 
-  readerOptions.serDeOptions().parameters = hiveSplit->serdeParameters;
+  parseSupportedSerdeParameters(
+      hiveSplit->serdeParameters,
+      hiveSplit->fileFormat,
+      readerOptions.serDeOptions());
 }
 
 void configureRowReaderOptions(
