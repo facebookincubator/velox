@@ -80,6 +80,10 @@ class SignatureBinderBase {
       const std::string& parameterName,
       const VarcharEnumParameter& params);
 
+  std::optional<bool> checkSetTypeVariable(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType);
+
   /// Try to bind the integer parameter from the actualType.
   bool tryBindIntegerParameters(
       const std::vector<exec::TypeSignature>& parameters,
