@@ -54,4 +54,10 @@ FOLLY_ALWAYS_INLINE int32_t epochHour(Timestamp ts) {
   return (seconds >= 0) ? seconds / 3'600 : ((seconds + 1) / 3'600) - 1;
 }
 
+/// Extract nanoseconds from 1970-01-01 00:00:00.000000000.
+/// Stores nanoseconds from 1970-01-01 00:00:00.000000000.
+FOLLY_ALWAYS_INLINE int64_t epochNanos(Timestamp ts) {
+  return ts.getSeconds() * 1'000'000'000L + ts.getNanos();
+}
+
 } // namespace facebook::velox::functions::iceberg
