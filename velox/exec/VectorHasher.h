@@ -252,6 +252,29 @@ class VectorHasher {
   // Returns null if distinctOverflow_ is true.
   std::unique_ptr<common::Filter> getFilter(bool nullAllowed) const;
 
+  bool supportsBloomFilter() const {
+    if (typeProvidesCustomComparison_) {
+      return false;
+    }
+    switch (typeKind_) {
+      // Smaller integers would never overflow 100'000 distinct values.
+      case TypeKind::INTEGER:
+      case TypeKind::BIGINT:
+        return distinctOverflow_;
+      default:
+        return false;
+    }
+  }
+
+  void setBloomFilter(common::FilterPtr filter) {
+    VELOX_DCHECK(supportsBloomFilter());
+    bloomFilter_ = std::move(filter);
+  }
+
+  const common::FilterPtr& getBloomFilter() const {
+    return bloomFilter_;
+  }
+
   void resetStats() {
     uniqueValues_.clear();
     uniqueValuesStorage_.clear();
@@ -607,6 +630,8 @@ class VectorHasher {
   // Memory for unique string values.
   std::vector<std::string> uniqueValuesStorage_;
   uint64_t distinctStringsBytes_ = 0;
+
+  common::FilterPtr bloomFilter_;
 };
 
 template <>

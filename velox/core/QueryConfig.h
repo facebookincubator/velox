@@ -479,6 +479,18 @@ class QueryConfig {
   static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
       "hash_probe_finish_early_on_empty_build";
 
+  /// Whether hash probe can generate any dynamic filter (including Bloom
+  /// filter) and push down to upstream operators.
+  static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
+      "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// The maximum byte size of Bloom filter that can be generated from hash
+  /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
+  /// optimal performance, this should not be too larger than the CPU cache size
+  /// on the host.
+  static constexpr const char* kHashProbeBloomFilterPushdownMaxSize =
+      "hash_probe_bloom_filter_pushdown_max_size";
+
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
   static constexpr const char* kMinTableRowsForParallelJoinBuild =
@@ -1231,6 +1243,14 @@ class QueryConfig {
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
     return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
+  }
+
+  bool hashProbeDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  uint64_t hashProbeBloomFilterPushdownMaxSize() const {
+    return get<uint64_t>(kHashProbeBloomFilterPushdownMaxSize, 0);
   }
 
   uint32_t minTableRowsForParallelJoinBuild() const {

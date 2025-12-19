@@ -115,6 +115,8 @@ struct HashTableStats {
 struct ParallelJoinBuildStats {
   std::vector<CpuWallTiming> partitionTimings;
   std::vector<CpuWallTiming> buildTimings;
+  std::vector<CpuWallTiming> bloomFilterPartitionTimings;
+  std::vector<CpuWallTiming> bloomFilterBuildTimings;
 };
 
 class BaseHashTable {
@@ -155,6 +157,14 @@ class BaseHashTable {
       "hashtable.parallelJoinBuildWallNanos"};
   static inline const std::string kParallelJoinBuildCpuNanos{
       "hashtable.parallelJoinBuildCpuNanos"};
+  static inline const std::string kParallelJoinBloomFilterPartitionWallNanos{
+      "hashtable.parallelJoinBloomFilterPartitionWallNanos"};
+  static inline const std::string kParallelJoinBloomFilterPartitionCpuNanos{
+      "hashtable.parallelJoinBloomFilterPartitionCpuNanos"};
+  static inline const std::string kParallelJoinBloomFilterBuildWallNanos{
+      "hashtable.parallelJoinBloomFilterBuildWallNanos"};
+  static inline const std::string kParallelJoinBloomFilterBuildCpuNanos{
+      "hashtable.parallelJoinBloomFilterBuildCpuNanos"};
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
@@ -497,7 +507,8 @@ class HashTable : public BaseHashTable {
       bool isJoinBuild,
       bool hasProbedFlag,
       uint32_t minTableSizeForParallelJoinBuild,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      uint64_t bloomFilterMaxSize = 0);
 
   ~HashTable() override = default;
 
@@ -522,7 +533,8 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool hasProbedFlag,
       uint32_t minTableSizeForParallelJoinBuild,
-      memory::MemoryPool* pool) {
+      memory::MemoryPool* pool,
+      uint64_t bloomFilterMaxSize = 0) {
     return std::make_unique<HashTable>(
         std::move(hashers),
         std::vector<Accumulator>{},
@@ -531,7 +543,8 @@ class HashTable : public BaseHashTable {
         true, // isJoinBuild
         hasProbedFlag,
         minTableSizeForParallelJoinBuild,
-        pool);
+        pool,
+        bloomFilterMaxSize);
   }
 
   void groupProbe(HashLookup& lookup, int8_t spillInputStartPartitionBit)
@@ -863,7 +876,7 @@ class HashTable : public BaseHashTable {
   // to the end of 'overflows' in 'partitionInfo'.
   void insertForJoin(
       char** groups,
-      uint64_t* hashes,
+      const uint64_t* hashes,
       int32_t numGroups,
       TableInsertPartitionInfo* partitionInfo);
 
@@ -871,7 +884,8 @@ class HashTable : public BaseHashTable {
   // contents in a RowContainer owned by 'this'. 'hashes' are the hash
   // numbers or array indices (if kArray mode) for each
   // group. 'groups' is expected to have no duplicate keys.
-  void insertForGroupBy(char** groups, uint64_t* hashes, int32_t numGroups);
+  void
+  insertForGroupBy(char** groups, const uint64_t* hashes, int32_t numGroups);
 
   // Checks if we can apply parallel table build optimization for hash join.
   // The function returns true if all of the following conditions:
@@ -906,6 +920,20 @@ class HashTable : public BaseHashTable {
   void partitionRows(
       HashTable<ignoreNullKeys>& subtable,
       RowPartitions& rowPartitions);
+
+  // Whether we should build Bloom filters.  If Bloom filter pushdown is
+  // enabled, and the size fits, this returns true if any of the key columns
+  // support it.  The actual build should build a Bloom filter for each key
+  // column that supports it, and skip the ones that do not.
+  bool bloomFilterSupported() const;
+
+  // Populate the Bloom filter for the key column with `columnIndex` and rows
+  // with certain `partition`.  The partitions information is stored in
+  // `rowPartitions`.
+  void buildBloomFilterPartition(
+      column_index_t columnIndex,
+      uint8_t partition,
+      const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions);
 
   // Calculates hashes for 'rows' and returns them in 'hashes'. If
   // 'initNormalizedKeys' is true, the normalized keys are stored below each row
@@ -967,7 +995,7 @@ class HashTable : public BaseHashTable {
   template <bool isNormailizedKeyMode>
   void insertForJoinWithPrefetch(
       char** groups,
-      uint64_t* hashes,
+      const uint64_t* hashes,
       int32_t numGroups,
       TableInsertPartitionInfo* partitionInfo);
 
@@ -1057,6 +1085,8 @@ class HashTable : public BaseHashTable {
 
   // The min table size in row to trigger parallel join table build.
   const uint32_t minTableSizeForParallelJoinBuild_;
+
+  const uint64_t bloomFilterMaxSize_;
 
   int8_t sizeBits_;
   bool isJoinBuild_ = false;
