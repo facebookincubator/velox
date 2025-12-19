@@ -218,8 +218,8 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
                "l_linestatus",
                "l_quantity",
                "l_extendedprice",
-               "l_extendedprice * (1.0 - l_discount) AS l_sum_disc_price",
-               "l_extendedprice * (1.0 - l_discount) * (1.0 + l_tax) AS l_sum_charge",
+               "l_extendedprice * (CAST(1.0 AS DECIMAL(15,2)) - l_discount) AS l_sum_disc_price",
+               "l_extendedprice * (CAST(1.0 AS DECIMAL(15,2)) - l_discount) * (CAST(1.0 AS DECIMAL(15,2)) + l_tax) AS l_sum_charge",
                "l_discount"})
           .partialAggregation(
               {"l_returnflag", "l_linestatus"},
