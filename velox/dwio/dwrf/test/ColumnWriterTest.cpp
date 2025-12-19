@@ -65,10 +65,10 @@ class MockStreamInformation : public StreamInformation {
     return streamIdentifier_.encodingKey().sequence();
   }
 
-  MOCK_CONST_METHOD0(getOffset, uint64_t());
-  MOCK_CONST_METHOD0(getLength, uint64_t());
-  MOCK_CONST_METHOD0(getUseVInts, bool());
-  MOCK_CONST_METHOD0(valid, bool());
+  MOCK_METHOD(uint64_t, getOffset, (), (const, override));
+  MOCK_METHOD(uint64_t, getLength, (), (const, override));
+  MOCK_METHOD(bool, getUseVInts, (), (const, override));
+  MOCK_METHOD(bool, valid, (), (const, override));
 
  private:
   const DwrfStreamIdentifier& streamIdentifier_;
