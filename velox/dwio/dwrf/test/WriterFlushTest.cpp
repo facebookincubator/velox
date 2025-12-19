@@ -173,11 +173,11 @@ class MockMemoryPool : public velox::memory::MemoryPool {
         name, kind, parent, parent->capacity());
   }
 
-  MOCK_CONST_METHOD0(peakBytes, int64_t());
+  MOCK_METHOD(int64_t, peakBytes, (), (const, override));
 
   MOCK_METHOD1(updateSubtreeMemoryUsage, int64_t(int64_t));
 
-  MOCK_CONST_METHOD0(alignment, uint16_t());
+  MOCK_METHOD(uint16_t, alignment, (), (const, override));
 
   uint64_t freeBytes() const override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
