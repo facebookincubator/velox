@@ -81,18 +81,20 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
-      if (auto const shortDecimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type)) {
-        VELOX_CHECK(type->kind() == TypeKind::BIGINT, "Unsupported Decimal Type");
-        using CudfDecimal64Type = cudf::fixed_point_scalar<numeric::decimal64>;
-        return std::make_unique<CudfDecimal64Type>(
-            value, numeric::scale_type{shortDecimalType->scale()}, !isNull, stream, mr);
-      } else if (auto const longDecimalType = std::dynamic_pointer_cast<const LongDecimalType>(type)) {
-        VELOX_CHECK(type->kind() == TypeKind::HUGEINT, "Unsupported Decimal Type");
-        using CudfDecimal128Type = cudf::fixed_point_scalar<numeric::decimal128>;
-        return std::make_unique<CudfDecimal128Type>(
-            value, numeric::scale_type{longDecimalType->scale()}, !isNull, stream, mr);
+      if (type->kind() == TypeKind::BIGINT) {
+        auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
+        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal64>;
+        return std::make_unique<CudfDecimalType>(
+            value, numeric::scale_type{decimalType->scale()}, !isNull, stream, mr);
+      } else if (type->kind() == TypeKind::HUGEINT) {
+        auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
+        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal128>;
+        return std::make_unique<CudfDecimalType>(
+            value, numeric::scale_type{decimalType->scale()}, !isNull, stream, mr);
       }
-      VELOX_UNREACHABLE("Unsupported Decimal Type");
+      VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {
