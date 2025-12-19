@@ -83,8 +83,10 @@ class TypeCoercer {
 
   /// Checks if 'fromType' can be implicitly converted to 'toType'.
   ///
-  /// @return true if conversion is possible.
-  static bool coercible(const TypePtr& fromType, const TypePtr& toType);
+  /// @return Cost of conversion is possible. std::nullopt otherwise.
+  static std::optional<int32_t> coercible(
+      const TypePtr& fromType,
+      const TypePtr& toType);
 };
 
 } // namespace facebook::velox
