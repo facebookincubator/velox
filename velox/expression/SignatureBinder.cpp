@@ -142,8 +142,7 @@ bool SignatureBinder::tryBind(
       if (actualTypes_.size() > formalArgsCnt) {
         auto& type = actualTypes_[formalArgsCnt - 1];
         for (auto i = formalArgsCnt; i < actualTypes_.size(); i++) {
-          if (!type->equivalent(*actualTypes_[i]) &&
-              actualTypes_[i]->kind() != TypeKind::UNKNOWN) {
+          if (!type->equivalent(*actualTypes_[i])) {
             return false;
           }
         }

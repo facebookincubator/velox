@@ -100,6 +100,35 @@ void assertCannotResolve(
   ASSERT_TRUE(returnType == nullptr);
 }
 
+TEST(SignatureBinderTest, unknown) {
+  {
+    // (T, T) -> array(T)
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("array(T)")
+                         .argumentType("T")
+                         .argumentType("T")
+                         .build();
+
+    testSignatureBinder(signature, {INTEGER(), INTEGER()}, ARRAY(INTEGER()));
+    assertCannotBind(signature, {INTEGER(), UNKNOWN()});
+    assertCannotBind(signature, {UNKNOWN(), INTEGER()});
+  }
+
+  {
+    // (T...) -> array(T)
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("array(T)")
+                         .variableArity("T")
+                         .build();
+
+    testSignatureBinder(signature, {INTEGER(), INTEGER()}, ARRAY(INTEGER()));
+    assertCannotBind(signature, {INTEGER(), UNKNOWN()});
+    assertCannotBind(signature, {UNKNOWN(), INTEGER()});
+  }
+}
+
 TEST(SignatureBinderTest, decimals) {
   // Decimal Add/Subtract.
   {

@@ -397,7 +397,7 @@ TEST_F(NullFreeRowViewTest, e2eCompare) {
 
 TEST_F(NullableRowViewTest, materialize) {
   auto result = evaluate(
-      "row_constructor(1, 'hi', array_constructor(1, 2, null))",
+      "row_constructor(1, 'hi', array_constructor(1, 2, null::bigint))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;
