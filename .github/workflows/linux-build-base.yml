@@ -189,7 +189,8 @@ jobs:
 
       - name: Run cuDF Tests
         run: |
-          mv _build/release/* ./
+          mv _build/release/velox/experimental ./velox
+          mv _build/release/_deps ./
           ls -R .
           cd velox/experimental/cudf/tests/
           chmod +x velox_cudf*
