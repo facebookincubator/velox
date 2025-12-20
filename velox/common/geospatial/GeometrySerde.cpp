@@ -241,16 +241,9 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
     auto coordinates = readCoordinates(input, partLengths[i]);
 
     if (multiType) {
-      ClockwiseResult clockwiseFlag =
+      bool clockwiseFlag =
           GeometrySerializer::isClockwise(coordinates, 0, coordinates->size());
-      if (FOLLY_UNLIKELY(clockwiseFlag == ClockwiseResult::ZERO_AREA)) {
-        // When serializing a MultiPolygon, we should throw a user error if
-        // there is a zero-area ring. This should only get hit due to a bug in
-        // our serde logic.
-        VELOX_USER_FAIL(
-            "Unexpected zero-area ring in MultiPolygon deserialization.");
-      }
-      if (shell && clockwiseFlag == ClockwiseResult::CW) {
+      if (shell && clockwiseFlag) {
         // next polygon has started
         polygons.push_back(
             getGeometryFactory()->createPolygon(
