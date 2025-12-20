@@ -28,8 +28,6 @@
 
 namespace facebook::velox::common::geospatial {
 
-enum ClockwiseResult { CW, CCW, ZERO_AREA };
-
 /**
  * VarbinaryWriter is a utility for serializing raw binary data to a
  * generic writer interface. It supports writing either raw byte arrays
@@ -111,10 +109,8 @@ class GeometrySerializer {
   }
 
   /// Determines if a ring of coordinates (from `start` to `end`) is oriented
-  /// clockwise. A return value of CW indicates clockwise orientation, CCW
-  /// indicates counterclockwise, and ZERO_AREA represents a polygon which has
-  /// no orientation due to having an area of 0.
-  FOLLY_ALWAYS_INLINE static ClockwiseResult isClockwise(
+  /// clockwise.
+  FOLLY_ALWAYS_INLINE static bool isClockwise(
       const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
       size_t start,
       size_t end) {
@@ -124,10 +120,7 @@ class GeometrySerializer {
       const auto& p2 = coordinates->getAt(i + 1);
       sum += (p2.x - p1.x) * (p2.y + p1.y);
     }
-    if (FOLLY_UNLIKELY(std::abs(sum) < 1e-15)) {
-      return ClockwiseResult::ZERO_AREA;
-    }
-    return sum > 0.0 ? ClockwiseResult::CW : ClockwiseResult::CCW;
+    return sum > 0.0;
   }
 
   /// Reverses the order of coordinates in the sequence between `start` and
@@ -146,47 +139,37 @@ class GeometrySerializer {
   /// Ensures that a polygon ring has the canonical orientation:
   /// - Exterior rings (shells) must be clockwise.
   /// - Interior rings (holes) must be counter-clockwise.
-  /// A return value of true indicates a zero-area ring was encountered
-  FOLLY_ALWAYS_INLINE static bool canonicalizePolygonCoordinates(
+  FOLLY_ALWAYS_INLINE static void canonicalizePolygonCoordinates(
       const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
       size_t start,
       size_t end,
       bool isShell) {
-    ClockwiseResult isClockwiseFlag = isClockwise(coordinates, start, end);
-    if (isClockwiseFlag == ClockwiseResult::ZERO_AREA) {
-      return true;
-    }
+    bool isClockwiseFlag = isClockwise(coordinates, start, end);
 
-    if ((isShell && isClockwiseFlag == ClockwiseResult::CCW) ||
-        (!isShell && isClockwiseFlag == ClockwiseResult::CW)) {
+    if ((isShell && !isClockwiseFlag) || (!isShell && isClockwiseFlag)) {
       reverse(coordinates, start, end);
     }
-    return false;
   }
 
   /// Applies `canonicalizePolygonCoordinates` to all rings in a polygon.
-  /// A return value of true indicates at least one zero-area ring was
-  /// encountered.
-  FOLLY_ALWAYS_INLINE static bool canonicalizePolygonCoordinates(
+  FOLLY_ALWAYS_INLINE static void canonicalizePolygonCoordinates(
       const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
       const std::vector<size_t>& partIndexes,
       const std::vector<bool>& shellPart) {
-    bool zeroAreaRingEncountered = false;
     for (size_t part = 0; part < partIndexes.size() - 1; part++) {
-      zeroAreaRingEncountered |= canonicalizePolygonCoordinates(
+      canonicalizePolygonCoordinates(
           coordinates,
           partIndexes[part],
           partIndexes[part + 1],
           shellPart[part]);
     }
     if (!partIndexes.empty()) {
-      zeroAreaRingEncountered |= canonicalizePolygonCoordinates(
+      canonicalizePolygonCoordinates(
           coordinates,
           partIndexes.back(),
           coordinates->size(),
           shellPart.back());
     }
-    return zeroAreaRingEncountered;
   }
 
  private:
@@ -383,12 +366,7 @@ class GeometrySerializer {
     }
 
     auto coordinates = geometry.getCoordinates();
-    bool zeroAreaRingEncountered =
-        canonicalizePolygonCoordinates(coordinates, partIndexes, shellPart);
-    if (FOLLY_UNLIKELY(zeroAreaRingEncountered && multiType)) {
-      VELOX_USER_FAIL(
-          "Input MultiPolygon contains one or more zero-area rings.");
-    }
+    canonicalizePolygonCoordinates(coordinates, partIndexes, shellPart);
     writeCoordinates(coordinates, writer);
   }
 
