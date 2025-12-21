@@ -32,8 +32,6 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_link_libraries(velox_hive_iceberg_splitreader velox_connector Folly::folly)
-
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

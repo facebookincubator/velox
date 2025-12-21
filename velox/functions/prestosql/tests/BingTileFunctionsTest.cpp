@@ -459,8 +459,8 @@ TEST_F(BingTileFunctionsTest, bingTileChildrenZoom) {
   VELOX_ASSERT_USER_THROW(
       testBingTileChildren(0, 0, 2, 1), "Child zoom 1 must be >= tile zoom 2");
   VELOX_ASSERT_USER_THROW(
-      testBingTileChildren(0, 0, 1, 8),
-      "Difference between parent zoom (1) and child zoom (8) must be <= 6");
+      testBingTileChildren(0, 0, 1, 9),
+      "Difference between parent zoom (1) and child zoom (9) must be <= 7");
 
   {
     RowVectorPtr input = makeSingleXYZoomZoomRow(0, 0, 1, 7);

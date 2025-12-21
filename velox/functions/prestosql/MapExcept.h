@@ -143,8 +143,11 @@ struct MapExceptFunctionEqualComparator {
 
     auto result = lhs.compare(rhs, kEqualValueAtFlags);
 
-    VELOX_USER_CHECK(
-        result.has_value(), "Comparison on null elements is not supported");
+    // If comparison returns indeterminate (null), treat as not equal.
+    // This is consistent with SQL semantics where NULL != NULL.
+    if (!result.has_value()) {
+      return false;
+    }
 
     return result.value() == 0;
   }

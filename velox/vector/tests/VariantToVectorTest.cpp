@@ -85,9 +85,8 @@ TEST_F(VariantToVectorTest, decimal) {
       Variant(arrayData[0]), Variant(arrayData[1]), Variant(arrayData[2])};
   Variant arrayInput = Variant::array(arrayInputData);
 
-  VELOX_ASSERT_THROW(
-      BaseVector::createConstant(ARRAY(type), arrayInput, 1, pool()),
-      "Type not supported: DECIMAL(20, 3)");
+  auto expectedVector = makeArrayVector<int128_t>({arrayData}, type);
+  testValue(ARRAY(type), arrayInput, expectedVector);
 }
 
 TEST_F(VariantToVectorTest, timestamp) {

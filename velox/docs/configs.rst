@@ -43,6 +43,16 @@ Generic Configuration
      - integer
      - 80
      - Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.
+   * - abandon_dedup_hashmap_min_rows
+     - integer
+     - 100,000
+     - Number of input rows to receive before starting to check whether to abandon building a HashTable without
+       duplicates in HashBuild for left semi/anti join.
+   * - abandon_dedup_hashmap_min_pct
+     - integer
+     - 0
+     - Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of
+       distinct keys in the HashTable exceeds this threshold. Zero means 'disable this optimization'.
    * - session_timezone
      - string
      -
@@ -132,6 +142,17 @@ Generic Configuration
      - integer
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
+   * - hash_probe_dynamic_filter_pushdown_enabled
+     - bool
+     - true
+     - Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.
+   * - hash_probe_bloom_filter_pushdown_max_size
+     - integer
+     - 0
+     - The maximum byte size of Bloom filter that can be generated from hash
+       probe.  When set to 0, no Bloom filter will be generated.  To achieve
+       optimal performance, this should not be too larger than the CPU cache
+       size on the host.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -232,6 +253,13 @@ Expression Evaluation Configuration
      - false
      - Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
        when processing small batches, e.g. < 10K rows.
+   * - expression.track_cpu_usage_for_functions
+     - string
+     - ""
+     - Comma-separated list of function names to selectively track CPU usage for. Only applicable when
+       ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
+       to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
+       be monitored.
    * - legacy_cast
      - bool
      - false
@@ -445,6 +473,12 @@ Spilling
      - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
        efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
        none means no compression.
+   * - spill_num_max_merge_files
+     - integer
+     - 0
+     - The max number of files to merge at a time when merging sorted files into a single ordered stream. 0 means unlimited.
+       This is used to reduce memory pressure by capping the number of open files when merging spilled sorted files to
+       avoid using too much memory and causing OOM. Note that this is only applicable for ordered spill.
    * - spill_prefixsort_enabled
      - bool
      - false

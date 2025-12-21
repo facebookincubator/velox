@@ -202,22 +202,73 @@ TEST_F(MapExceptTest, arrayKey) {
   assertEqualVectors(expected, result);
 }
 
-TEST_F(MapExceptTest, compareNullElementsThrowsException) {
+// Verify that complex keys with null descendants are handled gracefully.
+// When comparing two keys that both contain nulls, the comparison returns
+// "indeterminate" which we treat as not equal (consistent with SQL semantics
+// where NULL != NULL).
+TEST_F(MapExceptTest, complexKeyWithNullElements) {
+  // Map with key [1, 2] and exclusion keys [[1, null], [1, null]].
+  // The key [1, 2] does not match [1, null], so it should be kept in the
+  // result.
   auto data = makeRowVector({
       makeMapVector(
           {0},
           makeArrayVectorFromJson<int32_t>({
               "[1, 2]",
           }),
-          makeFlatVector<int32_t>(1)),
+          makeFlatVector<int32_t>({10})),
       makeNestedArrayVectorFromJson<int32_t>({
           "[[1, null], [1, null]]",
       }),
   });
 
-  VELOX_ASSERT_THROW(
-      evaluate("map_except(c0, c1)", data),
-      "Comparison on null elements is not supported");
+  auto result = evaluate("map_except(c0, c1)", data);
+
+  // The key [1, 2] doesn't match [1, null] (null != 2), so it should remain.
+  auto expected = makeMapVector(
+      {0},
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+      }),
+      makeFlatVector<int32_t>({10}));
+
+  assertEqualVectors(expected, result);
+
+  // Test case from the bug: the hash set compares two null-containing keys
+  // during collision resolution. Previously this threw an exception due to
+  // inconsistent behavior depending on hash bucket count from previous rows.
+  // Now it should succeed by treating null comparisons as not equal.
+  data = makeRowVector({
+      makeMapVector(
+          {0, 2},
+          makeArrayVectorFromJson<int32_t>({
+              "[1, 2]",
+              "[3, 4]",
+              "[5, 6]",
+              "[7, 8]",
+          }),
+          makeFlatVector<int32_t>({10, 20, 30, 40})),
+      makeNestedArrayVectorFromJson<int32_t>({
+          "[[1, null], [1, null]]",
+          "[[null, 2], [null, 3]]",
+      }),
+  });
+
+  result = evaluate("map_except(c0, c1)", data);
+
+  // Row 0: [1, 2] and [3, 4] don't match [1, null] (different keys).
+  // Row 1: [5, 6] and [7, 8] don't match [null, 2] or [null, 3].
+  expected = makeMapVector(
+      {0, 2},
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[3, 4]",
+          "[5, 6]",
+          "[7, 8]",
+      }),
+      makeFlatVector<int32_t>({10, 20, 30, 40}));
+
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(MapExceptTest, floatNaNs) {

@@ -15,8 +15,11 @@
  */
 
 #include "velox/exec/SpatialJoinBuild.h"
-#include "velox/common/base/IOUtils.h"
+#include <limits>
 #include "velox/common/geospatial/GeometryConstants.h"
+#ifdef VELOX_ENABLE_GEO
+#include "velox/common/geospatial/GeometrySerde.h"
+#endif
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -127,51 +130,29 @@ std::vector<RowVectorPtr> SpatialJoinBuild::mergeDataVectors() const {
 Envelope SpatialJoinBuild::readEnvelope(
     const StringView& geometryBytes,
     double radius) {
-  VELOX_CHECK_GE(
-      geometryBytes.size(),
-      sizeof(GeometrySerializationType) + 2 * sizeof(double));
-  double minX;
-  double minY;
-  double maxX;
-  double maxY;
-
-  velox::common::InputByteStream inputStream(geometryBytes.data());
-  // Geometry Serde makes it easy to get the envelope.
-  // The first byte is the GeometrySerializationType.
-  // All coordinates are doubles (8 bytes)
-  // Depending on the type, the next bytes are:
-  // 1. POINT: x, y
-  // 2. ENVELOPE: minX, minY, maxX, maxY
-  // 3. Else: EsriShapeType (4 bytes), minX, minY, maxX, maxY, GeometryBytes
-  auto geometryType = inputStream.read<GeometrySerializationType>();
-  if (geometryType == GeometrySerializationType::POINT) {
-    double x = inputStream.read<double>();
-    double y = inputStream.read<double>();
-    minX = x - radius;
-    minY = y - radius;
-    maxX = x + radius;
-    maxY = y + radius;
+#ifdef VELOX_ENABLE_GEO
+  radius = std::max(radius, 0.0);
+  auto geosEnvelope =
+      common::geospatial::GeometryDeserializer::deserializeEnvelope(
+          geometryBytes);
+  if (geosEnvelope->isNull()) {
+    return Envelope::empty();
   } else {
-    if (geometryType != GeometrySerializationType::ENVELOPE) {
-      // Unused esriType
-      inputStream.read<velox::common::geospatial::EsriShapeType>();
-    }
-    minX = inputStream.read<double>() - radius;
-    minY = inputStream.read<double>() - radius;
-    maxX = inputStream.read<double>() + radius;
-    maxY = inputStream.read<double>() + radius;
+    return Envelope::from(
+        geosEnvelope->getMinX() - radius,
+        geosEnvelope->getMinY() - radius,
+        geosEnvelope->getMaxX() + radius,
+        geosEnvelope->getMaxY() + radius);
   }
-
-  Envelope envelope;
-
-  // This also catches NaNs
-  if (minX <= maxX && minY <= maxY) {
-    envelope = Envelope::from(minX, minY, maxX, maxY);
-  } else {
-    envelope = Envelope::empty();
-  }
-
-  return envelope;
+#else
+  // When VELOX_ENABLE_GEO is not set, return an envelope of infinite area
+  // to ensure all geometries are considered for spatial join
+  return Envelope::from(
+      -std::numeric_limits<double>::infinity(),
+      -std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::infinity());
+#endif
 }
 
 SpatialIndex SpatialJoinBuild::buildSpatialIndex(

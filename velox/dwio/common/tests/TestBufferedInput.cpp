@@ -16,6 +16,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/dwio/common/BufferedInput.h"
 
 using namespace facebook::velox::dwio::common;
@@ -144,7 +146,6 @@ class TestBufferedInput : public testing::Test {
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
-} // namespace
 
 TEST_F(TestBufferedInput, ZeroLengthStream) {
   auto readFile =
@@ -390,4 +391,46 @@ TEST_F(TestBufferedInput, VReadSortingWithLabels) {
     ASSERT_TRUE(next.has_value());
     EXPECT_EQ(next.value(), r.second);
   }
+}
+
+class CustomBufferedInputBuilder
+    : public facebook::velox::connector::hive::BufferedInputBuilder {
+ public:
+  std::unique_ptr<facebook::velox::dwio::common::BufferedInput> create(
+      const facebook::velox::FileHandle& fileHandle,
+      const facebook::velox::dwio::common::ReaderOptions& readerOpts,
+      const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<facebook::velox::io::IoStatistics> ioStats,
+      std::shared_ptr<facebook::velox::filesystems::File::IoStats> fsStats,
+      folly::Executor* executor,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      override {
+    VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
+  }
+};
+
+class CustomBufferedInputTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance(MemoryManager::Options{});
+    facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+        std::make_shared<CustomBufferedInputBuilder>());
+  }
+
+  const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+};
+
+} // namespace
+
+TEST_F(CustomBufferedInputTest, basic) {
+  facebook::velox::FileHandle fileHandle;
+  facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get());
+  auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
+  auto fsStats =
+      std::make_shared<facebook::velox::filesystems::File::IoStats>();
+
+  VELOX_ASSERT_THROW(
+      facebook::velox::connector::hive::BufferedInputBuilder::getInstance()
+          ->create(fileHandle, readerOpts, nullptr, ioStats, fsStats, nullptr),
+      "Not implemented in CustomBufferedInputBuilder");
 }

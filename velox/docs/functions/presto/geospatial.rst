@@ -220,6 +220,17 @@ Spatial Operations
     at the expense of higher memory utilization. Null elements in the input
     array are ignored. Empty array input returns null.
 
+.. function:: geometry_union_agg(geometry: Geometry) -> union: Geometry
+
+    Returns a geometry that represents the point set union of the aggregated
+    input geometries. Null geometries are ignored. Empty input returns null.
+
+.. function:: convex_hull_agg(geometry: Geometry) -> union: Geometry
+
+    Returns a geometry that represents the convex hull of the points in the
+    aggregated input geometries.  Null geometries are ignored. Empty input
+    returns null.
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -304,6 +315,10 @@ Accessors
     For Point and LineString types, returns 0.0. For GeometryCollection types,
     returns the sum of the areas of the individual geometries. Empty geometries
     return 0.
+
+.. function:: ST_Area(sphericalgeography: SphericalGeography) -> area: double
+
+    Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.
 
 .. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
 

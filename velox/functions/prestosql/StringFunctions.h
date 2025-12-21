@@ -33,7 +33,7 @@ struct ChrFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const int64_t& codePoint) {
-    stringImpl::codePointToString(result, codePoint);
+    result = stringImpl::codePointToString(codePoint);
   }
 };
 

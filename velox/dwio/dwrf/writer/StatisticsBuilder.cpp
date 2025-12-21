@@ -16,7 +16,11 @@
 
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
+#include "velox/dwio/common/Arena.h"
+
 namespace facebook::velox::dwrf {
+
+using dwio::common::ArenaCreate;
 
 namespace {
 
@@ -118,9 +122,7 @@ void StatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
 
 std::unique_ptr<dwio::common::ColumnStatistics> StatisticsBuilder::build()
     const {
-  auto columnStatistics =
-      google::protobuf::Arena::CreateMessage<proto::ColumnStatistics>(
-          arena_.get());
+  auto columnStatistics = ArenaCreate<proto::ColumnStatistics>(arena_.get());
   auto stats = ColumnStatisticsWriteWrapper(columnStatistics);
   toProto(stats);
 

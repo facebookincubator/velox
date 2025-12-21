@@ -105,6 +105,11 @@ class StreamingAggregation : public Operator {
 
   const core::AggregationNode::Step step_;
 
+  // When true, indicates that no sort group spans across input batches. Each
+  // input batch contains complete data for its groups. This allows the
+  // streaming aggregation operator to produce all group results for each input.
+  const bool noGroupsSpanBatches_;
+
   std::vector<column_index_t> groupingKeys_;
   std::vector<AggregateInfo> aggregates_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;

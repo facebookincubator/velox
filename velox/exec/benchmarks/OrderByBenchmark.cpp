@@ -56,7 +56,7 @@ class OrderByBenchmark {
             const auto start = getCurrentTimeMicro();
             for (auto i = 0; i < iterations; ++i) {
               std::shared_ptr<Task> task;
-              test::AssertQueryBuilder(plan).runWithoutResults(task);
+              test::AssertQueryBuilder(plan).countResults(task);
               auto taskStats = exec::toPlanStats(task->taskStats());
               auto& stats = taskStats.at(orderByNodeId);
               inputNs += stats.addInputTiming.wallNanos;

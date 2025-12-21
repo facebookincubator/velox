@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cmath>
+#include <optional>
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Macros.h"
 
@@ -41,23 +42,32 @@ struct ExtremeValueFunction {
       out_type<T>& result,
       const arg_type<T>& firstElement,
       const arg_type<Variadic<T>>& remainingElement) {
-    auto currentValue = extractValue(firstElement);
+    // Track the winner: nullopt means firstElement, a value means index in
+    // remainingElement
+    std::optional<vector_size_t> winnerIdx;
 
-    for (auto element : remainingElement) {
-      auto candidateValue = extractValue(element.value());
+    for (size_t i = 0; i < remainingElement.size(); ++i) {
+      const auto& cur = remainingElement[i].value();
+      const auto& best = winnerIdx.has_value()
+          ? remainingElement[*winnerIdx].value()
+          : firstElement;
 
       if constexpr (isLeast) {
-        if (smallerThan(candidateValue, currentValue)) {
-          currentValue = candidateValue;
+        if (smallerThan(cur, best)) {
+          winnerIdx = i;
         }
       } else {
-        if (greaterThan(candidateValue, currentValue)) {
-          currentValue = candidateValue;
+        if (greaterThan(cur, best)) {
+          winnerIdx = i;
         }
       }
     }
 
-    result = currentValue;
+    if (!winnerIdx.has_value()) {
+      result = extractValue(firstElement);
+    } else {
+      result = extractValue(remainingElement[*winnerIdx].value());
+    }
   }
 
  private:

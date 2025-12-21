@@ -22,6 +22,7 @@
 #include "velox/functions/prestosql/json/JsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/type/Variant.h"
 
@@ -420,6 +421,13 @@ TEST_F(ConstrainedGeneratorsTest, jsonPath) {
 TEST_F(ConstrainedGeneratorsTest, tdigest) {
   std::unique_ptr<TDigestInputGenerator> generator =
       std::make_unique<TDigestInputGenerator>(0, TDIGEST(DOUBLE()), 0.4);
+  auto value = generator->generate();
+  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+}
+
+TEST_F(ConstrainedGeneratorsTest, setdigest) {
+  std::unique_ptr<SetDigestInputGenerator> generator =
+      std::make_unique<SetDigestInputGenerator>(0, SETDIGEST(), 0.4);
   auto value = generator->generate();
   EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
 }

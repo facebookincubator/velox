@@ -20,6 +20,7 @@ add_subdirectory(iceberg)
 velox_add_library(
   velox_hive_connector
   OBJECT
+  BufferedInputBuilder.cpp
   FileHandle.cpp
   HiveConfig.cpp
   HiveConnector.cpp

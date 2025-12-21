@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <array>
-
 #include "velox/type/Type.h"
 
 namespace facebook::velox::fuzzer {
@@ -30,17 +28,6 @@ namespace facebook::velox::fuzzer {
 /// coverage of DST-related edge cases.
 class TimeWithTimezoneInputGenerator : public AbstractInputGenerator {
  public:
-  // Frequently used timezone offsets in minutes (US timezones including DST)
-  static constexpr std::array<int16_t, 7> kFrequentlyUsedOffsets = {
-      -240, // EDT (Eastern Daylight Time)
-      -300, // EST (Eastern Standard Time) / CDT (Central Daylight Time)
-      -360, // CST (Central Standard Time) / MDT (Mountain Daylight Time)
-      -420, // MST (Mountain Standard Time) / PDT (Pacific Daylight Time)
-      -480, // PST (Pacific Standard Time) / AKDT (Alaska Daylight Time)
-      -540, // AKST (Alaska Standard Time) / HDT (Hawaii-Aleutian Daylight Time)
-      -600, // HST (Hawaii-Aleutian Standard Time)
-  };
-
   TimeWithTimezoneInputGenerator(size_t seed, double nullRatio);
 
   Variant generate() override;

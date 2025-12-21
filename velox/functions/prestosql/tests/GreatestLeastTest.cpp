@@ -19,6 +19,8 @@
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/type/Time.h"
 
 using namespace facebook::velox;
 
@@ -286,6 +288,104 @@ TEST_F(GreatestLeastTest, leastDate) {
       DATE());
 }
 
+TEST_F(GreatestLeastTest, greatestLeastTime) {
+  using namespace facebook::velox::util;
+
+  // Helper to parse TIME from string
+  const auto parseTime = [](const std::string& timeStr) -> int64_t {
+    auto result = fromTimeString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // Test greatest
+  runTest<int64_t>(
+      "greatest(c0, c1, c2)",
+      {
+          {parseTime("10:00:00"),
+           parseTime("00:00:00"),
+           parseTime("12:00:00.001")}, // c0
+          {parseTime("12:30:00"),
+           parseTime("12:00:00"),
+           parseTime("12:00:00.500")}, // c1
+          {parseTime("15:30:45.100"),
+           parseTime("23:59:59.999"),
+           parseTime("12:00:00.999")}, // c2
+      },
+      {parseTime("15:30:45.100"),
+       parseTime("23:59:59.999"),
+       parseTime("12:00:00.999")},
+      std::nullopt,
+      TIME(),
+      TIME());
+
+  // Test least
+  runTest<int64_t>(
+      "least(c0, c1, c2)",
+      {
+          {parseTime("10:00:00"),
+           parseTime("00:00:00"),
+           parseTime("12:00:00.001")}, // c0
+          {parseTime("12:30:00"),
+           parseTime("12:00:00"),
+           parseTime("12:00:00.500")}, // c1
+          {parseTime("15:30:45.100"),
+           parseTime("23:59:59.999"),
+           parseTime("12:00:00.999")}, // c2
+      },
+      {parseTime("10:00:00"), parseTime("00:00:00"), parseTime("12:00:00.001")},
+      std::nullopt,
+      TIME(),
+      TIME());
+}
+
+TEST_F(GreatestLeastTest, greatestLeastTimeWithTimezone) {
+  using namespace facebook::velox::util;
+
+  // Helper to parse TIME WITH TIME ZONE from string
+  const auto parseTimeWithTz = [](const std::string& timeStr) -> int64_t {
+    auto result = fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // Test greatest
+  runTest<int64_t>(
+      "greatest(c0, c1, c2)",
+      {
+          {parseTimeWithTz("10:00:00+00:00"),
+           parseTimeWithTz("20:00:00-08:00")}, // c0
+          {parseTimeWithTz("10:00:00-08:00"),
+           parseTimeWithTz("23:59:59.999+00:00")}, // c1
+          {parseTimeWithTz("10:00:00+08:00"),
+           parseTimeWithTz("00:00:00+08:00")}, // c2
+      },
+      {parseTimeWithTz("10:00:00-08:00"), parseTimeWithTz("20:00:00-08:00")},
+      std::nullopt,
+      TIME_WITH_TIME_ZONE(),
+      TIME_WITH_TIME_ZONE());
+
+  // Test least
+  runTest<int64_t>(
+      "least(c0, c1, c2)",
+      {
+          {parseTimeWithTz("10:00:00+00:00"),
+           parseTimeWithTz("00:00:00-08:00")}, // c0
+          {parseTimeWithTz("10:00:00-08:00"),
+           parseTimeWithTz("23:59:59.999+00:00")}, // c1
+          {parseTimeWithTz("10:00:00+08:00"),
+           parseTimeWithTz("00:00:00+08:00")}, // c2
+      },
+      {parseTimeWithTz("10:00:00+08:00"), parseTimeWithTz("00:00:00+08:00")},
+      std::nullopt,
+      TIME_WITH_TIME_ZONE(),
+      TIME_WITH_TIME_ZONE());
+}
+
 TEST_F(GreatestLeastTest, greatestLeastIpAddress) {
   auto greatest = [&](const std::optional<std::string>& a,
                       const std::optional<std::string>& b,
@@ -324,6 +424,14 @@ TEST_F(GreatestLeastTest, greatestLeastIpAddress) {
       "255.255.255.255",
       "2001:0db8:0000:0000:0000:ff00:0042:832");
   EXPECT_FALSE(leastValueWithNulls.has_value());
+
+  // Case where raw comparison of values will give
+  // different result than comparison of IPAddress values byte by byte.
+  auto greatValue = greatest("ffff::1", "1::1", "1::2");
+  EXPECT_EQ("ffff::1", greatValue.value());
+
+  auto lessValue = least("ffff::1", "1::1", "ffff::2");
+  EXPECT_EQ("1::1", lessValue.value());
 }
 
 TEST_F(GreatestLeastTest, stringBuffersMoved) {

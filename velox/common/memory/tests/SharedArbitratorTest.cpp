@@ -760,7 +760,7 @@ DEBUG_ONLY_TEST_P(
     folly::EventCount taskPauseWait;
     auto taskPauseWaitKey = taskPauseWait.prepareWait();
 
-    const auto fakeAllocationSize = kMemoryCapacity - (32L << 20);
+    const auto fakeAllocationSize = kMemoryCapacity - (2L << 20);
 
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {

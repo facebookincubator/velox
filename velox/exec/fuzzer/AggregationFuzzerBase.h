@@ -121,6 +121,7 @@ class AggregationFuzzerBase {
     opts.stringVariableLength = true;
     opts.stringLength = 4'000;
     opts.nullRatio = FLAGS_null_ratio;
+    opts.useRandomNullPattern = true;
     opts.timestampPrecision = timestampPrecision;
     return opts;
   }

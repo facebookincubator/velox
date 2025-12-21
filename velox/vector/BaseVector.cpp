@@ -807,16 +807,6 @@ struct VariantToVector {
   }
 };
 
-template <>
-struct VariantToVector<TypeKind::HUGEINT> {
-  static VectorPtr makeVector(
-      TypePtr type,
-      const std::vector<Variant>& /*data*/,
-      memory::MemoryPool* /*pool*/) {
-    VELOX_NYI("Type not supported: {}", type->toString());
-  }
-};
-
 template <TypeKind KIND>
 struct VariantToVector<
     KIND,

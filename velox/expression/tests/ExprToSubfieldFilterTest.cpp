@@ -354,6 +354,164 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterFloat) {
   }
 }
 
+// Test NULL comparison handling - comparisons with NULL should return
+// AlwaysFalse as per SQL three-valued logic
+TEST_F(ExprToSubfieldFilterTest, eqNull) {
+  auto call = parseCallExpr("a = cast(null as bigint)", ROW("a", BIGINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, eqNullVarchar) {
+  auto call = parseCallExpr("a = cast(null as varchar)", ROW("a", VARCHAR()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, eqNullTimestamp) {
+  auto call =
+      parseCallExpr("a = cast(null as timestamp)", ROW("a", TIMESTAMP()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, neqNull) {
+  auto call = parseCallExpr("a <> cast(null as bigint)", ROW("a", BIGINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, ltNull) {
+  auto call = parseCallExpr("a < cast(null as bigint)", ROW("a", BIGINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, ltNullDouble) {
+  auto call = parseCallExpr("a < cast(null as double)", ROW("a", DOUBLE()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, ltNullVarchar) {
+  auto call = parseCallExpr("a < cast(null as varchar)", ROW("a", VARCHAR()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, lteNull) {
+  auto call = parseCallExpr("a <= cast(null as bigint)", ROW("a", BIGINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, lteNullReal) {
+  auto call = parseCallExpr("a <= cast(null as real)", ROW("a", REAL()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, gtNull) {
+  auto call = parseCallExpr("a > cast(null as bigint)", ROW("a", BIGINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, gtNullInteger) {
+  auto call = parseCallExpr("a > cast(null as integer)", ROW("a", INTEGER()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, gteNull) {
+  auto call = parseCallExpr("a >= cast(null as bigint)", ROW("a", BIGINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, gteNullSmallint) {
+  auto call =
+      parseCallExpr("a >= cast(null as smallint)", ROW("a", SMALLINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, gteNullTinyint) {
+  auto call = parseCallExpr("a >= cast(null as tinyint)", ROW("a", TINYINT()));
+  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+  ASSERT_TRUE(filter);
+  validateSubfield(subfield, {"a"});
+
+  auto expected = std::make_unique<common::AlwaysFalse>();
+  VELOX_ASSERT_FILTER(expected, filter);
+}
+
 } // namespace
 } // namespace facebook::velox::exec
 

@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/SortBuffer.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -89,6 +90,7 @@ class SortBufferTest : public OperatorTestBase,
         0,
         0,
         "none",
+        0,
         spillPrefixSortConfig);
   }
 
@@ -118,7 +120,7 @@ class SortBufferTest : public OperatorTestBase,
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
       memory::memoryManager()->addLeafPool("SortBufferTest");
 
@@ -400,6 +402,7 @@ TEST_P(SortBufferTest, batchOutput) {
         0,
         0,
         "none",
+        0,
         prefixSortConfig_);
     folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
@@ -493,6 +496,7 @@ TEST_P(SortBufferTest, spill) {
         0,
         0,
         "none",
+        0,
         prefixSortConfig_);
     folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
@@ -612,6 +616,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
     ASSERT_GE(
         memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
   }
+  ASSERT_EQ(pool_->usedBytes(), 0);
 }
 
 DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {

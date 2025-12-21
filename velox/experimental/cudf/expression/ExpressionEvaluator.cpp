@@ -18,9 +18,10 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -35,6 +36,7 @@
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
 #include <cudf/strings/contains.hpp>
+#include <cudf/strings/find.hpp>
 #include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/table/table.hpp>
@@ -47,7 +49,6 @@ namespace {
 struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
-  CudfExpressionEvaluatorCanEvaluateCompiled canEvaluateCompiled;
   CudfExpressionEvaluatorCreate create;
 };
 
@@ -70,9 +71,6 @@ static void ensureBuiltinExpressionEvaluatorsRegistered() {
   registerCudfExpressionEvaluator(
       "function",
       kFunctionPriority,
-      [](const core::TypedExprPtr& typed) {
-        return FunctionExpression::canEvaluate(typed);
-      },
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return FunctionExpression::canEvaluate(std::move(expr));
       },
@@ -90,7 +88,6 @@ bool registerCudfExpressionEvaluator(
     const std::string& name,
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
-    CudfExpressionEvaluatorCanEvaluateCompiled canEvaluateCompiled,
     CudfExpressionEvaluatorCreate create,
     bool overwrite) {
   auto& registry = getCudfExpressionEvaluatorRegistry();
@@ -98,18 +95,51 @@ bool registerCudfExpressionEvaluator(
     return false;
   }
   registry[name] = CudfExpressionEvaluatorEntry{
-      priority,
-      std::move(canEvaluate),
-      std::move(canEvaluateCompiled),
-      std::move(create)};
+      priority, std::move(canEvaluate), std::move(create)};
   return true;
 }
 
-std::unordered_map<std::string, CudfFunctionFactory>&
-getCudfFunctionRegistry() {
-  static std::unordered_map<std::string, CudfFunctionFactory> registry;
+std::unordered_map<std::string, CudfFunctionSpec>& getCudfFunctionRegistry() {
+  static std::unordered_map<std::string, CudfFunctionSpec> registry;
   return registry;
 }
+
+namespace {
+
+static bool matchCallAgainstSignatures(
+    const velox::exec::Expr& call,
+    const std::vector<exec::FunctionSignaturePtr>& sigs) {
+  const auto n = call.inputs().size();
+  std::vector<TypePtr> argTypes;
+  argTypes.reserve(n);
+  for (const auto& in : call.inputs()) {
+    argTypes.push_back(in->type());
+  }
+  for (const auto& sig : sigs) {
+    exec::SignatureBinder binder(*sig, argTypes);
+    if (!binder.tryBind()) {
+      continue;
+    }
+    // binder does not confirm whether positional arguments are
+    // constants(scalars) as expected. we have to check manually
+    const auto& constArgs = sig->constantArguments();
+    const size_t fixed = std::min(constArgs.size(), n);
+    bool ok = true;
+    for (size_t i = 0; i < fixed; ++i) {
+      if (constArgs[i] && call.inputs()[i]->name() != "literal") {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+} // namespace
 
 class SplitFunction : public CudfFunction {
  public:
@@ -337,8 +367,8 @@ class SwitchFunction : public CudfFunction {
       auto constValue = constExpr->value();
       left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           createCudfScalar, constValue->typeKind(), constValue);
-    } else if (
-        auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+    }
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
             expr->inputs()[2])) {
       auto constValue = constExpr->value();
       right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -470,6 +500,7 @@ class CoalesceFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    std::cout << "CoalesceFunction::eval" << std::endl;
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
     // Starting from first column, we keep calling replace nulls with
     // subsequent cols until we get an all valid col or run out of columns
@@ -594,18 +625,59 @@ class LowerFunction : public CudfFunction {
   }
 };
 
+class UpperFunction : public CudfFunction {
+ public:
+  explicit UpperFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "upper expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::to_upper(inputCol, stream, mr);
+  }
+};
+
 class LikeFunction : public CudfFunction {
  public:
   explicit LikeFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "like expects 2 inputs");
 
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "like pattern must be a constant");
+    pattern_ = patternExpr->value()->toString(0);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::like(
+        inputCol, pattern_, std::string_view(""), stream, mr);
+  }
+
+ private:
+  std::string pattern_;
+};
+
+class StartswithFunction : public CudfFunction {
+ public:
+  explicit StartswithFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "startswith expects 2 inputs");
+
     auto stream = cudf::get_default_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
     auto patternExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(patternExpr, "like pattern must be a constant");
+    VELOX_CHECK_NOT_NULL(patternExpr, "startswith pattern must be a constant");
     pattern_ = std::make_unique<cudf::string_scalar>(
         patternExpr->value()->toString(0), true, stream, mr);
   }
@@ -615,12 +687,63 @@ class LikeFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::like(
-        inputCol,
-        *pattern_,
-        cudf::string_scalar("", true, stream, mr),
-        stream,
-        mr);
+    return cudf::strings::starts_with(inputCol, *pattern_, stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::string_scalar> pattern_;
+};
+
+class EndswithFunction : public CudfFunction {
+ public:
+  explicit EndswithFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "endswith expects 2 inputs");
+
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "endswith pattern must be a constant");
+    pattern_ = std::make_unique<cudf::string_scalar>(
+        patternExpr->value()->toString(0), true, stream, mr);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::ends_with(inputCol, *pattern_, stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::string_scalar> pattern_;
+};
+
+class ContainsFunction : public CudfFunction {
+ public:
+  explicit ContainsFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "contains expects 2 inputs");
+
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "contains pattern must be a constant");
+    pattern_ = std::make_unique<cudf::string_scalar>(
+        patternExpr->value()->toString(0), true, stream, mr);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::contains(inputCol, *pattern_, stream, mr);
   }
 
  private:
@@ -630,21 +753,23 @@ class LikeFunction : public CudfFunction {
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && registry.find(name) != registry.end()) {
     return false;
   }
-  registry[name] = factory;
+  registry[name] = CudfFunctionSpec{std::move(factory), signatures};
   return true;
 }
 
 void registerCudfFunctions(
-    std::vector<std::string> aliases,
+    const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite) {
   for (const auto& name : aliases) {
-    registerCudfFunction(name, factory, overwrite);
+    registerCudfFunction(name, factory, signatures, overwrite);
   }
 }
 
@@ -654,103 +779,270 @@ std::shared_ptr<CudfFunction> createCudfFunction(
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
   if (it != registry.end()) {
-    return it->second(name, expr);
+    return it->second.factory(name, expr);
   }
   return nullptr;
 }
 
 bool registerBuiltinFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
   registerCudfFunction(
       prefix + "split",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SplitFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           // cuDF expects cudf::size_type (int32) but we may get bigint from
+           // presto. SplitFunction hacks around this by converting to string
+           // and back
+           .constantArgumentType("bigint")
+           .build()});
 
   registerCudfFunction(
       prefix + "cardinality",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<CardinalityFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("array(any)")
+           .build()});
 
   registerCudfFunctions(
       {prefix + "substr", prefix + "substring"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SubstrFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .constantArgumentType("bigint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .constantArgumentType("bigint")
+           .constantArgumentType("bigint")
+           .build()});
 
+  // Coalesce is special form and doesn't have a prefix in its name.
   registerCudfFunction(
       "coalesce",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<CoalesceFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("T")
+           .variableArity("T")
+           .build()});
 
   registerCudfFunction(
       prefix + "hash_with_seed",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<HashFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("integer")
+           .argumentType("any")
+           .variableArity()
+           .build()});
 
   registerCudfFunction(
       prefix + "round",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<RoundFunction>(expr);
-      });
+      },
+      {// TODO(dm): Enable after adding decimal support to velox-cudf
+       //   FunctionSignatureBuilder()
+       //      .integerVariable("p")
+       //      .integerVariable("s")
+       //      .returnType("decimal(p,s)")
+       //      .argumentType("decimal(p,s)")
+       //      .build(),
+       //  FunctionSignatureBuilder()
+       //      .integerVariable("p")
+       //      .integerVariable("s")
+       //      .returnType("decimal(p,s)")
+       //      .argumentType("decimal(p,s)")
+       //      .constantArgumentType("integer")
+       //      .build(),
+       FunctionSignatureBuilder()
+           .returnType("tinyint")
+           .argumentType("tinyint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("tinyint")
+           .argumentType("tinyint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("smallint")
+           .argumentType("smallint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("smallint")
+           .argumentType("smallint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("integer")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("bigint")
+           .constantArgumentType("integer")
+           .build()});
 
   registerCudfFunction(
       prefix + "year",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<YearFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("date")
+           .build()});
 
   registerCudfFunction(
       prefix + "length",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LengthFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("varchar")
+           .build()});
 
   registerCudfFunction(
       prefix + "lower",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LowerFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "upper",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<UpperFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .build()});
 
   registerCudfFunction(
       prefix + "like",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LikeFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .build()});
 
+  // Our cudf binary ops can take all numeric types but instead of listing them
+  // all, we're testing if input types can be casted to double. Coersion will
+  // pass because all numerics can be casted to double.
+  // TODO (dm): This could break for decimal
   registerCudfFunctions(
       {prefix + "greaterthan", prefix + "gt"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<BinaryFunction>(
             expr, cudf::binary_operator::GREATER);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("double")
+           .argumentType("double")
+           .build()});
 
   registerCudfFunction(
       prefix + "divide",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<BinaryFunction>(
             expr, cudf::binary_operator::DIV);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .argumentType("double")
+           .build()});
 
+  // No prefix because switch and if are special form
   registerCudfFunctions(
-      {prefix + "switch", prefix + "if"},
+      {"switch", "if"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SwitchFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("boolean")
+           .argumentType("T")
+           .argumentType("T")
+           .build()});
 
   registerCudfFunctions(
-      {prefix + "try_cast", prefix + "cast"},
+      // No signatures required for cast and try_cast. They are special forms.
+      {"try_cast", "cast"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<CastFunction>(expr);
+      },
+      {
+          // Cast needs special handling dynamically using cudf.
       });
 
   registerCudfFunction(
       prefix + "date_add",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<DateAddFunction>(expr);
-      });
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .constantArgumentType("tinyint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .constantArgumentType("smallint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .constantArgumentType("integer")
+           .build()});
 
   return true;
 }
@@ -826,65 +1118,52 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     return true;
   }
 
-  return getCudfFunctionRegistry().contains(expr->name());
-}
-
-bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
-  using core::ExprKind;
-  if (expr->kind() == ExprKind::kFieldAccess ||
-      expr->kind() == ExprKind::kDereference ||
-      expr->kind() == ExprKind::kInput || expr->kind() == ExprKind::kConstant) {
-    return true;
+  const auto& opName = expr->name();
+  if (opName == "cast" || opName == "try_cast") {
+    const auto& srcType =
+        expr->inputs().empty() ? nullptr : expr->inputs()[0]->type();
+    const auto& dstType = expr->type();
+    if (srcType == nullptr || dstType == nullptr) {
+      return false;
+    }
+    auto src = cudf::data_type(cudf_velox::veloxToCudfTypeId(srcType));
+    auto dst = cudf::data_type(cudf_velox::veloxToCudfTypeId(dstType));
+    return cudf::is_supported_cast(src, dst);
   }
-  if (expr->kind() != ExprKind::kCall) {
-    LOG_FALLBACK(core::ExprKindName::toName(expr->kind()));
+
+  auto& registry = getCudfFunctionRegistry();
+  auto it = registry.find(expr->name());
+  if (it == registry.end()) {
     return false;
   }
-  const auto* call = expr->asUnchecked<core::CallTypedExpr>();
-  return getCudfFunctionRegistry().contains(call->name());
+  const auto& spec = it->second;
+  return matchCallAgainstSignatures(*expr, spec.signatures);
 }
 
-bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr) {
+bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
+  bool supported = false;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluateCompiled && entry.canEvaluateCompiled(expr)) {
-      return true;
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      supported = true;
+      break;
     }
   }
-
-  return false;
-}
-
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
-  ensureBuiltinExpressionEvaluatorsRegistered();
-  const auto& registry = getCudfExpressionEvaluatorRegistry();
-
-  bool currentRootSupported = [&]() {
-    for (const auto& [name, entry] : registry) {
-      if (entry.canEvaluate && entry.canEvaluate(expr)) {
-        return true;
-      }
-    }
-    return false;
-  }();
-
-  if (!currentRootSupported) {
+  if (!supported) {
     LOG_FALLBACK(expr->toString());
     return false;
   }
 
-  return canBeEvaluatedByCudf(expr->inputs());
-}
-
-bool canBeEvaluatedByCudf(const std::vector<core::TypedExprPtr>& exprs) {
-  ensureBuiltinExpressionEvaluatorsRegistered();
-  for (const auto& e : exprs) {
-    if (!canBeEvaluatedByCudf(e)) {
-      return false;
+  if (deep) {
+    for (const auto& input : expr->inputs()) {
+      if (input->name() != "literal" && !canBeEvaluatedByCudf(input, true)) {
+        return false;
+      }
     }
   }
+
   return true;
 }
 
@@ -900,7 +1179,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
     if (except && name == *except) {
       continue;
     }
-    if (entry.canEvaluateCompiled && entry.canEvaluateCompiled(expr)) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
       }

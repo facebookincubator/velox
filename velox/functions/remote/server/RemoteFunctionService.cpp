@@ -105,7 +105,7 @@ void RemoteFunctionServiceHandler::handleErrors(
       numRows,
       std::vector<VectorPtr>{flatVector});
   result->errorPayload() =
-      rowVectorToIOBuf(errorRowVector, *pool_, serde.get());
+      rowVectorToIOBufBatch(errorRowVector, *pool_, serde.get());
 }
 
 void RemoteFunctionServiceHandler::invokeFunction(
@@ -154,7 +154,7 @@ void RemoteFunctionServiceHandler::invokeFunction(
   result->rowCount() = outputRowVector->size();
   result->pageFormat() = serdeFormat;
   result->payload() =
-      rowVectorToIOBuf(outputRowVector, rows.end(), *pool_, serde.get());
+      rowVectorToIOBufBatch(outputRowVector, rows.end(), *pool_, serde.get());
 
   auto evalErrors = evalCtx.errors();
   if (evalErrors != nullptr && evalErrors->hasError()) {

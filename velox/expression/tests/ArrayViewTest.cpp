@@ -494,7 +494,7 @@ TEST_F(NullFreeArrayViewTest, materialize) {
 
 TEST_F(NullableArrayViewTest, materialize) {
   auto result = evaluate(
-      "array_constructor(1, 2, NULL, 4, NULL)",
+      "array_constructor(1, 2, null::bigint, 4, null::bigint)",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;
@@ -508,7 +508,7 @@ TEST_F(NullableArrayViewTest, materialize) {
 
 TEST_F(NullableArrayViewTest, materializeNested) {
   auto result = evaluate(
-      "array_constructor(array_constructor(1), array_constructor(1, NULL), NULL)",
+      "array_constructor(array_constructor(1), array_constructor(1, null::bigint), null::bigint[])",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;
@@ -534,7 +534,7 @@ TEST_F(NullableArrayViewTest, materializeArrayWithOpaque) {
   registerFunction<MakeOpaqueFunc, std::shared_ptr<int64_t>>({"make_opaque"});
 
   auto result = evaluate(
-      "array_constructor(make_opaque(), null)",
+      "array_constructor(make_opaque(), null::\"OPAQUE<void>\")",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;
@@ -579,7 +579,7 @@ TEST_F(NullableArrayViewTest, materializeArrayOfCustomTypes) {
   registerFunction<MakeUDTFunc, UDTTypeRegistrar::SimpleType>({"make_udt"});
 
   auto result = evaluate(
-      "array_constructor(make_udt(), null, make_udt(), make_udt())",
+      "array_constructor(make_udt(), null::materializeTestUDT, make_udt(), make_udt())",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;

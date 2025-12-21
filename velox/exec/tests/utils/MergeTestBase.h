@@ -17,6 +17,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/TreeOfLosers.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/Spill.h"
 
 #include <folly/Random.h>
 
@@ -98,6 +99,44 @@ class TestingStream final : public MergeStream {
 
   // The reversed sequence of values 'this represents.
   std::vector<uint32_t> numbers_;
+};
+
+class TestingSpillMergeStream : public SpillMergeStream {
+ public:
+  TestingSpillMergeStream(
+      uint32_t id,
+      const std::vector<SpillSortKey>& sortingKeys,
+      RowVectorPtr rowVector)
+      : id_(id), sortingKeys_(sortingKeys) {
+    rowVector_ = rowVector;
+    size_ = rowVector_->size();
+  }
+
+  uint32_t id() const override {
+    return id_;
+  }
+
+ private:
+  const std::vector<SpillSortKey>& sortingKeys() const override {
+    VELOX_CHECK(!closed_);
+    return sortingKeys_;
+  }
+
+  void nextBatch() override {
+    VELOX_CHECK(!closed_);
+    index_ = 0;
+    size_ = 0;
+    close();
+    rowVector_.reset();
+  }
+
+  void close() override {
+    VELOX_CHECK(!closed_);
+    SpillMergeStream::close();
+  }
+
+  uint32_t id_;
+  const std::vector<SpillSortKey> sortingKeys_;
 };
 
 // Test data for merging.

@@ -1137,4 +1137,66 @@ TEST_F(VectorFuzzerTest, qdigestTypeGeneration) {
     EXPECT_EQ(vector->size(), opts.vectorSize);
   }
 }
+
+TEST_F(VectorFuzzerTest, nullRatioPatternVariety) {
+  // Test that we get variety in NULL patterns when feature is enabled
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 100;
+  opts.nullRatio = 0.2;
+  opts.useRandomNullPattern = true; // Enable random NULL pattern selection
+
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Track different null patterns we see
+  bool seenAllAtStart = false;
+  bool seenAllAtEnd = false;
+  bool seenScattered = false;
+
+  for (size_t iter = 0; iter < 200; ++iter) {
+    auto vector = fuzzer.fuzzFlat(INTEGER());
+    ASSERT_EQ(vector->size(), 100);
+
+    size_t nullCount = 0;
+    size_t firstNull = 0;
+    size_t lastNull = 0;
+    bool foundFirst = false;
+
+    for (size_t i = 0; i < vector->size(); ++i) {
+      if (vector->isNullAt(i)) {
+        nullCount++;
+        if (!foundFirst) {
+          firstNull = i;
+          foundFirst = true;
+        }
+        lastNull = i;
+      }
+    }
+
+    if (nullCount == 0) {
+      continue; // Skip empty vectors
+    }
+
+    // Detect patterns:
+    // HeadOnly: all nulls at start (firstNull < 5)
+    if (firstNull < 5 && lastNull < nullCount + 5) {
+      seenAllAtStart = true;
+    }
+    // TailOnly: all nulls at end (firstNull > 100 - nullCount - 5)
+    if (firstNull > 100 - nullCount - 5 && lastNull > 95) {
+      seenAllAtEnd = true;
+    }
+    // Scattered (Random or HeadAndTail with gaps)
+    size_t gapSize = lastNull - firstNull - nullCount + 1;
+    if (gapSize > 10) {
+      seenScattered = true;
+    }
+  }
+
+  // We should see all different patterns across 200 iterations
+  int patternsObserved = (seenAllAtStart ? 1 : 0) + (seenAllAtEnd ? 1 : 0) +
+      (seenScattered ? 1 : 0);
+  EXPECT_EQ(patternsObserved, 3)
+      << "Expected to observe multiple NULL patterns, but only saw "
+      << patternsObserved;
+}
 } // namespace

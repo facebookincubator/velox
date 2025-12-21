@@ -33,6 +33,7 @@
 #include <cudf/copying.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
+#include <cudf/join/filtered_join.hpp>
 #include <cudf/join/join.hpp>
 #include <cudf/join/mixed_join.hpp>
 #include <cudf/null_mask.hpp>
@@ -398,6 +399,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // create ast tree
     std::vector<PrecomputeInstruction> rightPrecomputeInstructions;
     std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
+    static constexpr bool kAllowPureAstOnly = true;
     if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
       createAstTree(
           exprs.exprs()[0],
@@ -406,7 +408,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           buildType,
           probeType,
           rightPrecomputeInstructions,
-          leftPrecomputeInstructions);
+          leftPrecomputeInstructions,
+          kAllowPureAstOnly);
     } else {
       createAstTree(
           exprs.exprs()[0],
@@ -415,7 +418,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           probeType,
           buildType,
           leftPrecomputeInstructions,
-          rightPrecomputeInstructions);
+          rightPrecomputeInstructions,
+          kAllowPureAstOnly);
     }
     if (leftPrecomputeInstructions.size() > 0 ||
         rightPrecomputeInstructions.size() > 0) {
@@ -1001,10 +1005,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
           stream,
           cudf::get_current_device_resource_ref());
     } else {
-      leftJoinIndices = cudf::left_semi_join(
-          leftTableView.select(leftKeyIndices_),
+      cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
+          cudf::set_as_build_table::RIGHT,
+          stream);
+      leftJoinIndices = filter_join.semi_join(
+          leftTableView.select(leftKeyIndices_),
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -1051,10 +1058,13 @@ CudfHashJoinProbe::rightSemiFilterJoin(
         stream,
         cudf::get_current_device_resource_ref());
   } else {
-    rightJoinIndices = cudf::left_semi_join(
-        rightTableView.select(rightKeyIndices_),
+    cudf::filtered_join filter_join(
         leftTableView.select(leftKeyIndices_),
         cudf::null_equality::UNEQUAL,
+        cudf::set_as_build_table::RIGHT,
+        stream);
+    rightJoinIndices = filter_join.semi_join(
+        rightTableView.select(rightKeyIndices_),
         stream,
         cudf::get_current_device_resource_ref());
   }
@@ -1119,10 +1129,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
       leftJoinIndices = std::make_unique<rmm::device_uvector<cudf::size_type>>(
           0, stream, cudf::get_current_device_resource_ref());
     } else {
-      leftJoinIndices = cudf::left_anti_join(
-          leftTableView.select(leftKeyIndices_),
+      cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
+          cudf::set_as_build_table::RIGHT,
+          stream);
+      leftJoinIndices = filter_join.anti_join(
+          leftTableView.select(leftKeyIndices_),
           stream,
           cudf::get_current_device_resource_ref());
     }

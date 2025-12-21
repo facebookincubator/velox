@@ -15,6 +15,8 @@
  */
 
 #include "velox/common/fuzzer/Utils.h"
+#include <fmt/format.h>
+#include "velox/type/Time.h"
 
 namespace facebook::velox::fuzzer {
 
@@ -201,5 +203,39 @@ std::string randString(
   return buf;
 }
 #pragma GCC diagnostic pop
+
+int16_t generateRandomTimezoneOffset(
+    FuzzerGenerator& rng,
+    double frequentlyUsedProbability) {
+  // 25% probability: pick from frequently used offsets
+  // 75% probability: generate random offset in range [-840, 840]
+  if (coinToss(rng, frequentlyUsedProbability)) {
+    auto index =
+        rand<size_t>(rng, 0, kFrequentlyUsedTimezoneOffsets.size() - 1);
+    return kFrequentlyUsedTimezoneOffsets[index];
+  } else {
+    return rand<int16_t>(rng, -util::kTimeZoneBias, util::kTimeZoneBias);
+  }
+}
+
+std::string timezoneOffsetToString(int16_t offsetMinutes) {
+  // Validate range [-840, 840]
+  VELOX_USER_CHECK(
+      offsetMinutes >= -util::kTimeZoneBias &&
+          offsetMinutes <= util::kTimeZoneBias,
+      "Timezone offset {} minutes is out of range [-840, 840]",
+      offsetMinutes);
+
+  // Determine sign
+  char sign = (offsetMinutes >= 0) ? '+' : '-';
+
+  // Calculate hours and minutes using absolute value
+  int16_t absOffset = std::abs(offsetMinutes);
+  int16_t hours = absOffset / util::kMinutesInHour;
+  int16_t minutes = absOffset % util::kMinutesInHour;
+
+  // Format as "+HH:mm" or "-HH:mm" with zero-padding
+  return fmt::format("{}{:02d}:{:02d}", sign, hours, minutes);
+}
 
 } // namespace facebook::velox::fuzzer

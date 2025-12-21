@@ -1023,16 +1023,12 @@ VectorPtr deserialize(
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
       return deserializeStrings(type, data, nulls, offsets, pool);
-      break;
     case TypeKind::ARRAY:
       return deserializeArrays(type, data, nulls, pool);
-      break;
     case TypeKind::MAP:
       return deserializeMaps(type, data, nulls, pool);
-      break;
     case TypeKind::ROW:
       return deserializeRows(type, data, nulls, offsets, pool);
-      break;
     default:
       VELOX_UNREACHABLE("{}", type->toString());
   }

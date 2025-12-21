@@ -22,6 +22,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -170,9 +171,11 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   return properties->build();
 }
 
-void validateSchemaRecursive(const RowTypePtr& schema) {
-  // Check the schema's field names is not empty and unique.
-  VELOX_USER_CHECK_NOT_NULL(schema, "Field schema must not be empty.");
+void validateSchemaRecursive(
+    const RowTypePtr& schema,
+    const std::vector<ParquetFieldId>& parquetFieldIds) {
+  // Check the schema's field names are not empty and unique.
+  VELOX_USER_CHECK_NOT_NULL(schema, "Schema must not be empty.");
   const auto& fieldNames = schema->names();
 
   folly::F14FastSet<std::string> uniqueNames;
@@ -185,55 +188,100 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
         name);
   }
 
+  if (!parquetFieldIds.empty()) {
+    VELOX_USER_CHECK_EQ(parquetFieldIds.size(), schema->size());
+  }
+
   for (auto i = 0; i < schema->size(); ++i) {
-    if (auto childSchema =
-            std::dynamic_pointer_cast<const RowType>(schema->childAt(i))) {
-      validateSchemaRecursive(childSchema);
+    const auto& childType = schema->childAt(i);
+    const auto& childFieldIds =
+        parquetFieldIds.empty() ? parquetFieldIds : parquetFieldIds[i].children;
+
+    if (childType->isRow()) {
+      validateSchemaRecursive(
+          std::dynamic_pointer_cast<const RowType>(childType), childFieldIds);
+    } else if (childType->isArray()) {
+      if (!parquetFieldIds.empty()) {
+        VELOX_USER_CHECK_EQ(parquetFieldIds[i].children.size(), 1);
+      }
+      const auto& elementType = childType->asArray().elementType();
+      if (elementType->isRow()) {
+        validateSchemaRecursive(
+            std::dynamic_pointer_cast<const RowType>(elementType),
+            childFieldIds.empty() ? childFieldIds : childFieldIds[0].children);
+      }
+    } else if (childType->isMap()) {
+      if (!parquetFieldIds.empty()) {
+        VELOX_USER_CHECK_EQ(parquetFieldIds[i].children.size(), 2);
+      }
+      const auto& mapType = childType->asMap();
+      if (mapType.keyType()->isRow()) {
+        validateSchemaRecursive(
+            std::dynamic_pointer_cast<const RowType>(mapType.keyType()),
+            childFieldIds.empty() ? childFieldIds : childFieldIds[0].children);
+      }
+      if (mapType.valueType()->isRow()) {
+        validateSchemaRecursive(
+            std::dynamic_pointer_cast<const RowType>(mapType.valueType()),
+            childFieldIds.empty() ? childFieldIds : childFieldIds[1].children);
+      }
     }
   }
 }
 
-std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
+std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
     const std::shared_ptr<::arrow::Field>& field,
     const Type& type,
+    const ParquetFieldId* fieldId,
     const std::string& name = "") {
+  auto newField = name.empty() ? field : field->WithName(name);
+
+  if (fieldId) {
+    newField =
+        newField->WithMetadata(arrow::arrow::fieldIdMetadata(fieldId->fieldId));
+  }
+
   if (type.isRow()) {
     auto& rowType = type.asRow();
-    auto newField = field->WithName(name);
     auto structType =
         std::dynamic_pointer_cast<::arrow::StructType>(newField->type());
     auto childrenSize = rowType.size();
+    VELOX_CHECK(!fieldId || childrenSize <= fieldId->children.size());
     std::vector<std::shared_ptr<::arrow::Field>> newFields;
     newFields.reserve(childrenSize);
-    for (auto i = 0; i < childrenSize; i++) {
-      newFields.push_back(updateFieldNameRecursive(
-          structType->fields()[i], *rowType.childAt(i), rowType.nameOf(i)));
+    for (auto i = 0; i < childrenSize; ++i) {
+      const auto* childSetting = fieldId ? &fieldId->children.at(i) : nullptr;
+      newFields.push_back(updateFieldNameAndIdRecursive(
+          structType->fields()[i],
+          *rowType.childAt(i),
+          childSetting,
+          rowType.nameOf(i)));
     }
-    return newField->WithType(::arrow::struct_(newFields));
+    newField = newField->WithType(::arrow::struct_(newFields));
   } else if (type.isArray()) {
-    auto newField = field->WithName(name);
     auto listType =
         std::dynamic_pointer_cast<::arrow::BaseListType>(newField->type());
     auto elementType = type.asArray().elementType();
     auto elementField = listType->value_field();
-    return newField->WithType(
-        ::arrow::list(updateFieldNameRecursive(elementField, *elementType)));
+    const auto* childSetting = fieldId ? &fieldId->children.at(0) : nullptr;
+    auto updatedElementField =
+        updateFieldNameAndIdRecursive(elementField, *elementType, childSetting);
+    newField = newField->WithType(::arrow::list(updatedElementField));
   } else if (type.isMap()) {
     auto mapType = type.asMap();
-    auto newField = field->WithName(name);
     auto arrowMapType =
         std::dynamic_pointer_cast<::arrow::MapType>(newField->type());
-    auto newKeyField =
-        updateFieldNameRecursive(arrowMapType->key_field(), *mapType.keyType());
-    auto newValueField = updateFieldNameRecursive(
-        arrowMapType->item_field(), *mapType.valueType());
-    return newField->WithType(
-        ::arrow::map(newKeyField->type(), newValueField->type()));
-  } else if (name != "") {
-    return field->WithName(name);
-  } else {
-    return field;
+    const auto* keySetting = fieldId ? &fieldId->children.at(0) : nullptr;
+    const auto* valueSetting = fieldId ? &fieldId->children.at(1) : nullptr;
+    auto newKeyField = updateFieldNameAndIdRecursive(
+        arrowMapType->key_field(), *mapType.keyType(), keySetting);
+    auto newValueField = updateFieldNameAndIdRecursive(
+        arrowMapType->item_field(), *mapType.valueType(), valueSetting);
+    newField = newField->WithType(
+        std::make_shared<::arrow::MapType>(newKeyField, newValueField));
   }
+
+  return newField;
 }
 
 std::optional<TimestampPrecision> getTimestampUnit(
@@ -247,6 +295,17 @@ std::optional<TimestampPrecision> getTimestampUnit(
     return std::optional(static_cast<TimestampPrecision>(unit.value()));
   }
   return std::nullopt;
+}
+
+// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
+// "6" (micro), or "9" (nano).
+TimestampPrecision stringToTimestampPrecision(const std::string& value) {
+  auto unit = folly::to<uint8_t>(value);
+  VELOX_CHECK(
+      unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
+      "Invalid timestamp unit: {}",
+      unit);
+  return static_cast<TimestampPrecision>(unit);
 }
 
 std::optional<std::string> getTimestampTimeZone(
@@ -334,7 +393,7 @@ Writer::Writer(
               options.bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
-  validateSchemaRecursive(schema_);
+  validateSchemaRecursive(schema_, options.parquetFieldIds);
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
@@ -352,6 +411,7 @@ Writer::Writer(
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
   arrowMemoryPool_ = options.arrowMemoryPool;
+  parquetFieldIds_ = std::move(options.parquetFieldIds);
 }
 
 Writer::Writer(
@@ -447,9 +507,15 @@ void Writer::write(const VectorPtr& data) {
       "facebook::velox::parquet::Writer::write", arrowSchema.get());
   std::vector<std::shared_ptr<::arrow::Field>> newFields;
   auto childSize = schema_->size();
+  if (!parquetFieldIds_.empty()) {
+    VELOX_CHECK(childSize == parquetFieldIds_.size());
+  }
   for (auto i = 0; i < childSize; i++) {
-    newFields.push_back(updateFieldNameRecursive(
-        arrowSchema->fields()[i], *schema_->childAt(i), schema_->nameOf(i)));
+    newFields.push_back(updateFieldNameAndIdRecursive(
+        arrowSchema->fields()[i],
+        *schema_->childAt(i),
+        !parquetFieldIds_.empty() ? &parquetFieldIds_.at(i) : nullptr,
+        schema_->nameOf(i)));
   }
 
   PARQUET_ASSIGN_OR_THROW(
@@ -561,6 +627,24 @@ void WriterOptions::processConfigs(
   auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
   VELOX_CHECK_NOT_NULL(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");
+
+  // Check serdeParameters for timestamp settings first (highest priority).
+  auto serdeTimestampUnitIt = serdeParameters.find(kParquetSerdeTimestampUnit);
+  if (serdeTimestampUnitIt != serdeParameters.end()) {
+    parquetWriteTimestampUnit =
+        stringToTimestampPrecision(serdeTimestampUnitIt->second);
+  }
+
+  auto serdeTimestampTimezoneIt =
+      serdeParameters.find(kParquetSerdeTimestampTimezone);
+  if (serdeTimestampTimezoneIt != serdeParameters.end()) {
+    // Empty string means no timezone conversion (nullopt).
+    if (serdeTimestampTimezoneIt->second.empty()) {
+      parquetWriteTimestampTimeZone = std::nullopt;
+    } else {
+      parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second;
+    }
+  }
 
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =

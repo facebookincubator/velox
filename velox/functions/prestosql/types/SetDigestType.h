@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -61,4 +62,14 @@ inline bool isSetDigestType(const TypePtr& type) {
 inline std::shared_ptr<const SetDigestType> SETDIGEST() {
   return SetDigestType::get();
 }
+
+// Type to use for inputs and outputs of simple functions, e.g.
+// arg_type<SetDigest> and out_type<SetDigest>.
+struct SetDigestT {
+  using type = Varbinary;
+  static constexpr const char* typeName = "setdigest";
+};
+
+using SetDigest = CustomType<SetDigestT>;
+
 } // namespace facebook::velox

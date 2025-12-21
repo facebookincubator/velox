@@ -20,12 +20,17 @@
 
 namespace facebook::velox::functions {
 
-/// Checks nested nulls in a complex type vector. Returns true if value at
-/// specified index is null. Throws an exception if the base vector contains
-/// nulls if 'throwOnNestedNulls' is true.
+/// Checks nested nulls in a complex type vector.
+///
+/// @param decoded The decoded vector to check
+/// @param index The index in the decoded vector to check
+/// @param baseIndex The index in the base vector to check for nested nulls
+/// @param throwOnNestedNulls If true, throws exception when base vector
+/// contains nulls
+/// @return true if the value at specified index is null, false otherwise
 bool checkNestedNulls(
     const DecodedVector& decoded,
-    const vector_size_t* indices,
     vector_size_t index,
+    vector_size_t baseIndex,
     bool throwOnNestedNulls = false);
 } // namespace facebook::velox::functions

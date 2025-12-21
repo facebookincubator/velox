@@ -20,8 +20,6 @@
 #include <set>
 #include <string>
 
-#include "velox/common/base/Exceptions.h"
-#include "velox/common/base/SimdUtil.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::common {
@@ -53,6 +51,8 @@ const auto& filterKindNames() {
       {FilterKind::kHugeintRange, "HugeintRange"},
       {FilterKind::kTimestampRange, "TimestampRange"},
       {FilterKind::kHugeintValuesUsingHashTable, "HugeintValuesUsingHashTable"},
+      {FilterKind::kBigintValuesUsingBloomFilter,
+       "BigintValuesUsingBloomFilter"},
   };
   return kNames;
 }
@@ -113,6 +113,8 @@ void Filter::registerSerDe() {
       "BigintValuesUsingHashTable", BigintValuesUsingHashTable::create);
   registry.Register(
       "BigintValuesUsingBitmask", BigintValuesUsingBitmask::create);
+  registry.Register(
+      "BigintValuesUsingBloomFilter", BigintValuesUsingBloomFilter::create);
   registry.Register(
       "NegatedBigintValuesUsingHashTable",
       NegatedBigintValuesUsingHashTable::create);
@@ -379,6 +381,53 @@ bool BigintValuesUsingBitmask::testingEquals(const Filter& other) const {
   }
 
   return false;
+}
+
+folly::dynamic BigintValuesUsingBloomFilter::serialize() const {
+  auto obj = Filter::serializeBase();
+  folly::dynamic words = folly::dynamic::array;
+  for (auto& block : blocks_) {
+    for (auto word : block.data) {
+      words.push_back(word);
+    }
+  }
+  obj["numHashes"] = xsimd::batch<uint32_t>::size;
+  obj["blockWords"] = words;
+  return obj;
+}
+
+std::unique_ptr<Filter> BigintValuesUsingBloomFilter::create(
+    const folly::dynamic& obj) {
+  VELOX_USER_CHECK_EQ(
+      obj["numHashes"].asInt(),
+      xsimd::batch<uint32_t>::size,
+      "Cannot deserialize BigintValuesUsingBloomFilter serialized on hardware with different SIMD length");
+  auto nullAllowed = deserializeNullAllowed(obj);
+  std::vector<SplitBlockBloomFilter::Block> blocks;
+  int i = 0;
+  SplitBlockBloomFilter::Block current{};
+  for (auto& word : obj["blockWords"]) {
+    current.data[i++] = word.asInt();
+    if (i == xsimd::batch<uint32_t>::size) {
+      blocks.push_back(current);
+      i = 0;
+    }
+  }
+  return std::unique_ptr<BigintValuesUsingBloomFilter>(
+      new BigintValuesUsingBloomFilter(nullAllowed, std::move(blocks)));
+}
+
+bool BigintValuesUsingBloomFilter::testingEquals(const Filter& other) const {
+  auto* typedOther =
+      Filter::testingBaseEquals<BigintValuesUsingBloomFilter>(other);
+  if (!typedOther) {
+    return false;
+  }
+  return blocks_.size() == typedOther->blocks_.size() &&
+      memcmp(
+          blocks_.data(),
+          typedOther->blocks_.data(),
+          blocks_.size() * sizeof(SplitBlockBloomFilter::Block)) == 0;
 }
 
 folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
@@ -728,13 +777,6 @@ BigintValuesUsingBitmask::BigintValuesUsingBitmask(
   }
 }
 
-bool BigintValuesUsingBitmask::testInt64(int64_t value) const {
-  if (value < min_ || value > max_) {
-    return false;
-  }
-  return bitmask_[value - min_];
-}
-
 std::vector<int64_t> BigintValuesUsingBitmask::values() const {
   std::vector<int64_t> values;
   for (int i = 0; i < bitmask_.size(); i++) {
@@ -809,98 +851,6 @@ BigintValuesUsingHashTable::BigintValuesUsingHashTable(
     hashTable_[sizeMask_ + 1 + i] = hashTable_[sizeMask_];
   }
   std::sort(values_.begin(), values_.end());
-}
-
-bool BigintValuesUsingHashTable::testInt64(int64_t value) const {
-  if (containsEmptyMarker_ && value == kEmptyMarker) {
-    return true;
-  }
-  if (value < min_ || value > max_) {
-    return false;
-  }
-  uint32_t pos = (value * M) & sizeMask_;
-  for (auto i = pos; i <= pos + sizeMask_; i++) {
-    int32_t idx = i & sizeMask_;
-    int64_t l = hashTable_[idx];
-    if (l == kEmptyMarker) {
-      return false;
-    }
-    if (l == value) {
-      return true;
-    }
-  }
-  return false;
-}
-
-xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
-    xsimd::batch<int64_t> x) const {
-  auto outOfRange = (x < xsimd::broadcast<int64_t>(min_)) |
-      (x > xsimd::broadcast<int64_t>(max_));
-  if (simd::toBitMask(outOfRange) == simd::allSetBitMask<int64_t>()) {
-    return xsimd::batch_bool<int64_t>(false);
-  }
-  if (containsEmptyMarker_) {
-    return Filter::testValues(x);
-  }
-  auto allEmpty = xsimd::broadcast<int64_t>(kEmptyMarker);
-  // Temporarily casted to unsigned to suppress overflow error.
-  auto indices = simd::reinterpretBatch<int64_t>(
-      simd::reinterpretBatch<uint64_t>(x) * M & sizeMask_);
-  auto data =
-      simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
-  // The lanes with kEmptyMarker missed, the lanes matching x hit and the other
-  // lanes must check next positions.
-
-  auto result = x == data;
-  auto resultBits = simd::toBitMask(result);
-  auto missed = simd::toBitMask(data == allEmpty);
-  static_assert(decltype(result)::size <= 16);
-  uint16_t unresolved = simd::allSetBitMask<int64_t>() ^ (resultBits | missed);
-  if (!unresolved) {
-    return result;
-  }
-  constexpr int kAlign = xsimd::default_arch::alignment();
-  constexpr int kArraySize = xsimd::batch<int64_t>::size;
-  alignas(kAlign) int64_t indicesArray[kArraySize];
-  alignas(kAlign) int64_t valuesArray[kArraySize];
-  (indices + 1).store_aligned(indicesArray);
-  x.store_aligned(valuesArray);
-  while (unresolved) {
-    auto lane = bits::getAndClearLastSetBit(unresolved);
-    // Loop for each unresolved (not hit and
-    // not empty) until finding hit or empty.
-    int64_t index = indicesArray[lane];
-    int64_t value = valuesArray[lane];
-    auto allValue = xsimd::broadcast<int64_t>(value);
-    for (;;) {
-      auto line = xsimd::load_unaligned(hashTable_.data() + index);
-
-      if (simd::toBitMask(line == allValue)) {
-        resultBits |= 1 << lane;
-        break;
-      }
-      if (simd::toBitMask(line == allEmpty)) {
-        resultBits &= ~(1 << lane);
-        break;
-      }
-      index += line.size;
-      if (index > sizeMask_) {
-        index = 0;
-      }
-    }
-  }
-  return simd::fromBitMask<int64_t>(resultBits);
-}
-
-xsimd::batch_bool<int32_t> BigintValuesUsingHashTable::testValues(
-    xsimd::batch<int32_t> x) const {
-  // Calls 4x64 twice since the hash table is 64 bits wide in any
-  // case. A 32-bit hash table would be possible but all the use
-  // cases seen are in the 64 bit range.
-  auto first = simd::toBitMask(testValues(simd::getHalf<int64_t, 0>(x)));
-  auto second = simd::toBitMask(testValues(simd::getHalf<int64_t, 1>(x)));
-  return simd::fromBitMask<int32_t>(
-      first | (second << xsimd::batch<int64_t>::size));
 }
 
 bool BigintValuesUsingHashTable::testInt64Range(
@@ -1866,6 +1816,7 @@ std::unique_ptr<Filter> BigintRange::mergeWith(const Filter* other) const {
     case FilterKind::kNegatedBigintRange:
     case FilterKind::kBigintValuesUsingBitmask:
     case FilterKind::kBigintValuesUsingHashTable:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
     case FilterKind::kBigintMultiRange: {
       auto otherMultiRange = dynamic_cast<const BigintMultiRange*>(other);
@@ -2000,6 +1951,7 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
     }
     case FilterKind::kBigintValuesUsingHashTable:
     case FilterKind::kBigintValuesUsingBitmask:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
     case FilterKind::kNegatedBigintValuesUsingHashTable:
     case FilterKind::kNegatedBigintValuesUsingBitmask: {
@@ -2055,6 +2007,7 @@ std::unique_ptr<Filter> BigintValuesUsingHashTable::mergeWith(
       return mergeWith(min, max, other);
     }
     case FilterKind::kBigintValuesUsingBitmask:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
     case FilterKind::kBigintMultiRange: {
       auto otherMultiRange = dynamic_cast<const BigintMultiRange*>(other);
@@ -2128,6 +2081,7 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
     case FilterKind::kAlwaysTrue:
     case FilterKind::kAlwaysFalse:
     case FilterKind::kIsNull:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
     case FilterKind::kIsNotNull:
       return std::make_unique<BigintValuesUsingBitmask>(*this, false);
@@ -2217,9 +2171,9 @@ std::unique_ptr<Filter> NegatedBigintValuesUsingHashTable::mergeWith(
     case FilterKind::kBigintValuesUsingHashTable:
     case FilterKind::kBigintValuesUsingBitmask:
     case FilterKind::kBigintRange:
-    case FilterKind::kBigintMultiRange: {
+    case FilterKind::kBigintMultiRange:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
-    }
     case FilterKind::kNegatedBigintValuesUsingHashTable: {
       auto otherNegated =
           static_cast<const NegatedBigintValuesUsingHashTable*>(other);
@@ -2257,9 +2211,9 @@ std::unique_ptr<Filter> NegatedBigintValuesUsingBitmask::mergeWith(
     case FilterKind::kBigintValuesUsingBitmask:
     case FilterKind::kBigintRange:
     case FilterKind::kNegatedBigintRange:
-    case FilterKind::kBigintMultiRange: {
+    case FilterKind::kBigintMultiRange:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
-    }
     case FilterKind::kNegatedBigintValuesUsingHashTable: {
       auto otherHashTable =
           dynamic_cast<const NegatedBigintValuesUsingHashTable*>(other);
@@ -2297,9 +2251,9 @@ std::unique_ptr<Filter> BigintMultiRange::mergeWith(const Filter* other) const {
     case FilterKind::kBigintRange:
     case FilterKind::kNegatedBigintRange:
     case FilterKind::kBigintValuesUsingBitmask:
-    case FilterKind::kBigintValuesUsingHashTable: {
+    case FilterKind::kBigintValuesUsingHashTable:
+    case FilterKind::kBigintValuesUsingBloomFilter:
       return other->mergeWith(this);
-    }
     case FilterKind::kBigintMultiRange: {
       std::vector<std::unique_ptr<BigintRange>> newRanges;
       for (const auto& range : ranges_) {
@@ -2350,6 +2304,70 @@ std::unique_ptr<Filter> BigintMultiRange::mergeWith(const Filter* other) const {
     }
     default:
       VELOX_UNREACHABLE();
+  }
+}
+
+std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
+    const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return clone(false);
+    case FilterKind::kBigintRange: {
+      auto* filter = other->as<BigintRange>();
+      // If the hash table or bitmask generated is not small enough to fit in
+      // cache, we would rather not merging it.
+      int64_t range;
+      if (__builtin_sub_overflow(filter->upper(), filter->lower(), &range) ||
+          range > 100'000) {
+        return other->clone();
+      }
+      std::vector<int64_t> values;
+      values.reserve(range + 1);
+      for (int64_t i = filter->lower(); i <= filter->upper(); ++i) {
+        if (testInt64(i)) {
+          values.push_back(i);
+        }
+      }
+      return createBigintValues(values, nullAllowed_ && other->testNull());
+    }
+    case FilterKind::kBigintValuesUsingHashTable: {
+      auto* filter = other->as<BigintValuesUsingHashTable>();
+      auto values = filter->values();
+      int64_t size = 0;
+      for (int64_t i = 0; i < values.size(); ++i) {
+        if (testInt64(values[i])) {
+          values[size++] = values[i];
+        }
+      }
+      values.resize(size);
+      return createBigintValues(values, nullAllowed_ && other->testNull());
+    }
+    case FilterKind::kBigintValuesUsingBitmask: {
+      auto* filter = other->as<BigintValuesUsingBitmask>();
+      std::vector<int64_t> values;
+      values.reserve(filter->max() - filter->min() + 1);
+      for (int64_t i = filter->min(); i <= filter->max(); ++i) {
+        if (filter->testInt64(i) && testInt64(i)) {
+          values.push_back(i);
+        }
+      }
+      return createBigintValues(values, nullAllowed_ && other->testNull());
+    }
+    case FilterKind::kNegatedBigintRange:
+    case FilterKind::kNegatedBigintValuesUsingHashTable:
+    case FilterKind::kNegatedBigintValuesUsingBitmask:
+    case FilterKind::kBigintMultiRange:
+    case FilterKind::kBigintValuesUsingBloomFilter:
+      // Bloom filter allows false positive so dropping it will not affect
+      // correctness.  We can do so if we think merging will not improve
+      // performance.
+      return other->clone();
+    default:
+      VELOX_FAIL("Cannot merge {} with {}", kindName(), other->kindName());
   }
 }
 
@@ -2676,4 +2694,5 @@ std::unique_ptr<Filter> NegatedBytesValues::mergeWith(
       VELOX_UNREACHABLE();
   }
 }
+
 } // namespace facebook::velox::common

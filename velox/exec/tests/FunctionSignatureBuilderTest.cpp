@@ -173,6 +173,43 @@ TEST_F(FunctionSignatureBuilderTest, homogeneousRowInReturn) {
       "Homogeneous row cannot appear in return type");
 }
 
+TEST_F(FunctionSignatureBuilderTest, variableArity) {
+  // .variableArity() requires at least one argument.
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .variableArity()
+          .build(),
+      "Variable arity requires at least one argument");
+
+  // .variableArity() can be used only once.
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .variableArity("bigint")
+          .variableArity("integer")
+          .build(),
+      "Cannot add arguments after variable arity argument");
+
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .variableArity()
+          .variableArity()
+          .build(),
+      "Only one variable arity argument is allowed");
+
+  // No arguments can be added after calling .variableArity().
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .variableArity("bigint")
+          .argumentType("boolean")
+          .build(),
+      "Cannot add arguments after variable arity argument");
+}
+
 TEST_F(FunctionSignatureBuilderTest, scalarConstantFlags) {
   {
     auto signature = FunctionSignatureBuilder()

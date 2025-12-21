@@ -35,8 +35,8 @@ enum class Unit : int128_t {
   YOTTABYTE = int128_t(1) << 80
 };
 
-inline Unit parseUnit(const std::string& dataSize, const size_t& valueLength) {
-  static const std::map<std::string, Unit> unitMap = {
+inline Unit parseUnit(std::string_view dataSize, size_t valueLength) {
+  static const std::map<std::string_view, Unit> unitMap = {
       {"B", Unit::BYTE},
       {"kB", Unit::KILOBYTE},
       {"MB", Unit::MEGABYTE},
@@ -45,9 +45,10 @@ inline Unit parseUnit(const std::string& dataSize, const size_t& valueLength) {
       {"PB", Unit::PETABYTE},
       {"EB", Unit::EXABYTE},
       {"ZB", Unit::ZETTABYTE},
-      {"YB", Unit::YOTTABYTE}};
+      {"YB", Unit::YOTTABYTE},
+  };
   try {
-    std::string unitString = dataSize.substr(valueLength);
+    std::string_view unitString = dataSize.substr(valueLength);
     auto it = unitMap.find(unitString);
     VELOX_USER_CHECK(it != unitMap.end(), "Invalid data size: '{}'", dataSize);
     return it->second;
@@ -55,18 +56,16 @@ inline Unit parseUnit(const std::string& dataSize, const size_t& valueLength) {
     VELOX_USER_FAIL("Invalid data size: '{}'", dataSize);
   }
 }
-inline double parseValue(
-    const std::string& dataSize,
-    const size_t& valueLength) {
+inline double parseValue(std::string_view dataSize, size_t valueLength) {
   try {
-    std::string value = dataSize.substr(0, valueLength);
-    return std::stod(value);
+    std::string_view value = dataSize.substr(0, valueLength);
+    return folly::to<double>(value);
   } catch (const std::exception&) {
     VELOX_USER_FAIL("Invalid data size: '{}'", dataSize);
   }
 }
 
-inline int128_t getDecimal(const std::string& dataSize) {
+inline int128_t getDecimal(std::string_view dataSize) {
   size_t valueLength = 0;
   while (valueLength < dataSize.length() &&
          (isdigit(dataSize[valueLength]) || dataSize[valueLength] == '.')) {
@@ -98,14 +97,16 @@ struct ParsePrestoDataSizeFunction {
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<LongDecimal<P1, S1>>& result,
       const arg_type<Varchar>& input) {
-    result = getDecimal(input);
+    // TODO: Remove explicit std::string_view cast.
+    result = getDecimal(std::string_view(input));
   }
   FOLLY_ALWAYS_INLINE void call(
       out_type<LongDecimal<P1, S1>>& result,
       const arg_type<Varchar>& input) {
     // If ASCII input process else fail.
     if (stringCore::isAscii(input.data(), input.size())) {
-      result = getDecimal(input);
+      // TODO: Remove explicit std::string_view cast.
+      result = getDecimal(std::string_view(input));
     } else {
       VELOX_USER_FAIL("Invalid data size: '{}'", input);
     }

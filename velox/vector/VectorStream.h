@@ -507,6 +507,22 @@ folly::IOBuf rowVectorToIOBuf(
     memory::MemoryPool& pool,
     VectorSerde* serde = nullptr);
 
+/// Convenience function to serialize a single rowVector into an IOBuf using
+/// BatchVectorSerializer, which preserves encodings of input vectors.
+folly::IOBuf rowVectorToIOBufBatch(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool& pool,
+    VectorSerde* serde = nullptr,
+    const VectorSerde::Options* options = nullptr);
+
+/// Same as above but serializes up until row `rangeEnd`.
+folly::IOBuf rowVectorToIOBufBatch(
+    const RowVectorPtr& rowVector,
+    vector_size_t rangeEnd,
+    memory::MemoryPool& pool,
+    VectorSerde* serde = nullptr,
+    const VectorSerde::Options* options = nullptr);
+
 /// Convenience function to deserialize an IOBuf into a rowVector. If `serde` is
 /// nullptr, use the default installed serializer.
 RowVectorPtr IOBufToRowVector(

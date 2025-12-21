@@ -43,7 +43,7 @@ class FromUtf8Function : public exec::VectorFunction {
     // Read the constant replacement if it exisits and verify that it is valid.
     bool constantReplacement =
         args.size() == 1 || decodedArgs.at(1)->isConstantMapping();
-    std::string constantReplacementValue = kReplacementChar;
+    StringView constantReplacementValue = kReplacementChar;
 
     if (constantReplacement) {
       if (args.size() > 1) {
@@ -146,24 +146,17 @@ class FromUtf8Function : public exec::VectorFunction {
   }
 
  private:
-  static const std::string kReplacementChar;
+  static const StringView kReplacementChar;
 
-  static std::string codePointToString(int64_t codePoint) {
-    std::string result;
-    result.resize(4);
-    stringImpl::codePointToString(result, codePoint);
-    return result;
-  }
-
-  std::string getReplacementCharacter(
+  StringView getReplacementCharacter(
       const TypePtr& type,
       DecodedVector& decoded,
       vector_size_t row) const {
     if (type->isBigint()) {
-      return codePointToString(decoded.valueAt<int64_t>(row));
+      return stringImpl::codePointToString(decoded.valueAt<int64_t>(row));
     }
 
-    auto replacement = decoded.valueAt<StringView>(row);
+    StringView replacement = decoded.valueAt<StringView>(row);
     if (!replacement.empty()) {
       int32_t codePoint;
       auto charLength = tryGetUtf8CharLength(
@@ -260,7 +253,7 @@ class FromUtf8Function : public exec::VectorFunction {
 
   void fixInvalidUtf8(
       StringView input,
-      const std::string& replacement,
+      const StringView& replacement,
       exec::StringWriter& fixedWriter) const {
     if (input.empty()) {
       fixedWriter.setEmpty();
@@ -290,8 +283,9 @@ class FromUtf8Function : public exec::VectorFunction {
 };
 
 // static
-const std::string FromUtf8Function::kReplacementChar =
-    codePointToString(0xFFFD);
+const StringView FromUtf8Function::kReplacementChar =
+    stringImpl::codePointToString(0xFFFD);
+
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(

@@ -16,6 +16,7 @@
 
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -34,6 +35,22 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
         },
         nullptr,
         TIMESTAMP_WITH_TIME_ZONE());
+  }
+
+  // Helper to parse a timestamp with timezone string and return packed value
+  // e.g., "2023-08-05 10:15:00.000 Europe/London"
+  int64_t parseTimestampWithTz(const std::string& str) {
+    auto parsed =
+        util::fromTimestampWithTimezoneString(
+            str.c_str(), str.size(), util::TimestampParseMode::kPrestoCast)
+            .thenOrThrow(folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
+
+    // The parsed timestamp is in local time, need to convert to UTC
+    auto ts = parsed.timestamp;
+    ts.toGMT(*parsed.timeZone);
+    return pack(ts.toMillis(), parsed.timeZone->id());
   }
 
  protected:
@@ -615,6 +632,59 @@ TEST_F(TimestampWithTimeZoneCastTest, fromTime) {
         "try_cast(c0 as timestamp with time zone)", makeRowVector({input}));
     test::assertEqualVectors(expected, result);
   }
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toTime) {
+  // Test casting TIMESTAMP WITH TIME ZONE to TIME
+  // The TIME value should represent the local time in the given timezone
+  // This matches Presto's behavior (see TestTimestampWithTimeZone.java:34-59)
+
+  // Test data with named timezones to verify DST handling
+  // DST rules are applied based on the UTC timestamp's date, not current date
+  auto input = makeNullableFlatVector<int64_t>(
+      {// May 15, 2023 10:30:45.123 EDT (America/New_York in DST)
+       parseTimestampWithTz("2023-05-15 10:30:45.123 America/New_York"),
+       // January 10, 2023 08:15:30.500 GMT (Europe/London in standard time)
+       parseTimestampWithTz("2023-01-10 08:15:30.500 Europe/London"),
+       // January 15, 2023 09:30:00.000 EST (America/New_York in standard time)
+       parseTimestampWithTz("2023-01-15 09:30:00.000 America/New_York"),
+       // August 5, 2023 10:15:00.000 BST (Europe/London in DST)
+       parseTimestampWithTz("2023-08-05 10:15:00.000 Europe/London"),
+       // July 20, 2023 08:59:59.999 JST (Asia/Tokyo, no DST)
+       parseTimestampWithTz("2023-07-21 08:59:59.999 Asia/Tokyo"),
+       // Epoch in UTC
+       parseTimestampWithTz("1970-01-01 00:00:00.000 UTC"),
+       // December 24, 2023 22:00:00.000 PST (America/Los_Angeles in standard
+       // time)
+       parseTimestampWithTz("2023-12-24 22:00:00.000 America/Los_Angeles"),
+       // Null value
+       std::nullopt,
+       // Presto test case: 2001-01-22 03:04:05.321 +07:09
+       parseTimestampWithTz("2001-01-22 03:04:05.321 +07:09")},
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  auto expected = makeNullableFlatVector<int64_t>(
+      {// 10:30:45.123
+       10 * kMillisInHour + 30 * kMillisInMinute + 45 * kMillisInSecond + 123,
+       // 08:15:30.500
+       8 * kMillisInHour + 15 * kMillisInMinute + 30 * kMillisInSecond + 500,
+       // 09:30:00.000 (EST, demonstrates standard time for America/New_York)
+       9 * kMillisInHour + 30 * kMillisInMinute,
+       // 10:15:00.000 (BST, demonstrates DST for Europe/London)
+       10 * kMillisInHour + 15 * kMillisInMinute,
+       // 08:59:59.999
+       8 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond + 999,
+       // 00:00:00.000
+       0,
+       // 22:00:00.000
+       22 * kMillisInHour,
+       // Null value
+       std::nullopt,
+       // 03:04:05.321
+       3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond + 321},
+      TIME());
+
+  testCast(input, expected);
 }
 
 } // namespace

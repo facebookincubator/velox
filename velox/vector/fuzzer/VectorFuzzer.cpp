@@ -537,11 +537,10 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
 
-    // Second, generate a random null vector.
-    for (size_t i = 0; i < vector->size(); ++i) {
-      if (coinToss(opts_.nullRatio)) {
-        vector->setNull(i, true);
-      }
+    // Second, generate nulls using the configured null pattern.
+    auto nulls = fuzzNulls(size);
+    if (nulls) {
+      vector->setNulls(nulls);
     }
   }
   return vector;
@@ -870,11 +869,71 @@ RowVectorPtr VectorFuzzer::fuzzRow(
 
 BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
   NullsBuilder builder{size, pool_};
-  for (size_t i = 0; i < size; ++i) {
-    if (coinToss(opts_.nullRatio)) {
-      builder.setNull(i);
+
+  // Randomly select a pattern with weighted distribution:
+  // 70% kRandom, 30% split equally among kHeadOnly, kTailOnly, kHeadAndTail
+  // (each gets 10%)
+
+  // default to kRandom pattern
+  int patternChoice = 0;
+
+  if (opts_.useRandomNullPattern) {
+    auto randValue = fuzzer::rand<uint32_t>(rng_) % 100;
+    if (randValue < 70) {
+      patternChoice = 0; // kRandom - 70%
+    } else if (randValue < 80) {
+      patternChoice = 1; // kHeadOnly - 10%
+    } else if (randValue < 90) {
+      patternChoice = 2; // kTailOnly - 10%
+    } else {
+      patternChoice = 3; // kHeadAndTail - 10%
     }
   }
+
+  switch (patternChoice) {
+    case 0: // kRandom pattern
+      for (size_t i = 0; i < size; ++i) {
+        if (coinToss(opts_.nullRatio)) {
+          builder.setNull(i);
+        }
+      }
+      break;
+
+    case 1: { // kHeadOnly pattern
+      auto headNulls =
+          std::min<size_t>(static_cast<size_t>(size * opts_.nullRatio), size);
+      for (size_t i = 0; i < headNulls; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+
+    case 2: { // kTailOnly pattern
+      auto tailNulls =
+          std::min<size_t>(static_cast<size_t>(size * opts_.nullRatio), size);
+      auto startIdx = size > tailNulls ? size - tailNulls : 0;
+      for (size_t i = startIdx; i < size; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+
+    case 3: { // kHeadAndTail pattern
+      // Split nullRatio between head and tail to match total nulls of other
+      // patterns
+      auto edgeNulls = std::min<size_t>(
+          static_cast<size_t>(size * opts_.nullRatio / 2.0), size / 2);
+      for (size_t i = 0; i < edgeNulls; ++i) {
+        builder.setNull(i);
+      }
+      auto tailStart = size > edgeNulls ? size - edgeNulls : 0;
+      for (size_t i = tailStart; i < size; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+  }
+
   return builder.build();
 }
 

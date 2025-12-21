@@ -160,6 +160,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<TimeMinusInterval, Time, Time, IntervalDayTime>(
       {prefix + "minus"});
 
+  // Register Time - Time function (returns IntervalDayTime)
+  registerFunction<TimeMinusFunction, IntervalDayTime, Time, Time>(
+      {prefix + "minus"});
+
   // Use optimized vector function for Time + IntervalYearMonth (identity
   // function)
   exec::registerVectorFunction(
@@ -318,6 +322,12 @@ void registerSimpleFunctions(const std::string& prefix) {
       AtTimezoneFunction,
       TimestampWithTimezone,
       TimestampWithTimezone,
+      Varchar>({prefix + "at_timezone"});
+
+  registerFunction<
+      AtTimezoneTimeWithTimezoneFunction,
+      TimeWithTimezone,
+      TimeWithTimezone,
       Varchar>({prefix + "at_timezone"});
 
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(

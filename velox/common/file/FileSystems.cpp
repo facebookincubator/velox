@@ -17,6 +17,7 @@
 #include "velox/common/file/FileSystems.h"
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/CallOnce.h>
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 
@@ -90,7 +91,7 @@ class LocalFileSystem : public FileSystem {
                       std::max(
                           1,
                           static_cast<int32_t>(
-                              std::thread::hardware_concurrency() / 2)),
+                              folly::hardware_concurrency() / 2)),
                       std::make_shared<folly::NamedThreadFactory>(
                           "LocalReadahead"))
                 : nullptr) {}

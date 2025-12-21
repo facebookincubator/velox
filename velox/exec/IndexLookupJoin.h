@@ -120,6 +120,10 @@ class IndexLookupJoin : public Operator {
     // row in 'input' through the mapping specified by 'nonNullInputMappings'.
     // The redirect input hit indices are stored in 'resultInputHitIndices'.
     BufferPtr resultInputHitIndices;
+    // When splitOutput_ is false, this tracks partially accumulated results
+    // that are waiting for async operations to complete before continuing
+    // accumulation.
+    std::vector<std::unique_ptr<LookupResult>> partialOutputs;
 
     InputBatchState() : lookupFuture(ContinueFuture::makeEmpty()) {}
 
@@ -128,6 +132,7 @@ class IndexLookupJoin : public Operator {
       lookupResultIter = nullptr;
       lookupFuture = ContinueFuture::makeEmpty();
       lookupResult = nullptr;
+      partialOutputs.clear();
     }
 
     // Indicates if this input batch is empty.
@@ -159,6 +164,17 @@ class IndexLookupJoin : public Operator {
   // Prepare index source lookup for a given 'input_'.
   void prepareLookup(InputBatchState& batch);
   void startLookup(InputBatchState& batch);
+
+  // Helper function to merge batch.partialOutputs into a single
+  // batch.lookupResult. This is used when splitOutput_ is false to ensure all
+  // results from an iterator are combined into one output batch.
+  void mergeLookupResults(InputBatchState& batch);
+  // Helper function to get all lookup results. Fetches the first result if not
+  // already fetched, and when splitOutput_ is false, accumulates all remaining
+  // results into a single batch. Handles both initial lookup and resuming
+  // accumulation after async interruption. Returns true if results are ready,
+  // false if an async operation is pending.
+  bool getLookupResults(InputBatchState& batch);
 
   void startLookupBlockWait();
   void endLookupBlockWait();
@@ -252,6 +268,9 @@ class IndexLookupJoin : public Operator {
     return inputBatches_[startBatchIndex_ % maxNumInputBatches_];
   }
 
+  // If true, allows one input row to produce multiple output rows.
+  // If false, enforces one-to-one mapping.
+  const bool splitOutput_;
   // Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
   // Type of join.

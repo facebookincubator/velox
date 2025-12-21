@@ -16,7 +16,11 @@
 
 #include "velox/dwio/dwrf/writer/LayoutPlanner.h"
 
+#include "velox/dwio/common/Arena.h"
+
 namespace facebook::velox::dwrf {
+
+using dwio::common::ArenaCreate;
 
 StreamList getStreamList(WriterContext& context) {
   StreamList streams;
@@ -128,8 +132,7 @@ EncodingManager::EncodingManager(
     : encryptionHandler_{encryptionHandler},
       arena_{std::make_unique<google::protobuf::Arena>()} {
   initEncryptionGroups();
-  auto dwrfStripeFooter =
-      google::protobuf::Arena::CreateMessage<proto::StripeFooter>(arena_.get());
+  auto dwrfStripeFooter = ArenaCreate<proto::StripeFooter>(arena_.get());
   footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
 }
 
