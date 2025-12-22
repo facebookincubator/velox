@@ -38,18 +38,16 @@ class ExpandTest : public OperatorTestBase {
 };
 
 TEST_F(ExpandTest, complexConstant) {
-  auto otherColumns = makeRowVectorData(1);
-  auto children = otherColumns->children();
-  auto arrayVector = makeArrayVector<int32_t>({{1, 2, 3}});
+  auto data = makeRowVectorData(3);
+  auto children = data->children();
+  auto arrayVector =
+      makeArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}});
   children.push_back(arrayVector);
-  std::vector<VectorPtr> complexConstants(children.size());
-  complexConstants.back() = makeRowVector({arrayVector});
-  auto expected = makeRowVector({"k1", "k2", "a", "b", "c0"}, children);
+  auto expected = makeRowVector({"k1", "k2", "a", "b", "c"}, children);
 
   auto plan = PlanBuilder(pool())
-                  .values({expected})
-                  .expand(
-                      {{"k1", "k2", "a", "b", "ARRAY[1, 2, 3] as c"}})
+                  .values({data})
+                  .expand({{"k1", "k2", "a", "b", "ARRAY[1, 2, 3] as c"}})
                   .planNode();
 
   assertQuery(plan, expected);

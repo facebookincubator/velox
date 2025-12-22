@@ -85,7 +85,8 @@ RowVectorPtr Expand::getOutput() {
 
   for (auto i = 0; i < numColumns; ++i) {
     if (rowProjection[i] == kConstantChannel) {
-      outputColumns[i] = constantProjection[i];
+      outputColumns[i] =
+          BaseVector::wrapInConstant(numInput, 0, constantProjection[i]);
     } else {
       outputColumns[i] = input_->childAt(rowProjection[i]);
     }
