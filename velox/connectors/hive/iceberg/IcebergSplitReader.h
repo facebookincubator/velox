@@ -101,5 +101,7 @@ class IcebergSplitReader : public SplitReader {
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
+  // Pointer to runtime stats for tracking iceberg metrics
+  dwio::common::RuntimeStatistics* runtimeStats_{nullptr};
 };
 } // namespace facebook::velox::connector::hive::iceberg
