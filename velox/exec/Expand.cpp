@@ -30,21 +30,23 @@ Expand::Expand(
   const auto& inputType = expandNode->inputType();
   const auto numRows = expandNode->projections().size();
   fieldProjections_.reserve(numRows);
+  constantProjections_.reserve(numRows);
   constantOutputs_.reserve(numRows);
   const auto numColumns = expandNode->names().size();
   for (const auto& rowProjections : expandNode->projections()) {
     std::vector<column_index_t> rowProjection;
     rowProjection.reserve(numColumns);
-    std::vector<VectorPtr> constantOutput;
-    constantOutput.reserve(numColumns);
+    std::vector<std::shared_ptr<const core::ConstantTypedExpr>>
+        constantProjection;
+    constantProjection.reserve(numColumns);
     for (const auto& columnProjection : rowProjections) {
       if (auto field = core::TypedExprs::asFieldAccess(columnProjection)) {
         rowProjection.push_back(inputType->getChildIdx(field->name()));
-        constantOutput.push_back(nullptr);
+        constantProjection.push_back(nullptr);
       } else if (
           auto constant = core::TypedExprs::asConstant(columnProjection)) {
         rowProjection.push_back(kConstantChannel);
-        constantOutput.push_back(constant->toConstantVector(pool()));
+        constantProjection.push_back(constant);
       } else {
         VELOX_USER_FAIL(
             "Expand operator doesn't support this expression. Only column references and constants are supported. {}",
@@ -53,8 +55,27 @@ Expand::Expand(
     }
 
     fieldProjections_.emplace_back(std::move(rowProjection));
-    constantOutputs_.emplace_back(std::move(constantOutput));
+    constantProjections_.emplace_back(std::move(constantProjection));
   }
+}
+
+void Expand::initialize() {
+  if (constantProjections_.empty()) {
+    return;
+  }
+  const auto numColumns = constantProjections_[0].size();
+  std::vector<VectorPtr> constantOutput;
+  constantOutput.reserve(numColumns);
+  for (const auto& projections : constantProjections_) {
+    for (const auto& constant : projections) {
+      if (constant) {
+        constantOutput.push_back(constant->toConstantVector(pool()));
+      } else {
+        constantOutput.push_back(nullptr);
+      }
+    }
+  }
+  constantOutputs_.emplace_back(std::move(constantOutput));
 }
 
 bool Expand::needsInput() const {

@@ -43,11 +43,20 @@ TEST_F(ExpandTest, complexConstant) {
   auto arrayVector =
       makeArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}});
   children.push_back(arrayVector);
-  auto expected = makeRowVector({"k1", "k2", "a", "b", "c"}, children);
+  children.push_back(makeAllNullArrayVector(3, INTEGER()));
+  children.push_back(makeNullConstant(TypeKind::INTEGER, 3));
+  auto expected = makeRowVector(children);
 
   auto plan = PlanBuilder(pool())
                   .values({data})
-                  .expand({{"k1", "k2", "a", "b", "ARRAY[1, 2, 3] as c"}})
+                  .expand(
+                      {{"k1",
+                        "k2",
+                        "a",
+                        "b",
+                        "ARRAY[1, 2, 3] as c",
+                        "null::integer[] as d",
+                        "null::integer as e"}})
                   .planNode();
 
   assertQuery(plan, expected);
