@@ -189,10 +189,8 @@ jobs:
 
       - name: Run cuDF Tests
         run: |
-          mv _build/release/velox/experimental ./velox
-          mv _build/release/_deps ./
           ls -R .
-          cd velox/experimental/cudf/tests/
+          cd _build/release/velox/experimental/cudf/tests/
           chmod +x velox_cudf*
           export DEPS_PATH=../../../../_deps/
           export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
