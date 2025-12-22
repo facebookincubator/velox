@@ -44,8 +44,7 @@ class Expand : public Operator {
  private:
   std::vector<std::vector<column_index_t>> fieldProjections_;
 
-  std::vector<std::vector<std::shared_ptr<const core::ConstantTypedExpr>>>
-      constantProjections_;
+  std::vector<std::vector<VectorPtr>> constantOutputs_;
 
   // Used to indicate the index of fieldProjections_.
   int32_t rowIndex_{0};
