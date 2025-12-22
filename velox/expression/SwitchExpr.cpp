@@ -34,7 +34,7 @@ TypePtr resolveTypeInt(
 TypePtr resolveTypeInt(const std::vector<TypePtr>& argTypes) {
   std::vector<TypePtr> coercions;
   return resolveTypeInt(argTypes, false, coercions);
-};
+}
 } // namespace
 
 SwitchExpr::SwitchExpr(
@@ -312,7 +312,7 @@ TypePtr SwitchCallToSpecialForm::resolveType(
   return resolveTypeInt(argTypes);
 }
 
-TypePtr SwitchCallToSpecialForm::resolveTypeWithCorsions(
+TypePtr SwitchCallToSpecialForm::resolveTypeWithCoercions(
     const std::vector<TypePtr>& argTypes,
     std::vector<TypePtr>& coercions) {
   return resolveTypeInt(argTypes, true, coercions);
@@ -338,7 +338,7 @@ TypePtr IfCallToSpecialForm::resolveType(const std::vector<TypePtr>& argTypes) {
   return resolveTypeInt(argTypes);
 }
 
-TypePtr IfCallToSpecialForm::resolveTypeWithCorsions(
+TypePtr IfCallToSpecialForm::resolveTypeWithCoercions(
     const std::vector<TypePtr>& argTypes,
     std::vector<TypePtr>& coercions) {
   VELOX_CHECK_EQ(

@@ -40,7 +40,7 @@ TypePtr resolveTypeForSpecialFormWithCoercions(
     return nullptr;
   }
 
-  return specialForm->resolveTypeWithCorsions(argTypes, coercions);
+  return specialForm->resolveTypeWithCoercions(argTypes, coercions);
 }
 
 ExprPtr constructSpecialForm(

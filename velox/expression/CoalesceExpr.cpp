@@ -147,7 +147,7 @@ TypePtr CoalesceCallToSpecialForm::resolveType(
   return resolveTypeInt(argTypes);
 }
 
-TypePtr CoalesceCallToSpecialForm::resolveTypeWithCorsions(
+TypePtr CoalesceCallToSpecialForm::resolveTypeWithCoercions(
     const std::vector<TypePtr>& argTypes,
     std::vector<TypePtr>& coercions) {
   return resolveTypeInt(argTypes, true, coercions);

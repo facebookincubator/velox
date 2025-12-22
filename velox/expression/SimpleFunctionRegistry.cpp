@@ -172,98 +172,88 @@ std::optional<SimpleFunctionRegistry::ResolvedSimpleFunction>
 SimpleFunctionRegistry::resolveFunction(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
-    bool allowCoercion,
-    std::vector<TypePtr>& coercions) const {
+    std::vector<TypePtr>* coercions) const {
   using Candidate = std::pair<const FunctionEntry*, TypePtr>;
-
-  std::optional<Candidate> selectedCandidate;
+  const FunctionEntry* selectedFunction{};
+  TypePtr selectedType;
+  auto selectedPriority = kImpossibleCoercionCost;
+  std::vector<Coercion> selectedCoercions;
+  size_t selectedCount = 0;
   registeredFunctions_.withRLock([&](const auto& map) {
-    if (const auto* signatureMap = getSignatureMap(name, map)) {
-      std::vector<std::pair<std::vector<Coercion>, Candidate>> candidates;
-      std::optional<uint32_t> priority;
+    const auto* signatureMap = getSignatureMap(name, map);
+    if (!signatureMap) {
+      return;
+    }
+    std::vector<Coercion> requiredCoercions;
 
-      for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
-        SignatureBinder binder(candidateSignature, argTypes);
+    for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
+      SignatureBinder binder(candidateSignature, argTypes);
 
-        std::vector<Coercion> requiredCoercions;
-
-        bool bound;
-        if (allowCoercion) {
-          bound = binder.tryBindWithCoercions(requiredCoercions);
-        } else {
-          bound = binder.tryBind();
-        }
-
-        if (bound) {
-          for (const auto& currentCandidate : functionEntry) {
-            const auto& m = currentCandidate->getMetadata();
-
-            // For variadic signatures, number of arguments in function call
-            // may be one less than number of arguments in the signature.
-            const auto numArgsToMatch =
-                std::min(argTypes.size(), m.argPhysicalTypes().size());
-
-            bool match = true;
-            for (auto i = 0; i < numArgsToMatch; ++i) {
-              auto argType = argTypes[i];
-              if (allowCoercion && requiredCoercions[i].type != nullptr) {
-                argType = requiredCoercions[i].type;
-              }
-              if (!physicalTypeMatches(argType, m.argPhysicalTypes()[i])) {
-                match = false;
-                break;
-              }
-            }
-
-            if (!match) {
-              continue;
-            }
-
-            auto resultType = binder.tryResolveReturnType();
-            VELOX_CHECK_NOT_NULL(resultType);
-
-            if (physicalTypeMatches(resultType, m.resultPhysicalType())) {
-              const auto currentPriority = m.priority();
-
-              if (!priority.has_value() || currentPriority < priority.value()) {
-                candidates.clear();
-                candidates.emplace_back(
-                    requiredCoercions,
-                    std::make_pair(currentCandidate.get(), resultType));
-                priority = currentPriority;
-              } else if (allowCoercion && currentPriority == priority.value()) {
-                candidates.emplace_back(
-                    requiredCoercions,
-                    std::make_pair(currentCandidate.get(), resultType));
-              }
-            }
-          }
-        }
+      if (!binder.tryBind(coercions ? &requiredCoercions : nullptr)) {
+        continue;
       }
+      for (const auto& currentCandidate : functionEntry) {
+        const auto& m = currentCandidate->getMetadata();
 
-      if (!candidates.empty()) {
-        if (allowCoercion) {
-          if (auto index = Coercion::pickLowestCost(candidates)) {
-            selectedCandidate = candidates[index.value()].second;
+        // For variadic signatures, number of arguments in function call
+        // may be one less than number of arguments in the signature.
+        const auto numArgsToMatch =
+            std::min(argTypes.size(), m.argPhysicalTypes().size());
 
-            const auto& selectedCoercions = candidates[index.value()].first;
-
-            coercions.clear();
-            for (const auto& coercion : selectedCoercions) {
-              coercions.push_back(coercion.type);
-            }
+        bool match = true;
+        for (auto i = 0; i < numArgsToMatch; ++i) {
+          auto argType = argTypes[i];
+          if (coercions && requiredCoercions[i].type != nullptr) {
+            argType = requiredCoercions[i].type;
           }
-        } else {
-          selectedCandidate = candidates[0].second;
+          if (!physicalTypeMatches(argType, m.argPhysicalTypes()[i])) {
+            match = false;
+            break;
+          }
+        }
+
+        if (!match) {
+          continue;
+        }
+
+        auto resultType = binder.tryResolveReturnType();
+        if (!resultType) {
+          continue;
+        }
+
+        if (physicalTypeMatches(resultType, m.resultPhysicalType())) {
+          // Coercion cost is required to match more suitable signature.
+          // For example, let's assume function has two signatures:
+          // 1. BIGINT -> BIGINT
+          // 2. Generic<T> -> BIGINT
+          // Then binding function to INTEGER should pick the second signature.
+          // So we need to ensure that any non-zero coercion cost is higher than
+          // the maximum possible cost of function signatures without coercion.
+          const auto coercionCost = Coercion::overallCost(requiredCoercions);
+          const auto currentPriority = m.priority() +
+              core::kMaxFunctionRank * core::kMaxFunctionArgs * coercionCost;
+
+          if (currentPriority < selectedPriority) {
+            selectedFunction = currentCandidate.get();
+            selectedType = resultType;
+            selectedPriority = currentPriority;
+            selectedCoercions = requiredCoercions;
+            selectedCount = 1;
+          } else if (currentPriority == selectedPriority) {
+            ++selectedCount;
+          }
         }
       }
     }
   });
-
-  return selectedCandidate.has_value()
-      ? std::make_optional(ResolvedSimpleFunction(
-            *(selectedCandidate->first), selectedCandidate->second))
-      : std::nullopt;
+  if (selectedCount != 1) {
+    if (coercions) {
+      coercions->clear();
+    }
+    return std::nullopt;
+  }
+  Coercion::convert(selectedCoercions, coercions);
+  return ResolvedSimpleFunction{*selectedFunction, selectedType};
 }
 
 } // namespace facebook::velox::exec
