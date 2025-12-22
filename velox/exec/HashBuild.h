@@ -229,6 +229,9 @@ class HashBuild final : public Operator {
   // can be removed for left semi and anti join.
   const bool dropDuplicates_;
 
+  // Maximum number of distinct values to keep when merging vector hashers
+  const size_t vectorHasherMaxNumDistinct_;
+
   // Minimum number of rows to see before deciding to give up build no
   // duplicates hash table.
   const int32_t abandonHashBuildDedupMinRows_;

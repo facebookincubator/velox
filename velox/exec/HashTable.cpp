@@ -1925,6 +1925,7 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
     int8_t spillInputStartPartitionBit,
+    size_t vectorHasherMaxNumDistinct,
     bool dropDuplicates,
     folly::Executor* executor) {
   buildExecutor_ = executor;
@@ -1976,7 +1977,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
           other->analyze();
         }
         for (auto i = 0; i < hashers_.size(); ++i) {
-          hashers_[i]->merge(*other->hashers_[i]);
+          hashers_[i]->merge(*other->hashers_[i], vectorHasherMaxNumDistinct);
           if (!hashers_[i]->mayUseValueIds()) {
             useValueIds = false;
             break;
