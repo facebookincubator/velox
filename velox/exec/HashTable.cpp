@@ -1961,6 +1961,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
 
   bool useValueIds = mayUseValueIds(*this);
   if (useValueIds) {
+    CpuWallTimer timer(vectorHasherMergeTiming_);
     for (auto& other : otherTables_) {
       if (!mayUseValueIds(*other)) {
         useValueIds = false;

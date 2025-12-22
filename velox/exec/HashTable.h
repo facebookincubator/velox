@@ -165,6 +165,8 @@ class BaseHashTable {
       "hashtable.parallelJoinBloomFilterBuildWallNanos"};
   static inline const std::string kParallelJoinBloomFilterBuildCpuNanos{
       "hashtable.parallelJoinBloomFilterBuildCpuNanos"};
+  static inline const std::string kVectorHasherMergeCpuNanos{
+      "hashtable.vectorHasherMergeCpuNanos"};
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
@@ -451,6 +453,10 @@ class BaseHashTable {
     return parallelJoinBuildStats_;
   }
 
+  const CpuWallTiming& vectorHasherMergeTiming() const {
+    return vectorHasherMergeTiming_;
+  }
+
   /// Copies the values at 'columnIndex' into 'result' for the 'rows.size' rows
   /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
   /// row in 'result' to null.
@@ -474,6 +480,7 @@ class BaseHashTable {
   std::unique_ptr<RowContainer> rows_;
 
   ParallelJoinBuildStats parallelJoinBuildStats_;
+  CpuWallTiming vectorHasherMergeTiming_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
