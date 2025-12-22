@@ -1018,6 +1018,12 @@ void HashBuild::addRuntimeStats() {
         RuntimeCounter(
             spillConfig()->spillLevel(spiller_->hashBits().begin())));
   }
+
+  lockedStats->addRuntimeStat(
+      BaseHashTable::kVectorHasherMergeCpuNanos,
+      RuntimeCounter(
+          table_->vectorHasherMergeTiming().cpuNanos,
+          RuntimeCounter::Unit::kNanos));
 }
 
 BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
