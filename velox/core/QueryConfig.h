@@ -778,6 +778,11 @@ class QueryConfig {
   /// estimates.
   static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
 
+  /// Maximum number of distinct values to keep when merging vector hashers in
+  /// join HashBuild.
+  static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
+      "join_build_vector_hasher_max_num_distinct";
+
   enum class RowSizeTrackingMode {
     DISABLED = 0,
     EXCLUDE_DELTA_SPLITS = 1,
@@ -1395,6 +1400,10 @@ class QueryConfig {
 
   std::string clientTags() const {
     return get<std::string>(kClientTags, "");
+  }
+
+  uint32_t joinBuildVectorHasherMaxNumDistinct() const {
+    return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
   }
 
   template <typename T>

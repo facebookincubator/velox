@@ -337,7 +337,7 @@ class VectorHasher {
 
   // Merges the value ids information of 'other' into 'this'. Ranges
   // and distinct values are unioned.
-  void merge(const VectorHasher& other);
+  void merge(const VectorHasher& other, size_t maxNumDistinct);
 
   // true if no values have been added.
   bool empty() const {

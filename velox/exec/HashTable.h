@@ -320,6 +320,7 @@ class BaseHashTable {
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
+      size_t vectorHasherMaxNumDistinct,
       bool dropDuplicates = false,
       folly::Executor* executor = nullptr) = 0;
 
@@ -640,6 +641,7 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
+      size_t vectorHasherMaxNumDistinct,
       bool dropDuplicates = false,
       folly::Executor* executor = nullptr) override;
 

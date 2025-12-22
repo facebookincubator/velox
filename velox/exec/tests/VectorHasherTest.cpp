@@ -681,9 +681,9 @@ TEST_F(VectorHasherTest, merge) {
   VectorHasher emptyHasher(BIGINT(), 0);
   VectorHasher otherEmptyHasher(BIGINT(), 0);
   EXPECT_TRUE(emptyHasher.empty());
-  emptyHasher.merge(otherHasher);
-  hasher.merge(emptyHasher);
-  hasher.merge(otherEmptyHasher);
+  emptyHasher.merge(otherHasher, 1'000'000);
+  hasher.merge(emptyHasher, 1'000'000);
+  hasher.merge(otherEmptyHasher, 1'000'000);
   uint64_t numRange;
   uint64_t numDistinct;
   hasher.cardinality(0, numRange, numDistinct);
@@ -719,6 +719,45 @@ TEST_F(VectorHasherTest, merge) {
   // Check all values have distinct id. -1 to account for null that
   // does not occur in the data.
   EXPECT_EQ(numDistinct - 1, ids.size());
+}
+
+TEST_F(VectorHasherTest, mergeMaxNumDistinct) {
+  constexpr vector_size_t kSize = 100;
+  SelectivityVector rows(kSize);
+  raw_vector<uint64_t> hashes(kSize);
+
+  auto vector1 =
+      makeFlatVector<int64_t>(kSize, [](vector_size_t row) { return row; });
+  auto vector2 = makeFlatVector<int64_t>(
+      kSize, [](vector_size_t row) { return 1000 + row; });
+  auto vector3 = makeFlatVector<int64_t>(
+      kSize, [](vector_size_t row) { return 2000 + row; });
+
+  VectorHasher hasher1(BIGINT(), 0);
+  hasher1.decode(*vector1, rows);
+  hasher1.computeValueIds(rows, hashes);
+
+  VectorHasher hasher2(BIGINT(), 0);
+  hasher2.decode(*vector2, rows);
+  hasher2.computeValueIds(rows, hashes);
+
+  VectorHasher hasher3(BIGINT(), 0);
+  hasher3.decode(*vector3, rows);
+  hasher3.computeValueIds(rows, hashes);
+
+  hasher1.merge(hasher2, kSize * 2);
+  uint64_t numRange;
+  uint64_t numDistinct;
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numDistinct, kSize * 2 + 1);
+
+  hasher1.merge(hasher3, kSize * 2);
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
+
+  hasher1.merge(hasher3, kSize * 10);
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
 }
 
 TEST_F(VectorHasherTest, computeValueIdsBigint) {
