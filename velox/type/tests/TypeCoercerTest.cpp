@@ -23,19 +23,27 @@ namespace {
 
 void testCoercion(const TypePtr& fromType, const TypePtr& toType) {
   auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name());
-  ASSERT_TRUE(coercion.has_value());
-  VELOX_EXPECT_EQ_TYPES(coercion->type, toType);
+  ASSERT_TRUE(coercion);
+  if (coercion.cost == 0) {
+    ASSERT_FALSE(coercion.type);
+  } else {
+    VELOX_EXPECT_EQ_TYPES(coercion.type, toType);
+  }
 }
 
 void testBaseCoercion(const TypePtr& fromType) {
   auto coercion = TypeCoercer::coerceTypeBase(fromType, fromType->kindName());
-  ASSERT_TRUE(coercion.has_value());
-  VELOX_EXPECT_EQ_TYPES(coercion->type, fromType);
+  ASSERT_TRUE(coercion);
+  if (coercion.cost == 0) {
+    ASSERT_FALSE(coercion.type);
+  } else {
+    VELOX_EXPECT_EQ_TYPES(coercion.type, fromType);
+  }
 }
 
 void testNoCoercion(const TypePtr& fromType, const TypePtr& toType) {
   auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name());
-  ASSERT_FALSE(coercion.has_value());
+  ASSERT_FALSE(coercion);
 }
 
 TEST(TypeCoercerTest, basic) {
