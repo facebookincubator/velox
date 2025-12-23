@@ -2515,7 +2515,7 @@ TEST_F(TableScanTest, statsBasedSkippingWithoutDecompression) {
   auto assertQuery = [&](const std::string& filter) {
     auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
-        PlanBuilder(pool_.get()).tableScan(rowType, {filter}).planNode(),
+        PlanBuilder(pool_.get()).tableScan(rowType, {}, {filter}).planNode(),
         filePaths,
         "SELECT * FROM tmp WHERE " + filter);
   };

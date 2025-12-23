@@ -962,6 +962,10 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
       auto filter =
           exec::ExprToSubfieldFilterParser::makeOrFilter(std::move(disjuncts));
 
+      if (filter == nullptr) {
+        return expr;
+      }
+
       auto it = filters.find(subfield);
       if (it != filters.end()) {
         filter = filter->mergeWith(it->second.get());

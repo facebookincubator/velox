@@ -214,10 +214,10 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
       VELOX_CHECK(left.first == right.first);
-      return {
-          std::move(left.first),
-          exec::ExprToSubfieldFilterParser::makeOrFilter(
-              std::move(left.second), std::move(right.second))};
+      auto filter = exec::ExprToSubfieldFilterParser::makeOrFilter(
+          std::move(left.second), std::move(right.second));
+      VELOX_CHECK_NOT_NULL(filter);
+      return {std::move(left.first), std::move(filter)};
     }
 
     if (call->name() == "not") {
