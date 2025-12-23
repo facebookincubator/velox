@@ -133,7 +133,7 @@ HashProbe::HashProbe(
       filterResult_(1),
       outputTableRowsCapacity_(outputBatchSize_),
       parallelJoinBuildRowsEnabled_(
-          driverCtx->queryConfig().parallelJoinBuildRowsEnabled()) {
+          driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled()) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
 }
 
