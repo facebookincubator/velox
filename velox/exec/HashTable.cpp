@@ -2203,6 +2203,58 @@ int32_t HashTable<ignoreNullKeys>::listAllRows(
   return listRows<RowContainer::ProbeType::kAll>(iter, maxRows, maxBytes, rows);
 }
 
+template <bool ignoreNullKeys>
+template <RowContainer::ProbeType probeType>
+int32_t HashTable<ignoreNullKeys>::listRows(
+    RowContainerIterator& rowContainerIterator,
+    int rowContainerId,
+    int32_t maxRows,
+    uint64_t maxBytes,
+    char** rows) {
+  const auto& rowContainer = rowContainerId == 0
+      ? rows_.get()
+      : otherTables_[rowContainerId - 1]->rows();
+  const auto numRows = rowContainer->template listRows<probeType>(
+      &rowContainerIterator, maxRows, maxBytes, rows);
+  if (numRows > 0) {
+    return numRows;
+  }
+  return 0;
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listNotProbedRows(
+    RowContainerIterator& rowContainerIterator,
+    int rowContainerId,
+    int32_t maxRows,
+    uint64_t maxBytes,
+    char** rows) {
+  return listRows<RowContainer::ProbeType::kNotProbed>(
+      rowContainerIterator, rowContainerId, maxRows, maxBytes, rows);
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listProbedRows(
+    RowContainerIterator& rowContainerIterator,
+    int rowContainerId,
+    int32_t maxRows,
+    uint64_t maxBytes,
+    char** rows) {
+  return listRows<RowContainer::ProbeType::kProbed>(
+      rowContainerIterator, rowContainerId, maxRows, maxBytes, rows);
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listAllRows(
+    RowContainerIterator& rowContainerIterator,
+    int rowContainerId,
+    int32_t maxRows,
+    uint64_t maxBytes,
+    char** rows) {
+  return listRows<RowContainer::ProbeType::kAll>(
+      rowContainerIterator, rowContainerId, maxRows, maxBytes, rows);
+}
+
 template <>
 int32_t HashTable<false>::listNullKeyRows(
     NullKeyRowsIterator* iter,

@@ -297,6 +297,15 @@ class BaseHashTable {
       uint64_t maxBytes,
       char** rows) = 0;
 
+  /// Same as above, but only return rows from the row container of
+  /// 'rowContainerId'.
+  virtual int32_t listNotProbedRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) = 0;
+
   /// Returns rows with 'probed' flag set. Used by the right semi join.
   virtual int32_t listProbedRows(
       RowsIterator* iter,
@@ -304,9 +313,27 @@ class BaseHashTable {
       uint64_t maxBytes,
       char** rows) = 0;
 
+  /// Same as above, but only return rows from the row container of
+  /// 'rowContainerId'.
+  virtual int32_t listProbedRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) = 0;
+
   /// Returns all rows. Used by the right semi join project.
   virtual int32_t listAllRows(
       RowsIterator* iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) = 0;
+
+  /// Same as above, but only return rows from the row container of
+  /// 'rowContainerId'.
+  virtual int32_t listAllRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
       char** rows) = 0;
@@ -353,6 +380,9 @@ class BaseHashTable {
   /// Returns the number of rows in a group by or hash join build
   /// side. This is used for sizing the internal hash table.
   virtual uint64_t numDistinct() const = 0;
+
+  /// Returns the number of row containers in this hash table.
+  virtual int32_t numRowContainers() const = 0;
 
   /// Return a number of current stats that can help with debugging and
   /// profiling.
@@ -585,6 +615,27 @@ class HashTable : public BaseHashTable {
       uint64_t maxBytes,
       char** rows) override;
 
+  int32_t listNotProbedRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) override;
+
+  int32_t listProbedRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) override;
+
+  int32_t listAllRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) override;
+
   int32_t listNullKeyRows(
       NullKeyRowsIterator* iter,
       int32_t maxRows,
@@ -609,6 +660,10 @@ class HashTable : public BaseHashTable {
 
   uint64_t numDistinct() const override {
     return numDistinct_;
+  }
+
+  int32_t numRowContainers() const override {
+    return otherTables_.size() + 1;
   }
 
   HashTableStats stats() const override {
@@ -804,6 +859,14 @@ class HashTable : public BaseHashTable {
   template <RowContainer::ProbeType probeType>
   int32_t
   listRows(RowsIterator* iter, int32_t maxRows, uint64_t maxBytes, char** rows);
+
+  template <RowContainer::ProbeType probeType>
+  int32_t listRows(
+      RowContainerIterator& rowContainerIterator,
+      int rowContainerId,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows);
 
   char*& nextRow(char* row) {
     return *reinterpret_cast<char**>(row + nextOffset_);
