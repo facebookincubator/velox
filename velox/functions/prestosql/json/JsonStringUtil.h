@@ -94,7 +94,8 @@ inline bool needNormalizeForJsonParse(const char* input, size_t length) {
 /// @param output: Output string to write the unescaped input to.
 /// @param fully: If true, unescape all characters. If false, unescape only
 /// unicode and forward slash. The false case is used for json cast.
-void unescapeForJsonFunctions(
+/// @return The number of bytes written to the output.
+size_t unescapeForJsonFunctions(
     const char* input,
     size_t length,
     char* output,
