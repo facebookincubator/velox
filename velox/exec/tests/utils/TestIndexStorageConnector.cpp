@@ -96,7 +96,8 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
   }
 
   // Build the table index.
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable(
+      {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
   return std::make_shared<TestIndexTable>(
       std::move(keyType), std::move(valueType), std::move(table));
 }

@@ -64,6 +64,8 @@ HashBuild::HashBuild(
       nullAware_{joinNode_->isNullAware()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
       dropDuplicates_(joinNode_->canDropDuplicates()),
+      vectorHasherMaxNumDistinct_(
+          driverCtx->queryConfig().joinBuildVectorHasherMaxNumDistinct()),
       abandonHashBuildDedupMinRows_(
           driverCtx->queryConfig().abandonHashBuildDedupMinRows()),
       abandonHashBuildDedupMinPct_(
@@ -782,6 +784,7 @@ bool HashBuild::finishHashBuild() {
         std::move(otherTables),
         isInputFromSpill() ? spillConfig()->startPartitionBit
                            : BaseHashTable::kNoSpillInputStartPartitionBit,
+        vectorHasherMaxNumDistinct_,
         dropDuplicates_,
         allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
                                : nullptr);
@@ -1018,6 +1021,12 @@ void HashBuild::addRuntimeStats() {
         RuntimeCounter(
             spillConfig()->spillLevel(spiller_->hashBits().begin())));
   }
+
+  lockedStats->addRuntimeStat(
+      BaseHashTable::kVectorHasherMergeCpuNanos,
+      RuntimeCounter(
+          table_->vectorHasherMergeTiming().cpuNanos,
+          RuntimeCounter::Unit::kNanos));
 }
 
 BlockingReason HashBuild::isBlocked(ContinueFuture* future) {

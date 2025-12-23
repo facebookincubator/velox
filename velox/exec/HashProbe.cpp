@@ -131,7 +131,9 @@ HashProbe::HashProbe(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
       filterResult_(1),
-      outputTableRowsCapacity_(outputBatchSize_) {
+      outputTableRowsCapacity_(outputBatchSize_),
+      parallelJoinBuildRowsEnabled_(
+          driverCtx->queryConfig().parallelJoinBuildRowsEnabled()) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
 }
 
@@ -506,7 +508,6 @@ void HashProbe::prepareForSpillRestore() {
   restoringPartitionId_.reset();
   spillInputPartitionIds_.clear();
   spillOutputReader_.reset();
-  lastProbeIterator_.reset();
 
   VELOX_CHECK(promises_.empty() || lastProber_);
   if (!lastProber_) {
@@ -647,7 +648,6 @@ BlockingReason HashProbe::isBlocked(ContinueFuture* future) {
       }
       break;
     case ProbeOperatorState::kWaitForPeers:
-      VELOX_CHECK(canSpill());
       if (!future_.valid()) {
         setRunning();
       }
@@ -876,28 +876,49 @@ void HashProbe::fillOutput(vector_size_t size) {
 }
 
 RowVectorPtr HashProbe::getBuildSideOutput() {
-  auto* outputTableRows =
+  if (buildSideOutputRowContainerId_ == -1) {
+    buildSideOutputRowContainerId_ =
+        joinBridge_->getAndIncrementUnclaimedRowContainerId();
+    lastProbeIterator_.reset();
+  }
+  if (buildSideOutputRowContainerId_ >= table_->numRowContainers()) {
+    return nullptr;
+  }
+
+  char** outputTableRows =
       initBuffer<char*>(outputTableRows_, outputTableRowsCapacity_, pool());
-  int32_t numOut;
-  if (isRightSemiFilterJoin(joinType_)) {
-    numOut = table_->listProbedRows(
-        &lastProbeIterator_,
-        outputTableRowsCapacity_,
-        RowContainer::kUnlimited,
-        outputTableRows);
-  } else if (isRightSemiProjectJoin(joinType_)) {
-    numOut = table_->listAllRows(
-        &lastProbeIterator_,
-        outputTableRowsCapacity_,
-        RowContainer::kUnlimited,
-        outputTableRows);
-  } else {
-    // Must be a right join or full join.
-    numOut = table_->listNotProbedRows(
-        &lastProbeIterator_,
-        outputTableRowsCapacity_,
-        RowContainer::kUnlimited,
-        outputTableRows);
+  int32_t numOut{0};
+  while (numOut == 0 &&
+         buildSideOutputRowContainerId_ < table_->numRowContainers()) {
+    if (isRightSemiFilterJoin(joinType_)) {
+      numOut = table_->listProbedRows(
+          lastProbeIterator_,
+          buildSideOutputRowContainerId_,
+          outputTableRowsCapacity_,
+          RowContainer::kUnlimited,
+          outputTableRows);
+    } else if (isRightSemiProjectJoin(joinType_)) {
+      numOut = table_->listAllRows(
+          lastProbeIterator_,
+          buildSideOutputRowContainerId_,
+          outputTableRowsCapacity_,
+          RowContainer::kUnlimited,
+          outputTableRows);
+
+    } else {
+      // Must be a right join or full join.
+      numOut = table_->listNotProbedRows(
+          lastProbeIterator_,
+          buildSideOutputRowContainerId_,
+          outputTableRowsCapacity_,
+          RowContainer::kUnlimited,
+          outputTableRows);
+    }
+    if (numOut == 0) {
+      buildSideOutputRowContainerId_ =
+          joinBridge_->getAndIncrementUnclaimedRowContainerId();
+      lastProbeIterator_.reset();
+    }
   }
   if (numOut == 0) {
     return nullptr;
@@ -991,16 +1012,11 @@ void HashProbe::checkStateTransition(ProbeOperatorState state) {
   VELOX_CHECK_NE(state_, state);
   switch (state) {
     case ProbeOperatorState::kRunning:
-      if (!canSpill()) {
-        VELOX_CHECK_EQ(state_, ProbeOperatorState::kWaitForBuild);
-      } else {
-        VELOX_CHECK(
-            state_ == ProbeOperatorState::kWaitForBuild ||
-            state_ == ProbeOperatorState::kWaitForPeers);
-      }
+      VELOX_CHECK(
+          state_ == ProbeOperatorState::kWaitForBuild ||
+          state_ == ProbeOperatorState::kWaitForPeers);
       break;
     case ProbeOperatorState::kWaitForPeers:
-      VELOX_CHECK(canSpill());
       [[fallthrough]];
     case ProbeOperatorState::kWaitForBuild:
       [[fallthrough]];
@@ -1046,7 +1062,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       return nullptr;
     }
 
-    if (needLastProbe() && lastProber_) {
+    if (needLastProbe() && (outputBuildRowsInParallel_ || lastProber_)) {
       auto output = getBuildSideOutput();
       if (output != nullptr) {
         return output;
@@ -1726,15 +1742,28 @@ void HashProbe::noMoreInputInternal() {
   const bool hasSpillEnabled = canSpill();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
-  // The last operator to finish processing inputs is responsible for
-  // producing build-side rows based on the join.
+
+  // Reset flags about outputing build-side rows in parallel.
+  buildSideOutputRowContainerId_ = -1;
+  outputBuildRowsInParallel_ =
+      parallelJoinBuildRowsEnabled_ && needLastProbe() && !hasSpillEnabled;
+
+  // NOTE: if 'hasSpillEnabled' is false and 'outputBuildRowsInParallel_' is
+  // false too, then a hash probe operator doesn't need to wait for all the
+  // other peers to finish probe processing. If 'hasSpillEnabled' is true, it
+  // needs to wait and might expect spill gets triggered by the other probe
+  // operators, or there is previously spilled table partition(s) that needs to
+  // restore. If 'outputBuildRowsInParallel_', it needs to wait to all drivers
+  // start outputing build-side rows in parallel only after all drivers finish
+  // probe processing.
+  const bool shouldBlock = hasSpillEnabled || outputBuildRowsInParallel_;
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(),
           operatorCtx_->driver(),
-          hasSpillEnabled ? &future_ : nullptr,
-          hasSpillEnabled ? promises_ : promises,
+          shouldBlock ? &future_ : nullptr,
+          shouldBlock ? promises_ : promises,
           peers)) {
-    if (hasSpillEnabled) {
+    if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
       VELOX_DCHECK(promises_.empty());
@@ -1745,13 +1774,14 @@ void HashProbe::noMoreInputInternal() {
   }
 
   VELOX_CHECK(promises.empty());
-  // NOTE: if 'hasSpillEnabled' is false, then a hash probe operator doesn't
-  // need to wait for all the other peers to finish probe processing.
-  // Otherwise, it needs to wait and might expect spill gets triggered by the
-  // other probe operators, or there is previously spilled table partition(s)
-  // that needs to restore.
-  VELOX_CHECK(hasSpillEnabled || peers.empty());
   lastProber_ = true;
+  joinBridge_->resetUnclaimedRowContainerId();
+  // If 'outputBuildRowsInParallel_' is true, wake up all peers to start
+  // outputing build-side rows in parallel. Otherwise, only let the last prober
+  // proceed.
+  if (outputBuildRowsInParallel_) {
+    wakeupPeerOperators();
+  }
 }
 
 bool HashProbe::isFinished() {
@@ -1795,8 +1825,9 @@ void HashProbe::ensureOutputFits() {
   }
 
   // We only need to reserve memory for output if need.
-  if (input_ == nullptr &&
-      (hasMoreInput() || !(needLastProbe() && lastProber_))) {
+  bool outputBuildSideRows =
+      outputBuildRowsInParallel_ || (needLastProbe() && lastProber_);
+  if (input_ == nullptr && (hasMoreInput() || !outputBuildSideRows)) {
     return;
   }
 

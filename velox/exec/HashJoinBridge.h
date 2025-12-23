@@ -143,6 +143,17 @@ class HashJoinBridge : public JoinBridge {
 
   bool testingHasMoreSpilledPartitions();
 
+  /// Return the next unclaimed row container id in the current hash table for
+  /// HashProbe drivers to output build-side rows.
+  int getAndIncrementUnclaimedRowContainerId() {
+    return unclaimedRowContainerId_.fetch_add(1);
+  }
+
+  /// Reset the next unclaimed row container id to 0.
+  void resetUnclaimedRowContainerId() {
+    unclaimedRowContainerId_.store(0);
+  }
+
  private:
   void appendSpilledHashTablePartitionsLocked(
       SpillPartitionSet&& spillPartitionSet);
@@ -182,6 +193,13 @@ class HashJoinBridge : public JoinBridge {
   // attempt to get table. It is reset after probe side finish the (sub) table
   // processing.
   bool probeStarted_;
+
+  // Keep track of the next row container id in a hash table that has not been
+  // processed by any hash probe driver. This is used when hash probe drivers
+  // output build-side rows. When drivers are allowed to output build-side rows
+  // in parallel, drivers call getAndIncrementClaimedRowContainerId() to ensure
+  // the row containers they process do not overlap with each other.
+  std::atomic<int> unclaimedRowContainerId_{0};
 
   friend test::HashJoinBridgeTestHelper;
 };

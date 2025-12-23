@@ -277,6 +277,10 @@ class QueryConfig {
   static constexpr const char* kAdaptiveFilterReorderingEnabled =
       "adaptive_filter_reordering_enabled";
 
+  /// If true, allow hash probe drivers to generate build-side rows in parallel.
+  static constexpr const char* kParallelJoinBuildRowsEnabled =
+      "parallel_join_build_rows_enabled";
+
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
 
@@ -778,6 +782,11 @@ class QueryConfig {
   /// estimates.
   static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
 
+  /// Maximum number of distinct values to keep when merging vector hashers in
+  /// join HashBuild.
+  static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
+      "join_build_vector_hasher_max_num_distinct";
+
   enum class RowSizeTrackingMode {
     DISABLED = 0,
     EXCLUDE_DELTA_SPLITS = 1,
@@ -1019,6 +1028,10 @@ class QueryConfig {
 
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool parallelJoinBuildRowsEnabled() const {
+    return get<bool>(kParallelJoinBuildRowsEnabled, false);
   }
 
   bool spillEnabled() const {
@@ -1395,6 +1408,10 @@ class QueryConfig {
 
   std::string clientTags() const {
     return get<std::string>(kClientTags, "");
+  }
+
+  uint32_t joinBuildVectorHasherMaxNumDistinct() const {
+    return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
   }
 
   template <typename T>

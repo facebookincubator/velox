@@ -148,6 +148,10 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
   ASSERT_TRUE(
       TypeCoercer::leastCommonSuperType(
           ROW({""}, TINYINT()), ROW({"", ""}, TINYINT())) == nullptr);
+
+  ASSERT_TRUE(
+      TypeCoercer::leastCommonSuperType(
+          MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
 }
 
 } // namespace

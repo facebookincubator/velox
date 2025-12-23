@@ -37,6 +37,18 @@ TypePtr resolveResultType(
     const std::string& name,
     const std::vector<TypePtr>& argTypes);
 
+/// Like 'resolveResultType', but with support for applying type conversions if
+/// a function signature doesn't match 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve a function successfully. Contains one entry per argument. The entry
+/// is null if no coercion is required for that argument. The entry is not null
+/// if coercion is necessary.
+TypePtr resolveResultTypeWithCoercions(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
+
 /// Given a name of aggregate function and argument types, returns the
 /// intermediate type if the function exists. Throws if function doesn't exist
 /// or doesn't support specified argument types.

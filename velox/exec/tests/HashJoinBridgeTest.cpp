@@ -44,6 +44,7 @@ class HashJoinBridgeTestHelper {
   HashJoinBridge* const bridge_;
 };
 
+namespace {
 struct TestParam {
   int32_t numProbers{1};
   int32_t numBuilders{1};
@@ -728,4 +729,5 @@ TEST(HashJoinBridgeTest, hashJoinTableSpillType) {
     ASSERT_EQ(spillType->names(), testData.expectedTableSpillType->names());
   }
 }
+} // namespace
 } // namespace facebook::velox::exec::test

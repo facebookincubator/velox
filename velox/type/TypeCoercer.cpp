@@ -130,6 +130,10 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
     return nullptr;
   }
 
+  if (a->name() != b->name()) {
+    return nullptr;
+  }
+
   std::vector<TypeParameter> childTypes;
   childTypes.reserve(a->size());
   for (auto i = 0; i < a->size(); i++) {

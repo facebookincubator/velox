@@ -871,7 +871,7 @@ void VectorHasher::copyStatsFrom(const VectorHasher& other) {
   uniqueValues_ = other.uniqueValues_;
 }
 
-void VectorHasher::merge(const VectorHasher& other) {
+void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
   if (typeKind_ == TypeKind::BOOLEAN) {
     return;
   }
@@ -889,18 +889,25 @@ void VectorHasher::merge(const VectorHasher& other) {
   } else {
     setRangeOverflow();
   }
-  if (!distinctOverflow_ && !other.distinctOverflow_) {
-    // Unique values can be merged without dispatch on type. All the
-    // merged hashers must stay live for string type columns.
-    for (UniqueValue value : other.uniqueValues_) {
-      // Assign a new id at end of range for the case 'value' is not
-      // in 'uniqueValues_'. We do not set overflow here because the
-      // memory is already allocated and there is a known cap on size.
-      value.setId(uniqueValues_.size() + 1);
-      uniqueValues_.insert(value);
-    }
-  } else {
+  if (distinctOverflow_) {
+    return;
+  }
+  if (other.distinctOverflow_) {
     setDistinctOverflow();
+    return;
+  }
+  // Unique values can be merged without dispatch on type. All the
+  // merged hashers must stay live for string type columns.
+  for (UniqueValue value : other.uniqueValues_) {
+    // Assign a new id at end of range for the case 'value' is not
+    // in 'uniqueValues_'. We do not set overflow here because the
+    // memory is already allocated and there is a known cap on size.
+    value.setId(uniqueValues_.size() + 1);
+    if (uniqueValues_.insert(value).second &&
+        uniqueValues_.size() > maxNumDistinct) {
+      setDistinctOverflow();
+      break;
+    }
   }
 }
 

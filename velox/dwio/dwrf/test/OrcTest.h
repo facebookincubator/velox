@@ -28,8 +28,6 @@
 
 namespace facebook::velox::dwrf {
 
-#define VELOX_ARRAY_SIZE(array) (sizeof(array) / sizeof(*array))
-
 using MemoryPool = memory::MemoryPool;
 
 inline std::string getExampleFilePath(const std::string& fileName) {
