@@ -24,25 +24,76 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
-namespace facebook::velox {
-class Config;
-}
-
 namespace facebook::velox::core {
 
+/// Query execution context that manages resources and configuration for a
+/// query.
+///
+/// QueryCtx encapsulates query-level state and resources including:
+///
+/// - Memory pool management and memory arbitration.
+/// - Query and connector-specific configuration.
+/// - Executor for parallel task execution.
+/// - Async data cache for IO operations.
+/// - Spill executor for disk-based operations.
+/// - Query tracing and metrics tracking.
+///
+/// Usage Contexts:
+///
+/// - Multi-threaded execution: Used with Task::start() where an executor must
+///   be provided and its lifetime must outlive all tasks using this context.
+/// - Single-threaded execution: Used with ExecCtx or Task::next() for
+///   expression evaluation where no executor is required.
+///
+/// Construction:
+///
+/// To construct a QueryCtx, prefer to use the builder pattern:
+///
+/// @code
+///   auto queryCtx = QueryCtx::Builder()
+///       .executor(myExecutor)
+///       .queryConfig(configMap)
+///       .queryId("query-123")
+///       .pool(myMemoryPool)
+///       .build();
+/// @endcode
+///
+/// Memory Management:
+///
+/// - Automatically creates a root memory pool if not provided
+/// - Supports memory arbitration and reclamation under memory pressure
+/// - Tracks spilled bytes with configurable limits
+/// - Thread-safe memory pool operations
+///
+/// Thread-safety: QueryCtx is thread-safe for concurrent access across
+/// multiple tasks and operators within a query execution.
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
   ~QueryCtx() {
     VELOX_CHECK(!underArbitration_);
   }
 
-  /// QueryCtx is used in different places. When used with `Task::start()`, it's
-  /// required that the caller supplies the executor and ensure its lifetime
-  /// outlives the tasks that use it. In contrast, when used in expression
-  /// evaluation through `ExecCtx` or 'Task::next()' for single thread execution
-  /// mode, executor is not needed. Hence, we don't require executor to always
-  /// be passed in here, but instead, ensure that executor exists when actually
-  /// being used.
+  /// Creates a new QueryCtx instance with the specified configuration.
+  ///
+  /// This factory method constructs a QueryCtx with all necessary resources
+  /// and automatically sets up memory reclamation if not already configured.
+  ///
+  /// @param executor Optional executor for parallel task execution. Required
+  ///                 when used with Task::start(), but not needed for
+  ///                 expression evaluation or single-threaded execution.
+  /// @param queryConfig Query-level configuration settings.
+  /// @param connectorConfigs Connector-specific configuration mappings.
+  /// @param cache Async data cache for IO operations (defaults to global
+  ///              instance).
+  /// @param pool Memory pool for query execution (auto-created if nullptr).
+  /// @param spillExecutor Optional executor for spilling operations.
+  /// @param queryId Unique identifier for this query.
+  /// @param tokenProvider Optional filesystem token provider for
+  ///                      authentication.
+  /// @return Shared pointer to the newly created QueryCtx.
+  ///
+  /// Note: The caller must ensure the executor's lifetime outlives all tasks
+  /// using this QueryCtx when executor is provided.
   static std::shared_ptr<QueryCtx> create(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
@@ -51,9 +102,95 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
-      const std::string& queryId = "",
+      std::string queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
+  /// Builder pattern for constructing QueryCtx instances.
+  ///
+  /// Provides a fluent interface for creating QueryCtx with optional
+  /// parameters. This is the recommended approach for improved readability,
+  /// especially when only setting a subset of configuration options.
+  ///
+  /// Example:
+  /// @code
+  ///   auto ctx = QueryCtx::Builder()
+  ///                  .queryId("my-query")
+  ///                  .executor(myExecutor)
+  ///                  .queryConfig(QueryConfig{mySettings})
+  ///                  .build();
+  /// @endcode
+  class Builder {
+   public:
+    Builder& executor(folly::Executor* executor) {
+      executor_ = executor;
+      return *this;
+    }
+
+    Builder& queryConfig(QueryConfig queryConfig) {
+      queryConfig_ = std::move(queryConfig);
+      return *this;
+    }
+
+    Builder& connectorConfigs(
+        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+            connectorConfigs) {
+      connectorConfigs_ = std::move(connectorConfigs);
+      return *this;
+    }
+
+    Builder& asyncDataCache(cache::AsyncDataCache* cache) {
+      cache_ = cache;
+      return *this;
+    }
+
+    Builder& pool(std::shared_ptr<memory::MemoryPool> pool) {
+      pool_ = std::move(pool);
+      return *this;
+    }
+
+    Builder& spillExecutor(folly::Executor* spillExecutor) {
+      spillExecutor_ = spillExecutor;
+      return *this;
+    }
+
+    Builder& queryId(std::string queryId) {
+      queryId_ = std::move(queryId);
+      return *this;
+    }
+
+    Builder& tokenProvider(
+        std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
+      tokenProvider_ = std::move(tokenProvider);
+      return *this;
+    }
+
+    /// Constructs and returns a QueryCtx with the configured parameters.
+    ///
+    /// @return Shared pointer to the newly created QueryCtx instance
+    std::shared_ptr<QueryCtx> build();
+
+   private:
+    folly::Executor* executor_{nullptr};
+    QueryConfig queryConfig_{QueryConfig{{}}};
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+        connectorConfigs_;
+    cache::AsyncDataCache* cache_{cache::AsyncDataCache::getInstance()};
+    std::shared_ptr<memory::MemoryPool> pool_;
+    folly::Executor* spillExecutor_{nullptr};
+    std::string queryId_;
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+  };
+
+  /// Generates a unique memory pool name for a query.
+  ///
+  /// Creates a pool name by combining the provided query ID with a
+  /// monotonically increasing sequence number to ensure uniqueness across
+  /// multiple pool creations, even for the same query ID.
+  ///
+  /// @param queryId The query identifier to incorporate into the pool name
+  /// @return A unique pool name in the format "query.{queryId}.{seqNum}"
+  ///
+  /// Thread-safe: Uses atomic operations for sequence number generation.
   static std::string generatePoolName(const std::string& queryId);
 
   memory::MemoryPool* pool() const {
@@ -214,6 +351,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   // Invoked to start memory arbitration on this query.
   void startArbitration();
+
   // Invoked to stop memory arbitration on this query.
   void finishArbitration();
 
@@ -230,6 +368,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::atomic<uint64_t> numTracedBytes_{0};
 
   mutable std::mutex mutex_;
+
   // Indicates if this query is under memory arbitration or not.
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;

@@ -30,17 +30,30 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
-    const std::string& queryId,
+    std::string queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
+  return QueryCtx::Builder()
+      .executor(executor)
+      .queryConfig(std::move(queryConfig))
+      .connectorConfigs(std::move(connectorConfigs))
+      .asyncDataCache(cache)
+      .pool(std::move(pool))
+      .spillExecutor(spillExecutor)
+      .queryId(std::move(queryId))
+      .tokenProvider(std::move(tokenProvider))
+      .build();
+}
+
+std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
   std::shared_ptr<QueryCtx> queryCtx(new QueryCtx(
-      executor,
-      std::move(queryConfig),
-      std::move(connectorConfigs),
-      cache,
-      std::move(pool),
-      spillExecutor,
-      queryId,
-      std::move(tokenProvider)));
+      executor_,
+      std::move(queryConfig_),
+      std::move(connectorConfigs_),
+      cache_,
+      std::move(pool_),
+      spillExecutor_,
+      std::move(queryId_),
+      std::move(tokenProvider_)));
   queryCtx->maybeSetReclaimer();
   return queryCtx;
 }
@@ -70,7 +83,7 @@ QueryCtx::QueryCtx(
   // We attach a monotonically increasing sequence number to ensure the pool
   // name is unique.
   static std::atomic<int64_t> seqNum{0};
-  return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
+  return fmt::format("query.{}.{}", queryId, seqNum++);
 }
 
 void QueryCtx::maybeSetReclaimer() {
