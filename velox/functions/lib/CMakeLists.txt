@@ -41,6 +41,7 @@ velox_add_library(
   CheckNestedNulls.cpp
   KllSketch.cpp
   MapConcat.cpp
+  MapFromEntries.cpp
   Re2Functions.cpp
   Repeat.cpp
   Slice.cpp
