@@ -203,8 +203,8 @@ TypePtr Type::create(const folly::dynamic& obj) {
   if (isDecimalName(typeName)) {
     return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
   }
-  // Checks if 'typeName' specifies a custom type.
-  if (customTypeExists(typeName)) {
+
+  auto customTypeSingleton = [&](const std::string& typeName) {
     std::vector<TypeParameter> params;
     if (obj.find("cTypes") != obj.items().end()) {
       params.reserve(childTypes.size());
@@ -220,6 +220,11 @@ TypePtr Type::create(const folly::dynamic& obj) {
           deserializeEnumParam<std::string>(obj["kVarcharEnumParam"]));
     }
     return getCustomType(typeName, params);
+  };
+
+  // Checks if 'typeName' specifies a custom type.
+  if (customTypeExists(typeName)) {
+    return customTypeSingleton(typeName);
   }
 
   // 'typeName' must be a built-in type.
@@ -237,6 +242,9 @@ TypePtr Type::create(const folly::dynamic& obj) {
 
     case TypeKind::OPAQUE: {
       const auto& persistentName = obj["opaque"].asString();
+      if (customTypeExists(persistentName)) {
+        return customTypeSingleton(persistentName);
+      }
       const auto& registry = OpaqueSerdeRegistry::get();
       auto it = registry.reverse.find(persistentName);
       VELOX_USER_CHECK(
@@ -905,6 +913,20 @@ OpaqueType::DeserializeFunc<void> OpaqueType::getDeserializeFunc() const {
 std::shared_ptr<const OpaqueType> OpaqueType::deserializeExtra(
     const folly::dynamic&) const {
   return nullptr;
+}
+
+bool OpaqueType::clearSerializationRegistry(
+    const OpaqueTypePtr& opaqueType,
+    const std::string& persistentName) {
+  VELOX_CHECK_NOT_NULL(opaqueType);
+  auto& registry = OpaqueSerdeRegistry::get();
+  auto it = registry.mapping.find(opaqueType->typeIndex_);
+  if (it != registry.mapping.end()) {
+    registry.mapping.erase(opaqueType->typeIndex_);
+    registry.reverse.erase(persistentName);
+    return true;
+  }
+  return false;
 }
 
 void OpaqueType::clearSerializationRegistry() {
