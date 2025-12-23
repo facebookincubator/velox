@@ -398,9 +398,6 @@ uint64_t Lz4Decompressor::decompressInternal(
   return static_cast<uint64_t>(result);
 }
 
-// NOTE: We do not keep `ZSTD_DCtx' around on purpose, because if we keep it
-// around, in flat map column reader we have hundreds of thousands of
-// decompressors at same time and causing OOM.
 class ZstdDecompressor : public Decompressor {
  public:
   explicit ZstdDecompressor(
@@ -424,7 +421,10 @@ uint64_t ZstdDecompressor::decompress(
     uint64_t srcLength,
     char* dest,
     uint64_t destLength) {
-  auto ret = ZSTD_decompress(dest, destLength, src, srcLength);
+  // Reuse 'ZSTD_DCtx' per-thread to avoid repeated allocations.
+  thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> ctx{
+      ZSTD_createDCtx(), ZSTD_freeDCtx};
+  auto ret = ZSTD_decompressDCtx(ctx.get(), dest, destLength, src, srcLength);
   DWIO_ENSURE(
       !ZSTD_isError(ret),
       "ZSTD returned an error: ",
