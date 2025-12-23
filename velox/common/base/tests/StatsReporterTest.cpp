@@ -462,6 +462,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(
         counterMap.count(std::string(kMetricMemoryAllocatorTotalUsedBytes)), 1);
     // Check deltas are not reported
+    ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheNumLookups)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheNumHits)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheHitBytes)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheNumNew)), 0);
@@ -536,7 +537,8 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   newSsdStats->readWithoutChecksumChecks = 10;
   newSsdStats->entriesRecovered = 10;
   cache.updateStats(
-      {.numHit = 10,
+      {.numLookup = 10,
+       .numHit = 10,
        .hitBytes = 10,
        .numNew = 10,
        .numEvict = 10,
@@ -559,6 +561,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   // Check delta stats are reported
   {
     std::lock_guard<std::mutex> l(reporter_->m);
+    ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheNumLookups)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheNumHits)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheHitBytes)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricMemoryCacheNumNew)), 1);
@@ -604,7 +607,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheRecoveredEntries)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheReadWithoutChecksum)), 1);
-    ASSERT_EQ(counterMap.size(), 56);
+    ASSERT_EQ(counterMap.size(), 57);
   }
 }
 

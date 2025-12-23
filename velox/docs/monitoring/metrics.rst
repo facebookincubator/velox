@@ -330,6 +330,9 @@ Cache
      - Sum
      - Sum of scores of evicted entries. This serves to infer an average lifetime
        for entries in cache.
+   * - memory_cache_num_lookups
+     - Sum
+     - Number of lookups since last counter retrieval.
    * - memory_cache_num_hits
      - Sum
      - Number of hits (saved IO) since last counter retrieval. The first hit to a

@@ -516,6 +516,8 @@ struct CacheStats {
 
   /// ============= Cumulative stats =============
 
+  /// Number of lookups.
+  int64_t numLookup{0};
   /// Number of hits (saved IO). The first hit to a prefetched entry does not
   /// count.
   int64_t numHit{0};
