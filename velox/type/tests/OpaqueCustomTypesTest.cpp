@@ -72,11 +72,7 @@ class OpaqueCustomTypeTest : public testing::Test {
     EXPECT_EQ(testCustomType_->name(), serializedCustomType["opaque"]);
     auto deserializedType = Type::create(serializedCustomType);
 
-    // TODO: Ideally this should be EXPECT_EQ() but it doesn't work
-    // because Type::create() currently does not return the singleton instance.
-    // EXPECT_EQ(testCustomType, deserializedType);
-
-    EXPECT_EQ(testCustomType_->serialize(), deserializedType->serialize());
+    EXPECT_EQ(testCustomType_, deserializedType);
   }
 };
 
