@@ -25,6 +25,15 @@
 
 namespace facebook::velox::functions {
 
+/// Result of inserting a value into the ApproxMostFrequentStreamSummary.
+/// Contains information about whether an entry was evicted.
+template <typename T>
+struct ApproxMostFrequentInsertResult {
+  bool evicted{false};
+  T evictedValue{};
+  int64_t evictedCount{0};
+};
+
 /// Data structure to approximately compute the top frequent values from a large
 /// stream.
 ///
@@ -45,7 +54,8 @@ struct ApproxMostFrequentStreamSummary {
   void setCapacity(int);
 
   /// Add one or multiple new values to the summary.
-  void insert(T value, int64_t count = 1);
+  /// Returns information about whether an entry was evicted.
+  ApproxMostFrequentInsertResult<T> insert(T value, int64_t count = 1);
 
   /// Get the top `k` frequent elements with their estimated counts, sorted from
   /// most hits to least hits.
@@ -131,16 +141,24 @@ int ApproxMostFrequentStreamSummary<T, A>::capacity() const {
 }
 
 template <typename T, typename A>
-void ApproxMostFrequentStreamSummary<T, A>::insert(T value, int64_t count) {
+ApproxMostFrequentInsertResult<T> ApproxMostFrequentStreamSummary<T, A>::insert(
+    T value,
+    int64_t count) {
   auto index = queue_.getValueIndex(value);
   if (index.has_value()) {
     auto oldCount = queue_.priorities()[*index];
     queue_.updatePriority(*index, oldCount + count);
+    return {false, {}, 0};
   } else if (size() < capacity_) {
     queue_.addNewValue(value, count);
+    return {false, {}, 0};
   } else {
-    auto oldCount = queue_.topPriority();
-    queue_.replaceTop(value, oldCount + count);
+    // At capacity - need to evict the minimum entry.
+    // Capture the evicted value before replacing.
+    auto evictedValue = queue_.top();
+    auto evictedCount = queue_.topPriority();
+    queue_.replaceTop(value, evictedCount + count);
+    return {true, evictedValue, evictedCount};
   }
 }
 

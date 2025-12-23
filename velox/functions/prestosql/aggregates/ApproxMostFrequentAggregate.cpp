@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/aggregates/ApproxMostFrequentAggregate.h"
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Strings.h"
@@ -27,10 +28,17 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
+// 64MB memory limit for global aggregation where spilling is not effective.
+constexpr size_t kMaxTotalStringBytes = 1UL << 26; // 64MB
+
+constexpr double kRebuildRatio = 0.25;
+
+template <typename T, typename A = AlignedStlAllocator<T, 16>>
+using Summary = functions::ApproxMostFrequentStreamSummary<T, A>;
+
 template <typename T>
 struct Accumulator {
-  functions::ApproxMostFrequentStreamSummary<T, AlignedStlAllocator<T, 16>>
-      summary;
+  Summary<T> summary;
 
   explicit Accumulator(HashStringAllocator* allocator)
       : summary(AlignedStlAllocator<T, 16>(allocator)) {}
@@ -38,16 +46,20 @@ struct Accumulator {
   void insert(T value, int64_t count = 1) {
     summary.insert(value, count);
   }
+
+  // For non-string types, no memory limit needed.
+  void insertWithMemoryLimit(T value, int64_t count = 1) {
+    summary.insert(value, count);
+  }
 };
 
 template <>
 struct Accumulator<StringView> {
-  functions::ApproxMostFrequentStreamSummary<
-      StringView,
-      AlignedStlAllocator<StringView, 16>>
-      summary;
+  Summary<StringView> summary;
   HashStringAllocator* allocator;
   Strings strings;
+  size_t liveBytes_{0};
+  size_t deadBytes_{0};
 
   explicit Accumulator(HashStringAllocator* allocator)
       : summary(AlignedStlAllocator<StringView, 16>(allocator)),
@@ -63,6 +75,68 @@ struct Accumulator<StringView> {
     }
     summary.insert(value, count);
   }
+
+  void insertWithMemoryLimit(StringView value, int64_t count = 1) {
+    if (!value.isInline() && !summary.contains(value)) {
+      // Limit each key to its fair share of the memory budget.
+      size_t maxKeySize = kMaxTotalStringBytes / summary.capacity();
+      VELOX_USER_CHECK_LE(
+          value.size(),
+          maxKeySize,
+          "approx_most_frequent: key size {} exceeds max allowed {} "
+          "(total memory budget {} / capacity {}). Consider using a smaller capacity or adding GROUP BY.",
+          succinctBytes(value.size()),
+          succinctBytes(maxKeySize),
+          succinctBytes(kMaxTotalStringBytes),
+          summary.capacity());
+      liveBytes_ += value.size();
+      value = strings.append(value, *allocator);
+    }
+
+    auto result = summary.insert(value, count);
+    if (result.evicted && !result.evictedValue.isInline()) {
+      deadBytes_ += result.evictedValue.size();
+      liveBytes_ -= result.evictedValue.size();
+
+      // Trigger a summary rebuild once dead bytes surpass the threshold.
+      if (deadBytes_ > kMaxTotalStringBytes * kRebuildRatio) {
+        rebuild();
+      }
+    }
+  }
+
+ private:
+  void rebuild() {
+    if (summary.size() == 0) {
+      return;
+    }
+
+    const auto capacity = summary.capacity();
+    const auto currentSize = summary.size();
+
+    Strings newStrings;
+    AlignedStlAllocator<StringView, 16> alloc{allocator};
+    Summary<StringView> newSummary{alloc};
+    newSummary.setCapacity(capacity);
+
+    liveBytes_ = 0;
+    for (auto i = 0; i < currentSize; ++i) {
+      StringView v = summary.values()[i];
+      int64_t count = summary.counts()[i];
+      if (!v.isInline()) {
+        liveBytes_ += v.size();
+        v = newStrings.append(v, *allocator);
+      }
+      newSummary.insert(v, count);
+    }
+
+    // Free old storage
+    strings.free(*allocator);
+
+    strings = std::move(newStrings);
+    summary = std::move(newSummary);
+    deadBytes_ = 0;
+  }
 };
 
 template <typename T>
@@ -74,6 +148,14 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     return sizeof(Accumulator<T>);
   }
 
+  bool isFixedSize() const override {
+    return false;
+  }
+
+  bool accumulatorUsesExternalMemory() const override {
+    return true;
+  }
+
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -83,6 +165,7 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     rows.applyToSelected([&](auto row) {
       if (!decodedValues_.isNullAt(row)) {
         auto* accumulator = initAccumulator(groups[row]);
+        auto tracker = trackRowSize(groups[row]);
         accumulator->insert(decodedValues_.valueAt<T>(row));
       }
     });
@@ -103,9 +186,10 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
       bool) override {
     decodeArguments(rows, args);
     auto* accumulator = initAccumulator(group);
+    auto tracker = trackRowSize(group);
     rows.applyToSelected([&](auto row) {
       if (!decodedValues_.isNullAt(row)) {
-        accumulator->insert(decodedValues_.valueAt<T>(row));
+        accumulator->insertWithMemoryLimit(decodedValues_.valueAt<T>(row));
       }
     });
   }
@@ -304,15 +388,25 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
         if (!accumulator) {
           accumulator = initAccumulator(group);
         }
+        auto tracker = trackRowSize(group);
+        auto size = values->sizeAt(i);
+        VELOX_DCHECK_EQ(counts->sizeAt(i), size);
+        auto vo = values->offsetAt(i);
+        auto co = counts->offsetAt(i);
+        for (int j = 0; j < size; ++j) {
+          accumulator->insertWithMemoryLimit(
+              v->valueAt(vo + j), c->valueAt(co + j));
+        }
       } else {
         accumulator = initAccumulator(group[row]);
-      }
-      auto size = values->sizeAt(i);
-      VELOX_DCHECK_EQ(counts->sizeAt(i), size);
-      auto vo = values->offsetAt(i);
-      auto co = counts->offsetAt(i);
-      for (int j = 0; j < size; ++j) {
-        accumulator->insert(v->valueAt(vo + j), c->valueAt(co + j));
+        auto tracker = trackRowSize(group[row]);
+        auto size = values->sizeAt(i);
+        VELOX_DCHECK_EQ(counts->sizeAt(i), size);
+        auto vo = values->offsetAt(i);
+        auto co = counts->offsetAt(i);
+        for (int j = 0; j < size; ++j) {
+          accumulator->insert(v->valueAt(vo + j), c->valueAt(co + j));
+        }
       }
     });
   }
