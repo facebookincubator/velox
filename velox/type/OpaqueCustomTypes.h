@@ -34,12 +34,20 @@ class CastOperator;
 template <typename T, const char* customTypeName>
 class OpaqueCustomTypeRegister {
  public:
-  static bool registerType() {
-    return facebook::velox::registerCustomType(
+  static bool registerType(
+      OpaqueType::SerializeFunc<T> serialize = nullptr,
+      OpaqueType::DeserializeFunc<T> deserialize = nullptr) {
+    bool success = facebook::velox::registerCustomType(
         customTypeName, std::make_unique<const TypeFactory>());
+    if (success) {
+      OpaqueType::registerSerialization<T>(
+          customTypeName, serialize, deserialize);
+    }
+    return success;
   }
 
   static bool unregisterType() {
+    OpaqueType::unregisterSerialization<T>(customTypeName);
     return facebook::velox::unregisterCustomType(customTypeName);
   }
 
@@ -76,6 +84,13 @@ class OpaqueCustomTypeRegister {
 
     std::string toString() const override {
       return customTypeName;
+    }
+
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["name"] = "Type";
+      obj["type"] = customTypeName;
+      return obj;
     }
   };
 

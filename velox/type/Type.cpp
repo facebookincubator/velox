@@ -937,6 +937,14 @@ void OpaqueType::registerSerializationTypeErased(
   registry.reverse[persistentName] = type;
 }
 
+void OpaqueType::unregisterSerializationTypeErased(
+    const std::shared_ptr<const OpaqueType>& type,
+    const std::string& persistentName) {
+  auto& registry = OpaqueSerdeRegistry::get();
+  registry.mapping.erase(type->typeIndex_);
+  registry.reverse.erase(persistentName);
+}
+
 ArrayTypePtr ARRAY(TypePtr elementType) {
   return TypeFactory<TypeKind::ARRAY>::create(std::move(elementType));
 }

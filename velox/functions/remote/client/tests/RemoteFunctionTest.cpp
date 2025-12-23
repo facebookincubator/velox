@@ -140,9 +140,7 @@ class RemoteFunctionTest
     registerFunction<OpaqueTypeFunction, int64_t, std::shared_ptr<Foo>>(
         {params.functionPrefix + ".remote_opaque"});
 
-    registerOpaqueType<Foo>("Foo");
-    OpaqueType::registerSerialization<Foo>(
-        "Foo", Foo::serialize, Foo::deserialize);
+    registerOpaqueType<Foo>("Foo", Foo::serialize, Foo::deserialize);
   }
 };
 
