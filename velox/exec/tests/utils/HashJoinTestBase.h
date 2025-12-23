@@ -649,7 +649,7 @@ class HashJoinBuilder {
         core::QueryConfig::kHashProbeFinishEarlyOnEmptyBuild,
         hashProbeFinishEarlyOnEmptyBuild_ ? "true" : "false");
     config(
-        core::QueryConfig::kParallelJoinBuildRowsEnabled,
+        core::QueryConfig::kParallelOutputJoinBuildRowsEnabled,
         parallelJoinBuildRowsEnabled_ ? "true" : "false");
     if (maxDriverYieldTimeMs != 0) {
       config(
