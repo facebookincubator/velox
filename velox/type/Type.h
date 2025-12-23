@@ -363,6 +363,17 @@ struct TypeTraits<TypeKind::OPAQUE> {
   static constexpr const char* name = "OPAQUE";
 };
 
+// Convenience constexpr function to check for string-like and nested type
+// kinds.
+constexpr bool is_string_kind(TypeKind kind) {
+  return kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY;
+}
+
+constexpr bool is_nested_kind(TypeKind kind) {
+  return kind == TypeKind::ARRAY || kind == TypeKind::MAP ||
+      kind == TypeKind::ROW;
+}
+
 template <TypeKind KIND>
 struct TypeFactory;
 
