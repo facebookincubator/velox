@@ -21,6 +21,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
@@ -85,6 +86,9 @@ intermediateTypeTransforms() {
            std::make_shared<IntermediateTypeTransformUsingCast>(
                BINGTILE(), BIGINT())},
           {INTERVAL_DAY_TIME(), std::make_shared<IntervalDayTimeTransform>()},
+          {IPADDRESS(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               IPADDRESS(), VARCHAR())},
       };
   return intermediateTypeTransforms;
 }
