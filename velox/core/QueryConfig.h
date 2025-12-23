@@ -277,6 +277,10 @@ class QueryConfig {
   static constexpr const char* kAdaptiveFilterReorderingEnabled =
       "adaptive_filter_reordering_enabled";
 
+  /// If true, allow hash probe drivers to generate build-side rows in parallel.
+  static constexpr const char* kParallelJoinBuildRowsEnabled =
+      "parallel_join_build_rows_enabled";
+
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
 
@@ -1024,6 +1028,10 @@ class QueryConfig {
 
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool parallelJoinBuildRowsEnabled() const {
+    return get<bool>(kParallelJoinBuildRowsEnabled, false);
   }
 
   bool spillEnabled() const {
