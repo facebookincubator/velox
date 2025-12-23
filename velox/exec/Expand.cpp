@@ -64,9 +64,9 @@ void Expand::initialize() {
     return;
   }
   const auto numColumns = constantProjections_[0].size();
-  std::vector<VectorPtr> constantOutput;
-  constantOutput.reserve(numColumns);
   for (const auto& projections : constantProjections_) {
+    std::vector<VectorPtr> constantOutput;
+    constantOutput.reserve(numColumns);
     for (const auto& constant : projections) {
       if (constant) {
         constantOutput.push_back(constant->toConstantVector(pool()));
@@ -74,8 +74,8 @@ void Expand::initialize() {
         constantOutput.push_back(nullptr);
       }
     }
+    constantOutputs_.emplace_back(std::move(constantOutput));
   }
-  constantOutputs_.emplace_back(std::move(constantOutput));
 }
 
 bool Expand::needsInput() const {
