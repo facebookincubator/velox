@@ -338,6 +338,8 @@ char* HashTable<ignoreNullKeys>::insertEntry(
     HashLookup& lookup,
     uint64_t index,
     vector_size_t row) {
+  TestValue::adjust(
+      "facebook::velox::exec::HashTable::insertEntry", rows_->pool());
   char* group = rows_->newRow();
   lookup.hits[row] = group; // NOLINT
   storeKeys(lookup, row);
