@@ -600,6 +600,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setParquetFilterColumnIndexEnabled(bool flag) {
+    parquetFilterColumnIndexEnabled_ = flag;
+    return *this;
+  }
+
   ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
     ioExecutor_ = std::move(executor);
     return *this;
@@ -675,6 +680,10 @@ class ReaderOptions : public io::ReaderOptions {
     return useColumnNamesForColumnMapping_;
   }
 
+  bool parquetFilterColumnIndexEnabled() const {
+    return parquetFilterColumnIndexEnabled_;
+  }
+
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
     return randomSkip_;
   }
@@ -733,6 +742,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool allowEmptyFile_{false};
+  bool parquetFilterColumnIndexEnabled_{false};
 };
 
 struct WriterOptions {
