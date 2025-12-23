@@ -24,11 +24,13 @@ namespace facebook::velox::dwio::common {
 class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
  protected:
   SelectiveFlatMapColumnReader(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
       velox::common::ScanSpec& scanSpec)
       : SelectiveStructColumnReaderBase(
+            columnReaderOptions,
             requestedType,
             fileType,
             params,
