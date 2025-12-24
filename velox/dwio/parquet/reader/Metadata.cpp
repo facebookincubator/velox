@@ -358,4 +358,70 @@ std::string FileMetaDataPtr::createdBy() const {
   return thriftFileMetaDataPtr(ptr_)->created_by;
 }
 
+size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column) {
+  size_t size = 0;
+  size += sizeof(thrift::ColumnChunk);
+  size += sizeof(thrift::ColumnMetaData);
+  size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
+  size += column.meta_data.path_in_schema.size() * sizeof(std::string);
+  for (const auto& path : column.meta_data.path_in_schema) {
+    size += path.capacity();
+  }
+  size += column.meta_data.key_value_metadata.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : column.meta_data.key_value_metadata) {
+    size += kv.key.capacity();
+    size += kv.value.capacity();
+  }
+
+  if (column.meta_data.__isset.statistics) {
+    const auto& stats = column.meta_data.statistics;
+    size += sizeof(thrift::Statistics);
+    if (stats.__isset.min)
+      size += stats.min.capacity();
+    if (stats.__isset.max)
+      size += stats.max.capacity();
+    if (stats.__isset.min_value)
+      size += stats.min_value.capacity();
+    if (stats.__isset.max_value)
+      size += stats.max_value.capacity();
+    if (stats.__isset.null_count)
+      size += sizeof(int64_t);
+    if (stats.__isset.distinct_count)
+      size += sizeof(int64_t);
+  }
+  return size;
+}
+
+size_t calculateFileMetadataSize(const thrift::FileMetaData& metadata) {
+  size_t totalSize = sizeof(thrift::FileMetaData);
+  for (const auto& schema : metadata.schema) {
+    size_t elementSize = sizeof(schema) + schema.name.capacity() +
+        sizeof(schema.type) + sizeof(schema.type_length) +
+        sizeof(schema.repetition_type) + sizeof(schema.num_children) +
+        sizeof(schema.converted_type) + sizeof(schema.scale) +
+        sizeof(schema.precision) + sizeof(schema.field_id);
+    if (schema.__isset.logicalType) {
+      elementSize += sizeof(schema.logicalType);
+    }
+    totalSize += elementSize;
+  }
+  totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
+  for (const auto& rowGroup : metadata.row_groups) {
+    totalSize += rowGroup.columns.size() * sizeof(thrift::ColumnChunk);
+    for (const auto& column : rowGroup.columns) {
+      totalSize += calculateColumnMetadataSize(column);
+    }
+  }
+  totalSize += metadata.key_value_metadata.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : metadata.key_value_metadata) {
+    totalSize += kv.key.capacity();
+    totalSize += kv.value.capacity();
+  }
+  totalSize += metadata.created_by.capacity();
+  totalSize += metadata.column_orders.size() * sizeof(thrift::ColumnOrder);
+  totalSize += sizeof(thrift::EncryptionAlgorithm);
+  totalSize += metadata.footer_signing_key_metadata.capacity();
+  return totalSize;
+}
+
 } // namespace facebook::velox::parquet

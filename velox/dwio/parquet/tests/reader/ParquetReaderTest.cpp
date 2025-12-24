@@ -1787,6 +1787,33 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, readerOptions.memoryPool());
   ParquetReader reader(std::move(buffer), readerOptions);
-
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
+}
+
+TEST_F(ParquetReaderTest, thriftMemoryTrackingTest) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setParquetFooterTrackThriftMemoryThreshold(1);
+  auto initialUsage = leafPool_->usedBytes();
+  size_t memoryAfterRowReader = 0;
+  {
+    auto reader = createReader(sample, readerOptions);
+    EXPECT_EQ(reader->numberOfRows(), 20ULL);
+    auto rowReaderOpts = getReaderOpts(sampleSchema());
+    auto scanSpec = makeScanSpec(sampleSchema());
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    memoryAfterRowReader = leafPool_->usedBytes();
+    EXPECT_GT(memoryAfterRowReader, initialUsage);
+    auto result = BaseVector::create(sampleSchema(), 0, leafPool_.get());
+    rowReader->next(10, result);
+    EXPECT_EQ(result->size(), 10);
+
+    auto memoryAfterReading = leafPool_->usedBytes();
+    EXPECT_GE(memoryAfterReading, memoryAfterRowReader);
+  }
+
+  auto finalUsage = leafPool_->usedBytes();
+  EXPECT_EQ(finalUsage, initialUsage);
 }
