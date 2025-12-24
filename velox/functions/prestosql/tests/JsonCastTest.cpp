@@ -1837,3 +1837,192 @@ TEST_F(JsonCastTest, uniqueErrorContextMessage) {
       makeRowVector({makeNullableFlatVector<JsonNativeType>({"\"abc\""_sv})}),
       "Top-level Expression: cast((c0) as BIGINT)");
 }
+
+TEST_F(JsonCastTest, fromNestedRowWithNullInnerRow) {
+  // Test casting ARRAY(ROW(ROW(...))) to JSON where the innermost ROW is
+  // sometimes null.
+
+  // Define the innermost ROW type: ROW(a: BIGINT, b: VARCHAR)
+  auto innerRowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
+
+  // Define the outer ROW type: ROW(x: innerRowType, y: DOUBLE)
+  auto outerRowType = ROW({"x", "y"}, {innerRowType, DOUBLE()});
+
+  // Define the array type: ARRAY(outerRowType)
+  auto arrayType = ARRAY(outerRowType);
+
+  // Create innermost row vectors with some nulls.
+  // Row 0: inner row is {1, "hello"}
+  // Row 1: inner row is null
+  // Row 2: inner row is {3, "world"}
+  // Row 3: inner row is null
+  auto innerRowChild1 =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt});
+  auto innerRowChild2 = makeNullableFlatVector<StringView>(
+      {"hello"_sv, std::nullopt, "world"_sv, std::nullopt});
+  auto innerRowVector =
+      makeRowVector({"a", "b"}, {innerRowChild1, innerRowChild2});
+  // Set rows 1 and 3 as null (entire inner row is null)
+  innerRowVector->setNull(1, true);
+  innerRowVector->setNull(3, true);
+
+  // Create outer row vectors.
+  // Each outer row has: x (inner row), y (double)
+  auto outerRowChild2 = makeNullableFlatVector<double>({1.1, 2.2, 3.3, 4.4});
+  auto outerRowVector =
+      makeRowVector({"x", "y"}, {innerRowVector, outerRowChild2});
+
+  // Create array vector with 2 rows:
+  // Row 0: [outerRow[0], outerRow[1]] = [{x: {1, "hello"}, y: 1.1}, {x: null,
+  // y: 2.2}] Row 1: [outerRow[2], outerRow[3]] = [{x: {3, "world"}, y: 3.3},
+  // {x: null, y: 4.4}]
+  auto offsets = allocateOffsets(2, pool());
+  auto sizes = allocateSizes(2, pool());
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[0] = 0;
+  rawSizes[0] = 2;
+  rawOffsets[1] = 2;
+  rawSizes[1] = 2;
+
+  auto arrayVector = std::make_shared<ArrayVector>(
+      pool(), arrayType, nullptr, 2, offsets, sizes, outerRowVector);
+
+  // Expected JSON output (without field names, uses array notation for rows):
+  // Row 0: [[{a:1, b:"hello"}, 1.1], [null, 2.2]]  ->
+  // "[[[1,\"hello\"],1.1],[null,2.2]]" Row 1: [[{a:3, b:"world"}, 3.3],
+  // [null, 4.4]]  -> "[[[3,\"world\"],3.3],[null,4.4]]"
+  auto expectedVector = makeNullableFlatVector<JsonNativeType>(
+      {R"([[[1,"hello"],1.1],[null,2.2]])"_sv,
+       R"([[[3,"world"],3.3],[null,4.4]])"_sv},
+      JSON());
+
+  testCast(arrayVector, expectedVector);
+}
+
+TEST_F(JsonCastTest, fromNestedRowWithNullInnerRowFieldNames) {
+  // Same test as above but with field names enabled in JSON output.
+  // Uses TIMESTAMP as the innermost type.
+  setFieldNamesInJsonCast(true);
+
+  // Inner type is now a TIMESTAMP
+  auto innerRowType = ROW({"ts"}, {TIMESTAMP()});
+  auto outerRowType = ROW({"x", "y"}, {innerRowType, DOUBLE()});
+  auto arrayType = ARRAY(outerRowType);
+
+  // Create timestamp values: epoch, 10M seconds after epoch, etc.
+  // Row 0: {ts: Timestamp{0, 0}} = "1970-01-01 00:00:00.000"
+  // Row 1: null (entire inner row is null) - will have bad nanos value
+  // Row 2: {ts: Timestamp{10000000, 0}} = "1970-04-26 17:46:40.000"
+  // Row 3: null (entire inner row is null) - will have bad nanos value
+  // Note: Rows 1 and 3 have invalid nanos (> 1,000,000,000) but since the
+  // entire inner row is null, these bad values should be ignored during
+  // JSON serialization.
+  auto innerRowChild = makeNullableFlatVector<Timestamp>(
+      {Timestamp{0, 0},
+       Timestamp{0, 0},
+       Timestamp{10000000, 0},
+       Timestamp{0, 0}});
+
+  // Set bad nanos values directly in the raw buffer for null positions.
+  // This bypasses Timestamp validation to test that nulls are properly handled.
+  auto* rawTimestamps =
+      innerRowChild->asFlatVector<Timestamp>()->mutableRawValues();
+  rawTimestamps[1] = Timestamp::fromMillisNoError(0);
+  reinterpret_cast<uint64_t*>(&rawTimestamps[1])[1] = 2000000000ULL;
+  rawTimestamps[3] = Timestamp::fromMillisNoError(0);
+  reinterpret_cast<uint64_t*>(&rawTimestamps[3])[1] = 5000000000ULL;
+
+  auto innerRowVector = makeRowVector({"ts"}, {innerRowChild});
+  innerRowVector->setNull(1, true);
+  innerRowVector->setNull(3, true);
+
+  auto outerRowChild2 = makeNullableFlatVector<double>({1.1, 2.2, 3.3, 4.4});
+  auto outerRowVector =
+      makeRowVector({"x", "y"}, {innerRowVector, outerRowChild2});
+
+  auto offsets = allocateOffsets(2, pool());
+  auto sizes = allocateSizes(2, pool());
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[0] = 0;
+  rawSizes[0] = 2;
+  rawOffsets[1] = 2;
+  rawSizes[1] = 2;
+
+  auto arrayVector = std::make_shared<ArrayVector>(
+      pool(), arrayType, nullptr, 2, offsets, sizes, outerRowVector);
+
+  // With field names enabled, output uses object notation:
+  // Row 0: [{"x":{"ts":"1970-01-01 00:00:00.000"},"y":1.1},{"x":null,"y":2.2}]
+  // Row 1: [{"x":{"ts":"1970-04-26 17:46:40.000"},"y":3.3},{"x":null,"y":4.4}]
+  auto expectedVector = makeNullableFlatVector<JsonNativeType>(
+      {R"([{"x":{"ts":"1970-01-01 00:00:00.000"},"y":1.1},{"x":null,"y":2.2}])"_sv,
+       R"([{"x":{"ts":"1970-04-26 17:46:40.000"},"y":3.3},{"x":null,"y":4.4}])"_sv},
+      JSON());
+
+  testCast(arrayVector, expectedVector);
+
+  setFieldNamesInJsonCast(false);
+}
+
+TEST_F(JsonCastTest, fromDeeplyNestedRowWithNulls) {
+  // Test ARRAY(ROW(ROW(ROW(...)))) - 3 levels of nesting with nulls at
+  // different levels.
+
+  // Level 3 (innermost): ROW(val: BIGINT)
+  auto level3Type = ROW({"val"}, {BIGINT()});
+
+  // Level 2: ROW(inner: level3Type)
+  auto level2Type = ROW({"inner"}, {level3Type});
+
+  // Level 1 (outermost row): ROW(mid: level2Type, extra: VARCHAR)
+  auto level1Type = ROW({"mid", "extra"}, {level2Type, VARCHAR()});
+
+  // Array type
+  auto arrayType = ARRAY(level1Type);
+
+  // Create level 3 vectors (4 elements, some null):
+  // [0]: {val: 100}
+  // [1]: null (entire level3 row is null)
+  // [2]: {val: 300}
+  // [3]: {val: 400}
+  auto level3Child =
+      makeNullableFlatVector<int64_t>({100, std::nullopt, 300, 400});
+  auto level3Vector = makeRowVector({"val"}, {level3Child});
+  level3Vector->setNull(1, true);
+
+  // Create level 2 vectors:
+  // [0]: {inner: {val: 100}}
+  // [1]: {inner: null}  <- level3 is null, but level2 is not null
+  // [2]: null  <- entire level2 row is null
+  // [3]: {inner: {val: 400}}
+  auto level2Vector = makeRowVector({"inner"}, {level3Vector});
+  level2Vector->setNull(2, true);
+
+  // Create level 1 vectors:
+  auto level1Child2 =
+      makeNullableFlatVector<StringView>({"a"_sv, "b"_sv, "c"_sv, "d"_sv});
+  auto level1Vector =
+      makeRowVector({"mid", "extra"}, {level2Vector, level1Child2});
+
+  // Create array with 2 rows, 2 elements each:
+  auto offsets = allocateOffsets(2, pool());
+  auto sizes = allocateSizes(2, pool());
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[0] = 0;
+  rawSizes[0] = 2;
+  rawOffsets[1] = 2;
+  rawSizes[1] = 2;
+
+  auto arrayVector = std::make_shared<ArrayVector>(
+      pool(), arrayType, nullptr, 2, offsets, sizes, level1Vector);
+
+  auto expectedVector = makeNullableFlatVector<JsonNativeType>(
+      {R"([[[[100]],"a"],[[null],"b"]])"_sv,
+       R"([[null,"c"],[[[400]],"d"]])"_sv},
+      JSON());
+
+  testCast(arrayVector, expectedVector);
+}
