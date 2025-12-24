@@ -21,7 +21,6 @@
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::core {
-
 namespace {
 
 void appendComma(int32_t i, std::stringstream& sql) {
@@ -2673,6 +2672,29 @@ PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
 
 void TableWriteNode::addDetails(std::stringstream& stream) const {
   stream << insertTableHandle_->connectorInsertTableHandle()->toString();
+}
+
+RowTypePtr ColumnStatsSpec::outputType() const {
+  // Create output type based on the column stats collection specs.
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+
+  const auto numAggregates = aggregates.size();
+  const auto outputTypeSize = groupingKeys.size() + numAggregates;
+
+  names.reserve(outputTypeSize);
+  types.reserve(outputTypeSize);
+
+  for (const auto& key : groupingKeys) {
+    names.push_back(key->name());
+    types.push_back(key->type());
+  }
+
+  for (auto i = 0; i < numAggregates; ++i) {
+    names.push_back(aggregateNames[i]);
+    types.push_back(aggregates[i].call->type());
+  }
+  return ROW(std::move(names), std::move(types));
 }
 
 folly::dynamic ColumnStatsSpec::serialize() const {

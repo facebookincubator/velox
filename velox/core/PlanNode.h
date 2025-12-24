@@ -1508,6 +1508,11 @@ struct ColumnStatsSpec : public ISerializable {
     VELOX_CHECK_EQ(aggregates.size(), aggregateNames.size());
   }
 
+  /// Returns the output row type that will be produced by this column stats
+  /// spec. The output type is determined by the grouping keys and aggregate
+  /// functions specified in the object.
+  RowTypePtr outputType() const;
+
   folly::dynamic serialize() const override;
 
   static ColumnStatsSpec create(const folly::dynamic& obj, void* context);
