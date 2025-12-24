@@ -358,7 +358,7 @@ bool CompileState::compile(bool allowCpuFallback) {
       LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
                 << oper->toString().c_str()
                 << ", keepOperator = " << keepOperator
-                << ", replaceOp.size() = " << replaceOp.size() << "\n";
+                << ", replaceOp.size() = " << replaceOp.size() << ", ";
     }
     auto GpuReplacedOperator = [](const exec::Operator* op) {
       return isAnyOf<
@@ -390,14 +390,18 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (CudfConfig::getInstance().debugEnabled) {
       LOG(INFO) << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
                 << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
-                << std::endl;
-      LOG(INFO) << "GPU operator condition = " << condition << std::endl;
+                << ", GPU operator condition = " << condition << std::endl;
     }
     if (!allowCpuFallback) {
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
     } else if (!condition) {
       LOG(WARNING)
           << "Replacement with cuDF operator failed. Falling back to CPU execution";
+      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString()
+                   << std::endl;
+      auto planNode = getPlanNode(oper->planNodeId());
+      LOG(WARNING) << "Replacement Failed PlanNode: "
+                   << planNode->toString(true, false) << std::endl;
     }
 
     if (not replaceOp.empty()) {
