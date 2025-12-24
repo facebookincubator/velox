@@ -37,11 +37,18 @@ class HiveConnectorTest : public exec::test::HiveConnectorTestBase {
 };
 
 void validateNullConstant(const ScanSpec& spec, const Type& type) {
+  SCOPED_TRACE(spec.fieldName());
   ASSERT_TRUE(spec.isConstant());
   auto constant = spec.constantValue();
   ASSERT_TRUE(constant->isConstantEncoding());
   ASSERT_EQ(*constant->type(), type);
   ASSERT_TRUE(constant->isNullAt(0));
+}
+
+void validateNonConstant(const ScanSpec& spec, bool projectOut) {
+  SCOPED_TRACE(spec.fieldName());
+  ASSERT_FALSE(spec.isConstant());
+  ASSERT_EQ(spec.projectOut(), projectOut);
 }
 
 std::vector<Subfield> makeSubfields(const std::vector<std::string>& paths) {
@@ -574,6 +581,123 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
   ASSERT_EQ(c0->children().size(), 2);
   auto c0c0 = c0->childByName("c0c0");
   ASSERT_TRUE(mapKeyIsNotNull(*c0c0));
+}
+
+TEST_F(HiveConnectorTest, makeScanSpecArrayOrMapSubscript) {
+  auto c0Type =
+      ARRAY(ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}, {"c0c2", BIGINT()}}));
+  auto c1Type =
+      MAP(BIGINT(),
+          ROW({{"c1c0", BIGINT()}, {"c1c1", BIGINT()}, {"c1c2", BIGINT()}}));
+  auto c2Type =
+      MAP(VARCHAR(),
+          ROW({{"c2c0", BIGINT()}, {"c2c1", BIGINT()}, {"c2c2", BIGINT()}}));
+  auto rowType = ROW({{"c0", c0Type}, {"c1", c1Type}, {"c2", c2Type}});
+  {
+    SCOPED_TRACE("Structure only");
+    auto scanSpec = makeScanSpec(
+        rowType,
+        groupSubfields(makeSubfields({"c0[$]", "c1[$]"})),
+        {},
+        nullptr,
+        {},
+        {},
+        {},
+        false,
+        pool_.get());
+    auto* c0 = scanSpec->childByName("c0");
+    validateNullConstant(
+        *c0->childByName(ScanSpec::kArrayElementsFieldName),
+        *c0Type->childAt(0));
+    auto* c1 = scanSpec->childByName("c1");
+    validateNullConstant(
+        *c1->childByName(ScanSpec::kMapKeysFieldName), *c1Type->childAt(0));
+    validateNullConstant(
+        *c1->childByName(ScanSpec::kMapValuesFieldName), *c1Type->childAt(1));
+  }
+  {
+    SCOPED_TRACE("Cancel structure only");
+    auto scanSpec = makeScanSpec(
+        rowType,
+        groupSubfields(makeSubfields({"c0[$]", "c0[*]", "c1[$]", "c1[*]"})),
+        {},
+        nullptr,
+        {},
+        {},
+        {},
+        false,
+        pool_.get());
+    auto* c0Elements = scanSpec->childByName("c0")->childByName(
+        ScanSpec::kArrayElementsFieldName);
+    validateNonConstant(*c0Elements, true);
+    ASSERT_EQ(c0Elements->children().size(), 3);
+    validateNonConstant(*c0Elements->childByName("c0c0"), true);
+    validateNonConstant(*c0Elements->childByName("c0c1"), true);
+    validateNonConstant(*c0Elements->childByName("c0c2"), true);
+    auto* c1 = scanSpec->childByName("c1");
+    auto* c1Keys = c1->childByName(ScanSpec::kMapKeysFieldName);
+    validateNonConstant(*c1Keys, true);
+    auto* c1Values = c1->childByName(ScanSpec::kMapValuesFieldName);
+    validateNonConstant(*c1Values, true);
+    ASSERT_EQ(c1Values->children().size(), 3);
+    validateNonConstant(*c1Values->childByName("c1c0"), true);
+    validateNonConstant(*c1Values->childByName("c1c1"), true);
+    validateNonConstant(*c1Values->childByName("c1c2"), true);
+  }
+  {
+    SCOPED_TRACE("Cancel structure only with filters");
+    auto scanSpec = makeScanSpec(
+        rowType,
+        groupSubfields(makeSubfields(
+            {"c0[$]",
+             "c0[1].c0c0",
+             "c1[$]",
+             "c1[2].c1c1",
+             "c2[$]",
+             "c2[\"foo\"].c2c2"})),
+        {},
+        nullptr,
+        {},
+        {},
+        {},
+        false,
+        pool_.get());
+    auto* c0 = scanSpec->childByName("c0");
+    validateNonConstant(*c0, true);
+    ASSERT_EQ(c0->maxArrayElementsCount(), 1);
+    auto* c0Elements = c0->childByName(ScanSpec::kArrayElementsFieldName);
+    validateNonConstant(*c0Elements, true);
+    ASSERT_EQ(c0Elements->children().size(), 3);
+    validateNonConstant(*c0Elements->childByName("c0c0"), true);
+    validateNullConstant(*c0Elements->childByName("c0c1"), *BIGINT());
+    validateNullConstant(*c0Elements->childByName("c0c2"), *BIGINT());
+    auto* c1 = scanSpec->childByName("c1");
+    validateNonConstant(*c1, true);
+    auto* c1Keys = c1->childByName(ScanSpec::kMapKeysFieldName);
+    validateNonConstant(*c1Keys, true);
+    ASSERT_TRUE(c1Keys->filter());
+    ASSERT_TRUE(c1Keys->filter()->testInt64(2));
+    ASSERT_FALSE(c1Keys->filter()->testInt64(3));
+    auto* c1Values = c1->childByName(ScanSpec::kMapValuesFieldName);
+    validateNonConstant(*c1Values, true);
+    ASSERT_EQ(c1Values->children().size(), 3);
+    validateNullConstant(*c1Values->childByName("c1c0"), *BIGINT());
+    validateNonConstant(*c1Values->childByName("c1c1"), true);
+    validateNullConstant(*c1Values->childByName("c1c2"), *BIGINT());
+    auto* c2 = scanSpec->childByName("c2");
+    validateNonConstant(*c2, true);
+    auto* c2Keys = c2->childByName(ScanSpec::kMapKeysFieldName);
+    validateNonConstant(*c2Keys, true);
+    ASSERT_TRUE(c2Keys->filter());
+    ASSERT_TRUE(c2Keys->filter()->testStringView("foo"_sv));
+    ASSERT_FALSE(c2Keys->filter()->testStringView("bar"_sv));
+    auto* c2Values = c2->childByName(ScanSpec::kMapValuesFieldName);
+    validateNonConstant(*c2Values, true);
+    ASSERT_EQ(c2Values->children().size(), 3);
+    validateNullConstant(*c2Values->childByName("c2c0"), *BIGINT());
+    validateNullConstant(*c2Values->childByName("c2c1"), *BIGINT());
+    validateNonConstant(*c2Values->childByName("c2c2"), true);
+  }
 }
 
 TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
