@@ -138,8 +138,7 @@ struct VariantTypeTraits<
     KIND,
     usesCustomComparison,
     std::enable_if_t<
-        TypeTraits<KIND>::isPrimitiveType && KIND != TypeKind::VARCHAR &&
-            KIND != TypeKind::VARBINARY,
+        TypeTraits<KIND>::isPrimitiveType && !is_string_kind(KIND),
         void>> {
   using native_type = typename TypeTraits<KIND>::NativeType;
   using stored_type =
@@ -151,9 +150,7 @@ template <TypeKind KIND, bool usesCustomComparison>
 struct VariantTypeTraits<
     KIND,
     usesCustomComparison,
-    std::enable_if_t<
-        KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY,
-        void>> {
+    std::enable_if_t<is_string_kind(KIND), void>> {
   using native_type = std::string_view;
   using stored_type =
       TypeStorage<scalar_stored_type<KIND>, KIND, usesCustomComparison>;
@@ -338,7 +335,25 @@ class Variant {
     return Variant{
         KIND,
         new typename detail::VariantTypeTraits<KIND, false>::stored_type{
-            std::move(v)}};
+            std::move(v)},
+    };
+  }
+
+  // Explicit specializations for other non-deep copied string types.
+  template <TypeKind KIND>
+  static std::enable_if_t<is_string_kind(KIND), Variant> create(StringView v) {
+    return create<KIND>(std::string(v));
+  }
+
+  template <TypeKind KIND>
+  static std::enable_if_t<is_string_kind(KIND), Variant> create(
+      std::string_view v) {
+    return create<KIND>(std::string(v));
+  }
+
+  template <TypeKind KIND>
+  static std::enable_if_t<is_string_kind(KIND), Variant> create(const char* v) {
+    return create<KIND>(std::string(v));
   }
 
   /// Creates a non-null Variant by deducing the TypeKind from the C++ template
@@ -489,10 +504,11 @@ class Variant {
   static Variant typeWithCustomComparison(
       typename TypeTraits<KIND>::NativeType input,
       const TypePtr& type) {
+    using variant_traits = detail::VariantTypeTraits<KIND, true>;
     return {
         KIND,
-        new typename detail::VariantTypeTraits<KIND, true>::stored_type{
-            input,
+        new typename variant_traits::stored_type{
+            typename variant_traits::value_type{std::move(input)},
             std::dynamic_pointer_cast<
                 const CanProvideCustomComparisonType<KIND>>(type)},
         true};

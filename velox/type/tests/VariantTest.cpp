@@ -113,6 +113,15 @@ TEST(VariantCreateTest, varcharType) {
   auto unicodeVariant = Variant::create<TypeKind::VARCHAR>(unicodeStr);
   EXPECT_EQ(unicodeVariant.value<TypeKind::VARCHAR>(), unicodeStr);
 
+  // Other string types.
+  auto stdStringViewVariant =
+      Variant::create<TypeKind::VARCHAR>(std::string_view(longStr));
+  EXPECT_EQ(stdStringViewVariant.value<TypeKind::VARCHAR>(), longStr);
+
+  auto stringViewVariant =
+      Variant::create<TypeKind::VARCHAR>(StringView(longStr));
+  EXPECT_EQ(stringViewVariant.value<TypeKind::VARCHAR>(), longStr);
+
   // Test move semantics
   std::string moveStr = "Move me!";
   auto moveVariant = Variant::create<TypeKind::VARCHAR>(std::move(moveStr));
@@ -135,6 +144,15 @@ TEST(VariantCreateTest, varbinaryType) {
 
   auto largeVariant = Variant::create<TypeKind::VARBINARY>(largeBinary);
   EXPECT_EQ(largeVariant.value<TypeKind::VARBINARY>(), largeBinary);
+
+  // Other string types.
+  auto stdStringViewVariant =
+      Variant::create<TypeKind::VARBINARY>(std::string_view(simpleBinary));
+  EXPECT_EQ(stdStringViewVariant.value<TypeKind::VARBINARY>(), simpleBinary);
+
+  auto stringViewVariant =
+      Variant::create<TypeKind::VARBINARY>(StringView(simpleBinary));
+  EXPECT_EQ(stringViewVariant.value<TypeKind::VARBINARY>(), simpleBinary);
 
   // Test move semantics.
   std::string moveBinary = "Move binary!";
