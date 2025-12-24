@@ -77,7 +77,8 @@ class CastHooks {
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;
 
-  /// Converts decimal to string type.
+  /// Converts decimal to string type. Returns the number of characters
+  /// written to startPosition.
   template <typename FromNativeType>
   size_t castFromDecimalToString(
       FromNativeType unscaledValue,

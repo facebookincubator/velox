@@ -335,26 +335,29 @@ class DecimalUtil {
   /// @param scale The scale of decimal.
   /// @param maxSize The estimated max size of string.
   /// @param startPosition The start position to write from.
-  /// @return The actual size of the string.
+  /// @param isScientific Whether to format small magnitude decimals using
+  /// scientific notation (Spark-compatible).
+  /// @return The number of characters written starting from startPosition.
   template <typename T>
   static size_t castToString(
       T unscaledValue,
       int32_t scale,
       int32_t maxSize,
       char* const startPosition,
-      bool sci = false) {
+      bool isScientific = false) {
     char* writePosition = startPosition;
     if (unscaledValue == 0) {
       *writePosition++ = '0';
-      if (sci && scale > 6) {
+      if (isScientific && scale > 6) {
         *writePosition++ = 'E';
         auto exp =
-            std::to_chars(writePosition, writePosition + maxSize - 2, -scale);
+            std::to_chars(writePosition, startPosition + maxSize, -scale);
         VELOX_DCHECK_EQ(
             exp.ec,
             std::errc(),
             "Failed to cast exponent value to varchar: {}",
             std::make_error_code(exp.ec).message());
+        VELOX_DCHECK_LE(exp.ptr - startPosition, maxSize);
         writePosition = exp.ptr;
       } else if (scale > 0) {
         *writePosition++ = '.';
@@ -367,10 +370,9 @@ class DecimalUtil {
         *writePosition++ = '-';
         unscaledValue = -unscaledValue;
       }
-      int32_t adjusted = 0;
-      if (sci) {
-        int digits = countDigits(unscaledValue);
-        adjusted = digits - 1 - scale;
+      if (isScientific) {
+        const auto digits = countDigits(unscaledValue);
+        const auto adjusted = digits - 1 - scale;
         if (adjusted < -6) {
           // Use scientific notation if the absolute value is less than 1e-6.
           // This is consistent with Spark's behavior.
@@ -382,17 +384,16 @@ class DecimalUtil {
               std::errc(),
               "Failed to cast coeff to varchar: {}",
               std::make_error_code(coeffEc).message());
-          int coeffLen = coeffEnd - coeffBuf.get();
           *writePosition++ = coeffBuf[0];
-          if (coeffLen > 1) {
+          if (digits > 1) {
             *writePosition++ = '.';
-            size_t toCopy = coeffLen - 1;
+            size_t toCopy = digits - 1;
             std::memcpy(writePosition, coeffBuf.get() + 1, toCopy);
             writePosition += toCopy;
           }
           *writePosition++ = 'E';
           auto exp = std::to_chars(
-              writePosition, writePosition + maxSize - coeffLen - 2, adjusted);
+              writePosition, writePosition + maxSize - digits - 2, adjusted);
           VELOX_DCHECK_EQ(
               exp.ec,
               std::errc(),
