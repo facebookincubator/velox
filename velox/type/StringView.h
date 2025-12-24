@@ -29,6 +29,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 
 namespace facebook::velox {
 
@@ -69,7 +70,11 @@ struct StringView {
       // small string: inlined. Zero the last 8 bytes first to allow for whole
       // word comparison.
       value_.data = nullptr;
+      // Suppress spurious warnings for older GCC version.
+      // This memcpy is safe under the isInline() condition.
+      VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
       memcpy(prefix_, data, size_);
+      VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
     } else {
       // large string: store pointer
       memcpy(prefix_, data, kPrefixSize);
