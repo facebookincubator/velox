@@ -371,14 +371,15 @@ class DecimalUtil {
         unscaledValue = -unscaledValue;
       }
       if (isScientific) {
-        const auto digits = countDigits(unscaledValue);
-        const auto adjusted = digits - 1 - scale;
-        if (adjusted < -6) {
+        if (scale >= 6 &&
+            unscaledValue < DecimalUtil::kPowersOfTen[scale - 6]) {
+          const auto digits = countDigits(unscaledValue);
+          const auto adjusted = digits - 1 - scale;
           // Use scientific notation if the absolute value is less than 1e-6.
           // This is consistent with Spark's behavior.
-          auto coeffBuf = std::make_unique<char[]>(digits);
+          auto coeffBuf = std::vector<char>(digits);
           auto [coeffEnd, coeffEc] = std::to_chars(
-              coeffBuf.get(), coeffBuf.get() + digits, unscaledValue);
+              coeffBuf.data(), coeffBuf.data() + digits, unscaledValue);
           VELOX_DCHECK_EQ(
               coeffEc,
               std::errc(),
@@ -388,7 +389,7 @@ class DecimalUtil {
           if (digits > 1) {
             *writePosition++ = '.';
             size_t toCopy = digits - 1;
-            std::memcpy(writePosition, coeffBuf.get() + 1, toCopy);
+            std::memcpy(writePosition, coeffBuf.data() + 1, toCopy);
             writePosition += toCopy;
           }
           *writePosition++ = 'E';
