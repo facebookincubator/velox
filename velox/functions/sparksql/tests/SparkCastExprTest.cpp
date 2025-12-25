@@ -251,6 +251,12 @@ TEST_F(SparkCastExprTest, decimalToVarchar) {
        "12089258196146291747.06175",
        std::nullopt});
 
+  // Long decimal with small magnitudes should use scientific notation.
+  expect128(
+      {-3, 0, 55, HugeInt::build(0, 1), std::nullopt},
+      DECIMAL(38, 20),
+      {"-3E-20", "0E-20", "5.5E-19", "1E-20", std::nullopt});
+
   // Long decimal zero scale.
   expect128({0}, DECIMAL(25, 0), {"0"});
 }
