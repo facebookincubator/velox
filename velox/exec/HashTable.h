@@ -431,6 +431,10 @@ class BaseHashTable {
   /// and be unique.
   virtual void erase(folly::Range<char**> rows) = 0;
 
+  /// Frees the lookup pointer table of this HashTable.
+  // todo: update anno. maybe rename the interface.
+  virtual void freePointerTable() = 0;
+
   /// Returns a brief description for use in debugging.
   virtual std::string toString() = 0;
 
@@ -689,6 +693,8 @@ class HashTable : public BaseHashTable {
       bool disableRangeArrayHash = false) override;
 
   void erase(folly::Range<char**> rows) override;
+
+  void freePointerTable() override;
 
   /// Moves the contents of 'tables' into 'this' and prepares 'this'
   /// for use in hash join probe. A hash join build side is prepared as
