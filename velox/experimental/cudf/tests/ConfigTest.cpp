@@ -22,7 +22,7 @@ namespace facebook::velox::cudf_velox::test {
 
 TEST(ConfigTest, CudfConfig) {
   std::unordered_map<std::string, std::string> options = {
-      {CudfConfig::kCudfEnabled, "false"},
+      {CudfConfig::kCudfDisabled, "true"},
       {CudfConfig::kCudfDebugEnabled, "true"},
       {CudfConfig::kCudfMemoryResource, "arena"},
       {CudfConfig::kCudfMemoryPercent, "25"},
@@ -31,7 +31,7 @@ TEST(ConfigTest, CudfConfig) {
 
   CudfConfig config;
   config.initialize(std::move(options));
-  ASSERT_EQ(config.enabled, false);
+  ASSERT_EQ(config.disabled, true);
   ASSERT_EQ(config.debugEnabled, true);
   ASSERT_EQ(config.memoryResource, "arena");
   ASSERT_EQ(config.memoryPercent, 25);
