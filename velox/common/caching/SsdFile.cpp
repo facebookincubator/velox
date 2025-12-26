@@ -308,6 +308,14 @@ bool SsdFile::growOrEvictLocked() {
     }
   }
 
+  // If SSD is in no space state and future eviction logging cannot go through,
+  // skip eviction, to avoid data inconsistency for checkpointing. Eviction log
+  // is up to date. Separately when SSD is in no space state,
+  // growOrEvictLocked() would not be invoked by write() in the first place.
+  if (checkpointEnabled() && state_.load() == State::kNoSpace) {
+    return false;
+  }
+
   auto candidates = tracker_.findEvictionCandidates(
       kNumEvictionCandidates, numRegions_, regionPins_);
   if (candidates.empty()) {
@@ -346,6 +354,11 @@ void SsdFile::clearRegionEntriesLocked(const std::vector<int32_t>& regions) {
 
 void SsdFile::write(std::vector<CachePin>& pins) {
   process::TraceContext trace("SsdFile::write");
+
+  if (state_.load() == State::kNoSpace) {
+    ++stats_.writeSsdDropped;
+    return;
+  }
 
   // Check entry count limit before writing
   if (maxEntries_ > 0) {
@@ -449,18 +462,29 @@ bool SsdFile::write(
     int64_t offset,
     int64_t length,
     const std::vector<iovec>& iovecs) {
+  VELOX_DCHECK_NE(state_.load(), State::kNoSpace);
+
+  int err = 0;
   try {
     writeFile_->write(iovecs, offset, length);
     return true;
   } catch (const std::exception&) {
+    err = errno;
     VELOX_SSD_CACHE_LOG(ERROR)
         << "Failed to write to SSD, file name: " << fileName_
         << ", size: " << iovecs.size() << ", offset: " << offset
-        << ", error code: " << errno
-        << ", error string: " << folly::errnoStr(errno);
+        << ", error code: " << err
+        << ", error string: " << folly::errnoStr(err);
     ++stats_.writeSsdErrors;
-    return false;
   }
+
+  if (err == ENOSPC) {
+    VELOX_SSD_CACHE_LOG(WARNING)
+        << "State of cache file " << fileName_ << " transits from "
+        << stateString(state_) << " to " << stateString(State::kNoSpace);
+    state_ = State::kNoSpace;
+  }
+  return false;
 }
 
 namespace {
@@ -842,6 +866,23 @@ void SsdFile::checkpoint(bool force) {
     }
     // Ignore nested exception.
   }
+}
+
+// static
+std::string SsdFile::stateString(State state) {
+  switch (state) {
+    case State::kActive:
+      return "Active";
+    case State::kNoSpace:
+      return "NoSpace";
+    default:
+      return fmt::format("UNKNOWN: {}", static_cast<uint8_t>(state));
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, const SsdFile::State& state) {
+  out << SsdFile::stateString(state);
+  return out;
 }
 
 void SsdFile::initializeCheckpoint() {

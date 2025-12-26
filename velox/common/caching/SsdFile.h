@@ -308,11 +308,19 @@ class SsdFile {
     folly::Executor* const executor;
   };
 
+  enum class State : uint8_t {
+    kActive,
+    kNoSpace,
+  };
+
   static constexpr uint64_t kRegionSize = 1 << 26; // 64MB
 
   /// Constructs a cache backed by filename. Discards any previous contents of
   /// filename.
   SsdFile(const Config& config);
+
+  /// Convert State to std::string.
+  static std::string stateString(State state);
 
   /// Adds entries of 'pins' to this file. 'pins' must be in read mode and
   /// those pins that are successfully added to SSD are marked as being on SSD.
@@ -498,6 +506,10 @@ class SsdFile {
     if (!checkpointEnabled()) {
       return false;
     }
+    // Once no SSD space, skip the subsequent checkpointing.
+    if (state_.load() == State::kNoSpace) {
+      return false;
+    }
     return force || (bytesAfterCheckpoint_ >= checkpointIntervalBytes_);
   }
 
@@ -609,6 +621,8 @@ class SsdFile {
   // Map of file number and offset to location in file.
   folly::F14FastMap<FileCacheKey, SsdRun> entries_;
 
+  std::atomic<State> state_{State::kActive};
+
   // File system.
   std::shared_ptr<filesystems::FileSystem> fs_;
 
@@ -650,4 +664,16 @@ class SsdFile {
   friend class test::SsdCacheTestHelper;
 };
 
+std::ostream& operator<<(std::ostream& out, const SsdFile::State& state);
+
 } // namespace facebook::velox::cache
+
+template <>
+struct fmt::formatter<facebook::velox::cache::SsdFile::State>
+    : formatter<std::string> {
+  auto format(facebook::velox::cache::SsdFile::State state, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        facebook::velox::cache::SsdFile::stateString(state), ctx);
+  }
+};
