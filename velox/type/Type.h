@@ -2234,6 +2234,11 @@ inline std::string to(const int128_t& value) {
   return std::to_string(value);
 }
 
+template <typename T>
+inline T to(const velox::StringView& value) {
+  return to<T>(std::string_view(value.data(), value.size()));
+}
+
 template <>
 inline std::string to(const velox::StringView& value) {
   return std::string(value.data(), value.size());

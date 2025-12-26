@@ -406,7 +406,7 @@ TEST_F(NullableRowViewTest, materialize) {
 
   std::tuple<
       std::optional<int64_t>,
-      std::optional<std::string>,
+      std::optional<StringView>,
       std::optional<std::vector<std::optional<int64_t>>>>
       expected{1, "hi", {{1, 2, std::nullopt}}};
   ASSERT_EQ(reader[0].materialize(), expected);

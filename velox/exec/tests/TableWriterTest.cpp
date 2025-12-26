@@ -82,7 +82,7 @@ TEST_F(BasicTableWriterTestBase, roundTrip) {
                      ->as<FlatVector<StringView>>();
   ASSERT_TRUE(details->isNullAt(0));
   ASSERT_FALSE(details->isNullAt(1));
-  folly::dynamic obj = folly::parseJson(details->valueAt(1));
+  folly::dynamic obj = folly::parseJson(std::string_view(details->valueAt(1)));
 
   ASSERT_EQ(size, obj["rowCount"].asInt());
   auto fileWriteInfos = obj["fileWriteInfos"];
@@ -180,7 +180,7 @@ TEST_F(BasicTableWriterTestBase, targetFileName) {
   auto results = AssertQueryBuilder(plan).copyResults(pool());
   auto* details = results->childAt(TableWriteTraits::kFragmentChannel)
                       ->asUnchecked<SimpleVector<StringView>>();
-  auto detail = folly::parseJson(details->valueAt(1));
+  auto detail = folly::parseJson(std::string_view(details->valueAt(1)));
   auto fileWriteInfos = detail["fileWriteInfos"];
   ASSERT_EQ(1, fileWriteInfos.size());
   ASSERT_EQ(fileWriteInfos[0]["writeFileName"].asString(), kFileName);
@@ -1817,7 +1817,8 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
     }
     if (!fragmentVector->isNullAt(i)) {
       ASSERT_FALSE(fragmentVector->isNullAt(i));
-      folly::dynamic obj = folly::parseJson(fragmentVector->valueAt(i));
+      folly::dynamic obj =
+          folly::parseJson(std::string_view(fragmentVector->valueAt(i)));
       if (testMode_ == TestMode::kUnpartitioned) {
         ASSERT_EQ(obj["targetPath"], outputDirectory->getPath());
         ASSERT_EQ(obj["writePath"], outputDirectory->getPath());

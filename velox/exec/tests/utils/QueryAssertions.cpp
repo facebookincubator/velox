@@ -278,7 +278,8 @@ variant variantAt<TypeKind::VARBINARY>(
     int32_t row,
     int32_t column) {
   return variant::binary(
-      StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
+      std::string(
+          ::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
 }
 
 template <>
@@ -323,7 +324,7 @@ variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
 
 template <>
 variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
-  return variant::binary(StringView(::duckdb::StringValue::Get(value)));
+  return variant::binary(std::string(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {

@@ -1036,9 +1036,9 @@ TEST_F(VectorFuzzerTest, customTypeGenerator) {
       if (decoded.isNullAt(j)) {
         continue;
       }
-      std::string value = decoded.valueAt<StringView>(j);
       try {
-        json = folly::parseJson(value, opts);
+        auto stringView = decoded.valueAt<StringView>(j);
+        json = folly::parseJson(std::string_view(stringView), opts);
       } catch (...) {
         EXPECT_TRUE(false);
       }
@@ -1078,9 +1078,10 @@ TEST_F(VectorFuzzerTest, jsonConstrained) {
       if (decoded.isNullAt(j)) {
         continue;
       }
-      std::string value = decoded.valueAt<StringView>(j);
       folly::dynamic json;
-      EXPECT_NO_THROW(json = folly::parseJson(value, jsonOpts));
+      auto stringView = decoded.valueAt<StringView>(j);
+      EXPECT_NO_THROW(
+          json = folly::parseJson(std::string_view(stringView), jsonOpts));
       EXPECT_TRUE(json.isNull() || json.isArray());
     }
   }
@@ -1098,7 +1099,7 @@ TEST_F(VectorFuzzerTest, setConstrained) {
 
   DecodedVector decoded(*vector, SelectivityVector(kSize));
   for (auto i = 0; i < kSize; ++i) {
-    std::string value = decoded.valueAt<StringView>(i);
+    auto value = decoded.valueAt<StringView>(i);
     EXPECT_TRUE(value == "a" || value == "b");
   }
 }
