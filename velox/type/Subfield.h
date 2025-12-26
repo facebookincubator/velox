@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/hash/Hash.h>
 #include <ostream>
 
 #include "velox/common/Enums.h"
@@ -29,6 +30,7 @@ enum class SubfieldKind {
   kNestedField,
   kStringSubscript,
   kLongSubscript,
+  kArrayOrMapSubscript,
 };
 
 VELOX_DECLARE_ENUM_NAME(SubfieldKind)
@@ -52,6 +54,7 @@ struct Separators {
   char quote = '\"';
   char wildCard = '*';
   char unicodeCaret = '^';
+  char dollar = '$';
 };
 
 class Subfield {
@@ -109,6 +112,124 @@ class Subfield {
 
     std::unique_ptr<PathElement> clone() override {
       return std::make_unique<AllSubscripts>();
+    }
+  };
+
+  class ArrayOrMapSubscript final : public PathElement {
+   public:
+    // Constructor for neither keys nor values mode (equivalent to [$])
+    ArrayOrMapSubscript()
+        : PathElement(SubfieldKind::kArrayOrMapSubscript),
+          includeKeys_(false),
+          includeValues_(false),
+          subscript_(nullptr) {}
+
+    // Constructor for key/value filtering with a subscript filter
+    ArrayOrMapSubscript(
+        bool includeKeys,
+        bool includeValues,
+        std::unique_ptr<PathElement> subscript)
+        : PathElement(SubfieldKind::kArrayOrMapSubscript),
+          includeKeys_(includeKeys),
+          includeValues_(includeValues),
+          subscript_(std::move(subscript)) {
+      // Validate subscript is one of the allowed types
+      if (subscript_) {
+        VELOX_USER_CHECK(
+            subscript_->kind() == SubfieldKind::kAllSubscripts ||
+                subscript_->kind() == SubfieldKind::kLongSubscript ||
+                subscript_->kind() == SubfieldKind::kStringSubscript,
+            "ArrayOrMapSubscript filter must be AllSubscripts, LongSubscript, or StringSubscript");
+      }
+    }
+
+    bool includeKeys() const {
+      return includeKeys_;
+    }
+
+    bool includeValues() const {
+      return includeValues_;
+    }
+
+    const PathElement* subscript() const {
+      return subscript_.get();
+    }
+
+    // Returns true if this is a [$] -- neither keys nor values are needed.
+    bool isStructureOnly() const {
+      return !includeKeys_ && !includeValues_ && !subscript_;
+    }
+
+    std::string toString() const override {
+      // Neither Keys Nor Values case: [$]
+      if (isStructureOnly()) {
+        return "[$]";
+      }
+
+      if (includeKeys_ && includeValues_) {
+        return subscript_ ? subscript_->toString() : "[*]";
+      }
+
+      // Future patterns (not yet implemented in parser):
+      // [K*, *], [K*, 42], [K*, 'foo'], [V*, *], [V*, 42], [V*, 'foo']
+      std::string prefix = includeKeys_ ? "K*" : "V*";
+      std::string subscriptStr = parseSubscriptValue();
+      return "[" + prefix + ", " + subscriptStr + "]";
+    }
+
+    size_t hash() const override {
+      return folly::hash::hash_combine(
+          includeKeys_, includeValues_, subscript_ ? subscript_->hash() : 0);
+    }
+
+    bool operator==(const PathElement& other) const override {
+      if (this == &other) {
+        return true;
+      }
+      if (other.kind() != SubfieldKind::kArrayOrMapSubscript) {
+        return false;
+      }
+      const auto* otherSub = other.as<ArrayOrMapSubscript>();
+      if (includeKeys_ != otherSub->includeKeys_ ||
+          includeValues_ != otherSub->includeValues_) {
+        return false;
+      }
+      if (subscript_ == nullptr && otherSub->subscript_ == nullptr) {
+        return true;
+      }
+      if (subscript_ == nullptr || otherSub->subscript_ == nullptr) {
+        return false;
+      }
+      return *subscript_ == *otherSub->subscript_;
+    }
+
+    std::unique_ptr<PathElement> clone() override {
+      if (isStructureOnly()) {
+        return std::make_unique<ArrayOrMapSubscript>();
+      }
+      return std::make_unique<ArrayOrMapSubscript>(
+          includeKeys_, includeValues_, subscript_->clone());
+    }
+
+   private:
+    const bool includeKeys_;
+    const bool includeValues_;
+    const std::unique_ptr<PathElement> subscript_;
+
+    std::string parseSubscriptValue() const {
+      if (!subscript_) {
+        return "*";
+      }
+      switch (subscript_->kind()) {
+        case SubfieldKind::kAllSubscripts:
+          return "*";
+        case SubfieldKind::kLongSubscript:
+          return std::to_string(subscript_->as<LongSubscript>()->index());
+        case SubfieldKind::kStringSubscript:
+          return "'" + subscript_->as<StringSubscript>()->index() + "'";
+        default:
+          VELOX_FAIL("Unexpected subscript type: {}", subscript_->kind());
+      }
     }
   };
 
