@@ -32,7 +32,12 @@ StructColumnReader::StructColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveStructColumnReader(requestedType, fileType, params, scanSpec) {
+    : SelectiveStructColumnReader(
+          columnReaderOptions,
+          requestedType,
+          fileType,
+          params,
+          scanSpec) {
   auto& childSpecs = scanSpec_->stableChildren();
   for (auto i = 0; i < childSpecs.size(); ++i) {
     auto childSpec = childSpecs[i];
