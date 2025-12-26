@@ -616,15 +616,14 @@ class HashJoinBuilder {
         builder.splits(splitEntry.first, splitEntry.second);
       }
     }
-    auto queryCtx = core::QueryCtx::create(
-        executor_,
-        core::QueryConfig{{}},
-        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-        cache::AsyncDataCache::getInstance(),
-        memory::MemoryManager::getInstance()->addRootPool(
-            "query_pool",
-            memory::kMaxMemory,
-            memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::Builder()
+                        .executor(executor_)
+                        .pool(
+                            memory::MemoryManager::getInstance()->addRootPool(
+                                "query_pool",
+                                memory::kMaxMemory,
+                                memory::MemoryReclaimer::create()))
+                        .build();
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     int32_t spillPct{0};
     if (injectSpill) {
