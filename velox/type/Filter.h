@@ -1854,8 +1854,12 @@ inline xsimd::batch_bool<double> FloatingPointRange<double>::testValues(
 
 template <>
 inline xsimd::batch_bool<float> FloatingPointRange<double>::testValues(
-    xsimd::batch<float>) const {
-  VELOX_FAIL("Not defined for double filter");
+    xsimd::batch<float> x) const {
+  // Slow path for schema evolution:  handles the case where double filter is
+  // applied to float data (e.g., reading float column with double type
+  // request). Falls back to element-by-element testing as batch processing
+  // requires type matching.
+  return Filter::testValues(x);
 }
 
 template <>
