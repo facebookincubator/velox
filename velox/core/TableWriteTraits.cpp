@@ -111,7 +111,8 @@ folly::dynamic TableWriteTraits::getTableCommitContext(
   VELOX_CHECK_GT(input->size(), 0);
   auto* contextVector =
       input->childAt(kContextChannel)->as<SimpleVector<StringView>>();
-  return folly::parseJson(contextVector->valueAt(input->size() - 1));
+  return folly::parseJson(
+      std::string_view(contextVector->valueAt(input->size() - 1)));
 }
 
 int64_t TableWriteTraits::getRowCount(const RowVectorPtr& output) {

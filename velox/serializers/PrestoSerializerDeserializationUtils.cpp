@@ -866,7 +866,7 @@ void read<OpaqueType>(
   for (int32_t i = 0; i < numNewValues; ++i) {
     int32_t offset = offsets[i];
     auto sv = StringView(rawString + previousOffset, offset - previousOffset);
-    auto opaqueValue = deserialization(sv);
+    auto opaqueValue = deserialization(std::string(sv));
     rawValues[resultOffset + i] = opaqueValue;
     previousOffset = offset;
   }
