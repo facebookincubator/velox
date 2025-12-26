@@ -18,6 +18,8 @@
 
 #include <folly/Executor.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <deque>
+#include <functional>
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
@@ -69,9 +71,9 @@ namespace facebook::velox::core {
 /// multiple tasks and operators within a query execution.
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
-  ~QueryCtx() {
-    VELOX_CHECK(!underArbitration_);
-  }
+  using ReleaseCallback = std::function<void()>;
+
+  ~QueryCtx();
 
   /// Creates a new QueryCtx instance with the specified configuration.
   ///
@@ -164,6 +166,13 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    /// Adds a callback to be invoked when the QueryCtx is destroyed.
+    /// Multiple callbacks can be added by calling this method multiple times.
+    Builder& releaseCallback(ReleaseCallback callback) {
+      releaseCallbacks_.push_back(std::move(callback));
+      return *this;
+    }
+
     /// Constructs and returns a QueryCtx with the configured parameters.
     ///
     /// @return Shared pointer to the newly created QueryCtx instance
@@ -179,6 +188,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     folly::Executor* spillExecutor_{nullptr};
     std::string queryId_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+    std::deque<ReleaseCallback> releaseCallbacks_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -229,6 +239,22 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
+  }
+
+  /// Registers a callback to be invoked when this QueryCtx is destroyed.
+  /// This allows external resources tied to the query's lifetime to be cleaned
+  /// up before the QueryCtx and its members are destructed. For example,
+  /// resources that have allocations in the query's memory pool.
+  ///
+  /// Example: HashTableCache uses this to remove cached hash tables when a
+  /// query completes. The cache entry holds a child memory pool of the query
+  /// pool, so it must be released before the query pool is destroyed.
+  ///
+  /// Note: Callbacks are invoked in registration order. Exceptions thrown by
+  /// callbacks are caught and logged; they do not prevent subsequent callbacks
+  /// from running.
+  void addReleaseCallback(ReleaseCallback callback) {
+    releaseCallbacks_.push_back(std::move(callback));
   }
 
   /// Overrides the previous configuration. Note that this function is NOT
@@ -373,6 +399,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  // Callbacks invoked before destruction to clean up external resources.
+  std::deque<ReleaseCallback> releaseCallbacks_;
 };
 
 // Represents the state of one thread of query execution.
