@@ -88,7 +88,7 @@ TEST_F(RLEv2Test, basicDelta0) {
   }
 
   const unsigned char bytes[] = {0xc0, 0x13, 0x00, 0x02};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -106,7 +106,7 @@ TEST_F(RLEv2Test, basicDelta1) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe7, 0x07, 0xc8, 0x01, 0x32, 0x19, 0x0f};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -127,7 +127,7 @@ TEST_F(RLEv2Test, basicDelta2) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe7, 0x07, 0xc7, 0x01, 0x32, 0x19, 0x23};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -148,7 +148,7 @@ TEST_F(RLEv2Test, basicDelta3) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe8, 0x07, 0xc7, 0x01, 0x32, 0x19, 0x0f};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -169,7 +169,7 @@ TEST_F(RLEv2Test, basicDelta4) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe8, 0x07, 0xc8, 0x01, 0x32, 0x19, 0x23};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -219,7 +219,7 @@ TEST_F(RLEv2Test, basicDelta0WithNulls) {
   }
 
   const unsigned char bytes[] = {0xc0, 0x13, 0x00, 0x02};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   const size_t count = values.size();
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count, nulls), 1, nulls);
@@ -243,7 +243,7 @@ TEST_F(RLEv2Test, shortRepeats) {
   const unsigned char bytes[] = {0x04, 0x00, 0x04, 0x02, 0x04, 0x04, 0x04,
                                  0x06, 0x04, 0x08, 0x04, 0x0a, 0x04, 0x0c,
                                  0x04, 0x0e, 0x04, 0x10, 0x04, 0x12};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -266,7 +266,7 @@ TEST_F(RLEv2Test, multiByteShortRepeats) {
                                  0x00, 0x00, 0x3c, 0x80, 0x00, 0x00, 0x00,
                                  0x00, 0x00, 0x00, 0x02, 0x3c, 0x80, 0x00,
                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -302,7 +302,7 @@ TEST_F(RLEv2Test, bitSize2Direct) {
   }
 
   const unsigned char bytes[] = {0x42, 0x13, 0x22, 0x22, 0x22, 0x22, 0x22};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -320,7 +320,7 @@ TEST_F(RLEv2Test, bitSize4Direct) {
 
   const unsigned char bytes[] = {
       0x46, 0x13, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
 
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
@@ -360,7 +360,7 @@ TEST_F(RLEv2Test, multipleRunsDirect) {
       0x04,
       0x04,
       0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
 
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
@@ -408,7 +408,7 @@ TEST_F(RLEv2Test, overflowDirect) {
       0x7e, 0x03, 0x7d, 0x45, 0x3c, 0x12, 0x41, 0x48, 0xf4, 0xbe, 0x7d, 0x45,
       0x3c, 0x12, 0x41, 0x48, 0xf4, 0xae, 0x50, 0xce, 0xad, 0x2a, 0x30, 0x0e,
       0xd2, 0x96, 0xfe, 0xd8, 0xd2, 0x38, 0x54, 0x6e, 0x3d, 0x81};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -445,7 +445,7 @@ TEST_F(RLEv2Test, basicPatched0) {
       0x5a,
       0xfc,
       0xe8};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -484,7 +484,7 @@ TEST_F(RLEv2Test, basicPatched1) {
       0xe0, 0x78, 0x00, 0x1c, 0x0f, 0x08, 0x06, 0x81, 0xc6, 0x90, 0x80, 0x68,
       0x24, 0x1b, 0x0b, 0x26, 0x83, 0x21, 0x30, 0xe0, 0x98, 0x3c, 0x6f, 0x06,
       0xb7, 0x03, 0x70};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -544,7 +544,7 @@ TEST_F(RLEv2Test, mixedPatchedAndShortRepeats) {
       0x00, 0x0c, 0x02, 0x08, 0x18, 0x00, 0x40, 0x00, 0x01, 0x00, 0x00, 0x08,
       0x30, 0x33, 0x80, 0x00, 0x02, 0x0c, 0x10, 0x20, 0x20, 0x47, 0x80, 0x13,
       0x4c};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -579,7 +579,7 @@ TEST_F(RLEv2Test, basicDirectSeek) {
       0x04,
       0x04,
       0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
 
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
