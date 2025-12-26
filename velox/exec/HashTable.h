@@ -167,6 +167,8 @@ class BaseHashTable {
       "hashtable.parallelJoinBloomFilterBuildCpuNanos"};
   static inline const std::string kVectorHasherMergeCpuNanos{
       "hashtable.vectorHasherMergeCpuNanos"};
+  static inline const std::string kHashTableCacheHit{"hashtable.cacheHit"};
+  static inline const std::string kHashTableCacheMiss{"hashtable.cacheMiss"};
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
