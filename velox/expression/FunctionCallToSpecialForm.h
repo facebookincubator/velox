@@ -33,9 +33,9 @@ class FunctionCallToSpecialForm {
   /// Like 'resolveType', but with support for applying type conversions if a
   /// special form signature doesn't match 'argTypes' exactly. Support varies
   /// from special form to special form. By default, no coersions are attempted.
-  virtual TypePtr resolveTypeWithCorsions(
+  virtual TypePtr resolveTypeWithCoercions(
       const std::vector<TypePtr>& argTypes,
-      [[maybe_unused]] std::vector<TypePtr>& coercions) {
+      std::vector<TypePtr>& coercions) {
     coercions.clear();
     coercions.resize(argTypes.size());
     return resolveType(argTypes);
