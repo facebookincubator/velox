@@ -53,8 +53,9 @@ class HashJoinBridge : public JoinBridge {
   /// Invoked by the build operator to set the built hash table.
   /// 'spillPartitionSet' contains the spilled partitions while building
   /// 'table' which only applies if the disk spilling is enabled.
+  /// Accepts both unique_ptr (regular joins) and shared_ptr (broadcast joins).
   void setHashTable(
-      std::unique_ptr<BaseHashTable> table,
+      std::shared_ptr<BaseHashTable> table,
       SpillPartitionSet spillPartitionSet,
       bool hasNullKeys,
       HashJoinTableSpillFunc&& tableSpillFunc);
