@@ -69,7 +69,8 @@ struct IPPrefixFunction {
       out_type<IPPrefix>& result,
       const arg_type<Varchar>& ipString,
       const arg_type<int64_t>& prefixBits) {
-    auto tryIp = folly::IPAddress::tryFromString(ipString);
+    // TODO: Remove explicit std::string_view cast.
+    auto tryIp = folly::IPAddress::tryFromString(std::string_view(ipString));
     if (tryIp.hasError()) {
       VELOX_USER_FAIL("Cannot cast value to IPADDRESS: {}", ipString);
     }
