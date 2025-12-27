@@ -967,16 +967,14 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
                       core::JoinType::kLeftSemiFilter)
                   .planNode();
 
-  SplitInput splitInput = {
-      {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-      {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+  SplitPath splitPaths = {
+      {probeScanId, {probeFile->getPath()}},
+      {buildScanId, {buildFile->getPath()}},
   };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
-      .inputSplits(splitInput)
+      .inputSplits(splitPaths)
       .checkSpillStats(false)
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
@@ -984,7 +982,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
+      .inputSplits(splitPaths)
       .checkSpillStats(false)
       .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
       .run();
@@ -1008,7 +1006,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
-      .inputSplits(splitInput)
+      .inputSplits(splitPaths)
       .checkSpillStats(false)
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
@@ -1017,7 +1015,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
+      .inputSplits(splitPaths)
       .checkSpillStats(false)
       .referenceQuery(
           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
@@ -2605,18 +2603,16 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
                         true /*nullAware*/)
                     .planNode();
 
-    SplitInput splitInput = {
-        {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-        {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    SplitPath splitPaths = {
+        {probeScanId, {probeFile->getPath()}},
+        {buildScanId, {buildFile->getPath()}},
     };
 
     // right semi project not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
-            .inputSplits(splitInput)
+            .inputSplits(splitPaths)
             .checkSpillStats(false)
             .referenceQuery("SELECT u0, u0 IN (SELECT t0 FROM t) FROM u")
             .run(),
@@ -3472,18 +3468,16 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
                       core::JoinType::kLeftSemiProject)
                   .planNode();
 
-  SplitInput splitInput = {
-      {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-      {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+  SplitPath splitPaths = {
+      {probeScanId, {probeFile->getPath()}},
+      {buildScanId, {buildFile->getPath()}},
   };
 
   // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
-          .inputSplits(splitInput)
+          .inputSplits(splitPaths)
           .checkSpillStats(false)
           .referenceQuery("SELECT t0, t1, t0 IN (SELECT u0 FROM u) FROM t")
           .run(),
@@ -3493,7 +3487,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(flipJoinSides(plan))
-          .inputSplits(splitInput)
+          .inputSplits(splitPaths)
           .checkSpillStats(false)
           .referenceQuery("SELECT t0, t1, t0 IN (SELECT u0 FROM u) FROM t")
           .run(),
@@ -3520,7 +3514,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
-          .inputSplits(splitInput)
+          .inputSplits(splitPaths)
           .checkSpillStats(false)
           .referenceQuery(
               "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
@@ -3531,7 +3525,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(flipJoinSides(plan))
-          .inputSplits(splitInput)
+          .inputSplits(splitPaths)
           .checkSpillStats(false)
           .referenceQuery(
               "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
@@ -4827,11 +4821,23 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
     writeToFile(tempFiles.back()->getPath(), rowVector);
-    auto split = HiveConnectorSplitBuilder(tempFiles.back()->getPath())
-                     .partitionKey("p1", std::to_string(i))
-                     .build();
-    probeSplits.push_back(exec::Split(split));
   }
+
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> splits;
+      splits.reserve(tempFiles.size());
+      for (int32_t i = 0; i < tempFiles.size(); ++i) {
+        auto split = HiveConnectorSplitBuilder(tempFiles[i]->getPath())
+                         .partitionKey("p1", std::to_string(i))
+                         .build();
+        splits.emplace_back(exec::Split(split));
+      }
+      SplitInput inputSplits;
+      inputSplits.emplace(nodeId, splits);
+      return inputSplits;
+    };
+  };
 
   auto outputType = ROW({"p0", "p1"}, {BIGINT(), BIGINT()});
   connector::ColumnHandleMap assignments = {
@@ -4873,7 +4879,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
       .planNode(std::move(op))
       .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
       .injectSpill(false)
-      .inputSplits({{probeScanId, probeSplits}})
+      .makeInputSplits(makeInputSplits(probeScanId))
       .referenceQuery("select p.p0 from p, b where b.b0 = p.p1")
       .checkSpillStats(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool /*hasSpill*/) {
@@ -4935,11 +4941,10 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
                 .capturePlanNodeId(joinNodeId)
                 .planNode();
 
-  SplitInput splitInput = {
-      {scanNodeId, {Split(makeHiveConnectorSplit(probeFile->getPath()))}}};
+  SplitPath splitPaths = {{scanNodeId, {probeFile->getPath()}}};
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
-      .inputSplits(splitInput)
+      .inputSplits(splitPaths)
       .injectSpill(false)
       .checkSpillStats(false)
       .referenceQuery("SELECT c0, sum(c1) FROM t, u WHERE c0 = u0 group by c0")
@@ -5225,10 +5230,6 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
   std::vector<RowVectorPtr> buildVectors{
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
   createDuckDbTable("t", buildVectors);
-  auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(
-                   filePaths[0]->getPath())
-                   .partitionKey("k", "0")
-                   .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
   connector::ColumnHandleMap assignments = {
       {"n1_0", regularColumn("c0", BIGINT())},
@@ -5252,11 +5253,21 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
               core::JoinType::kInner)
           .project({"c0"})
           .planNode();
-  SplitInput splits = {{probeScanId, {exec::Split(split)}}};
+
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(
+                       filePaths[0]->getPath())
+                       .partitionKey("k", "0")
+                       .build();
+      SplitInput splits = {{nodeId, {exec::Split(split)}}};
+      return splits;
+    };
+  };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
-      .inputSplits(splits)
+      .makeInputSplits(makeInputSplits(probeScanId))
       .referenceQuery("select t.c0 from t, u where t.c0 = 0")
       .checkSpillStats(false)
       .run();
