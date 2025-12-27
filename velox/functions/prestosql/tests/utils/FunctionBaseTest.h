@@ -354,7 +354,7 @@ class FunctionBaseTest : public testing::Test,
 
   /// Parses a timestamp string into Timestamp.
   /// Accepts strings formatted as 'YYYY-MM-DD HH:mm:ss[.nnn]'.
-  static Timestamp parseTimestamp(const std::string& text) {
+  static Timestamp parseTimestamp(std::string_view text) {
     return util::fromTimestampString(
                text.data(), text.size(), util::TimestampParseMode::kPrestoCast)
         .thenOrThrow(folly::identity, [&](const Status& status) {
@@ -362,10 +362,26 @@ class FunctionBaseTest : public testing::Test,
         });
   }
 
+  // TODO: Remove explicit std::string_view cast.
+  static Timestamp parseTimestamp(StringView text) {
+    return parseTimestamp(std::string_view(text));
+  }
+  static Timestamp parseTimestamp(const char* text) {
+    return parseTimestamp(std::string_view(text));
+  }
+
   /// Parses a date string into days since epoch.
   /// Accepts strings formatted as 'YYYY-MM-DD'.
-  static int32_t parseDate(const std::string& text) {
+  static int32_t parseDate(std::string_view text) {
     return DATE()->toDays(text);
+  }
+
+  // TODO: Remove explicit std::string_view cast.
+  static int32_t parseDate(StringView text) {
+    return parseDate(std::string_view(text));
+  }
+  static int32_t parseDate(const char* text) {
+    return parseDate(std::string_view(text));
   }
 
   /// Returns a vector of signatures for the given function name and return

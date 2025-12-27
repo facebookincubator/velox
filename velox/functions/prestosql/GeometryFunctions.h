@@ -54,7 +54,7 @@ struct StGeometryFromTextFunction {
     GEOS_TRY(
         {
           geos::io::WKTReader reader;
-          geosGeometry = reader.read(wkt);
+          geosGeometry = reader.read(std::string(wkt));
         },
         "Failed to parse WKT");
     common::geospatial::GeometrySerializer::serialize(*geosGeometry, result);
@@ -184,7 +184,7 @@ struct StPolygonFunction {
     GEOS_TRY(
         {
           geos::io::WKTReader reader;
-          geosGeometry = reader.read(wkt);
+          geosGeometry = reader.read(std::string(wkt));
         },
         "Failed to parse WKT");
     auto validate = geospatial::validateType(
@@ -214,7 +214,8 @@ struct StRelateFunction {
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
     GEOS_TRY(
-        result = leftGeosGeometry->relate(*rightGeosGeometry, relation);
+        result =
+            leftGeosGeometry->relate(*rightGeosGeometry, std::string(relation));
         , "Failed to check geometry relation");
 
     return Status::OK();
@@ -1788,7 +1789,7 @@ struct GeometryFromGeoJsonFunction {
       out_type<Geometry>& result,
       const arg_type<Varchar>& geometry) {
     auto reader = geos::io::GeoJSONReader();
-    auto geosGeometry = reader.read(geometry);
+    auto geosGeometry = reader.read(std::string(geometry));
     common::geospatial::GeometrySerializer::serialize(*geosGeometry, result);
   }
 };
@@ -1951,7 +1952,7 @@ struct StLineFromTextFunction {
     GEOS_TRY(
         {
           geos::io::WKTReader reader;
-          geosGeometry = reader.read(wkt);
+          geosGeometry = reader.read(std::string(wkt));
         },
         "Failed to parse WKT");
     auto validate = geospatial::validateType(
