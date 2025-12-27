@@ -298,6 +298,9 @@ constexpr std::string_view kMetricSsdCacheWriteSsdErrors{
 constexpr std::string_view kMetricSsdCacheWriteSsdDropped{
     "velox.ssd_cache_write_ssd_dropped"};
 
+constexpr std::string_view kMetricSsdCacheWriteExceedEntryLimit{
+    "velox.ssd_cache_write_exceed_entry_limit"};
+
 constexpr std::string_view kMetricSsdCacheWriteCheckpointErrors{
     "velox.ssd_cache_write_checkpoint_errors"};
 
