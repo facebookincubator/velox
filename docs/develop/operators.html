@@ -658,16 +658,19 @@ and emitting results.</p>
 <tr class="row-odd"><td><p>nullAware</p></td>
 <td><p>Applies to anti and semi project joins only. Indicates whether the join semantic is IN (nullAware = true) or EXISTS (nullAware = false).</p></td>
 </tr>
-<tr class="row-even"><td><p>leftKeys</p></td>
+<tr class="row-even"><td><p>useHashTableCache</p></td>
+<td><p>Optional. Used only by Presto-on-Spark. When true, enables caching of the hash table built for broadcast joins so that subsequent tasks can reuse it.</p></td>
+</tr>
+<tr class="row-odd"><td><p>leftKeys</p></td>
 <td><p>Columns from the left hand side input that are part of the equality condition. At least one must be specified.</p></td>
 </tr>
-<tr class="row-odd"><td><p>rightKeys</p></td>
+<tr class="row-even"><td><p>rightKeys</p></td>
 <td><p>Columns from the right hand side input that are part of the equality condition. At least one must be specified. The number and order of the rightKeys must match the number and order of the leftKeys.</p></td>
 </tr>
-<tr class="row-even"><td><p>filter</p></td>
+<tr class="row-odd"><td><p>filter</p></td>
 <td><p>Optional non-equality filter expression that may reference columns from both inputs.</p></td>
 </tr>
-<tr class="row-odd"><td><p>outputType</p></td>
+<tr class="row-even"><td><p>outputType</p></td>
 <td><p>A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.</p></td>
 </tr>
 </tbody>
