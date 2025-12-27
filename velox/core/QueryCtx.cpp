@@ -55,6 +55,9 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       std::move(queryId_),
       std::move(tokenProvider_)));
   queryCtx->maybeSetReclaimer();
+  for (auto& cb : releaseCallbacks_) {
+    queryCtx->addReleaseCallback(std::move(cb));
+  }
   return queryCtx;
 }
 
@@ -77,6 +80,19 @@ QueryCtx::QueryCtx(
       queryConfig_{std::move(queryConfig)},
       fsTokenProvider_(std::move(tokenProvider)) {
   initPool(queryId);
+}
+
+QueryCtx::~QueryCtx() {
+  for (auto& cb : releaseCallbacks_) {
+    try {
+      cb();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Release callback threw exception: " << e.what();
+    } catch (...) {
+      LOG(ERROR) << "Release callback threw unknown exception";
+    }
+  }
+  VELOX_CHECK(!underArbitration_);
 }
 
 /*static*/ std::string QueryCtx::generatePoolName(const std::string& queryId) {
