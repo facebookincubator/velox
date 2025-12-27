@@ -735,6 +735,13 @@ class QueryConfig {
   static constexpr const char* kSkipRequestDataSizeWithSingleSourceEnabled =
       "skip_request_data_size_with_single_source_enabled";
 
+  /// If true, exchange clients defer data fetching until next() is called.
+  /// This enables waiter tasks using cached hash tables to skip I/O entirely
+  /// when the table is already cached. If false (default), exchange clients
+  /// start fetching data immediately when remote tasks are added.
+  static constexpr const char* kExchangeLazyFetchingEnabled =
+      "exchange_lazy_fetching_enabled";
+
   /// If this is true, then it allows you to get the struct field names
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
@@ -1375,6 +1382,10 @@ class QueryConfig {
 
   bool singleSourceExchangeOptimizationEnabled() const {
     return get<bool>(kSkipRequestDataSizeWithSingleSourceEnabled, false);
+  }
+
+  bool exchangeLazyFetchingEnabled() const {
+    return get<bool>(kExchangeLazyFetchingEnabled, false);
   }
 
   bool isFieldNamesInJsonCastEnabled() const {

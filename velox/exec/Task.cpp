@@ -3428,7 +3428,8 @@ void Task::createExchangeClientLocked(
       addExchangeClientPool(planNodeId, pipelineId),
       queryCtx()->executor(),
       queryCtx()->queryConfig().requestDataSizesMaxWaitSec(),
-      queryCtx()->queryConfig().singleSourceExchangeOptimizationEnabled());
+      queryCtx()->queryConfig().singleSourceExchangeOptimizationEnabled(),
+      queryCtx()->queryConfig().exchangeLazyFetchingEnabled());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 
