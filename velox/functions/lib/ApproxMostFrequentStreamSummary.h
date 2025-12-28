@@ -149,7 +149,7 @@ void ApproxMostFrequentStreamSummary<T, A>::topK(
     int k,
     T* values,
     int64_t* counts) const {
-  VELOX_CHECK(k >= 0);
+  VELOX_CHECK_GE(k, 0);
   k = std::min(k, size());
   if (k == 0) {
     return;

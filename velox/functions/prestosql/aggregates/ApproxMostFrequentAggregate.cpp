@@ -49,9 +49,9 @@ struct Accumulator<StringView> {
   HashStringAllocator* allocator;
   Strings strings;
 
-  explicit Accumulator(HashStringAllocator* allocator)
-      : summary(AlignedStlAllocator<StringView, 16>(allocator)),
-        allocator(allocator) {}
+  explicit Accumulator(HashStringAllocator* _allocator)
+      : summary(AlignedStlAllocator<StringView, 16>(_allocator)),
+        allocator(_allocator) {}
 
   ~Accumulator() {
     strings.free(*allocator);
@@ -135,7 +135,7 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     vector_size_t entryCount = 0;
     for (int i = 0; i < numGroups; ++i) {
       auto* summary = &value<Accumulator<T>>(groups[i])->summary;
-      int size = std::min<int>(buckets_, summary->size());
+      const int size = std::min<int>(buckets_, summary->size());
       if (size == 0) {
         mapVector->setNull(i, true);
       } else {
@@ -157,8 +157,8 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    auto rowVec = (*result)->as<RowVector>();
-    VELOX_CHECK(rowVec);
+    auto* rowVec = (*result)->as<RowVector>();
+    VELOX_CHECK_NOT_NULL(rowVec);
     rowVec->childAt(0) = std::make_shared<ConstantVector<int64_t>>(
         rowVec->pool(),
         numGroups,
@@ -171,14 +171,14 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
         false,
         BIGINT(),
         static_cast<int64_t&&>(capacity_));
-    auto values = rowVec->childAt(2)->as<ArrayVector>();
-    auto counts = rowVec->childAt(3)->as<ArrayVector>();
+    auto* values = rowVec->childAt(2)->as<ArrayVector>();
+    auto* counts = rowVec->childAt(3)->as<ArrayVector>();
     rowVec->resize(numGroups);
     values->resize(numGroups);
     counts->resize(numGroups);
 
-    auto v = values->elements()->template asFlatVector<T>();
-    auto c = counts->elements()->template asFlatVector<int64_t>();
+    auto* v = values->elements()->template asFlatVector<T>();
+    auto* c = counts->elements()->template asFlatVector<int64_t>();
     vector_size_t entryCount = 0;
     for (int i = 0; i < numGroups; ++i) {
       auto* accumulator = value<const Accumulator<T>>(groups[i]);
@@ -278,39 +278,39 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     VELOX_CHECK_EQ(args.size(), 1);
     DecodedVector decoded(*args[0], rows);
     auto rowVec = static_cast<const RowVector*>(decoded.base());
-    auto buckets = rowVec->childAt(0)->as<SimpleVector<int64_t>>();
-    auto capacity = rowVec->childAt(1)->as<SimpleVector<int64_t>>();
-    auto values = rowVec->childAt(2)->as<ArrayVector>();
-    auto counts = rowVec->childAt(3)->as<ArrayVector>();
-    VELOX_CHECK(buckets);
-    VELOX_CHECK(capacity);
-    VELOX_CHECK(values);
-    VELOX_CHECK(counts);
+    auto* buckets = rowVec->childAt(0)->as<SimpleVector<int64_t>>();
+    VELOX_CHECK_NOT_NULL(buckets);
+    auto* capacity = rowVec->childAt(1)->as<SimpleVector<int64_t>>();
+    VELOX_CHECK_NOT_NULL(capacity);
+    auto* values = rowVec->childAt(2)->as<ArrayVector>();
+    VELOX_CHECK_NOT_NULL(values);
+    auto* counts = rowVec->childAt(3)->as<ArrayVector>();
+    VELOX_CHECK_NOT_NULL(counts);
 
-    auto v = values->elements()->template asFlatVector<T>();
-    auto c = counts->elements()->template asFlatVector<int64_t>();
-    VELOX_CHECK(v);
-    VELOX_CHECK(c);
+    auto* v = values->elements()->template asFlatVector<T>();
+    VELOX_CHECK_NOT_NULL(v);
+    auto* c = counts->elements()->template asFlatVector<int64_t>();
+    VELOX_CHECK_NOT_NULL(c);
 
-    Accumulator<T>* accumulator = nullptr;
+    Accumulator<T>* accumulator{nullptr};
     rows.applyToSelected([&](auto row) {
       if (decoded.isNullAt(row)) {
         return;
       }
-      int i = decoded.index(row);
+      const int i = decoded.index(row);
       setConstantArgument("Buckets", buckets_, buckets->valueAt(i));
       setConstantArgument("Capacity", capacity_, capacity->valueAt(i));
       if constexpr (kSingleGroup) {
-        if (!accumulator) {
+        if (accumulator == nullptr) {
           accumulator = initAccumulator(group);
         }
       } else {
         accumulator = initAccumulator(group[row]);
       }
-      auto size = values->sizeAt(i);
+      const auto size = values->sizeAt(i);
       VELOX_DCHECK_EQ(counts->sizeAt(i), size);
-      auto vo = values->offsetAt(i);
-      auto co = counts->offsetAt(i);
+      const auto vo = values->offsetAt(i);
+      const auto co = counts->offsetAt(i);
       for (int j = 0; j < size; ++j) {
         accumulator->insert(v->valueAt(vo + j), c->valueAt(co + j));
       }
@@ -319,11 +319,11 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
 
   std::pair<FlatVector<T>*, FlatVector<int64_t>*>
   prepareFinalResult(char** groups, int32_t numGroups, MapVector* result) {
-    VELOX_CHECK(result);
-    auto keys = result->mapKeys()->asUnchecked<FlatVector<T>>();
-    auto values = result->mapValues()->asUnchecked<FlatVector<int64_t>>();
-    VELOX_CHECK(keys);
-    VELOX_CHECK(values);
+    VELOX_CHECK_NOT_NULL(result);
+    auto* keys = result->mapKeys()->asUnchecked<FlatVector<T>>();
+    VELOX_CHECK_NOT_NULL(keys);
+    auto* values = result->mapValues()->asUnchecked<FlatVector<int64_t>>();
+    VELOX_CHECK_NOT_NULL(values);
     vector_size_t entryCount = 0;
     for (int i = 0; i < numGroups; ++i) {
       auto* summary = &value<const Accumulator<T>>(groups[i])->summary;
@@ -334,10 +334,11 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     return std::make_pair(keys, values);
   }
 
-  static constexpr int64_t kMissingArgument = -1;
+  static constexpr int64_t kMissingArgument{-1};
+
   DecodedVector decodedValues_;
-  int64_t buckets_ = kMissingArgument;
-  int64_t capacity_ = kMissingArgument;
+  int64_t buckets_{kMissingArgument};
+  int64_t capacity_{kMissingArgument};
 };
 
 class ApproxMostFrequentBooleanAggregate {
