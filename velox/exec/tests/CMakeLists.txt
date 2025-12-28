@@ -13,6 +13,27 @@
 # limitations under the License.
 add_subdirectory(utils)
 
+add_executable(velox_key_encoder_test KeyEncoderTest.cpp)
+
+add_test(
+  NAME velox_key_encoder_test
+  COMMAND velox_key_encoder_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  velox_key_encoder_test
+  velox_exec
+  velox_exec_test_lib
+  velox_key_encoder
+  velox_functions_prestosql
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
 add_executable(
   aggregate_companion_functions_test
   AggregateCompanionAdapterTest.cpp
