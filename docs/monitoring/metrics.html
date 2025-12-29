@@ -547,43 +547,47 @@ due to SSD cache request size mismatch</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of error while writing to SSD cache files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_write_ssd_dropped</p></td>
+<tr class="row-odd"><td><p>ssd_cache_write_no_space_errors</p></td>
+<td><p>Sum</p></td>
+<td><p>Total number of errors due to SSD no space for writes.</p></td>
+</tr>
+<tr class="row-even"><td><p>ssd_cache_write_ssd_dropped</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of writes dropped due to no cache space.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_write_exceed_entry_limit</p></td>
+<tr class="row-odd"><td><p>ssd_cache_write_exceed_entry_limit</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of writes dropped due to entry limit exceeded.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_write_checkpoint_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_write_checkpoint_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while writing SSD checkpoint file.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_read_corruptions</p></td>
+<tr class="row-odd"><td><p>ssd_cache_read_corruptions</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of corrupted SSD data read detected by checksum.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_read_ssd_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_read_ssd_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while reading from SSD cache files.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_read_checkpoint_errors</p></td>
+<tr class="row-odd"><td><p>ssd_cache_read_checkpoint_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while reading from SSD checkpoint files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_checkpoints_read</p></td>
+<tr class="row-even"><td><p>ssd_cache_checkpoints_read</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of checkpoints read.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_checkpoints_written</p></td>
+<tr class="row-odd"><td><p>ssd_cache_checkpoints_written</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of checkpoints written.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_regions_evicted</p></td>
+<tr class="row-even"><td><p>ssd_cache_regions_evicted</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of cache regions evicted.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_recovered_entries</p></td>
+<tr class="row-odd"><td><p>ssd_cache_recovered_entries</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of cache entries recovered from checkpoint.</p></td>
 </tr>
