@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/KeyEncoder.h"
+#include "velox/serializers/KeyEncoder.h"
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/type/Timestamp.h"
