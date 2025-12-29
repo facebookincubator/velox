@@ -24,7 +24,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::serializer {
 
 /// A single index bound (lower or upper) with a single row and inclusive flag.
 /// Used to represent either a lower or upper bound for index filtering.
@@ -253,4 +253,4 @@ void KeyEncoder::encode(
   }
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::serializer

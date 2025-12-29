@@ -31,7 +31,7 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::serializer::test {
 namespace {
 
 class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
@@ -8298,7 +8298,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::serializer::test
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
   // Test Case 1: Both bounds inclusive
@@ -9595,7 +9595,7 @@ TEST_F(KeyEncoderTest, columnSeparatorTest) {
     }
   }
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::serializer::test
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

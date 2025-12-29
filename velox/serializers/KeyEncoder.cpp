@@ -19,7 +19,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::serializer {
 
 bool IndexBounds::validate() const {
   if (!lowerBound.has_value() && !upperBound.has_value()) {
@@ -1258,4 +1258,4 @@ std::optional<EncodedKeyBounds> KeyEncoder::encodeIndexBounds(
   return result;
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::serializer
