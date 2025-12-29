@@ -257,6 +257,10 @@ void registerVeloxMetrics() {
   // Total number of error while writing to SSD cache files.
   DEFINE_METRIC(kMetricSsdCacheWriteSsdErrors, facebook::velox::StatType::SUM);
 
+  // Total number of errors due to SSD no space for writes.
+  DEFINE_METRIC(
+      kMetricSsdCacheWriteNoSpaceErrors, facebook::velox::StatType::SUM);
+
   // Total number of errors while writing SSD checkpoint file.
   DEFINE_METRIC(
       kMetricSsdCacheWriteCheckpointErrors, facebook::velox::StatType::SUM);

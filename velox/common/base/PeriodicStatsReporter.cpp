@@ -212,6 +212,8 @@ void PeriodicStatsReporter::reportCacheStats() {
     REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteSsdErrors, deltaSsdStats.writeSsdErrors);
     REPORT_IF_NOT_ZERO(
+        kMetricSsdCacheWriteNoSpaceErrors, deltaSsdStats.writeSsdNoSpaceErrors);
+    REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteSsdDropped, deltaSsdStats.writeSsdDropped);
     REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteExceedEntryLimit,

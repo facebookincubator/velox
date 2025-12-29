@@ -23,6 +23,8 @@ namespace facebook::velox::cache {
 #define VELOX_SSD_CACHE_LOG_PREFIX "[SSDCA] "
 #define VELOX_SSD_CACHE_LOG(severity) \
   LOG(severity) << VELOX_SSD_CACHE_LOG_PREFIX
+#define VELOX_SSD_CACHE_LOG_EVERY_MS(severity, ms) \
+  FB_LOG_EVERY_MS(severity, ms) << VELOX_SSD_CACHE_LOG_PREFIX
 
 namespace test {
 class SsdCacheTestHelper;
