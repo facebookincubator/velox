@@ -490,6 +490,8 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheMetaFileDeleteErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheGrowFileErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdErrors)), 0);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricSsdCacheWriteNoSpaceErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdDropped)), 0);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheWriteExceedEntryLimit)), 0);
@@ -530,6 +532,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   newSsdStats->deleteMetaFileErrors = 10;
   newSsdStats->growFileErrors = 10;
   newSsdStats->writeSsdErrors = 10;
+  newSsdStats->writeSsdNoSpaceErrors = 1;
   newSsdStats->writeSsdDropped = 10;
   newSsdStats->writeSsdExceedEntryLimit = 10;
   newSsdStats->writeCheckpointErrors = 10;
@@ -590,6 +593,8 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheMetaFileDeleteErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheGrowFileErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdErrors)), 1);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricSsdCacheWriteNoSpaceErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdDropped)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheWriteExceedEntryLimit)), 1);
@@ -609,7 +614,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheRecoveredEntries)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheReadWithoutChecksum)), 1);
-    ASSERT_EQ(counterMap.size(), 57);
+    ASSERT_EQ(counterMap.size(), 58);
   }
 }
 

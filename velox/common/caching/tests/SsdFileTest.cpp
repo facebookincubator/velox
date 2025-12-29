@@ -823,6 +823,110 @@ TEST_F(SsdFileTest, ssdReadWithoutChecksumCheck) {
 #endif
 }
 
+TEST_F(SsdFileTest, writeInNoSpaceState) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  initializeCache(kSsdSize);
+
+  // Verify the initial state is kActive.
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kActive);
+
+  // Verify the cache write is successful in the initial kActiveState.
+  auto pins = makePins(fileName_.id(), 0, 4096, 4096, 4096 * 10);
+  ssdFile_->write(pins);
+  SsdCacheStats statsBeforeNoSpace;
+  ssdFile_->updateStats(statsBeforeNoSpace);
+  EXPECT_GT(statsBeforeNoSpace.entriesWritten, 0);
+  EXPECT_EQ(statsBeforeNoSpace.writeSsdDropped, 0);
+
+  // Set the state to kNoSpace to simulate the SSD running out of space.
+  ssdFileHelper_->setState(SsdFile::State::kNoSpace);
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kNoSpace);
+
+  // Verify that writes are dropped and no new entries are written in the
+  // kNoSpace state.
+  auto morePins = makePins(fileName_.id(), 4096 * 10, 4096, 4096, 4096 * 5);
+  ssdFile_->write(morePins);
+  SsdCacheStats statsAfterNoSpace;
+  ssdFile_->updateStats(statsAfterNoSpace);
+  EXPECT_GT(
+      statsAfterNoSpace.writeSsdDropped, statsBeforeNoSpace.writeSsdDropped);
+  EXPECT_EQ(
+      statsAfterNoSpace.entriesWritten, statsBeforeNoSpace.entriesWritten);
+
+  // Verify none of the new entries have ssdFile set.
+  for (const auto& pin : morePins) {
+    EXPECT_EQ(pin.entry()->ssdFile(), nullptr);
+  }
+}
+
+TEST_F(SsdFileTest, checkpointInNoSpaceState) {
+  constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
+  const uint64_t checkpointIntervalBytes = 2 * SsdFile::kRegionSize;
+  initializeCache(kSsdSize, checkpointIntervalBytes);
+
+  // Write some entries to trigger checkpoint eligibility.
+  auto pins = makePins(fileName_.id(), 0, 4096, 4096, 3 * SsdFile::kRegionSize);
+  ssdFile_->write(pins);
+
+  SsdCacheStats statsBeforeNoSpace;
+  ssdFile_->updateStats(statsBeforeNoSpace);
+
+  // Set the state to kNoSpace.
+  ssdFileHelper_->setState(SsdFile::State::kNoSpace);
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kNoSpace);
+
+  // Verify checkpointing is skipped in the kNoSpace state.
+  ssdFile_->checkpoint(true);
+
+  SsdCacheStats statsAfterNoSpace;
+  ssdFile_->updateStats(statsAfterNoSpace);
+  EXPECT_EQ(
+      statsAfterNoSpace.checkpointsWritten,
+      statsBeforeNoSpace.checkpointsWritten);
+}
+
+TEST_F(SsdFileTest, growOrEvictBlockedInNoSpaceState) {
+  constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
+  const uint64_t checkpointIntervalBytes = kSsdSize;
+  initializeCache(kSsdSize, checkpointIntervalBytes);
+
+  // Fill up the SSD cache to trigger eviction on subsequent writes.
+  for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
+       startOffset += SsdFile::kRegionSize) {
+    auto pins = makePins(
+        fileName_.id(), startOffset, 4096, 4096, SsdFile::kRegionSize - 1024);
+    ssdFile_->write(pins);
+  }
+
+  // The SSD cache is at max regins.
+  SsdCacheStats statsBeforeNoSpace;
+  ssdFile_->updateStats(statsBeforeNoSpace);
+  EXPECT_EQ(statsBeforeNoSpace.regionsCached, ssdFileHelper_->maxRegions());
+
+  ssdFileHelper_->setState(SsdFile::State::kNoSpace);
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kNoSpace);
+
+  // Verify the eviction should not happen since write was dropped before
+  // eviction.
+  auto newPins = makePins(fileName_.id(), kSsdSize * 2, 4096, 4096, 4096 * 5);
+  ssdFile_->write(newPins);
+
+  SsdCacheStats statsAfterNoSpace;
+  ssdFile_->updateStats(statsAfterNoSpace);
+
+  EXPECT_EQ(
+      statsAfterNoSpace.regionsEvicted, statsBeforeNoSpace.regionsEvicted);
+  EXPECT_GT(
+      statsAfterNoSpace.writeSsdDropped, statsBeforeNoSpace.writeSsdDropped);
+  EXPECT_EQ(
+      statsAfterNoSpace.entriesWritten, statsBeforeNoSpace.entriesWritten);
+
+  // Verify none of the new entries have ssdFile set.
+  for (const auto& pin : newPins) {
+    EXPECT_EQ(pin.entry()->ssdFile(), nullptr);
+  }
+}
+
 TEST_F(SsdFileTest, dataFileErrorInjection) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   initializeCache(kSsdSize, 0, false, false, false, true);

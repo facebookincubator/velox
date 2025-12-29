@@ -295,6 +295,9 @@ constexpr std::string_view kMetricSsdCacheGrowFileErrors{
 constexpr std::string_view kMetricSsdCacheWriteSsdErrors{
     "velox.ssd_cache_write_ssd_errors"};
 
+constexpr std::string_view kMetricSsdCacheWriteNoSpaceErrors{
+    "velox.ssd_cache_write_no_space_errors"};
+
 constexpr std::string_view kMetricSsdCacheWriteSsdDropped{
     "velox.ssd_cache_write_ssd_dropped"};
 
