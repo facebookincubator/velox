@@ -194,33 +194,35 @@ TEST_F(SparkCastExprTest, decimalToIntegral) {
 }
 
 TEST_F(SparkCastExprTest, decimalToVarchar) {
-  auto expect64 = [&](const std::vector<std::optional<int64_t>>& values,
-                      const TypePtr& type,
-                      const std::vector<std::optional<StringView>>& expected) {
-    testCast(
-        makeNullableFlatVector<int64_t>(values, type),
-        makeNullableFlatVector<StringView>(expected));
-  };
+  auto testShortDecimal =
+      [&](const std::vector<std::optional<int64_t>>& values,
+          const TypePtr& type,
+          const std::vector<std::optional<StringView>>& expected) {
+        testCast(
+            makeNullableFlatVector<int64_t>(values, type),
+            makeNullableFlatVector<StringView>(expected));
+      };
 
-  auto expect128 = [&](const std::vector<std::optional<int128_t>>& values,
-                       const TypePtr& type,
-                       const std::vector<std::optional<StringView>>& expected) {
-    testCast(
-        makeNullableFlatVector<int128_t>(values, type),
-        makeNullableFlatVector<StringView>(expected));
-  };
+  auto testLongDecimal =
+      [&](const std::vector<std::optional<int128_t>>& values,
+          const TypePtr& type,
+          const std::vector<std::optional<StringView>>& expected) {
+        testCast(
+            makeNullableFlatVector<int128_t>(values, type),
+            makeNullableFlatVector<StringView>(expected));
+      };
 
   // Short decimal with scale > 0 (inlined).
-  expect64(
+  testShortDecimal(
       {123456789, -333333333, 0, 5, -9, std::nullopt},
       DECIMAL(9, 2),
       {"1234567.89", "-3333333.33", "0.00", "0.05", "-0.09", std::nullopt});
 
   // Short decimal zero scale.
-  expect64({0}, DECIMAL(6, 0), {"0"});
+  testShortDecimal({0}, DECIMAL(6, 0), {"0"});
 
   // Short decimal extreme values (scientific notation for small magnitudes).
-  expect64(
+  testShortDecimal(
       {DecimalUtil::kShortDecimalMin,
        -3,
        0,
@@ -236,7 +238,7 @@ TEST_F(SparkCastExprTest, decimalToVarchar) {
        std::nullopt});
 
   // Long decimal.
-  expect128(
+  testLongDecimal(
       {DecimalUtil::kLongDecimalMin,
        0,
        DecimalUtil::kLongDecimalMax,
@@ -252,13 +254,13 @@ TEST_F(SparkCastExprTest, decimalToVarchar) {
        std::nullopt});
 
   // Long decimal with small magnitudes should use scientific notation.
-  expect128(
+  testLongDecimal(
       {-3, 0, 55, HugeInt::build(0, 1), std::nullopt},
       DECIMAL(38, 20),
       {"-3E-20", "0E-20", "5.5E-19", "1E-20", std::nullopt});
 
   // Long decimal zero scale.
-  expect128({0}, DECIMAL(25, 0), {"0"});
+  testLongDecimal({0}, DECIMAL(25, 0), {"0"});
 }
 
 TEST_F(SparkCastExprTest, invalidDate) {
