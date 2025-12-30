@@ -47,7 +47,10 @@ class IcebergSplitReader : public SplitReader {
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
       override;
 
-  uint64_t next(uint64_t size, VectorPtr& output) override;
+  uint64_t next(
+      uint64_t size,
+      VectorPtr& output,
+      dwio::common::RuntimeStatistics& runtimeStats) override;
 
  private:
   /// Adapts the data file schema to match the table schema expected by the
@@ -101,7 +104,5 @@ class IcebergSplitReader : public SplitReader {
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
-  // Pointer to runtime stats for tracking iceberg metrics
-  dwio::common::RuntimeStatistics* runtimeStats_{nullptr};
 };
 } // namespace facebook::velox::connector::hive::iceberg
