@@ -28,9 +28,9 @@ enum class NullParam {
   kPartialNulls, /// ~20% null values randomly distributed
   kAllNulls /// All null values in the column
 };
-class IcebergTestBase : public HiveConnectorTestBase {
+class IcebergTestBase1 : public HiveConnectorTestBase {
  public:
-  IcebergTestBase()
+  IcebergTestBase1()
       : config_{std::make_shared<facebook::velox::dwrf::Config>()} {
     // Make the writers flush per batch so that we can create non-aligned
     // RowGroups between the base data files and delete files

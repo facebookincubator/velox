@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergTestBase1.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -80,10 +80,10 @@ std::string testParamsToString(const TestParams& params) {
 /// the Iceberg connector correctly filters out deleted rows by comparing
 /// results against equivalent DuckDB queries.
 ///
-/// @see IcebergTestBase for shared testing utilities
+/// @see IcebergTestBase1 for shared testing utilities
 /// @see TestParams for parameterization configuration
 class IcebergReadEqualityDeleteTest
-    : public IcebergTestBase,
+    : public IcebergTestBase1,
       public testing::WithParamInterface<TestParams> {
   std::shared_ptr<TempFilePath> writeEqualityDeleteFile(
       const std::vector<RowVectorPtr>& deleteVectors) {
@@ -311,7 +311,7 @@ class IcebergReadEqualityDeleteTest
               makeFlatVector<int64_t>(
                   20, [](auto row) { return row + 1; })})})};
     int32_t numDataColumns = 1;
-    IcebergTestBase::WriteDataFilesConfig config;
+    IcebergTestBase1::WriteDataFilesConfig config;
     config.numRows = rowCount_;
     config.numColumns = numDataColumns;
     config.splitCount = 1;

@@ -18,7 +18,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
-#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergTestBase1.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -28,10 +28,10 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-class IcebergReadPositionalDeleteTest : public IcebergTestBase {
+class IcebergReadPositionalDeleteTest : public IcebergTestBase1 {
  public:
   void SetUp() override {
-    IcebergTestBase::SetUp();
+    IcebergTestBase1::SetUp();
 #ifdef VELOX_ENABLE_PARQUET
     parquet::registerParquetReaderFactory();
 #endif
@@ -218,7 +218,7 @@ class IcebergReadPositionalDeleteTest : public IcebergTestBase {
       int32_t splitCount = 1) {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
-    IcebergTestBase::WriteDataFilesConfig config;
+    IcebergTestBase1::WriteDataFilesConfig config;
     config.rowGroupSizesForFiles = rowGroupSizesForFiles;
     config.useConfigAndFlushPolicy = true;
     std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =

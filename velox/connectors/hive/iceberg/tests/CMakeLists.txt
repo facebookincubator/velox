@@ -37,7 +37,7 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_library(velox_hive_iceberg_read_test_base IcebergTestBase.cpp)
+  add_library(velox_hive_iceberg_read_test_base IcebergTestBase1.cpp)
   target_link_libraries(
     velox_hive_iceberg_read_test_base
     velox_exec_test_lib

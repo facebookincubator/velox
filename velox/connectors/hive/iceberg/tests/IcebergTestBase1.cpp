@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergTestBase1.h"
 
 #include <map>
 #include <random>
@@ -25,7 +25,7 @@
 namespace facebook::velox::connector::hive::iceberg {
 
 template <typename T>
-std::string IcebergTestBase::getListAsCSVString(
+std::string IcebergTestBase1::getListAsCSVString(
     const std::vector<T>& deleteValues) {
   if (deleteValues.empty()) {
     return "";
@@ -51,7 +51,7 @@ std::string IcebergTestBase::getListAsCSVString(
 }
 
 template <typename T>
-std::string IcebergTestBase::makeSingleColumnNotInPredicate(
+std::string IcebergTestBase1::makeSingleColumnNotInPredicate(
     const VectorPtr& deleteVector,
     int32_t numDeletedRows,
     const std::string& columnName) {
@@ -73,7 +73,7 @@ std::string IcebergTestBase::makeSingleColumnNotInPredicate(
 }
 
 template <typename T>
-std::string IcebergTestBase::makeSingleValueInequalityPredicate(
+std::string IcebergTestBase1::makeSingleValueInequalityPredicate(
     const VectorPtr& deleteVector,
     int32_t row,
     const std::string& columnName) {
@@ -87,7 +87,7 @@ std::string IcebergTestBase::makeSingleValueInequalityPredicate(
   }
 }
 
-std::vector<int64_t> IcebergTestBase::makeRandomDeleteValues(
+std::vector<int64_t> IcebergTestBase1::makeRandomDeleteValues(
     int32_t maxRowNumber) {
   std::mt19937 gen{0};
   std::vector<int64_t> deleteRows;
@@ -100,7 +100,7 @@ std::vector<int64_t> IcebergTestBase::makeRandomDeleteValues(
 }
 
 template <typename T>
-std::vector<T> IcebergTestBase::makeSequenceValues(
+std::vector<T> IcebergTestBase1::makeSequenceValues(
     int32_t numRows,
     int8_t repeat) {
   static_assert(std::is_integral_v<T>, "T must be an integral type");
@@ -118,7 +118,8 @@ std::vector<T> IcebergTestBase::makeSequenceValues(
   return values;
 }
 
-std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
+std::vector<std::shared_ptr<ConnectorSplit>>
+IcebergTestBase1::makeIcebergSplits(
     const std::string& dataFilePath,
     const std::vector<IcebergDeleteFile>& deleteFiles,
     const std::unordered_map<std::string, std::optional<std::string>>&
@@ -151,12 +152,12 @@ std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
   return splits;
 }
 
-core::PlanNodePtr IcebergTestBase::tableScanNode(
+core::PlanNodePtr IcebergTestBase1::tableScanNode(
     const RowTypePtr& outputRowType) const {
   return PlanBuilder(pool_.get()).tableScan(outputRowType).planNode();
 }
 
-std::vector<RowVectorPtr> IcebergTestBase::makeVectors(
+std::vector<RowVectorPtr> IcebergTestBase1::makeVectors(
     int32_t count,
     int32_t rowsPerVector,
     const std::vector<TypeKind>& columnTypes,
@@ -411,7 +412,7 @@ std::vector<RowVectorPtr> IcebergTestBase::makeVectors(
 }
 
 std::map<std::string, std::shared_ptr<TempFilePath>>
-IcebergTestBase::writeDataFiles(const WriteDataFilesConfig& config) {
+IcebergTestBase1::writeDataFiles(const WriteDataFilesConfig& config) {
   std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths;
   std::vector<RowVectorPtr> dataVectorsJoined;
 
@@ -480,7 +481,7 @@ IcebergTestBase::writeDataFiles(const WriteDataFilesConfig& config) {
   return dataFilePaths;
 }
 
-std::string IcebergTestBase::makePredicates(
+std::string IcebergTestBase1::makePredicates(
     const std::vector<RowVectorPtr>& deleteVectors,
     const std::vector<int32_t>& equalityFieldIds,
     const std::vector<TypeKind>& columnTypes) {
@@ -586,78 +587,78 @@ std::string IcebergTestBase::makePredicates(
 }
 
 // Explicit template instantiations for makeSequenceValues
-template std::vector<bool> IcebergTestBase::makeSequenceValues<bool>(
+template std::vector<bool> IcebergTestBase1::makeSequenceValues<bool>(
     int32_t,
     int8_t);
-template std::vector<int8_t> IcebergTestBase::makeSequenceValues<int8_t>(
+template std::vector<int8_t> IcebergTestBase1::makeSequenceValues<int8_t>(
     int32_t,
     int8_t);
-template std::vector<int16_t> IcebergTestBase::makeSequenceValues<int16_t>(
+template std::vector<int16_t> IcebergTestBase1::makeSequenceValues<int16_t>(
     int32_t,
     int8_t);
-template std::vector<int32_t> IcebergTestBase::makeSequenceValues<int32_t>(
+template std::vector<int32_t> IcebergTestBase1::makeSequenceValues<int32_t>(
     int32_t,
     int8_t);
-template std::vector<int64_t> IcebergTestBase::makeSequenceValues<int64_t>(
+template std::vector<int64_t> IcebergTestBase1::makeSequenceValues<int64_t>(
     int32_t,
     int8_t);
-template std::vector<int128_t> IcebergTestBase::makeSequenceValues<int128_t>(
+template std::vector<int128_t> IcebergTestBase1::makeSequenceValues<int128_t>(
     int32_t,
     int8_t);
 
 // Explicit template instantiations for getListAsCSVString
-template std::string IcebergTestBase::getListAsCSVString<int8_t>(
+template std::string IcebergTestBase1::getListAsCSVString<int8_t>(
     const std::vector<int8_t>&);
-template std::string IcebergTestBase::getListAsCSVString<int16_t>(
+template std::string IcebergTestBase1::getListAsCSVString<int16_t>(
     const std::vector<int16_t>&);
-template std::string IcebergTestBase::getListAsCSVString<int32_t>(
+template std::string IcebergTestBase1::getListAsCSVString<int32_t>(
     const std::vector<int32_t>&);
-template std::string IcebergTestBase::getListAsCSVString<int64_t>(
+template std::string IcebergTestBase1::getListAsCSVString<int64_t>(
     const std::vector<int64_t>&);
-template std::string IcebergTestBase::getListAsCSVString<float>(
+template std::string IcebergTestBase1::getListAsCSVString<float>(
     const std::vector<float>&);
-template std::string IcebergTestBase::getListAsCSVString<double>(
+template std::string IcebergTestBase1::getListAsCSVString<double>(
     const std::vector<double>&);
-template std::string IcebergTestBase::getListAsCSVString<StringView>(
+template std::string IcebergTestBase1::getListAsCSVString<StringView>(
     const std::vector<StringView>&);
 
 // Explicit template instantiations for makeSingleColumnNotInPredicate
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<int8_t>(
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<int8_t>(
     const VectorPtr&,
     int32_t,
     const std::string&);
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<int16_t>(
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<int16_t>(
     const VectorPtr&,
     int32_t,
     const std::string&);
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<int32_t>(
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<int32_t>(
     const VectorPtr&,
     int32_t,
     const std::string&);
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<int64_t>(
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<int64_t>(
     const VectorPtr&,
     int32_t,
     const std::string&);
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<float>(
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<float>(
     const VectorPtr&,
     int32_t,
     const std::string&);
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<double>(
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<double>(
     const VectorPtr&,
     int32_t,
     const std::string&);
-template std::string IcebergTestBase::makeSingleColumnNotInPredicate<
+template std::string IcebergTestBase1::makeSingleColumnNotInPredicate<
     StringView>(const VectorPtr&, int32_t, const std::string&);
 
 // Explicit template instantiations for makeSingleValueInequalityPredicate
-template std::string IcebergTestBase::makeSingleValueInequalityPredicate<
+template std::string IcebergTestBase1::makeSingleValueInequalityPredicate<
     int8_t>(const VectorPtr&, int32_t, const std::string&);
-template std::string IcebergTestBase::makeSingleValueInequalityPredicate<
+template std::string IcebergTestBase1::makeSingleValueInequalityPredicate<
     int16_t>(const VectorPtr&, int32_t, const std::string&);
-template std::string IcebergTestBase::makeSingleValueInequalityPredicate<
+template std::string IcebergTestBase1::makeSingleValueInequalityPredicate<
     int32_t>(const VectorPtr&, int32_t, const std::string&);
-template std::string IcebergTestBase::makeSingleValueInequalityPredicate<
+template std::string IcebergTestBase1::makeSingleValueInequalityPredicate<
     int64_t>(const VectorPtr&, int32_t, const std::string&);
-template std::string IcebergTestBase::makeSingleValueInequalityPredicate<
+template std::string IcebergTestBase1::makeSingleValueInequalityPredicate<
     StringView>(const VectorPtr&, int32_t, const std::string&);
 } // namespace facebook::velox::connector::hive::iceberg
