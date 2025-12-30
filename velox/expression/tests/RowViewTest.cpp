@@ -23,11 +23,10 @@
 #include "velox/functions/prestosql/Comparisons.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
+namespace facebook::velox::functions::test {
 namespace {
 
-using namespace facebook::velox;
-using namespace facebook::velox::functions;
-using namespace facebook::velox::test;
+using velox::test::assertEqualVectors;
 
 DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
   SelectivityVector rows(vector.size());
@@ -517,4 +516,6 @@ TEST_F(DynamicRowViewTest, castToDynamicRowInFunction) {
     assertEqualVectors(makeFlatVector<int64_t>({2, 2}), result);
   }
 }
+
 } // namespace
+} // namespace facebook::velox::functions::test
