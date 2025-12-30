@@ -144,10 +144,12 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           // Check nulls in the top level row vector.
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
           if (isMapEntryNull) {
-            // The map vector needs to be valid because its consumed by
-            // checkDuplicateKeys before try sets invalid rows to null.
-            resetSize(row);
             if (throwOnNull_) {
+              // Set the sizes to 0 so that the final map vector generated is
+              // valid in case we are inside a try. The map vector needs to be
+              // valid because its consumed by checkDuplicateKeys before try
+              // sets invalid rows to null.
+              resetSize(row);
               VELOX_USER_FAIL(kErrorMessageEntryNotNull);
             }
             bits::setNull(mutableNulls, row);
