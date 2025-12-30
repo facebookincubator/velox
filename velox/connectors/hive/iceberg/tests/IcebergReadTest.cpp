@@ -933,7 +933,7 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
 TEST_F(HiveIcebergTest, icebergMetrics) {
   folly::SingletonVault::singleton()->registrationComplete();
 
-  // Helper function to aggregate a runtime metric across all pipelines and operators
+  // Helper function to aggregate a runtime metric across all pipelines and operators.
   auto getAggregatedRuntimeMetric = [](const exec::TaskStats& taskStats, const std::string& metricName) -> int64_t {
     int64_t total = 0;
     for (const auto& pipelineStats : taskStats.pipelineStats) {
@@ -947,7 +947,7 @@ TEST_F(HiveIcebergTest, icebergMetrics) {
     return total;
   };
 
-  // Test case 1: Single split with 3 deletes
+  // Test case 1: Single split with 3 deletes.
   std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles = {
       {"data_file_1", {100, 85}}};
   std::unordered_map<
@@ -962,7 +962,7 @@ TEST_F(HiveIcebergTest, icebergMetrics) {
   ASSERT_EQ(getAggregatedRuntimeMetric(taskStats, "iceberg.numSplits"), 1);
   ASSERT_EQ(getAggregatedRuntimeMetric(taskStats, "iceberg.numDeletes"), 3);
 
-  // Test case 2: Multiple data files (2 data files = 2 splits) with deletes
+  // Test case 2: Multiple data files (2 data files = 2 splits) with deletes.
   // data_file_1 has 4 deletes
   // data_file_2 has 3 deletes
   // Total: 2 splits, 7 deletes
@@ -978,7 +978,7 @@ TEST_F(HiveIcebergTest, icebergMetrics) {
   ASSERT_EQ(getAggregatedRuntimeMetric(taskStats2, "iceberg.numSplits"), 2);
   ASSERT_EQ(getAggregatedRuntimeMetric(taskStats2, "iceberg.numDeletes"), 7);
 
-  // Test case 3: Multiple data files each split into multiple splits (splitCount=3)
+  // Test case 3: Multiple data files each split into multiple splits (splitCount=3).
   // This tests that metrics aggregate correctly across multiple splits from multiple files.
   // data_file_1 split into 3 splits, with 4 deletes
   // data_file_2 split into 3 splits, with 3 deletes

@@ -236,8 +236,8 @@ int IcebergSplitReaderBenchmark::read(
   int resultSize = 0;
   auto result = BaseVector::create(rowType, 0, leafPool_.get());
   while (true) {
-    bool hasData = icebergSplitReader->next(nextSize, result);
-    if (!hasData) {
+    auto rowsScanned = icebergSplitReader->next(nextSize, result, runtimeStats_);
+    if (rowsScanned == 0) {
       break;
     }
     auto rowsRemaining = result->size();
