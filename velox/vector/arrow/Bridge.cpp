@@ -748,12 +748,15 @@ void exportValues(
   const auto& type = vec.type();
   out.n_buffers = 2;
 
-  if (!rows.changed() && isFlatScalarZeroCopy(type)) {
+  if (!rows.changed() && !vec.values()) {
     // Arrow does not allow a nullptr for the values buffer. If the input vector
     // has no values buffer (all-null case), allocate an empty buffer of size 0.
-    auto values =
-        vec.values() ? vec.values() : AlignedBuffer::allocate<uint8_t>(0, pool);
-    holder.setBuffer(1, values);
+    holder.setBuffer(1, AlignedBuffer::allocate<uint8_t>(0, pool));
+    return;
+  }
+
+  if (!rows.changed() && isFlatScalarZeroCopy(type)) {
+    holder.setBuffer(1, vec.values());
     return;
   }
 
