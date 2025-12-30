@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/aggregates/ApproxMostFrequentAggregate.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Strings.h"
@@ -27,27 +28,28 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
+template <typename T, typename A = AlignedStlAllocator<T, 16>>
+using Summary = functions::ApproxMostFrequentStreamSummary<T, A>;
+
 template <typename T>
 struct Accumulator {
-  functions::ApproxMostFrequentStreamSummary<T, AlignedStlAllocator<T, 16>>
-      summary;
+  Summary<T> summary;
 
   explicit Accumulator(HashStringAllocator* allocator)
       : summary(AlignedStlAllocator<T, 16>(allocator)) {}
 
-  void insert(T value, int64_t count = 1) {
+  void insert(T value, int64_t count) {
     summary.insert(value, count);
   }
 };
 
 template <>
 struct Accumulator<StringView> {
-  functions::ApproxMostFrequentStreamSummary<
-      StringView,
-      AlignedStlAllocator<StringView, 16>>
-      summary;
+  Summary<StringView> summary;
   HashStringAllocator* allocator;
   Strings strings;
+  size_t activeBytes_{0};
+  size_t evictedBytes_{0};
 
   explicit Accumulator(HashStringAllocator* _allocator)
       : summary(AlignedStlAllocator<StringView, 16>(_allocator)),
@@ -57,21 +59,93 @@ struct Accumulator<StringView> {
     strings.free(*allocator);
   }
 
-  void insert(StringView value, int64_t count = 1) {
+  void insert(
+      StringView value,
+      int64_t count,
+      uint64_t compactionBytesThreshold = 0,
+      double compactionUnusedMemoryRatio = 0) {
     if (!value.isInline() && !summary.contains(value)) {
+      activeBytes_ += value.size();
       value = strings.append(value, *allocator);
     }
-    summary.insert(value, count);
+
+    auto evicted = summary.insert(value, count);
+    if (evicted.has_value() && !evicted->isInline()) {
+      const auto evictedSize = evicted->size();
+      evictedBytes_ += evictedSize;
+      VELOX_CHECK_GE(activeBytes_, evictedSize);
+      activeBytes_ -= evictedSize;
+
+      // Trigger compaction to reclaim memory from evicted strings.
+      // Compact only when:
+      // 1. Total string storage exceeds compactionBytesThreshold, AND
+      // 2. Evicted bytes exceed compactionUnusedMemoryRatio of the threshold.
+      if (compactionBytesThreshold > 0) {
+        if (FOLLY_UNLIKELY(
+                (evictedBytes_ + activeBytes_ > compactionBytesThreshold) &&
+                (evictedBytes_ >
+                 compactionBytesThreshold * compactionUnusedMemoryRatio))) {
+          compact();
+        }
+      }
+    }
+  }
+
+ private:
+  // Copies active strings to new storage and frees old storage. Peak memory
+  // is approximately 2x activeBytes + evictedBytes, since both storages coexist
+  // temporarily.
+  void compact() {
+    if (summary.size() == 0) {
+      return;
+    }
+
+    const auto capacity = summary.capacity();
+    const auto currentSize = summary.size();
+
+    Strings compactedStrings;
+    Summary<StringView> compactedSummary{
+        AlignedStlAllocator<StringView, 16>{allocator}};
+    compactedSummary.setCapacity(capacity);
+
+    uint64_t compactedActiveBytes = 0;
+    for (auto i = 0; i < currentSize; ++i) {
+      StringView v = summary.values()[i];
+      int64_t cnt = summary.counts()[i];
+      if (!v.isInline()) {
+        compactedActiveBytes += v.size();
+        v = compactedStrings.append(v, *allocator);
+      }
+      compactedSummary.insert(v, cnt);
+    }
+
+    VELOX_CHECK_EQ(compactedActiveBytes, activeBytes_);
+
+    // Free old storage.
+    strings.free(*allocator);
+
+    strings = std::move(compactedStrings);
+    summary = std::move(compactedSummary);
+    evictedBytes_ = 0;
   }
 };
 
 template <typename T>
 struct ApproxMostFrequentAggregate : exec::Aggregate {
-  explicit ApproxMostFrequentAggregate(const TypePtr& resultType)
-      : Aggregate(resultType) {}
+  explicit ApproxMostFrequentAggregate(
+      const TypePtr& resultType,
+      uint64_t compactionBytesThreshold,
+      double compactionUnusedMemoryRatio)
+      : Aggregate(resultType),
+        compactionBytesThreshold_(compactionBytesThreshold),
+        compactionUnusedMemoryRatio_(compactionUnusedMemoryRatio) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(Accumulator<T>);
+  }
+
+  bool isFixedSize() const override {
+    return false;
   }
 
   void addRawInput(
@@ -83,7 +157,8 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     rows.applyToSelected([&](auto row) {
       if (!decodedValues_.isNullAt(row)) {
         auto* accumulator = initAccumulator(groups[row]);
-        accumulator->insert(decodedValues_.valueAt<T>(row));
+        auto tracker = trackRowSize(groups[row]);
+        accumulator->insert(decodedValues_.valueAt<T>(row), 1);
       }
     });
   }
@@ -103,9 +178,18 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
       bool) override {
     decodeArguments(rows, args);
     auto* accumulator = initAccumulator(group);
+    auto tracker = trackRowSize(group);
     rows.applyToSelected([&](auto row) {
       if (!decodedValues_.isNullAt(row)) {
-        accumulator->insert(decodedValues_.valueAt<T>(row));
+        if constexpr (std::is_same_v<T, StringView>) {
+          accumulator->insert(
+              decodedValues_.valueAt<T>(row),
+              1,
+              compactionBytesThreshold_,
+              compactionUnusedMemoryRatio_);
+        } else {
+          accumulator->insert(decodedValues_.valueAt<T>(row), 1);
+        }
       }
     });
   }
@@ -304,15 +388,34 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
         if (accumulator == nullptr) {
           accumulator = initAccumulator(group);
         }
+        auto tracker = trackRowSize(group);
+        const auto size = values->sizeAt(i);
+        VELOX_DCHECK_EQ(counts->sizeAt(i), size);
+        const auto vo = values->offsetAt(i);
+        const auto co = counts->offsetAt(i);
+        if constexpr (std::is_same_v<T, StringView>) {
+          for (int j = 0; j < size; ++j) {
+            accumulator->insert(
+                v->valueAt(vo + j),
+                c->valueAt(co + j),
+                compactionBytesThreshold_,
+                compactionUnusedMemoryRatio_);
+          }
+        } else {
+          for (int j = 0; j < size; ++j) {
+            accumulator->insert(v->valueAt(vo + j), c->valueAt(co + j));
+          }
+        }
       } else {
         accumulator = initAccumulator(group[row]);
-      }
-      const auto size = values->sizeAt(i);
-      VELOX_DCHECK_EQ(counts->sizeAt(i), size);
-      const auto vo = values->offsetAt(i);
-      const auto co = counts->offsetAt(i);
-      for (int j = 0; j < size; ++j) {
-        accumulator->insert(v->valueAt(vo + j), c->valueAt(co + j));
+        auto tracker = trackRowSize(group[row]);
+        const auto size = values->sizeAt(i);
+        VELOX_DCHECK_EQ(counts->sizeAt(i), size);
+        const auto vo = values->offsetAt(i);
+        const auto co = counts->offsetAt(i);
+        for (int j = 0; j < size; ++j) {
+          accumulator->insert(v->valueAt(vo + j), c->valueAt(co + j));
+        }
       }
     });
   }
@@ -335,6 +438,11 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
   }
 
   static constexpr int64_t kMissingArgument{-1};
+
+  // NOTE: compaction is currently only applied for global aggregation
+  // addSingleGroupRawInput with StringView type
+  const uint64_t compactionBytesThreshold_;
+  const double compactionUnusedMemoryRatio_;
 
   DecodedVector decodedValues_;
   int64_t buckets_{kMissingArgument};
@@ -452,14 +560,16 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
-    const TypePtr& valueType) {
+    const TypePtr& valueType,
+    uint64_t compactionBytesThreshold,
+    double compactionUnusedMemoryRatio) {
   if constexpr (
       kKind == TypeKind::TINYINT || kKind == TypeKind::SMALLINT ||
       kKind == TypeKind::INTEGER || kKind == TypeKind::BIGINT ||
       kKind == TypeKind::VARCHAR) {
     return std::make_unique<
         ApproxMostFrequentAggregate<typename TypeTraits<kKind>::NativeType>>(
-        resultType);
+        resultType, compactionBytesThreshold, compactionUnusedMemoryRatio);
   }
 
   if (kKind == TypeKind::BOOLEAN) {
@@ -508,8 +618,7 @@ void registerApproxMostFrequentAggregate(
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         auto& valueType = exec::isPartialOutput(step)
             ? resultType->childAt(2)->childAt(0)
             : resultType->childAt(0);
@@ -520,7 +629,9 @@ void registerApproxMostFrequentAggregate(
             step,
             argTypes,
             resultType,
-            valueType);
+            valueType,
+            config.aggregationCompactionBytesThreshold(),
+            config.aggregationCompactionUnusedMemoryRatio());
       },
       withCompanionFunctions,
       overwrite);

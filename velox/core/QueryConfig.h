@@ -205,6 +205,24 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialAggregationMinPct =
       "abandon_partial_aggregation_min_pct";
 
+  /// Memory threshold in bytes for triggering string compaction during
+  /// global aggregation. When total string storage exceeds this limit with
+  /// high unused memory ratio, compaction is triggered to reclaim dead strings.
+  /// Disabled by default (0).
+  ///
+  /// NOTE: currently only applies to approx_most_frequent aggregate with
+  /// StringView type during global aggregation. May extend to other types.
+  static constexpr const char* kAggregationCompactionBytesThreshold =
+      "aggregation_compaction_bytes_threshold";
+
+  /// Ratio of unused (evicted) bytes to total bytes that triggers compaction.
+  /// Value is between 0.0 and 1.0. Default is 0.25.
+  ///
+  /// NOTE: currently only applies to approx_most_frequent aggregate with
+  /// StringView type during global aggregation. May extend to other types.
+  static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
+      "aggregation_compaction_unused_memory_ratio";
+
   static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
       "abandon_partial_topn_row_number_min_rows";
 
@@ -870,6 +888,14 @@ class QueryConfig {
 
   int32_t abandonPartialAggregationMinPct() const {
     return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
+  }
+
+  uint64_t aggregationCompactionBytesThreshold() const {
+    return get<uint64_t>(kAggregationCompactionBytesThreshold, 0);
+  }
+
+  double aggregationCompactionUnusedMemoryRatio() const {
+    return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
   }
 
   int32_t abandonPartialTopNRowNumberMinRows() const {
