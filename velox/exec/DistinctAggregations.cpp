@@ -35,7 +35,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
         inputType_(
             TypedDistinctAggregations::makeInputTypeForAccumulator(
                 inputType,
-                inputs_)) {}
+                inputs_)),
+        spillType_(ARRAY(inputType_)),
+        isSingleInputAggregate_(inputs_.size() == 1) {}
 
   /// Returns metadata about the accumulator used to store unique inputs.
   Accumulator accumulator() const override {
@@ -44,9 +46,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
         sizeof(AccumulatorType),
         false, // usesExternalMemory
         1, // alignment
-        nullptr,
-        [](folly::Range<char**> /*groups*/, VectorPtr& /*result*/) {
-          VELOX_UNREACHABLE();
+        spillType_,
+        [this](folly::Range<char**> groups, VectorPtr& result) {
+          extractForSpill(groups, result);
         },
         [this](folly::Range<char**> groups) {
           for (auto* group : groups) {
@@ -72,7 +74,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
       RowSizeTracker<char, uint32_t> tracker(
           group[rowSizeOffset_], *allocator_);
-      accumulator->addValue(decodedInput_, i, allocator_);
+      accumulator->addNonNullValue(decodedInput_, i, allocator_);
     });
 
     inputForAccumulator_.reset();
@@ -87,7 +89,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
     auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
     RowSizeTracker<char, uint32_t> tracker(group[rowSizeOffset_], *allocator_);
     rows.applyToSelected([&](vector_size_t i) {
-      accumulator->addValue(decodedInput_, i, allocator_);
+      accumulator->addNonNullValue(decodedInput_, i, allocator_);
     });
 
     inputForAccumulator_.reset();
@@ -138,6 +140,23 @@ class TypedDistinctAggregations : public DistinctAggregations {
     }
   }
 
+  void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index) override {
+    auto* baseArray = input->as<ArrayVector>();
+    if (baseArray->isNullAt(index)) {
+      return;
+    }
+
+    decodedInput_.decode(*baseArray->elements());
+
+    auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
+
+    RowSizeTracker<char, uint32_t> tracker(group[rowSizeOffset_], *allocator_);
+    accumulator->addNonNullValues(*baseArray, index, decodedInput_, allocator_);
+  }
+
  protected:
   void initializeNewGroupsInternal(
       char** groups,
@@ -154,10 +173,6 @@ class TypedDistinctAggregations : public DistinctAggregations {
   }
 
  private:
-  bool isSingleInputAggregate() const {
-    return aggregates_[0]->inputs.size() == 1;
-  }
-
   void decodeInput(const RowVectorPtr& input, const SelectivityVector& rows) {
     inputForAccumulator_ = makeInputForAccumulator(input);
     decodedInput_.decode(*inputForAccumulator_, rows);
@@ -181,7 +196,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
   }
 
   VectorPtr makeInputForAccumulator(const RowVectorPtr& input) const {
-    if (isSingleInputAggregate()) {
+    if (isSingleInputAggregate_) {
       return input->childAt(inputs_[0]);
     }
 
@@ -189,30 +204,105 @@ class TypedDistinctAggregations : public DistinctAggregations {
     for (int i = 0; i < inputs_.size(); ++i) {
       newChildren[i] = input->childAt(inputs_[i]);
     }
+    // For cases with multiple inputs, if any one of them is null, the entire
+    // input would be ignored and excluded from aggregation.
     return std::make_shared<RowVector>(
-        pool_, inputType_, nullptr, input->size(), newChildren);
+        pool_,
+        inputType_,
+        allocateNullBufferMultiInput(newChildren, input->size()),
+        input->size(),
+        newChildren);
   }
 
-  std::vector<VectorPtr> makeInputForAggregation(const VectorPtr& input) const {
-    if (isSingleInputAggregate()) {
+  BufferPtr allocateNullBufferMultiInput(
+      const std::vector<VectorPtr>& children,
+      vector_size_t size) const {
+    BufferPtr nulls = nullptr;
+    uint64_t* rawNulls = nullptr;
+
+    for (const auto& child : children) {
+      if (child->mayHaveNulls()) {
+        if (!nulls) {
+          nulls = AlignedBuffer::allocate<bool>(size, pool_);
+          rawNulls = nulls->asMutable<uint64_t>();
+          bits::fillBits(rawNulls, 0, size, false);
+        }
+        auto* childNulls = child->rawNulls();
+
+        if (childNulls) {
+          bits::orBits(rawNulls, childNulls, 0, size);
+        }
+      }
+    }
+    return nulls;
+  }
+
+  std::vector<VectorPtr> makeInputForAggregation(VectorPtr& input) const {
+    if (isSingleInputAggregate_) {
       return {std::move(input)};
     }
     return input->template asUnchecked<RowVector>()->children();
+  }
+
+  void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const {
+    auto* arrayVector = result->as<ArrayVector>();
+    arrayVector->resize(groups.size());
+
+    auto* rawOffsets = arrayVector->offsets()->asMutable<vector_size_t>();
+    auto* rawSizes = arrayVector->sizes()->asMutable<vector_size_t>();
+
+    vector_size_t offset = 0;
+    for (auto i = 0; i < groups.size(); ++i) {
+      auto* accumulator =
+          reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
+
+      const auto numDistinct = accumulator->size();
+      rawSizes[i] = numDistinct;
+      rawOffsets[i] = offset;
+
+      offset += numDistinct;
+
+      if (numDistinct == 0) {
+        // Set it to null to indicate that the current group has no actual
+        // value.
+        arrayVector->setNull(i, true);
+      }
+    }
+    if (offset == 0) {
+      return;
+    }
+
+    auto& elementsVector = arrayVector->elements();
+    elementsVector->resize(offset);
+
+    offset = 0;
+    for (const auto group : groups) {
+      auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
+      if constexpr (std::is_same_v<T, ComplexType>) {
+        offset += accumulator->extractValues(*elementsVector, offset);
+      } else {
+        offset += accumulator->extractValues(
+            *(elementsVector->template as<FlatVector<T>>()), offset);
+      }
+    }
   }
 
   memory::MemoryPool* const pool_;
   const std::vector<AggregateInfo*> aggregates_;
   const std::vector<column_index_t> inputs_;
   const TypePtr inputType_;
+  const TypePtr spillType_;
 
   DecodedVector decodedInput_;
   VectorPtr inputForAccumulator_;
+
+  const bool isSingleInputAggregate_;
 };
 
 template <TypeKind Kind>
 std::unique_ptr<DistinctAggregations>
 createDistinctAggregationsWithCustomCompare(
-    std::vector<AggregateInfo*> aggregates,
+    const std::vector<AggregateInfo*>& aggregates,
     const RowTypePtr& inputType,
     memory::MemoryPool* pool) {
   return std::make_unique<TypedDistinctAggregations<
