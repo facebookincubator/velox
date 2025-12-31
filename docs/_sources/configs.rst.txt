@@ -521,6 +521,21 @@ Aggregation
      - integer
      - 80
      - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
+   * - aggregation_compaction_bytes_threshold
+     - integer
+     - 0
+     - Memory threshold in bytes for triggering string compaction during global
+       aggregation. When total string storage exceeds this limit with high unused
+       memory ratio, compaction is triggered to reclaim dead strings. Disabled by
+       default (0). Currently only applies to approx_most_frequent aggregate with
+       StringView type during global aggregation.
+   * - aggregation_compaction_unused_memory_ratio
+     - double
+     - 0.25
+     - Ratio of unused (evicted) bytes to total bytes that triggers compaction.
+       The value is in the range of [0, 1). Currently only applies to approx_most_frequent
+       aggregate with StringView type during global aggregation. May be extended
+       to other aggregation types on-demand.
    * - streaming_aggregation_min_output_batch_rows
      - integer
      - 0
