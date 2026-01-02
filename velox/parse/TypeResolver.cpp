@@ -86,13 +86,18 @@ TypePtr resolveScalarFunctionType(
   if (returnType) {
     return returnType;
   }
+  /*
+    std::vector<TypePtr> coercion;
+    returnType = resolveFunctionWithCoercions(name, argTypes, coercion);
+    if (returnType) {
+      return returnType;
+    }
 
-  std::vector<TypePtr> coercion;
-  returnType = resolveFunctionWithCoercions(name, argTypes, coercion);
-  if (returnType) {
-    return returnType;
-  }
-
+    VLOG(0) << "Did not resolveScalarFunctionType with name[" << name << "]";
+    for (auto arg : argTypes) {
+      VLOG(0) << "  " << arg->toString();
+    }
+    */
   if (nullOnFailure) {
     return nullptr;
   }
@@ -159,8 +164,8 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
     case TypeKind::DOUBLE:
       break;
     // case TypeKind::VARCHAR:
-    //   targetTypes.emplace_back(VARCHAR()); // different lengths
-    //   break;
+    //    targetTypes.emplace_back(VARCHAR()); // different lengths
+    //    break;
     case TypeKind::ARRAY: {
       auto childTargetTypes = implicitCastTargets(type->childAt(0));
       for (const auto& childTarget : childTargetTypes) {
@@ -171,6 +176,11 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
     default: // make compilers happy
       break;
   }
+  // VLOG(0) << "implicitCastTargets Input: " << type->toString();
+  // VLOG(0) << "Allowed target types:";
+  // for (auto ttype : targetTypes) {
+  //   VLOG(0) << "  " << ttype->toString();
+  // }
   return targetTypes;
 }
 
@@ -193,6 +203,10 @@ TypedExprPtr adjustLastNArguments(
     std::vector<TypedExprPtr> inputs,
     const std::shared_ptr<const CallExpr>& expr,
     size_t n) {
+  // VLOG(0) << "Try to resolve adjustLastNArguments. n[" << n << "]";
+  // for (auto arg : inputs) {
+  //   VLOG(0) << "  " << arg->type()->toString();
+  // }
   auto type = resolveTypeImpl(inputs, expr, true /*nullOnFailure*/);
   if (type != nullptr) {
     return std::make_shared<CallTypedExpr>(
@@ -227,9 +241,11 @@ TypedExprPtr adjustLastNArguments(
 TypedExprPtr createWithImplicitCast(
     const std::shared_ptr<const CallExpr>& expr,
     const std::vector<TypedExprPtr>& inputs) {
+  // VLOG(0) << "Calling createWithImplicitCast";
   if (auto adjusted = adjustLastNArguments(inputs, expr, inputs.size())) {
     return adjusted;
   }
+  // VLOG(0) << "adjusted was NULL, do direct resolution";
   auto type = resolveTypeImpl(inputs, expr, /*nullOnFailure=*/false);
   return std::make_shared<CallTypedExpr>(type, inputs, expr->name());
 }

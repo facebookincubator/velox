@@ -190,7 +190,8 @@ getVectorFunctionWithMetadata(
         for (const auto& signature : entry.signatures) {
           exec::SignatureBinder binder(*signature, inputTypes);
           std::vector<Coercion> coercions;
-          if (binder.tryBind() || binder.tryBindWithCoercions(coercions)) {
+          if (binder
+                  .tryBind()) { // || binder.tryBindWithCoercions(coercions)) {
             auto inputArgs = toVectorFunctionArgs(inputTypes, constantInputs);
 
             return {

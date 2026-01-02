@@ -256,12 +256,13 @@ class StringFunctionsTest : public FunctionBaseTest {
     // If we use VarcharN types an implicit cast is used that increases the
     // number of allocations. For the first time the VectorTypePool is
     // initialized causing an additional allocation on the first evaluation.
-    int expectedNumAllocations = useVarcharN ? 4 : 2;
-    if (argsCount == 2) {
-      // For the initial evaluation of using VarcharN there are two extra
-      // allocations.
-      expectedNumAllocations += 2;
-    }
+    // int expectedNumAllocations = useVarcharN ? 4 : 2;
+    int expectedNumAllocations = 2;
+    // if (argsCount == 2) {
+    //  For the initial evaluation of using VarcharN there are two extra
+    //  allocations.
+    //  expectedNumAllocations += 2;
+    //}
     auto numAllocsBefore = pool()->stats().numAllocs;
 
     auto result = evaluate<FlatVector<StringView>>(

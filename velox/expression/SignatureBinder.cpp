@@ -124,6 +124,20 @@ bool hasCoercion(const std::vector<Coercion>& coercions) {
   return false;
 }
 
+// This handles the VARCHAR and VARBINARY case where the type signature
+// has no parameters but the actualType does. This allows for binding
+// an actualType with parameters to an unparameterized argument of a function.
+// This is not true coercion because the physical types match and we can
+// logically match them.
+bool isLogicallyCompatible(
+    const TypeSignature& signature,
+    const TypePtr& actualType) {
+  return (signature.baseName() == "varchar" &&
+          actualType->kind() == TypeKind::VARCHAR) ||
+      (signature.baseName() == "varbinary" &&
+       actualType->kind() == TypeKind::VARBINARY);
+}
+
 } // namespace
 
 bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
@@ -417,11 +431,11 @@ bool SignatureBinderBase::tryBind(
   auto actualTypeName =
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
-  const auto& params = typeSignature.parameters();
+  // const auto& params = typeSignature.parameters();
 
-  if (!boost::algorithm::iequals(typeName, actualType->name()) ||
-      (actualType->isPrimitiveType() &&
-       params.size() != actualType->parameters().size())) {
+  if (!boost::algorithm::iequals(typeName, actualType->name())) { // ||
+    //(actualType->isPrimitiveType() &&
+    // params.size() != actualType->parameters().size())) {
     if (allowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
@@ -431,6 +445,8 @@ bool SignatureBinderBase::tryBind(
     }
     return false;
   }
+
+  const auto& params = typeSignature.parameters();
 
   // Handle homogeneous row case: row(T, ...)
   if (typeSignature.isHomogeneousRow()) {
@@ -466,7 +482,8 @@ bool SignatureBinderBase::tryBind(
   }
 
   // Type Parameters can recurse.
-  if (params.size() != actualType->parameters().size()) {
+  if (params.size() != actualType->parameters().size() &&
+      !isLogicallyCompatible(typeSignature, actualType)) {
     return false;
   }
 

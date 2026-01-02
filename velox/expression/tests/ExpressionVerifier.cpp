@@ -477,7 +477,7 @@ ExpressionVerifier::verify(
                     referenceEvalResult.value(),
                     projectionPlan->outputType(),
                     {commonEvalResultRow}),
-                "Velox and reference DB results don't match");
+                "Velox and reference DB results don't match. Plan: {}", projectionPlan->toString());
             LOG(INFO) << "Verified results against reference DB";
             verificationStates.push_back(
                 VerificationState::kVerifiedAgainstReference);

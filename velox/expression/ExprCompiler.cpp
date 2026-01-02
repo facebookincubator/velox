@@ -277,12 +277,16 @@ ExprPtr compileCall(
     bool trackCpuUsage,
     const CompilerCtx& ctx) {
   const auto* call = expr->asUnchecked<core::CallTypedExpr>();
-  // Determine if CPU tracking should be enabled for this specific expression.
+  // VLOG(0) << "CallExpr: " << call->toString();
+  //  Determine if CPU tracking should be enabled for this specific expression.
   if (!trackCpuUsage && !ctx.cpuUsageTrackingCandidates.empty()) {
     trackCpuUsage = ctx.cpuUsageTrackingCandidates.count(call->name()) > 0;
   }
   const auto& resultType = expr->type();
   const auto inputTypes = getTypes(inputs);
+  // for (auto& type : inputTypes) {
+  //   VLOG(0) << "  " << type->toString();
+  // }
 
   if (auto specialForm = specialFormRegistry().getSpecialForm(call->name())) {
     return specialForm->constructSpecialForm(
@@ -330,30 +334,32 @@ ExprPtr compileCall(
         call->name(),
         trackCpuUsage);
   }
+  /*
+    std::vector<TypePtr> coercedInputTypes;
+    if (auto simpleFunctionEntry =
+    simpleFunctions().resolveFunctionWithCoercions( call->name(), inputTypes,
+    coercedInputTypes)) { VELOX_USER_CHECK(
+          resultType->equivalent(*simpleFunctionEntry->type().get()),
+          "Found incompatible return types for '{}' ({} vs. {}) "
+          "for input types ({}).",
+          call->name(),
+          simpleFunctionEntry->type(),
+          resultType,
+          folly::join(", ", inputTypes));
 
-  std::vector<TypePtr> coercedInputTypes;
-  if (auto simpleFunctionEntry = simpleFunctions().resolveFunctionWithCoercions(
-          call->name(), inputTypes, coercedInputTypes)) {
-    VELOX_USER_CHECK(
-        resultType->equivalent(*simpleFunctionEntry->type().get()),
-        "Found incompatible return types for '{}' ({} vs. {}) "
-        "for input types ({}).",
-        call->name(),
-        simpleFunctionEntry->type(),
-        resultType,
-        folly::join(", ", inputTypes));
+      auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
+          inputTypes, getConstantInputs(inputs), ctx.queryCtx->queryConfig());
+      return std::make_shared<Expr>(
+          resultType,
+          std::move(inputs),
+          std::move(func),
+          simpleFunctionEntry->metadata(),
+          call->name(),
+          trackCpuUsage);
+    }
+  */
 
-    auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-        inputTypes, getConstantInputs(inputs), ctx.queryCtx->queryConfig());
-    return std::make_shared<Expr>(
-        resultType,
-        std::move(inputs),
-        std::move(func),
-        simpleFunctionEntry->metadata(),
-        call->name(),
-        trackCpuUsage);
-  }
-
+  VLOG(0) << "Did not resolve a function.";
   const auto& functionName = call->name();
   auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
   auto simpleFunctionSignatures =

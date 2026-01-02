@@ -84,7 +84,7 @@ class ArrayMinTest : public FunctionBaseTest {
   void testInLineVarcharNullable() {
     using S = StringView;
 
-    TypePtr type = VARCHAR();
+    TypePtr inputType = VARCHAR();
     for (int loop = 0; loop < 2; ++loop) {
       auto arrayVector = makeNullableArrayVector<StringView>(
           {
@@ -93,17 +93,17 @@ class ArrayMinTest : public FunctionBaseTest {
               {},
               {S("red"), S("purple"), S("green")},
           },
-          ARRAY(type));
+          ARRAY(inputType));
       auto expected = makeNullableFlatVector<StringView>(
-          {S("blue"), std::nullopt, std::nullopt, S("green")}, type);
+          {S("blue"), std::nullopt, std::nullopt, S("green")}, VARCHAR());
       testExpr<StringView>(expected, "array_min(C0)", {arrayVector});
-      type = VARCHAR(12);
+      inputType = VARCHAR(12);
     }
   }
 
   void testVarcharNullable() {
     using S = StringView;
-    TypePtr type = VARCHAR();
+    TypePtr inputType = VARCHAR();
     for (int loop = 0; loop < 2; ++loop) {
       // use > 12 length string to avoid inlining
       auto arrayVector = makeNullableArrayVector<StringView>(
@@ -118,15 +118,15 @@ class ArrayMinTest : public FunctionBaseTest {
                S("purple is an elegant color"),
                S("green plants make us happy")},
           },
-          ARRAY(type));
+          ARRAY(inputType));
       auto expected = makeNullableFlatVector<StringView>(
           {S("blue clear sky above"),
            std::nullopt,
            std::nullopt,
            S("green plants make us happy")},
-          type);
+          VARCHAR());
       testExpr<StringView>(expected, "array_min(C0)", {arrayVector});
-      type = VARCHAR(50);
+      inputType = VARCHAR(50);
     }
   }
 

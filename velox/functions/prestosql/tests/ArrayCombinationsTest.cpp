@@ -182,7 +182,7 @@ TEST_F(ArrayCombinationsTest, inlineVarcharArrays) {
 
 TEST_F(ArrayCombinationsTest, varcharArrays) {
   using S = StringView;
-  TypePtr type = ARRAY(VARCHAR());
+  TypePtr inputType = ARRAY(VARCHAR());
   for (int loop = 0; loop < 2; ++loop) {
     auto arrayVector = makeNullableArrayVector<S>(
         {
@@ -197,7 +197,7 @@ TEST_F(ArrayCombinationsTest, varcharArrays) {
              "purple is an elegant color"},
             {"red shiny car ahead", std::nullopt, "blue clear sky above"},
         },
-        type);
+        inputType);
     auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 1, 2, 4, 5});
 
     auto expected = makeNullableNestedArrayVector<S>(
@@ -228,10 +228,10 @@ TEST_F(ArrayCombinationsTest, varcharArrays) {
              "red shiny car ahead",
              "purple is an elegant color"}}}},
          common::testutil::optionalEmpty},
-        type);
+        ARRAY(VARCHAR()));
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
-    type = ARRAY(VARCHAR(50));
+    inputType = ARRAY(VARCHAR(50));
   }
 }
 
