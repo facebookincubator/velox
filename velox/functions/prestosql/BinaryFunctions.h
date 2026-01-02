@@ -524,4 +524,76 @@ struct Murmur3X64_128Function {
   }
 };
 
+template <typename T>
+struct Fnv1_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
+    static constexpr uint32_t kPrime = 0x01000193;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    int32_t hash = kOffsetBasis;
+    for (size_t i = 0; i < input.size(); ++i) {
+      hash *= kPrime;
+      hash ^= data[i];
+    }
+    result = hash;
+  }
+};
+
+template <typename T>
+struct Fnv1_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
+    static constexpr uint64_t kPrime = 0x100000001b3L;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    int64_t hash = kOffsetBasis;
+    for (size_t i = 0; i < input.size(); ++i) {
+      hash *= kPrime;
+      hash ^= data[i];
+    }
+    result = hash;
+  }
+};
+
+template <typename T>
+struct Fnv1a_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
+    static constexpr uint32_t kPrime = 0x01000193;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    int32_t hash = kOffsetBasis;
+    for (size_t i = 0; i < input.size(); ++i) {
+      hash ^= data[i];
+      hash *= kPrime;
+    }
+    result = hash;
+  }
+};
+
+template <typename T>
+struct Fnv1a_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
+    static constexpr uint64_t kPrime = 0x100000001b3L;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    int64_t hash = kOffsetBasis;
+    for (size_t i = 0; i < input.size(); ++i) {
+      hash ^= data[i];
+      hash *= kPrime;
+    }
+    result = hash;
+  }
+};
+
 } // namespace facebook::velox::functions
