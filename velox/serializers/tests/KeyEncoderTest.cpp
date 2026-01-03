@@ -4140,7 +4140,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({2}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
@@ -4148,7 +4148,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({2}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
@@ -4209,7 +4209,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int64_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
@@ -4217,7 +4217,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -5141,7 +5141,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({2}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
@@ -5149,7 +5149,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({2}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
@@ -5210,7 +5210,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
@@ -5218,7 +5218,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -5384,7 +5384,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({10})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int32_t>(
-            {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST upper
+            {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
+                                                      // upper
         makeRowVector({makeFlatVector<int32_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
     for (const auto& testCase : testCases) {
@@ -6142,7 +6143,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({2}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int16_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
@@ -6150,7 +6151,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({2}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int16_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
@@ -6211,7 +6212,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int16_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
@@ -6219,7 +6220,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -6385,7 +6386,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({10})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int16_t>(
-            {std::numeric_limits<int16_t>::max()})}), // DESC_NULLS_FIRST upper
+            {std::numeric_limits<int16_t>::max()})}), // DESC_NULLS_FIRST
+                                                      // upper
         makeRowVector({makeFlatVector<int16_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
     for (const auto& testCase : testCases) {
@@ -7120,7 +7122,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({2}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int8_t>::min()})}), // ASC_NULLS_FIRST
                                                           // upper
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
@@ -7128,7 +7130,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({2}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int8_t>::min()})}), // ASC_NULLS_LAST
                                                           // upper
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
@@ -7187,7 +7189,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int8_t>::max()})}), // DESC_NULLS_FIRST
                                                           // upper
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
@@ -7195,7 +7197,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -7676,7 +7678,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
             .bound = makeRowVector({makeFlatVector<bool>({true})}),
             .inclusive = true},
         makeRowVector({makeFlatVector<bool>({false})}), // ASC_NULLS_FIRST lower
-        std::nullopt, // ASC_NULLS_FIRST upper (overflow - can't increment true)
+        std::nullopt, // ASC_NULLS_FIRST upper (overflow - can't increment
+                      // true)
         makeRowVector({makeFlatVector<bool>({false})}), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper (overflow)
         makeRowVector(
@@ -7960,6 +7963,100 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
+
+  // Test Case 13: Multi-column point lookup where the lower (second) column
+  // hits max value (true) in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is true, the increment should carry over to c0,
+  // resulting in (true, false).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({false}), makeFlatVector<bool>({true})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({false}), makeFlatVector<bool>({true})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_FIRST upper
+                                              // (carry-over)
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_LAST upper
+                                              // (carry-over)
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({false})}), // DESC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 14: Multi-column point lookup where the lower (second) column
+  // hits min value (false) in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is false, the decrement should carry over to c0,
+  // resulting in (false, true).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({true}), makeFlatVector<bool>({false})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({true}), makeFlatVector<bool>({false})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_LAST upper
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // DESC_NULLS_FIRST upper
+                                             // (carry-over)
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})})); // DESC_NULLS_LAST upper
+                                              // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
@@ -7982,7 +8079,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
         makeRowVector({makeFlatVector<float>({10.5f})}), // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST upper
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // upper
         makeRowVector(
             {makeFlatVector<float>({10.5f})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
@@ -8019,7 +8117,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             {makeFlatVector<float>({100.5f})}), // ASC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<float>({std::nextafter(
             10.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST lower
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // lower
         makeRowVector(
             {makeFlatVector<float>({100.5f})}), // ASC_NULLS_LAST upper
         makeRowVector({makeFlatVector<float>({std::nextafter(
@@ -8112,7 +8211,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
         std::nullopt, // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST upper
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // upper
         std::nullopt, // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
@@ -8208,7 +8308,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             {std::nullopt})}), // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST upper
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // upper
         makeRowVector({makeNullableFlatVector<float>(
             {std::nullopt})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
@@ -8442,7 +8543,151 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
-} // namespace facebook::velox::serializer::test
+
+  // Test Case 15: Multi-column point lookup where the lower (second) column
+  // hits positive infinity in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is at +infinity, the increment should carry over
+  // to c0, resulting in (nextafter(c0, +inf), -inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {std::numeric_limits<float>::infinity()})}), // ASC_NULLS_FIRST
+                                                              // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // ASC_NULLS_FIRST
+                                         // upper
+                                         // (carry-over)
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {std::numeric_limits<float>::infinity()})}), // ASC_NULLS_LAST
+                                                              // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>(
+                 {-std::numeric_limits<float>::infinity()})}), // ASC_NULLS_LAST
+                                                               // upper
+                                                               // (carry-over)
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_FIRST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 std::numeric_limits<float>::infinity(),
+                 -std::numeric_limits<
+                     float>::infinity())})}), // DESC_NULLS_FIRST
+                                              // upper
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {std::numeric_limits<float>::infinity()})}), // DESC_NULLS_LAST
+                                                              // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 std::numeric_limits<float>::infinity(),
+                 -std::numeric_limits<
+                     float>::infinity())})})); // DESC_NULLS_LAST
+                                               // upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 16: Multi-column point lookup where the lower (second) column
+  // hits negative infinity in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is at -infinity, the decrement should carry over
+  // to c0, resulting in (nextafter(c0, -inf), +inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {-std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {-std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // ASC_NULLS_FIRST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 -std::numeric_limits<float>::infinity(),
+                 std::numeric_limits<float>::infinity())})}), // ASC_NULLS_FIRST
+                                                              // upper
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {-std::numeric_limits<float>::infinity()})}), // ASC_NULLS_LAST
+                                                               // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 -std::numeric_limits<float>::infinity(),
+                 std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                              // upper
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_FIRST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, -std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>({std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_FIRST
+                                         // upper
+                                         // (carry-over)
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_LAST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, -std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>({std::numeric_limits<
+                 float>::infinity()})})); // DESC_NULLS_LAST
+                                          // upper
+                                          // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+}
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
   // Test Case 1: Both bounds inclusive
@@ -8934,6 +9179,151 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
+
+  // Test Case 15: Multi-column point lookup where the lower (second) column
+  // hits positive infinity in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is at +infinity, the increment should carry over
+  // to c0, resulting in (nextafter(c0, +inf), -inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_FIRST
+                                          // upper
+                                          // (carry-over)
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>(
+                 {std::numeric_limits<double>::infinity()})}), // ASC_NULLS_LAST
+                                                               // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_LAST
+                                          // upper
+                                          // (carry-over)
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 std::numeric_limits<double>::infinity(),
+                 -std::numeric_limits<
+                     double>::infinity())})}), // DESC_NULLS_FIRST
+                                               // upper
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_LAST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 std::numeric_limits<double>::infinity(),
+                 -std::numeric_limits<
+                     double>::infinity())})})); // DESC_NULLS_LAST
+                                                // upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 16: Multi-column point lookup where the lower (second) column
+  // hits negative infinity in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is at -infinity, the decrement should carry over
+  // to c0, resulting in (nextafter(c0, -inf), +inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {-std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {-std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 -std::numeric_limits<double>::infinity(),
+                 std::numeric_limits<
+                     double>::infinity())})}), // ASC_NULLS_FIRST
+                                               // upper
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_LAST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 -std::numeric_limits<double>::infinity(),
+                 std::numeric_limits<double>::infinity())})}), // ASC_NULLS_LAST
+                                                               // upper
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, -std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_FIRST
+                                          // upper
+                                          // (carry-over)
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_LAST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, -std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})})); // DESC_NULLS_LAST
+                                           // upper
+                                           // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
@@ -9244,6 +9634,135 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
+
+  // Test Case 12: Multi-column point lookup where the lower (second) column
+  // hits max value in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is at Timestamp::max(), the increment should carry
+  // over to c0, resulting in (c0+1nanos, Timestamp::min()).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                     velox::Timestamp::kMaxSeconds,
+                     velox::Timestamp::kMaxNanos)})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                     velox::Timestamp::kMaxSeconds,
+                     velox::Timestamp::kMaxNanos)})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 301)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_FIRST upper
+                                                        // (carry-over)
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 301)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_LAST upper
+                                                        // (carry-over)
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos - 1)})}), // DESC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos - 1)})})); // DESC_NULLS_LAST upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 13: Multi-column point lookup where the lower (second) column
+  // hits min value in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is at Timestamp::min(), the decrement should carry
+  // over to c0, resulting in (c0-1nanos, Timestamp::max()).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>(
+                     {velox::Timestamp(velox::Timestamp::kMinSeconds, 0)})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>(
+                     {velox::Timestamp(velox::Timestamp::kMinSeconds, 0)})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 1)})}), // ASC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 1)})}), // ASC_NULLS_LAST upper
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds,
+                 0)})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 299)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // DESC_NULLS_FIRST upper
+                                                   // (carry-over)
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 299)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})})); // DESC_NULLS_LAST upper
+                                                    // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
@@ -9253,9 +9772,10 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
   };
 
   // Test Case 1: Both bounds inclusive
-  // For ascending order: increment appends '\0' (e.g., "orange" -> "orange\0")
-  // For descending order: decrement only works if string ends with '\0',
-  // otherwise increment fails and we get unbounded upper (std::nullopt)
+  // For ascending order: increment appends '\0' (e.g., "orange" ->
+  // "orange\0") For descending order: decrement only works if string ends
+  // with '\0', otherwise increment fails and we get unbounded upper
+  // (std::nullopt)
   {
     // For DESC order with inclusive upper bound on "orange" (doesn't end with
     // '\0'), decrement fails, so upper bound becomes unbounded (std::nullopt)
