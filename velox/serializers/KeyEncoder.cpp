@@ -785,41 +785,25 @@ void encodeColumnTyped(
 
 bool incrementStringValue(std::string* value, bool descending) {
   if (!descending) {
-    // Ascending order: increment
-    for (int i = value->size() - 1; i >= 0; --i) {
-      auto& byte = (*value)[i];
-      unsigned char uByte = static_cast<unsigned char>(byte);
-
-      // Check if we can increment without overflow
-      if (uByte != 0xFF) {
-        byte = static_cast<char>(uByte + 1);
-        return true;
-      }
-      // This byte is at max, try next byte
-    }
-    // All bytes are at max value, append zero byte to get next larger string
+    // Ascending order: append the smallest possible byte (null byte) to get the
+    // immediate next string. For any string s, s < s + '\0' < s + '\x01' < ...
     value->push_back('\0');
     return true;
   } else {
-    // Descending order: decrement
-    for (int i = value->size() - 1; i >= 0; --i) {
-      auto& byte = (*value)[i];
-      unsigned char uByte = static_cast<unsigned char>(byte);
-
-      // Check if we can decrement without underflow
-      if (uByte != 0x00) {
-        byte = static_cast<char>(uByte - 1);
-        return true;
-      }
-      // This byte is at min, try next byte
+    // Descending order: decrement is only possible if the string ends with
+    // '\0'. This is the inverse of the increment operation - truncate the
+    // trailing null byte. This approach aligns with Apache Kudu's
+    // DecrementStringCell.
+    //
+    // For strings not ending with '\0', there is no finite immediate
+    // predecessor (e.g., predecessor of "abc" would be "ab\xFF\xFF\xFF..." with
+    // infinite 0xFF bytes). Return false to signal caller should use exclusive
+    // bounds.
+    if (value->empty() || value->back() != '\0') {
+      return false;
     }
-    // All bytes are at min value, remove last byte to get next smaller string
-    if (!value->empty()) {
-      value->pop_back();
-      return true;
-    }
-    // Empty string, cannot decrement further
-    return false;
+    value->pop_back();
+    return true;
   }
 }
 
