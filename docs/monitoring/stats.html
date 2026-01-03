@@ -514,6 +514,13 @@ reported value is set to the corresponding CompressionKind enum with 0
 <td><p>nanos</p></td>
 <td><p>The total walltime in nanoseconds that the data or index connector do the remaining filtering.</p></td>
 </tr>
+<tr class="row-odd"><td><p>numIndexFilterConversions</p></td>
+<td></td>
+<td><p>The number of index columns that were converted from ScanSpec filters to
+index bounds for index-based filtering (e.g., cluster index pruning in
+Nimble). A value greater than zero indicates filters were successfully
+converted to leverage file index structures for row pruning.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
