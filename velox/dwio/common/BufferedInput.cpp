@@ -114,8 +114,9 @@ std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
       // help faster lookup using enqueuedToBufferOffset_ later.
       [region, this, i = regions_.size() - 1]() {
         auto result = readInternal(region.offset, region.length, i);
-        VELOX_CHECK(
-            std::get<1>(result) != MAX_UINT64,
+        VELOX_CHECK_NE(
+            std::get<1>(result),
+            MAX_UINT64,
             "Fail to read region offset={} length={}",
             region.offset,
             region.length);
