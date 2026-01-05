@@ -227,6 +227,44 @@ struct L2SquaredFunctionDoubleArray {
 };
 
 template <typename T>
+struct DotProductMap {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void callNullFree(
+      out_type<double>& result,
+      const null_free_arg_type<Map<Varchar, double>>& leftMap,
+      const null_free_arg_type<Map<Varchar, double>>& rightMap) {
+    if (leftMap.empty() || rightMap.empty()) {
+      result = std::numeric_limits<double>::quiet_NaN();
+      return;
+    }
+
+    int d = static_cast<int>(leftMap.size() + rightMap.size());
+    std::vector<float> x(d * 2, 0);
+    size_t i = 0;
+    for (const auto& [key, value] : leftMap) {
+      auto it = rightMap.find(key);
+      double right = (it != rightMap.end()) ? it->second : 0;
+      if (i < d) {
+        x[i] = static_cast<float>(value);
+      }
+      if (static_cast<size_t>(d + i) < x.size()) {
+        x[d + i] = static_cast<float>(right);
+      }
+      i++;
+    }
+    for (const auto& [key, value] : rightMap) {
+      if (leftMap.find(key) == leftMap.end()) {
+        x[d + i++] = static_cast<float>(value);
+      }
+    }
+
+    result = static_cast<double>(
+        faiss::fvec_inner_product(x.data(), x.data() + d, d));
+  }
+};
+
+template <typename T>
 struct DotProductFloatArray {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -380,6 +418,30 @@ struct CosineSimilarityFunctionArray {
 
     double product = dotProduct(leftArray, rightArray);
     result = product / (normLeftArray * normRightArray);
+  }
+};
+
+template <typename T>
+struct DotProductMap {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void callNullFree(
+      out_type<double>& result,
+      const null_free_arg_type<Map<Varchar, double>>& leftMap,
+      const null_free_arg_type<Map<Varchar, double>>& rightMap) {
+    if (leftMap.empty() || rightMap.empty()) {
+      result = std::numeric_limits<double>::quiet_NaN();
+      return;
+    }
+
+    double dotProduct = 0.0;
+    for (const auto& [key, value] : leftMap) {
+      auto it = rightMap.find(key);
+      if (it != rightMap.end()) {
+        dotProduct += value * it->second;
+      }
+    }
+    result = dotProduct;
   }
 };
 
