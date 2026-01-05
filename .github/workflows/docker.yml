@@ -147,7 +147,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download digests
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
@@ -192,7 +192,7 @@ jobs:
 
       - name: Download Base Image
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: centos9-amd64
           path: /tmp
