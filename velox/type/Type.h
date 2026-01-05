@@ -1362,6 +1362,10 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
         deserializeTypeErased);
   }
 
+  static bool clearSerializationRegistry(
+      const std::shared_ptr<const OpaqueType>& opaqueType,
+      const std::string& persistentName);
+
   static void clearSerializationRegistry();
 
  protected:
@@ -1376,6 +1380,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
       SerializeFunc<void> serialize = nullptr,
       DeserializeFunc<void> deserialize = nullptr);
 };
+
+using OpaqueTypePtr = std::shared_ptr<const OpaqueType>;
 
 using IntegerType = ScalarType<TypeKind::INTEGER>;
 using BooleanType = ScalarType<TypeKind::BOOLEAN>;
@@ -2371,6 +2377,7 @@ bool registerOpaqueType(const std::string& alias) {
 template <typename Class>
 bool unregisterOpaqueType(const std::string& alias) {
   auto typeIndex = std::type_index(typeid(Class));
+  OpaqueType::clearSerializationRegistry(OpaqueType::create<Class>(), alias);
   return getTypeIndexByOpaqueAlias().erase(alias) == 1 &&
       getOpaqueAliasByTypeIndex().erase(typeIndex) == 1;
 }

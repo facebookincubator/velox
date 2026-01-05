@@ -661,12 +661,22 @@ TEST(TypeTest, opaque) {
   auto foo3 = Type::create(foo->serialize());
   ASSERT_EQ(*foo, *foo3);
 
+  // Clearing the serialization registry when no serialization/deserialization
+  // functions have been provided, should return true, since the registry
+  // contained nullptr as serialization/deserialization functions.
+  EXPECT_TRUE(OpaqueType::clearSerializationRegistry(foo2, "id_of_foo"));
+
   OpaqueType::registerSerialization<Bar>(
       "id_of_bar",
       [](const std::shared_ptr<Bar>&) -> std::string { return ""; },
       [](const std::string&) -> std::shared_ptr<Bar> { return nullptr; });
   bar->getSerializeFunc();
   bar->getDeserializeFunc();
+
+  // Clearing the serialization registry should return true.
+  EXPECT_TRUE(
+      OpaqueType::clearSerializationRegistry(
+          OpaqueType::create<Bar>(), "id_of_bar"));
 }
 
 // Example of an opaque type that keeps some additional type-level metadata.
