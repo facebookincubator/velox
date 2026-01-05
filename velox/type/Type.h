@@ -1364,6 +1364,12 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   static void clearSerializationRegistry();
 
+  template <typename T>
+  FOLLY_NOINLINE static void unregisterSerialization(
+      const std::string& persistentName) {
+    unregisterSerializationTypeErased(OpaqueType::create<T>(), persistentName);
+  }
+
  protected:
   bool equals(const Type& other) const override;
 
@@ -1375,6 +1381,10 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
       const std::string& persistentName,
       SerializeFunc<void> serialize = nullptr,
       DeserializeFunc<void> deserialize = nullptr);
+
+  static void unregisterSerializationTypeErased(
+      const std::shared_ptr<const OpaqueType>& type,
+      const std::string& persistentName);
 };
 
 using IntegerType = ScalarType<TypeKind::INTEGER>;
@@ -2358,11 +2368,22 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex);
 /// might not be able to deserialize it in another process. To solve this
 /// problem, we require that both the serializing and deserializing processes
 /// register the opaque type using registerOpaqueType() with the same alias.
+///
+/// This function also registers the serialization for the opaque type. If
+/// custom serialize/deserialize functions are provided, they will be used;
+/// otherwise, default (nullptr) will be registered.
 template <typename Class>
-bool registerOpaqueType(const std::string& alias) {
+bool registerOpaqueType(
+    const std::string& alias,
+    OpaqueType::SerializeFunc<Class> serialize = nullptr,
+    OpaqueType::DeserializeFunc<Class> deserialize = nullptr) {
   auto typeIndex = std::type_index(typeid(Class));
-  return getTypeIndexByOpaqueAlias().emplace(alias, typeIndex).second &&
+  bool success = getTypeIndexByOpaqueAlias().emplace(alias, typeIndex).second &&
       getOpaqueAliasByTypeIndex().emplace(typeIndex, alias).second;
+  if (success) {
+    OpaqueType::registerSerialization<Class>(alias, serialize, deserialize);
+  }
+  return success;
 }
 
 /// Unregisters an opaque type. Returns true if the type was unregistered.
@@ -2371,6 +2392,7 @@ bool registerOpaqueType(const std::string& alias) {
 template <typename Class>
 bool unregisterOpaqueType(const std::string& alias) {
   auto typeIndex = std::type_index(typeid(Class));
+  OpaqueType::unregisterSerialization<Class>(alias);
   return getTypeIndexByOpaqueAlias().erase(alias) == 1 &&
       getOpaqueAliasByTypeIndex().erase(typeIndex) == 1;
 }
