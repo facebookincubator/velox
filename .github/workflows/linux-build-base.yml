@@ -46,27 +46,33 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_TRIGGER: ${{ github.event_name }}
         run: |
-          merge_base_commit=$(gh api -q '.merge_base_commit.sha' \
-            /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
-          )
+          echo "JOB_TRIGGER: $JOB_TRIGGER"
+          if [[ "$JOB_TRIGGER" == "pull_request" ]]; then
+            merge_base_commit=$(gh api -q '.merge_base_commit.sha' \
+              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+            )
 
-          range="$merge_base_commit..$HEAD_SHA"
-          echo "range=$range" >> "$GITHUB_OUTPUT"
-          echo "merge_base_commit=$merge_base_commit" >> "$GITHUB_OUTPUT"
+            range="$merge_base_commit..$HEAD_SHA"
+            echo "range=$range" >> "$GITHUB_OUTPUT"
+            echo "merge_base_commit=$merge_base_commit" >> "$GITHUB_OUTPUT"
 
-          git diff --name-only $range > changed_files.txt
+            git diff --name-only $range > changed_files.txt
 
-          cpp_files='.+\.(cpp|h|hpp)$'
+            cpp_files='.+\.(cpp|h|hpp)$'
 
-          {
-            echo 'files<<EOF'
-            cat changed_files.txt
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+            {
+              echo 'files<<EOF'
+              cat changed_files.txt
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
 
-          if grep -qE $cpp_files changed_files.txt; then
-            echo "run_clang_tidy=true" >> "$GITHUB_OUTPUT"
+            if grep -qE $cpp_files changed_files.txt; then
+              echo "run_clang_tidy=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "run_clang_tidy=false" >> "$GITHUB_OUTPUT"
           fi
 
   adapters:
