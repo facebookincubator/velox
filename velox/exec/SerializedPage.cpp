@@ -15,6 +15,8 @@
  */
 #include "velox/exec/SerializedPage.h"
 
+#include <folly/container/Reserve.h>
+
 namespace facebook::velox::exec {
 
 PrestoSerializedPage::PrestoSerializedPage(
@@ -26,6 +28,7 @@ PrestoSerializedPage::PrestoSerializedPage(
       numRows_(numRows),
       onDestructionCb_(onDestructionCb) {
   VELOX_CHECK_NOT_NULL(iobuf_);
+  folly::grow_capacity_by(ranges_, iobuf_->countChainElements());
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();
     ranges_.push_back(
