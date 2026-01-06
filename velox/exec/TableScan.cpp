@@ -187,15 +187,9 @@ RowVectorPtr TableScan::getOutput() {
     const auto estimatedRowSize = dataSource_->estimatedRowSize();
     // TODO: Expose this to operator stats.
     VLOG(1) << "estimatedRowSize = " << estimatedRowSize;
-    readBatchSize_ = estimatedRowSize == connector::DataSource::kUnknownRowSize
-        ? outputBatchRows()
-        : outputBatchRows(estimatedRowSize);
-    int32_t readBatchSize = readBatchSize_;
-    if (maxFilteringRatio_ > 0) {
-      readBatchSize = std::min(
-          maxReadBatchSize_,
-          static_cast<int32_t>(readBatchSize / maxFilteringRatio_));
-    }
+
+    const int32_t readBatchSize = calculateBatchSize(estimatedRowSize);
+
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
@@ -503,6 +497,34 @@ void TableScan::addDynamicFilterLocked(
     }
   }
   stats_.wlock()->dynamicFilterStats.producerNodeIds.emplace(producer);
+}
+
+int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
+  constexpr int64_t kUnknown = connector::DataSource::kUnknownRowSize;
+
+  // Determine effective row size. Priority:
+  // 1. Current footer estimate
+  // 2. Previous batch estimate
+  // 3. No estimate: use preferredOutputBatchRows() (readBatchSize_ default)
+  int64_t effectiveRowSize = kUnknown;
+  if (currentEstimatedRowSize != kUnknown) {
+    footerRowSizeEstimate_ = currentEstimatedRowSize;
+    effectiveRowSize = currentEstimatedRowSize;
+  } else if (footerRowSizeEstimate_ != kUnknown) {
+    effectiveRowSize = footerRowSizeEstimate_;
+  }
+
+  if (effectiveRowSize != kUnknown) {
+    readBatchSize_ = outputBatchRows(effectiveRowSize);
+  }
+
+  int32_t batchSize = readBatchSize_;
+  if (maxFilteringRatio_ > 0) {
+    batchSize = std::min(
+        maxReadBatchSize_,
+        static_cast<int32_t>(batchSize / maxFilteringRatio_));
+  }
+  return batchSize;
 }
 
 void TableScan::close() {

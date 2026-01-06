@@ -68,6 +68,11 @@ class TableScan : public SourceOperator {
     return scaledController_;
   }
 
+  /// Returns the current read batch size. Used for testing.
+  vector_size_t testingReadBatchSize() const {
+    return readBatchSize_;
+  }
+
  private:
   // Checks if this table scan operator needs to yield before processing the
   // next split.
@@ -98,6 +103,10 @@ class TableScan : public SourceOperator {
   // the scan driver memory usage and check to see if we need to scale up scan
   // processing or not.
   void tryScaleUp();
+
+  // Calculates the batch size to read based on available row size information.
+  // Returns the number of rows to read in the next batch.
+  int32_t calculateBatchSize(int64_t currentEstimatedRowSize);
 
   const connector::ConnectorTableHandlePtr tableHandle_;
   const connector::ColumnHandleMap columnHandles_;
@@ -140,6 +149,10 @@ class TableScan : public SourceOperator {
   int32_t numReadyPreloadedSplits_{0};
 
   double maxFilteringRatio_{0};
+
+  // Row size estimate from file footer statistics. Saved from previous splits
+  // to use as fallback when current split lacks footer statistics.
+  int64_t footerRowSizeEstimate_{connector::DataSource::kUnknownRowSize};
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;

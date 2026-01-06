@@ -558,10 +558,14 @@ void HiveDataSource::setFromDataSource(
 }
 
 int64_t HiveDataSource::estimatedRowSize() {
-  if (!splitReader_) {
+  if (splitReader_ == nullptr) {
     return kUnknownRowSize;
   }
-  return splitReader_->estimatedRowSize();
+  auto rowSize = splitReader_->estimatedRowSize();
+  TestValue::adjust(
+      "facebook::velox::connector::hive::HiveDataSource::estimatedRowSize",
+      &rowSize);
+  return rowSize;
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
