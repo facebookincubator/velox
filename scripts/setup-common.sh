@@ -111,17 +111,30 @@ function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/"${BOOST_VERSION}"/"${BOOST_VERSION}".tar.gz boost
   (
     cd "${DEPENDENCY_DIR}"/boost || exit
+    # Build Boost using CMake to generate proper CMake config files.
+    # This is required for FBThrift's exported targets which reference Boost::boost.
+    mkdir -p _build && cd _build || exit
+    local BOOST_CMAKE_ARGS=(
+      -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}"
+      -DCMAKE_BUILD_TYPE=Release
+      -DBUILD_SHARED_LIBS=OFF
+      -DBOOST_EXCLUDE_LIBRARIES="python"
+      -DBOOST_ENABLE_CMAKE=ON
+    )
     if [[ "$(uname)" == "Linux" && ${USE_CLANG} != "false" ]]; then
       ./bootstrap.sh --prefix="${INSTALL_PREFIX}" --with-toolset="clang-15"
       # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
       # clang of version 15 when toolset clang-15 is used.
       # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
       sed -i 's/using clang-15/using clang : 15/g' project-config.jam
-      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang-15 --without-python
+      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang-15 --without-python --with-cmake
     else
       ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
-      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python
+      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python --with-cmake
     fi
+    cmake .. "${BOOST_CMAKE_ARGS[@]}"
+    cmake --build . -j"${NPROC}"
+    ${SUDO} cmake --install .
   )
 }
 
