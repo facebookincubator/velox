@@ -1362,6 +1362,15 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
         deserializeTypeErased);
   }
 
+  // This function is used to remove the serialization/deserialization functions
+  // for a type. It reverses the state changes made by registerSerialization
+  // function.
+  // @return true if the functions are found and removed
+  // successfully. False otherwise.
+  static bool unregisterSerialization(
+      const std::shared_ptr<const OpaqueType>& opaqueType,
+      const std::string& persistentName);
+
   static void clearSerializationRegistry();
 
  protected:
@@ -1376,6 +1385,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
       SerializeFunc<void> serialize = nullptr,
       DeserializeFunc<void> deserialize = nullptr);
 };
+
+using OpaqueTypePtr = std::shared_ptr<const OpaqueType>;
 
 using IntegerType = ScalarType<TypeKind::INTEGER>;
 using BooleanType = ScalarType<TypeKind::BOOLEAN>;
@@ -2371,6 +2382,7 @@ bool registerOpaqueType(const std::string& alias) {
 template <typename Class>
 bool unregisterOpaqueType(const std::string& alias) {
   auto typeIndex = std::type_index(typeid(Class));
+  OpaqueType::unregisterSerialization(OpaqueType::create<Class>(), alias);
   return getTypeIndexByOpaqueAlias().erase(alias) == 1 &&
       getOpaqueAliasByTypeIndex().erase(typeIndex) == 1;
 }
