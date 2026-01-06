@@ -34,7 +34,7 @@ source "$SCRIPT_DIR"/setup-centos9.sh
 
 # Install packages required for build.
 function install_build_prerequisites {
-  dnf update -y
+  #dnf update -y
   dnf_install dnf-plugins-core # For ccache, ninja
   dnf_install autoconf automake ccache git g++-14 libtool \
     ninja-build python3-pip python3-devel wget which

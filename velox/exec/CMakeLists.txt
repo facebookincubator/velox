@@ -37,6 +37,9 @@ velox_add_library(
   SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
+  ProjectSequence.cpp
+  Linear.cpp
+  LinearRun.cpp
   GroupId.cpp
   GroupingSet.cpp
   HashAggregation.cpp
