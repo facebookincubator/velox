@@ -247,7 +247,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps
+          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps && install_fbthrift_deps
 
       - name: Clear CCache Statistics
         run: |

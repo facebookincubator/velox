@@ -110,7 +110,8 @@ jobs:
               -DVELOX_MONO_LIBRARY=ON \
               -DVELOX_BUILD_SHARED=ON \
               -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
-              -DVELOX_ENABLE_FAISS=ON
+              -DVELOX_ENABLE_FAISS=ON \
+              -DVELOX_BUILD_TESTING=OFF
 
       - name: Build
         run: |

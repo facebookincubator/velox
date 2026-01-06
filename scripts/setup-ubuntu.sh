@@ -255,6 +255,17 @@ function install_apt_deps {
   install_velox_deps_from_apt
 }
 
+function install_fbthrift_deps {
+  run_and_time install_fmt
+  run_and_time install_boost
+  run_and_time install_fast_float
+  run_and_time install_folly
+  run_and_time install_fizz
+  run_and_time install_wangle
+  run_and_time install_mvfst
+  run_and_time install_fbthrift
+}
+
 (return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (

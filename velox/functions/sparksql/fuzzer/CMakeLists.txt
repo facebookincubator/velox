@@ -99,6 +99,10 @@ target_link_libraries(
   arrow
 )
 
+if(VELOX_BUILD_TESTING)
+  target_link_libraries(velox_spark_query_runner FBThrift::thriftcpp2)
+endif()
+
 add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
 
 target_link_libraries(
@@ -116,5 +120,6 @@ target_link_libraries(
 )
 
 if(${VELOX_BUILD_TESTING})
+  target_link_libraries(spark_aggregation_fuzzer_test FBThrift::thriftcpp2)
   add_subdirectory(tests)
 endif()
