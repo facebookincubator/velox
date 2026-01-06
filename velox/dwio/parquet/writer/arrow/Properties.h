@@ -26,6 +26,7 @@
 
 #include "arrow/io/caching.h"
 #include "arrow/type.h"
+#include "arrow/util/logging.h"
 #include "arrow/util/type_fwd.h"
 #include "velox/dwio/parquet/writer/arrow/Encryption.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
@@ -397,13 +398,16 @@ class PARQUET_EXPORT WriterProperties {
     /// Specify the max number of rows to put in a single row group.
     /// Default 1Mi rows.
     Builder* max_row_group_length(int64_t max_row_group_length) {
+      ARROW_CHECK_GT(max_row_group_length, 0) << "max_row_group_length must be positive";
       max_row_group_length_ = max_row_group_length;
       return this;
     }
 
     /// Specify the max bytes to put in a single row group.
+    /// The size is estimated based on encoded and compressed data.
     /// Default 128MB.
     Builder* max_row_group_bytes(int64_t max_row_group_bytes) {
+      ARROW_CHECK_GT(max_row_group_bytes, 0) << "max_row_group_bytes must be positive";
       max_row_group_bytes_ = max_row_group_bytes;
       return this;
     }

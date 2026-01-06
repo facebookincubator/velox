@@ -33,22 +33,25 @@ using facebook::velox::parquet::arrow::Compression;
 using facebook::velox::parquet::arrow::WriterProperties;
 using facebook::velox::parquet::arrow::arrow::FileWriter;
 
-// Utility for buffering Arrow output with a DataBuffer.
+// Utility for buffering Arrow output with a DataBuffer, with automatic
+// flushing when the buffer size exceeds a configured threshold.
 class ArrowDataBufferSink : public ::arrow::io::OutputStream {
  public:
   /// @param growRatio Growth factor used when invoking the reserve() method of
   /// DataSink, thereby helping to minimize frequent memcpy operations.
+  /// @param flushThreshold Threshold for flushing data to the underlying sink.
   ArrowDataBufferSink(
       std::unique_ptr<dwio::common::FileSink> sink,
       memory::MemoryPool& pool,
-      double growRatio)
-      : sink_(std::move(sink)), growRatio_(growRatio), buffer_(pool) {}
+      double growRatio,
+      int64_t flushThreshold)
+      : sink_(std::move(sink)),
+        growRatio_(growRatio),
+        flushThreshold_(flushThreshold),
+        buffer_(pool) {}
 
   ::arrow::Status Write(const std::shared_ptr<::arrow::Buffer>& data) override {
-    auto requestCapacity = buffer_.size() + data->size();
-    if (requestCapacity > buffer_.capacity()) {
-      buffer_.reserve(growRatio_ * (requestCapacity));
-    }
+    ARROW_RETURN_NOT_OK(ensureCapacity(data->size()));
     buffer_.append(
         buffer_.size(),
         reinterpret_cast<const char*>(data->data()),
@@ -57,10 +60,7 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   }
 
   ::arrow::Status Write(const void* data, int64_t nbytes) override {
-    auto requestCapacity = buffer_.size() + nbytes;
-    if (requestCapacity > buffer_.capacity()) {
-      buffer_.reserve(growRatio_ * (requestCapacity));
-    }
+    ARROW_RETURN_NOT_OK(ensureCapacity(nbytes));
     buffer_.append(buffer_.size(), reinterpret_cast<const char*>(data), nbytes);
     return ::arrow::Status::OK();
   }
@@ -91,8 +91,22 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   }
 
  private:
+  ::arrow::Status ensureCapacity(int64_t bytesToWrite) {
+    auto requestCapacity = buffer_.size() + bytesToWrite;
+    if (requestCapacity > flushThreshold_) {
+      ARROW_RETURN_NOT_OK(Flush());
+      requestCapacity = bytesToWrite;
+    }
+
+    if (requestCapacity > buffer_.capacity()) {
+      buffer_.reserve(growRatio_ * (requestCapacity));
+    }
+    return ::arrow::Status::OK();
+  }
+
   std::unique_ptr<dwio::common::FileSink> sink_;
   const double growRatio_;
+  const int64_t flushThreshold_;
   dwio::common::DataBuffer<char> buffer_;
   int64_t bytesFlushed_ = 0;
 };
@@ -335,11 +349,6 @@ Writer::Writer(
     RowTypePtr schema)
     : pool_(std::move(pool)),
       generalPool_{pool_->addLeafChild(".general")},
-      stream_(
-          std::make_shared<ArrowDataBufferSink>(
-              std::move(sink),
-              *generalPool_,
-              options.bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
   validateSchemaRecursive(schema_);
@@ -349,6 +358,11 @@ Writer::Writer(
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
+  stream_ = std::make_shared<ArrowDataBufferSink>(
+      std::move(sink),
+      *generalPool_,
+      options.bufferGrowRatio,
+      flushPolicy_->bytesInRowGroup());
   options_.timestampUnit =
       static_cast<TimestampUnit>(options.parquetWriteTimestampUnit.value_or(
           TimestampPrecision::kNanoseconds));
