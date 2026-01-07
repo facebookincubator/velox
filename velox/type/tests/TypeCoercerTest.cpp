@@ -111,5 +111,48 @@ TEST(TypeCoercerTest, row) {
       TypeCoercer::coercible(ROW({UNKNOWN(), INTEGER(), REAL()}), BIGINT()));
 }
 
+TEST(TypeCoercerTest, leastCommonSuperType) {
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(INTEGER(), BIGINT()), BIGINT());
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(ARRAY(INTEGER()), ARRAY(TINYINT())),
+      ARRAY(INTEGER()));
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(
+          MAP(TINYINT(), DOUBLE()), MAP(INTEGER(), REAL())),
+      MAP(INTEGER(), DOUBLE()));
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(
+          ROW({TINYINT(), DOUBLE()}), ROW({INTEGER(), REAL()})),
+      ROW({INTEGER(), DOUBLE()}));
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(
+          ROW({"", "", ""}, INTEGER()), ROW({"", "", ""}, SMALLINT())),
+      ROW({"", "", ""}, INTEGER()));
+
+  ASSERT_TRUE(
+      TypeCoercer::leastCommonSuperType(VARCHAR(), TINYINT()) == nullptr);
+
+  ASSERT_TRUE(
+      TypeCoercer::leastCommonSuperType(ARRAY(TINYINT()), TINYINT()) ==
+      nullptr);
+
+  ASSERT_TRUE(
+      TypeCoercer::leastCommonSuperType(ARRAY(TINYINT()), ARRAY(VARCHAR())) ==
+      nullptr);
+
+  ASSERT_TRUE(
+      TypeCoercer::leastCommonSuperType(
+          ROW({""}, TINYINT()), ROW({"", ""}, TINYINT())) == nullptr);
+
+  ASSERT_TRUE(
+      TypeCoercer::leastCommonSuperType(
+          MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
+}
+
 } // namespace
 } // namespace facebook::velox

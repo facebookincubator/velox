@@ -83,8 +83,14 @@ class TypeCoercer {
 
   /// Checks if 'fromType' can be implicitly converted to 'toType'.
   ///
-  /// @return true if conversion is possible.
-  static bool coercible(const TypePtr& fromType, const TypePtr& toType);
+  /// @return Cost of conversion is possible. std::nullopt otherwise.
+  static std::optional<int32_t> coercible(
+      const TypePtr& fromType,
+      const TypePtr& toType);
+
+  /// Returns least common type for 'a' and 'b', i.e. a type that both 'a' and
+  /// 'b' are coercible to. Returns nullptr if no such type exists.
+  static TypePtr leastCommonSuperType(const TypePtr& a, const TypePtr& b);
 };
 
 } // namespace facebook::velox

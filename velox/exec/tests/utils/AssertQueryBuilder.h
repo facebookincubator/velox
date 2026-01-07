@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
@@ -206,7 +207,7 @@ class AssertQueryBuilder {
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
-        std::thread::hardware_concurrency());
+        folly::hardware_concurrency());
   }
 
   // Used by the created task as the default driver executor.

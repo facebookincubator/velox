@@ -707,8 +707,9 @@ RowVectorPtr WriterFuzzer::veloxToPrestoResult(const RowVectorPtr& result) {
 std::string WriterFuzzer::getReferenceOutputDirectoryPath(int32_t layers) {
   auto filePath =
       referenceQueryRunner_->execute("SELECT \"$path\" FROM tmp_write");
+  auto stringView = extractSingleValue<StringView>(filePath);
   auto tableDirectoryPath =
-      fs::path(extractSingleValue<StringView>(filePath)).parent_path();
+      fs::path(std::string_view(stringView)).parent_path();
   while (layers-- > 0) {
     tableDirectoryPath = tableDirectoryPath.parent_path();
   }

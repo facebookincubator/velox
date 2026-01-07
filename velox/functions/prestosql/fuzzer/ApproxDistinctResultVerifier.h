@@ -255,7 +255,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
 
     // We expect large deviations (>2 stddev) in < 5% of values.
     if (numGroups >= 50) {
-      return largeGaps.size() <= 0.05 * numGroups;
+      return largeGaps.size() <= std::ceil(0.05 * numGroups);
     }
 
     return numGroups == 1 || largeGaps.empty();

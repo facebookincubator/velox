@@ -311,17 +311,14 @@ AssertQueryBuilder::readCursor() {
       static std::atomic<uint64_t> cursorQueryId{0};
       const std::string queryId =
           fmt::format("TaskCursorQuery_{}", cursorQueryId++);
-      auto queryPool = memory::memoryManager()->addRootPool(
-          queryId, params_.maxQueryCapacity);
-      params_.queryCtx = core::QueryCtx::create(
-          executor_.get(),
-          core::QueryConfig({}),
-          std::
-              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-          cache::AsyncDataCache::getInstance(),
-          std::move(queryPool),
-          nullptr,
-          queryId);
+
+      params_.queryCtx = core::QueryCtx::Builder()
+                             .executor(executor_.get())
+                             .pool(
+                                 memory::memoryManager()->addRootPool(
+                                     queryId, params_.maxQueryCapacity))
+                             .queryId(queryId)
+                             .build();
     }
   }
   if (!configs_.empty()) {

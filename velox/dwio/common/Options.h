@@ -52,6 +52,7 @@ enum class FileFormat {
   NIMBLE = 8,
   ORC = 9,
   SST = 10, // rocksdb sst format
+  FLUX = 11,
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -449,8 +450,16 @@ class RowReaderOptions {
     return trackRowSize_;
   }
 
-  void setTrackRowSize(bool value) {
-    trackRowSize_ = value;
+  void setTrackRowSize(bool trackRowSize) {
+    trackRowSize_ = trackRowSize;
+  }
+
+  bool passStringBuffersFromDecoder() const {
+    return passStringBuffersFromDecoder_;
+  }
+
+  void setPassStringBuffersFromDecoder(bool passStringBuffersFromDecoder) {
+    passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
  private:
@@ -513,6 +522,7 @@ class RowReaderOptions {
 
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
+  bool passStringBuffersFromDecoder_{true};
 };
 
 /// Options for creating a Reader.

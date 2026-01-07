@@ -33,6 +33,7 @@ add_executable(
   EntropyAggregationTest.cpp
   GeometricMeanTest.cpp
   HistogramTest.cpp
+  KHyperLogLogAggregateTest.cpp
   Main.cpp
   MapAccumulatorTest.cpp
   MapAggTest.cpp
@@ -50,12 +51,19 @@ add_executable(
   PrestoHasherTest.cpp
   QDigestAggTest.cpp
   ReduceAggTest.cpp
+  ReservoirSampleTest.cpp
   SetAggTest.cpp
+  SetDigestAggregateTest.cpp
   SetUnionTest.cpp
   SumDataSizeForStatsTest.cpp
   SumTest.cpp
   VarianceAggregationTest.cpp
 )
+
+if(${VELOX_ENABLE_GEO})
+  target_sources(velox_aggregates_test PRIVATE GeometryAggregateTest.cpp)
+  target_link_libraries(velox_aggregates_test velox_functions_geo)
+endif()
 
 add_test(NAME velox_aggregates_test COMMAND velox_aggregates_test WORKING_DIRECTORY .)
 

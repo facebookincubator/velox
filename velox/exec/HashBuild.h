@@ -17,6 +17,7 @@
 
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/HashTableCache.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
@@ -106,6 +107,25 @@ class HashBuild final : public Operator {
 
   // Invoked to set up hash table to build.
   void setupTable();
+
+  // Sets up hash table caching if enabled. Returns true if the cached table
+  // is already available or if this operator should wait for another task
+  // to build it, in which case further initialization should be skipped.
+  // Returns false if this operator should proceed with building the table.
+  bool setupCachedHashTable();
+
+  // Checks if a cached hash table is available and uses it if so.
+  // Returns true if the cached table was used (build can be skipped).
+  // Returns false if we need to build the table (cache miss).
+  bool getHashTableFromCache();
+
+  // Called when waiting for a cached hash table from another task.
+  // Returns true if the cached table was received and noMoreInput was called.
+  bool receivedCachedHashTable();
+
+  // Stores the built hash table in the cache for reuse by other tasks.
+  // No-op if hash table caching is not enabled.
+  void maybeSetHashTableInCache(const std::shared_ptr<BaseHashTable>& table);
 
   // Invoked when operator has finished processing the build input and wait for
   // all the other drivers to finish the processing. The last driver that
@@ -212,6 +232,27 @@ class HashBuild final : public Operator {
   // Invoked to abandon build deduped hash table.
   void abandonHashBuildDedup();
 
+  // Returns true if this operator is using a cached hash table.
+  // When enabled, the hash table is built once and cached for reuse
+  // by other tasks within the same query and stage.
+  bool useHashTableCache() const {
+    return !cacheKey_.empty();
+  }
+
+  // Returns the hash table cache key for this operator.
+  // Only valid if useHashTableCache() returns true.
+  const std::string& cacheKey() const {
+    VELOX_CHECK(
+        useHashTableCache(),
+        "cacheKey() called when table caching is not enabled");
+    return cacheKey_;
+  }
+
+  // Determines the memory pool to use for the hash table.
+  // For cached hash tables, uses query-level pool so the table can
+  // outlive the task. For regular joins, uses operator pool.
+  memory::MemoryPool* tableMemoryPool() const;
+
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
@@ -229,6 +270,9 @@ class HashBuild final : public Operator {
   // can be removed for left semi and anti join.
   const bool dropDuplicates_;
 
+  // Maximum number of distinct values to keep when merging vector hashers
+  const size_t vectorHasherMaxNumDistinct_;
+
   // Minimum number of rows to see before deciding to give up build no
   // duplicates hash table.
   const int32_t abandonHashBuildDedupMinRows_;
@@ -243,6 +287,15 @@ class HashBuild final : public Operator {
   tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
 
   State state_{State::kRunning};
+
+  // For hash table caching: the cache key passed in at construction.
+  // If set, this operator coordinates via HashTableCache.
+  // Key format: "queryId:planNodeId"
+  std::string cacheKey_;
+
+  // For hash table caching: cached entry containing the shared table and pool.
+  // Retrieved from HashTableCache.
+  std::shared_ptr<HashTableCacheEntry> cacheEntry_;
 
   // The row type used for hash table build and disk spilling.
   RowTypePtr tableType_;

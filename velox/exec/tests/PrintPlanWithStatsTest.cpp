@@ -183,6 +183,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"        hashtable.capacity\\s+sum: 200, count: 1, min: 200, max: 200, avg: 200"},
        {"        hashtable.numDistinct\\s+sum: 100, count: 1, min: 100, max: 100, avg: 100"},
        {"        hashtable.numRehashes\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        hashtable.vectorHasherMergeCpuNanos\\s+sum: .*, count: 1, min: .*, max: .*, avg: .*"},
        {"        queuedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        rangeKey0\\s+sum: 200, count: 1, min: 200, max: 200, avg: 200"},
        {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},

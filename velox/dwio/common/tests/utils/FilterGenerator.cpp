@@ -663,7 +663,7 @@ void pruneRandomSubfield(
                 break;
               case TypeKind::VARCHAR:
               case TypeKind::VARBINARY:
-                stringKeys.push_back(
+                stringKeys.emplace_back(
                     keys->asUnchecked<SimpleVector<StringView>>()->valueAt(jj));
                 break;
               default:

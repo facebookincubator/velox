@@ -19,6 +19,7 @@
 #include <memory>
 
 #include <folly/container/F14Map.h>
+#include "velox/common/base/Status.h"
 #include "velox/common/hyperloglog/HllAccumulator.h"
 
 namespace facebook::velox::common::hll {
@@ -34,7 +35,6 @@ class KHyperLogLog {
 
   static constexpr int32_t kDefaultHllBuckets = 256;
   static constexpr int32_t kDefaultMaxSize = 4096;
-  static constexpr int64_t kDefaultHistogramSize = 256;
 
   explicit KHyperLogLog(TAllocator* allocator)
       : KHyperLogLog(kDefaultMaxSize, kDefaultHllBuckets, allocator) {}
@@ -55,7 +55,8 @@ class KHyperLogLog {
   }
 
   /// Creates a KHyperLogLog instance from serialized data.
-  static std::unique_ptr<KHyperLogLog<TUii, TAllocator>>
+  /// Returns an error status if the data is invalid.
+  static Expected<std::unique_ptr<KHyperLogLog<TUii, TAllocator>>>
   deserialize(const char* data, size_t size, TAllocator* allocator);
 
   /// Serializes the KHyperLogLog state to a varbinary.
@@ -127,10 +128,12 @@ class KHyperLogLog {
   void mergeWith(const KHyperLogLog<TUii, TAllocator>& other);
 
   /// Merges another serialized KHyperLogLog into this one.
+  /// The serialized data is assumed to be valid.
   void mergeWith(StringView serialized, TAllocator* allocator) {
     auto other = common::hll::KHyperLogLog<TUii, TAllocator>::deserialize(
         serialized.data(), serialized.size(), allocator);
-    mergeWith(*other);
+    VELOX_CHECK(other.hasValue(), "Failed to deserialize KHyperLogLog");
+    mergeWith(*other.value());
   }
 
  private:

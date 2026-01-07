@@ -13,15 +13,17 @@
 # limitations under the License.
 
 if(VELOX_ENABLE_GEO)
-  add_executable(velox_geospatial_test GeometryFunctionsTest.cpp)
+  add_executable(velox_common_geospatial_serde_test GeometrySerdeTest.cpp)
+
+  add_test(velox_common_geospatial_serde_test velox_common_geospatial_serde_test)
+
+  target_link_libraries(
+    velox_common_geospatial_serde_test
+    velox_common_geospatial_serde
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    GTest::gmock_main
+    GEOS::geos
+  )
 endif()
-
-add_test(velox_geospatial_test velox_geospatial_test)
-
-target_link_libraries(
-  velox_geospatial_test
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  GTest::gmock_main
-)

@@ -72,31 +72,79 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
 }
 
 // static
-bool TypeCoercer::coercible(const TypePtr& fromType, const TypePtr& toType) {
+std::optional<int32_t> TypeCoercer::coercible(
+    const TypePtr& fromType,
+    const TypePtr& toType) {
   if (fromType->isUnKnown()) {
-    return true;
+    return 1;
   }
 
   if (fromType->size() == 0) {
     if (auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name())) {
-      return true;
+      return coercion->cost;
     }
 
-    return false;
+    return std::nullopt;
   }
 
   if (fromType->name() != toType->name() ||
       fromType->size() != toType->size()) {
-    return false;
+    return std::nullopt;
   }
 
+  int32_t totalCost = 0;
   for (auto i = 0; i < fromType->size(); i++) {
-    if (!coercible(fromType->childAt(i), toType->childAt(i))) {
-      return false;
+    if (auto cost = coercible(fromType->childAt(i), toType->childAt(i))) {
+      totalCost += cost.value();
+    } else {
+      return std::nullopt;
     }
   }
 
-  return true;
+  return totalCost;
+}
+
+// static
+TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
+  if (a->isUnKnown()) {
+    return b;
+  }
+
+  if (b->isUnKnown()) {
+    return a;
+  }
+
+  if (a->size() != b->size()) {
+    return nullptr;
+  }
+
+  if (a->size() == 0) {
+    if (TypeCoercer::coerceTypeBase(a, b->name())) {
+      return b;
+    }
+
+    if (TypeCoercer::coerceTypeBase(b, a->name())) {
+      return a;
+    }
+
+    return nullptr;
+  }
+
+  if (a->name() != b->name()) {
+    return nullptr;
+  }
+
+  std::vector<TypeParameter> childTypes;
+  childTypes.reserve(a->size());
+  for (auto i = 0; i < a->size(); i++) {
+    if (auto childType = leastCommonSuperType(a->childAt(i), b->childAt(i))) {
+      childTypes.push_back(TypeParameter(childType));
+    } else {
+      return nullptr;
+    }
+  }
+
+  return getType(a->name(), childTypes);
 }
 
 } // namespace facebook::velox
