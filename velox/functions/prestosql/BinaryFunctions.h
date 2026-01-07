@@ -529,16 +529,15 @@ struct Murmur3X64_128Function {
 /// @param data Pointer to input bytes
 /// @param size Number of bytes
 /// @param xorFirst If true, use FNV-1a, if false, use FNV-1
-template <typename HashType>
+template <typename HashType, bool XORFirst>
 FOLLY_ALWAYS_INLINE HashType computeFnvHash(
     const unsigned char* data,
     size_t size,
     HashType offsetBasis,
-    HashType prime,
-    bool xorFirst) {
+    HashType prime) {
   HashType hash = offsetBasis;
   for (auto i = 0; i < size; ++i) {
-    if (xorFirst) {
+    if constexpr (XORFirst) {
       hash ^= data[i];
       hash *= prime;
     } else {
@@ -558,8 +557,8 @@ struct Fnv1_32Function {
     static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
     static constexpr uint32_t kPrime = 0x01000193;
     const auto* data = reinterpret_cast<const unsigned char*>(input.data());
-    result = computeFnvHash<uint32_t>(
-        data, input.size(), kOffsetBasis, kPrime, false);
+    result = computeFnvHash<uint32_t, false>(
+        data, input.size(), kOffsetBasis, kPrime);
   }
 };
 
@@ -572,8 +571,8 @@ struct Fnv1_64Function {
     static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
     static constexpr uint64_t kPrime = 0x100000001b3L;
     const auto* data = reinterpret_cast<const unsigned char*>(input.data());
-    result = computeFnvHash<uint64_t>(
-        data, input.size(), kOffsetBasis, kPrime, false);
+    result = computeFnvHash<uint64_t, false>(
+        data, input.size(), kOffsetBasis, kPrime);
   }
 };
 
@@ -586,8 +585,8 @@ struct Fnv1a_32Function {
     static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
     static constexpr uint32_t kPrime = 0x01000193;
     const auto* data = reinterpret_cast<const unsigned char*>(input.data());
-    result = computeFnvHash<uint32_t>(
-        data, input.size(), kOffsetBasis, kPrime, true);
+    result = computeFnvHash<uint32_t, true>(
+        data, input.size(), kOffsetBasis, kPrime);
   }
 };
 
@@ -600,8 +599,8 @@ struct Fnv1a_64Function {
     static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
     static constexpr uint64_t kPrime = 0x100000001b3L;
     const auto* data = reinterpret_cast<const unsigned char*>(input.data());
-    result = computeFnvHash<uint64_t>(
-        data, input.size(), kOffsetBasis, kPrime, true);
+    result = computeFnvHash<uint64_t, true>(
+        data, input.size(), kOffsetBasis, kPrime);
   }
 };
 
