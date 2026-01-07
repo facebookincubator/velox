@@ -43,9 +43,9 @@ static int64_t hashKey(TJoinKey joinKey) {
   } else if constexpr (std::is_same_v<TJoinKey, float>) {
     // Cast to double first, then extract bits, based on implicit coercion
     double dbl = static_cast<double>(joinKey);
-    result = *reinterpret_cast<int64_t*>(&dbl);
+    std::memcpy(&result, &dbl, sizeof(result));
   } else if constexpr (std::is_same_v<TJoinKey, double>) {
-    result = *reinterpret_cast<int64_t*>(&joinKey);
+    std::memcpy(&result, &joinKey, sizeof(result));
   } else if constexpr (std::is_same_v<TJoinKey, StringView>) {
     result =
         common::hll::Murmur3Hash128::hash64(joinKey.data(), joinKey.size(), 0);
@@ -250,7 +250,8 @@ int64_t KHyperLogLog<TUii, TAllocator>::cardinality() const {
       static_cast<uint64_t>(maxKey()) - static_cast<uint64_t>(INT64_MIN);
   double halfDensity =
       static_cast<double>(hashesRange) / (minhash_.size() - 1) / 2.0;
-  return static_cast<int64_t>(detail::kHashOutputHalfRange / halfDensity);
+  return static_cast<int64_t>(
+      static_cast<double>(detail::kHashOutputHalfRange) / halfDensity);
 }
 
 template <typename TUii, typename TAllocator>

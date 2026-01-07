@@ -805,7 +805,9 @@ struct JsonExtractImpl {
       return simdjson::SUCCESS;
     };
 
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+    // TODO: Remove explicit std::string_view cast.
+    auto& extractor =
+        SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
     bool isDefinitePath = true;
     simdjson::padded_string paddedJson(json.data(), json.size());
 

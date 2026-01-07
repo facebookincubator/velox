@@ -30,6 +30,7 @@ velox_add_library(
   IntegerFunctionsRegistration.cpp
   FloatingPointFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
+  KHyperLogLogFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp
   MathematicalFunctionsRegistration.cpp
   MathematicalOperatorsRegistration.cpp

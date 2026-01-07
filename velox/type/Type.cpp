@@ -907,6 +907,15 @@ std::shared_ptr<const OpaqueType> OpaqueType::deserializeExtra(
   return nullptr;
 }
 
+bool OpaqueType::unregisterSerialization(
+    const OpaqueTypePtr& opaqueType,
+    const std::string& persistentName) {
+  VELOX_CHECK_NOT_NULL(opaqueType);
+  auto& registry = OpaqueSerdeRegistry::get();
+  registry.reverse.erase(persistentName);
+  return registry.mapping.erase(opaqueType->typeIndex_);
+}
+
 void OpaqueType::clearSerializationRegistry() {
   auto& registry = OpaqueSerdeRegistry::get();
   registry.mapping.clear();

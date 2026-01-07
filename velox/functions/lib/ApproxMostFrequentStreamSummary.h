@@ -44,8 +44,9 @@ struct ApproxMostFrequentStreamSummary {
 
   void setCapacity(int);
 
-  /// Add one or multiple new values to the summary.
-  void insert(T value, int64_t count = 1);
+  /// Add a value with the given count to the summary.
+  /// Returns the evicted value if at capacity, std::nullopt otherwise.
+  std::optional<T> insert(T value, int64_t count = 1);
 
   /// Get the top `k` frequent elements with their estimated counts, sorted from
   /// most hits to least hits.
@@ -131,17 +132,25 @@ int ApproxMostFrequentStreamSummary<T, A>::capacity() const {
 }
 
 template <typename T, typename A>
-void ApproxMostFrequentStreamSummary<T, A>::insert(T value, int64_t count) {
+std::optional<T> ApproxMostFrequentStreamSummary<T, A>::insert(
+    T value,
+    int64_t count) {
   auto index = queue_.getValueIndex(value);
   if (index.has_value()) {
-    auto oldCount = queue_.priorities()[*index];
+    const auto oldCount = queue_.priorities()[*index];
     queue_.updatePriority(*index, oldCount + count);
-  } else if (size() < capacity_) {
-    queue_.addNewValue(value, count);
-  } else {
-    auto oldCount = queue_.topPriority();
-    queue_.replaceTop(value, oldCount + count);
+    return std::nullopt;
   }
+  if (size() < capacity_) {
+    queue_.addNewValue(value, count);
+    return std::nullopt;
+  }
+
+  // At capacity - need to evict the minimum entry.
+  std::optional<T> evictedValue{queue_.top()};
+  auto evictedCount = queue_.topPriority();
+  queue_.replaceTop(value, evictedCount + count);
+  return evictedValue;
 }
 
 template <typename T, typename A>
@@ -149,7 +158,7 @@ void ApproxMostFrequentStreamSummary<T, A>::topK(
     int k,
     T* values,
     int64_t* counts) const {
-  VELOX_CHECK(k >= 0);
+  VELOX_CHECK_GE(k, 0);
   k = std::min(k, size());
   if (k == 0) {
     return;
@@ -180,7 +189,7 @@ void ApproxMostFrequentStreamSummary<T, A>::topK(
 template <typename T, typename A>
 std::vector<std::pair<T, int64_t>> ApproxMostFrequentStreamSummary<T, A>::topK(
     int k) const {
-  VELOX_CHECK(k >= 0);
+  VELOX_CHECK_GE(k, 0);
   k = std::min(k, size());
   std::vector<T> values(k);
   std::vector<int64_t> counts(k);

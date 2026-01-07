@@ -419,9 +419,15 @@ Cache
    * - ssd_cache_write_ssd_errors
      - Sum
      - Total number of error while writing to SSD cache files.
+   * - ssd_cache_write_no_space_errors
+     - Sum
+     - Total number of errors due to SSD no space for writes.
    * - ssd_cache_write_ssd_dropped
      - Sum
      - Total number of writes dropped due to no cache space.
+   * - ssd_cache_write_exceed_entry_limit
+     - Sum
+     - Total number of writes dropped due to entry limit exceeded.
    * - ssd_cache_write_checkpoint_errors
      - Sum
      - Total number of errors while writing SSD checkpoint file.

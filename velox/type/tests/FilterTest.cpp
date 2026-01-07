@@ -615,6 +615,70 @@ TEST(FilterTest, negatedBigintValuesEdgeCases) {
   EXPECT_TRUE(not_equal->testInt64(1));
 }
 
+TEST(FilterTest, bigintValuesUsingBloomFilter) {
+  BigintValuesUsingBloomFilter filter(10, false);
+  folly::F14FastSet<int64_t> inserted;
+  for (int64_t x : {2, 3, 5, 7, 11, 13, 17, 19}) {
+    filter.insert(x);
+    inserted.insert(x);
+  }
+  ASSERT_FALSE(filter.testNull());
+  for (int i = 0; i < 20; ++i) {
+    ASSERT_EQ(filter.testInt64(i), inserted.contains(i));
+  }
+  ASSERT_TRUE(filter.testInt64Range(20, 30, true));
+  ASSERT_TRUE(filter.testingEquals(filter));
+  Filter::registerSerDe();
+  auto serialized = filter.serialize();
+  auto deserialized =
+      ISerializable::deserialize<BigintValuesUsingBloomFilter>(serialized);
+  ASSERT_TRUE(deserialized->testingEquals(filter));
+  ASSERT_FALSE(filter.testInt64(23));
+  filter.insert(23);
+  ASSERT_TRUE(filter.testInt64(23));
+  ASSERT_FALSE(deserialized->testingEquals(filter));
+  ASSERT_TRUE(filter.clone(std::nullopt)->testingEquals(filter));
+  auto nullAllowedClone = filter.clone(true);
+  ASSERT_TRUE(nullAllowedClone->testNull());
+  ASSERT_TRUE(nullAllowedClone->clone(false)->testingEquals(filter));
+}
+
+TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
+  BigintValuesUsingBloomFilter filter(4, false);
+  for (int64_t x : {2, 3, 5, 7}) {
+    filter.insert(x);
+  }
+  auto test = [&](const Filter& other, const Filter& expected) {
+    auto merged = filter.mergeWith(&other);
+    ASSERT_TRUE(merged->testingEquals(expected));
+    auto merged2 = other.mergeWith(&filter);
+    ASSERT_TRUE(merged->testingEquals(*merged2));
+  };
+  {
+    SCOPED_TRACE("BigintRange");
+    test(BigintRange(2, 5, true), *createBigintValues({2, 3, 5}, false));
+  }
+  {
+    SCOPED_TRACE("Huge BigintRange");
+    BigintRange other(-1, INT64_MAX, true);
+    test(other, other);
+  }
+  {
+    SCOPED_TRACE("BigintValuesUsingHashTable");
+    std::vector<int64_t> otherValues = {INT64_MIN, 0, 3, 6, 9, INT64_MAX};
+    BigintValuesUsingHashTable other(
+        otherValues.front(), otherValues.back(), otherValues, true);
+    test(other, *createBigintValues({3}, false));
+  }
+  {
+    SCOPED_TRACE("BigintValuesUsingBitmask");
+    std::vector<int64_t> otherValues = {0, 3, 6, 9};
+    BigintValuesUsingBitmask other(
+        otherValues.front(), otherValues.back(), otherValues, true);
+    test(other, *createBigintValues({3}, false));
+  }
+}
+
 TEST(FilterTest, bigintMultiRange) {
   // x between 1 and 10 or x between 100 and 120
   auto filter = bigintOr(between(1, 10), between(100, 120));
@@ -726,6 +790,32 @@ TEST(FilterTest, doubleRange) {
   EXPECT_FALSE(filter->testDouble(1));
   EXPECT_TRUE(filter->testDouble(3));
   EXPECT_TRUE(filter->testDouble(100));
+
+  // Test DoubleRange filter with float batch (schema evolution slow path).
+  // When a double filter is applied to float data, it falls back to
+  // element-by-element testing instead of SIMD batch processing.
+  filter = betweenDouble(1.2, 3.4);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {1.0f, std::nanf("nan"), 3.4f, 3.1f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
+
+  filter = lessThanOrEqualDouble(1.2);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
+
+  filter = greaterThanDouble(1.2);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
 }
 
 TEST(FilterTest, floatRange) {

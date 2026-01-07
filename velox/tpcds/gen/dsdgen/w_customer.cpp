@@ -61,7 +61,6 @@ int mk_w_customer(
     DSDGenContext& dsdGenContext) {
   int nTemp;
 
-  int nBaseDate;
   /* begin locals declarations */
   int nNameIndex, nGender;
   struct W_CUSTOMER_TBL* r;
@@ -69,10 +68,6 @@ int mk_w_customer(
   date_t dtBirthMin, dtBirthMax, dtToday, dt1YearAgo, dt10YearsAgo;
   tdef* pT = getSimpleTdefsByNumber(CUSTOMER, dsdGenContext);
   r = &dsdGenContext.g_w_customer;
-
-  date_t min_date;
-  strtodt(&min_date, DATE_MINIMUM);
-  nBaseDate = dttoj(&min_date);
 
   strtodt(&dtBirthMax, "1992-12-31");
   strtodt(&dtBirthMin, "1924-01-01");

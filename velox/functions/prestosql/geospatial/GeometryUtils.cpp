@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 #include <geos/operation/valid/IsSimpleOp.h>
 #include <geos/operation/valid/IsValidOp.h>
 #include <queue>
 #include "velox/common/base/Exceptions.h"
-
-#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
+#include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
 using geos::operation::valid::IsSimpleOp;
@@ -160,8 +160,6 @@ class SphericalExcessCalculator {
 
 namespace facebook::velox::functions::geospatial {
 
-static constexpr double kRealMinLatitude = -90;
-static constexpr double kRealMaxLatitude = 90;
 static constexpr int32_t kMaxCoveringCount = 1'000'000;
 
 GeometryCollectionIterator::GeometryCollectionIterator(
@@ -217,12 +215,6 @@ std::vector<const geos::geom::Geometry*> flattenCollection(
     result.push_back(it.next());
   }
   return result;
-}
-
-geos::geom::GeometryFactory* getGeometryFactory() {
-  thread_local static geos::geom::GeometryFactory::Ptr geometryFactory =
-      geos::geom::GeometryFactory::create();
-  return geometryFactory.get();
 }
 
 std::optional<std::string> geometryInvalidReason(
@@ -284,17 +276,18 @@ std::optional<std::string> geometryInvalidReason(
 
 Status validateLatitudeLongitude(double latitude, double longitude) {
   if (FOLLY_UNLIKELY(
-          latitude < kRealMinLatitude || latitude > kRealMaxLatitude ||
-          longitude < BingTileType::kMinLongitude ||
-          longitude > BingTileType::kMaxLongitude || std::isnan(latitude) ||
-          std::isnan(longitude))) {
+          latitude < common::geospatial::kMinLatitude ||
+          latitude > common::geospatial::kMaxLatitude ||
+          longitude < common::geospatial::kMinLongitude ||
+          longitude > common::geospatial::kMaxLongitude ||
+          std::isnan(latitude) || std::isnan(longitude))) {
     return Status::UserError(
         fmt::format(
             "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
-            kRealMinLatitude,
-            kRealMaxLatitude,
-            BingTileType::kMinLongitude,
-            BingTileType::kMaxLongitude,
+            common::geospatial::kMinLatitude,
+            common::geospatial::kMaxLatitude,
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude,
             latitude,
             longitude));
   }
@@ -307,22 +300,22 @@ FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
     double latitude,
     double longitude) {
   if (FOLLY_UNLIKELY(
-          latitude > BingTileType::kMaxLatitude ||
-          latitude < BingTileType::kMinLatitude)) {
+          latitude > common::geospatial::kMaxBingTileLatitude ||
+          latitude < common::geospatial::kMinBingTileLatitude)) {
     VELOX_USER_FAIL(
         fmt::format(
             "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-            BingTileType::kMinLatitude,
-            BingTileType::kMaxLatitude));
+            common::geospatial::kMinBingTileLatitude,
+            common::geospatial::kMaxBingTileLatitude));
   }
   if (FOLLY_UNLIKELY(
-          longitude > BingTileType::kMaxLongitude ||
-          longitude < BingTileType::kMinLongitude)) {
+          longitude > common::geospatial::kMaxLongitude ||
+          longitude < common::geospatial::kMinLongitude)) {
     VELOX_USER_FAIL(
         fmt::format(
             "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-            BingTileType::kMinLongitude,
-            BingTileType::kMaxLongitude));
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude));
   }
 }
 

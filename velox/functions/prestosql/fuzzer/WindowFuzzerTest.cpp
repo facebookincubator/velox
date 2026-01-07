@@ -134,6 +134,7 @@ int main(int argc, char** argv) {
       "noisy_approx_set_sfm",
       "noisy_approx_distinct_sfm",
       "noisy_approx_set_sfm_from_index_and_zeros",
+      "reservoir_sample",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
@@ -141,6 +142,18 @@ int main(int argc, char** argv) {
       // Come back to SetDigest and KHLL aggregate functions.
       "make_set_digest",
       "merge_set_digest",
+      "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
+      // verifier is added.
+      "convex_hull_agg",
+      "geometry_union_agg",
+      "geometry_union_agg_partial",
+      "geometry_union_agg_merge",
+      "geometry_union_agg_extract",
+      "geometry_union_agg_merge_extract",
+      "convex_hull_agg_partial",
+      "convex_hull_agg_merge",
+      "convex_hull_agg_extract",
+      "convex_hull_agg_merge_extract",
   };
 
   if (!FLAGS_presto_url.empty()) {
