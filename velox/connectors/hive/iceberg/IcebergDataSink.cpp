@@ -82,20 +82,7 @@ folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
   return timestamp.toMicros();
 }
 
-class IcebergFileNameGenerator : public FileNameGenerator {
- public:
-  IcebergFileNameGenerator() {}
-
-  std::pair<std::string, std::string> gen(
-      std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx,
-      bool commitRequired) const override;
-
-  folly::dynamic serialize() const override;
-
-  std::string toString() const override;
-};
+} // namespace
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
@@ -120,8 +107,6 @@ std::string IcebergFileNameGenerator::toString() const {
   return "IcebergFileNameGenerator";
 }
 
-} // namespace
-
 IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<IcebergColumnHandlePtr> inputColumns,
     LocationHandlePtr locationHandle,
@@ -130,7 +115,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     dwio::common::FileFormat tableStorageFormat,
     const std::vector<IcebergSortingColumn>& sortedBy,
     std::optional<common::CompressionKind> compressionKind,
-    const std::unordered_map<std::string, std::string>& serdeParameters)
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    std::shared_ptr<const FileNameGenerator> fileNameGenerator)
     : HiveInsertTableHandle(
           std::vector<std::shared_ptr<const HiveColumnHandle>>(
               inputColumns.begin(),
@@ -142,7 +128,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           serdeParameters,
           nullptr,
           false,
-          std::make_shared<const IcebergFileNameGenerator>()),
+          std::move(fileNameGenerator)),
       partitionSpec_(std::move(partitionSpec)),
       columnTransforms_(
           parsePartitionTransformSpecs(partitionSpec_->fields, pool)),
