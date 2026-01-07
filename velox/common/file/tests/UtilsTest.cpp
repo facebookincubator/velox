@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/file/Region.h"
 #include "velox/common/file/Utils.h"
 #include "velox/common/file/tests/TestUtils.h"
 
@@ -290,3 +291,19 @@ INSTANTIATE_TEST_SUITE_P(
     ReadToIOBufsTest,
     ValuesIn(
         std::vector<bool /* Should generated chained IOBuf */>({false, true})));
+
+TEST(RegionTest, toString) {
+  EXPECT_EQ(Region(0, 0).toString(), "Region{offset: 0, length: 0B, label: }");
+  EXPECT_EQ(
+      Region(100, 256).toString(),
+      "Region{offset: 100, length: 256B, label: }");
+  EXPECT_EQ(
+      Region(1024, 1024, "test").toString(),
+      "Region{offset: 1024, length: 1.00KB, label: test}");
+  EXPECT_EQ(
+      Region(0, 1'048'576, "stream").toString(),
+      "Region{offset: 0, length: 1.00MB, label: stream}");
+  EXPECT_EQ(
+      Region(12345, 1'073'741'824).toString(),
+      "Region{offset: 12345, length: 1.00GB, label: }");
+}

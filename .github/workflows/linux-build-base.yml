@@ -31,6 +31,7 @@ jobs:
       run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
       changed-files: ${{ steps.changes.outputs.files}}
       diff-range: ${{ steps.changes.outputs.range }}
+      merge-base-commit: ${{ steps.changes.outputs.merge_base_commit }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -52,6 +53,7 @@ jobs:
 
           range="$merge_base_commit..$HEAD_SHA"
           echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "merge_base_commit=$merge_base_commit" >> "$GITHUB_OUTPUT"
 
           git diff --name-only $range > changed_files.txt
 
@@ -195,15 +197,23 @@ jobs:
       # When clang is used a number of dependencies are excluded from the build so we don't
       # need to run clang-tidy for that.
       # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
-      - name: Run clang-tidy
+      - name: Install and run clang-tidy
         if: ${{ ! inputs.use-clang }}
         env:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
           RANGE: ${{ needs.get-changes.outputs.diff-range }}
+          MERGE_BASE_COMMIT: ${{ needs.get-changes.outputs.merge-base-commit }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-
-          python ./scripts/checks/run-clang-tidy.py -p $(realpath ./_build/release) --commit $RANGE $FILES
+          uv tool install clang-tidy==18.1.8
+          git fetch origin $MERGE_BASE_COMMIT
+          # The usage of GCC14 adds compiler warnings not understood by Clang/Clang-tidy.
+          # We replace them for now but eventually move Clang-tidy to the Clang based build.
+          BUILD_PATH=$(realpath ./_build/release)
+          sed -i 's/-Wno-error=template-id-cdtor//g' $BUILD_PATH/compile_commands.json
+          sed -i 's/-Wno-class-memaccess//g' $BUILD_PATH/compile_commands.json
+          sed -i 's/-Wno-maybe-uninitialized//g' $BUILD_PATH/compile_commands.json
+          python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
 
   ubuntu-debug:
     runs-on: 8-core-ubuntu-22.04

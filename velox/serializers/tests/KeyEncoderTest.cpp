@@ -4140,7 +4140,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({2}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
@@ -4148,7 +4148,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({2}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
@@ -4209,7 +4209,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int64_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
@@ -4217,7 +4217,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
              makeFlatVector<int64_t>(
-                 {std::numeric_limits<int64_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -5141,7 +5141,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({2}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
@@ -5149,7 +5149,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({2}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
@@ -5210,7 +5210,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
@@ -5218,7 +5218,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
              makeFlatVector<int32_t>(
-                 {std::numeric_limits<int32_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -5384,7 +5384,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
         makeRowVector(
             {makeFlatVector<int32_t>({10})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int32_t>(
-            {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST upper
+            {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
+                                                      // upper
         makeRowVector({makeFlatVector<int32_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
     for (const auto& testCase : testCases) {
@@ -6142,7 +6143,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({2}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int16_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
@@ -6150,7 +6151,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({2}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int16_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
@@ -6211,7 +6212,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int16_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
@@ -6219,7 +6220,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({0}),
              makeFlatVector<int16_t>(
-                 {std::numeric_limits<int16_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -6385,7 +6386,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({10})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int16_t>(
-            {std::numeric_limits<int16_t>::max()})}), // DESC_NULLS_FIRST upper
+            {std::numeric_limits<int16_t>::max()})}), // DESC_NULLS_FIRST
+                                                      // upper
         makeRowVector({makeFlatVector<int16_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
     for (const auto& testCase : testCases) {
@@ -7120,7 +7122,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({2}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::max()})}), // ASC_NULLS_FIRST
+                 {std::numeric_limits<int8_t>::min()})}), // ASC_NULLS_FIRST
                                                           // upper
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
@@ -7128,7 +7130,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({2}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::max()})}), // ASC_NULLS_LAST
+                 {std::numeric_limits<int8_t>::min()})}), // ASC_NULLS_LAST
                                                           // upper
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
@@ -7187,7 +7189,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::min()})}), // DESC_NULLS_FIRST
+                 {std::numeric_limits<int8_t>::max()})}), // DESC_NULLS_FIRST
                                                           // upper
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
@@ -7195,7 +7197,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({0}),
              makeFlatVector<int8_t>(
-                 {std::numeric_limits<int8_t>::min()})})); // DESC_NULLS_LAST
+                 {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
@@ -7676,7 +7678,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
             .bound = makeRowVector({makeFlatVector<bool>({true})}),
             .inclusive = true},
         makeRowVector({makeFlatVector<bool>({false})}), // ASC_NULLS_FIRST lower
-        std::nullopt, // ASC_NULLS_FIRST upper (overflow - can't increment true)
+        std::nullopt, // ASC_NULLS_FIRST upper (overflow - can't increment
+                      // true)
         makeRowVector({makeFlatVector<bool>({false})}), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper (overflow)
         makeRowVector(
@@ -7960,6 +7963,100 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
+
+  // Test Case 13: Multi-column point lookup where the lower (second) column
+  // hits max value (true) in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is true, the increment should carry over to c0,
+  // resulting in (true, false).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({false}), makeFlatVector<bool>({true})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({false}), makeFlatVector<bool>({true})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_FIRST upper
+                                              // (carry-over)
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_LAST upper
+                                              // (carry-over)
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({false})}), // DESC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 14: Multi-column point lookup where the lower (second) column
+  // hits min value (false) in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is false, the decrement should carry over to c0,
+  // resulting in (false, true).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({true}), makeFlatVector<bool>({false})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<bool>({true}), makeFlatVector<bool>({false})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({true})}), // ASC_NULLS_LAST upper
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})}), // DESC_NULLS_FIRST upper
+                                             // (carry-over)
+        makeRowVector(
+            {makeFlatVector<bool>({true}),
+             makeFlatVector<bool>({false})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<bool>({false}),
+             makeFlatVector<bool>({true})})); // DESC_NULLS_LAST upper
+                                              // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
@@ -7982,7 +8079,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
         makeRowVector({makeFlatVector<float>({10.5f})}), // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST upper
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // upper
         makeRowVector(
             {makeFlatVector<float>({10.5f})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
@@ -8019,7 +8117,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             {makeFlatVector<float>({100.5f})}), // ASC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<float>({std::nextafter(
             10.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST lower
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // lower
         makeRowVector(
             {makeFlatVector<float>({100.5f})}), // ASC_NULLS_LAST upper
         makeRowVector({makeFlatVector<float>({std::nextafter(
@@ -8112,7 +8211,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
         std::nullopt, // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST upper
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // upper
         std::nullopt, // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
@@ -8208,7 +8308,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             {std::nullopt})}), // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
             100.5f,
-            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST upper
+            std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                         // upper
         makeRowVector({makeNullableFlatVector<float>(
             {std::nullopt})}), // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<float>({std::nextafter(
@@ -8442,7 +8543,151 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
-} // namespace facebook::velox::serializer::test
+
+  // Test Case 15: Multi-column point lookup where the lower (second) column
+  // hits positive infinity in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is at +infinity, the increment should carry over
+  // to c0, resulting in (nextafter(c0, +inf), -inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {std::numeric_limits<float>::infinity()})}), // ASC_NULLS_FIRST
+                                                              // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // ASC_NULLS_FIRST
+                                         // upper
+                                         // (carry-over)
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {std::numeric_limits<float>::infinity()})}), // ASC_NULLS_LAST
+                                                              // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>(
+                 {-std::numeric_limits<float>::infinity()})}), // ASC_NULLS_LAST
+                                                               // upper
+                                                               // (carry-over)
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_FIRST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 std::numeric_limits<float>::infinity(),
+                 -std::numeric_limits<
+                     float>::infinity())})}), // DESC_NULLS_FIRST
+                                              // upper
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {std::numeric_limits<float>::infinity()})}), // DESC_NULLS_LAST
+                                                              // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 std::numeric_limits<float>::infinity(),
+                 -std::numeric_limits<
+                     float>::infinity())})})); // DESC_NULLS_LAST
+                                               // upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 16: Multi-column point lookup where the lower (second) column
+  // hits negative infinity in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is at -infinity, the decrement should carry over
+  // to c0, resulting in (nextafter(c0, -inf), +inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {-std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<float>({100.5f}),
+                 makeFlatVector<float>(
+                     {-std::numeric_limits<float>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // ASC_NULLS_FIRST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 -std::numeric_limits<float>::infinity(),
+                 std::numeric_limits<float>::infinity())})}), // ASC_NULLS_FIRST
+                                                              // upper
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>(
+                 {-std::numeric_limits<float>::infinity()})}), // ASC_NULLS_LAST
+                                                               // lower
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({std::nextafter(
+                 -std::numeric_limits<float>::infinity(),
+                 std::numeric_limits<float>::infinity())})}), // ASC_NULLS_LAST
+                                                              // upper
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_FIRST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, -std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>({std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_FIRST
+                                         // upper
+                                         // (carry-over)
+        makeRowVector(
+            {makeFlatVector<float>({100.5f}),
+             makeFlatVector<float>({-std::numeric_limits<
+                 float>::infinity()})}), // DESC_NULLS_LAST
+                                         // lower
+        makeRowVector(
+            {makeFlatVector<float>({std::nextafter(
+                 100.5f, -std::numeric_limits<float>::infinity())}),
+             makeFlatVector<float>({std::numeric_limits<
+                 float>::infinity()})})); // DESC_NULLS_LAST
+                                          // upper
+                                          // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+}
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
   // Test Case 1: Both bounds inclusive
@@ -8934,6 +9179,151 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
+
+  // Test Case 15: Multi-column point lookup where the lower (second) column
+  // hits positive infinity in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is at +infinity, the increment should carry over
+  // to c0, resulting in (nextafter(c0, +inf), -inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_FIRST
+                                          // upper
+                                          // (carry-over)
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>(
+                 {std::numeric_limits<double>::infinity()})}), // ASC_NULLS_LAST
+                                                               // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_LAST
+                                          // upper
+                                          // (carry-over)
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 std::numeric_limits<double>::infinity(),
+                 -std::numeric_limits<
+                     double>::infinity())})}), // DESC_NULLS_FIRST
+                                               // upper
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_LAST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 std::numeric_limits<double>::infinity(),
+                 -std::numeric_limits<
+                     double>::infinity())})})); // DESC_NULLS_LAST
+                                                // upper
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+
+  // Test Case 16: Multi-column point lookup where the lower (second) column
+  // hits negative infinity in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is at -infinity, the decrement should carry over
+  // to c0, resulting in (nextafter(c0, -inf), +inf).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {-std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<double>({100.5}),
+                 makeFlatVector<double>(
+                     {-std::numeric_limits<double>::infinity()})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 -std::numeric_limits<double>::infinity(),
+                 std::numeric_limits<
+                     double>::infinity())})}), // ASC_NULLS_FIRST
+                                               // upper
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // ASC_NULLS_LAST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({std::nextafter(
+                 -std::numeric_limits<double>::infinity(),
+                 std::numeric_limits<double>::infinity())})}), // ASC_NULLS_LAST
+                                                               // upper
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_FIRST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, -std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_FIRST
+                                          // upper
+                                          // (carry-over)
+        makeRowVector(
+            {makeFlatVector<double>({100.5}),
+             makeFlatVector<double>({-std::numeric_limits<
+                 double>::infinity()})}), // DESC_NULLS_LAST
+                                          // lower
+        makeRowVector(
+            {makeFlatVector<double>({std::nextafter(
+                 100.5, -std::numeric_limits<double>::infinity())}),
+             makeFlatVector<double>({std::numeric_limits<
+                 double>::infinity()})})); // DESC_NULLS_LAST
+                                           // upper
+                                           // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
@@ -9244,39 +9634,214 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
-}
 
-TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
-  // Test Case 1: Both bounds inclusive
+  // Test Case 12: Multi-column point lookup where the lower (second) column
+  // hits max value in ASC order. This tests carry-over behavior when
+  // incrementing - when c1 is at Timestamp::max(), the increment should carry
+  // over to c0, resulting in (c0+1nanos, Timestamp::min()).
   {
     auto testCases = createIndexBoundEncodeTestCases(
-        {"c0"},
+        {"c0", "c1"},
         IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                     velox::Timestamp::kMaxSeconds,
+                     velox::Timestamp::kMaxNanos)})}),
             .inclusive = true},
         IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                     velox::Timestamp::kMaxSeconds,
+                     velox::Timestamp::kMaxNanos)})}),
             .inclusive = true},
         makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // ASC_NULLS_FIRST lower
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // ASC_NULLS_FIRST lower
         makeRowVector(
-            {makeFlatVector<std::string>({"orangf"})}), // ASC_NULLS_FIRST upper
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 301)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_FIRST upper
+                                                        // (carry-over)
         makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // ASC_NULLS_LAST lower
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // ASC_NULLS_LAST lower
         makeRowVector(
-            {makeFlatVector<std::string>({"orangf"})}), // ASC_NULLS_LAST upper
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 301)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_LAST upper
+                                                        // (carry-over)
         makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // DESC_NULLS_FIRST lower
-        makeRowVector({makeFlatVector<std::string>(
-            {"orangd"})}), // DESC_NULLS_FIRST upper
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // DESC_NULLS_FIRST lower
         makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // DESC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<std::string>(
-            {"orangd"})})); // DESC_NULLS_LAST upper
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos - 1)})}), // DESC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos - 1)})})); // DESC_NULLS_LAST upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
     }
+  }
+
+  // Test Case 13: Multi-column point lookup where the lower (second) column
+  // hits min value in DESC order. This tests carry-over behavior when
+  // decrementing - when c1 is at Timestamp::min(), the decrement should carry
+  // over to c0, resulting in (c0-1nanos, Timestamp::max()).
+  {
+    auto testCases = createIndexBoundEncodeTestCases(
+        {"c0", "c1"},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>(
+                     {velox::Timestamp(velox::Timestamp::kMinSeconds, 0)})}),
+            .inclusive = true},
+        IndexBound{
+            .bound = makeRowVector(
+                {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+                 makeFlatVector<velox::Timestamp>(
+                     {velox::Timestamp(velox::Timestamp::kMinSeconds, 0)})}),
+            .inclusive = true},
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 1)})}), // ASC_NULLS_FIRST upper
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // ASC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 1)})}), // ASC_NULLS_LAST upper
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds,
+                 0)})}), // DESC_NULLS_FIRST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 299)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})}), // DESC_NULLS_FIRST upper
+                                                   // (carry-over)
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMinSeconds, 0)})}), // DESC_NULLS_LAST lower
+        makeRowVector(
+            {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 299)}),
+             makeFlatVector<velox::Timestamp>({velox::Timestamp(
+                 velox::Timestamp::kMaxSeconds,
+                 velox::Timestamp::kMaxNanos)})})); // DESC_NULLS_LAST upper
+                                                    // (carry-over)
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
+  }
+}
+
+TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
+  // Helper to create string with embedded null byte (for increment result)
+  auto makeStringWithNull = [](const std::string& s) {
+    return s + std::string(1, '\0');
+  };
+
+  // Test Case 1: Both bounds inclusive
+  // For ascending order: increment appends '\0' (e.g., "orange" ->
+  // "orange\0") For descending order: decrement only works if string ends
+  // with '\0', otherwise increment fails and we get unbounded upper
+  // (std::nullopt)
+  {
+    // For DESC order with inclusive upper bound on "orange" (doesn't end with
+    // '\0'), decrement fails, so upper bound becomes unbounded (std::nullopt)
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({"apple"})});
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({"apple"})});
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    // For DESC order, decrement fails on "orange" (doesn't end with '\0'),
+    // so upper bound becomes unbounded
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({"apple"})});
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({"apple"})});
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
   // Test Case 2: Only lower bound
@@ -9305,143 +9870,314 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     }
   }
 
-  // Test Case 3: Only upper bound
+  // Test Case 3: Only upper bound (inclusive)
+  // For ASC: increment appends '\0'
+  // For DESC: decrement fails on "orange", upper becomes unbounded
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0"},
-        std::nullopt,
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-            .inclusive = true},
-        std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangf"})}), // ASC_NULLS_FIRST upper
-        std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangf"})}), // ASC_NULLS_LAST upper
-        std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector({makeFlatVector<std::string>(
-            {"orangd"})}), // DESC_NULLS_FIRST upper
-        std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<std::string>(
-            {"orangd"})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0"};
+    ascNullsFirstTestCase.lowerBound = std::nullopt;
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound = std::nullopt;
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0"};
+    ascNullsLastTestCase.lowerBound = std::nullopt;
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound = std::nullopt;
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0"};
+    descNullsFirstTestCase.lowerBound = std::nullopt;
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound = std::nullopt;
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0"};
+    descNullsLastTestCase.lowerBound = std::nullopt;
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound = std::nullopt;
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
-  // Test Case 4: Empty string lower bound
+  // Test Case 4: String ending with '\0' - decrement should work
+  // This tests the Kudu-aligned behavior where decrement truncates trailing
+  // '\0'
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({""})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
-            .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<std::string>({""})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"abd"})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({""})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"abd"})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({""})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"abb"})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({""})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"abb"})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+    std::string stringWithNull = makeStringWithNull("abc");
+
+    EncodeIndexBoundsTestCase descTestCase;
+    descTestCase.indexColumns = {"c0"};
+    descTestCase.lowerBound = std::nullopt;
+    descTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({stringWithNull})}),
+        .inclusive = true};
+    descTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descTestCase.expectedLowerBound = std::nullopt;
+    // Decrement of "abc\0" should give "abc"
+    descTestCase.expectedUpperBound =
+        makeRowVector({makeFlatVector<std::string>({"abc"})});
+    SCOPED_TRACE(descTestCase.debugString());
+    testIndexBounds(descTestCase);
   }
 
-  // Test Case 5: Multi-column, both inclusive
+  // Test Case 5: Empty string lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"apple"}),
-                 makeFlatVector<std::string>({"banana"})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"orange"}),
-                 makeFlatVector<std::string>({"peach"})}),
-            .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peaci"})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peaci"})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>(
-                 {"banana"})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peacg"})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peacg"})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({""})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({""})});
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("abc")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({""})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({""})});
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("abc")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    // For DESC order, decrement fails on "abc", upper becomes unbounded
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({""})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({""})});
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({""})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({""})});
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
-  // Test Case 6: Single column with null in lower bound
+  // Test Case 6: Multi-column, both inclusive
+  // For multi-column, increment works on rightmost column first
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeNullableFlatVector<std::string>({std::nullopt})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-            .inclusive = true},
-        makeRowVector({makeNullableFlatVector<std::string>(
-            {std::nullopt})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangf"})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeNullableFlatVector<std::string>(
-            {std::nullopt})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangf"})}), // ASC_NULLS_LAST upper
-        makeRowVector({makeNullableFlatVector<std::string>(
-            {std::nullopt})}), // DESC_NULLS_FIRST lower
-        makeRowVector({makeFlatVector<std::string>(
-            {"orangd"})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeNullableFlatVector<std::string>(
-            {std::nullopt})}), // DESC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<std::string>(
-            {"orangd"})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"apple"}),
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({makeStringWithNull("peach")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0", "c1"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"apple"}),
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({makeStringWithNull("peach")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    // For DESC order, decrement fails on rightmost column "peach",
+    // then tries leftmost "orange" which also fails -> unbounded
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"apple"}),
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0", "c1"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"apple"}),
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
-  // Test Case 7: Single column with null in upper bound
+  // Test Case 7: Single column with null in lower bound
+  // For null in lower bound with inclusive, the lower bound stays as null
+  // For upper bound, ASC order appends '\0', DESC order fails decrement
+  {
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound =
+        makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+    // Decrement fails on "orange", upper becomes unbounded
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound =
+        makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+    // Decrement fails on "orange", upper becomes unbounded
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
+  }
+
+  // Test Case 8: Single column with null in upper bound
+  // Incrementing null in ASC_NULLS_FIRST gives empty string ""
+  // For other orders, null is at the end or decrement fails
   {
     auto testCases = createIndexBoundEncodeTestCases(
         {"c0"},
@@ -9471,148 +10207,277 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     }
   }
 
-  // Test Case 8: Multi-column with null in first column lower bound
+  // Test Case 9: Multi-column with null in first column lower bound
+  // For ASC order, upper bound appends '\0' to rightmost column
+  // For DESC order, decrement fails on rightmost column "peach"
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeNullableFlatVector<std::string>({std::nullopt}),
-                 makeFlatVector<std::string>({"banana"})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"orange"}),
-                 makeFlatVector<std::string>({"peach"})}),
-            .inclusive = true},
-        makeRowVector(
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeNullableFlatVector<std::string>({std::nullopt}),
-             makeFlatVector<std::string>({"banana"})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peaci"})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeNullableFlatVector<std::string>({std::nullopt}),
+         makeFlatVector<std::string>({"banana"})});
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({makeStringWithNull("peach")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0", "c1"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeNullableFlatVector<std::string>({std::nullopt}),
-             makeFlatVector<std::string>({"banana"})}), // ASC_NULLS_LAST lower
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peaci"})}), // ASC_NULLS_LAST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeNullableFlatVector<std::string>({std::nullopt}),
+         makeFlatVector<std::string>({"banana"})});
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({makeStringWithNull("peach")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    // DESC order: decrement fails on both columns -> unbounded
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeNullableFlatVector<std::string>({std::nullopt}),
-             makeFlatVector<std::string>(
-                 {"banana"})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peacg"})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeNullableFlatVector<std::string>({std::nullopt}),
+         makeFlatVector<std::string>({"banana"})});
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0", "c1"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeNullableFlatVector<std::string>({std::nullopt}),
-             makeFlatVector<std::string>({"banana"})}), // DESC_NULLS_LAST lower
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peacg"})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeNullableFlatVector<std::string>({std::nullopt}),
+         makeFlatVector<std::string>({"banana"})});
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
-  // Test Case 9: Multi-column with null in second column lower bound
+  // Test Case 10: Multi-column with null in second column lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"apple"}),
-                 makeNullableFlatVector<std::string>({std::nullopt})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"orange"}),
-                 makeFlatVector<std::string>({"peach"})}),
-            .inclusive = true},
-        makeRowVector(
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peaci"})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>(
-                 {"apple\0"}), // Encoded key: \0 + "apple" + \0 (marks
-                               // end of value) + \x1 (null placeholder
-                               // for c1 in NULLS_LAST order)
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peaci"})}), // ASC_NULLS_LAST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({makeStringWithNull("peach")})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0", "c1"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peacg"})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    // For NULLS_LAST, null is at the end, no increment needed for lower bound
+    ascNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({makeStringWithNull("peach")})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    // DESC order: decrement fails -> unbounded
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})}), // DESC_NULLS_LAST lower
-        makeRowVector(
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peacg"})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0", "c1"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"apple"}),
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeFlatVector<std::string>({"peach"})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
-  // Test Case 10: Multi-column with null in upper bound
+  // Test Case 11: Multi-column with null in upper bound
+  // For ASC_NULLS_FIRST, null sorts first so incrementing null gives ""
+  // For ASC_NULLS_LAST, null sorts last, increment first column
+  // For DESC orders, decrement fails on first column string
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"apple"}),
-                 makeFlatVector<std::string>({"banana"})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<std::string>({"orange"}),
-                 makeNullableFlatVector<std::string>({std::nullopt})}),
-            .inclusive = true},
-        makeRowVector(
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({""})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    // Incrementing null in NULLS_FIRST gives ""
+    ascNullsFirstTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({"orange"}),
+         makeFlatVector<std::string>({""})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase ascNullsLastTestCase;
+    ascNullsLastTestCase.indexColumns = {"c0", "c1"};
+    ascNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangf"}),
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    ascNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+    ascNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    // Null at NULLS_LAST can't be incremented, so increment first column
+    ascNullsLastTestCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<std::string>({makeStringWithNull("orange")}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+    SCOPED_TRACE(ascNullsLastTestCase.debugString());
+    testIndexBounds(ascNullsLastTestCase);
+
+    // DESC order: decrement fails on null in second column,
+    // then fails on first column "orange" -> unbounded
+    EncodeIndexBoundsTestCase descNullsFirstTestCase;
+    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+    descNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>(
-                 {"banana"})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangd"}),
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    descNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsFirstTestCase.debugString());
+    testIndexBounds(descNullsFirstTestCase);
+
+    EncodeIndexBoundsTestCase descNullsLastTestCase;
+    descNullsLastTestCase.indexColumns = {"c0", "c1"};
+    descNullsLastTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
             {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<std::string>({"orangd"}),
-             makeNullableFlatVector<std::string>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+             makeFlatVector<std::string>({"banana"})}),
+        .inclusive = true};
+    descNullsLastTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<std::string>({"orange"}),
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+    descNullsLastTestCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<std::string>({"apple"}),
+         makeFlatVector<std::string>({"banana"})});
+    descNullsLastTestCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(descNullsLastTestCase.debugString());
+    testIndexBounds(descNullsLastTestCase);
   }
 
   // Test lower bound bump failures

@@ -19,7 +19,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
-namespace fecebook::velox::exec::test {
+namespace facebook::velox::exec::test {
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;
@@ -194,4 +194,4 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
   PlanNodeId probeScanNodeId_;
   folly::Random::DefaultGenerator rng_;
 };
-} // namespace fecebook::velox::exec::test
+} // namespace facebook::velox::exec::test

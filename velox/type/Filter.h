@@ -2515,3 +2515,13 @@ std::unique_ptr<Filter> createNegatedBigintValues(
     bool nullAllowed);
 
 } // namespace facebook::velox::common
+
+template <>
+struct fmt::formatter<facebook::velox::common::FilterKind>
+    : formatter<std::string> {
+  auto format(facebook::velox::common::FilterKind s, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        std::string(facebook::velox::common::FilterKindName::toName(s)), ctx);
+  }
+};

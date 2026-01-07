@@ -287,11 +287,12 @@ void ReservoirSampleAccumulator::mergeSamples(
 
 BufferPtr makeShuffledIndex(
     vector_size_t size,
+    vector_size_t offset,
     folly::ThreadLocalPRNG& randGen,
     memory::MemoryPool* pool) {
   BufferPtr index = allocateIndices(size, pool);
   vector_size_t* rawIndex = index->asMutable<vector_size_t>();
-  std::iota(rawIndex, rawIndex + size, 0);
+  std::iota(rawIndex, rawIndex + size, offset);
   std::shuffle(rawIndex, rawIndex + size, randGen);
   return index;
 }
@@ -361,7 +362,7 @@ void ReservoirSampleAccumulator::mergeSamples(
     rows.setValidRange(0, oneSelected, true);
     rows.updateBounds();
 
-    const BufferPtr oneIndex = makeShuffledIndex(sampleCount(), rng, pool);
+    const BufferPtr oneIndex = makeShuffledIndex(sampleCount(), 0, rng, pool);
     mergedSamples->copy(samples.get(), rows, oneIndex->as<vector_size_t>());
   }
 
@@ -371,8 +372,8 @@ void ReservoirSampleAccumulator::mergeSamples(
     rows.setValidRange(oneSelected, maxSampleSize.value(), true);
     rows.updateBounds();
 
-    BufferPtr otherIndex = makeShuffledIndex(otherSize, rng, pool);
-    // Shift the source indices of the mapping forward by oneCount.
+    BufferPtr otherIndex = makeShuffledIndex(otherSize, otherOffset, rng, pool);
+    // Shift the source indices of the mapping forward by oneSelected.
     auto* otherRawIndex = otherIndex->asMutable<vector_size_t>();
     for (vector_size_t i = 0; i < otherSelected; ++i) {
       otherRawIndex[maxSampleSize.value() - 1 - i] =
