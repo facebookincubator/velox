@@ -526,9 +526,6 @@ struct Murmur3X64_128Function {
 
 /// Computes FNV hash for the given data.
 /// FNV-1 multiplies then XORs, FNV-1a XORs then multiplies.
-/// @param data Pointer to input bytes
-/// @param size Number of bytes
-/// @param xorFirst If true, use FNV-1a, if false, use FNV-1
 template <typename HashType, bool XORFirst>
 FOLLY_ALWAYS_INLINE HashType computeFnvHash(
     const unsigned char* data,
