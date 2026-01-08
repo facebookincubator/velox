@@ -19,15 +19,15 @@ cmake_minimum_required(VERSION 3.30.4)
 
 # Add velox_resolve_dependency_url here for rapids-cmake, rmm, and kvikio if a specific version or commit is needed.
 
-set(VELOX_cudf_VERSION 25.12 CACHE STRING "cudf version")
+set(VELOX_cudf_VERSION 26.02 CACHE STRING "cudf version")
 
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  4ec101a368e1423a1a3831a121f0d24e2d91ed044aed68faee0ba18fda38b450
+  b70a8f25fd74e58b6597741a3541f96d98608edf6cd40d3573f34c0096c999fc
 )
 set(
   VELOX_cudf_SOURCE_URL
-  "https://github.com/rapidsai/cudf/archive/181bd7b85c614e9c8f755a62f07f4b9c9334b615.tar.gz"
+  "https://github.com/rapidsai/cudf/archive/059ee7facab2aa8221d31df6ff98c31748f5dda7.tar.gz"
 )
 velox_resolve_dependency_url(cudf)
 
