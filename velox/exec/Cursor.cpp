@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Cursor.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/file/FileSystems.h"
 
 #include <filesystem>
@@ -214,7 +215,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
       : TaskCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
-                std::thread::hardware_concurrency())),
+                folly::hardware_concurrency())),
         maxDrivers_{params.maxDrivers},
         numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
         numSplitGroups_{params.numSplitGroups} {

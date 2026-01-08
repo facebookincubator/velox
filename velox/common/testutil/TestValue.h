@@ -15,9 +15,10 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <mutex>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
@@ -45,24 +46,24 @@ class TestValue {
   /// injected callback hook.
   template <typename T>
   static void set(
-      const std::string& injectionPoint,
+      std::string_view injectionPoint,
       std::function<void(T*)> injectionCb);
 
   /// Invoked by the test code to unregister a callback hook at the specified
   /// execution point.
-  static void clear(const std::string& injectionPoint);
+  static void clear(std::string_view injectionPoint);
 
   /// Invoked by the production code to try to invoke the test callback hook
   /// with 'testData' if there is one registered at the specified execution
   /// point. 'testData' capture the mutable production execution state.
-  static void adjust(const std::string& injectionPoint, void* testData);
+  static void adjust(std::string_view injectionPoint, void* testData);
 
  private:
   using Callback = std::function<void(void*)>;
 
   static std::mutex mutex_;
   static bool enabled_;
-  static std::unordered_map<std::string, Callback> injectionMap_;
+  static folly::F14FastMap<std::string, Callback> injectionMap_;
 };
 
 class ScopedTestValue {
@@ -79,13 +80,13 @@ class ScopedTestValue {
   }
 
  private:
-  const std::string point_;
+  std::string point_;
 };
 
 #ifndef NDEBUG
 template <typename T>
 void TestValue::set(
-    const std::string& injectionPoint,
+    std::string_view injectionPoint,
     std::function<void(T*)> injectionCb) {
   std::lock_guard<std::mutex> l(mutex_);
   if (!enabled_) {
@@ -99,15 +100,14 @@ void TestValue::set(
 #else
 template <typename T>
 void TestValue::set(
-    const std::string& injectionPoint,
+    std::string_view injectionPoint,
     std::function<void(T*)> injectionCb) {}
 #endif
 
 #ifdef NDEBUG
 // Keep the definition in header so that it can be inlined (elided).
-inline void TestValue::adjust(
-    const std::string& injectionPoint,
-    void* testData) {}
+inline void TestValue::adjust(std::string_view injectionPoint, void* testData) {
+}
 #endif
 
 #define SCOPED_TESTVALUE_SET(point, ...)                              \

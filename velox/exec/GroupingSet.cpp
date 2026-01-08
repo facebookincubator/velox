@@ -1093,6 +1093,7 @@ bool GroupingSet::getOutputWithSpill(
           false,
           false,
           false,
+          false,
           pool_);
 
       initializeAggregates(aggregates_, *mergeRows_, false);
@@ -1128,8 +1129,7 @@ bool GroupingSet::prepareNextSpillPartitionOutput() {
   auto it = spillPartitionSet_.begin();
   VELOX_CHECK_NE(outputSpillPartition_, it->first.partitionNumber());
   outputSpillPartition_ = it->first.partitionNumber();
-  merge_ = it->second->createOrderedReader(
-      spillConfig_->readBufferSize, pool_, spillStats_);
+  merge_ = it->second->createOrderedReader(*spillConfig_, pool_, spillStats_);
   spillPartitionSet_.erase(it);
   return true;
 }
@@ -1425,6 +1425,7 @@ void GroupingSet::abandonPartialAggregation() {
       !ignoreNullKeys_,
       accumulators(true),
       std::vector<TypePtr>(),
+      false,
       false,
       false,
       false,

@@ -45,6 +45,7 @@ velox_add_library(
   HashPartitionFunction.cpp
   HashProbe.cpp
   HashTable.cpp
+  HashTableCache.cpp
   IndexLookupJoin.cpp
   JoinBridge.cpp
   Limit.cpp

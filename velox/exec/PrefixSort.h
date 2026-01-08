@@ -153,7 +153,7 @@ class PrefixSort {
   /// The std::sort won't require bytes while prefix sort may require buffers
   /// such as prefix data. The logic is similar to the above function
   /// PrefixSort::sort but returns the maximum buffer the sort may need.
-  static uint32_t maxRequiredBytes(
+  static uint64_t maxRequiredBytes(
       const RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags,
       const velox::common::PrefixSortConfig& config,
@@ -205,7 +205,7 @@ class PrefixSort {
 
   // Estimates the memory required for prefix sort such as prefix buffer and
   // swap buffer.
-  uint32_t maxRequiredBytes() const;
+  uint64_t maxRequiredBytes() const;
 
   void sortInternal(std::vector<char*, memory::StlAllocator<char*>>& rows);
 

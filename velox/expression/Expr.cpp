@@ -1770,8 +1770,8 @@ common::Subfield extractSubfield(
         break;
       case TypeKind::VARCHAR:
         path.push_back(
-            std::make_unique<common::Subfield::StringSubscript>(
-                index->value()->as<ConstantVector<StringView>>()->value()));
+            std::make_unique<common::Subfield::StringSubscript>(std::string(
+                index->value()->as<ConstantVector<StringView>>()->value())));
         break;
       default:
         return {};

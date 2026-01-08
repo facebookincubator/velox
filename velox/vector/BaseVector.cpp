@@ -32,7 +32,6 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox {
-
 namespace {
 
 Variant nullVariant(const TypePtr& type) {
@@ -56,7 +55,8 @@ template <>
 Variant variantAtTyped<TypeKind::VARBINARY>(
     const BaseVector* vector,
     vector_size_t row) {
-  return Variant::binary(vector->as<SimpleVector<StringView>>()->valueAt(row));
+  return Variant::binary(
+      std::string(vector->as<SimpleVector<StringView>>()->valueAt(row)));
 }
 
 Variant variantAtImpl(const BaseVector* vector, vector_size_t row);
@@ -799,16 +799,6 @@ VectorPtr callMakeVector(
 
 template <TypeKind KIND, typename = void>
 struct VariantToVector {
-  static VectorPtr makeVector(
-      TypePtr type,
-      const std::vector<Variant>& /*data*/,
-      memory::MemoryPool* /*pool*/) {
-    VELOX_NYI("Type not supported: {}", type->toString());
-  }
-};
-
-template <>
-struct VariantToVector<TypeKind::HUGEINT> {
   static VectorPtr makeVector(
       TypePtr type,
       const std::vector<Variant>& /*data*/,

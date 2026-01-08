@@ -53,7 +53,16 @@ void ExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
       sources_.push_back(source);
       queue_->addSourceLocked();
       emptySources_.push(source);
-      requestSpecs = pickSourcesToRequestLocked();
+      // When lazyFetching_ is true, I/O will be triggered lazily when next() is
+      // called from Exchange::isBlocked(). This allows waiter tasks using
+      // cached hash tables to skip I/O entirely when the table is already
+      // cached - the HashBuild operator will finish before
+      // Exchange::isBlocked() is ever called, so no unnecessary data fetching
+      // occurs.
+      if (!lazyFetching_) {
+        // Start fetching data immediately.
+        requestSpecs = pickSourcesToRequestLocked();
+      }
     }
   }
 
@@ -78,6 +87,11 @@ void ExchangeClient::close() {
     if (closed_) {
       return;
     }
+
+    // Capture stats BEFORE clearing sources_.
+    // This allows stats() to return meaningful data even after close().
+    stats_ = collectStatsLocked();
+
     closed_ = true;
     sources = std::move(sources_);
     producingSources = std::move(producingSources_);
@@ -91,9 +105,17 @@ void ExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
-  folly::F14FastMap<std::string, RuntimeMetric> stats;
+folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() {
   std::lock_guard<std::mutex> l(queue_->mutex());
+  if (stats_.empty()) {
+    stats_ = collectStatsLocked();
+  }
+  return stats_;
+}
+
+folly::F14FastMap<std::string, RuntimeMetric>
+ExchangeClient::collectStatsLocked() const {
+  folly::F14FastMap<std::string, RuntimeMetric> stats;
 
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {

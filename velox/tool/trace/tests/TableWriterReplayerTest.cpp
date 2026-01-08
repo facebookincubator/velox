@@ -373,7 +373,8 @@ TEST_F(TableWriterReplayerTest, basic) {
   // Second column contains details about written files.
   const auto details = results->childAt(TableWriteTraits::kFragmentChannel)
                            ->as<FlatVector<StringView>>();
-  const folly::dynamic obj = folly::parseJson(details->valueAt(1));
+  const folly::dynamic obj =
+      folly::parseJson(std::string_view(details->valueAt(1)));
   const auto fileWriteInfos = obj["fileWriteInfos"];
   ASSERT_EQ(1, fileWriteInfos.size());
 

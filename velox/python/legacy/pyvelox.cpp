@@ -88,8 +88,7 @@ static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
     facebook::velox::memory::MemoryPool* pool) {
   using NativeType = typename TypeTraits<T>::NativeType;
-  constexpr bool kNeedsHolder =
-      (T == TypeKind::VARCHAR || T == TypeKind::VARBINARY);
+  constexpr bool kNeedsHolder = is_string_kind(T);
 
   TypePtr type = createScalarType(T);
   auto result =

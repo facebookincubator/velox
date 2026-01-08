@@ -142,6 +142,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.maxSpillRunRows(),
       queryConfig.writerFlushThresholdBytes(),
       queryConfig.spillCompressionKind(),
+      queryConfig.spillNumMaxMergeFiles(),
       queryConfig.spillPrefixSortEnabled()
           ? std::optional<common::PrefixSortConfig>(prefixSortConfig())
           : std::nullopt,
@@ -705,7 +706,7 @@ StopReason Driver::runInternal(
     }
   } catch (velox::VeloxException&) {
     task()->setError(std::current_exception());
-    // The CancelPoolGuard will close 'self' and remove from Task.
+    // The CancelGuard will close 'self' and remove from Task.
     return StopReason::kAlreadyTerminated;
   } catch (std::exception&) {
     task()->setError(std::current_exception());

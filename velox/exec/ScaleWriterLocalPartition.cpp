@@ -174,28 +174,11 @@ void ScaleWriterPartitioningLocalPartition::addInput(RowVectorPtr input) {
                                              row;
     }
 
-    for (auto i = 0; i < numPartitions_; ++i) {
-      const auto writerRowCount = writerAssignmentCounts_[i];
-      if (writerRowCount == 0) {
-        continue;
-      }
-
-      auto writerInput = processPartition(
-          input,
-          writerRowCount,
-          i,
-          std::move(writerAssignmmentIndicesBuffers_[i]),
-          rawWriterAssignmmentIndicesBuffers_[i]);
-      if (writerInput != nullptr) {
-        ContinueFuture future;
-        auto reason = queues_[i]->enqueue(
-            writerInput, totalInputBytes * writerRowCount / numInput, &future);
-        if (reason != BlockingReason::kNotBlocked) {
-          blockingReasons_.push_back(reason);
-          futures_.push_back(std::move(future));
-        }
-      }
-    }
+    populateAndEnqueuePartitions(
+        input,
+        writerAssignmentCounts_,
+        writerAssignmmentIndicesBuffers_,
+        rawWriterAssignmmentIndicesBuffers_);
   }
 
   // Only update the scaling state if the memory used is below the
