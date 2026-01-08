@@ -484,6 +484,11 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
+  # Suppress deprecated GPU targets warning for CUDA 12.8.x
+  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8.0 AND
+     CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 13.0.0)
+    string(APPEND CMAKE_CUDA_FLAGS " -Wno-deprecated-gpu-targets")
+  endif()
   if(VELOX_ENABLE_CUDF)
     foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
       if(arch LESS 70)
