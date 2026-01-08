@@ -1060,16 +1060,20 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     return i == 0 ? this : otherTables_[i - 1].get();
   };
 
-  const auto prepareStep = [&](auto& steps, auto&& work) {
+  const auto runStep = [&](auto& steps, auto&& work, bool runInCurrentThread) {
     auto step = std::make_shared<AsyncSource<bool>>([work = std::move(work)] {
       work();
       return std::make_unique<bool>(true);
     });
     steps.push_back(step);
-    buildExecutor_->add([driverCtx, step]() {
-      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
+    if (runInCurrentThread) {
       step->prepare();
-    });
+    } else {
+      buildExecutor_->add([driverCtx, step]() {
+        ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
+        step->prepare();
+      });
+    }
   };
 
   // This step can involve large memory allocations, so there is a chance of
@@ -1084,20 +1088,30 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   // The parallel table partitioning step.
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = getTable(i);
-    prepareStep(
+    bool last = i == numPartitions - 1;
+    runStep(
         partitionSteps,
         [this, table, rawRowPartitions = rowPartitions[i].get()] {
           partitionRows(*table, *rawRowPartitions);
-        });
+        },
+        // run last partition on current thread to avoid wasting current thread
+        // on just waiting
+        last);
   }
   syncWorkItems(partitionSteps, parallelJoinBuildStats_.partitionTimings, true);
 
   // The parallel table building step.
   std::vector<std::vector<char*>> overflowPerPartition(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    prepareStep(buildSteps, [this, i, &overflowPerPartition, &rowPartitions] {
-      buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
-    });
+    bool last = i == numPartitions - 1;
+    runStep(
+        buildSteps,
+        [this, i, &overflowPerPartition, &rowPartitions] {
+          buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
+        },
+        // run last partition on current thread to avoid wasting current thread
+        // on just waiting
+        last);
   }
   syncWorkItems(buildSteps, parallelJoinBuildStats_.buildTimings, true);
 
@@ -1114,9 +1128,10 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
           numDistinct_, false);
       hashers_[i]->setBloomFilter(filter);
       for (auto j = 0; j < numPartitions; ++j) {
+        bool last = j == numPartitions - 1;
         auto* rows = getTable(j)->rows();
         rowPartitions[j]->reset();
-        prepareStep(
+        runStep(
             bloomFilterPartitionSteps,
             [hasher = hashers_[i].get(),
              offset = rows->columnAt(i).offset(),
@@ -1131,16 +1146,25 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
                   *rows,
                   numBloomFilterPartitions,
                   *rowPartitions);
-            });
+            },
+            // run last partition on current thread to avoid wasting current
+            // thread on just waiting
+            last);
       }
       syncWorkItems(
           bloomFilterPartitionSteps,
           parallelJoinBuildStats_.bloomFilterPartitionTimings,
           true);
       for (auto j = 0; j < numBloomFilterPartitions; ++j) {
-        prepareStep(bloomFilterBuildSteps, [this, i, j, &rowPartitions] {
-          buildBloomFilterPartition(i, j, rowPartitions);
-        });
+        bool last = j == numBloomFilterPartitions - 1;
+        runStep(
+            bloomFilterBuildSteps,
+            [this, i, j, &rowPartitions] {
+              buildBloomFilterPartition(i, j, rowPartitions);
+            },
+            // run last partition on current thread to avoid wasting current
+            // thread on just waiting
+            last);
       }
       syncWorkItems(
           bloomFilterBuildSteps,
