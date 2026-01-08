@@ -126,13 +126,6 @@ class FormatData {
   virtual bool parentNullsInLeaves() const {
     return false;
   }
-
-  bool getStringBuffersFromDecoder() const {
-    return getStringBuffersFromDecoder_;
-  }
-
- protected:
-  bool getStringBuffersFromDecoder_{false};
 };
 
 /// Base class for format-specific reader initialization arguments.
