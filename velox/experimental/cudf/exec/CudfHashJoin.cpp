@@ -1241,8 +1241,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   // cudfInput stays alive during this function, keeping the view valid.
   auto leftTableView = cudfInput->getTableView();
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Probe table number of columns: " << leftTableView.num_columns()
-              << std::endl;
+    LOG(INFO) << "Probe table number of columns: "
+              << leftTableView.num_columns() << std::endl;
     LOG(INFO) << "Probe table number of rows: " << leftTableView.num_rows()
               << std::endl;
   }

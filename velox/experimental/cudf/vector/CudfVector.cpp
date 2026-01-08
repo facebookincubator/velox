@@ -148,8 +148,7 @@ std::unique_ptr<cudf::table> CudfVector::release() {
   // Constructed from packed_table - materialize a table from the view.
   // This copies the data since the view references the packed buffer.
   auto mr = cudf::get_current_device_resource_ref();
-  auto materializedTable =
-      std::make_unique<cudf::table>(tabView_, stream_, mr);
+  auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
   stream_.synchronize();
   // Clear the packed table since we've materialized
   packedTable_.reset();

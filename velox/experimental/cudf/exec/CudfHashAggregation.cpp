@@ -787,7 +787,8 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
     std::vector<column_index_t> const& groupByKeys,
     std::vector<std::unique_ptr<Aggregator>>& aggregators,
     rmm::cuda_stream_view stream) {
-  auto groupbyKeyView = tableView.select(groupByKeys.begin(), groupByKeys.end());
+  auto groupbyKeyView =
+      tableView.select(groupByKeys.begin(), groupByKeys.end());
 
   size_t const numGroupingKeys = groupbyKeyView.num_columns();
 
