@@ -649,11 +649,14 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
+  add_definitions(-DVELOX_ENABLE_LOCAL_RUNNER_SERVICE)
+endif()
+
 # FBThrift is required by remote functions and LocalRunnerService.
 # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
 # requires clients to explicitly install fizz and wangle.
 if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
-  add_definitions(-DVELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
