@@ -19,6 +19,12 @@ String Functions
     some languages. Specifically, this will return incorrect results for
     Lithuanian, Turkish and Azeri.
 
+.. function:: bit_length(string) -> integer
+
+    Returns the bit length for the specified string column.
+
+        SELECT bit_length('123'); -- 24
+
 .. function:: chr(n) -> varchar
 
     Returns the Unicode code point ``n`` as a single character string.
