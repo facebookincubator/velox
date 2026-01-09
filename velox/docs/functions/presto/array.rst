@@ -252,6 +252,15 @@ Array Functions
     Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
     T must be coercible to double. Returns bigint if T is coercible to bigint. Otherwise, returns double.
 
+.. function:: array_top_n(array(T), int) -> array(T)
+
+    Returns an array of the top ``n`` elements from a given ``array``, sorted according to its natural descending order.
+    If ``n`` is larger than the size of the given ``array``, the returned list will be the same size as the input instead of ``n``. ::
+
+        SELECT array_top_n(ARRAY [1, 100, 2, 5, 3], 3); -- [100, 5, 3]
+        SELECT array_top_n(ARRAY [1, 100], 5); -- [100, 1]
+        SELECT array_top_n(ARRAY ['a', 'zzz', 'zz', 'b', 'g', 'f'], 3); -- ['zzz', 'zz', 'g']
+
 .. function:: cardinality(x) -> bigint
 
     Returns the cardinality (size) of the array ``x``.
