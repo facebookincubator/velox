@@ -29,6 +29,10 @@ void debugCheckOutput(const RowVectorPtr& output) {
 #else
 void debugCheckOutput(const RowVectorPtr& output) {}
 #endif
+
+constexpr vector_size_t kZero = 0;
+constexpr vector_size_t kOne = 1;
+
 } // namespace
 
 Unnest::Unnest(
@@ -50,10 +54,11 @@ Unnest::Unnest(
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
-    if (!variable->type()->isArray() && !variable->type()->isMap()) {
+    const auto& type = variable->type();
+    if (!type->isArray() && !type->isMap() && !type->isRow()) {
       VELOX_UNSUPPORTED(
-          "Unnest operator supports only ARRAY and MAP types, the actual type is {}",
-          variable->type()->toString());
+          "Unnest operator supports only ARRAY and MAP and ROW types, the actual type is {}",
+          type->toString());
     }
     unnestChannels_.push_back(inputType->getChildIdx(variable->name()));
   }
@@ -104,19 +109,21 @@ void Unnest::addInput(RowVectorPtr input) {
     auto& currentDecoded = unnestDecoded_[channel];
     currentDecoded.decode(*unnestVector);
 
-    rawIndices_[channel] = currentDecoded.indices();
-
-    if (unnestVector->typeKind() == TypeKind::ARRAY) {
-      const auto* unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
-      VELOX_CHECK_NOT_NULL(unnestBaseArray);
-      rawSizes_[channel] = unnestBaseArray->rawSizes();
-      rawOffsets_[channel] = unnestBaseArray->rawOffsets();
+    const auto typeKind = unnestVector->typeKind();
+    if (typeKind == TypeKind::ARRAY || typeKind == TypeKind::MAP) {
+      const auto* unnestBaseArrayBase =
+          currentDecoded.base()->as<ArrayVectorBase>();
+      VELOX_CHECK_NOT_NULL(unnestBaseArrayBase);
+      rawSizes_[channel] = unnestBaseArrayBase->rawSizes();
+      rawOffsets_[channel] = unnestBaseArrayBase->rawOffsets();
+      rawIndices_[channel] = currentDecoded.indices();
     } else {
-      VELOX_CHECK_EQ(unnestVector->typeKind(), TypeKind::MAP);
-      const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
-      VELOX_CHECK_NOT_NULL(unnestBaseMap);
-      rawSizes_[channel] = unnestBaseMap->rawSizes();
-      rawOffsets_[channel] = unnestBaseMap->rawOffsets();
+      VELOX_CHECK_EQ(unnestVector->typeKind(), TypeKind::ROW);
+      const auto* unnestRow = currentDecoded.base()->as<RowVector>();
+      VELOX_CHECK_NOT_NULL(unnestRow);
+      rawSizes_[channel] = &kOne;
+      rawOffsets_[channel] = &kZero;
+      rawIndices_[channel] = &kZero;
     }
 
     // Count max number of elements per row.
@@ -420,13 +427,14 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
         generateEncodingForChannel(channel, range);
 
     const auto& currentDecoded = unnestDecoded_[channel];
-    if (currentDecoded.base()->typeKind() == TypeKind::ARRAY) {
+    const auto typeKind = currentDecoded.base()->typeKind();
+    if (typeKind == TypeKind::ARRAY) {
       // Construct unnest column using Array elements wrapped using above
       // created dictionary.
       const auto* unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
       outputs[outputColumnIndex++] = unnestChannelEncoding.wrap(
           unnestBaseArray->elements(), range.numInnerRows);
-    } else {
+    } else if (typeKind == TypeKind::MAP) {
       // Construct two unnest columns for Map keys and values vectors wrapped
       // using above created dictionary.
       const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
@@ -434,6 +442,12 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
           unnestBaseMap->mapKeys(), range.numInnerRows);
       outputs[outputColumnIndex++] = unnestChannelEncoding.wrap(
           unnestBaseMap->mapValues(), range.numInnerRows);
+    } else {
+      const auto* unnestBaseRow = currentDecoded.base()->as<RowVector>();
+      for (const auto& child : unnestBaseRow->children()) {
+        outputs[outputColumnIndex++] =
+            unnestChannelEncoding.wrap(child, range.numInnerRows);
+      }
     }
   }
 
