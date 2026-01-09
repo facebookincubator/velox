@@ -485,18 +485,11 @@ class SelectiveColumnReader {
   }
 
   StringView copyStringValueIfNeed(std::string_view value) {
-    if (value.size() <= StringView::kInlineSize ||
-        formatData().getStringBuffersFromDecoder()) {
+    if (value.size() <= StringView::kInlineSize) {
       return StringView(value);
     }
-
     auto* data = copyStringValue(value);
     return StringView(data, value.size());
-  }
-
-  void setStringBuffers(std::vector<BufferPtr> buffers) {
-    stringBuffers_ = std::move(buffers);
-    rawStringBuffer_ = nullptr;
   }
 
   virtual void setCurrentRowNumber(int64_t /*value*/) {
@@ -743,13 +736,11 @@ class SelectiveColumnReader {
 template <>
 inline void SelectiveColumnReader::addValue(const std::string_view value) {
   const uint64_t size = value.size();
-  if (formatData().getStringBuffersFromDecoder() ||
-      size <= StringView::kInlineSize) {
+  if (size <= StringView::kInlineSize) {
     reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
         StringView(value.data(), size);
     return;
   }
-
   if (rawStringBuffer_ && rawStringUsed_ + size <= rawStringSize_) {
     memcpy(rawStringBuffer_ + rawStringUsed_, value.data(), size);
     reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
