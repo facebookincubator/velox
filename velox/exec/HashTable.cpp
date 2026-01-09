@@ -23,7 +23,6 @@
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::common::testutil::TestValue;
 

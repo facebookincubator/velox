@@ -16,9 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Portability.h"
-#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/exec/OneWayStatusFlag.h"
-#include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
 
