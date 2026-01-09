@@ -157,7 +157,7 @@ bool ScanSpec::hasFilter() const {
   if (hasFilter_.has_value()) {
     return hasFilter_.value();
   }
-  if (!isConstant() && filter()) {
+  if (filter()) {
     hasFilter_ = true;
     return true;
   }
