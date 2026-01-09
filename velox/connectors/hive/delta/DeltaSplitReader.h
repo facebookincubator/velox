@@ -1,0 +1,93 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/SplitReader.h"
+
+namespace facebook::velox::connector::hive::delta {
+
+class DeltaSplitReader : public SplitReader {
+ public:
+  DeltaSplitReader(
+      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+      const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
+      const std::unordered_map<std::string, std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const RowTypePtr& readerOutputType,
+      const std::shared_ptr<io::IoStatistics>& ioStats,
+      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+      FileHandleFactory* fileHandleFactory,
+      folly::Executor* executor,
+      const std::shared_ptr<common::ScanSpec>& scanSpec);
+
+  ~DeltaSplitReader() override = default;
+
+  void prepareSplit(
+      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      dwio::common::RuntimeStatistics& runtimeStats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      override;
+
+  uint64_t next(uint64_t size, VectorPtr& output) override;
+
+ private:
+  /// Adapts the data file schema to match the table schema expected by the
+  /// query.
+  ///
+  /// This method reconciles differences between the physical data file schema
+  /// and the logical table schema, handling various scenarios where columns may
+  /// be missing, added, or need special treatment.
+  ///
+  /// @param fileType The schema read from the data file's metadata. This
+  /// represents the actual columns physically present in the Parquet/ORC file.
+  /// @param tableSchema The logical schema defined in the catalog (e.g., from
+  /// DDL). This represents the current table schema that queries expect.
+  ///
+  /// @return A vector of column types adapted to match the query's
+  /// expectations, with appropriate type conversions and constant values set
+  /// for missing or special columns.
+  ///
+  /// The method handles the following scenarios for each column in the scan
+  /// spec:
+  ///
+  /// 1. Info columns (e.g., $path, $file_size, $file_modified_time)
+  ///    These are virtual columns that provide metadata about the file itself.
+  ///    Values are read from hiveSplit_->infoColumns map and set as constant
+  ///    values in the scanSpec so they're materialized for all rows.
+  ///
+  /// 2. Regular columns present in File:
+  ///    Column exists in both fileType and readerOutputType. Type is adapted
+  ///    from fileType to match the expected output type, handling schema
+  ///    evolution where column types may have changed.
+  ///
+  /// 3. Columns missing from File:
+  ///    a) Partition columns:
+  ///       Column is marked as partition key in hiveSplit_->partitionKeys.
+  ///       Value is read from partition metadata and set as a constant.
+  ///    b) Schema evolution (newly added columns):
+  ///       Column was added to the table schema after this data file was
+  ///       written. Set as NULL constant since the old file doesn't contain
+  ///       this column.
+  std::vector<TypePtr> adaptColumns(
+      const RowTypePtr& fileType,
+      const RowTypePtr& tableSchema) const override;
+};
+
+} // namespace facebook::velox::connector::hive::delta
+

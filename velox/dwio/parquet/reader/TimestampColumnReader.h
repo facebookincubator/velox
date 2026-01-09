@@ -19,6 +19,7 @@
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
 namespace {
@@ -130,6 +131,9 @@ class TimestampColumnReader : public IntegerColumnReader {
   }
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
+    // Check if we need to produce packed int64 for TIMESTAMP_WITH_TIME_ZONE
+    const bool isTimestampWithTZ = isTimestampWithTimeZoneType(requestedType_);
+
     getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
     if (allNull_) {
       return;
@@ -154,6 +158,35 @@ class TimestampColumnReader : public IntegerColumnReader {
         rawValues[i] =
             toInt96Timestamp(encoded).toPrecision(requestedPrecision_);
       }
+    }
+
+    // Convert to packed int64 for TIMESTAMP_WITH_TIME_ZONE
+    if (isTimestampWithTZ) {
+      auto timestampVector = resultVector->as<FlatVector<Timestamp>>();
+      auto size = timestampVector->size();
+      auto pool = timestampVector->pool();
+
+      // Create FlatVector<int64_t> with packed values
+      auto packedVector = std::make_shared<FlatVector<int64_t>>(
+          pool,
+          requestedType_,
+          timestampVector->nulls(),
+          size,
+          AlignedBuffer::allocate<int64_t>(size, pool),
+          std::vector<BufferPtr>{});
+
+      auto* rawPacked = packedVector->mutableRawValues();
+      auto* rawTimestamps = timestampVector->rawValues();
+
+      // Pack timestamps with UTC timezone (key = 0)
+      constexpr TimeZoneKey kUtcKey = 0;
+      for (vector_size_t i = 0; i < size; ++i) {
+        if (!timestampVector->isNullAt(i)) {
+          rawPacked[i] = pack(rawTimestamps[i], kUtcKey);
+        }
+      }
+
+      *result = packedVector;
     }
   }
 

@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/delta/DeltaSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
@@ -101,34 +102,50 @@ std::unique_ptr<SplitReader> SplitReader::create(
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
-  if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
-      hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
-    return std::make_unique<iceberg::IcebergSplitReader>(
-        hiveSplit,
-        hiveTableHandle,
-        partitionKeys,
-        connectorQueryCtx,
-        hiveConfig,
-        readerOutputType,
-        ioStats,
-        fsStats,
-        fileHandleFactory,
-        ioExecutor,
-        scanSpec);
-  } else {
-    return std::unique_ptr<SplitReader>(new SplitReader(
-        hiveSplit,
-        hiveTableHandle,
-        partitionKeys,
-        connectorQueryCtx,
-        hiveConfig,
-        readerOutputType,
-        ioStats,
-        fsStats,
-        fileHandleFactory,
-        ioExecutor,
-        scanSpec));
+  if (hiveSplit->customSplitInfo.count("table_format") > 0) {
+    const auto& tableFormat = hiveSplit->customSplitInfo.at("table_format");
+    if (tableFormat == "hive-iceberg") {
+      return std::make_unique<iceberg::IcebergSplitReader>(
+          hiveSplit,
+          hiveTableHandle,
+          partitionKeys,
+          connectorQueryCtx,
+          hiveConfig,
+          readerOutputType,
+          ioStats,
+          fsStats,
+          fileHandleFactory,
+          ioExecutor,
+          scanSpec);
+    } else if (tableFormat == "hive-delta") {
+      return std::make_unique<delta::DeltaSplitReader>(
+          hiveSplit,
+          hiveTableHandle,
+          partitionKeys,
+          connectorQueryCtx,
+          hiveConfig,
+          readerOutputType,
+          ioStats,
+          fsStats,
+          fileHandleFactory,
+          ioExecutor,
+          scanSpec);
+    }
   }
+
+  // Default to base SplitReader for regular Hive tables
+  return std::unique_ptr<SplitReader>(new SplitReader(
+      hiveSplit,
+      hiveTableHandle,
+      partitionKeys,
+      connectorQueryCtx,
+      hiveConfig,
+      readerOutputType,
+      ioStats,
+      fsStats,
+      fileHandleFactory,
+      ioExecutor,
+      scanSpec));
 }
 
 SplitReader::SplitReader(
