@@ -54,6 +54,11 @@ Functions
     must be a value greater than zero and less than one, and it must be constant
     for all input rows.
 
+.. function:: scale_qdigest(qdigest(T), scale_factor) -> qdigest(T)
+
+    Returns a ``qdigest`` whose distribution has been scaled by a factor
+    specified by ``scale_factor``.
+
 .. function:: value_at_quantile(digest: qdigest<T>, quantile: double) -> T
 
     Returns the approximate percentile values from the quantile digest ``digest`` given the ``quantile``.
