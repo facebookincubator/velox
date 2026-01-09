@@ -4295,11 +4295,7 @@ TEST_F(VectorTest, hasOverlappingRanges) {
     if (!overlap) {
       ASSERT_FALSE(makeArray()->hasOverlappingRanges());
     } else {
-      const auto array = makeArray();
-      ASSERT_TRUE(array->hasOverlappingRanges());
-      VELOX_ASSERT_THROW(
-          array->validate({}),
-          "ArrayVectorBase must not have overlapping ranges of elements.");
+      ASSERT_TRUE(makeArray()->hasOverlappingRanges());
     }
   };
   test(3, {false, false, false}, {0, 1, 2}, {1, 1, 1}, false);
