@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/core.h>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -52,42 +53,70 @@ namespace facebook::velox {
 #endif
 #endif
 
-/// Define tsan_atomic<T> to be std::atomic<T?> for tsan builds and
-/// T otherwise. This allows declaring variables like statistics
-/// counters that do not have to be exact nor have synchronized
-/// semantics. This deals with san errors while not incurring the
-/// bus lock overhead at run time in regular builds.
-#ifdef TSAN_BUILD
+/// tsan_atomic is relaxed atomic without use rmw operations.
+/// For an example instead of fetch_add it does load, add, store.
+/// This is not atomic operation, but it is ok for our use cases.
+/// This allows declaring variables like statistics counters that do not have to
+/// be exact nor have synchronized semantics.
+/// TODO: Use different name.
 template <typename T>
-using tsan_atomic = std::atomic<T>;
+class tsan_atomic : protected std::atomic<T> {
+ public:
+  using std::atomic<T>::atomic;
 
-template <typename T>
-inline T tsanAtomicValue(const std::atomic<T>& x) {
-  return x;
-}
+  T operator=(T v) noexcept {
+    this->store(v, std::memory_order_relaxed);
+    return v;
+  }
 
-/// Lock guard in tsan build and no-op otherwise.
-template <typename T>
-using tsan_lock_guard = std::lock_guard<T>;
+  operator T() const noexcept {
+    return this->load(std::memory_order_relaxed);
+  }
 
-#else
+  T operator+=(T v) noexcept {
+    const auto newValue = *this + v;
+    return *this = newValue;
+  }
+  T operator-=(T v) noexcept {
+    const auto newValue = *this - v;
+    return *this = newValue;
+  }
+  T operator&=(T v) noexcept {
+    const auto newValue = *this & v;
+    return *this = newValue;
+  }
+  T operator|=(T v) noexcept {
+    const auto newValue = *this | v;
+    return *this = newValue;
+  }
+  T operator^=(T v) noexcept {
+    const auto newValue = *this ^ v;
+    return *this = newValue;
+  }
 
-template <typename T>
-using tsan_atomic = T;
+  T operator++(int) noexcept {
+    const T oldValue = *this;
+    *this = oldValue + T(1);
+    return oldValue;
+  }
+  T operator--(int) noexcept {
+    const T oldValue = *this;
+    *this = oldValue - T(1);
+    return oldValue;
+  }
 
-template <typename T>
-inline T tsanAtomicValue(T x) {
-  return x;
-}
-template <typename T>
-struct TsanEmptyLockGuard {
-  TsanEmptyLockGuard(T& /*ignore*/) {}
+  T operator++() noexcept {
+    return *this += T(1);
+  }
+  T operator--() noexcept {
+    return *this -= T(1);
+  }
 };
 
 template <typename T>
-using tsan_lock_guard = TsanEmptyLockGuard<T>;
-
-#endif
+inline T tsanAtomicValue(const tsan_atomic<T>& x) {
+  return x;
+}
 
 template <typename T>
 inline void resizeTsanAtomic(
@@ -101,3 +130,11 @@ inline void resizeTsanAtomic(
   vector = std::move(newVector);
 }
 } // namespace facebook::velox
+
+template <typename T>
+struct fmt::formatter<facebook::velox::tsan_atomic<T>> : formatter<T> {
+  template <typename FormatContext>
+  auto format(const T& v, FormatContext& ctx) const {
+    return formatter<T>::format(v, ctx);
+  }
+};
