@@ -23,11 +23,11 @@ set(VELOX_cudf_VERSION 26.02 CACHE STRING "cudf version")
 
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  b70a8f25fd74e58b6597741a3541f96d98608edf6cd40d3573f34c0096c999fc
+  96b54c2b33281f58183978429933740869ef384d2687308699a257b05076d4fd
 )
 set(
   VELOX_cudf_SOURCE_URL
-  "https://github.com/rapidsai/cudf/archive/059ee7facab2aa8221d31df6ff98c31748f5dda7.tar.gz"
+  "https://github.com/rapidsai/cudf/archive/3f85f626633ca4202941cc3bf3112bcd319eab8e.tar.gz"
 )
 velox_resolve_dependency_url(cudf)
 
