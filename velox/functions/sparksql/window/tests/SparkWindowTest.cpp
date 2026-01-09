@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/Window.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
@@ -105,6 +109,60 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SparkWindowTestInstantiation,
     SparkWindowTest,
     testing::ValuesIn(getSparkWindowTestParams()));
+
+class SparkAggregateWindowTest : public WindowTestBase {
+ public:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    WindowTestBase::options_.parseIntegerAsBigint = false;
+    velox::functions::aggregate::sparksql::registerAggregateFunctions("");
+  }
+};
+
+DEBUG_ONLY_TEST_F(SparkAggregateWindowTest, destroyPreviousAccumulator) {
+  const auto size = 100;
+  auto input = makeRowVector(
+      {"d", "p0", "s"},
+      {
+          // Payload Data.
+          makeFlatVector<std::string>(size, [](auto row){ return std::string(1024, 'a'); }),
+          // Partition key.
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values(split(input, 10))
+                  .window({"last(d) over (partition by p0 order by s)"})
+                  .planNode();
+
+  const HashStringAllocator* stringAllocator = nullptr;
+  uint64_t usedBytes = 0;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Window::callApplyForPartitionRows",
+      std::function<void(exec::Window*)>([&](exec::Window* windowOp) {
+        if (stringAllocator == nullptr) {
+          stringAllocator = windowOp->testingGetHashStringAllocator();
+          // Record how many bytes have been used.
+          usedBytes = stringAllocator->currentBytes();
+        } else {
+          // Because we will destroy previous created accumulator and every string in input
+          // is of the same length, so here we check if the `usedBytes` is not changed.
+          ASSERT_EQ(usedBytes, stringAllocator->currentBytes());
+        }
+      }));
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .serialExecution(true)
+          .assertResults(
+              "SELECT *, last(d) over (partition by p0 order by s) "
+              "FROM tmp ");
+}
 
 } // namespace
 } // namespace facebook::velox::window::test
