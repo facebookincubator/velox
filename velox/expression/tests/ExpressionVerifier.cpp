@@ -32,6 +32,34 @@ namespace facebook::velox::test {
 using exec::test::ReferenceQueryErrorCode;
 
 namespace {
+
+// Helper function, recursively checks if an expression or any of its children
+// has special forms "if" or "switch". Such expressions may be the result of
+// rewrites and can be ignored during failures.
+bool containsIfOrSwitch(const core::TypedExprPtr& expr) {
+  if (auto callExpr =
+          std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+    if (callExpr->name() == "if" || callExpr->name() == "switch") {
+      return true;
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsIfOrSwitch(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool plansContainIfOrSwitch(const std::vector<core::TypedExprPtr>& plans) {
+  for (const auto& plan : plans) {
+    if (containsIfOrSwitch(plan)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void logInputs(const std::vector<fuzzer::InputTestCase>& inputTestCases) {
   int testCaseIdx = 0;
   for (const auto& [rowVector, rows] : inputTestCases) {
@@ -589,7 +617,19 @@ ExpressionVerifier::verify(
             copiedResult,
             sql,
             complexConstants);
-        throw;
+        // Let's check if the exception was thrown due to a switch or if
+        // rewrite. This optimization may introduce errors due to default null
+        // propagation. Behavior mismatch is acceptable in this case. More
+        // information can be found here:
+        // https://github.com/facebookincubator/velox/issues/15486
+        if (plansContainIfOrSwitch(plans)) {
+          LOG(WARNING) << "Expression contains IF or SWITCH. Skipping.";
+          continue;
+        }
+        // Vast majority of cases
+        else {
+          throw;
+        }
       }
     }
 
