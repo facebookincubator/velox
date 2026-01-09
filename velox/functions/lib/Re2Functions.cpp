@@ -43,18 +43,13 @@ Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
     return reIt->second.get();
   }
 
-  if (cache_.size() >= maxCompiledRegexes_) {
-    return folly::makeUnexpected(
-        Status::UserError("Max number of regex reached"));
-  }
-
   auto re = std::make_unique<RE2>(toStringPiece(pattern), RE2::Quiet);
   if (!re->ok()) {
     return folly::makeUnexpected(
         Status::UserError("invalid regular expression:{}", re->error()));
   }
 
-  auto [it, inserted] = cache_.emplace(key, std::move(re));
+  auto [it, inserted] = cache_.insert(key, std::move(re));
   VELOX_CHECK(inserted);
 
   return it->second.get();
@@ -916,14 +911,14 @@ class LikeWithRe2 final : public exec::VectorFunction {
 };
 
 // This function is constructed when pattern or escape are not constants.
-// It allows up to 'expression.max_compiled_regexes' different regular
-// expressions to be compiled throughout the query lifetime per expression and
-// thread of execution, note that optimized regular expressions that are not
+// It maintains an LRU cache with maximum capacity of
+// 'expression.max_compiled_regexes' compiled regular expressions per expression
+// and thread of execution, note that optimized regular expressions that are not
 // compiled are not counted.
 class LikeGeneric final : public exec::VectorFunction {
  public:
   explicit LikeGeneric(int64_t maxCompiledRegexes)
-      : maxCompiledRegexes_(maxCompiledRegexes) {}
+      : compiledRegularExpressions_(maxCompiledRegexes) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -1040,11 +1035,6 @@ class LikeGeneric final : public exec::VectorFunction {
       return reIt->second.get();
     }
 
-    VELOX_USER_CHECK_LT(
-        compiledRegularExpressions_.size(),
-        maxCompiledRegexes_,
-        "Max number of regex reached");
-
     bool validEscapeUsage;
     auto regex = likePatternToRe2(pattern, escapeChar, validEscapeUsage);
     VELOX_USER_CHECK(
@@ -1057,17 +1047,16 @@ class LikeGeneric final : public exec::VectorFunction {
     checkForBadPattern(*re);
 
     auto [it, inserted] =
-        compiledRegularExpressions_.emplace(key, std::move(re));
+        compiledRegularExpressions_.insert(key, std::move(re));
     VELOX_CHECK(inserted);
 
     return it->second.get();
   }
 
-  mutable folly::F14FastMap<
+  mutable folly::EvictingCacheMap<
       std::pair<std::string, std::optional<char>>,
       std::unique_ptr<RE2>>
       compiledRegularExpressions_;
-  int64_t maxCompiledRegexes_;
 };
 
 void re2ExtractAll(

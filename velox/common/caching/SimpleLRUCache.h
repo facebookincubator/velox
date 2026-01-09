@@ -109,8 +109,8 @@ struct SimpleLRUCacheStats {
 /// A simple LRU cache that allows each element to occupy an arbitrary amount of
 /// space in the cache. Useful when the size of the cached elements can vary a
 /// lot; if they are all roughly the same size something that only tracks the
-/// number of elements in the cache like common/datastruct/LRUCacheMap.h may be
-/// better.
+/// number of elements in the cache like folly/container/EvictingCacheMap.h may
+/// be better.
 ///
 /// NOTE:
 /// 1. NOT Thread-Safe: All the public calls modify internal structures and

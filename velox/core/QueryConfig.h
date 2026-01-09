@@ -113,8 +113,8 @@ class QueryConfig {
   static constexpr const char* kExprMaxArraySizeInReduce =
       "expression.max_array_size_in_reduce";
 
-  /// Controls maximum number of compiled regular expression patterns per
-  /// function instance per thread of execution.
+  /// Controls the capacity of the LRU cache for compiled regular expression
+  /// patterns per function instance per thread of execution.
   static constexpr const char* kExprMaxCompiledRegexes =
       "expression.max_compiled_regexes";
 
