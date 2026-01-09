@@ -16,6 +16,7 @@
 
 #include "velox/type/Variant.h"
 #include <cfloat>
+#include "folly/dynamic.h"
 #include "folly/json.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
@@ -392,7 +393,10 @@ std::string Variant::toJson(const Type& type) const {
         if (!first) {
           b += ",";
         }
-        b += v.toJson(type.childAt(idx++));
+        folly::dynamic entry = folly::dynamic::object;
+        entry[type.asRow().nameOf(idx)] = v.toJson(type.childAt(idx));
+        b += folly::toJson(entry);
+        idx++;
         first = false;
       }
       b += "]";
