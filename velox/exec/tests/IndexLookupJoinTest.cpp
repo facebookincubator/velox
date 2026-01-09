@@ -19,6 +19,7 @@
 #include "folly/experimental/EventCount.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest-matchers.h"
+#include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
@@ -207,20 +208,18 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   auto planBuilder = PlanBuilder();
-  auto nonIndexTableScan = std::dynamic_pointer_cast<const core::TableScanNode>(
+  auto nonIndexTableScan = checked_pointer_cast<const core::TableScanNode>(
       PlanBuilder::TableScanBuilder(planBuilder)
           .outputType(asRowType(right->type()))
           .endTableScan()
           .planNode());
-  VELOX_CHECK_NOT_NULL(nonIndexTableScan);
 
-  auto indexTableScan = std::dynamic_pointer_cast<const core::TableScanNode>(
+  auto indexTableScan = checked_pointer_cast<const core::TableScanNode>(
       PlanBuilder::TableScanBuilder(planBuilder)
           .tableHandle(indexConnectorHandle)
           .outputType(asRowType(right->type()))
           .endTableScan()
           .planNode());
-  VELOX_CHECK_NOT_NULL(indexTableScan);
 
   for (const auto joinType : {core::JoinType::kLeft, core::JoinType::kInner}) {
     auto plan = PlanBuilder(planNodeIdGenerator)
@@ -234,7 +233,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                     .endIndexLookupJoin()
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_TRUE(indexLookupJoinNode->joinConditions().empty());
     ASSERT_EQ(
         indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
@@ -256,7 +255,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                     .endIndexLookupJoin()
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 2);
     ASSERT_EQ(
         indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
@@ -281,7 +280,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                     .endIndexLookupJoin()
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 3);
     ASSERT_EQ(
         indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
@@ -304,7 +303,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
             .endIndexLookupJoin()
             .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 2);
     ASSERT_EQ(
         indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
@@ -328,7 +327,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
             .endIndexLookupJoin()
             .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 2);
     ASSERT_EQ(indexLookupJoinNode->filter(), nullptr);
     ASSERT_EQ(
@@ -352,7 +351,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         joinType)
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_TRUE(indexLookupJoinNode->joinConditions().empty());
     ASSERT_NE(indexLookupJoinNode->filter(), nullptr);
     ASSERT_EQ(
@@ -378,7 +377,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         joinType)
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 1);
     ASSERT_NE(indexLookupJoinNode->filter(), nullptr);
     ASSERT_EQ(
@@ -405,7 +404,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         core::JoinType::kLeft)
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 1);
     ASSERT_NE(indexLookupJoinNode->filter(), nullptr);
     ASSERT_EQ(
@@ -432,7 +431,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                     .endIndexLookupJoin()
                     .planNode();
     auto indexLookupJoinNode =
-        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+        checked_pointer_cast<const core::IndexLookupJoinNode>(plan);
     ASSERT_TRUE(indexLookupJoinNode->joinConditions().empty());
     ASSERT_NE(indexLookupJoinNode->filter(), nullptr);
     ASSERT_EQ(
