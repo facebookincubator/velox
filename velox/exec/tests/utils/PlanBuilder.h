@@ -743,6 +743,12 @@ class PlanBuilder {
   PlanBuilder& projectExpressions(
       const std::vector<core::TypedExprPtr>& projections);
 
+  /// Variation of project that takes typed expressions. This bypasses the
+  /// duckdb parser.
+  PlanBuilder& projectTypedExpressions(
+      const std::vector<std::string>& projectNames,
+      const std::vector<core::TypedExprPtr>& projections);
+
   /// Similar to project() except 'optionalProjections' could be empty and the
   /// function will skip creating a ProjectNode in that case.
   PlanBuilder& optionalProject(
