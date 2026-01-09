@@ -74,14 +74,7 @@ void ExchangeQueue::enqueueLocked(
 
   queue_.push_back(std::move(page));
   const auto minBatchSize = minOutputBatchBytesLocked();
-  while (!promises_.empty()) {
-    VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
-    const int32_t unblockedConsumers = numberOfConsumers_ - promises_.size();
-    const int64_t unasignedBytes =
-        totalBytes_ - unblockedConsumers * minBatchSize;
-    if (unasignedBytes < minBatchSize) {
-      break;
-    }
+  if (!promises_.empty() && totalBytes_ >= minBatchSize) {
     // Resume one of the waiting drivers.
     auto it = promises_.begin();
     promises.push_back(std::move(it->second));
