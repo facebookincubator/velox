@@ -690,10 +690,16 @@ class OpaqueWithMetadataType : public OpaqueType {
       : OpaqueType(std::type_index(typeid(OpaqueWithMetadata))),
         metadata(metadata) {}
 
+  bool operator==(const OpaqueWithMetadataType& other) const {
+    return OpaqueType::operator==(other) && other.metadata == metadata;
+  }
+
   bool operator==(const Type& other) const override {
-    return OpaqueType::operator==(other) &&
-        reinterpret_cast<const OpaqueWithMetadataType*>(&other)->metadata ==
-        metadata;
+    if (const auto* otherType =
+            reinterpret_cast<const OpaqueWithMetadataType*>(&other)) {
+      return (*this == *otherType);
+    }
+    return false;
   }
 
   folly::dynamic serialize() const override {
