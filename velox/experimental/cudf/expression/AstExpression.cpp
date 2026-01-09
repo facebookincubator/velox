@@ -16,7 +16,9 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstPrinter.hpp"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/vector/TableViewPrinter.hpp"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -221,6 +223,9 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
+
+  std::cout << "****** isAstExprSupported: " << expr->toString()
+            << ", name: " << name << ", len: " << len << std::endl;
 
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
@@ -714,6 +719,12 @@ ColumnOrView ASTExpression::eval(
             precomputedColumns[columnIndex - inputTableColumns.size()]);
       }
     } else {
+      if (CudfConfig::getInstance().debugEnabled) {
+        LOG(INFO) << cudf::ast::expression_to_string(cudfTree_.back())
+                  << std::endl;
+        LOG(INFO) << cudf::table_schema_to_string(astInputTableView)
+                  << std::endl;
+      }
       return cudf::compute_column(
           astInputTableView, cudfTree_.back(), stream, mr);
     }
