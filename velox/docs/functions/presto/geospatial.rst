@@ -599,6 +599,12 @@ for more details.
 
     Returns the polygon representation of a given Bing tile.
 
+.. function:: bing_tile_at(latitude, longitude, zoom_level) -> BingTile
+
+    Returns a Bing tile at a given zoom level containing a point at a given latitude
+    and longitude. Latitude must be within ``[-85.05112878, 85.05112878]`` range.
+    Longitude must be within ``[-180, 180]`` range. Zoom levels from 1 to 23 are supported.
+
 .. function:: bing_tile_quadkey() -> quadKey: varchar
 
     Returns the quadkey representing the provided bing tile.
