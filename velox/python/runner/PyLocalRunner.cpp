@@ -54,16 +54,27 @@ exec::Split preparedSplit(
 
 namespace py = pybind11;
 
-PyVector PyTaskIterator::Iterator::operator*() const {
-  return PyVector{vector_, outputPool_};
+PyTaskIterator::PyTaskIterator(
+    std::shared_ptr<memory::MemoryPool> pool,
+    std::shared_ptr<exec::TaskCursor> cursor)
+    : outputPool_(std::move(pool)), cursor_(std::move(cursor)) {
+  if (outputPool_ == nullptr) {
+    throw std::runtime_error(
+        "Memory pool cannot be nullptr when constructing PyTaskIterator.");
+  }
+  if (cursor_ == nullptr) {
+    throw std::runtime_error(
+        "Cursor cannot be nullptr when constructing PyTaskIterator.");
+  }
 }
 
-void PyTaskIterator::Iterator::advance() {
-  if (cursor_ && cursor_->moveNext()) {
-    vector_ = cursor_->current();
-  } else {
+PyVector PyTaskIterator::next() {
+  if (!cursor_->moveNext()) {
     vector_ = nullptr;
+    throw py::stop_iteration(); // Raise StopIteration when done.
   }
+  vector_ = cursor_->current();
+  return PyVector{vector_, outputPool_};
 }
 
 PyLocalRunner::PyLocalRunner(
@@ -92,24 +103,16 @@ void PyLocalRunner::addQueryConfig(
   queryConfigs_[configName] = configValue;
 }
 
-py::iterator PyLocalRunner::execute(int32_t maxDrivers) {
-  if (pyIterator_) {
-    throw std::runtime_error("PyLocalRunner can only be executed once.");
-  }
-
-  // Create query context.
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(),
-      core::QueryConfig(queryConfigs_),
-      {},
-      cache::AsyncDataCache::getInstance(),
-      rootPool_);
-
+PyTaskIterator PyLocalRunner::execute(int32_t maxDrivers) {
   // Initialize task cursor and task.
   cursor_ = exec::TaskCursor::create({
       .planNode = planNode_,
       .maxDrivers = maxDrivers,
-      .queryCtx = queryCtx,
+      .queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .queryConfig(core::QueryConfig(queryConfigs_))
+                      .pool(rootPool_)
+                      .build(),
       .outputPool = outputPool_,
   });
 
@@ -120,14 +123,13 @@ py::iterator PyLocalRunner::execute(int32_t maxDrivers) {
     }
     cursor_->task()->noMoreSplits(scanId);
   }
+  scanFiles_.clear();
 
   {
     std::lock_guard<std::mutex> guard(taskRegistryLock());
     taskRegistry().push_back(cursor_->task());
   }
-
-  pyIterator_ = std::make_shared<PyTaskIterator>(cursor_, outputPool_);
-  return py::make_iterator(pyIterator_->begin(), pyIterator_->end());
+  return PyTaskIterator{outputPool_, cursor_};
 }
 
 std::string PyLocalRunner::printPlanWithStats() const {
