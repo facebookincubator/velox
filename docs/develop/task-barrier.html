@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Task Barrier &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="SIMD Usage in Velox" href="simd.html" />
+    <link rel="prev" title="What’s in the Task?" href="task.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="simd.html" title="SIMD Usage in Velox"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="task.html" title="What’s in the Task?"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Task Barrier</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="task-barrier">
+<h1>Task Barrier<a class="headerlink" href="#task-barrier" title="Link to this heading">¶</a></h1>
+<section id="motivation-context">
+<h2>Motivation &amp; Context<a class="headerlink" href="#motivation-context" title="Link to this heading">¶</a></h2>
+<p>The introduction of Task Barrier support in Velox was driven by two distinct but
+related high-performance workloads: AI training data loading and Real-time
+Streaming Processing. Both require strict control over task lifecycle and state
+management.</p>
+<p>These workloads share three critical requirements:</p>
+<ol class="arabic simple">
+<li><p><strong>High Efficiency (Task Reuse)</strong>: AI training feeds data split-by-split.
+Creating a new VeloxTask for every single split incurs some overhead (memory
+allocation, plan optimization, operator initialization).</p></li>
+<li><p><strong>Checkpointing &amp; Consistency (Streaming)</strong>: Streaming systems need a way to
+safely “pause” the stream to take a consistent snapshot. To do this, the
+system must ensure all data belonging to a specific time window or epoch is
+fully processed and flushed before moving to the next.</p></li>
+<li><p><strong>Deterministic Execution</strong>: To ensure experiments are reproducible, data
+order and processing must be identical across runs.</p></li>
+</ol>
+</section>
+<section id="the-solution-task-barrier">
+<h2>The Solution: Task Barrier<a class="headerlink" href="#the-solution-task-barrier" title="Link to this heading">¶</a></h2>
+<p>To solve this, Velox uses Sequential Task Execution combined with a Task
+Barrier. This allows a single Velox Task to be reused indefinitely.</p>
+<p>The “Barrier” is a synchronization mechanism that forces the task to “pause”
+and drain all in-flight data—including buffered data in stateful operators.</p>
+<ul class="simple">
+<li><p><strong>For AI Loading</strong>: This ensures the task is clean and ready for the next
+batch of splits without overhead.</p></li>
+<li><p><strong>For Streaming</strong>: This acts as a “consistent cut,” ensuring that all state
+modifications for the current epoch are finalized and emitted before the next
+epoch begins.</p></li>
+</ul>
+</section>
+<section id="api-usage">
+<h2>API &amp; Usage<a class="headerlink" href="#api-usage" title="Link to this heading">¶</a></h2>
+<p>The core API introduced is <code class="docutils literal notranslate"><span class="pre">Task::requestBarrier()</span></code>. This signals the task to
+finish processing all currently queued splits and fully drain all stateful
+operators.</p>
+<section id="workflow">
+<h3>Workflow<a class="headerlink" href="#workflow" title="Link to this heading">¶</a></h3>
+<ol class="arabic">
+<li><p><strong>Feed Splits</strong>: The application adds a set of splits to the task, providing
+exactly one split per each data source (e.g., one file split for every
+TableScan node).</p></li>
+<li><p><strong>Request Barrier</strong>: Immediately after feeding the splits, the application
+calls <code class="docutils literal notranslate"><span class="pre">requestBarrier()</span></code>. This signals that no more splits will be added
+after this Split Set until it has been fully processed, all resulting data
+has been produced, and the task has completely drained and signaled its
+completion (reached the barrier).</p></li>
+<li><p><strong>Process &amp; Barrier Detection</strong>: The application continuously calls
+<code class="docutils literal notranslate"><span class="pre">task-&gt;next()</span></code> to fetch results. From a user perspective, the Barrier
+Reached state is detected precisely when:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">task-&gt;next()</span></code> returns no data (nullptr), AND</p></li>
+<li><p>The returned ContinueFuture is not set (invalid)</p></li>
+</ul>
+<p>This specific combination confirms that the task is not merely blocked
+waiting for I/O, but has fully drained all vectors from the current Split
+Set and is now idle.</p>
+<p>(Note: The internal mechanism of how drivers coordinate this draining
+sequence and signal completion to the Task is explained in detail in the
+Implementation Mechanism section).</p>
+</li>
+<li><p><strong>Decision (Cycle or Finish)</strong>: Once the barrier is reached, the application
+must take one of two actions:</p>
+<ul class="simple">
+<li><p><strong>Finish Task</strong>: If there are no more splits to process (e.g., end of
+dataset), call <code class="docutils literal notranslate"><span class="pre">noMoreSplits()</span></code> on the task to signal the final end of
+the job and terminate.</p></li>
+<li><p><strong>Repeat Cycle</strong>: If more splits exist, proceed to Step 5 to add the next
+set.</p></li>
+</ul>
+</li>
+<li><p><strong>Resume</strong>: The application adds the new Split Set and repeats the process
+from Step 1.</p></li>
+</ol>
+</section>
+<section id="code-example-c">
+<h3>Code Example (C++)<a class="headerlink" href="#code-example-c" title="Link to this heading">¶</a></h3>
+<p>The following pseudo-code illustrates how an AI data loader interacts with the
+Velox Task Barrier:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// AI data loading loop</span>
+<span class="c1">// 1. Get splits from the runtime</span>
+<span class="c1">// 2. Feed them to Velox</span>
+<span class="c1">// 3. Wait for barrier to ensure all data for those splits is produced</span>
+
+<span class="kt">bool</span><span class="w"> </span><span class="nf">addSplits</span><span class="p">();</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(;;)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// Data consumption loop</span>
+<span class="w">  </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="nb">true</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ContinueFuture</span><span class="w"> </span><span class="n">dataFuture</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ContinueFuture</span><span class="o">::</span><span class="n">makeEmpty</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Fetch next batch of results (velox vector)</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">veloxTask</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dataFuture</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">data</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="c1">// Consume the data (e.g., feed to training loop)</span>
+<span class="w">      </span><span class="n">consume</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+<span class="w">      </span><span class="k">continue</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// If no data is returned, check if we are blocked</span>
+<span class="w">    </span><span class="c1">// BARRIER REACHED CONDITION: Data is null AND future is invalid.</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">dataFuture</span><span class="p">.</span><span class="n">valid</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="c1">// The Task is now idle at the Barrier.</span>
+
+<span class="w">      </span><span class="c1">// Attempt to fetch new splits for the next Split Set</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">getSplits</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">continue</span><span class="p">;</span><span class="w"> </span><span class="c1">// New splits added -&gt; Resume processing (Repeat Cycle)</span>
+<span class="w">      </span><span class="p">}</span>
+
+<span class="w">      </span><span class="c1">// No more splits available -&gt; Execution finished.</span>
+<span class="w">      </span><span class="k">return</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Wait for the task to produce more data</span>
+<span class="w">    </span><span class="n">wait</span><span class="p">(</span><span class="n">dataFuture</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// Helper to add splits and request barrier</span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">getSplits</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">splitSet</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nextSplitSet</span><span class="p">();</span>
+
+<span class="w">  </span><span class="c1">// TERMINATION CONDITION:</span>
+<span class="w">  </span><span class="c1">// If no more splits are available from the source (e.g., end of dataset),</span>
+<span class="w">  </span><span class="c1">// we must explicitly signal the Task that input is finished.</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">splitSet</span><span class="p">.</span><span class="n">has_value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">     </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="p">[</span><span class="n">op</span><span class="p">,</span><span class="w"> </span><span class="n">planNode</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">veloxPlan</span><span class="p">.</span><span class="n">leafNodes</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">       </span><span class="n">veloxTask</span><span class="o">-&gt;</span><span class="n">noMoreSplits</span><span class="p">(</span><span class="n">planNode</span><span class="o">-&gt;</span><span class="n">id</span><span class="p">());</span>
+<span class="w">     </span><span class="p">}</span>
+<span class="w">     </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Add splits for all leaf nodes</span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="p">[</span><span class="n">op</span><span class="p">,</span><span class="w"> </span><span class="n">planNode</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">veloxPlan</span><span class="p">.</span><span class="n">leafNodes</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">veloxTask</span><span class="o">-&gt;</span><span class="n">addSplit</span><span class="p">(</span><span class="n">planNode</span><span class="o">-&gt;</span><span class="n">id</span><span class="p">(),</span><span class="w"> </span><span class="n">splitSet</span><span class="p">.</span><span class="n">at</span><span class="p">(</span><span class="n">planNode</span><span class="o">-&gt;</span><span class="n">id</span><span class="p">()));</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="c1">// Request a barrier immediately after adding the split set</span>
+<span class="w">  </span><span class="c1">// This acts as a seal for the current split set, ensuring the task</span>
+<span class="w">  </span><span class="c1">// drains fully.</span>
+<span class="w">  </span><span class="n">veloxTask</span><span class="o">-&gt;</span><span class="n">requestBarrier</span><span class="p">();</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implementation-mechanism">
+<h2>Implementation Mechanism<a class="headerlink" href="#implementation-mechanism" title="Link to this heading">¶</a></h2>
+<p>The implementation relies on a special Barrier Split and a cooperative draining
+mechanism within the Driver pipeline.</p>
+<section id="the-barrier-split">
+<h3>The Barrier Split<a class="headerlink" href="#the-barrier-split" title="Link to this heading">¶</a></h3>
+<p>When <code class="docutils literal notranslate"><span class="pre">requestBarrier()</span></code> is called:</p>
+<ul class="simple">
+<li><p>Velox injects a special “Barrier Split” into the split queue of every source
+operator in the leaf drivers (the drivers that read raw input splits).</p></li>
+<li><p>This split acts as a Sentinel that flows through the pipeline.</p></li>
+<li><p>It is excluded from standard task split processing statistics.</p></li>
+</ul>
+</section>
+<section id="draining-stateful-operators">
+<h3>Draining Stateful Operators<a class="headerlink" href="#draining-stateful-operators" title="Link to this heading">¶</a></h3>
+<p>Standard stateless operators (e.g., Filter, Project) process data
+vector-by-vector, typically producing one output vector for each input vector
+without buffering. They handle the barrier sentinel simply by passing it
+downstream once the current input vector is finished.</p>
+<p>However, stateful operators (like Aggregations or Joins) actively buffer data
+across multiple input vectors. The barrier mechanism forces them to flush this
+buffer via a BarrierState maintained by each Driver.</p>
+<p>The Draining Process:</p>
+<ul class="simple">
+<li><p><strong>Trigger</strong>: When a source operator receives the Barrier Split, it enters
+“draining mode” by calling the driver’s <code class="docutils literal notranslate"><span class="pre">drainOutput()</span></code> method.</p></li>
+<li><p><strong>Action</strong>: The driver then propagates this state by calling <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code>
+on the next operator in the pipeline.</p></li>
+<li><p><strong>Flush</strong>: If that operator is stateful, it flushes all buffered data to the
+output.</p></li>
+<li><p><strong>Forward</strong>: The operator then calls <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code> on its downstream
+operator, ensuring the signal flows operator-by-operator within the driver.</p></li>
+</ul>
+</section>
+<section id="diagram-draining-flow-single-driver">
+<h3>Diagram: Draining Flow (Single Driver)<a class="headerlink" href="#diagram-draining-flow-single-driver" title="Link to this heading">¶</a></h3>
+<p>The diagram below shows how the signal flows. Notice how the Stateful Operator
+must flush its buffer before passing the signal to the Sink.</p>
+<a class="reference internal image-reference" href="../_images/task-barrier-single-driver.png"><img alt="Draining Flow (Single Driver)" src="../_images/task-barrier-single-driver.png" style="width: 100%;" />
+</a>
+</section>
+<section id="cross-pipeline-propagation-the-dag">
+<h3>Cross-Pipeline Propagation (The DAG)<a class="headerlink" href="#cross-pipeline-propagation-the-dag" title="Link to this heading">¶</a></h3>
+<p>A complex query plan in Velox is executed as a Directed Acyclic Graph (DAG) of
+pipelines. The barrier must propagate through this entire graph in topological
+order.</p>
+<p><strong>Mechanism: LocalExchange via Exchange Queue</strong></p>
+<p>The pipelines in Velox are connected by LocalExchange through an Exchange Queue
+mechanism. This structure allows the barrier signal to “jump” across pipeline
+boundaries.</p>
+<ul class="simple">
+<li><p><strong>Leaf Pipeline Completion</strong>: The barrier processing starts at the leaf
+drivers. The signal propagates down the operators until it reaches the Sink
+Operator (e.g., LocalPartition, LocalExchangeSink).</p></li>
+<li><p><strong>The Bridge (Queue)</strong>: When the Sink Operator receives the <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code>
+signal, it first flushes any buffered data it holds. It then places a special
+Barrier Token into the connecting Exchange Queue. This marker sits
+immediately after the last data vector generated by the current Split Set.</p></li>
+<li><p><strong>Downstream Pipeline Activation</strong>: The downstream driver (e.g., the Join
+pipeline) reads from this queue. When its Source Operator encounters the
+Barrier Token, it interprets this as the signal to initiate the barrier
+sequence for its own pipeline.</p></li>
+<li><p><strong>Synchronization</strong>: This ensures strict ordering. Pipeline B cannot finish
+its barrier processing until Pipeline A has fully flushed its data and passed
+the barrier token. The Task monitors the completion of all drivers via the
+internal <code class="docutils literal notranslate"><span class="pre">finishDriverBarrier()</span></code> mechanism; only when the final sink in the
+final pipeline has finished draining is the Barrier Future fulfilled.</p></li>
+</ul>
+</section>
+<section id="illustration-mergejoin-example">
+<h3>Illustration: MergeJoin Example<a class="headerlink" href="#illustration-mergejoin-example" title="Link to this heading">¶</a></h3>
+<p>Consider a MergeJoin with two upstream pipelines (Left and Right) feeding into a
+Join pipeline.</p>
+<ul class="simple">
+<li><p><strong>Step 1</strong>: The Task injects Barrier Splits into the TableScan operators of
+both the Left and Right pipelines.</p></li>
+<li><p><strong>Step 2</strong>: Both pipelines process their splits, flush their local operators
+(e.g., filters), and push data to their respective Exchange Queues.</p></li>
+<li><p><strong>Step 3</strong>: Both pipelines finish by pushing a Barrier Token into their
+queues.</p></li>
+<li><p><strong>Step 4</strong>: The Join Pipeline reads from these queues. It processes data until
+it hits the Barrier Token on both inputs.</p></li>
+<li><p><strong>Step 5</strong>: The MergeJoin operator receives <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code>. It performs the
+“Drop-Input” optimization (checking if it can stop early) and flushes any
+remaining matches.</p></li>
+<li><p><strong>Step 6</strong>: The Join pipeline completes, fulfilling the user’s promise.</p></li>
+</ul>
+<a class="reference internal image-reference" href="../_images/task-barrier-multi-driver.png"><img alt="MergeJoin Barrier Propagation" src="../_images/task-barrier-multi-driver.png" style="width: 100%;" />
+</a>
+</section>
+</section>
+<section id="tablescan-source-operator-mechanics">
+<h2>TableScan &amp; Source Operator Mechanics<a class="headerlink" href="#tablescan-source-operator-mechanics" title="Link to this heading">¶</a></h2>
+<p>The TableScan (or any Source Operator) is the entry point for the barrier
+signal. Its behavior is critical for determining when to “Pause” (Drain) and
+when to “Resume.”</p>
+<section id="delivery-entering-the-barrier">
+<h3>Delivery (Entering the Barrier)<a class="headerlink" href="#delivery-entering-the-barrier" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Injection</strong>: The <code class="docutils literal notranslate"><span class="pre">requestBarrier</span></code> API directly injects a BarrierSplit into
+the Task’s split queue. This split is distinct from regular data splits (e.g.,
+FileSplit).</p></li>
+<li><p><strong>Detection</strong>: The Driver loop responsible for the TableScan fetches the next
+split from the queue. When it pops the BarrierSplit, it does not attempt to
+read data.</p></li>
+<li><p><strong>Signal Initiation</strong>: Instead of calling getOutput, the driver invokes
+<code class="docutils literal notranslate"><span class="pre">startDrain()</span></code> on the TableScan operator. This initiates the cascading drain
+sequence described in The Draining Process Section.</p></li>
+<li><p><strong>Exclusion</strong>: The TableScan ensures this split does not increment task
+progress counters (e.g., “completed splits”), ensuring the barrier is
+transparent to execution metrics.</p></li>
+</ul>
+</section>
+<section id="resuming-exit-next-split">
+<h3>Resuming (Exit &amp; Next Split)<a class="headerlink" href="#resuming-exit-next-split" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Idle State</strong>: Once the TableScan has propagated the drain signal and the
+downstream pipeline has fully drained, the Driver completes that specific
+execution cycle. The Task marks the barrier future as complete.</p></li>
+<li><p><strong>Wait</strong>: The TableScan driver does not terminate; it simply returns to
+checking the split queue. If the queue is empty, the driver yields (waits).</p></li>
+<li><p><strong>Re-activation</strong>: When the application calls <code class="docutils literal notranslate"><span class="pre">addSplit()</span></code> with new data
+splits for the next logical Split Set:</p>
+<ol class="arabic simple">
+<li><p>The splits are pushed to the queue.</p></li>
+<li><p>The TableScan driver wakes up, pops a valid data split, and resumes
+standard data processing (getOutput).</p></li>
+</ol>
+</li>
+</ul>
+<p>This seamless transition allows the same Task and Driver instances—and their
+associated memory pools and caches—to be reused indefinitely.</p>
+</section>
+</section>
+<section id="operator-specific-implementation-details">
+<h2>Operator-Specific Implementation Details<a class="headerlink" href="#operator-specific-implementation-details" title="Link to this heading">¶</a></h2>
+<p>The core of the barrier implementation lies in the <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code> virtual
+method. While stateless operators simply pass the signal through, stateful
+operators must actively manage their buffers to ensure data determinism.</p>
+<section id="index-lookup-join">
+<h3>Index Lookup Join<a class="headerlink" href="#index-lookup-join" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Function</strong>: Connects a stream of input rows (probe side) with a remote or
+local index (build side), often fetching matches asynchronously.</p></li>
+</ul>
+<p><strong>Draining Complexity</strong>: The operator typically buffers input rows to perform
+batched lookups or asynchronous prefetches. Simply stopping input isn’t enough;
+pending lookups inside the execution engine must complete and be emitted.</p>
+<p><strong>Barrier Logic</strong>:</p>
+<ul class="simple">
+<li><p><strong>Flush Prefetch Buffers</strong>: When the barrier signal is received, the operator
+forces the flushing of any “in-flight” batches that have been sent for lookup
+but haven’t yet produced output.</p></li>
+<li><p><strong>Drain Output</strong>: It ensures that <code class="docutils literal notranslate"><span class="pre">getOutput()</span></code> continues to return results
+until all buffered lookup requests have been resolved and emitted.</p></li>
+</ul>
+</section>
+<section id="unnest">
+<h3>Unnest<a class="headerlink" href="#unnest" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Function</strong>: Expands complex types (arrays, maps) into multiple rows.</p></li>
+</ul>
+<p><strong>Draining Complexity</strong>: An Unnest operator might require multiple calls to
+<code class="docutils literal notranslate"><span class="pre">getOutput()</span></code> to fully process a single large input vector due to output batch
+size limits. If a barrier arrives, the operator cannot simply stop; it must
+finish expanding the current vector.</p>
+<p><strong>Barrier Logic</strong>:</p>
+<ul class="simple">
+<li><p><strong>Process Remaining Rows</strong>: The <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code> logic ensures that the
+operator does not accept new input vectors but continues to generate output
+until the current input vector is fully unnested.</p></li>
+<li><p><strong>Clean State</strong>: Once the current input vector is exhausted, the operator
+transitions to a finished state for that specific barrier cycle, ensuring no
+partial arrays are left “half-expanded” across the split boundary.</p></li>
+</ul>
+</section>
+<section id="sort-merge-join">
+<h3>Sort Merge Join<a class="headerlink" href="#sort-merge-join" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Function</strong>: Assumes both inputs are sorted and finds matches by traversing
+them simultaneously. It is highly stateful and relies on the relative order of
+keys.</p></li>
+</ul>
+<p><strong>Draining Complexity</strong>: “Over-Reading” in Draining Mode</p>
+<p>In a standard Sort Merge Join, the operator buffers rows from one side while
+iterating through the other. When a Barrier acts as a temporary “End of Stream,”
+the operator might continue reading from one input even after the other input
+has finished, to find potential matches. However, because the inputs are sorted,
+the operator often knows that no further matches are possible, making this extra
+I/O wasteful.</p>
+<p><strong>Barrier Logic &amp; The “Drop-Input” Optimization</strong></p>
+<p>This operator implements an optimization to prevent wasteful processing:</p>
+<ol class="arabic simple">
+<li><p><strong>Draining Matches</strong>: When <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code> is invoked, the operator forces
+the processing of any matches currently possible with the buffered data.</p></li>
+<li><p><strong>Early Cutoff (Drop-Input)</strong>:</p>
+<ul class="simple">
+<li><p><strong>Logic</strong>: If one side of the join is fully processed/drained (hit the
+barrier), the operator compares the max key from that finished side against
+the current key of the active side.</p></li>
+<li><p><strong>Decision</strong>: If the active side’s key has already passed the finished
+side’s max key (based on sort order), no future matches are possible.</p></li>
+<li><p><strong>Action</strong>: The operator sets the <code class="docutils literal notranslate"><span class="pre">dropInputOpId</span></code> in the BarrierState.
+This signals the driver to stop pulling data for the remaining side
+immediately.</p></li>
+</ul>
+</li>
+</ol>
+<p>This optimization saves significant CPU and I/O resources while still
+guaranteeing the same correct result as a full drain.</p>
+</section>
+<section id="streaming-aggregation">
+<h3>Streaming Aggregation<a class="headerlink" href="#streaming-aggregation" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Function</strong>: Computes aggregates (SUM, COUNT, etc.) on data already sorted by
+grouping keys.</p></li>
+</ul>
+<p><strong>Draining Complexity</strong>: The operator buffers the current group’s accumulation
+in memory. If the split ends exactly at a barrier, that partial accumulation
+exists in the operator’s state but hasn’t been emitted because the operator
+hasn’t seen a “new” key to trigger the flush.</p>
+<p><strong>Barrier Logic</strong>:</p>
+<ul class="simple">
+<li><p><strong>Force Group Flush</strong>: Upon receiving the barrier signal via <code class="docutils literal notranslate"><span class="pre">startDrain()</span></code>,
+the operator treats the event as a virtual “end of stream” for the current
+batch. It forces the emission of the accumulated result for the current group
+key, even if the key hasn’t changed yet.</p></li>
+<li><p><strong>Reset Accumulators</strong>: After flushing, the accumulators are reset. This
+ensures that when the task resumes after the barrier with new splits, it
+starts fresh.</p></li>
+</ul>
+</section>
+</section>
+<section id="limitations">
+<h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>Sequential Execution Mode Only</strong>: The barrier logic currently requires the
+task to be running in sequential execution mode (single-threaded logic per
+driver).</p></li>
+<li><p><strong>Restricted Data Sources</strong>: The barrier execution strictly supports only
+TableScan source nodes. Other source nodes, such as Values (value source node)
+or RemoteExchange (remote exchange node), are not supported.</p></li>
+<li><p><strong>HashJoin</strong>: Not supported. HashJoin involves complex build-side state
+management that is less common in the streaming/AI workloads targeted by this
+feature. These workloads typically rely on MergeJoin or IndexJoin to maintain
+order and lower memory footprint.</p></li>
+</ul>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Task Barrier</a><ul>
+<li><a class="reference internal" href="#motivation-context">Motivation &amp; Context</a></li>
+<li><a class="reference internal" href="#the-solution-task-barrier">The Solution: Task Barrier</a></li>
+<li><a class="reference internal" href="#api-usage">API &amp; Usage</a><ul>
+<li><a class="reference internal" href="#workflow">Workflow</a></li>
+<li><a class="reference internal" href="#code-example-c">Code Example (C++)</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#implementation-mechanism">Implementation Mechanism</a><ul>
+<li><a class="reference internal" href="#the-barrier-split">The Barrier Split</a></li>
+<li><a class="reference internal" href="#draining-stateful-operators">Draining Stateful Operators</a></li>
+<li><a class="reference internal" href="#diagram-draining-flow-single-driver">Diagram: Draining Flow (Single Driver)</a></li>
+<li><a class="reference internal" href="#cross-pipeline-propagation-the-dag">Cross-Pipeline Propagation (The DAG)</a></li>
+<li><a class="reference internal" href="#illustration-mergejoin-example">Illustration: MergeJoin Example</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#tablescan-source-operator-mechanics">TableScan &amp; Source Operator Mechanics</a><ul>
+<li><a class="reference internal" href="#delivery-entering-the-barrier">Delivery (Entering the Barrier)</a></li>
+<li><a class="reference internal" href="#resuming-exit-next-split">Resuming (Exit &amp; Next Split)</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#operator-specific-implementation-details">Operator-Specific Implementation Details</a><ul>
+<li><a class="reference internal" href="#index-lookup-join">Index Lookup Join</a></li>
+<li><a class="reference internal" href="#unnest">Unnest</a></li>
+<li><a class="reference internal" href="#sort-merge-join">Sort Merge Join</a></li>
+<li><a class="reference internal" href="#streaming-aggregation">Streaming Aggregation</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="task.html"
+                          title="previous chapter">What’s in the Task?</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="simd.html"
+                          title="next chapter">SIMD Usage in Velox</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/task-barrier.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="simd.html" title="SIMD Usage in Velox"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="task.html" title="What’s in the Task?"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Task Barrier</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
