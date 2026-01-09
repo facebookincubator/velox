@@ -158,6 +158,11 @@ option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
+option(
+  VELOX_ENABLE_LOCAL_RUNNER_SERVICE
+  "Enable LocalRunnerService and VeloxQueryRunner for expression fuzzer regression testing"
+  OFF
+)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
@@ -644,9 +649,11 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
-  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
-  # requires clients to explicitly install fizz and wangle.
+# FBThrift is required by remote functions and LocalRunnerService.
+# TODO: Move this to use resolve_dependency(). For some reason, FBThrift
+# requires clients to explicitly install fizz and wangle.
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
+  add_definitions(-DVELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)

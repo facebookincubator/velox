@@ -12,6 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# LocalRunnerService thrift library (requires FBThrift support)
+# Generate this first as it's needed by velox_fuzzer_util below.
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
+  include(FBThriftCppLibrary)
+  add_fbthrift_cpp_library(
+    local_runner_service_thrift
+    if/LocalRunnerService.thrift
+    SERVICES
+    LocalRunnerService
+  )
+
+  target_compile_options(local_runner_service_thrift PRIVATE -Wno-error=deprecated-declarations)
+endif()
+
 add_library(
   velox_fuzzer_util
   ReferenceQueryRunner.cpp
@@ -27,12 +41,10 @@ add_library(
   PrestoSql.cpp
 )
 
-# TODO Add VeloxQueryRunner to velox_fuzzer_util to support in
-# ExpressionFuzzerTest. More information can be found here:
-# https://github.com/facebookincubator/velox/issues/15414
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+# VeloxQueryRunner requires LocalRunnerService thrift library
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
-  target_link_libraries(velox_fuzzer_util FBThrift::thriftcpp2)
+  target_link_libraries(velox_fuzzer_util local_runner_service_thrift FBThrift::thriftcpp2)
 endif()
 
 target_link_libraries(
@@ -219,18 +231,7 @@ target_link_libraries(
 )
 
 # LocalRunnerService (requires FBThrift support)
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
-  # Generate Thrift library for LocalRunnerService
-  include(FBThriftCppLibrary)
-  add_fbthrift_cpp_library(
-    local_runner_service_thrift
-    if/LocalRunnerService.thrift
-    SERVICES
-    LocalRunnerService
-  )
-
-  target_compile_options(local_runner_service_thrift PRIVATE -Wno-error=deprecated-declarations)
-
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   # LocalRunnerService Library
   add_library(velox_local_runner_service_lib LocalRunnerService.cpp)
 
