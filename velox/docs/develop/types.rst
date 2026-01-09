@@ -172,6 +172,7 @@ The table below shows the supported Presto types.
 Presto Type               Physical Type
 ========================  =====================
 HYPERLOGLOG               VARBINARY
+KHYPERLOGLOG              VARBINARY
 JSON                      VARCHAR
 TIMESTAMP WITH TIME ZONE  BIGINT
 UUID                      HUGEINT
@@ -180,12 +181,18 @@ IPPREFIX                  ROW(HUGEINT,TINYINT)
 BINGTILE                  BIGINT
 GEOMETRY                  VARBINARY
 SPHERICALGEOGRAPHY        VARBINARY
+SETDIGEST                 VARBINARY
 TDIGEST                   VARBINARY
 QDIGEST                   VARBINARY
 BIGINT_ENUM               BIGINT
 VARCHAR_ENUM              VARCHAR
 TIME WITH TIME ZONE       BIGINT
 ========================  =====================
+
+KHYPERLOGLOG is a data sketch for estimating cardinality and joinability of large datasets.
+Based on the `KHyperLogLog paper <https://research.google/pubs/khyperloglog-estimating-reidentifiability-and-joinability-of-large-data-at-scale/>`_,
+it extends HyperLogLog with min-hash to enable set intersection and similarity operations.
+For storage and retrieval it may be cast to/from VARBINARY.
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
 from UNIX epoch with timezone information. Its physical type is BIGINT.
@@ -219,6 +226,10 @@ As a result the IPPREFIX object stores *FFFF:FFFF::* and the length 32 for both 
 
    IPPREFIX 'FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
    IPPREFIX 'FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+
+SETDIGEST is a data sketch for estimating set cardinality and performing set operations
+like intersection cardinality and Jaccard index. It combines HyperLogLog with MinHash.
+SetDigests may be merged, and for storage and retrieval they may be cast to/from VARBINARY.
 
 TDIGEST(DOUBLE) is a data sketch for estimating rank-based metrics.
 T-digests may be merged without losing precision, and for storage and retrieval
