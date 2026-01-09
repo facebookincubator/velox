@@ -914,6 +914,15 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("bigint")
            .argumentType("bigint")
            .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .constantArgumentType("integer")
            .build()});
 
   registerCudfFunction(
