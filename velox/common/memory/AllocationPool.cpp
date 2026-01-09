@@ -48,6 +48,25 @@ void AllocationPool::clear() {
   usedBytes_ = 0;
 }
 
+void AllocationPool::releaseAllocation(int32_t index) {
+  // todo: other states are not updated or checked.
+  // must ensure correctness that the pool is not growing again.
+  VELOX_CHECK_GE(index, 0);
+  VELOX_CHECK_LT(index, numRanges());
+  if (index < allocations_.size()) {
+    // todo: remove logging
+    VLOG(1) << "releasing " << index << "th allocation, size="
+              << allocations_[index].byteSize() / 1024 / 1204 << "MB";
+    pool_->freeNonContiguous(allocations_[index]);
+    return;
+  }
+  int32_t adaptedIndex = index - allocations_.size();
+  // todo: remove logging
+  VLOG(1) << "releasing " << index << "th allocation(large), size="
+            << largeAllocations_[adaptedIndex].size() / 1024 / 1204 << "MB";
+  pool_->freeContiguous(largeAllocations_[adaptedIndex]);
+}
+
 char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
   VELOX_CHECK_GT(bytes, 0, "Cannot allocate zero bytes");
   if (freeAddressableBytes() >= bytes && alignment == 1) {
