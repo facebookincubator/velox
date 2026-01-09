@@ -21,17 +21,10 @@
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/parser/ParserUtil.h"
 
 namespace facebook::velox::type::fbhive {
 namespace {
-
-/// Returns true only if 'str' contains digits.
-bool isPositiveInteger(std::string_view str) {
-  return !str.empty() &&
-      std::find_if(str.begin(), str.end(), [](unsigned char c) {
-        return !std::isdigit(c);
-      }) == str.end();
-}
 
 bool isSupportedSpecialChar(char c) {
   static std::unordered_set<char> supported{'_', '$', '#'};
