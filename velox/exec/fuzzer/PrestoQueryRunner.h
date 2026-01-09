@@ -40,11 +40,14 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   /// @param coordinatorUri Presto REST API endpoint, e.g. http://127.0.0.1:8080
   /// @param user Username to use in X-Presto-User header.
   /// @param timeout Timeout in milliseconds of an HTTP request.
+  /// @param sessionProperties Optional session properties to pass with each
+  /// query.
   PrestoQueryRunner(
       memory::MemoryPool* aggregatePool,
       std::string coordinatorUri,
       std::string user,
-      std::chrono::milliseconds timeout);
+      std::chrono::milliseconds timeout,
+      std::unordered_map<std::string, std::string> sessionProperties = {});
 
   RunnerType runnerType() const override {
     return RunnerType::kPrestoQueryRunner;
@@ -126,6 +129,7 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   const std::string coordinatorUri_;
   const std::string user_;
   const std::chrono::milliseconds timeout_;
+  std::unordered_map<std::string, std::string> sessionProperties_;
   folly::EventBaseThread eventBaseThread_{false};
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<QueryRunnerContext> queryRunnerContext_;
