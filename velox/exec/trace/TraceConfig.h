@@ -19,18 +19,13 @@
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <unordered_set>
+#include "velox/exec/trace/TraceWriter.h"
 
-namespace facebook::velox {
+namespace facebook::velox::exec {
+class Operator;
+}
 
-#define VELOX_TRACE_LIMIT_EXCEEDED(errorMessage)                    \
-  _VELOX_THROW(                                                     \
-      ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kTraceLimitExceeded.c_str(),   \
-      /* isRetriable */ true,                                       \
-      "{}",                                                         \
-      errorMessage);
+namespace facebook::velox::exec::trace {
 
 /// The callback used to update and aggregate the trace bytes of a query. If the
 /// query trace limit is set, the callback return true if the aggregate traced
@@ -40,11 +35,15 @@ using UpdateAndCheckTraceLimitCB = std::function<void(uint64_t)>;
 struct TraceConfig {
   /// Target query trace node id.
   std::string queryNodeId;
+
   /// Base dir of query trace.
   std::string queryTraceDir;
+
   UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB;
+
   /// The trace task regexp.
   std::string taskRegExp;
+
   /// If true, we only collect operator input trace without the actual
   /// execution. This is used by crash debugging so that we can collect the
   /// input that triggers the crash.
@@ -57,4 +56,5 @@ struct TraceConfig {
       std::string taskRegExp,
       bool dryRun);
 };
-} // namespace facebook::velox
+
+} // namespace facebook::velox::exec::trace

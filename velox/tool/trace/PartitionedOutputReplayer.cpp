@@ -18,9 +18,9 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/PartitionedOutput.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 
 using namespace facebook::velox;

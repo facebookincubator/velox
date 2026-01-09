@@ -18,8 +18,8 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 namespace facebook::velox::exec::trace {
 

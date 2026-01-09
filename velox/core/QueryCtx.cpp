@@ -15,8 +15,8 @@
  */
 
 #include "velox/core/QueryCtx.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SpillConfig.h"
-#include "velox/common/base/TraceConfig.h"
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
@@ -126,9 +126,8 @@ void QueryCtx::updateTracedBytesAndCheckLimit(uint64_t bytes) {
   if (numTracedBytes_.fetch_add(bytes) + bytes >=
       queryConfig_.queryTraceMaxBytes()) {
     VELOX_TRACE_LIMIT_EXCEEDED(
-        fmt::format(
-            "Query exceeded per-query local trace limit of {}",
-            succinctBytes(queryConfig_.queryTraceMaxBytes())));
+        "Query exceeded per-query local trace limit of {}",
+        succinctBytes(queryConfig_.queryTraceMaxBytes()));
   }
 }
 

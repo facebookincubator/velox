@@ -17,9 +17,9 @@
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/TraceConfig.h"
+#include "velox/exec/trace/TraceConfig.h"
 
-namespace facebook::velox {
+namespace facebook::velox::exec::trace {
 
 TraceConfig::TraceConfig(
     std::string _queryNodeId,
@@ -34,4 +34,5 @@ TraceConfig::TraceConfig(
       dryRun(_dryRun) {
   VELOX_CHECK(!queryNodeId.empty(), "The query trace node cannot be empty");
 }
-} // namespace facebook::velox
+
+} // namespace facebook::velox::exec::trace

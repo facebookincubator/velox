@@ -20,7 +20,6 @@
 #include <vector>
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/Task.h"
 #include "velox/type/Type.h"
 
 #include <folly/dynamic.h>
@@ -77,10 +76,6 @@ std::string getQueryTraceDirectory(
     const std::string& queryId);
 
 /// Returns the trace directory for a given query task.
-std::string getTaskTraceDirectory(
-    const std::string& traceDir,
-    const Task& task);
-
 std::string getTaskTraceDirectory(
     const std::string& traceDir,
     const std::string& queryId,
@@ -189,4 +184,5 @@ void registerTraceNodeFactory(
     TraceNodeFactory&& factory);
 
 void registerDummySourceSerDe();
+
 } // namespace facebook::velox::exec::trace
