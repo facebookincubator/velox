@@ -2206,8 +2206,10 @@ Status WriteArrowSerialize(
       ctx->GetScratchData<ParquetCType>(array.length(), &buffer));
 
   SerializeFunctor<ParquetType, ArrowType> functor;
-  RETURN_NOT_OK(
-      functor.Serialize(checked_cast<const ArrayType&>(array), ctx, buffer));
+  if (array.null_count() != array.length()) {
+    RETURN_NOT_OK(
+        functor.Serialize(checked_cast<const ArrayType&>(array), ctx, buffer));
+  }
   bool no_nulls = writer->descr()->schema_node()->is_required() ||
       (array.null_count() == 0);
   if (!maybe_parent_nulls && no_nulls) {
