@@ -396,9 +396,7 @@ class FileWriterImpl : public FileWriter {
   Status WriteTable(const Table& table, int64_t chunk_size) override {
     RETURN_NOT_OK(table.Validate());
 
-    if (chunk_size <= 0 && table.num_rows() > 0) {
-      return Status::Invalid("chunk size per row_group must be greater than 0");
-    } else if (!table.schema()->Equals(*schema_, false)) {
+    if (!table.schema()->Equals(*schema_, false)) {
       return Status::Invalid(
           "table schema does not match this writer's. table:'",
           table.schema()->ToString(),
@@ -407,6 +405,19 @@ class FileWriterImpl : public FileWriter {
           "'");
     } else if (chunk_size > this->properties().max_row_group_length()) {
       chunk_size = this->properties().max_row_group_length();
+    }
+    // max_row_group_bytes is applied only after the row group has accumulated
+    // data.
+    if (row_group_writer_ != nullptr && row_group_writer_->num_rows() > 0) {
+      double avg_row_size = row_group_writer_->total_buffered_bytes() * 1.0 /
+          row_group_writer_->num_rows();
+      chunk_size = std::min(
+          chunk_size,
+          static_cast<int64_t>(
+              this->properties().max_row_group_bytes() / avg_row_size));
+    }
+    if (chunk_size <= 0 && table.num_rows() > 0) {
+      return Status::Invalid("rows per row_group must be greater than 0");
     }
 
     auto WriteRowGroup = [&](int64_t offset, int64_t size) {
@@ -446,12 +457,7 @@ class FileWriterImpl : public FileWriter {
       return Status::OK();
     }
 
-    // Max number of rows allowed in a row group.
-    const int64_t max_row_group_length =
-        this->properties().max_row_group_length();
-
-    if (row_group_writer_ == nullptr || !row_group_writer_->buffered() ||
-        row_group_writer_->num_rows() >= max_row_group_length) {
+    if (row_group_writer_ == nullptr || !row_group_writer_->buffered()) {
       RETURN_NOT_OK(NewBufferedRowGroup());
     }
 
@@ -492,16 +498,31 @@ class FileWriterImpl : public FileWriter {
       return Status::OK();
     };
 
+    // Max number of rows allowed in a row group.
+    const int64_t max_row_group_length =
+        this->properties().max_row_group_length();
+    // Max number of bytes allowed in a row group.
+    const int64_t max_row_group_bytes =
+        this->properties().max_row_group_bytes();
+
     int64_t offset = 0;
     while (offset < batch.num_rows()) {
-      const int64_t batch_size = std::min(
-          max_row_group_length - row_group_writer_->num_rows(),
-          batch.num_rows() - offset);
-      RETURN_NOT_OK(WriteBatch(offset, batch_size));
-      offset += batch_size;
-
-      // Flush current row group if it is full.
-      if (row_group_writer_->num_rows() >= max_row_group_length) {
+      int64_t group_rows = row_group_writer_->num_rows();
+      int64_t batch_size = std::min(
+          max_row_group_length - group_rows, batch.num_rows() - offset);
+      if (group_rows > 0) {
+        int64_t buffered_bytes = row_group_writer_->total_buffered_bytes();
+        double avg_row_size = buffered_bytes * 1.0 / group_rows;
+        batch_size = std::min(
+            batch_size,
+            static_cast<int64_t>(
+                (max_row_group_bytes - buffered_bytes) / avg_row_size));
+      }
+      if (batch_size > 0) {
+        RETURN_NOT_OK(WriteBatch(offset, batch_size));
+        offset += batch_size;
+      } else if (offset < batch.num_rows()) {
+        // Current row group is full, write remaining rows in a new group.
         RETURN_NOT_OK(NewBufferedRowGroup());
       }
     }

@@ -73,6 +73,12 @@ int64_t RowGroupWriter::total_compressed_bytes_written() const {
   return contents_->total_compressed_bytes_written();
 }
 
+int64_t RowGroupWriter::total_buffered_bytes() const {
+  return contents_->total_compressed_bytes() +
+      contents_->total_compressed_bytes_written() +
+      contents_->estimated_buffered_value_bytes();
+}
+
 bool RowGroupWriter::buffered() const {
   return contents_->buffered();
 }
@@ -267,6 +273,20 @@ class RowGroupSerializer : public RowGroupWriter::Contents {
       }
     }
     return total_compressed_bytes_written;
+  }
+
+  int64_t estimated_buffered_value_bytes() const override {
+    if (closed_) {
+      return 0;
+    }
+    int64_t estimated_buffered_value_bytes = 0;
+    for (size_t i = 0; i < column_writers_.size(); i++) {
+      if (column_writers_[i]) {
+        estimated_buffered_value_bytes +=
+            column_writers_[i]->EstimatedBufferedValueBytes();
+      }
+    }
+    return estimated_buffered_value_bytes;
   }
 
   bool buffered() const override {
