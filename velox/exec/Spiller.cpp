@@ -231,20 +231,27 @@ void SpillerBase::ensureSorted(SpillRun& run) {
   {
     NanosecondTimer timer(&sortTimeNs);
 
-    if (!state_.prefixSortConfig().has_value()) {
+    bool prefixSortSuccess{false};
+    if (state_.prefixSortConfig().has_value()) {
+      prefixSortSuccess = PrefixSort::sort(
+          container_,
+          compareFlags_,
+          state_.prefixSortConfig().value(),
+          memory::spillMemoryPool(),
+          run.rows);
+      if (!prefixSortSuccess) {
+        LOG(WARNING) << "PrefixSort failed due to memory allocation error, "
+                     << "falling back to TimSort";
+      }
+    }
+
+    if (!prefixSortSuccess) {
       gfx::timsort(
           run.rows.begin(),
           run.rows.end(),
           [&](const char* left, const char* right) {
             return container_->compareRows(left, right, compareFlags_) < 0;
           });
-    } else {
-      PrefixSort::sort(
-          container_,
-          compareFlags_,
-          state_.prefixSortConfig().value(),
-          memory::spillMemoryPool(),
-          run.rows);
     }
 
     run.sorted = true;

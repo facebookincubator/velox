@@ -105,7 +105,8 @@ class PrefixSort {
       memory::MemoryPool* pool);
 
   /// Follow the steps below to sort the data in RowContainer:
-  /// 1. Allocate a contiguous block of memory to store normalized keys.
+  /// 1. Allocate a contiguous block of memory to store normalized keys, if
+  /// allocation fails return false.
   /// 2. Extract the sort keys from the RowContainer. If the key can be
   /// normalized, normalize it. For this kind of keys can be normalized，we
   /// combine them with the original row address ptr and store them
@@ -127,7 +128,8 @@ class PrefixSort {
   ///
   /// @param rows The result of RowContainer::listRows(), assuming that the
   /// caller (SortBuffer etc.) has already got the result.
-  FOLLY_ALWAYS_INLINE static void sort(
+  /// @return true if the sort is done, false if the sort fails.
+  FOLLY_ALWAYS_INLINE static bool sort(
       const RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags,
       const velox::common::PrefixSortConfig& config,
@@ -135,7 +137,7 @@ class PrefixSort {
       std::vector<char*, memory::StlAllocator<char*>>& rows) {
     if (rowContainer->numRows() < config.minNumRows) {
       stdSort(rows, rowContainer, compareFlags);
-      return;
+      return true;
     }
     const auto sortLayout =
         generateSortLayout(rowContainer, compareFlags, config);
@@ -143,11 +145,11 @@ class PrefixSort {
     // Putting this outside sort-internal helps with stdSort.
     if (!sortLayout.hasNormalizedKeys) {
       stdSort(rows, rowContainer, compareFlags);
-      return;
+      return true;
     }
 
     PrefixSort prefixSort(rowContainer, sortLayout, pool);
-    prefixSort.sortInternal(rows);
+    return prefixSort.sortInternal(rows);
   }
 
   /// The std::sort won't require bytes while prefix sort may require buffers
@@ -207,7 +209,7 @@ class PrefixSort {
   // swap buffer.
   uint64_t maxRequiredBytes() const;
 
-  void sortInternal(std::vector<char*, memory::StlAllocator<char*>>& rows);
+  bool sortInternal(std::vector<char*, memory::StlAllocator<char*>>& rows);
 
   int compareAllNormalizedKeys(char* left, char* right);
 
