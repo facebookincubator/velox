@@ -90,6 +90,202 @@ std::unique_ptr<common::Filter> makeFloatingPointMapKeyFilter(
   return std::make_unique<common::MultiRange>(std::move(filters), false);
 }
 
+void setupMapScanSpec(
+    const Type& type,
+    const std::vector<SubfieldSpec>& subfields,
+    int level,
+    memory::MemoryPool* pool,
+    common::ScanSpec& mapSpec,
+    common::ScanSpec& keysSpec,
+    common::ScanSpec& valuesSpec) {
+  if (subfields.empty()) {
+    return;
+  }
+  auto& keyType = type.childAt(0);
+  bool stringKey = keyType->isVarchar() || keyType->isVarbinary();
+  bool includeKeys = false;
+  bool includeValues = false;
+  std::vector<std::string> stringSubscripts;
+  std::vector<int64_t> longSubscripts;
+  for (auto& subfield : subfields) {
+    auto* element = subfield.subfield->path()[level].get();
+    switch (element->kind()) {
+      case common::SubfieldKind::kAllSubscripts:
+        return;
+      case common::SubfieldKind::kStringSubscript: {
+        VELOX_CHECK(stringKey);
+        auto* subscript =
+            checkedPointerCast<common::Subfield::StringSubscript>(element);
+        stringSubscripts.push_back(subscript->index());
+        includeKeys = includeValues = true;
+        break;
+      }
+      case common::SubfieldKind::kLongSubscript: {
+        VELOX_CHECK(!stringKey);
+        auto* subscript =
+            checkedPointerCast<common::Subfield::LongSubscript>(element);
+        longSubscripts.push_back(subscript->index());
+        includeKeys = includeValues = true;
+        break;
+      }
+      case common::SubfieldKind::kArrayOrMapSubscript: {
+        auto* outer =
+            checkedPointerCast<common::Subfield::ArrayOrMapSubscript>(element);
+        includeKeys = includeKeys || outer->includeKeys();
+        includeValues = includeValues || outer->includeValues();
+        if (outer->includeKeys() || outer->includeValues()) {
+          if (!outer->subscript()) {
+            return;
+          }
+          switch (outer->subscript()->kind()) {
+            case common::SubfieldKind::kAllSubscripts:
+              return;
+            case common::SubfieldKind::kStringSubscript: {
+              VELOX_CHECK(stringKey);
+              auto* subscript =
+                  checkedPointerCast<const common::Subfield::StringSubscript>(
+                      outer->subscript());
+              stringSubscripts.push_back(subscript->index());
+              break;
+            }
+            case common::SubfieldKind::kLongSubscript: {
+              VELOX_CHECK(!stringKey);
+              auto* subscript =
+                  checkedPointerCast<const common::Subfield::LongSubscript>(
+                      outer->subscript());
+              longSubscripts.push_back(subscript->index());
+              break;
+            }
+            default:
+              VELOX_FAIL(
+                  "Unsupported for map pruning: {}",
+                  outer->subscript()->toString());
+          }
+        } else {
+          VELOX_CHECK_NULL(outer->subscript());
+        }
+        break;
+      }
+      default:
+        VELOX_FAIL("Unsupported for map pruning: {}", element->toString());
+    }
+  }
+  if (includeKeys) {
+    std::unique_ptr<common::Filter> filter;
+    if (stringKey) {
+      deduplicate(stringSubscripts);
+      filter = std::make_unique<common::BytesValues>(stringSubscripts, false);
+      mapSpec.setFlatMapFeatureSelection(std::move(stringSubscripts));
+    } else {
+      deduplicate(longSubscripts);
+      if (keyType->isReal()) {
+        filter = makeFloatingPointMapKeyFilter<float>(longSubscripts);
+      } else if (keyType->isDouble()) {
+        filter = makeFloatingPointMapKeyFilter<double>(longSubscripts);
+      } else {
+        filter = common::createBigintValues(longSubscripts, false);
+      }
+      std::vector<std::string> features;
+      features.reserve(longSubscripts.size());
+      for (auto num : longSubscripts) {
+        features.push_back(std::to_string(num));
+      }
+      mapSpec.setFlatMapFeatureSelection(std::move(features));
+    }
+    keysSpec.setFilter(std::move(filter));
+  } else {
+    keysSpec.setConstantValue(
+        BaseVector::createNullConstant(type.childAt(0), 1, pool));
+  }
+  if (!includeValues) {
+    valuesSpec.setConstantValue(
+        BaseVector::createNullConstant(type.childAt(1), 1, pool));
+  }
+}
+
+void setupArrayScanSpec(
+    const Type& type,
+    std::vector<SubfieldSpec>& subfields,
+    int level,
+    memory::MemoryPool* pool,
+    common::ScanSpec& arraySpec,
+    common::ScanSpec& elementsSpec) {
+  if (subfields.empty()) {
+    return;
+  }
+  long maxIndex = -1;
+  auto updateMaxIndex = [&](const common::Subfield::PathElement* element) {
+    constexpr long kMaxIndex = std::numeric_limits<vector_size_t>::max();
+    auto* subscript =
+        checkedPointerCast<const common::Subfield::LongSubscript>(element);
+    VELOX_USER_CHECK_GT(
+        subscript->index(),
+        0,
+        "Non-positive array subscript cannot be push down");
+    maxIndex = std::max(maxIndex, std::min(kMaxIndex, subscript->index()));
+  };
+  bool includeValues = false;
+  for (auto& subfield : subfields) {
+    auto* element = subfield.subfield->path()[level].get();
+    switch (element->kind()) {
+      case common::SubfieldKind::kAllSubscripts:
+        return;
+      case common::SubfieldKind::kLongSubscript:
+        updateMaxIndex(element);
+        includeValues = true;
+        break;
+      case common::SubfieldKind::kArrayOrMapSubscript: {
+        auto* outer =
+            checkedPointerCast<common::Subfield::ArrayOrMapSubscript>(element);
+        if (outer->includeValues()) {
+          includeValues = true;
+          if (!outer->subscript()) {
+            return;
+          }
+          switch (outer->subscript()->kind()) {
+            case common::SubfieldKind::kAllSubscripts:
+              return;
+            case common::SubfieldKind::kLongSubscript:
+              updateMaxIndex(outer->subscript());
+              break;
+            default:
+              VELOX_FAIL(
+                  "Unsupported for array pruning: {}",
+                  outer->subscript()->toString());
+          }
+        } else {
+          VELOX_CHECK_NULL(outer->subscript());
+        }
+        break;
+      }
+      default:
+        VELOX_FAIL("Unsupported for array pruning: {}", element->toString());
+    }
+  }
+  if (includeValues) {
+    arraySpec.setMaxArrayElementsCount(maxIndex);
+  } else {
+    elementsSpec.setConstantValue(
+        BaseVector::createNullConstant(type.childAt(0), 1, pool));
+  }
+}
+
+void removeNotIncludeValues(std::vector<SubfieldSpec>& subfields, int level) {
+  int newSize = 0;
+  for (int i = 0; i < subfields.size(); ++i) {
+    auto* element = subfields[i].subfield->path()[level].get();
+    if (element->kind() == common::SubfieldKind::kArrayOrMapSubscript) {
+      auto* subscript =
+          checkedPointerCast<common::Subfield::ArrayOrMapSubscript>(element);
+      if (!subscript->includeValues()) {
+        continue;
+      }
+    }
+    subfields[newSize++] = subfields[i];
+  }
+  subfields.resize(newSize);
+}
+
 // Recursively add subfields to scan spec.
 void addSubfields(
     const Type& type,
@@ -137,92 +333,21 @@ void addSubfields(
     case TypeKind::MAP: {
       auto& keyType = type.childAt(0);
       auto* keys = spec.addMapKeyFieldRecursively(*keyType);
-      addSubfields(
-          *type.childAt(1),
-          subfields,
-          level + 1,
-          pool,
-          *spec.addMapValueField());
-      if (subfields.empty()) {
-        return;
+      auto* values = spec.addMapValueField();
+      setupMapScanSpec(type, subfields, level, pool, spec, *keys, *values);
+      if (!values->isConstant()) {
+        removeNotIncludeValues(subfields, level);
+        addSubfields(*type.childAt(1), subfields, level + 1, pool, *values);
       }
-      bool stringKey = keyType->isVarchar() || keyType->isVarbinary();
-      std::vector<std::string> stringSubscripts;
-      std::vector<int64_t> longSubscripts;
-      for (auto& subfield : subfields) {
-        auto* element = subfield.subfield->path()[level].get();
-        if (element->is(common::SubfieldKind::kAllSubscripts)) {
-          return;
-        }
-        if (stringKey) {
-          auto* subscript = element->as<common::Subfield::StringSubscript>();
-          VELOX_CHECK(
-              subscript,
-              "Unsupported for string map pruning: {}",
-              element->toString());
-          stringSubscripts.push_back(subscript->index());
-        } else {
-          auto* subscript = element->as<common::Subfield::LongSubscript>();
-          VELOX_CHECK(
-              subscript,
-              "Unsupported for long map pruning: {}",
-              element->toString());
-          longSubscripts.push_back(subscript->index());
-        }
-      }
-      std::unique_ptr<common::Filter> filter;
-      if (stringKey) {
-        deduplicate(stringSubscripts);
-        filter = std::make_unique<common::BytesValues>(stringSubscripts, false);
-        spec.setFlatMapFeatureSelection(std::move(stringSubscripts));
-      } else {
-        deduplicate(longSubscripts);
-        if (keyType->isReal()) {
-          filter = makeFloatingPointMapKeyFilter<float>(longSubscripts);
-        } else if (keyType->isDouble()) {
-          filter = makeFloatingPointMapKeyFilter<double>(longSubscripts);
-        } else {
-          filter = common::createBigintValues(longSubscripts, false);
-        }
-        std::vector<std::string> features;
-        for (auto num : longSubscripts) {
-          features.push_back(std::to_string(num));
-        }
-        spec.setFlatMapFeatureSelection(std::move(features));
-      }
-      keys->setFilter(std::move(filter));
       break;
     }
     case TypeKind::ARRAY: {
-      addSubfields(
-          *type.childAt(0),
-          subfields,
-          level + 1,
-          pool,
-          *spec.addArrayElementField());
-      if (subfields.empty()) {
-        return;
+      auto* elements = spec.addArrayElementField();
+      setupArrayScanSpec(type, subfields, level, pool, spec, *elements);
+      if (!elements->isConstant()) {
+        removeNotIncludeValues(subfields, level);
+        addSubfields(*type.childAt(0), subfields, level + 1, pool, *elements);
       }
-      constexpr long kMaxIndex = std::numeric_limits<vector_size_t>::max();
-      long maxIndex = -1;
-      for (auto& subfield : subfields) {
-        auto* element = subfield.subfield->path()[level].get();
-        if (dynamic_cast<const common::Subfield::AllSubscripts*>(element)) {
-          return;
-        }
-        auto* subscript =
-            dynamic_cast<const common::Subfield::LongSubscript*>(element);
-        VELOX_CHECK(
-            subscript,
-            "Unsupported for array pruning: {}",
-            element->toString());
-        VELOX_USER_CHECK_GT(
-            subscript->index(),
-            0,
-            "Non-positive array subscript cannot be push down");
-        maxIndex = std::max(maxIndex, std::min(kMaxIndex, subscript->index()));
-      }
-      spec.setMaxArrayElementsCount(maxIndex);
       break;
     }
     default:
