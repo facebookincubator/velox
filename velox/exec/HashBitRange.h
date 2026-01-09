@@ -19,8 +19,8 @@
 
 namespace facebook::velox::exec {
 
-// Describes a bit range inside a 64 bit hash number for use in
-// partitioning data.
+/// Describes a bit range inside a 64-bit hash number for use in partitioning
+/// data.
 class HashBitRange {
  public:
   HashBitRange(uint8_t begin, uint8_t end)
