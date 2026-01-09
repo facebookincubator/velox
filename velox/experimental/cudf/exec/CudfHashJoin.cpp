@@ -1238,7 +1238,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
   // Use getTableView() to avoid expensive materialization for packed_table.
-  // cudfInput stays alive during this function, keeping the view valid.
+  // cudfInput is staying alive until the table view is no longer needed.
   auto leftTableView = cudfInput->getTableView();
   if (CudfConfig::getInstance().debugEnabled) {
     LOG(INFO) << "Probe table number of columns: "
@@ -1287,6 +1287,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       VELOX_FAIL("Unsupported join type: ", joinNode_->joinType());
   }
 
+  // Release input CudfVector to free GPU memory before creating output.
+  // This reduces peak memory from (input + output) to max(input, output).
+  // cudfInput must be released first since input_.reset() only decrements
+  // the refcount while cudfInput still holds a reference.
+  cudfInput.reset();
   input_.reset();
   finished_ = noMoreInput_ && !joinNode_->isRightJoin();
 
