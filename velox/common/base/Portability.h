@@ -66,10 +66,6 @@ inline T tsanAtomicValue(const std::atomic<T>& x) {
   return x;
 }
 
-/// Lock guard in tsan build and no-op otherwise.
-template <typename T>
-using tsan_lock_guard = std::lock_guard<T>;
-
 #else
 
 template <typename T>
@@ -79,13 +75,6 @@ template <typename T>
 inline T tsanAtomicValue(T x) {
   return x;
 }
-template <typename T>
-struct TsanEmptyLockGuard {
-  TsanEmptyLockGuard(T& /*ignore*/) {}
-};
-
-template <typename T>
-using tsan_lock_guard = TsanEmptyLockGuard<T>;
 
 #endif
 
