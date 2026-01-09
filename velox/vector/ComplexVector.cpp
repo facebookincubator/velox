@@ -985,10 +985,6 @@ void ArrayVectorBase::validateArrayVectorBase(
         "vector's size. Index: {}.",
         i);
   }
-
-  VELOX_CHECK(
-      !hasOverlappingRanges(),
-      "ArrayVectorBase must not have overlapping ranges of elements.");
 }
 
 namespace {
