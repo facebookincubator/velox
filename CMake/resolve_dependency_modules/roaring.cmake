@@ -34,9 +34,8 @@ block()
     URL ${VELOX_ROARING_SOURCE_URL}
     URL_HASH ${VELOX_ROARING_BUILD_SHA256_CHECKSUM}
   )
+  FetchContent_MakeAvailable(roaring)
 endblock()
-
-FetchContent_MakeAvailable(roaring)
 
 if(NOT TARGET Roaring::roaring)
   add_library(Roaring::roaring ALIAS roaring)
