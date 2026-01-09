@@ -2662,7 +2662,8 @@ class PartitionedOutputNode : public PlanNode {
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
       VectorSerde::Kind serdeKind,
-      PlanNodePtr source);
+      PlanNodePtr source,
+      bool rootFragment = false);
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
@@ -2681,7 +2682,8 @@ class PartitionedOutputNode : public PlanNode {
       const PlanNodeId& id,
       RowTypePtr outputType,
       VectorSerde::Kind VectorSerde,
-      PlanNodePtr source);
+      PlanNodePtr source,
+      bool rootFragment = false);
 
   class Builder {
    public:
@@ -2796,6 +2798,10 @@ class PartitionedOutputNode : public PlanNode {
     return outputType_;
   }
 
+  const bool isRootFragment() const {
+    return rootFragment_;
+  }
+
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
@@ -2871,6 +2877,7 @@ class PartitionedOutputNode : public PlanNode {
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
   const VectorSerde::Kind serdeKind_;
   const RowTypePtr outputType_;
+  const bool rootFragment_;
 };
 
 using PartitionedOutputNodePtr = std::shared_ptr<const PartitionedOutputNode>;
