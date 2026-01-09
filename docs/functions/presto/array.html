@@ -223,6 +223,16 @@ Returns NULL if array contains a NULL value.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_min_by">
+<span class="sig-name descname"><span class="pre">array_min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#array_min_by" title="Link to this definition">¶</a></dt>
+<dd><p>Applies the provided function to each element, and returns the element that gives the minimum value.
+<code class="docutils literal notranslate"><span class="pre">U</span></code> can be any orderable type.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_min_by</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;bbb&#39;</span><span class="p">,</span> <span class="s1">&#39;cc&#39;</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">LENGTH</span><span class="p">(</span><span class="n">x</span><span class="p">))</span> <span class="o">--</span> <span class="s1">&#39;a&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_normalize">
 <span class="sig-name descname"><span class="pre">array_normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_normalize" title="Link to this definition">¶</a></dt>
 <dd><p>Normalizes array <code class="docutils literal notranslate"><span class="pre">x</span></code> by dividing each element by the p-norm of the array. It is equivalent to <code class="docutils literal notranslate"><span class="pre">TRANSFORM(array,</span> <span class="pre">v</span> <span class="pre">-&gt;</span> <span class="pre">v</span> <span class="pre">/</span> <span class="pre">REDUCE(array,</span> <span class="pre">0,</span> <span class="pre">(a,</span> <span class="pre">v)</span> <span class="pre">-&gt;</span> <span class="pre">a</span> <span class="pre">+</span> <span class="pre">POW(ABS(v),</span> <span class="pre">p),</span> <span class="pre">a</span> <span class="pre">-&gt;</span> <span class="pre">POW(a,</span> <span class="pre">1</span> <span class="pre">/</span> <span class="pre">p))</span></code>, but the reduce part is only executed once. Returns null if the array is null or there are null array elements. If <code class="docutils literal notranslate"><span class="pre">p</span></code> is 0, then the input array is returned. Only REAL and DOUBLE types are supported.</p>
@@ -649,6 +659,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
 <li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
 <li><a class="reference internal" href="#array_max_by"><code class="docutils literal notranslate"><span class="pre">array_max_by()</span></code></a></li>
+<li><a class="reference internal" href="#array_min_by"><code class="docutils literal notranslate"><span class="pre">array_min_by()</span></code></a></li>
 <li><a class="reference internal" href="#array_normalize"><code class="docutils literal notranslate"><span class="pre">array_normalize()</span></code></a></li>
 <li><a class="reference internal" href="#arrays_overlap"><code class="docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></li>
 <li><a class="reference internal" href="#arrays_union"><code class="docutils literal notranslate"><span class="pre">arrays_union()</span></code></a></li>
