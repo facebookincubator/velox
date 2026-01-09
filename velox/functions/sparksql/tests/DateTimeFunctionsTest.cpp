@@ -672,7 +672,8 @@ TEST_F(DateTimeFunctionsTest, dayNameDate) {
   EXPECT_EQ("Thu", dayName(parseDate("2023-08-24")));
   EXPECT_EQ("Fri", dayName(parseDate("2023-08-25")));
   EXPECT_EQ("Sat", dayName(parseDate("2023-08-26")));
-  EXPECT_EQ("Fri", dayName(parseDate("1582-10-15"))); // Gregorian calendar start
+    EXPECT_EQ(
+            "Fri", dayName(parseDate("1582-10-15"))); // Gregorian calendar start
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
