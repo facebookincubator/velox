@@ -780,6 +780,40 @@ struct WeekdayFunction {
 };
 
 template <typename T>
+struct DayNameFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    const auto tm = getDateTime(date);
+    switch (tm.tm_wday) {
+      case 0:
+        result.append("Sun");
+        break;
+      case 1:
+        result.append("Mon");
+        break;
+      case 2:
+        result.append("Tue");
+        break;
+      case 3:
+        result.append("Wed");
+        break;
+      case 4:
+        result.append("Thu");
+        break;
+      case 5:
+        result.append("Fri");
+        break;
+      default:
+        result.append("Sat");
+        break;
+    }
+  }
+};
+
+template <typename T>
 struct NextDayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

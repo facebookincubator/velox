@@ -130,9 +130,10 @@ for :doc:`all <functions/spark/coverage>` functions.
     :spark:func:`date_trunc`                     :spark:func:`map_filter`                     :spark:func:`upper`
     :spark:func:`datediff`                       :spark:func:`map_from_arrays`                :spark:func:`url_decode`
     :spark:func:`day`                            :spark:func:`map_keys`                       :spark:func:`url_encode`
-    :spark:func:`dayofmonth`                     :spark:func:`map_values`                     :spark:func:`uuid`
-    :spark:func:`dayofweek`                      :spark:func:`map_zip_with`                   :spark:func:`varchar_type_write_side_check`
-    :spark:func:`dayofyear`                      :spark:func:`mask`                           :spark:func:`week_of_year`
+    :spark:func:`dayname`                        :spark:func:`map_values`                     :spark:func:`uuid`
+    :spark:func:`dayofmonth`                     :spark:func:`map_zip_with`                   :spark:func:`varchar_type_write_side_check`
+    :spark:func:`dayofweek`                      :spark:func:`mask`                           :spark:func:`week_of_year`
+    :spark:func:`dayofyear`                      :spark:func:`md5`                            :spark:func:`weekday`
     :spark:func:`decimal_equalto`                :spark:func:`md5`                            :spark:func:`weekday`
     :spark:func:`decimal_greaterthan`            :spark:func:`might_contain`                  :spark:func:`width_bucket`
     :spark:func:`decimal_greaterthanorequal`     :spark:func:`minute`                         :spark:func:`xxhash64`
