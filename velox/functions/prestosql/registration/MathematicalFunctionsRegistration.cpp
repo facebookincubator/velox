@@ -124,6 +124,11 @@ void registerMathFunctions(const std::string& prefix) {
       double,
       Array<double>,
       Array<double>>({prefix + "cosine_similarity"});
+  registerFunction<
+      DotProductMap,
+      double,
+      Map<Varchar, double>,
+      Map<Varchar, double>>({prefix + "dot_product"});
   registerFunction<DotProductArray, double, Array<double>, Array<double>>(
       {prefix + "dot_product"});
 #ifdef VELOX_ENABLE_FAISS
