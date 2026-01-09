@@ -216,19 +216,22 @@ RowVectorPtr CudfToVelox::getOutput() {
   // batch size
   if (isPassthroughMode() ||
       (inputs_.size() == 1 && inputs_.front()->size() <= targetBatchSize)) {
-    std::unique_ptr<cudf::table> tbl = inputs_.front()->release();
+    // Move the CudfVector out to keep it alive while we use the view.
+    // This avoids expensive materialization when constructed from packed_table.
+    auto cudfVector = std::move(inputs_.front());
     inputs_.pop_front();
 
-    VELOX_CHECK_NOT_NULL(tbl);
-    if (tbl->num_rows() == 0) {
+    auto tableView = cudfVector->getTableView();
+    if (tableView.num_rows() == 0) {
       finished_ = noMoreInput_ && inputs_.empty();
       return nullptr;
     }
     RowVectorPtr output =
-        with_arrow::toVeloxColumn(tbl->view(), pool(), "", stream);
+        with_arrow::toVeloxColumn(tableView, pool(), "", stream);
     stream.synchronize();
     finished_ = noMoreInput_ && inputs_.empty();
     output->setType(outputType_);
+    // cudfVector goes out of scope here, freeing the GPU memory
     return output;
   }
 

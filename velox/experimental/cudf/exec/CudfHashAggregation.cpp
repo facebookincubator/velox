@@ -676,8 +676,10 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
   // intermediate groupby results.
 
   auto inputTableStream = tbl->stream();
+  // Use getTableView() to avoid expensive materialization for packed_table.
+  // tbl stays alive during this function call, keeping the view valid.
   auto groupbyOnInput = doGroupByAggregation(
-      tbl->release(),
+      tbl->getTableView(),
       groupingKeyInputChannels_,
       aggregators_,
       inputTableStream);
@@ -701,8 +703,9 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
     // Now we have to groupby again but this time with intermediate aggregators.
+    // Keep concatenatedTable alive while we use its view.
     auto compactedOutput = doGroupByAggregation(
-        std::move(concatenatedTable),
+        concatenatedTable->view(),
         groupingKeyOutputChannels_,
         intermediateAggregators_,
         partialOutputStream);
@@ -739,16 +742,18 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
     // Do a distinct on the concatenated results.
+    // Keep concatenatedTable alive while we use its view.
     auto distinctOutput = getDistinctKeys(
-        std::move(concatenatedTable),
+        concatenatedTable->view(),
         groupingKeyOutputChannels_,
         inputTableStream);
     partialOutput_ = distinctOutput;
   } else {
     // First time processing, just store the result of the input batch's
-    // distinct.
+    // distinct. Use getTableView() to avoid expensive materialization for
+    // packed_table. tbl stays alive during this function call.
     partialOutput_ = getDistinctKeys(
-        tbl->release(), groupingKeyInputChannels_, inputTableStream);
+        tbl->getTableView(), groupingKeyInputChannels_, inputTableStream);
   }
 }
 
@@ -778,11 +783,12 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 }
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
-    std::unique_ptr<cudf::table> tbl,
+    cudf::table_view tableView,
     std::vector<column_index_t> const& groupByKeys,
     std::vector<std::unique_ptr<Aggregator>>& aggregators,
     rmm::cuda_stream_view stream) {
-  auto groupbyKeyView = tbl->select(groupByKeys.begin(), groupByKeys.end());
+  auto groupbyKeyView =
+      tableView.select(groupByKeys.begin(), groupByKeys.end());
 
   size_t const numGroupingKeys = groupbyKeyView.num_columns();
 
@@ -795,7 +801,7 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
 
   std::vector<cudf::groupby::aggregation_request> requests;
   for (auto& aggregator : aggregators) {
-    aggregator->addGroupbyRequest(tbl->view(), requests);
+    aggregator->addGroupbyRequest(tableView, requests);
   }
 
   auto [groupKeys, results] = groupByOwner.aggregate(requests, stream);
@@ -829,14 +835,13 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
 }
 
 CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
-    std::unique_ptr<cudf::table> tbl,
+    cudf::table_view tableView,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
     resultColumns.push_back(
-        aggregators_[i]->doReduce(
-            tbl->view(), outputType_->childAt(i), stream));
+        aggregators_[i]->doReduce(tableView, outputType_->childAt(i), stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
@@ -848,11 +853,11 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
 }
 
 CudfVectorPtr CudfHashAggregation::getDistinctKeys(
-    std::unique_ptr<cudf::table> tbl,
+    cudf::table_view tableView,
     std::vector<column_index_t> const& groupByKeys,
     rmm::cuda_stream_view stream) {
   auto result = cudf::distinct(
-      tbl->view().select(groupByKeys.begin(), groupByKeys.end()),
+      tableView.select(groupByKeys.begin(), groupByKeys.end()),
       {groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end()},
       cudf::duplicate_keep_option::KEEP_FIRST,
       cudf::null_equality::EQUAL,
@@ -939,13 +944,15 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
+  // Use tbl->view() instead of moving the table.
+  // tbl stays alive until the end of this function, keeping the view valid.
   if (isDistinct_) {
-    return getDistinctKeys(std::move(tbl), groupingKeyInputChannels_, stream);
+    return getDistinctKeys(tbl->view(), groupingKeyInputChannels_, stream);
   } else if (isGlobal_) {
-    return doGlobalAggregation(std::move(tbl), stream);
+    return doGlobalAggregation(tbl->view(), stream);
   } else {
     return doGroupByAggregation(
-        std::move(tbl), groupingKeyInputChannels_, aggregators_, stream);
+        tbl->view(), groupingKeyInputChannels_, aggregators_, stream);
   }
 }
 
