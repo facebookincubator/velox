@@ -862,6 +862,16 @@ class BaseVector {
   /// Returns the value at specified index as a Variant.
   Variant variantAt(vector_size_t index) const;
 
+  /// Returns values for all rows as Variants.
+  std::vector<Variant> toVariants() const;
+
+  /// Creates a vector from a list of Variant values. The result is a flat
+  /// vector with one element per value.
+  static VectorPtr createFromVariants(
+      const TypePtr& type,
+      const std::vector<Variant>& values,
+      velox::memory::MemoryPool* pool);
+
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
 
