@@ -218,6 +218,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<double>(prefix);
   registerArrayJoinFunctions<bool>(prefix);
   registerArrayJoinFunctions<Varchar>(prefix);
+  registerArrayJoinFunctions<Varbinary>(prefix);
   registerArrayJoinFunctions<Timestamp>(prefix);
   registerArrayJoinFunctions<Date>(prefix);
   registerArrayJoinFunctions<Json>(prefix);
