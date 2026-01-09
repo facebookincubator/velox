@@ -21,6 +21,7 @@ add_library(
   AggregationResolver.cpp
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
+  FeatureGen.cpp
   FilterToExpression.cpp
   HiveConnectorTestBase.cpp
   IndexLookupJoinTestBase.cpp

@@ -716,7 +716,7 @@ void BaseVector::ensureWritable(
   const bool isUnknownType = resultType->containsUnknown();
 
   // Check if ensure writable can work in place.
-  if (result.use_count() == 1 && !isUnknownType) {
+  if ((result.use_count() == 1 || result->isMutable()) && !isUnknownType) {
     switch (result->encoding()) {
       case VectorEncoding::Simple::FLAT:
       case VectorEncoding::Simple::ROW:
