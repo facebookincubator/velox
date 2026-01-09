@@ -41,7 +41,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
-        kRequestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
+        requestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
         pool_(pool),
         executor_(executor),
         queue_(
@@ -115,7 +115,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   folly::dynamic toJson() const;
 
   std::chrono::seconds requestDataSizesMaxWaitSec() const {
-    return kRequestDataSizesMaxWaitSec_;
+    return requestDataSizesMaxWaitSec_;
   }
 
   const std::unordered_set<std::string>& getRemoteTaskIdList() const {
@@ -171,7 +171,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   const std::string taskId_;
   const int destination_;
   const int64_t maxQueuedBytes_;
-  const std::chrono::seconds kRequestDataSizesMaxWaitSec_;
+  const std::chrono::seconds requestDataSizesMaxWaitSec_;
 
   memory::MemoryPool* const pool_;
   folly::Executor* const executor_;
