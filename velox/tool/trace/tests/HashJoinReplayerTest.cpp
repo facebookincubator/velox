@@ -29,11 +29,11 @@
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/HashJoinReplayer.h"
 #include "velox/tool/trace/TraceReplayRunner.h"
@@ -280,8 +280,8 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
   assertEqualResults({result}, {traceResult});
 
   const auto taskId = task->taskId();
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto opTraceDir =
       exec::trace::getOpTraceDirectory(taskTraceDir, traceNodeId_, 0, 0);
   const auto opTraceDataFile = exec::trace::getOpTraceInputFilePath(opTraceDir);
@@ -345,8 +345,8 @@ TEST_F(HashJoinReplayerTest, runner) {
   }
   auto traceResult = traceBuilder.copyResults(pool(), task);
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto probeOperatorTraceDir = exec::trace::getOpTraceDirectory(
       taskTraceDir,
       traceNodeId_,
