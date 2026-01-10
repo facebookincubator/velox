@@ -187,4 +187,26 @@ class VectorFuncFour : public velox::exec::VectorFunction {
   }
 };
 
+class VectorFuncFive : public velox::exec::VectorFunction {
+ public:
+  void apply(
+      const velox::SelectivityVector& /* rows */,
+      std::vector<velox::VectorPtr>& /* args */,
+      const TypePtr& /* outputType */,
+      velox::exec::EvalCtx& /* context */,
+      velox::VectorPtr& /* result */) const override {}
+
+  static std::vector<std::shared_ptr<velox::exec::FunctionSignature>>
+  signatures() {
+    // map(K,V), array(K) -> array(K)
+    return {velox::exec::FunctionSignatureBuilder()
+                .knownTypeVariable("K")
+                .typeVariable("V")
+                .returnType("array(K)")
+                .argumentType("map(K,V)")
+                .argumentType("array(K)")
+                .build()};
+  }
+};
+
 } // namespace facebook::velox

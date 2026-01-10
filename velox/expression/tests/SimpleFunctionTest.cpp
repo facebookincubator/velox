@@ -1072,7 +1072,7 @@ TEST_F(SimpleFunctionTest, variadicReuseNoArgs) {
 }
 
 TEST_F(SimpleFunctionTest, variadicReuseNoArgsDifferentType) {
-  std::string functionName = "function_with_variadic";
+  std::string functionName = "function_with_variadic_different_type";
   registerFunction<FunctionWithVariadic, int32_t, Variadic<int64_t>>(
       {functionName});
 

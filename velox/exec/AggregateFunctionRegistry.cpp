@@ -53,55 +53,49 @@ TypePtr resolveResultType(
   }
 }
 
-namespace {
-bool hasCoercion(const std::vector<Coercion>& coercions) {
-  for (const auto& coercion : coercions) {
-    if (coercion.type != nullptr) {
-      return true;
-    }
-  }
-
-  return false;
-}
-} // namespace
-
 TypePtr resolveResultTypeWithCoercions(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
     std::vector<TypePtr>& coercions) {
   coercions.clear();
 
-  std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
-  if (auto signatures = getAggregateFunctionSignatures(name)) {
-    for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, argTypes);
-      std::vector<Coercion> requiredCoercions;
-      if (binder.tryBindWithCoercions(requiredCoercions)) {
-        auto type = binder.tryResolveReturnType();
-        if (!hasCoercion(requiredCoercions)) {
-          coercions.resize(argTypes.size(), nullptr);
-          return type;
-        }
-
-        candidates.emplace_back(requiredCoercions, type);
-      }
-    }
-
-    if (auto index = Coercion::pickLowestCost(candidates)) {
-      const auto& requiredCoercions = candidates[index.value()].first;
-      coercions.reserve(requiredCoercions.size());
-      for (const auto& coercion : requiredCoercions) {
-        coercions.push_back(coercion.type);
-      }
-
-      return candidates[index.value()].second;
-    }
-
-    VELOX_USER_FAIL(
-        makeSignatureNotSupportedError(name, argTypes, signatures.value()));
-  } else {
+  std::vector<Coercion> selectedCoercions;
+  size_t selectedCount = 0;
+  TypePtr selectedType;
+  auto signatures = getAggregateFunctionSignatures(name);
+  if (!signatures) {
     VELOX_USER_FAIL("Aggregate function not registered: {}", name);
   }
+
+  auto selectedPriority = kImpossibleCoercionCost;
+  std::vector<Coercion> requiredCoercions;
+  for (const auto& signature : *signatures) {
+    exec::SignatureBinder binder{*signature, argTypes};
+    if (!binder.tryBind(&requiredCoercions)) {
+      continue;
+    }
+    auto type = binder.tryResolveReturnType();
+    if (!type) {
+      continue;
+    }
+    const auto currentPriority = Coercion::overallCost(requiredCoercions);
+    if (currentPriority < selectedPriority) {
+      std::swap(selectedCoercions, requiredCoercions);
+      selectedType = std::move(type);
+      selectedPriority = currentPriority;
+      selectedCount = 1;
+    } else if (currentPriority == selectedPriority) {
+      ++selectedCount;
+    }
+  }
+
+  if (selectedCount != 1) {
+    VELOX_USER_FAIL(
+        makeSignatureNotSupportedError(name, argTypes, signatures.value()));
+  }
+
+  Coercion::convert(selectedCoercions, &coercions);
+  return selectedType;
 }
 
 TypePtr resolveIntermediateType(
