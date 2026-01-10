@@ -21,7 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorStats.h"
-#include "velox/exec/OperatorTraceWriter.h"
+#include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
 
@@ -639,8 +639,8 @@ class Operator : public BaseRuntimeStatWriter {
   /// NOTE: only one of the two could be set for an operator for tracing .
   /// 'splitTracer_' is only set for table scan to record the processed split
   /// for now.
-  std::unique_ptr<trace::OperatorTraceInputWriter> inputTracer_{nullptr};
-  std::unique_ptr<trace::OperatorTraceSplitWriter> splitTracer_{nullptr};
+  std::unique_ptr<trace::TraceInputWriter> inputTracer_{nullptr};
+  std::unique_ptr<trace::TraceSplitWriter> splitTracer_{nullptr};
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this
@@ -675,6 +675,7 @@ class Operator : public BaseRuntimeStatWriter {
  private:
   // Setup 'inputTracer_' to record the processed input vectors.
   void setupInputTracer(const std::string& traceDir);
+
   // Setup 'splitTracer_' for table scan to record the processed split.
   void setupSplitTracer(const std::string& traceDir);
 };

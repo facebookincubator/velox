@@ -54,12 +54,24 @@ class TestPyVeloxRunner(unittest.TestCase):
         plan_builder = PlanBuilder().values()
         LocalRunner(plan_builder.get_plan_node())
 
-    def test_executed_twice(self):
-        # Ensure the runner fails if it is executed twice.
-        plan_builder = PlanBuilder().values()
+    def test_execute_twice(self):
+        # Ensure a runner can be executed twice.
+        vector = to_velox(
+            pyarrow.record_batch([pyarrow.array(list(range(10)))], names=["c0"])
+        )
+
+        plan_builder = PlanBuilder().values([vector])
         runner = LocalRunner(plan_builder.get_plan_node())
-        runner.execute()
-        self.assertRaises(RuntimeError, runner.execute)
+
+        total_size = 0
+        for vector in runner.execute():
+            total_size += vector.size()
+        self.assertEqual(total_size, 10)
+
+        total_size = 0
+        for vector in runner.execute():
+            total_size += vector.size()
+        self.assertEqual(total_size, 10)
 
     def test_values(self):
         vectors = []

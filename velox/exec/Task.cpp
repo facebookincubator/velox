@@ -36,12 +36,11 @@
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/TaskTraceWriter.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-
 namespace {
 
 // RAII helper class to satisfy given promises and notify listeners of an event
@@ -3448,7 +3447,7 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return exchangeClients_[pipelineId];
 }
 
-std::optional<TraceConfig> Task::maybeMakeTraceConfig() const {
+std::optional<trace::TraceConfig> Task::maybeMakeTraceConfig() const {
   const auto& queryConfig = queryCtx_->queryConfig();
   if (!queryConfig.queryTraceEnabled()) {
     return std::nullopt;
@@ -3478,18 +3477,19 @@ std::optional<TraceConfig> Task::maybeMakeTraceConfig() const {
           [traceNodeId](const core::PlanNode* node) -> bool {
             return node->id() == traceNodeId;
           }),
-      "Trace plan node ID = {} not found from task {}",
+      "Trace plan node ID = '{}' not found from task '{}'",
       traceNodeId,
       taskId_);
 
-  LOG(INFO) << "Trace input for plan nodes " << traceNodeId << " from task "
-            << taskId_;
+  LOG(INFO) << "Trace input for plan nodes '" << traceNodeId << "' from task '"
+            << taskId_ << "'";
 
-  UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB =
+  trace::UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB =
       [this](uint64_t bytes) {
         queryCtx_->updateTracedBytesAndCheckLimit(bytes);
       };
-  return TraceConfig(
+
+  return trace::TraceConfig(
       traceNodeId,
       traceDir,
       std::move(updateAndCheckTraceLimitCB),

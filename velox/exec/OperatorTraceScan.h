@@ -21,6 +21,7 @@
 #include "velox/exec/OperatorTraceReader.h"
 
 namespace facebook::velox::exec::trace {
+
 /// This is a scan operator for query replay. It uses traced data from a
 /// specific directory path, which is
 /// $traceRoot/$taskId/$nodeId/$pipelineId/$driverId.

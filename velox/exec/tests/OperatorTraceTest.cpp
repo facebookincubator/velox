@@ -27,18 +27,24 @@
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskTraceReader.h"
 #include "velox/exec/TaskTraceWriter.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 
-using namespace facebook::velox::exec::test;
-
 namespace facebook::velox::exec::trace::test {
-class OperatorTraceTest : public HiveConnectorTestBase {
+namespace {
+
+using exec::test::assertEqualResults;
+using exec::test::AssertQueryBuilder;
+using exec::test::PlanBuilder;
+using exec::test::TempDirectoryPath;
+using exec::test::TempFilePath;
+
+class OperatorTraceTest : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -104,6 +110,13 @@ class OperatorTraceTest : public HiveConnectorTestBase {
 
   std::unique_ptr<DriverCtx> driverCtx() {
     return std::make_unique<DriverCtx>(nullptr, 0, 0, 0, 0);
+  }
+
+  std::string getTaskTraceDirectory(
+      const std::string& traceDir,
+      const Task& task) {
+    return trace::getTaskTraceDirectory(
+        traceDir, task.queryCtx()->queryId(), task.taskId());
   }
 
   RowTypePtr dataType_;
@@ -505,8 +518,7 @@ TEST_F(OperatorTraceTest, error) {
             .queryCtx(queryCtx)
             .maxDrivers(1)
             .copyResults(pool()),
-
-        "Trace plan node ID = nonexist not found from task");
+        "Trace plan node ID = 'nonexist' not found from task");
   }
 }
 
@@ -1171,4 +1183,6 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   const auto reader = trace::TaskTraceMetadataReader(taskTraceDir, pool());
   ASSERT_EQ("test-hive", reader.connectorId("0"));
 }
+
+} // namespace
 } // namespace facebook::velox::exec::trace::test
