@@ -22,6 +22,7 @@
 #include <folly/Conv.h>
 
 #include "folly/dynamic.h"
+#include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/CppToType.h"
@@ -565,7 +566,10 @@ class Variant {
   bool lessThan(const Variant& other) const;
 
   template <TypeKind KIND>
-  bool equals(const Variant& other) const;
+  std::optional<bool> equals(
+      const Variant& other,
+      CompareFlags::NullHandlingMode nullHandlingMode =
+          CompareFlags::NullHandlingMode::kNullAsValue) const;
 
   template <TypeKind KIND>
   uint64_t hash() const;
@@ -648,7 +652,10 @@ class Variant {
 
   bool operator<(const Variant& other) const;
 
-  bool equals(const Variant& other) const;
+  std::optional<bool> equals(
+      const Variant& other,
+      CompareFlags::NullHandlingMode nullHandlingMode =
+          CompareFlags::NullHandlingMode::kNullAsValue) const;
 
   bool equalsWithNullEqualsNull(const Variant& other) const;
 
@@ -963,7 +970,7 @@ class Variant {
 };
 
 inline bool operator==(const Variant& a, const Variant& b) {
-  return a.equals(b);
+  return a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue).value();
 }
 
 struct VariantConverter {

@@ -799,6 +799,31 @@ TEST(VariantTest, equalsWithEpsilonFloat) {
   ASSERT_FALSE(Variant(sum1).equalsWithEpsilon(Variant(sum3)));
 }
 
+TEST(VariantTest, equalsWithNullAsIndeterminate) {
+  auto testNullEquals = [](const TypeKind& kind) {
+    ASSERT_TRUE(
+        Variant::null(kind).equals(
+            Variant::null(kind),
+            CompareFlags::NullHandlingMode::kNullAsIndeterminate) ==
+        std::nullopt);
+    ASSERT_TRUE(Variant::null(kind).equals(Variant::null(kind)).value());
+  };
+
+  // null = null is
+  //  - indeterminate with kNullAsIndeterminate nullHandlingMode.
+  //  - true with kNullAsValue nullHandlingMode.
+  testNullEquals(TypeKind::SMALLINT);
+  testNullEquals(TypeKind::INTEGER);
+  testNullEquals(TypeKind::BIGINT);
+  testNullEquals(TypeKind::VARCHAR);
+  testNullEquals(TypeKind::VARBINARY);
+  testNullEquals(TypeKind::DOUBLE);
+  testNullEquals(TypeKind::TIMESTAMP);
+  testNullEquals(TypeKind::ARRAY);
+  testNullEquals(TypeKind::MAP);
+  testNullEquals(TypeKind::ROW);
+}
+
 TEST(VariantTest, mapWithNaNKey) {
   // Verify that map variants treat all NaN keys as equivalent and comparable
   // (consider them the largest) with other values.
