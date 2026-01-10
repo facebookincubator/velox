@@ -1038,5 +1038,47 @@ DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {
               "ORDER BY d");
 }
 
+// Test aggregate window function with UNBOUNDED PRECEDING AND UNBOUNDED
+// FOLLOWING frame. This tests the sameFrameAggregation optimization path
+// in AggregateWindowFunction which uses batch loading to avoid allocating
+// a huge vector for the entire partition at once, reducing memory spike.
+// The aggregate is computed once and cached for reuse across output batches.
+TEST_F(WindowTest, aggregateUnboundedFrame) {
+  const vector_size_t size = 1000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload - values to aggregate.
+          makeFlatVector<int64_t>(size, [](auto row) { return row + 1; }),
+          // Partition key - creates 10 partitions of 100 rows each.
+          makeFlatVector<int16_t>(size, [](auto row) { return row / 100; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  auto runTest = [&](const std::string& aggFunc) {
+    auto windowExpr = fmt::format(
+        "{}(d) over (partition by p order by s rows between "
+        "unbounded preceding and unbounded following)",
+        aggFunc);
+    auto plan =
+        PlanBuilder().values(split(data, 10)).window({windowExpr}).planNode();
+
+    // Use small batch sizes to ensure partition spans multiple output batches,
+    // testing both batch loading and result caching.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, "256")
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "50")
+        .config(core::QueryConfig::kMaxOutputBatchRows, "100")
+        .assertResults(fmt::format("SELECT *, {} FROM tmp", windowExpr));
+  };
+
+  runTest("sum");
+  runTest("count");
+  runTest("avg");
+}
+
 } // namespace
 } // namespace facebook::velox::exec
