@@ -16,6 +16,9 @@
 
 #include <filesystem>
 
+#include <folly/json.h>
+
+#include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -263,6 +266,26 @@ class TransformE2ETest : public test::IcebergTestBase {
         value.data(), value.size());
     return ((hash & 0x7FFFFFFF) % numBuckets);
   }
+
+  folly::dynamic getPartitionValuesFromCommitMessage(
+      const RowVectorPtr& rowVector) {
+    auto outputDirectory = TempDirectoryPath::create();
+    std::vector<test::PartitionField> partitionTransforms = {
+        {0, TransformType::kIdentity, std::nullopt},
+    };
+    const auto dataSink = createDataSinkAndAppendData(
+        {rowVector}, outputDirectory->getPath(), partitionTransforms);
+
+    auto commitMessages = dataSink->commitMessage();
+    VELOX_CHECK_EQ(commitMessages.size(), 1);
+    auto commitData = folly::parseJson(commitMessages[0]);
+    auto partitionDataJson =
+        folly::parseJson(commitData["partitionDataJson"].asString());
+    auto partitionValues = partitionDataJson["partitionValues"];
+    VELOX_CHECK_EQ(partitionValues.size(), 1);
+    dataSink->close();
+    return partitionValues[0];
+  }
 };
 
 TEST_F(TransformE2ETest, identity) {
@@ -342,6 +365,46 @@ TEST_F(TransformE2ETest, partitionNamingConventions) {
 
   ASSERT_EQ(actualPartitionNames, expectedPartitionNames)
       << "Partition folder names do not match expected values";
+}
+
+TEST_F(TransformE2ETest, varbinaryPartitionCommitMessage) {
+  std::vector<std::string> testData = {
+      "binarydata\x01\x02\x03",
+      "",
+      ".-_*/?%#&=+,;@!$\\\"'()<>:|[]{}^~`\n\r\t\u00A9",
+  };
+
+  for (const auto& binaryData : testData) {
+    SCOPED_TRACE(testing::Message() << "binaryData: " << binaryData);
+    auto rowVector = makeRowVector({
+        makeConstant(binaryData, 1, VARBINARY()),
+    });
+
+    auto partitionValue = getPartitionValuesFromCommitMessage(rowVector);
+    ASSERT_EQ(
+        partitionValue.asString(),
+        encoding::Base64::encode(binaryData.data(), binaryData.size()));
+  }
+}
+
+TEST_F(TransformE2ETest, nullPartitionValue) {
+  const std::vector<TypeKind> typeKinds = {
+      TypeKind::BOOLEAN,
+      TypeKind::INTEGER,
+      TypeKind::BIGINT,
+      TypeKind::VARCHAR,
+      TypeKind::VARBINARY,
+      TypeKind::TIMESTAMP,
+  };
+
+  for (const auto& typeKind : typeKinds) {
+    auto rowVector = makeRowVector({
+        makeNullConstant(typeKind, 1),
+    });
+
+    auto partitionValue = getPartitionValuesFromCommitMessage(rowVector);
+    ASSERT_TRUE(partitionValue.isNull());
+  }
 }
 
 TEST_F(TransformE2ETest, bucket) {
