@@ -1336,8 +1336,7 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
       for (int64_t numProbedBuckets = 0; numProbedBuckets < numBuckets();
            ++numProbedBuckets) {
         MaskType free =
-            ~simd::toBitMask(
-                BaseHashTable::TagVector::batch_bool_type(tagsInTable)) &
+            ~simd::toBitMask(tagsInTable != TagVector::broadcast(0)) &
             ProbeState::kFullMask;
         if (free) {
           auto freeOffset = bits::getAndClearLastSetBit(free);
