@@ -290,8 +290,7 @@ static void addExpressionBindings(
           },
           "Evaluates the expression, taking in a map from names to input vectors")
       .def_static("from_string", [](std::string& str) {
-        parse::ParseOptions opts;
-        return IExprWrapper{parse::parseExpr(str, opts)};
+        return IExprWrapper{parse::DuckSqlExpressionsParser().parseExpr(str)};
       });
 }
 
