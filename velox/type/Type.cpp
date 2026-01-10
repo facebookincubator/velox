@@ -436,18 +436,18 @@ const std::vector<TypeParameter>* RowType::ensureParameters() const {
   return newParameters.release();
 }
 
-const RowType::NameToIndex* RowType::ensureNameToIndex() const {
-  auto newNameToIndex = std::make_unique<NameToIndex>();
+const detail::NameToIndex* RowType::ensureNameToIndex() const {
+  auto newNameToIndex = std::make_unique<detail::NameToIndex>();
   newNameToIndex->reserve(names_.size());
   for (uint32_t i = 0; const auto& name : names_) {
     if (auto* oldNameToIndex = nameToIndex_.load(std::memory_order_acquire))
         [[unlikely]] {
       return oldNameToIndex;
     }
-    newNameToIndex->emplace(NameIndex{name, i++});
+    newNameToIndex->insert(name, i++);
   }
 
-  NameToIndex* oldNameToIndex = nullptr;
+  detail::NameToIndex* oldNameToIndex = nullptr;
   if (!nameToIndex_.compare_exchange_strong(
           oldNameToIndex,
           newNameToIndex.get(),
@@ -508,7 +508,7 @@ bool RowType::isComparable() const {
 }
 
 bool RowType::containsChild(std::string_view name) const {
-  return nameToIndex().contains(NameIndex{name, 0});
+  return nameToIndex().contains(name);
 }
 
 uint32_t RowType::getChildIdx(std::string_view name) const {
@@ -521,12 +521,7 @@ uint32_t RowType::getChildIdx(std::string_view name) const {
 
 std::optional<uint32_t> RowType::getChildIdxIfExists(
     std::string_view name) const {
-  const auto& nameToIndex = this->nameToIndex();
-  auto it = nameToIndex.find(NameIndex{name, 0});
-  if (it != nameToIndex.end()) {
-    return it->index;
-  }
-  return std::nullopt;
+  return nameToIndex().find(name);
 }
 
 bool RowType::equivalent(const Type& other) const {
