@@ -60,6 +60,9 @@ inline std::string TestParamToName(const TestParam& param) {
       param.parallelBuildSideRowsEnabled ? "with" : "without");
 }
 
+using SplitPath =
+    std::unordered_map<core::PlanNodeId, std::vector<std::string>>;
+
 using SplitInput =
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>;
 
@@ -375,8 +378,20 @@ class HashJoinBuilder {
     return *this;
   }
 
-  HashJoinBuilder& inputSplits(const SplitInput& inputSplits) {
-    makeInputSplits_ = [inputSplits] { return inputSplits; };
+  HashJoinBuilder& inputSplits(const SplitPath& splitPaths) {
+    makeInputSplits_ = [splitPaths] {
+      SplitInput inputSplits;
+      for (const auto& [nodeId, paths] : splitPaths) {
+        std::vector<exec::Split> splits;
+        splits.reserve(paths.size());
+        for (const auto& path : paths) {
+          splits.emplace_back(
+              exec::Split(HiveConnectorSplitBuilder(path).build()));
+        }
+        inputSplits[nodeId] = std::move(splits);
+      }
+      return inputSplits;
+    };
     return *this;
   }
 
@@ -783,7 +798,6 @@ class HashJoinBuilder {
   bool hashProbeFinishEarlyOnEmptyBuild_{true};
   bool parallelJoinBuildRowsEnabled_{false};
 
-  SplitInput inputSplits_;
   std::function<SplitInput()> makeInputSplits_;
   core::PlanNodePtr planNode_;
   std::unordered_map<std::string, std::string> configs_;
@@ -879,15 +893,13 @@ class HashJoinTestBase : public HiveConnectorTestBase {
                       outputLayout,
                       joinType)
                   .planNode();
-    SplitInput splitInput = {
-        {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-        {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    SplitPath splitPaths = {
+        {probeScanId, {probeFile->getPath()}},
+        {buildScanId, {buildFile->getPath()}},
     };
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splitInput)
+        .inputSplits(splitPaths)
         .checkSpillStats(false)
         .referenceQuery(referenceQuery)
         .run();
