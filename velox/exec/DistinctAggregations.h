@@ -91,6 +91,11 @@ class DistinctAggregations {
       folly::Range<char**> groups,
       const RowVectorPtr& result) = 0;
 
+  virtual void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index) = 0;
+
  protected:
   // Initializes null flags and accumulators for newly encountered groups.  This
   // function should be called only once for each group.
