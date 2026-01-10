@@ -153,9 +153,9 @@ class CompactRow {
   bool supportsBulkCopy_{false};
 
   // ROW type only. Number of bytes used by null flags.
-  size_t rowNullBytes_;
+  size_t rowNullBytes_{0};
 
   // Fixed-width types only. Number of bytes used for a single value.
-  size_t valueBytes_;
+  size_t valueBytes_{0};
 };
 } // namespace facebook::velox::row
