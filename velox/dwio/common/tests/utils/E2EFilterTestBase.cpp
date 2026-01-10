@@ -485,6 +485,12 @@ void E2EFilterTestBase::testRunLengthDictionaryScenario(
   }
 }
 
+namespace {
+core::ExprPtr parseExpr(const std::string& text) {
+  return parse::DuckSqlExpressionsParser().parseExpr(text);
+}
+} // namespace
+
 void E2EFilterTestBase::testMetadataFilterImpl(
     const std::vector<RowVectorPtr>& batches,
     common::Subfield filterField,
@@ -493,7 +499,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
     const std::string& remainingFilter,
     std::function<bool(int64_t, int64_t)> validationFilter) {
   SCOPED_TRACE(fmt::format("remainingFilter='{}'", remainingFilter));
-  auto untypedExpr = parse::parseExpr(remainingFilter, {});
+  auto untypedExpr = parseExpr(remainingFilter);
   auto typedExpr = core::Expressions::inferTypes(
       untypedExpr, batches[0]->type(), leafPool_.get());
   testMetadataFilterImpl(
@@ -642,11 +648,11 @@ void E2EFilterTestBase::testMetadataFilter() {
   {
     SCOPED_TRACE("remainingFilter='a == 1 or a == 3 or a == 8'");
     auto typedExpr1 = core::Expressions::inferTypes(
-        parse::parseExpr("a == 1", {}), batches[0]->type(), leafPool_.get());
+        parseExpr("a == 1"), batches[0]->type(), leafPool_.get());
     auto typedExpr2 = core::Expressions::inferTypes(
-        parse::parseExpr("a == 3", {}), batches[0]->type(), leafPool_.get());
+        parseExpr("a == 3"), batches[0]->type(), leafPool_.get());
     auto typedExpr3 = core::Expressions::inferTypes(
-        parse::parseExpr("a == 8", {}), batches[0]->type(), leafPool_.get());
+        parseExpr("a == 8"), batches[0]->type(), leafPool_.get());
 
     auto typedExpr = std::make_shared<core::CallTypedExpr>(
         velox::BOOLEAN(),
@@ -667,11 +673,11 @@ void E2EFilterTestBase::testMetadataFilter() {
   {
     SCOPED_TRACE("remainingFilter='a >= 1 and a <= 100 and a == 8'");
     auto typedExpr1 = core::Expressions::inferTypes(
-        parse::parseExpr("a >= 1", {}), batches[0]->type(), leafPool_.get());
+        parseExpr("a >= 1"), batches[0]->type(), leafPool_.get());
     auto typedExpr2 = core::Expressions::inferTypes(
-        parse::parseExpr("a <= 100", {}), batches[0]->type(), leafPool_.get());
+        parseExpr("a <= 100"), batches[0]->type(), leafPool_.get());
     auto typedExpr3 = core::Expressions::inferTypes(
-        parse::parseExpr("b.c != 8", {}), batches[0]->type(), leafPool_.get());
+        parseExpr("b.c != 8"), batches[0]->type(), leafPool_.get());
 
     auto typedExpr = std::make_shared<core::CallTypedExpr>(
         velox::BOOLEAN(),
@@ -713,7 +719,7 @@ void E2EFilterTestBase::testMetadataFilter() {
     writeToMemory(batches[0]->type(), batches, false);
     auto spec = std::make_shared<common::ScanSpec>("<root>");
     spec->addAllChildFields(*batches[0]->type());
-    auto untypedExpr = parse::parseExpr("a = 1 or b + c = 2", {});
+    auto untypedExpr = parseExpr("a = 1 or b + c = 2");
     auto typedExpr = core::Expressions::inferTypes(
         untypedExpr, batches[0]->type(), leafPool_.get());
     auto metadataFilter =
