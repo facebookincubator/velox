@@ -21,9 +21,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 using namespace facebook::velox::exec::test;
 

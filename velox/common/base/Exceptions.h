@@ -334,6 +334,14 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
       /* isRetriable */ false,                                             \
       ##__VA_ARGS__)
 
+#define VELOX_TRACE_LIMIT_EXCEEDED(...)                             \
+  _VELOX_THROW(                                                     \
+      ::facebook::velox::VeloxRuntimeError,                         \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
+      ::facebook::velox::error_code::kTraceLimitExceeded.c_str(),   \
+      /* isRetriable */ true,                                       \
+      ##__VA_ARGS__)
+
 DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError)
 
 // For all below macros, an additional message can be passed using a
