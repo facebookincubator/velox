@@ -65,6 +65,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
   registerFunction<DayFunction, int32_t, Date>(
       {prefix + "day", prefix + "dayofmonth"});
+  registerFunction<DayNameFunction, Varchar, Date>({prefix + "dayname"});
   registerFunction<DayOfYearFunction, int32_t, Date>({prefix + "dayofyear"});
   registerFunction<DayOfWeekFunction, int32_t, Date>({prefix + "dayofweek"});
   registerFunction<WeekdayFunction, int32_t, Date>({prefix + "weekday"});
