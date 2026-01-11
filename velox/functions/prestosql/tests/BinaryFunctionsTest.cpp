@@ -329,6 +329,53 @@ TEST_F(BinaryFunctionsTest, xxhash64WithSeed) {
   EXPECT_NE(hexToDec("26C7827D889F6DA3"), xxhash64WithSeed("hello", 1224));
 }
 
+TEST_F(BinaryFunctionsTest, fnv1_32) {
+  const auto fnv1_32 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("fnv1_32(c0)", VARBINARY(), arg);
+  };
+  EXPECT_EQ(std::nullopt, fnv1_32(std::nullopt));
+  EXPECT_EQ(0x811c9dc5, fnv1_32(""));
+  EXPECT_EQ(0x050c5d06, fnv1_32(hexToDec("19")));
+  EXPECT_EQ(0x050c5dea, fnv1_32(hexToDec("F5")));
+  EXPECT_EQ(0x087689bb, fnv1_32(hexToDec("0919")));
+  EXPECT_EQ(0x67a7fdec, fnv1_32(hexToDec("F50919")));
+  EXPECT_EQ(0x9f2263f3, fnv1_32(hexToDec("232706FC6BF50919")));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1_64) {
+  const auto fnv1_64 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int64_t>("fnv1_64(c0)", VARBINARY(), arg);
+  };
+
+  EXPECT_EQ(std::nullopt, fnv1_64(std::nullopt));
+  EXPECT_EQ(0xcbf29ce484222325L, fnv1_64(""));
+  EXPECT_EQ(0x4a65ff96675a9f33L, fnv1_64(hexToDec("232706FC6BF50919")));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1a_32) {
+  const auto fnv1a_32 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("fnv1a_32(c0)", VARBINARY(), arg);
+  };
+
+  EXPECT_EQ(std::nullopt, fnv1a_32(std::nullopt));
+  EXPECT_EQ(0x811c9dc5, fnv1a_32(""));
+  EXPECT_EQ(0x1c0c8154, fnv1a_32(hexToDec("19")));
+  EXPECT_EQ(0x700b7290, fnv1a_32(hexToDec("F5")));
+  EXPECT_EQ(0x34881807, fnv1a_32(hexToDec("0919")));
+  EXPECT_EQ(0xeb80c366, fnv1a_32(hexToDec("F50919")));
+  EXPECT_EQ(0x0951d55f, fnv1a_32(hexToDec("232706FC6BF50919")));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1a_64) {
+  const auto fnv1a_64 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int64_t>("fnv1a_64(c0)", VARBINARY(), arg);
+  };
+
+  EXPECT_EQ(std::nullopt, fnv1a_64(std::nullopt));
+  EXPECT_EQ(0xcbf29ce484222325L, fnv1a_64(""));
+  EXPECT_EQ(0x68addc0b0febac5fL, fnv1a_64(hexToDec("232706FC6BF50919")));
+}
+
 TEST_F(BinaryFunctionsTest, toHex) {
   const auto toHex = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("to_hex(cast(c0 as varbinary))", value);
