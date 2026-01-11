@@ -25,11 +25,11 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TraceReplayRunner.h"
@@ -122,8 +122,8 @@ TEST_F(TableScanReplayerTest, runner) {
           .splits(makeHiveConnectorSplits(splitFiles))
           .copyResults(pool(), task);
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto taskTraceReader =
       exec::trace::TaskTraceMetadataReader(taskTraceDir, pool());
   const auto connectorId = taskTraceReader.connectorId(traceNodeId_);

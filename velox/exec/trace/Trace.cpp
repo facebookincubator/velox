@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/Trace.h"
+#include "velox/exec/trace/Trace.h"
 
 #include <fmt/core.h>
 

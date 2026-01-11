@@ -34,7 +34,7 @@ class LambdaParameterizedBaseTest
       const std::string& expression,
       const RowVectorPtr& data) {
     std::vector<core::TypedExprPtr> parseExpr = {
-        parseExpression(expression, asRowType(data->type()))};
+        makeTypedExpr(expression, asRowType(data->type()))};
     auto exprSet = std::make_unique<exec::ExprSet>(
         std::move(parseExpr), &execCtxParametrized_);
 

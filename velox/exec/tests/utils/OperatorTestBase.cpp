@@ -244,7 +244,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
     const std::string& text,
     RowTypePtr rowType,
     const parse::ParseOptions& options) {
-  auto untyped = parse::parseExpr(text, options);
+  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
 }
 

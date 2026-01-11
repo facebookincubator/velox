@@ -14,31 +14,35 @@
  * limitations under the License.
  */
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/duckdb/conversion/DuckParser.h"
 
 namespace facebook::velox::parse {
+namespace {
 
-core::ExprPtr parseExpr(const std::string& expr, const ParseOptions& options) {
-  facebook::velox::duckdb::ParseOptions duckConversionOptions;
-  duckConversionOptions.parseDecimalAsDouble = options.parseDecimalAsDouble;
-  duckConversionOptions.parseIntegerAsBigint = options.parseIntegerAsBigint;
-  duckConversionOptions.parseInListAsArray = options.parseInListAsArray;
-  duckConversionOptions.functionPrefix = options.functionPrefix;
-  return facebook::velox::duckdb::parseExpr(expr, duckConversionOptions);
-}
-
-std::vector<core::ExprPtr> parseMultipleExpressions(
-    const std::string& expr,
+facebook::velox::duckdb::ParseOptions toDuckOptions(
     const ParseOptions& options) {
-  facebook::velox::duckdb::ParseOptions duckConversionOptions;
-  duckConversionOptions.parseDecimalAsDouble = options.parseDecimalAsDouble;
-  duckConversionOptions.parseIntegerAsBigint = options.parseIntegerAsBigint;
-  duckConversionOptions.functionPrefix = options.functionPrefix;
-  return facebook::velox::duckdb::parseMultipleExpressions(
-      expr, duckConversionOptions);
+  facebook::velox::duckdb::ParseOptions duckOptions;
+  duckOptions.parseDecimalAsDouble = options.parseDecimalAsDouble;
+  duckOptions.parseIntegerAsBigint = options.parseIntegerAsBigint;
+  duckOptions.parseInListAsArray = options.parseInListAsArray;
+  duckOptions.functionPrefix = options.functionPrefix;
+  return duckOptions;
+}
+} // namespace
+
+DuckSqlExpressionsParser::DuckSqlExpressionsParser(const ParseOptions& options)
+    : options_{toDuckOptions(options)} {}
+
+core::ExprPtr DuckSqlExpressionsParser::parseExpr(const std::string& expr) {
+  return facebook::velox::duckdb::parseExpr(expr, options_);
 }
 
-OrderByClause parseOrderByExpr(const std::string& expr) {
+std::vector<core::ExprPtr> DuckSqlExpressionsParser::parseExprs(
+    const std::string& expr) {
+  return facebook::velox::duckdb::parseMultipleExpressions(expr, options_);
+}
+
+OrderByClause DuckSqlExpressionsParser::parseOrderByExpr(
+    const std::string& expr) {
   auto orderBy = facebook::velox::duckdb::parseOrderByExpr(expr);
 
   return {

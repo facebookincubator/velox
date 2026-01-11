@@ -52,7 +52,7 @@ class ExprToSubfieldFilterTest : public testing::Test {
       const std::string& expr,
       const RowTypePtr& type) {
     return core::Expressions::inferTypes(
-        parse::parseExpr(expr, {}), type, pool_.get());
+        parse::DuckSqlExpressionsParser().parseExpr(expr), type, pool_.get());
   }
 
   core::CallTypedExprPtr parseCallExpr(

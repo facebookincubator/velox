@@ -259,15 +259,7 @@ class PreprocBenchmark : public functions::test::FunctionBenchmarkBase {
   }
 
   exec::ExprSet compile(const std::vector<std::string>& texts) {
-    std::vector<core::TypedExprPtr> typedExprs;
-    parse::ParseOptions options;
-    for (const auto& text : texts) {
-      auto untyped = parse::parseExpr(text, options);
-      auto typed = core::Expressions::inferTypes(
-          untyped, ROW({"c0"}, {REAL()}), execCtx_.pool());
-      typedExprs.push_back(typed);
-    }
-    return exec::ExprSet(typedExprs, &execCtx_);
+    return compileExpressions(texts, ROW({{"c0", REAL()}}));
   }
 
   std::string makeExpression(int n, RunConfig config, bool withNulls) {

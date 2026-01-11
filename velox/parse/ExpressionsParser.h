@@ -15,7 +15,8 @@
  */
 #pragma once
 
-#include "velox/parse/IExpr.h"
+#include "velox/duckdb/conversion/DuckParser.h"
+#include "velox/parse/SqlExpressionsParser.h"
 
 namespace facebook::velox::parse {
 
@@ -34,18 +35,34 @@ struct ParseOptions {
   std::string functionPrefix;
 };
 
-core::ExprPtr parseExpr(const std::string& expr, const ParseOptions& options);
+/// Parses SQL expressions using DuckDB SQL dialect:
+/// https://duckdb.org/docs/stable/sql/dialect/overview
+class DuckSqlExpressionsParser : public SqlExpressionsParser {
+ public:
+  DuckSqlExpressionsParser(const ParseOptions& options = {});
 
-struct OrderByClause {
-  core::ExprPtr expr;
-  bool ascending;
-  bool nullsFirst;
+  core::ExprPtr parseExpr(const std::string& expr) override;
+
+  std::vector<core::ExprPtr> parseExprs(const std::string& expr) override;
+
+  OrderByClause parseOrderByExpr(const std::string& expr) override;
+
+ private:
+  const facebook::velox::duckdb::ParseOptions options_;
 };
 
-OrderByClause parseOrderByExpr(const std::string& expr);
-
-std::vector<core::ExprPtr> parseMultipleExpressions(
+/// Legacy APIs kepts for backward compatibility.
+/// TODO Remove after updating callsites in Axiom.
+[[deprecated("Use DuckSqlExpressionsParser instead")]]
+inline core::ExprPtr parseExpr(
     const std::string& expr,
-    const ParseOptions& options);
+    const ParseOptions& options) {
+  return DuckSqlExpressionsParser(options).parseExpr(expr);
+}
+
+[[deprecated("Use DuckSqlExpressionsParser instead")]]
+inline OrderByClause parseOrderByExpr(const std::string& expr) {
+  return DuckSqlExpressionsParser().parseOrderByExpr(expr);
+}
 
 } // namespace facebook::velox::parse

@@ -137,7 +137,8 @@ void runDynamicTypeTest(
   std::shared_ptr<core::QueryCtx> queryCtx{core::QueryCtx::create()};
   core::ExecCtx execCtx{pool, queryCtx.get()};
   SelectivityVector rows(elementSize);
-  auto untypedExpr = parse::parseExpr("dynamic_row_udf(c0)", {});
+  auto untypedExpr =
+      parse::DuckSqlExpressionsParser().parseExpr("dynamic_row_udf(c0)");
   auto parsedExpr =
       core::Expressions::inferTypes(untypedExpr, inputVector->type(), pool);
   exec::ExprSet exprSet({parsedExpr}, &execCtx);

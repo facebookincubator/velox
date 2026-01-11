@@ -32,7 +32,7 @@ inline core::TypedExprPtr parseAndInferTypedExpr(
     const RowTypePtr& rowType,
     core::ExecCtx* execCtx,
     const parse::ParseOptions& options = {}) {
-  auto untyped = parse::parseExpr(sql, options);
+  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(sql);
   return core::Expressions::inferTypes(untyped, rowType, execCtx->pool());
 }
 

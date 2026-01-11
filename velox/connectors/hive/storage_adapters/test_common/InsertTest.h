@@ -87,7 +87,8 @@ class InsertTest : public velox::test::VectorTestBase {
                        ->as<FlatVector<StringView>>();
     ASSERT_TRUE(details->isNullAt(0));
     ASSERT_FALSE(details->isNullAt(1));
-    folly::dynamic obj = folly::parseJson(details->valueAt(1));
+    folly::dynamic obj =
+        folly::parseJson(std::string_view(details->valueAt(1)));
 
     ASSERT_EQ(numRows, obj["rowCount"].asInt());
     auto fileWriteInfos = obj["fileWriteInfos"];
