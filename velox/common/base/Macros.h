@@ -28,6 +28,21 @@
   _Pragma("GCC diagnostic pop");
 #endif
 
+// Disable deprecated-declarations for Clang and GCC
+#ifdef __clang__
+#define VELOX_SUPPRESS_DEPRECATED_WARNING \
+  _Pragma("clang diagnostic push");       \
+  _Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
+
+#define VELOX_UNSUPPRESS_DEPRECATED_WARNING _Pragma("clang diagnostic pop")
+#else
+#define VELOX_SUPPRESS_DEPRECATED_WARNING \
+  _Pragma("GCC diagnostic push");         \
+  _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+
+#define VELOX_UNSUPPRESS_DEPRECATED_WARNING _Pragma("GCC diagnostic pop")
+#endif
+
 #define VELOX_CONCAT(x, y) x##y
 // Need this extra layer to expand __COUNTER__.
 #define VELOX_VARNAME_IMPL(x, y) VELOX_CONCAT(x, y)
