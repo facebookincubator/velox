@@ -1224,6 +1224,74 @@ TEST_P(StreamingAggregationTest, preferredOutputBatchBytes) {
   ASSERT_EQ(results.size(), expectedOutputBatches);
 }
 
+// Tests that when noGroupsSpanBatches is set, the number of output batches
+// matches the number of input batches when minOutputBatchRows is set to 1.
+// When minOutputBatchRows is set to an extremely large value, we expect a
+// single output batch.
+TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
+  // Create input batches where no group spans across batches.
+  // Each batch has unique grouping keys that don't appear in other batches.
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>({1, 1, 2, 2}),
+      makeFlatVector<int32_t>({3, 3, 4, 4}),
+      makeFlatVector<int32_t>({5, 5, 6, 6}),
+      makeFlatVector<int32_t>({7, 7, 8, 8}),
+      makeFlatVector<int32_t>({9, 9, 10, 10}),
+  };
+
+  auto data = addPayload(keys, 1);
+  createDuckDbTable(data);
+
+  struct {
+    int32_t minOutputBatchRows;
+    size_t expectedOutputBatches;
+
+    std::string debugString() const {
+      return fmt::format(
+          "minOutputBatchRows={}, expectedOutputBatches={}",
+          minOutputBatchRows,
+          expectedOutputBatches);
+    }
+  } testSettings[] = {
+      // When minOutputBatchRows is 1, each input batch produces an output batch
+      {1, keys.size()},
+      // When minOutputBatchRows is very large, all groups are batched together
+      // into a single output
+      {std::numeric_limits<int32_t>::max(), 1},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId aggregationNodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(data)
+                    .streamingAggregation(
+                        {"c0"},
+                        {"count(1)", "sum(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/true)
+                    .capturePlanNodeId(aggregationNodeId)
+                    .planNode();
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+                std::to_string(testData.minOutputBatchRows))
+            .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
+
+    // Verify the number of output batches.
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(
+        velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+        testData.expectedOutputBatches);
+  }
+}
+
 namespace {
 class InputSourceNode : public core::PlanNode {
  public:

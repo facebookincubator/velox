@@ -517,14 +517,14 @@ TEST_P(TestColumnReader, testBooleanWithNulls) {
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // [0x0f for x in range(256 / 8)]
   const unsigned char buffer2[] = {0x1d, 0x0f};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:boolean>");
@@ -628,13 +628,13 @@ TEST_P(TestColumnReader, testBooleanSkipsWithNulls) {
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
   // [0x0f for x in range(128 / 8)]
   const unsigned char buffer2[] = {0x1d, 0x0f};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:boolean>");
@@ -683,8 +683,8 @@ TEST_P(TestColumnReader, testByteWithNulls) {
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // range(256)
   char buffer[258];
@@ -697,8 +697,8 @@ TEST_P(TestColumnReader, testByteWithNulls) {
     buffer[i + 2] = static_cast<char>(i);
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer, std::size(buffer))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:tinyint>");
@@ -778,8 +778,8 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // range(256)
   char buffer[258];
@@ -792,8 +792,8 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
     buffer[i + 2] = static_cast<char>(i);
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer, std::size(buffer))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:tinyint>");
@@ -856,7 +856,7 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
   int32_t expects_col0[] = {2110, 2120, 2130, 2140};
   int32_t expects_col1[] = {11, 12, 13, 14};
   int32_t expects_col2[] = {32, 34, 36, 38};
-  int32_t size = VELOX_ARRAY_SIZE(col0);
+  int32_t size = std::size(col0);
 
   // set format
   streams_.setFormat(DwrfFormat::kOrc);
@@ -884,8 +884,8 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
   // col_0's DATA stream
   EXPECT_CALL(
       streams_, getStreamOrcProxy(1, proto::orc::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer0, VELOX_ARRAY_SIZE(buffer0))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer0, std::size(buffer0))));
   // col_1's DATA stream
   std::array<char, 1024> data;
   std::vector<int64_t> v;
@@ -903,8 +903,8 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
   // col_2's DATA stream
   EXPECT_CALL(
       streams_, getStreamOrcProxy(3, proto::orc::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType =
@@ -929,7 +929,7 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
     auto colBatch = getChild<FlatVector<int32_t>>(batch, 0);
     auto colBatch2 = getChild<FlatVector<int32_t>>(batch, 1);
     auto colBatch3 = getChild<FlatVector<int32_t>>(batch, 2);
-    ASSERT_EQ(VELOX_ARRAY_SIZE(expects_col0), colBatch->size());
+    ASSERT_EQ(std::size(expects_col0), colBatch->size());
     ASSERT_EQ(colBatch->size(), colBatch2->size());
     ASSERT_EQ(colBatch2->size(), colBatch3->size());
     for (size_t i = 0; i < batch->size(); ++i) {
@@ -972,8 +972,8 @@ TEST_P(TestColumnReader, testIntegerWithNulls) {
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {0x16, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   char buffer2[1024];
   size_t size = writeRange(buffer2, 0, 100);
@@ -1091,8 +1091,8 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {0x16, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // even row points to dictionary.
   char buffer2[1024];
@@ -1108,8 +1108,8 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
   const unsigned char buffer3[] = {0x0a, 0xaa};
   EXPECT_CALL(
       streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer3, std::size(buffer3))));
 
   EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
       .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
@@ -1249,21 +1249,21 @@ TEST_P(StringReaderTests, testDictionaryWithNulls) {
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {0x19, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
   const unsigned char buffer2[] = {0x2f, 0x00, 0x00, 0x2f, 0x00, 0x01};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
   const unsigned char buffer3[] = {0x4f, 0x52, 0x43, 0x4f, 0x77, 0x65, 0x6e};
   EXPECT_CALL(
       streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer3, std::size(buffer3))));
   const unsigned char buffer4[] = {0x02, 0x01, 0x03};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer4, VELOX_ARRAY_SIZE(buffer4))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer4, std::size(buffer4))));
 
   TestStrideIndexProvider provider(10000);
   EXPECT_CALL(streams_, getStrideIndexProviderProxy())
@@ -1395,8 +1395,8 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
   const unsigned char inDict[] = {0x0a, 0xaa};
   EXPECT_CALL(
       streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(inDict, VELOX_ARRAY_SIZE(inDict))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(inDict, std::size(inDict))));
 
   auto indexData = index.SerializePartialAsString();
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
@@ -1484,8 +1484,8 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
       .WillRepeatedly(Return(nullptr));
   const unsigned char present[] = {0x16, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(present, VELOX_ARRAY_SIZE(present))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(present, std::size(present))));
 
   char data[1024];
   data[0] = 0x9c;
@@ -1565,8 +1565,8 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
   const unsigned char inDict[] = {0x0a, 0xaa};
   EXPECT_CALL(
       streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(inDict, VELOX_ARRAY_SIZE(inDict))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(inDict, std::size(inDict))));
 
   auto indexData = index.SerializePartialAsString();
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
@@ -1637,18 +1637,18 @@ TEST_P(TestNonSelectiveColumnReader, testSubstructsWithNulls) {
 
   const unsigned char buffer1[] = {0x16, 0x0f};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   const unsigned char buffer2[] = {0x0a, 0x55};
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   const unsigned char buffer3[] = {0x04, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer3, std::size(buffer3))));
 
   char buffer4[256];
   size_t size = writeRange(buffer4, 0, 26);
@@ -1723,13 +1723,13 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
   const unsigned char buffer1[] = {
       0x03, 0x00, 0xff, 0x3f, 0x08, 0xff, 0xff, 0xfc, 0x03, 0x00};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
   EXPECT_CALL(streams_, getStreamProxy(2, _, _))
       .WillRepeatedly(Return(nullptr));
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   TestStrideIndexProvider provider(10000);
   EXPECT_CALL(streams_, getStrideIndexProviderProxy())
@@ -1741,8 +1741,8 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer2, size)));
   const unsigned char buffer3[] = {0x61, 0x01, 0x00};
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer3, std::size(buffer3))));
 
   // fill the dictionary with '00' to '99'
   char digits[200];
@@ -1754,12 +1754,12 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
   }
   EXPECT_CALL(
       streams_, getStreamProxy(2, proto::Stream_Kind_DICTIONARY_DATA, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(digits, VELOX_ARRAY_SIZE(digits))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(digits, std::size(digits))));
   const unsigned char buffer4[] = {0x61, 0x00, 0x02};
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_LENGTH, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer4, VELOX_ARRAY_SIZE(buffer4))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer4, std::size(buffer4))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myInt:int,myString:string>");
@@ -1838,12 +1838,12 @@ TEST_P(StringReaderTests, testBinaryDirect) {
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Return(new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob))));
+          Return(new SeekableArrayInputStream(blob, std::size(blob))));
 
   const unsigned char buffer[] = {0x61, 0x00, 0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer, std::size(buffer))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:binary>");
@@ -1892,8 +1892,8 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
 
   const unsigned char buffer1[] = {0x1d, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   char blob[256];
   for (size_t i = 0; i < 8; ++i) {
@@ -1904,12 +1904,12 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Return(new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob))));
+          Return(new SeekableArrayInputStream(blob, std::size(blob))));
 
   const unsigned char buffer2[] = {0x7d, 0x00, 0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:binary>");
@@ -1969,12 +1969,12 @@ TEST_P(TestColumnReader, testShortBlobError) {
   char blob[100];
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Return(new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob))));
+          Return(new SeekableArrayInputStream(blob, std::size(blob))));
 
   const unsigned char buffer1[] = {0x61, 0x00, 0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:string>");
@@ -2020,13 +2020,13 @@ TEST_P(StringReaderTests, testStringDirectShortBuffer) {
     }
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob), 3)));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(blob, std::size(blob), 3)));
 
   const unsigned char buffer1[] = {0x61, 0x00, 0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:string>");
@@ -2075,8 +2075,8 @@ TEST_P(StringReaderTests, testStringDirectShortBufferWithNulls) {
 
   const unsigned char buffer1[] = {0x3d, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   char blob[512];
   for (size_t i = 0; i < 16; ++i) {
@@ -2086,13 +2086,13 @@ TEST_P(StringReaderTests, testStringDirectShortBufferWithNulls) {
     }
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob), 30)));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(blob, std::size(blob), 30)));
 
   const unsigned char buffer2[] = {0x7d, 0x00, 0x02, 0x7d, 0x00, 0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:string>");
@@ -2154,19 +2154,19 @@ TEST_P(StringReaderTests, testStringDirectNullAcrossWindow) {
 
   const unsigned char isNull[2] = {0xff, 0x7f};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(isNull, VELOX_ARRAY_SIZE(isNull))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(isNull, std::size(isNull))));
 
   const char blob[] = "abcdefg";
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob), 4)));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(blob, std::size(blob), 4)));
 
   // [1] * 7
   const unsigned char lenData[] = {0x04, 0x00, 0x01};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(lenData, VELOX_ARRAY_SIZE(lenData))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(lenData, std::size(lenData))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:string>");
@@ -2250,8 +2250,8 @@ TEST_P(StringReaderTests, testStringDirectSkip) {
       0x01, 0x8a, 0x05, 0x7f, 0x01, 0x8c, 0x06, 0x7f, 0x01, 0x8e,
       0x07, 0x7f, 0x01, 0x90, 0x08, 0x1b, 0x01, 0x92, 0x09};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:string>");
@@ -2298,8 +2298,8 @@ TEST_P(StringReaderTests, testStringDirectSkipWithNulls) {
   // alternate 4 non-null and 4 null via [0xf0 for x in range(2400 / 8)]
   const unsigned char buffer1[] = {0x7f, 0xf0, 0x7f, 0xf0, 0x25, 0xf0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // sum(range(1200))
   const size_t BLOB_SIZE = 719400;
@@ -2323,8 +2323,8 @@ TEST_P(StringReaderTests, testStringDirectSkipWithNulls) {
       0x01, 0x8a, 0x05, 0x7f, 0x01, 0x8c, 0x06, 0x7f, 0x01, 0x8e,
       0x07, 0x7f, 0x01, 0x90, 0x08, 0x1b, 0x01, 0x92, 0x09};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:string>");
@@ -2386,8 +2386,8 @@ TEST_P(TestColumnReader, testList) {
       0x00,
       0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // range(1200)
   char buffer2[8192];
@@ -2435,8 +2435,8 @@ TEST_P(TestNonSelectiveColumnReader, testListPropagateNulls) {
   // set getStream
   const unsigned char buffer[] = {0xff, 0x00};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer, std::size(buffer))));
 
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer, 0)));
@@ -2477,8 +2477,8 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
@@ -2493,8 +2493,8 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // range(2048)
   char buffer3[8192];
@@ -2636,8 +2636,8 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNulls) {
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
@@ -2652,8 +2652,8 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNulls) {
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // range(2048)
   char buffer3[8192];
@@ -2737,8 +2737,8 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNullsNoData) {
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
@@ -2753,8 +2753,8 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNullsNoData) {
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(nullptr));
@@ -2815,8 +2815,8 @@ TEST_P(TestNonSelectiveColumnReader, testListWithAllNulls) {
   // set getStream
   const unsigned char buffer[] = {0xff, 0x00};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer, std::size(buffer))));
 
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer, 0)));
@@ -2869,8 +2869,8 @@ TEST_P(TestColumnReader, testMap) {
       0x00,
       0x02};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // range(1200)
   char buffer2[8192];
@@ -2926,8 +2926,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
@@ -2935,8 +2935,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   // [0x55 for x in range(2048/8)]
   const unsigned char buffer2[] = {0x7f, 0x55, 0x7b, 0x55};
   EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // [1 for x in range(260)] +
   // [4 for x in range(260)] +
@@ -2948,8 +2948,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer3, std::size(buffer3))));
 
   // range(2048)
   char buffer4[8192];
@@ -3131,8 +3131,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // [1 for x in range(260)] +
   // [4 for x in range(260)] +
@@ -3144,8 +3144,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // range(2048)
   char buffer3[8192];
@@ -3254,8 +3254,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNullsNoData) {
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // [1 for x in range(260)] +
   // [4 for x in range(260)] +
@@ -3267,8 +3267,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNullsNoData) {
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:map<bigint,bigint>>");
@@ -3322,8 +3322,8 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithAllNulls) {
 
   const unsigned char buffer1[] = {0xff, 0x00};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer1, 0)));
@@ -3365,9 +3365,7 @@ TEST_P(TestColumnReader, testFloatBatchNotAligned) {
 
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
-          byteValues,
-          VELOX_ARRAY_SIZE(byteValues),
-          VELOX_ARRAY_SIZE(byteValues) / 2)));
+          byteValues, std::size(byteValues), std::size(byteValues) / 2)));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myFloat:float>");
@@ -3403,8 +3401,8 @@ TEST_P(TestColumnReader, testFloatWithNulls) {
   // 13 non-nulls followed by 19 nulls
   const unsigned char buffer1[] = {0xfc, 0xff, 0xf8, 0x0, 0x0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   const float test_vals[] = {
       1.0f,
@@ -3427,8 +3425,8 @@ TEST_P(TestColumnReader, testFloatWithNulls) {
       0x0,  0x80, 0xff, 0xff, 0xff, 0x7f, 0x7f, 0xff, 0xff, 0x7f, 0xff,
       0x1,  0x0,  0x0,  0x0,  0x1,  0x0,  0x0,  0x80};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myFloat:float>");
@@ -3472,8 +3470,8 @@ TEST_P(TestColumnReader, testFloatSkipWithNulls) {
   // 2 non-nulls, 2 nulls, 2 non-nulls, 2 nulls
   const unsigned char buffer1[] = {0xff, 0xcc};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // 1, 2.5, -100.125, 10000
   const unsigned char buffer2[] = {
@@ -3494,8 +3492,8 @@ TEST_P(TestColumnReader, testFloatSkipWithNulls) {
       0x1c,
       0x46};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myFloat:float>");
@@ -3563,8 +3561,8 @@ TEST_P(TestColumnReader, testDoubleWithNulls) {
   // 13 non-nulls followed by 19 nulls
   const unsigned char buffer1[] = {0xfc, 0xff, 0xf8, 0x0, 0x0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   const double test_vals[] = {
       1.0,
@@ -3591,8 +3589,8 @@ TEST_P(TestColumnReader, testDoubleWithNulls) {
       0xff, 0xff, 0xef, 0xff, 0x1,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,
       0x1,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x80};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myDouble:double>");
@@ -3637,16 +3635,16 @@ TEST_P(TestColumnReader, testDoubleSkipWithNulls) {
   // 1 non-null, 5 nulls, 2 non-nulls
   const unsigned char buffer1[] = {0xff, 0x83};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // 1, 2, -2
   const unsigned char buffer2[] = {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myDouble:double>");
@@ -3713,8 +3711,8 @@ TEST_P(TestColumnReader, testTimestampSkipWithNulls) {
   // 2 non-nulls, 2 nulls, 2 non-nulls, 2 nulls
   const unsigned char buffer1[] = {0xff, 0xcc};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   const unsigned char buffer2[] = {
       0xfc,
@@ -3735,13 +3733,13 @@ TEST_P(TestColumnReader, testTimestampSkipWithNulls) {
       0xd4,
       0x30};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   const unsigned char buffer3[] = {0x1, 0x8, 0x5e};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer3, std::size(buffer3))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myTimestamp:timestamp>");
@@ -3831,15 +3829,15 @@ TEST_P(TestColumnReader, testTimestamp) {
       0xba, 0xa0, 0x1a, 0x9d, 0x88, 0xa6, 0x82, 0x1a, 0x9d, 0xba, 0x9c,
       0xe4, 0x19, 0x9d, 0xee, 0xe1, 0xcd, 0x18};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   const unsigned char buffer2[] = {
       0xf6, 0x00, 0xa8, 0xd1, 0xf9, 0xd6, 0x03, 0x00, 0x9e, 0x01, 0xec,
       0x76, 0xf4, 0x76, 0xfc, 0x76, 0x84, 0x77, 0x8c, 0x77, 0xfd, 0x0b};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<myTimestamp:timestamp>");
@@ -3909,13 +3907,13 @@ TEST_P(TestColumnReader, testDecimal64) {
     }
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(new SeekableArrayInputStream(
-          numBuffer, VELOX_ARRAY_SIZE(numBuffer), 3)));
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer), 3)));
   // col_0's Secondary Stream
   const unsigned char buffer2[] = {0x3e, 0x00, 0x04}; // [0x02] * 65
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer2, std::size(buffer2))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col_0:decimal(12, 2)>");
@@ -3948,19 +3946,19 @@ TEST_P(TestColumnReader, testDecimal64WithSkip) {
   const unsigned char presentBuffer[] = {0xfe, 0xff, 0x80}; // [0xff]
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
-          presentBuffer, VELOX_ARRAY_SIZE(presentBuffer))));
+          presentBuffer, std::size(presentBuffer))));
   const unsigned char numBuffer[] = {
       0xf8, 0xe8, 0xe2, 0xcf, 0xf4, 0xcb, 0xb6, 0xda, 0x0d, 0x86, 0xc1, 0xcc,
       0xcd, 0x9e, 0xd5, 0xc5, 0x11, 0xb4, 0xf6, 0xfc, 0xf3, 0xb9, 0xba, 0x16,
       0xca, 0xe7, 0xa3, 0xa6, 0xdf, 0x1c, 0xea, 0xad, 0xc0, 0xe5, 0x24, 0xf8,
       0x94, 0x8c, 0x2f, 0x86, 0xa4, 0x3c, 0x94, 0x4d, 0x62};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(new SeekableArrayInputStream(
-          numBuffer, VELOX_ARRAY_SIZE(numBuffer))));
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer))));
   const unsigned char buffer1[] = {0x06, 0x00, 0x14}; // [0x0a] * 9
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col_0:decimal(12, 10)>");
@@ -4004,7 +4002,7 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
   const unsigned char presentBuffer[] = {0xfe, 0xff, 0xf8};
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
-          presentBuffer, VELOX_ARRAY_SIZE(presentBuffer))));
+          presentBuffer, std::size(presentBuffer))));
   const unsigned char numBuffer[] = {
       0xf8, 0xe8, 0xe2, 0xcf, 0xf4, 0xcb, 0xb6, 0xda, 0x0d, 0x86, 0xc1, 0xcc,
       0xcd, 0x9e, 0xd5, 0xc5, 0x11, 0xb4, 0xf6, 0xfc, 0xf3, 0xb9, 0xba, 0x16,
@@ -4018,12 +4016,12 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
       0x93, 0xe8, 0xa3, 0xec, 0xd0, 0x96, 0xd4, 0xcc, 0xf6, 0xac, 0x02,
   };
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-      .WillRepeatedly(Return(new SeekableArrayInputStream(
-          numBuffer, VELOX_ARRAY_SIZE(numBuffer))));
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer))));
   const unsigned char buffer1[] = {0x0a, 0x00, 0x4a}; // [0x02] * 13
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(buffer1, std::size(buffer1))));
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col_0:decimal(38, 37)>");
@@ -4087,8 +4085,8 @@ TEST_P(TestColumnReader, testLargeSkip) {
     length[pos + 2] = 0x01;
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
-      .WillRepeatedly(Return(
-          new SeekableArrayInputStream(length, VELOX_ARRAY_SIZE(length))));
+      .WillRepeatedly(
+          Return(new SeekableArrayInputStream(length, std::size(length))));
 
   char data[1024 * 1024];
   size_t size = writeRange(data, 0, 73200);

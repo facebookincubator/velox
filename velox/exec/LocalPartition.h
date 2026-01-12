@@ -240,12 +240,21 @@ class LocalPartition : public Operator {
 
   void allocateIndexBuffers(const std::vector<vector_size_t>& sizes);
 
-  RowVectorPtr processPartition(
-      const RowVectorPtr& input,
-      vector_size_t size,
-      int partition,
-      const BufferPtr& indices,
-      const vector_size_t* rawIndices);
+  /// Create partitions from 'input' according to 'numRowsPerPartition' and
+  /// 'indexBuffers', and enqueue the partitions to LocalExchangeQueues. The
+  /// behavior of partition vector creation varies depending on
+  /// 'singlePartitionBufferSize_'. If 'singlePartitionBufferSize_' is non-zero,
+  /// append rows from 'input' to 'partitionBuffers_' for every partition. When
+  /// the total size of all partition buffer vectors exceeds
+  /// 'singlePartitionBufferSize_ * numPartitions_', flush all partitionBuffers_
+  /// vectors to LocalExchangeQueues. If 'singlePartitionBufferSize_' is zero,
+  /// create partition vectors by wrapping 'input' with indexBuffers and flush
+  /// them to LocalExchangeQueues immediately.
+  void populateAndEnqueuePartitions(
+      RowVectorPtr input,
+      const std::vector<vector_size_t>& numRowsPerPartition,
+      const std::vector<BufferPtr>& indexBuffers,
+      const std::vector<vector_size_t*>& rawIndicesBuffers);
 
   const std::vector<std::shared_ptr<LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
@@ -261,6 +270,11 @@ class LocalPartition : public Operator {
   std::vector<vector_size_t*> rawIndices_;
 
  private:
+  // Try getting a reusable vector for 'partition' from the corresponding
+  // local-exchange vector pool of this partition. If none is available, create
+  // a new vector.
+  VectorPtr getOrCreateVector(const size_t partition);
+
   RowVectorPtr wrapChildren(
       const RowVectorPtr& input,
       vector_size_t size,
@@ -270,7 +284,29 @@ class LocalPartition : public Operator {
   void copy(
       const RowVectorPtr& input,
       const folly::Range<const BaseVector::CopyRange*>& ranges,
+      const size_t partition,
       VectorPtr& target);
+
+  /// Add rows from 'input' to 'partitionBuffers_' that every row belongs to.
+  /// Also set 'totalPartitionBufferSizeExcludingString' to be the total size of
+  /// all partition buffer vectors excluding string buffers inside them, and set
+  /// 'totalPartitionStringBufferSize' to be the total size of all string
+  /// buffers in all partition buffer vectors.
+  void populatePartitionBuffer(
+      const RowVectorPtr& input,
+      const vector_size_t numPartitionRows,
+      const size_t partition,
+      const vector_size_t* rawIndices,
+      uint64_t& totalPartitionBufferSizeExcludingString,
+      uint64_t& totalPartitionStringBufferSize);
+
+  /// Return the partition vector to be added to LocalExchangeQueue. This method
+  /// returns nullptr if no row belongs to 'partition'
+  RowVectorPtr createPartition(
+      const RowVectorPtr& input,
+      const vector_size_t numPartitionRows,
+      const size_t partition,
+      const BufferPtr& indices);
 
   const uint64_t singlePartitionBufferSize_;
   std::vector<BaseVector::CopyRange> copyRanges_;

@@ -2515,7 +2515,7 @@ TEST_F(TableScanTest, statsBasedSkippingWithoutDecompression) {
   auto assertQuery = [&](const std::string& filter) {
     auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
-        PlanBuilder(pool_.get()).tableScan(rowType, {filter}).planNode(),
+        PlanBuilder(pool_.get()).tableScan(rowType, {}, {filter}).planNode(),
         filePaths,
         "SELECT * FROM tmp WHERE " + filter);
   };
@@ -5355,6 +5355,63 @@ TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
       .split(aScanId, makeHiveConnectorSplit(files[0]->getPath()))
       .split(bScanId, makeHiveConnectorSplit(files[1]->getPath()))
       .assertResults(resVector);
+}
+
+TEST_F(TableScanTest, bloomFilterPushdown) {
+  auto build = makeRowVector(
+      {"b"},
+      {
+          makeFlatVector<int64_t>(
+              10'001 + VectorHasher::kMaxDistinct,
+              [](auto i) { return 1000 * i; }),
+      });
+  auto probe = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>(
+              2 * build->size(), [](auto i) { return 500 * i; }),
+      });
+  std::shared_ptr<TempFilePath> files[2];
+  files[0] = TempFilePath::create();
+  writeToFile(files[0]->getPath(), {probe});
+  files[1] = TempFilePath::create();
+  writeToFile(files[1]->getPath(), {build});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId, buildScanId, joinId;
+  auto plan = PlanBuilder(idGenerator)
+                  .tableScan(ROW({"a"}, {BIGINT()}))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"a"},
+                      {"b"},
+                      PlanBuilder(idGenerator)
+                          .tableScan(ROW({"b"}, {BIGINT()}))
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      /*filter=*/"",
+                      {"a"})
+                  .capturePlanNodeId(joinId)
+                  .planNode();
+  for (bool parallelBuild : {false, true}) {
+    SCOPED_TRACE(fmt::format("parallelBuild={}", parallelBuild));
+    AssertQueryBuilder builder(plan);
+    builder
+        .config(
+            core::QueryConfig::kHashProbeBloomFilterPushdownMaxSize,
+            std::to_string(4 * build->size()))
+        .split(probeScanId, makeHiveConnectorSplit(files[0]->getPath()))
+        .split(buildScanId, makeHiveConnectorSplit(files[1]->getPath()));
+    if (parallelBuild) {
+      builder.serialExecution(false).maxDrivers(2).config(
+          core::QueryConfig::kMinTableRowsForParallelJoinBuild, "1");
+    }
+    auto task = builder.assertResults(build);
+    auto planStats = toPlanStats(task->taskStats());
+    ASSERT_EQ(
+        planStats.at(joinId).customStats.at("dynamicFiltersProduced").sum,
+        parallelBuild ? 2 : 1);
+    ASSERT_GT(planStats.at(joinId).customStats.at("bloomFilterSize").sum, 0);
+  }
 }
 
 // TODO: re-enable this test once we add back driver suspension support for

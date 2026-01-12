@@ -42,9 +42,23 @@ using facebook::velox::test::BatchMaker;
 
 struct TestParam {
   int64_t numDrivers{1};
+  bool parallelBuildSideRowsEnabled;
 
-  explicit TestParam(int _numDrivers) : numDrivers(_numDrivers) {}
+  explicit TestParam(int _numDrivers)
+      : numDrivers(_numDrivers), parallelBuildSideRowsEnabled(false) {}
+
+  TestParam(int _numDrivers, bool _parallelBuildSideRowsEnabled)
+      : numDrivers(_numDrivers),
+        parallelBuildSideRowsEnabled(_parallelBuildSideRowsEnabled) {}
 };
+
+// Required for GTest to generate unique parameterized test names.
+inline std::string TestParamToName(const TestParam& param) {
+  return fmt::format(
+      "{}_drivers_{}_parallelBuildSideRowsEnabled",
+      param.numDrivers,
+      param.parallelBuildSideRowsEnabled ? "with" : "without");
+}
 
 using SplitInput =
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>;
@@ -407,6 +421,11 @@ class HashJoinBuilder {
     return *this;
   }
 
+  HashJoinBuilder& parallelizeJoinBuildRows(bool value) {
+    parallelJoinBuildRowsEnabled_ = value;
+    return *this;
+  }
+
   HashJoinBuilder& spillDirectory(const std::string& spillDirectory) {
     spillDirectory_ = spillDirectory;
     return *this;
@@ -597,15 +616,14 @@ class HashJoinBuilder {
         builder.splits(splitEntry.first, splitEntry.second);
       }
     }
-    auto queryCtx = core::QueryCtx::create(
-        executor_,
-        core::QueryConfig{{}},
-        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-        cache::AsyncDataCache::getInstance(),
-        memory::MemoryManager::getInstance()->addRootPool(
-            "query_pool",
-            memory::kMaxMemory,
-            memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::Builder()
+                        .executor(executor_)
+                        .pool(
+                            memory::MemoryManager::getInstance()->addRootPool(
+                                "query_pool",
+                                memory::kMaxMemory,
+                                memory::MemoryReclaimer::create()))
+                        .build();
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     int32_t spillPct{0};
     if (injectSpill) {
@@ -629,6 +647,9 @@ class HashJoinBuilder {
     config(
         core::QueryConfig::kHashProbeFinishEarlyOnEmptyBuild,
         hashProbeFinishEarlyOnEmptyBuild_ ? "true" : "false");
+    config(
+        core::QueryConfig::kParallelOutputJoinBuildRowsEnabled,
+        parallelJoinBuildRowsEnabled_ ? "true" : "false");
     if (maxDriverYieldTimeMs != 0) {
       config(
           core::QueryConfig::kDriverCpuTimeSliceLimitMs,
@@ -760,6 +781,7 @@ class HashJoinBuilder {
   std::shared_ptr<memory::MemoryPool> queryPool_;
   std::string spillDirectory_;
   bool hashProbeFinishEarlyOnEmptyBuild_{true};
+  bool parallelJoinBuildRowsEnabled_{false};
 
   SplitInput inputSplits_;
   std::function<SplitInput()> makeInputSplits_;
@@ -774,7 +796,8 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   HashJoinTestBase() : HashJoinTestBase(TestParam(1)) {}
 
   explicit HashJoinTestBase(const TestParam& param)
-      : numDrivers_(param.numDrivers) {}
+      : numDrivers_(param.numDrivers),
+        parallelBuildSideRowsEnabled_(param.parallelBuildSideRowsEnabled) {}
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
@@ -967,6 +990,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   }
 
   const int32_t numDrivers_;
+  const bool parallelBuildSideRowsEnabled_;
 
   // The default left and right table types used for test.
   RowTypePtr probeType_;

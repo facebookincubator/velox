@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include <folly/init/Init.h>
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
-#include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/Expr.h"
@@ -64,8 +64,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    parse::ParseOptions options;
-    auto untyped = parse::parseExpr(text, options);
+    auto untyped = parse::DuckSqlExpressionsParser().parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
@@ -101,7 +100,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
 
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   std::shared_ptr<core::QueryCtx> queryCtx_{
       core::QueryCtx::create(executor_.get())};
   std::unique_ptr<core::ExecCtx> execCtx_{

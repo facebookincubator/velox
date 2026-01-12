@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 #include <folly/json.h>
-
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/TableWriter.h"
-#include "velox/exec/Trace.h"
+#include "velox/core/TableWriteTraits.h"
+#include "velox/exec/trace/Trace.h"
 
 namespace facebook::velox::exec::trace {
 namespace {
+
 std::string findLastPathNode(const std::string& path) {
   std::vector<std::string> pathNodes;
   folly::split("/", path, pathNodes);
@@ -42,6 +42,7 @@ std::unordered_map<std::string, TraceNodeFactory>& traceNodeRegistry() {
   static std::unordered_map<std::string, TraceNodeFactory> registry;
   return registry;
 }
+
 } // namespace
 
 void createTraceDirectory(
@@ -80,13 +81,6 @@ std::string getQueryTraceDirectory(
   }
 
   return fmt::format("{}/{}", normalizedTraceDir, queryId);
-}
-
-std::string getTaskTraceDirectory(
-    const std::string& traceDir,
-    const Task& task) {
-  return getTaskTraceDirectory(
-      traceDir, task.queryCtx()->queryId(), task.taskId());
 }
 
 std::string getTaskTraceDirectory(
@@ -245,10 +239,12 @@ bool canTrace(const std::string& operatorType) {
   static const std::unordered_set<std::string> kSupportedOperatorTypes{
       "Aggregation",
       "CallbackSink",
+      "Exchange",
       "FilterProject",
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
+      "MergeExchange",
       "MergeJoin",
       "OrderBy",
       "PartialAggregation",
@@ -354,6 +350,7 @@ core::PlanNodePtr getTraceNode(
         aggregationNode->globalGroupingSets(),
         aggregationNode->groupId(),
         aggregationNode->ignoreNullKeys(),
+        aggregationNode->noGroupsSpanBatches(),
         std::make_shared<DummySourceNode>(
             aggregationNode->sources().front()->outputType()));
   }
@@ -407,7 +404,7 @@ core::PlanNodePtr getTraceNode(
         tableWriteNode->columnStatsSpec(),
         tableWriteNode->insertTableHandle(),
         tableWriteNode->hasPartitioningScheme(),
-        TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()),
+        core::TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()),
         tableWriteNode->commitStrategy(),
         std::make_shared<DummySourceNode>(
             tableWriteNode->sources().front()->outputType()));
@@ -452,6 +449,23 @@ core::PlanNodePtr getTraceNode(
         topNRowNumberNode->limit(),
         std::make_shared<DummySourceNode>(
             topNRowNumberNode->sources().front()->outputType()));
+  }
+
+  if (const auto* exchangeNode =
+          dynamic_cast<const core::ExchangeNode*>(traceNode)) {
+    // Check if it's a MergeExchangeNode
+    if (const auto* mergeExchangeNode =
+            dynamic_cast<const core::MergeExchangeNode*>(traceNode)) {
+      return std::make_shared<core::MergeExchangeNode>(
+          nodeId,
+          mergeExchangeNode->outputType(),
+          mergeExchangeNode->sortingKeys(),
+          mergeExchangeNode->sortingOrders(),
+          mergeExchangeNode->serdeKind());
+    }
+    // Regular ExchangeNode
+    return std::make_shared<core::ExchangeNode>(
+        nodeId, exchangeNode->outputType(), exchangeNode->serdeKind());
   }
 
   for (const auto& factory : traceNodeRegistry()) {

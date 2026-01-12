@@ -160,10 +160,30 @@ TypePtr resolveFunctionOrCallableSpecialForm(
   return resolveFunction(functionName, argTypes);
 }
 
+TypePtr resolveFunctionOrCallableSpecialFormWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  if (auto returnType = resolveCallableSpecialFormWithCoercions(
+          functionName, argTypes, coercions)) {
+    return returnType;
+  }
+
+  return resolveFunctionWithCoercions(functionName, argTypes, coercions);
+}
+
 TypePtr resolveCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   return exec::resolveTypeForSpecialForm(functionName, argTypes);
+}
+
+TypePtr resolveCallableSpecialFormWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  return exec::resolveTypeForSpecialFormWithCoercions(
+      functionName, argTypes, coercions);
 }
 
 TypePtr resolveSimpleFunction(

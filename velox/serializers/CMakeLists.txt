@@ -11,6 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+velox_add_library(velox_key_encoder KeyEncoder.cpp)
+
+velox_link_libraries(
+  velox_key_encoder
+  velox_common_base
+  velox_core
+  velox_memory
+  velox_type
+  velox_vector
+)
+
 velox_add_library(
   velox_presto_serializer
   CompactRowSerializer.cpp

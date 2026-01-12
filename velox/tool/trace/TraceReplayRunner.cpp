@@ -15,6 +15,7 @@
  */
 
 #include "velox/tool/trace/TraceReplayRunner.h"
+#include <folly/system/HardwareConcurrency.h>
 
 #include <gflags/gflags.h>
 
@@ -24,7 +25,6 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/gcs/RegisterGcsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
@@ -35,7 +35,7 @@
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/TaskTraceReader.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -242,13 +242,13 @@ void printSummary(
 TraceReplayRunner::TraceReplayRunner()
     : cpuExecutor_(
           std::make_unique<folly::CPUThreadPoolExecutor>(
-              std::thread::hardware_concurrency() *
+              folly::hardware_concurrency() *
                   FLAGS_driver_cpu_executor_hw_multiplier,
               std::make_shared<folly::NamedThreadFactory>(
                   "TraceReplayCpuConnector"))),
       ioExecutor_(
           std::make_unique<folly::IOThreadPoolExecutor>(
-              std::thread::hardware_concurrency() *
+              folly::hardware_concurrency() *
                   FLAGS_hive_connector_executor_hw_multiplier,
               std::make_shared<folly::NamedThreadFactory>(
                   "TraceReplayIoConnector"))) {}

@@ -69,6 +69,12 @@ class PrestoVectorSerde : public VectorSerde {
     /// currently used for spilling. Is false by default.
     bool useLosslessTimestamp{false};
 
+    /// When true, interprets serialized timestamp values as microseconds
+    /// instead of milliseconds. Used when the source data contains timestamps
+    /// in microsecond precision (e.g., TIMESTAMP_MICROSECONDS Presto type).
+    /// Mutually exclusive with useLosslessTimestamp.
+    bool useMicrosecondPrecision{false};
+
     /// Serializes nulls of structs before the columns. Used to allow
     /// single pass reading of in spilling.
     ///

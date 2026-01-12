@@ -39,16 +39,8 @@ variant TimeWithTimezoneInputGenerator::generate() {
 
   const int64_t timeMillis = rand<int64_t>(rng_, 0, util::kMillisInDay - 1);
 
-  int16_t timezoneOffsetMinutes;
-  // 25% of the time, pick from frequently used timezone offsets
-  if (coinToss(rng_, 0.25)) {
-    timezoneOffsetMinutes = kFrequentlyUsedOffsets[rand<size_t>(
-        rng_, 0, kFrequentlyUsedOffsets.size() - 1)];
-  } else {
-    // rest, pick a random timezone offset for variety
-    timezoneOffsetMinutes =
-        rand<int16_t>(rng_, -util::kTimeZoneBias, util::kTimeZoneBias);
-  }
+  // Use shared timezone generation utility (25% frequently used, 75% random)
+  int16_t timezoneOffsetMinutes = generateRandomTimezoneOffset(rng_);
 
   const int16_t biasEncodedTimezone = util::biasEncode(timezoneOffsetMinutes);
   return util::pack(timeMillis, biasEncodedTimezone);

@@ -187,7 +187,8 @@ TEST_F(ArrayConstructorTest, literals) {
 
   // Add null literals.
   result = evaluate(
-      "array_constructor(1, 2, null, 4, null)", makeRowVector(ROW({}), 1));
+      "array_constructor(1, 2, null::bigint, 4, null::bigint)",
+      makeRowVector(ROW({}), 1));
   expected =
       makeNullableArrayVector<int64_t>({{1, 2, std::nullopt, 4, std::nullopt}});
   test::assertEqualVectors(expected, result);

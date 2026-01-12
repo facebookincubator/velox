@@ -16,11 +16,90 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
+#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+namespace {
+
+template <TypeKind Kind>
+folly::dynamic extractPartitionValue(
+    const VectorPtr& child,
+    vector_size_t row) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  return child->as<SimpleVector<T>>()->valueAt(row);
+}
+
+template <>
+folly::dynamic extractPartitionValue<TypeKind::VARCHAR>(
+    const VectorPtr& child,
+    vector_size_t row) {
+  return child->as<SimpleVector<StringView>>()->valueAt(row).str();
+}
+
+template <>
+folly::dynamic extractPartitionValue<TypeKind::VARBINARY>(
+    const VectorPtr& child,
+    vector_size_t row) {
+  return child->as<SimpleVector<StringView>>()->valueAt(row).str();
+}
+
+template <>
+folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
+    const VectorPtr& child,
+    vector_size_t row) {
+  return child->as<SimpleVector<Timestamp>>()->valueAt(row).toMicros();
+}
+
+class IcebergFileNameGenerator : public FileNameGenerator {
+ public:
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      bool commitRequired) const override;
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+};
+
+std::string makeUuid() {
+  return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
+}
+
+std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
+    std::optional<uint32_t> bucketId,
+    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const ConnectorQueryCtx& connectorQueryCtx,
+    bool commitRequired) const {
+  auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
+  if (targetFileName.empty()) {
+    targetFileName = fmt::format("{}", makeUuid());
+  }
+  auto fileFormat = dwio::common::toString(insertTableHandle->storageFormat());
+  auto fileName = fmt::format("{}.{}", targetFileName, fileFormat);
+  return {fileName, fileName};
+}
+
+folly::dynamic IcebergFileNameGenerator::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IcebergFileNameGenerator";
+  return obj;
+}
+
+std::string IcebergFileNameGenerator::toString() const {
+  return "IcebergFileNameGenerator";
+}
+
+} // namespace
 
 IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<HiveColumnHandlePtr> inputColumns,
@@ -45,6 +124,10 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
       "Input columns cannot be empty for Iceberg tables.");
   VELOX_USER_CHECK_NOT_NULL(
       locationHandle_, "Location handle is required for Iceberg tables.");
+  VELOX_USER_CHECK_EQ(
+      tableStorageFormat,
+      dwio::common::FileFormat::PARQUET,
+      "Only Parquet file format is supported when writing Iceberg tables.");
 }
 
 namespace {
@@ -87,6 +170,14 @@ std::vector<column_index_t> createPartitionChannels(
   }
 
   return channels;
+}
+
+std::vector<column_index_t> createDataChannels(
+    const IcebergInsertTableHandlePtr& insertTableHandle) {
+  std::vector<column_index_t> dataChannels(
+      insertTableHandle->inputColumns().size());
+  std::iota(dataChannels.begin(), dataChannels.end(), 0);
+  return dataChannels;
 }
 
 // Creates a RowType schema for transformed partition values based on the
@@ -148,6 +239,7 @@ IcebergDataSink::IcebergDataSink(
           createPartitionChannels(
               insertTableHandle->inputColumns(),
               insertTableHandle->partitionSpec()),
+          createDataChannels(insertTableHandle),
           createPartitionRowType(insertTableHandle->partitionSpec()),
           functionPrefix) {}
 
@@ -158,6 +250,7 @@ IcebergDataSink::IcebergDataSink(
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const std::vector<column_index_t>& partitionChannels,
+    const std::vector<column_index_t>& dataChannels,
     RowTypePtr partitionRowType,
     const std::string& functionPrefix)
     : HiveDataSink(
@@ -169,6 +262,7 @@ IcebergDataSink::IcebergDataSink(
           0,
           nullptr,
           partitionChannels,
+          dataChannels,
           !partitionChannels.empty()
               ? std::make_unique<PartitionIdGenerator>(
                     partitionRowType,
@@ -199,7 +293,9 @@ IcebergDataSink::IcebergDataSink(
           partitionSpec_ != nullptr
               ? std::make_unique<IcebergPartitionName>(partitionSpec_)
               : nullptr),
-      partitionRowType_(std::move(partitionRowType)) {}
+      partitionRowType_(std::move(partitionRowType)) {
+  commitPartitionValue_.resize(maxOpenWriters_);
+}
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
   std::vector<std::string> commitTasks;
@@ -228,6 +324,10 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
       ("fileFormat", "PARQUET")
       ("content", "DATA");
     // clang-format on
+    if (!commitPartitionValue_.empty() && !commitPartitionValue_[i].isNull()) {
+      commitData["partitionDataJson"] = folly::toJson(
+          folly::dynamic::object("partitionValues", commitPartitionValue_[i]));
+    }
     auto commitDataJson = folly::toJson(commitData);
     commitTasks.push_back(commitDataJson);
   }
@@ -258,6 +358,51 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
       partitionId,
       partitionIdGenerator_->partitionValues(),
       partitionKeyAsLowerCase_);
+}
+
+uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
+  auto writerId = HiveDataSink::ensureWriter(id);
+  if (commitPartitionValue_[writerId].isNull()) {
+    commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
+  }
+  return writerId;
+}
+
+std::shared_ptr<dwio::common::WriterOptions>
+IcebergDataSink::createWriterOptions() const {
+  auto options = HiveDataSink::createWriterOptions();
+  // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
+  // - Timestamps must be stored with microsecond precision.
+  // - Timestamps must NOT be adjusted to UTC timezone; they should be written
+  //   as-is without timezone conversion (empty string disables conversion).
+  //
+  // These settings are passed via serdeParameters to avoid including
+  // parquet-specific headers. The keys must match kParquetSerdeTimestampUnit
+  // and kParquetSerdeTimestampTimezone defined in
+  // velox/dwio/parquet/writer/Writer.h. The value "6" represents microseconds
+  // (TimestampPrecision::kMicroseconds).
+  options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
+  options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
+  // Re-process configs to apply the serde parameters we just set.
+  options->processConfigs(
+      *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
+  return options;
+}
+
+folly::dynamic IcebergDataSink::makeCommitPartitionValue(
+    uint32_t writerIndex) const {
+  folly::dynamic partitionValues = folly::dynamic::array();
+  const auto& transformedValues = partitionIdGenerator_->partitionValues();
+  for (auto i = 0; i < partitionChannels_.size(); ++i) {
+    const auto& child = transformedValues->childAt(i);
+    if (child->isNullAt(writerIndex)) {
+      partitionValues.push_back(nullptr);
+    } else {
+      partitionValues.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          extractPartitionValue, child->typeKind(), child, writerIndex));
+    }
+  }
+  return partitionValues;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

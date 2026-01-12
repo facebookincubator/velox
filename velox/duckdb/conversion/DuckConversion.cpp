@@ -192,6 +192,9 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       if (auto customType = getCustomType(name, {})) {
         return customType;
       }
+      if (name == "OPAQUE<void>") {
+        return OPAQUE<void>();
+      }
       [[fallthrough]];
     }
     default:

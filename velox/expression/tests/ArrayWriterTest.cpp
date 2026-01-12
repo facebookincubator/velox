@@ -689,7 +689,7 @@ TEST_F(ArrayWriterTest, copyFromNullableArrayView) {
       {"copy_from_nullable"});
 
   auto result = evaluate(
-      "copy_from_nullable(array_constructor(1, null, 3, null, 5))",
+      "copy_from_nullable(array_constructor(1, null::bigint, 3, null::bigint, 5))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   // Test results.
@@ -712,7 +712,7 @@ TEST_F(ArrayWriterTest, copyFromNestedNullableArrayView) {
       Array<Array<int64_t>>>({"copy_from_nullable_nested"});
 
   auto result = evaluate(
-      "copy_from_nullable_nested(array_constructor(array_constructor(1), array_constructor(3, null, 5)))",
+      "copy_from_nullable_nested(array_constructor(array_constructor(1), array_constructor(3, null::bigint, 5)))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   // Test results.
@@ -769,7 +769,7 @@ TEST_F(ArrayWriterTest, addItems) {
   {
     // call path.
     auto result = evaluate(
-        "add_items_test(array_constructor(10, null))",
+        "add_items_test(array_constructor(10, null::bigint))",
         makeRowVector({makeFlatVector<int64_t>(1)}));
 
     // Test results.

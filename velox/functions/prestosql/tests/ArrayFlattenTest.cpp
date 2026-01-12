@@ -25,12 +25,13 @@ namespace {
 
 class ArrayFlattenTest : public FunctionBaseTest {
  protected:
-  void testExpression(
+  VectorPtr testExpression(
       const std::string& expression,
       const std::vector<VectorPtr>& input,
       const VectorPtr& expected) {
     auto result = evaluate(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
+    return result;
   }
 };
 
@@ -149,5 +150,24 @@ TEST_F(ArrayFlattenTest, constantArrayWithoutConsecutiveBaseElements) {
           {std::nullopt, 6, 5, std::nullopt},
           {std::nullopt, 6, 5, std::nullopt}});
   testExpression("flatten(c0)", {constArrayOfArrays}, expected);
+}
+
+TEST_F(ArrayFlattenTest, arrayOfConstantArrayWithConsecutiveIndices) {
+  const auto baseVector = makeArrayVector<int64_t>({{1, 1}});
+  const auto constVector = BaseVector::wrapInConstant(3, 0, baseVector);
+
+  // Create arrays of array vector using above constant vector.
+  // [[1, 1]]
+  // [[1, 1]]
+  // [[1, 1]]
+  const auto arrayOfArrays = makeArrayVector({0, 1, 2}, constVector);
+
+  // [1, 1]
+  // [1, 1]
+  // [1, 1]
+  const auto expected = makeArrayVector<int64_t>({{1, 1}, {1, 1}, {1, 1}});
+
+  const auto actual = testExpression("flatten(c0)", {arrayOfArrays}, expected);
+  ASSERT_FALSE(actual->as<ArrayVector>()->hasOverlappingRanges());
 }
 } // namespace

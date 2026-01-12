@@ -342,6 +342,10 @@ void VectorStream::append(folly::Range<const Timestamp*> values) {
       appendOne(value.getSeconds());
       appendOne(value.getNanos());
     }
+  } else if (opts_.useMicrosecondPrecision) {
+    for (auto& value : values) {
+      appendOne(value.toMicros());
+    }
   } else {
     for (auto& value : values) {
       appendOne(value.toMillis());
