@@ -136,6 +136,13 @@ TEST_F(GetJsonObjectTest, nullResult) {
           R"([{"my": {"info": {"name": "Alice"quoted""}}}, {"other": ["v1", "v2"]}])",
           "$[0].my.info.name"),
       std::nullopt);
+
+  // Invalid escape sequence.
+  EXPECT_EQ(getJsonObject(R"({"hello": "\x"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"hello": "test", "invalid": "\@"})", "$.hello"),
+      std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\๑"})", "$.hello"), std::nullopt);
 }
 
 TEST_F(GetJsonObjectTest, incompleteJson) {

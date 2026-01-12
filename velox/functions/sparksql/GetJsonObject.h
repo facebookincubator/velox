@@ -51,6 +51,10 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
+    // Check if json has invalid escape sequence.
+    if (hasInvalidEscapedChar(json.data(), json.size())) {
+      return false;
+    }
     const auto formattedJsonPath =
         jsonPath_.has_value() ? jsonPath_.value() : normalizeJsonPath(jsonPath);
     // jsonPath is "$".
@@ -275,6 +279,55 @@ struct GetJsonObjectFunction {
       return isValidEndingCharacter(++currentPos);
     }
     return false;
+  }
+
+  // Checks for invalid escape sequences in JSON string.
+  // Note: We only search for '\' which is ASCII (0x5C) and cannot appear
+  // as a continuation byte in valid UTF-8 (continuation bytes are 0x80-0xBF).
+  // So we can safely scan byte-by-byte regardless of encoding.
+  FOLLY_ALWAYS_INLINE bool hasInvalidEscapedChar(
+      const char* json,
+      size_t size) {
+    const char* end = json + size;
+    const char* pos = json;
+
+    while ((pos = static_cast<const char*>(
+                memchr(pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
+      size_t remaining = static_cast<size_t>(end - pos);
+      if (FOLLY_UNLIKELY(remaining < 2)) {
+        return false; // Incomplete escape at end, let parser handle it.
+      }
+
+      switch (pos[1]) {
+        case '"':
+        case '\\':
+        case '/':
+        case 'b':
+        case 'f':
+        case 'n':
+        case 'r':
+        case 't':
+          pos += 2;
+          break;
+        case 'u':
+          // Validate \uXXXX
+          if (FOLLY_UNLIKELY(remaining < 6) ||
+              !isHexDigit(pos[2]) || !isHexDigit(pos[3]) ||
+              !isHexDigit(pos[4]) || !isHexDigit(pos[5])) {
+            return true;
+          }
+          pos += 6;
+          break;
+        default:
+          return true; // Invalid escape character.
+      }
+    }
+    return false;
+  }
+
+  static FOLLY_ALWAYS_INLINE bool isHexDigit(char c) {
+    auto uc = static_cast<unsigned char>(c);
+    return (uc - '0' < 10u) || ((uc | 0x20) - 'a' < 6u);
   }
 
   // Used for constant json path.
