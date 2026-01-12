@@ -102,7 +102,8 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
     // Second column contains details about written files.
     auto details = results->childAt(exec::TableWriteTraits::kFragmentChannel)
                        ->as<FlatVector<StringView>>();
-    folly::dynamic obj = folly::parseJson(details->valueAt(1));
+    folly::dynamic obj =
+        folly::parseJson(std::string_view(details->valueAt(1)));
     return obj["fileWriteInfos"];
   }
 
