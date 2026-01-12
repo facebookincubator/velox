@@ -20,7 +20,9 @@
 #include <cstdint>
 #include <memory>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -121,6 +123,12 @@ class ArrayWriterTest : public functions::test::FunctionBaseTest {
     writer.writer->init(*writer.result->as<ArrayVector>());
     writer.writer->setOffset(0);
     return writer;
+  }
+
+ protected:
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    common::testutil::TestValue::enable();
   }
 };
 
@@ -681,7 +689,7 @@ TEST_F(ArrayWriterTest, copyFromNullableArrayView) {
       {"copy_from_nullable"});
 
   auto result = evaluate(
-      "copy_from_nullable(array_constructor(1, null, 3, null, 5))",
+      "copy_from_nullable(array_constructor(1, null::bigint, 3, null::bigint, 5))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   // Test results.
@@ -704,7 +712,7 @@ TEST_F(ArrayWriterTest, copyFromNestedNullableArrayView) {
       Array<Array<int64_t>>>({"copy_from_nullable_nested"});
 
   auto result = evaluate(
-      "copy_from_nullable_nested(array_constructor(array_constructor(1), array_constructor(3, null, 5)))",
+      "copy_from_nullable_nested(array_constructor(array_constructor(1), array_constructor(3, null::bigint, 5)))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   // Test results.
@@ -761,7 +769,7 @@ TEST_F(ArrayWriterTest, addItems) {
   {
     // call path.
     auto result = evaluate(
-        "add_items_test(array_constructor(10, null))",
+        "add_items_test(array_constructor(10, null::bigint))",
         makeRowVector({makeFlatVector<int64_t>(1)}));
 
     // Test results.
@@ -1100,6 +1108,37 @@ TEST_F(ArrayWriterTest, errorHandlingE2E) {
            "null",
            "[[5, 5, 5], [5, 5, 5], [5, 5, 5]]",
            "null"}));
+}
+
+DEBUG_ONLY_TEST_F(ArrayWriterTest, resizeErrorHandling) {
+  // When resizing the element Vector it's possible that an error is thrown,
+  // e.g. due to running out of memory or the Driver shutting down, ensure the
+  // Writer does not end up in an inconsistent state when this happens.
+  auto [result, vectorWriter] = makeTestWriter();
+  const auto elementsVector = vectorWriter->vector().elements();
+
+  vectorWriter->setOffset(0);
+  auto& arrayWriter = vectorWriter->current();
+  arrayWriter.add_item() = 100;
+
+  // Simulate an error growing the Values Buffer in the element's Vector.
+  {
+    const std::string errorMessage = "Simulated failure in memory allocation";
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::FlatVector::resizeValues",
+        std::function<void(FlatVector<int64_t>*)>(
+            [&](FlatVector<int64_t>*) { VELOX_FAIL(errorMessage); }));
+    VELOX_ASSERT_THROW(arrayWriter.add_item(), errorMessage);
+  }
+
+  // The elements Vector should not have been resized due to the error.
+  VELOX_CHECK_EQ(elementsVector->size(), 1);
+
+  // If we call add_item again it should resize the elements Vector to
+  // accommodate the new element. If the ArrayWriter is in an invalid state it
+  // will think the elements has already been resized.
+  arrayWriter.add_item() = 200;
+  VELOX_CHECK_EQ(elementsVector->size(), 2);
 }
 
 } // namespace

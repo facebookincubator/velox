@@ -112,9 +112,10 @@ SsdFile::SsdFile(const Config& config)
       checksumReadVerificationEnabled_(
           config.checksumEnabled && config.checksumReadVerificationEnabled),
       shardId_(config.shardId),
+      maxEntries_(config.maxEntries),
+      executor_(config.executor),
       fs_(filesystems::getFileSystem(fileName_, nullptr)),
-      checkpointIntervalBytes_(config.checkpointIntervalBytes),
-      executor_(config.executor) {
+      checkpointIntervalBytes_(config.checkpointIntervalBytes) {
   process::TraceContext trace("SsdFile::SsdFile");
   filesystems::FileOptions fileOptions;
   fileOptions.shouldThrowOnFileAlreadyExists = false;
@@ -307,8 +308,19 @@ bool SsdFile::growOrEvictLocked() {
     }
   }
 
-  auto candidates =
-      tracker_.findEvictionCandidates(3, numRegions_, regionPins_);
+  // If SSD is in no space state and future eviction logging cannot go through,
+  // skip eviction, to avoid data inconsistency for checkpointing. Eviction log
+  // is up to date. Separately when SSD is in no space state,
+  // growOrEvictLocked() would not be invoked by write() in the first place.
+  if (state_.load() == State::kNoSpace) {
+    VELOX_SSD_CACHE_LOG_EVERY_MS(WARNING, 1'000)
+        << "Failed to grow cache file " << fileName_
+        << " due to SSD in no space state.";
+    return false;
+  }
+
+  auto candidates = tracker_.findEvictionCandidates(
+      kNumEvictionCandidates, numRegions_, regionPins_);
   if (candidates.empty()) {
     suspended_ = true;
     return false;
@@ -345,6 +357,23 @@ void SsdFile::clearRegionEntriesLocked(const std::vector<int32_t>& regions) {
 
 void SsdFile::write(std::vector<CachePin>& pins) {
   process::TraceContext trace("SsdFile::write");
+
+  if (state_.load() == State::kNoSpace) {
+    ++stats_.writeSsdDropped;
+    VELOX_SSD_CACHE_LOG_EVERY_MS(WARNING, 10'000)
+        << "SSD file write is dropped in no space state.";
+    return;
+  }
+
+  // Check entry count limit before writing
+  if (maxEntries_ > 0) {
+    std::shared_lock<std::shared_mutex> l(mutex_);
+    if (entries_.size() + pins.size() >= maxEntries_) {
+      ++stats_.writeSsdExceedEntryLimit;
+      return;
+    }
+  }
+
   // Sorts the pins by their file/offset. In this way what is adjacent in
   // storage is likely adjacent on SSD.
   std::sort(pins.begin(), pins.end());
@@ -438,16 +467,29 @@ bool SsdFile::write(
     int64_t offset,
     int64_t length,
     const std::vector<iovec>& iovecs) {
+  VELOX_DCHECK_NE(state_.load(), State::kNoSpace);
+
   try {
     writeFile_->write(iovecs, offset, length);
     return true;
   } catch (const std::exception&) {
+    const int err = errno;
     VELOX_SSD_CACHE_LOG(ERROR)
         << "Failed to write to SSD, file name: " << fileName_
         << ", size: " << iovecs.size() << ", offset: " << offset
-        << ", error code: " << errno
-        << ", error string: " << folly::errnoStr(errno);
+        << ", error code: " << err
+        << ", error string: " << folly::errnoStr(err);
     ++stats_.writeSsdErrors;
+
+    if (err == ENOSPC) {
+      if (state_.exchange(State::kNoSpace) != State::kNoSpace) {
+        VELOX_SSD_CACHE_LOG(WARNING)
+            << "State of cache file " << fileName_ << " transits to "
+            << stateString(State::kNoSpace);
+      }
+      ++stats_.writeSsdNoSpaceErrors;
+    }
+
     return false;
   }
 }
@@ -520,6 +562,9 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   stats.deleteMetaFileErrors += stats_.deleteMetaFileErrors;
   stats.growFileErrors += stats_.growFileErrors;
   stats.writeSsdErrors += stats_.writeSsdErrors;
+  stats.writeSsdNoSpaceErrors += stats_.writeSsdNoSpaceErrors;
+  stats.writeSsdDropped += stats_.writeSsdDropped;
+  stats.writeSsdExceedEntryLimit += stats_.writeSsdExceedEntryLimit;
   stats.writeCheckpointErrors += stats_.writeCheckpointErrors;
   stats.readSsdErrors += stats_.readSsdErrors;
   stats.readCheckpointErrors += stats_.readCheckpointErrors;
@@ -831,6 +876,23 @@ void SsdFile::checkpoint(bool force) {
   }
 }
 
+// static
+std::string SsdFile::stateString(State state) {
+  switch (state) {
+    case State::kActive:
+      return "Active";
+    case State::kNoSpace:
+      return "NoSpace";
+    default:
+      return fmt::format("UNKNOWN: {}", static_cast<uint8_t>(state));
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, const SsdFile::State& state) {
+  out << SsdFile::stateString(state);
+  return out;
+}
+
 void SsdFile::initializeCheckpoint() {
   if (!checkpointEnabled()) {
     return;
@@ -965,7 +1027,7 @@ void SsdFile::readCheckpoint() {
     auto checkpointReadFile = fs_->openFileForRead(checkpointPath);
     stream = std::make_unique<common::FileInputStream>(
         std::move(checkpointReadFile),
-        1 << 20,
+        kCheckpointReadBufferSize,
         memory::memoryManager()->cachePool());
   } catch (std::exception& e) {
     ++stats_.openCheckpointErrors;

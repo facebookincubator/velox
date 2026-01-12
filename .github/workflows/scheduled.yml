@@ -260,7 +260,7 @@ jobs:
 
       - name: Upload Signature Artifacts
         if: ${{ github.event_name != 'schedule' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -286,94 +286,101 @@ jobs:
           key: function-signatures-${{ github.sha }}
 
       - name: Upload presto fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto
           path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload spark expression fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark_expression_fuzzer
           path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload spark aggregation fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark_aggregation_fuzzer
           path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload aggregation fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: aggregation
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload join fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: join
           path: velox/_build/debug/velox/exec/fuzzer/velox_join_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload exchange fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: exchange
           path: velox/_build/debug//velox/exec/fuzzer/velox_exchange_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload window fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: window
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload cache fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cache_fuzzer
           path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload table evolution fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: table_evolution_fuzzer
           path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload memory arbitration fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: memory_arbitration_fuzzer
           path: velox/_build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload row number fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload topn row number fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: topn_row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_topn_row_number_fuzzer
           retention-days: ${{ env.RETENTION }}
 
       - name: Upload writer fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: writer
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_writer_fuzzer_test
+          retention-days: ${{ env.RETENTION }}
+
+      - name: Upload spatial join fuzzer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: spatial_join_fuzzer
+          path: velox/_build/debug/velox/exec/fuzzer/velox_spatial_join_fuzzer
           retention-days: ${{ env.RETENTION }}
 
   presto-fuzzer-run:
@@ -413,7 +420,7 @@ jobs:
           echo "DURATION=$duration" >> $GITHUB_ENV
 
       - name: Download presto fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: presto
 
@@ -435,6 +442,7 @@ jobs:
                 --velox_fuzzer_enable_expression_reuse \
                 --max_expression_trees_per_step 2 \
                 --retry_with_try \
+                --special_forms="and,or,cast,coalesce" \
                 --enable_dereference \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
@@ -445,7 +453,7 @@ jobs:
 
       - name: Archive production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-fuzzer-failure-artifacts
           path: |
@@ -463,7 +471,7 @@ jobs:
     steps:
 
       - name: Download Presto expression fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: presto
 
@@ -515,7 +523,7 @@ jobs:
 
       - name: Archive expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-fuzzer-failure-artifacts
           path: |
@@ -531,12 +539,12 @@ jobs:
     steps:
 
       - name: Download presto expression fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: presto
 
       - name: Download Signatures
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -549,6 +557,7 @@ jobs:
           chmod +x velox_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/presto_bias_functions)"
           ./velox_expression_fuzzer_test \
                 --seed ${random_seed} \
                 --lazy_vector_generation_ratio 0.2 \
@@ -571,7 +580,7 @@ jobs:
 
       - name: Archive Presto Bias expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-fuzzer-failure-artifacts
           path: |
@@ -586,7 +595,7 @@ jobs:
     steps:
 
       - name: Download spark aggregation fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: spark_aggregation_fuzzer
 
@@ -612,7 +621,7 @@ jobs:
 
       - name: Archive Spark aggregate production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-agg-fuzzer-failure-artifacts
           path: |
@@ -628,12 +637,12 @@ jobs:
     steps:
 
       - name: Download spark expression fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: spark_expression_fuzzer
 
       - name: Download Signatures
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -646,6 +655,7 @@ jobs:
           chmod +x spark_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/spark_bias_functions)"
           ./spark_expression_fuzzer_test \
                 --seed ${random_seed} \
                 --duration_sec $DURATION \
@@ -659,7 +669,7 @@ jobs:
 
       - name: Archive Spark expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
           path: |
@@ -675,7 +685,7 @@ jobs:
     steps:
 
       - name: Download spark expression fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: spark_expression_fuzzer
 
@@ -696,6 +706,7 @@ jobs:
                 --retry_with_try \
                 --enable_dereference \
                 --velox_fuzzer_enable_decimal_type \
+                --special_forms="and,or,cast,coalesce" \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -705,7 +716,7 @@ jobs:
 
       - name: Archive Spark expression production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
           path: |
@@ -723,7 +734,7 @@ jobs:
     steps:
 
       - name: Download join fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: join
 
@@ -766,7 +777,7 @@ jobs:
 
       - name: Archive join production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-join-fuzzer-failure-artifacts
           path: |
@@ -782,7 +793,7 @@ jobs:
     steps:
 
       - name: Download exchange fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: exchange
 
@@ -805,7 +816,7 @@ jobs:
 
       - name: Archive Exchange production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: exchange-fuzzer-failure-artifacts
           path: |
@@ -824,7 +835,7 @@ jobs:
     steps:
 
       - name: Download row number fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: row_number
 
@@ -867,7 +878,7 @@ jobs:
 
       - name: Archive row number production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: row-fuzzer-failure-artifacts
           path: |
@@ -886,7 +897,7 @@ jobs:
     steps:
 
       - name: Download topn row number fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: topn_row_number
 
@@ -930,7 +941,7 @@ jobs:
 
       - name: Archive topn row number production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: topn-row-fuzzer-failure-artifacts
           path: |
@@ -947,7 +958,7 @@ jobs:
     steps:
 
       - name: Download cache fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: cache_fuzzer
 
@@ -966,7 +977,7 @@ jobs:
 
       - name: Archive Cache production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cache-fuzzer-logs
           path: |
@@ -981,7 +992,7 @@ jobs:
     steps:
 
       - name: Download table evolution fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: table_evolution_fuzzer
 
@@ -1000,7 +1011,7 @@ jobs:
 
       - name: Archive table evolution production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: table-evolution-fuzzer-test-logs
           path: |
@@ -1015,7 +1026,7 @@ jobs:
     steps:
 
       - name: Download memory arbitration fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: memory_arbitration_fuzzer
 
@@ -1034,7 +1045,7 @@ jobs:
 
       - name: Archive memory arbitration production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: memory-arbitration-fuzzer-test-logs
           path: |
@@ -1052,7 +1063,7 @@ jobs:
     steps:
 
       - name: Download aggregation fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: aggregation
 
@@ -1096,7 +1107,7 @@ jobs:
 
       - name: Archive aggregate production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-aggregate-fuzzer-failure-artifacts
           path: |
@@ -1116,7 +1127,7 @@ jobs:
     steps:
 
       - name: Download presto expression fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: presto
 
@@ -1133,7 +1144,7 @@ jobs:
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
       - name: Download Signatures
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -1186,7 +1197,7 @@ jobs:
           && echo -e "\n\nPresto Fuzzer run finished successfully."
       - name: Archive Presto only-bias-function expression fuzzer production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-only-bias-function-fuzzer-failure-artifacts
           path: |
@@ -1205,7 +1216,7 @@ jobs:
     steps:
 
       - name: Download aggregation fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: aggregation
 
@@ -1222,7 +1233,7 @@ jobs:
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
       - name: Download Signatures
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -1260,7 +1271,7 @@ jobs:
 
       - name: Archive bias aggregate production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-sot-aggregate-fuzzer-failure-artifacts
           path: |
@@ -1274,7 +1285,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Signatures
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: signatures
           path: /tmp/signatures
@@ -1303,7 +1314,7 @@ jobs:
     steps:
 
       - name: Download window fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: window
 
@@ -1348,7 +1359,7 @@ jobs:
 
       - name: Archive window production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-window-fuzzer-failure-artifacts
           path: |
@@ -1367,7 +1378,7 @@ jobs:
     steps:
 
       - name: Download writer fuzzer
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: writer
 
@@ -1414,13 +1425,49 @@ jobs:
 
       - name: Archive writer production artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-writer-fuzzer-failure-artifacts
           path: |
             /tmp/writer_fuzzer_repro
             /tmp/server.log
             /var/log
+
+  spatial-join-fuzzer-run:
+    name: Spatial Join Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download spatial join fuzzer
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: spatial_join_fuzzer
+
+      - name: Run Spatial Join Fuzzer
+        run: |
+          mkdir -p /tmp/spatial_join_fuzzer_repro/logs/
+          chmod -R 777 /tmp/spatial_join_fuzzer_repro
+          chmod +x velox_spatial_join_fuzzer
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./velox_spatial_join_fuzzer \
+                --seed ${random_seed} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/spatial_join_fuzzer_repro/logs \
+          && echo -e "\n\Spatial join fuzzer run finished successfully."
+
+      - name: Archive spatial join fuzzer production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: spatial-join-fuzzer-failure-artifacts
+          path: |
+            /tmp/spatial_join_fuzzer_repro
 
   linux-clang:
     if: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch') }}

@@ -31,7 +31,6 @@
 #include "velox/common/testutil/TestValue.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
-DECLARE_bool(velox_memory_pool_debug_enabled);
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 
 using namespace ::testing;
@@ -61,15 +60,16 @@ struct TestParam {
 class MemoryPoolTest : public testing::TestWithParam<TestParam> {
  public:
   static const std::vector<TestParam> getTestParams() {
-    std::vector<TestParam> params;
-    params.push_back({true, true, false});
-    params.push_back({true, false, false});
-    params.push_back({false, true, false});
-    params.push_back({false, false, false});
-    params.push_back({true, true, true});
-    params.push_back({true, false, true});
-    params.push_back({false, true, true});
-    params.push_back({false, false, true});
+    std::vector<TestParam> params = {
+        {true, true, false},
+        {true, false, false},
+        {false, true, false},
+        {false, false, false},
+        {true, true, true},
+        {true, false, true},
+        {false, true, true},
+        {false, false, true},
+    };
     return params;
   }
 
@@ -2530,7 +2530,6 @@ TEST_P(MemoryPoolTest, concurrentUpdateToDifferentPools) {
 }
 
 TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
-  FLAGS_velox_memory_pool_debug_enabled = true;
   if (!isLeafThreadSafe_) {
     return;
   }
@@ -2716,7 +2715,6 @@ TEST(MemoryPoolTest, visitChildren) {
 }
 
 TEST(MemoryPoolTest, debugMode) {
-  FLAGS_velox_memory_pool_debug_enabled = true;
   constexpr int64_t kMaxMemory = 10 * GB;
   constexpr int64_t kNumIterations = 100;
   const std::vector<int64_t> kAllocSizes = {128, 8 * KB, 2 * MB};
@@ -2914,7 +2912,6 @@ TEST(MemoryPoolTest, debugModeWithFilter) {
 }
 
 TEST_P(MemoryPoolTest, debugModeWrapCapException) {
-  FLAGS_velox_memory_pool_debug_enabled = true;
   const uint64_t kMaxCap = 128L * MB;
   MemoryManager::Options options;
   options.allocatorCapacity = kMaxCap;

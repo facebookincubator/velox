@@ -315,6 +315,10 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& left,
       const std::string& right);
 
+  double jaroWinklerSimilarity(
+      const std::string& left,
+      const std::string& right);
+
   using replace_input_test_t = std::vector<std::pair<
       std::tuple<std::string, std::string, std::string>,
       std::string>>;
@@ -1451,6 +1455,63 @@ TEST_F(StringFunctionsTest, invalidLevenshteinDistance) {
   VELOX_ASSERT_THROW(
       levenshteinDistance("bec", std::string(500001, 'h')),
       "The combined inputs size exceeded max Levenshtein distance combined input size");
+}
+
+double StringFunctionsTest::jaroWinklerSimilarity(
+    const std::string& left,
+    const std::string& right) {
+  return evaluateOnce<double>(
+             "jarowinkler_similarity(c0, c1)",
+             std::optional(left),
+             std::optional(right))
+      .value();
+}
+
+TEST_F(StringFunctionsTest, asciiJaroWinklerSimilarity) {
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("", ""), 1.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRACE", "TRACE"), 1.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRATE", "TRACE"), 0.91);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRACE", "TRATE"), 0.91);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("arnab", "aranb"), 0.95);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("DwAyNE", "DuANE"), 0.84);
+
+  // Test edge cases with empty strings
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("abc", ""), 0.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("", "xyz"), 0.0);
+}
+
+TEST_F(StringFunctionsTest, unicodeJaroWinklerSimilarity) {
+  // Test for non-ASCII
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRA\u00EFE", "TRACE"), 0.91);
+  EXPECT_DOUBLE_EQ(
+      jaroWinklerSimilarity(
+          "\u4FE1\u5FF5\u7231\u00EF\u671B", "\u4FE1\u5FF5\u7231\u5E0C\u671B"),
+      0.91);
+  EXPECT_DOUBLE_EQ(
+      jaroWinklerSimilarity(
+          "\u4FE1\u00EF\u7231y\u5E0C\u671B", "\u4FE1\u5FF5\u7231\u5E0C\u671B"),
+      0.84);
+}
+
+TEST_F(StringFunctionsTest, invalidJaroWinklerSimilarity) {
+  // Test for invalid utf-8 characters
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello world", "a\xA9ü"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello world", "Ψ\xFF\xFFΣΓΔA"),
+      "Invalid UTF-8 encoding in characters");
+
+  // Test for maximum length
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity(std::string(1001, 'x'), std::string(1001, 'x')),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello", std::string(500000, 'x')),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity(std::string(500000, 'x'), "hello"),
+      "The combined inputs for Jaro-Winkler similarity are too large");
 }
 
 TEST_F(StringFunctionsTest, longestCommonPrefix) {

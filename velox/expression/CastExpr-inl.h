@@ -175,8 +175,7 @@ void CastExpr::applyCastKernel(
     }
 
     // Optimize empty input strings casting by avoiding throwing exceptions.
-    if constexpr (
-        FromKind == TypeKind::VARCHAR || FromKind == TypeKind::VARBINARY) {
+    if constexpr (is_string_kind(FromKind)) {
       if constexpr (
           TypeTraits<ToKind>::isPrimitiveType &&
           TypeTraits<ToKind>::isFixedWidth) {
@@ -223,10 +222,9 @@ void CastExpr::applyCastKernel(
       return;
     }
 
-    const auto output = castResult.value();
+    const auto& output = castResult.value();
 
-    if constexpr (
-        ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
+    if constexpr (is_string_kind(ToKind)) {
       // Write the result output to the output vector
       auto writer = exec::StringWriter(result, row);
       writer.copy_from(output);

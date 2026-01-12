@@ -1,0 +1,130 @@
+---
+slug: task-barrier
+title: "Task Barrier: Efficient Task Reuse and Streaming Checkpoints in Velox"
+authors: [xiaoxmeng, yuhta, mbasmanova, pedroerp]
+tags: [tech-blog, task, execution]
+---
+
+## TL;DR
+
+Velox Task Barriers provide a synchronization mechanism that not only enables efficient task reuse,
+important for workloads such as [AI training data loading](https://engineering.fb.com/2022/09/19/ml-applications/data-ingestion-machine-learning-training-meta/),
+but also delivers the strict sequencing and checkpointing semantics required for streaming workloads.
+
+By injecting a barrier split, users guarantee that no subsequent data is processed until the entire
+DAG is flushed and the synchronization signal is unblocked. This capability serves two critical
+patterns:
+
+1. **Task Reuse**: Eliminates the overhead of repeated task initialization and teardown by safely
+   reconfiguring warm tasks for new queries. This is a recurring pattern in AI training data
+   loading workloads.
+
+2. **Streaming Processing**: Enables continuous data handling with consistent checkpoints, allowing
+   stateful operators to maintain context across batches without service interruption.
+
+See the [Task Barrier Developer Guide](https://facebookincubator.github.io/velox/develop/task-barrier.html) for implementation details.
+
+## The Problem
+
+Creating a new Velox task for every data request introduces overhead:
+
+- Memory pool initialization and configuration
+- Pipeline and operator construction
+- Connector and data source setup
+- Thread pool registration
+
+For high-throughput workloads that process thousands of requests, this overhead may accumulate
+and impact overall system performance.
+
+## The Solution: Task Barrier
+
+Task Barrier introduces a lightweight synchronization mechanism that:
+
+1. **Drains all in-flight data** - Ensures all buffered data flows through the pipeline to completion.
+
+2. **Resets stateful operators** - Clears internal state in operators like aggregations, joins, and sorts.
+
+3. **Preserves task infrastructure** - Keeps memory pools, thread registrations, and connector sessions intact.
+
+### How It Works
+
+The barrier is triggered by a special `BarrierSplit` injected into the task's source operators via
+`requestBarrier()`. When received:
+
+1. Source operators propagate the barrier signal downstream.
+2. Each operator calls `finishDriverBarrier()` to flush and reset its state.
+3. Once all drivers complete barrier processing, the task is ready for a new split.
+
+### Workflow Example (Pseudo-code)
+
+The following example demonstrates the usage pattern: the user adds splits, requests a barrier,
+and then must continue to drain results until the barrier is reached. This ensures all in-flight
+data leaves the pipeline, allowing the barrier to complete.
+
+```cpp
+// 1. Initialize the task infrastructure once
+auto task = Task::create(config, memoryPool);
+
+// 2. Loop to process multiple batches using the same task
+while (scheduler.hasMoreRequests()) {
+
+  // A. Get new data splits (e.g., from a file or query)
+  auto splits = scheduler.getNextSplits();
+
+  // B. Add splits to the running task
+  task->addSplits(sourcePlanNodeId, splits);
+
+  // C. Request a barrier to mark the end of this batch.
+  // This injects a BarrierSplit that flows behind the data.
+  // Note: Any splits added to the task AFTER this call will be blocked
+  // and will not be processed until this barrier is fully cleared.
+  auto barrierFuture = task->requestBarrier();
+
+  // D. Drain the pipeline until the barrier is passed.
+  // Critical: We must keep pulling results so the task can flush
+  // its buffers and reach the barrier.
+  while (!barrierFuture.isReady()) {
+    auto result = task->next(); // Get next result batch
+    if (result != nullptr) {
+      userOutput.consume(result);
+    }
+  }
+
+  // E. Barrier reached.
+  // The task has been reset (operators cleared, buffers flushed).
+  // It is now ready for the next iteration immediately.
+}
+```
+
+### Operator Support
+
+Task Barrier requires operators to implement `finishDriverBarrier()` to properly reset their state:
+
+- **TableScan**: Clears current split and reader state.
+- **HashBuild/HashProbe**: Resets hash tables and probe state.
+- **Aggregation**: Flushes partial aggregates and clears accumulators.
+- **OrderBy**: Outputs sorted data and resets sort buffer.
+- **Exchange**: Drains exchange queues.
+
+## Performance Impact
+
+By eliminating repeated task creation overhead, Task Barrier provides significant performance
+improvements for workloads with:
+
+- **Short-lived Queries**: Specifically those that recur frequently with the exact same plan DAG,
+  avoiding the need for repeated reconstruction.
+- **AI/ML Pipelines**: High-frequency data loading requests where task initialization would
+  otherwise dominate execution time.
+- **Iterative Processing**: Queries that can benefit from "warm" caches and pre-allocated memory pools.
+
+## Learn More
+
+For detailed implementation information, API reference, and operator-specific behavior, see the
+[Task Barrier](https://facebookincubator.github.io/velox/develop/task-barrier.html) documentation.
+
+## References
+
+- [Data Ingestion for Machine Learning Training at Meta](https://engineering.fb.com/2022/09/19/ml-applications/data-ingestion-machine-learning-training-meta/)
+- [Flink Stateful Streaming Processing](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/concepts/stateful-stream-processing/)
+- [Velox Task Model](https://facebookincubator.github.io/velox/develop/task.html)
+- [Velox Task Barrier](https://facebookincubator.github.io/velox/develop/task-barrier.html)

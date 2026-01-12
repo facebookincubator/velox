@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -44,6 +45,7 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
@@ -116,7 +118,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     return true;
   };
 
-  auto isFilterProjectSupported = [getPlanNode](const exec::Operator* op) {
+  auto isFilterProjectSupported = [getPlanNode, ctx](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
@@ -127,15 +129,23 @@ bool CompileState::compile(bool allowCpuFallback) {
             projectPlanNode->outputType()->size() == 0) {
           canBeEvaluated = false;
         }
-        if (!canBeEvaluatedByCudf(projectPlanNode->projections())) {
-          canBeEvaluated = false;
+
+      // Check filter separately.
+      if (filterNode) {
+        if (!canBeEvaluatedByCudf(
+                {filterNode->filter()}, ctx->task->queryCtx().get())) {
+          return false;
         }
       }
-      if (canBeEvaluated && filterNode &&
-          !canBeEvaluatedByCudf({filterNode->filter()})) {
-        canBeEvaluated = false;
+
+      // Check projects separately.
+      if (projectPlanNode) {
+        if (!canBeEvaluatedByCudf(
+                projectPlanNode->projections(), ctx->task->queryCtx().get())) {
+          return false;
+        }
       }
-      return canBeEvaluated;
+      return true;
     }
     return false;
   };
@@ -192,7 +202,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange,
-                   exec::AssignUniqueId>(op) ||
+                   exec::AssignUniqueId,
+                   CudfOperator>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
             isAggregationSupported(op) || isTableScanSupported(op);
       };
@@ -211,7 +222,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                exec::TopN,
                exec::Limit,
                exec::LocalPartition,
-               exec::AssignUniqueId>(op) ||
+               exec::AssignUniqueId,
+               CudfOperator>(op) ||
         isFilterProjectSupported(op) || isJoinSupported(op) ||
         isAggregationSupported(op);
   };
@@ -224,7 +236,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                exec::TopN,
                exec::Limit,
                exec::LocalExchange,
-               exec::AssignUniqueId>(op) ||
+               exec::AssignUniqueId,
+               CudfOperator>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
         (isTableScanSupported(op)) || (isAggregationSupported(op));
@@ -383,7 +396,8 @@ bool CompileState::compile(bool allowCpuFallback) {
           exec::LocalPartition,
           exec::LocalExchange,
           exec::FilterProject,
-          exec::AssignUniqueId>(op);
+          exec::AssignUniqueId,
+          CudfOperator>(op);
     };
     auto GpuRetainedOperator =
         [isTableScanSupported](const exec::Operator* op) {

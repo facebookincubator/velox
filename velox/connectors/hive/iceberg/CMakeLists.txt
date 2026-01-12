@@ -14,6 +14,7 @@
 
 velox_add_library(
   velox_hive_iceberg_splitreader
+  IcebergConnector.cpp
   IcebergDataSink.cpp
   IcebergPartitionName.cpp
   IcebergSplit.cpp
@@ -30,8 +31,6 @@ velox_link_libraries(
   velox_functions_iceberg
   Folly::folly
 )
-
-velox_link_libraries(velox_hive_iceberg_splitreader velox_connector Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

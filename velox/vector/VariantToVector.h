@@ -21,8 +21,7 @@ namespace facebook::velox {
 
 // Converts Variant `value` into a Velox vector using specified type.
 //
-// Supports all primitive types and complex types that do not contain DECIMAL
-// types.
+// Supports all primitive types and complex types.
 //
 // @returns ConstantVector of size 1.
 //

@@ -65,8 +65,9 @@ void ValueList::appendNonNull(
   allocator->extendWrite(dataCurrent_, stream);
   // The stream may have a tail of a previous write.
   const auto initialSize = stream.size();
-  static const exec::ContainerRowSerdeOptions options{};
-  exec::ContainerRowSerde::serialize(values, index, stream, options);
+  // Set isKey to false to avoid unnecessary sorting.
+  static const exec::ContainerRowSerdeOptions kOptions{/*isKey=*/false};
+  exec::ContainerRowSerde::serialize(values, index, stream, kOptions);
   ++size_;
   bytes_ += stream.size() - initialSize;
 

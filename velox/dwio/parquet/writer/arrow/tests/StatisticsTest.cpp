@@ -464,7 +464,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
       std::vector<int16_t> definitionLevels(batchNullCount, 0);
       definitionLevels.insert(
           definitionLevels.end(), batchNumValues - batchNullCount, 1);
-      auto beg = this->values_.begin() + i * numValues / 2;
+      auto beg = this->values_.cbegin() + i * numValues / 2;
       auto end = beg + batchNumValues;
       std::vector<c_type> batch = GetDeepCopy(std::vector<c_type>(beg, end));
       c_type* batchValuesPtr = GetValuesPointer(batch);
@@ -1634,6 +1634,172 @@ TEST(TestStatistics, FloatNegativeZero) {
 
 TEST(TestStatistics, DoubleNegativeZero) {
   CheckNegativeZeroStats<DoubleType>();
+}
+
+// Test infinity handling in statistics.
+template <typename ParquetType>
+void CheckInfinityStats() {
+  using T = typename ParquetType::c_type;
+
+  constexpr int32_t kNumValues = 8;
+  NodePtr node = PrimitiveNode::Make(
+      "infinity_test", Repetition::OPTIONAL, ParquetType::type_num);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr T posInf = std::numeric_limits<T>::infinity();
+  constexpr T negInf = -std::numeric_limits<T>::infinity();
+  constexpr T min = -1.0f;
+  constexpr T max = 1.0f;
+
+  {
+    std::array<T, kNumValues> allPosInf{
+        posInf, posInf, posInf, posInf, posInf, posInf, posInf, posInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, allPosInf, posInf, posInf);
+  }
+
+  {
+    std::array<T, kNumValues> allNegInf{
+        negInf, negInf, negInf, negInf, negInf, negInf, negInf, negInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, allNegInf, negInf, negInf);
+  }
+
+  {
+    std::array<T, kNumValues> mixedInf{
+        posInf, negInf, posInf, negInf, posInf, negInf, posInf, negInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, mixedInf, negInf, posInf);
+  }
+
+  {
+    std::array<T, kNumValues> mixedValues{
+        posInf, max, min, min, negInf, max, min, posInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, mixedValues, negInf, posInf);
+  }
+
+  {
+    constexpr T nan = std::numeric_limits<T>::quiet_NaN();
+    std::array<T, kNumValues> mixedWithNan{
+        posInf, nan, max, negInf, nan, min, posInf, nan};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, mixedWithNan, negInf, posInf);
+  }
+}
+
+TEST(TestStatistics, FloatInfinityValues) {
+  CheckInfinityStats<FloatType>();
+}
+
+TEST(TestStatistics, DoubleInfinityValues) {
+  CheckInfinityStats<DoubleType>();
+}
+
+// Test infinity values with validity bitmap.
+TEST(TestStatistics, InfinityWithNullBitmap) {
+  constexpr int kNumValues = 8;
+  NodePtr node = PrimitiveNode::Make(
+      "infinity_null_test", Repetition::OPTIONAL, Type::FLOAT);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr float posInf = std::numeric_limits<float>::infinity();
+  constexpr float negInf = -std::numeric_limits<float>::infinity();
+
+  // Test with some infinity values marked as null.
+  std::array<float, kNumValues> valuesWithNulls{
+      posInf, negInf, 1.0f, 2.0f, posInf, -1.0f, 3.0f, negInf};
+
+  // Bitmap: exclude first posInf and last negInf (01111110 = 0x7E).
+  uint8_t validBitmap = 0x7E;
+
+  auto stats = MakeStatistics<FloatType>(&descr);
+  AssertMinMaxAre(stats, valuesWithNulls, &validBitmap, negInf, posInf);
+  valuesWithNulls = {posInf, 0.0f, 1.0f, 2.0f, -2.0f, -1.0f, 3.0f, negInf};
+
+  stats = MakeStatistics<FloatType>(&descr);
+  AssertMinMaxAre(stats, valuesWithNulls, &validBitmap, -2.0f, 3.0f);
+}
+
+// Test merging statistics with infinity values.
+TEST(TestStatistics, MergeInfinityStatistics) {
+  NodePtr node =
+      PrimitiveNode::Make("merge_infinity", Repetition::OPTIONAL, Type::DOUBLE);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr double posInf = std::numeric_limits<double>::infinity();
+  constexpr double negInf = -std::numeric_limits<double>::infinity();
+
+  auto stats1 = MakeStatistics<DoubleType>(&descr);
+  std::array<double, 3> normalValues{-1.0f, 0.0f, 1.0f};
+  AssertMinMaxAre(stats1, normalValues, -1.0f, 1.0f);
+
+  auto stats2 = MakeStatistics<DoubleType>(&descr);
+  std::array<double, 2> infinityValues{negInf, posInf};
+  AssertMinMaxAre(stats2, infinityValues, negInf, posInf);
+
+  auto mergedStats = MakeStatistics<DoubleType>(&descr);
+  mergedStats->Merge(*stats1);
+  mergedStats->Merge(*stats2);
+
+  // Result should have infinity bounds.
+  ASSERT_TRUE(mergedStats->HasMinMax());
+  ASSERT_EQ(negInf, mergedStats->min());
+  ASSERT_EQ(posInf, mergedStats->max());
+}
+
+TEST(TestStatistics, CleanInfinityStatistics) {
+  constexpr int kNumValues = 4;
+  NodePtr node = PrimitiveNode::Make(
+      "clean_stat_nullopt", Repetition::OPTIONAL, Type::FLOAT);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+
+  {
+    std::array<float, kNumValues> allNans{nan, nan, nan, nan};
+    auto stats = MakeStatistics<FloatType>(&descr);
+    AssertUnsetMinMax(stats, allNans);
+  }
+
+  {
+    std::array<float, kNumValues> values{1.0f, 2.0f, 3.0f, 4.0f};
+    uint8_t allNullBitmap = 0x00;
+
+    auto stats = MakeStatistics<FloatType>(&descr);
+    AssertUnsetMinMax(stats, values, &allNullBitmap);
+  }
+
+  {
+    std::array<float, kNumValues> mixedNans{nan, 1.0f, nan, 2.0f};
+    uint8_t partialNullBitmap = 0x05;
+
+    auto stats = MakeStatistics<FloatType>(&descr);
+    AssertUnsetMinMax(stats, mixedNans, &partialNullBitmap);
+  }
+}
+
+TEST(TestStatistics, InfinityCleanStatisticValid) {
+  constexpr int kNumValues = 4;
+  NodePtr node = PrimitiveNode::Make(
+      "clean_stat_valid", Repetition::OPTIONAL, Type::DOUBLE);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr double posInf = std::numeric_limits<double>::infinity();
+  constexpr double negInf = -std::numeric_limits<double>::infinity();
+  constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+
+  {
+    std::array<double, kNumValues> mixedValues{posInf, nan, negInf, nan};
+    auto stats = MakeStatistics<DoubleType>(&descr);
+    AssertMinMaxAre(stats, mixedValues, negInf, posInf);
+  }
+
+  {
+    std::array<double, 1> singleInf{negInf};
+    auto stats = MakeStatistics<DoubleType>(&descr);
+    AssertMinMaxAre(stats, singleInf, negInf, negInf);
+  }
 }
 
 // TODO: disabled as it requires Arrow parquet data dir.

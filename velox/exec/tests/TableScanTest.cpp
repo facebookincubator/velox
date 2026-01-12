@@ -36,6 +36,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -46,6 +47,7 @@
 #include "velox/exec/tests/utils/TableScanTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/lib/IsNull.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -72,7 +74,12 @@ void verifyCacheStats(
   EXPECT_EQ(cacheStats.numLookups, numLookups);
 }
 
-class TableScanTest : public TableScanTestBase {};
+class TableScanTest : public TableScanTestBase {
+  void SetUp() override {
+    TableScanTestBase::SetUp();
+    orc::registerOrcReaderFactory();
+  }
+};
 
 TEST_F(TableScanTest, allColumns) {
   auto vectors = makeVectors(10, 1'000);
@@ -2508,7 +2515,7 @@ TEST_F(TableScanTest, statsBasedSkippingWithoutDecompression) {
   auto assertQuery = [&](const std::string& filter) {
     auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
-        PlanBuilder(pool_.get()).tableScan(rowType, {filter}).planNode(),
+        PlanBuilder(pool_.get()).tableScan(rowType, {}, {filter}).planNode(),
         filePaths,
         "SELECT * FROM tmp WHERE " + filter);
   };
@@ -5350,6 +5357,63 @@ TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
       .assertResults(resVector);
 }
 
+TEST_F(TableScanTest, bloomFilterPushdown) {
+  auto build = makeRowVector(
+      {"b"},
+      {
+          makeFlatVector<int64_t>(
+              10'001 + VectorHasher::kMaxDistinct,
+              [](auto i) { return 1000 * i; }),
+      });
+  auto probe = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>(
+              2 * build->size(), [](auto i) { return 500 * i; }),
+      });
+  std::shared_ptr<TempFilePath> files[2];
+  files[0] = TempFilePath::create();
+  writeToFile(files[0]->getPath(), {probe});
+  files[1] = TempFilePath::create();
+  writeToFile(files[1]->getPath(), {build});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId, buildScanId, joinId;
+  auto plan = PlanBuilder(idGenerator)
+                  .tableScan(ROW({"a"}, {BIGINT()}))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"a"},
+                      {"b"},
+                      PlanBuilder(idGenerator)
+                          .tableScan(ROW({"b"}, {BIGINT()}))
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      /*filter=*/"",
+                      {"a"})
+                  .capturePlanNodeId(joinId)
+                  .planNode();
+  for (bool parallelBuild : {false, true}) {
+    SCOPED_TRACE(fmt::format("parallelBuild={}", parallelBuild));
+    AssertQueryBuilder builder(plan);
+    builder
+        .config(
+            core::QueryConfig::kHashProbeBloomFilterPushdownMaxSize,
+            std::to_string(4 * build->size()))
+        .split(probeScanId, makeHiveConnectorSplit(files[0]->getPath()))
+        .split(buildScanId, makeHiveConnectorSplit(files[1]->getPath()));
+    if (parallelBuild) {
+      builder.serialExecution(false).maxDrivers(2).config(
+          core::QueryConfig::kMinTableRowsForParallelJoinBuild, "1");
+    }
+    auto task = builder.assertResults(build);
+    auto planStats = toPlanStats(task->taskStats());
+    ASSERT_EQ(
+        planStats.at(joinId).customStats.at("dynamicFiltersProduced").sum,
+        parallelBuild ? 2 : 1);
+    ASSERT_GT(planStats.at(joinId).customStats.at("bloomFilterSize").sum, 0);
+  }
+}
+
 // TODO: re-enable this test once we add back driver suspension support for
 // table scan.
 TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
@@ -5761,7 +5825,7 @@ TEST_F(TableScanTest, footerIOCount) {
   ASSERT_GT(stats.at("footerBufferOverread").sum, 0);
 }
 
-TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
+TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
   gflags::FlagSaver gflagSaver;
   // Disable prefetch to avoid test flakiness.
   FLAGS_cache_prefetch_min_pct = 200;
@@ -5790,8 +5854,8 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
   }
   createDuckDbTable(vectors);
 
-  for (auto disableReoder : {false}) {
-    SCOPED_TRACE(fmt::format("disableReoder {}", disableReoder));
+  for (auto disableReorder : {false, true}) {
+    SCOPED_TRACE(fmt::format("disableReorder {}", disableReorder));
     auto* cache = cache::AsyncDataCache::getInstance();
     cache->clear();
 
@@ -5824,7 +5888,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
                   kHiveConnectorId,
                   connector::hive::HiveConfig::
                       kReadStatsBasedFilterReorderDisabledSession,
-                  disableReoder ? "true" : "false")
+                  disableReorder ? "true" : "false")
               // Disable coalesce so that each column stream has a separate read
               // per split at least.
               .connectorSessionProperty(
@@ -5860,7 +5924,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
                   kHiveConnectorId,
                   connector::hive::HiveConfig::
                       kReadStatsBasedFilterReorderDisabledSession,
-                  disableReoder ? "true" : "false")
+                  disableReorder ? "true" : "false")
               .connectorSessionProperty(
                   kHiveConnectorId,
                   connector::hive::HiveConfig::kMaxCoalescedBytesSession,
@@ -5878,15 +5942,17 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
                   "SELECT c0 FROM tmp WHERE (c1 IN (1,7,11) OR c1 IS NULL) AND (c3 IN (1,7,11)  OR c3 IS NULL)");
 
       auto tableScanStats = getTableScanStats(task);
-      if (disableReoder) {
+      if (disableReorder) {
         ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 0);
       } else {
+        // Cache hit
         if (tableScanStats.customStats.count("storageReadBytes") == 0) {
           continue;
         }
+        // Cache miss, should behave like first time run
         ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 1);
         ASSERT_GT(tableScanStats.customStats["storageReadBytes"].sum, 0);
-        ASSERT_EQ(tableScanStats.customStats["storageReadBytes"].count, 1);
+        ASSERT_GT(tableScanStats.customStats["storageReadBytes"].count, 0);
       }
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
@@ -6289,6 +6355,152 @@ TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
     auto split = makeHiveConnectorSplit(file->getPath());
     AssertQueryBuilder(plan).split(split).assertResults(expected);
   }
+}
+
+TEST_F(TableScanTest, shortDecimalFilter) {
+  functions::registerIsNotNullFunction("isnotnull");
+
+  std::vector<std::optional<int64_t>> values = {
+      123456789123456789L,
+      987654321123456L,
+      std::nullopt,
+      2000000000000000L,
+      5000000000000000L,
+      987654321987654321L,
+      100000000000000L,
+      1230000000123456L,
+      120000000123456L,
+      std::nullopt};
+  auto rowVector = makeRowVector(
+      {"a"},
+      {
+          makeNullableFlatVector<int64_t>(values, DECIMAL(18, 6)),
+      });
+  createDuckDbTable({rowVector});
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath)
+                   .start(0)
+                   .length(fs::file_size(filePath))
+                   .fileFormat(dwio::common::FileFormat::ORC)
+                   .build();
+
+  auto rowType = rowVector->rowType();
+  // Is not null.
+  auto op =
+      PlanBuilder().tableScan(rowType, {}, "isnotnull(a)", rowType).planNode();
+  assertQuery(op, split, "SELECT a FROM tmp where a is not null");
+
+  // Is null.
+  op = PlanBuilder().tableScan(rowType, {}, "is_null(a)", rowType).planNode();
+  assertQuery(op, split, "SELECT a FROM tmp where a is null");
+
+  // BigintRange.
+  op =
+      PlanBuilder()
+          .tableScan(
+              rowType,
+              {},
+              "a > 2000000000.0::DECIMAL(18, 6) and a < 6000000000.0::DECIMAL(18, 6)",
+              rowType)
+          .planNode();
+  assertQuery(
+      op,
+      split,
+      "SELECT a FROM tmp where a > 2000000000.0 and a < 6000000000.0");
+
+  // NegatedBigintRange.
+  op =
+      PlanBuilder()
+          .tableScan(
+              rowType,
+              {},
+              "not(a between 2000000000.0::DECIMAL(18, 6) and 6000000000.0::DECIMAL(18, 6))",
+              rowType)
+          .planNode();
+  assertQuery(
+      op,
+      split,
+      "SELECT a FROM tmp where a < 2000000000.0 or a > 6000000000.0");
+}
+
+TEST_F(TableScanTest, longDecimalFilter) {
+  functions::registerIsNotNullFunction("isnotnull");
+
+  std::vector<std::optional<int64_t>> shortValues = {
+      123456789123456789L,
+      987654321123456L,
+      std::nullopt,
+      2000000000000000L,
+      5000000000000000L,
+      987654321987654321L,
+      100000000000000L,
+      1230000000123456L,
+      120000000123456L,
+      std::nullopt};
+
+  std::vector<std::optional<int128_t>> longValues = {
+      HugeInt::parse("123456789123456789123456789" + std::string(9, '0')),
+      HugeInt::parse("987654321123456789" + std::string(9, '0')),
+      std::nullopt,
+      HugeInt::parse("2" + std::string(37, '0')),
+      HugeInt::parse("5" + std::string(37, '0')),
+      HugeInt::parse("987654321987654321987654321" + std::string(9, '0')),
+      HugeInt::parse("1" + std::string(26, '0')),
+      HugeInt::parse("123000000012345678" + std::string(10, '0')),
+      HugeInt::parse("120000000123456789" + std::string(9, '0')),
+      HugeInt::parse("9" + std::string(37, '0'))};
+
+  auto rowVector = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int64_t>(shortValues, DECIMAL(18, 6)),
+          makeNullableFlatVector<int128_t>(longValues, DECIMAL(38, 18)),
+      });
+  createDuckDbTable({rowVector});
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath)
+                   .start(0)
+                   .length(fs::file_size(filePath))
+                   .fileFormat(dwio::common::FileFormat::ORC)
+                   .build();
+
+  auto outputType = ROW({"b"}, {DECIMAL(38, 18)});
+  auto dataColumns = rowVector->rowType();
+
+  auto op = PlanBuilder()
+                .tableScan(outputType, {}, "isnotnull(b)", dataColumns)
+                .planNode();
+  assertQuery(op, split, "SELECT b FROM tmp where b is not null");
+
+  // Is null.
+  op = PlanBuilder()
+           .tableScan(outputType, {}, "is_null(b)", dataColumns)
+           .planNode();
+  assertQuery(op, split, "SELECT b FROM tmp where b is null");
+
+  // HugeintRange.
+  op =
+      PlanBuilder()
+          .tableScan(
+              outputType,
+              {},
+              "b > 2000000000.0::DECIMAL(38, 18) and b < 6000000000.0::DECIMAL(38, 18)",
+              dataColumns)
+          .planNode();
+  assertQuery(
+      op,
+      split,
+      "SELECT b FROM tmp where b > 2000000000.0 and b < 6000000000.0");
+
+  // Test filter column not being projected out.
+  op = PlanBuilder()
+           .tableScan(outputType, {}, "a is null", dataColumns)
+           .planNode();
+  assertQuery(op, split, "SELECT b FROM tmp WHERE a is null");
 }
 
 } // namespace

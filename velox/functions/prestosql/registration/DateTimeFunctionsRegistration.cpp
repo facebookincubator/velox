@@ -90,6 +90,10 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_unixtime"});
 
   registerFromUnixtime(prefix + "from_unixtime");
+  registerFunction<CurrentTimezoneFunction, Varchar>(
+      {prefix + "current_timezone"});
+  registerFunction<CurrentTimestampFunction, TimestampWithTimezone>(
+      {prefix + "current_timestamp", prefix + "now"});
 
   registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
   registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
@@ -156,6 +160,10 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   // Register Time - Interval function
   registerFunction<TimeMinusInterval, Time, Time, IntervalDayTime>(
+      {prefix + "minus"});
+
+  // Register Time - Time function (returns IntervalDayTime)
+  registerFunction<TimeMinusFunction, IntervalDayTime, Time, Time>(
       {prefix + "minus"});
 
   // Use optimized vector function for Time + IntervalYearMonth (identity
@@ -316,6 +324,12 @@ void registerSimpleFunctions(const std::string& prefix) {
       AtTimezoneFunction,
       TimestampWithTimezone,
       TimestampWithTimezone,
+      Varchar>({prefix + "at_timezone"});
+
+  registerFunction<
+      AtTimezoneTimeWithTimezoneFunction,
+      TimeWithTimezone,
+      TimeWithTimezone,
       Varchar>({prefix + "at_timezone"});
 
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(

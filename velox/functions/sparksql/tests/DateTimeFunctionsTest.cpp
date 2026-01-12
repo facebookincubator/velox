@@ -1705,18 +1705,36 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
         fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
   };
 
+  const auto timestampaddBigint = [&](const std::string& unit,
+                                      std::optional<int64_t> value,
+                                      std::optional<Timestamp> timestamp) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
+  };
+
   // Check null behaviors.
   EXPECT_EQ(std::nullopt, timestampadd("second", 1, std::nullopt));
   EXPECT_EQ(std::nullopt, timestampadd("month", std::nullopt, Timestamp(0, 0)));
+  EXPECT_EQ(
+      std::nullopt, timestampaddBigint("month", std::nullopt, Timestamp(0, 0)));
 
   // Check invalid units.
   VELOX_ASSERT_THROW(
       timestampadd("invalid_unit", 1, Timestamp(0, 0)),
       "Unsupported datetime unit: invalid_unit");
+  VELOX_ASSERT_THROW(
+      timestampaddBigint("invalid_unit", 1, Timestamp(0, 0)),
+      "Unsupported datetime unit: invalid_unit");
 
   EXPECT_EQ(
       Timestamp(1551348061, 999) /*2019-02-28 10:01:01.000000*/,
       timestampadd(
+          "microsecond",
+          60 * 1000000 + 500,
+          Timestamp(1551348000, 999'500'999) /*2019-02-28 10:00:00.999500*/));
+  EXPECT_EQ(
+      Timestamp(1551348061, 999) /*2019-02-28 10:01:01.000000*/,
+      timestampaddBigint(
           "microsecond",
           60 * 1000000 + 500,
           Timestamp(1551348000, 999'500'999) /*2019-02-28 10:00:00.999500*/));
@@ -1857,6 +1875,31 @@ TEST_F(DateTimeFunctionsTest, monthsBetween) {
           parseTimestamp("1997-02-21 10:30:00"),
           parseTimestamp("1996-03-21 11:00:00"),
           true));
+}
+TEST_F(DateTimeFunctionsTest, dateFormat) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              std::optional<std::string> format) {
+    return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
+  };
+
+  // Check invalid format.
+  EXPECT_THROW(dateFormat(parseTimestamp("1970-01-01"), "u"), VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
+
+  // Check Simple tests.
+  EXPECT_EQ("AD", dateFormat(parseTimestamp("1970-01-01"), "G"));
+  EXPECT_EQ("19", dateFormat(parseTimestamp("1900-01-01"), "C"));
+  EXPECT_EQ("2020", dateFormat(parseTimestamp("2020-01-01"), "Y"));
+  EXPECT_EQ("1", dateFormat(parseTimestamp("2022-01-01"), "D"));
+  EXPECT_EQ("1", dateFormat(parseTimestamp("2022-01-01"), "d"));
+  EXPECT_EQ("AM", dateFormat(parseTimestamp("2022-01-01 00:00:00"), "a"));
+  EXPECT_EQ(
+      "2022-01-01 00:00:00",
+      dateFormat(parseTimestamp("2022-01-01"), "yyyy-MM-dd HH:mm:ss"));
+
+  enableLegacyFormatter();
+  EXPECT_EQ("4", dateFormat(parseTimestamp("1970-01-01"), "u"));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/type/Time.h"
 #include "velox/type/Variant.h"
 
@@ -44,7 +45,7 @@ TEST(TimeWithTimezoneInputGeneratorTest, generate) {
     EXPECT_LT(timeMillis, util::kMillisInDay);
 
     // Verify timezone offset is in valid bias-encoded range [0, 1680]
-    const auto timezoneOffset = util::unpackZoneKeyId(value);
+    const auto timezoneOffset = util::unpackZoneOffset(value);
     EXPECT_GE(timezoneOffset, 0);
     EXPECT_LE(timezoneOffset, 2 * util::kTimeZoneBias);
   }
@@ -54,15 +55,15 @@ TEST(TimeWithTimezoneInputGeneratorTest, generatesBothOffsetTypes) {
   TimeWithTimezoneInputGenerator generator(12345, 0.0); // Fixed seed, no nulls
 
   std::unordered_set<int16_t> frequentlyUsed(
-      TimeWithTimezoneInputGenerator::kFrequentlyUsedOffsets.begin(),
-      TimeWithTimezoneInputGenerator::kFrequentlyUsedOffsets.end());
+      kFrequentlyUsedTimezoneOffsets.begin(),
+      kFrequentlyUsedTimezoneOffsets.end());
 
   bool foundFrequentlyUsed = false;
   bool foundOther = false;
 
   for (int i = 0; i < 100 && (!foundFrequentlyUsed || !foundOther); ++i) {
     auto value = generator.generate().value<TypeKind::BIGINT>();
-    auto encoded = util::unpackZoneKeyId(value);
+    auto encoded = util::unpackZoneOffset(value);
     auto offset = util::decodeTimezoneOffset(encoded);
 
     if (frequentlyUsed.count(offset)) {

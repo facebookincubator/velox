@@ -187,6 +187,43 @@ TableEvolutionFuzzer::parseFileFormats(std::string input) {
 
 namespace {
 
+// Helper function to randomly select aggregates from available columns
+// without replacement. Returns a list of aggregate expressions.
+void generateAggregatesForColumns(
+    const std::vector<int>& availableColumns,
+    const std::vector<std::string>& supportedAggFuncs,
+    const RowTypePtr& schema,
+    FuzzerGenerator& rng,
+    std::vector<std::string>& aggregates) {
+  if (availableColumns.empty()) {
+    return;
+  }
+
+  int numAggregates = std::min(
+      static_cast<int>(availableColumns.size()),
+      std::min(
+          static_cast<int>(5),
+          static_cast<int>(
+              folly::Random::rand32(1, availableColumns.size() + 1, rng))));
+
+  std::unordered_set<int> selectedIndices;
+  for (int i = 0; i < numAggregates; ++i) {
+    if (folly::Random::oneIn(2, rng)) {
+      int randomIdx;
+      do {
+        randomIdx = folly::Random::rand32(availableColumns.size(), rng);
+      } while (selectedIndices.count(randomIdx) > 0);
+      selectedIndices.insert(randomIdx);
+
+      int colIdx = availableColumns[randomIdx];
+      std::string aggFunc = supportedAggFuncs[folly::Random::rand32(
+          supportedAggFuncs.size(), rng)];
+      aggregates.push_back(
+          fmt::format("{}({})", aggFunc, schema->nameOf(colIdx)));
+    }
+  }
+}
+
 std::vector<std::vector<RowVectorPtr>> runTaskCursors(
     const std::vector<std::shared_ptr<TaskCursor>>& cursors,
     folly::Executor& executor) {
@@ -259,7 +296,7 @@ void buildScanSplitFromTableWriteResult(
   auto* fragments =
       writeResult[0]->childAt(1)->asChecked<SimpleVector<StringView>>();
   for (int i = 1; i < writeResult[0]->size(); ++i) {
-    auto fragment = folly::parseJson(fragments->valueAt(i));
+    auto fragment = folly::parseJson(std::string_view(fragments->valueAt(i)));
     auto fileName = fragment["fileWriteInfos"][0]["writeFileName"].asString();
     auto hiveSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         TableEvolutionFuzzer::connectorId(),
@@ -410,7 +447,7 @@ fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
 
 // Generate random aggregation configuration for pushdown testing.
 // Only generates aggregations that are eligible for pushdown:
-// - Supported aggregate functions: min, max, sum
+// - Supported aggregate functions: min, max, bool_and, bool_or
 // - Each column can only be used by at most one aggregate
 // - Grouping keys are optional (can be empty for global aggregation)
 // - Columns with filters (subfield or remaining) are excluded to enable
@@ -421,7 +458,11 @@ std::optional<AggregationConfig> generateAggregationConfig(
     const std::unordered_set<std::string>& filteredColumns) {
   // List of aggregate functions that support pushdown
   // Note: Excluding 'sum' to avoid integer overflow in fuzzer with random data
-  static const std::vector<std::string> supportedAggs = {"min", "max"};
+  static const std::vector<std::string> supportedNumericAggs = {"min", "max"};
+  static const std::vector<std::string> supportedBooleanAggs = {
+      "bool_and", "bool_or"};
+  static const std::vector<std::string> supportedIntegerAggs = {
+      "bitwise_and_agg", "bitwise_or_agg", "bitwise_xor_agg"};
 
   // Randomly decide number of grouping keys (0 to 2)
   int numGroupingKeys = folly::Random::rand32(3, rng);
@@ -441,7 +482,9 @@ std::optional<AggregationConfig> generateAggregationConfig(
   // For aggregation pushdown to work, each column should only be used once
   // and columns with filters should be excluded
   std::vector<std::string> aggregates;
-  std::vector<int> availableColumns;
+  std::vector<int> availableNumericColumns;
+  std::vector<int> availableIntegerColumns;
+  std::vector<int> availableBooleanColumns;
   for (int i = 0; i < schema->size(); ++i) {
     if (usedColumnIndices.count(i) == 0) {
       auto columnName = schema->nameOf(i);
@@ -451,41 +494,43 @@ std::optional<AggregationConfig> generateAggregationConfig(
       }
 
       auto type = schema->childAt(i);
-      // Only numeric types support min/max/sum
-      // Check if it's a primitive numeric type (not decimal)
+      // Integer types: randomly choose between min/max or bitwise aggregations
+      // Note: Exclude DATE/Interval type as it doesn't support bitwise
+      // aggregations
       if ((type->isInteger() || type->isBigint() || type->isSmallint() ||
-           type->isTinyint() || type->isReal() || type->isDouble()) &&
-          !type->isDecimal()) {
-        availableColumns.push_back(i);
+           type->isTinyint()) &&
+          !type->isDate() && !type->isIntervalDayTime() &&
+          !type->isIntervalYearMonth()) {
+        if (folly::Random::oneIn(2, rng)) {
+          availableIntegerColumns.push_back(i);
+        } else {
+          availableNumericColumns.push_back(i);
+        }
+      }
+      // Float types support min/max only
+      else if ((type->isReal() || type->isDouble()) && !type->isDecimal()) {
+        availableNumericColumns.push_back(i);
+      }
+      // Boolean types support bool_and/bool_or
+      else if (type->isBoolean()) {
+        availableBooleanColumns.push_back(i);
       }
     }
   }
 
-  if (availableColumns.empty()) {
+  // Need at least one column to aggregate
+  if (availableNumericColumns.empty() && availableBooleanColumns.empty() &&
+      availableIntegerColumns.empty()) {
     return std::nullopt;
   }
 
-  // Randomly select 1-5 aggregates
-  int numAggregates = std::min(
-      static_cast<int>(5),
-      static_cast<int>(
-          folly::Random::rand32(1, availableColumns.size() + 1, rng)));
-
   // Randomly pick columns for aggregates without replacement
-  std::unordered_set<int> selectedIndices;
-  for (int i = 0; i < numAggregates; ++i) {
-    int randomIdx;
-    do {
-      randomIdx = folly::Random::rand32(availableColumns.size(), rng);
-    } while (selectedIndices.count(randomIdx) > 0);
-    selectedIndices.insert(randomIdx);
-
-    int colIdx = availableColumns[randomIdx];
-    std::string aggFunc =
-        supportedAggs[folly::Random::rand32(supportedAggs.size(), rng)];
-    aggregates.push_back(
-        fmt::format("{}({})", aggFunc, schema->nameOf(colIdx)));
-  }
+  generateAggregatesForColumns(
+      availableNumericColumns, supportedNumericAggs, schema, rng, aggregates);
+  generateAggregatesForColumns(
+      availableBooleanColumns, supportedBooleanAggs, schema, rng, aggregates);
+  generateAggregatesForColumns(
+      availableIntegerColumns, supportedIntegerAggs, schema, rng, aggregates);
 
   if (aggregates.empty()) {
     return std::nullopt;

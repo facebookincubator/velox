@@ -18,7 +18,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace fecebook::velox::exec::test {
+namespace facebook::velox::exec::test {
 using namespace facebook::velox::test;
 
 namespace {
@@ -516,4 +516,4 @@ IndexLookupJoinTestBase::createProbeFiles(
   writeToFiles(toFilePaths(probeFiles), probeVectors);
   return probeFiles;
 }
-} // namespace fecebook::velox::exec::test
+} // namespace facebook::velox::exec::test

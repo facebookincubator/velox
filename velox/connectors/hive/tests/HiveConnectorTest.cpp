@@ -694,5 +694,65 @@ TEST_F(HiveConnectorTest, prestoTableSampling) {
   ASSERT_TRUE(filters.empty());
 }
 
+#define VELOX_ASSERT_FILTER(expected, actual)   \
+  ASSERT_TRUE(expected->testingEquals(*actual)) \
+      << expected->toString() << " vs " << actual->toString();
+
+TEST_F(HiveConnectorTest, disjuncts) {
+  auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool_.get());
+  auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DECIMAL(20, 0)});
+
+  {
+    auto expr =
+        parseExpr("(c0 > 0 and c0 < 10) or (c0 > 5 and c0 < 15)", rowType);
+
+    SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFiltersFromRemainingFilter(
+        expr, &evaluator, filters, sampleRate);
+    ASSERT_TRUE(remaining == nullptr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    VELOX_ASSERT_FILTER(exec::between(1, 14), filters.begin()->second);
+  }
+
+  {
+    auto expr = parseExpr("(c0 between -10 and 12)", rowType);
+
+    SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFiltersFromRemainingFilter(
+        expr, &evaluator, filters, sampleRate);
+    ASSERT_TRUE(remaining == nullptr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    ASSERT_EQ(filters.begin()->first, Subfield("c0"));
+    VELOX_ASSERT_FILTER(exec::between(-10, 12), filters.begin()->second);
+
+    expr = parseExpr("(c0 > 0 and c0 < 10) or (c0 > 5 and c0 < 15)", rowType);
+    remaining = extractFiltersFromRemainingFilter(
+        expr, &evaluator, filters, sampleRate);
+    ASSERT_TRUE(remaining == nullptr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    ASSERT_EQ(filters.begin()->first, Subfield("c0"));
+    VELOX_ASSERT_FILTER(exec::between(1, 12), filters.begin()->second);
+  }
+
+  {
+    auto expr = parseExpr("c0 not in (1, 3) or c0 in (1, 2)", rowType);
+    SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFiltersFromRemainingFilter(
+        expr, &evaluator, filters, sampleRate);
+    ASSERT_EQ(remaining, expr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_TRUE(filters.empty());
+  }
+}
+
+#undef VELOX_ASSERT_FILTER
+
 } // namespace
 } // namespace facebook::velox::connector::hive

@@ -203,17 +203,6 @@ class ConstantVector final : public SimpleVector<T> {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
-  uint64_t retainedSize() const override {
-    VELOX_DCHECK(initialized_);
-    if (valueVector_) {
-      return valueVector_->retainedSize();
-    }
-    if (stringBuffer_) {
-      return stringBuffer_->capacity();
-    }
-    return sizeof(T);
-  }
-
   BaseVector* loadedVector() override {
     if (!valueVector_) {
       return this;
@@ -487,6 +476,18 @@ class ConstantVector final : public SimpleVector<T> {
     BaseVector::nulls_->setSize(1);
     BaseVector::rawNulls_ = BaseVector::nulls_->as<uint64_t>();
     *BaseVector::nulls_->asMutable<uint64_t>() = bits::kNull64;
+  }
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    VELOX_DCHECK(initialized_);
+    if (valueVector_) {
+      return valueVector_->retainedSize(totalStringBufferSize);
+    }
+    if (stringBuffer_) {
+      totalStringBufferSize += stringBuffer_->capacity();
+      return stringBuffer_->capacity();
+    }
+    return sizeof(T);
   }
 
   // 'valueVector_' element 'index_' represents a complex constant

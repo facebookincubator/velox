@@ -384,6 +384,7 @@ class AggregationTest : public OperatorTestBase {
         false,
         true,
         true,
+        false,
         pool_.get());
   }
 
@@ -482,7 +483,8 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<std::string>{"agg"},
               aggregates,
-              false,
+              /*ignoreNullKeys=*/false,
+              /*noGroupsSpanBatches=*/false,
               std::move(source));
         })
         .planNode();
@@ -543,7 +545,8 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<std::string>{"agg"},
                         aggregates,
-                        false,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/false,
                         std::move(source));
                   })
                   .planNode();
@@ -1003,6 +1006,7 @@ TEST_F(AggregationTest, distinctWithGroupingKeysReordered) {
   options.vectorSize = vectorSize;
   options.stringVariableLength = false;
   options.stringLength = 128;
+  options.nullRatio = 0.1;
   VectorFuzzer fuzzer(options, pool());
   const int numVectors{5};
   std::vector<RowVectorPtr> vectors;
@@ -4025,6 +4029,7 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       false, // isJoinBuild
       false, // hasProbedFlag
       false, // hasNormalizedKeys
+      false, // useListRowIndex
       pool());
   const auto rowColumn = rows.columnAt(0);
   agg.setOffsets(
