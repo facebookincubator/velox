@@ -19,15 +19,18 @@ usage() {
   cat <<EOF
 Usage: $0 --branch <branch>
        $0 --pr <pr-number>
+       $0 --commit <sha>
 
 Options:
-  --branch <branch>    Update all cudf dependencies (rapids-cmake, rmm, kvikio, cudf)
+  --branch <branch>    Update all cudf dependencies to latest from branch
   --pr <pr-number>     Update only cudf from a specific PR
+  --commit <sha>       Update all dependencies using cudf commit and compatible versions
 
 Examples:
   $0 --branch main
   $0 --branch release/26.02
   $0 --pr 12345
+  $0 --commit abc123def456
 EOF
 }
 
@@ -44,6 +47,12 @@ get_commit_info() {
   local repo=$1 branch=$2
   curl -sf "https://api.github.com/repos/rapidsai/${repo}/commits/${branch}" |
     jq -r '[.sha, .commit.committer.date[:10]] | join(" ")'
+}
+
+get_commit_before_date() {
+  local repo=$1 until_date=$2
+  curl -sf "https://api.github.com/repos/rapidsai/${repo}/commits?sha=main&until=${until_date}&per_page=1" |
+    jq -r '.[0] | [.sha, .commit.committer.date[:10]] | join(" ")'
 }
 
 get_sha256() {
@@ -95,6 +104,55 @@ if [[ $MODE == "--pr" ]]; then
 
   update_dependency "cudf" "$SHA" "$DATE" "$CHECKSUM"
   echo "Done! Updated cudf to PR #${ARG}: ${SHA:0:7} ($DATE)"
+
+elif [[ $MODE == "--commit" ]]; then
+  echo "Fetching cuDF commit ${ARG:0:7}..."
+  COMMIT_INFO=$(curl -sf "https://api.github.com/repos/rapidsai/cudf/commits/${ARG}")
+  SHA=$(echo "$COMMIT_INFO" | jq -r '.sha')
+  DATE=$(echo "$COMMIT_INFO" | jq -r '.commit.committer.date[:10]')
+  TIMESTAMP=$(echo "$COMMIT_INFO" | jq -r '.commit.committer.date')
+  VERSION=$(curl -sf "https://raw.githubusercontent.com/rapidsai/cudf/${SHA}/VERSION" | grep -oP '^[0-9]+\.[0-9]+')
+
+  echo "  Commit: ${SHA:0:7} from $DATE"
+  echo "  Version: $VERSION"
+  echo
+
+  declare -A COMMITS DATES CHECKSUMS
+  COMMITS[cudf]=$SHA
+  DATES[cudf]=$DATE
+
+  echo "Finding compatible dependency versions (main branch commits before $TIMESTAMP)..."
+  echo
+
+  for dep in rapids_cmake rmm kvikio; do
+    repo=${dep//_/-}
+    echo "Fetching $repo..."
+    read -r commit date < <(get_commit_before_date "$repo" "$TIMESTAMP")
+    echo "  Commit: ${commit:0:7} from $date"
+    echo "  Computing SHA256..."
+    checksum=$(get_sha256 "$repo" "$commit")
+    echo "  SHA256: $checksum"
+
+    COMMITS[$dep]=$commit
+    DATES[$dep]=$date
+    CHECKSUMS[$dep]=$checksum
+    echo
+  done
+
+  echo "Computing SHA256 for cudf..."
+  CHECKSUMS[cudf]=$(get_sha256 "cudf" "$SHA")
+  echo "  SHA256: ${CHECKSUMS[cudf]}"
+  echo
+
+  echo "Updating $CMAKE_FILE..."
+  for dep in rapids_cmake rmm kvikio cudf; do
+    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}"
+  done
+
+  echo "Done! Updated dependencies:"
+  for dep in rapids_cmake rmm kvikio cudf; do
+    echo "  $dep: ${COMMITS[$dep]:0:7} (${DATES[$dep]})"
+  done
 
 elif [[ $MODE == "--branch" ]]; then
   VERSION=$(get_version "$ARG")
