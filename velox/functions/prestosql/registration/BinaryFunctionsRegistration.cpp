@@ -97,6 +97,11 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varbinary,
       int64_t,
       Varbinary>({prefix + "rpad"});
+
+  registerFunction<Fnv132Function, int64_t, Varbinary>({prefix + "fnv1_32"});
+  registerFunction<Fnv1a32Function, int64_t, Varbinary>({prefix + "fnv1a_32"});
+  registerFunction<Fnv164Function, int64_t, Varbinary>({prefix + "fnv1_64"});
+  registerFunction<Fnv1a64Function, int64_t, Varbinary>({prefix + "fnv1a_64"});
 }
 } // namespace
 

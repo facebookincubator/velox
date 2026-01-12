@@ -154,3 +154,19 @@ Binary Functions
 .. function:: xxhash64(binary, bigint) -> varbinary
 
     Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.
+    
+.. function:: fnv1_32(binary) -> bigint
+
+    Computes the 32-bit FNV-1 hash of ``binary``.
+
+.. function:: fnv1a_32(binary) -> bigint
+
+    Computes the 32-bit FNV-1a hash of  ``binary``.
+
+.. function:: fnv1_64(binary) -> bigint
+
+   Computes the 64-bit FNV-1 hash of ``binary``.
+
+.. function:: fnv1a_64(binary) -> bigint
+
+    Computes the 64-bit FNV-1a hash of ``binary``.
