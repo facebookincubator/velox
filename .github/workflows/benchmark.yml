@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
 
       - name: Restore Dependencies
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         id: restore-deps
         with:
           path: ${{ env.INSTALL_PREFIX }}
@@ -84,7 +84,7 @@ jobs:
 
       - name: Save Dependencies
         if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ${{ env.INSTALL_PREFIX }}
           key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
