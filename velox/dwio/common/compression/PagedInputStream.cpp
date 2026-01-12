@@ -20,8 +20,9 @@ namespace facebook::velox::dwio::common::compression {
 
 void PagedInputStream::prepareOutputBuffer(uint64_t uncompressedLength) {
   if (!outputBuffer_ || uncompressedLength > outputBuffer_->capacity()) {
+    // OutputBuffer is intended for writing before reading, not need zeroFilled.
     outputBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
-        pool_, uncompressedLength);
+        pool_, uncompressedLength, false);
   }
 }
 
