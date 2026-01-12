@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/KHyperLogLogResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
@@ -172,6 +173,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::AverageResultVerifier;
+  using facebook::velox::exec::test::KHyperLogLogResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
   using facebook::velox::exec::test::TDigestAggregateResultVerifier;
 
@@ -187,6 +189,7 @@ int main(int argc, char** argv) {
           {"approx_most_frequent", nullptr},
           {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
+          {"khyperloglog_agg", std::make_shared<KHyperLogLogResultVerifier>()},
           {"merge", nullptr},
           // Semantically inconsistent functions
           {"skewness", nullptr},
