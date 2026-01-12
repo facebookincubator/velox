@@ -36,7 +36,7 @@ re2::StringPiece toStringPiece(const T& s) {
 namespace detail {
 
 Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
-  const std::string key = pattern;
+  const auto key = std::string(pattern);
 
   auto reIt = cache_.find(key);
   if (reIt != cache_.end()) {

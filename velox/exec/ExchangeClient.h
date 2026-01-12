@@ -36,7 +36,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       memory::MemoryPool* pool,
       folly::Executor* executor,
       int32_t requestDataSizesMaxWaitSec = 10,
-      bool skipRequestDataSizeWithSingleSource = false)
+      bool skipRequestDataSizeWithSingleSource = false,
+      bool lazyFetching = false)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
@@ -55,7 +56,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         minOutputBatchBytes_(
             std::max(static_cast<uint64_t>(1), minOutputBatchBytes)),
         skipRequestDataSizeWithSingleSource_(
-            skipRequestDataSizeWithSingleSource) {
+            skipRequestDataSizeWithSingleSource),
+        lazyFetching_(lazyFetching) {
     VELOX_CHECK_NOT_NULL(pool_);
     VELOX_CHECK_NOT_NULL(executor_);
     // NOTE: the executor is used to run async response callback from the
@@ -188,6 +190,11 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   // Enable single source exchange optimization query config flag
   // when there is only one exchange source.
   const bool skipRequestDataSizeWithSingleSource_;
+
+  // If true, defer fetching until next() is called.
+  // If false (default), start fetching data immediately when remote tasks are
+  // added.
+  const bool lazyFetching_;
 
   // Total number of bytes in flight.
   int64_t totalPendingBytes_{0};

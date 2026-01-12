@@ -790,6 +790,32 @@ TEST(FilterTest, doubleRange) {
   EXPECT_FALSE(filter->testDouble(1));
   EXPECT_TRUE(filter->testDouble(3));
   EXPECT_TRUE(filter->testDouble(100));
+
+  // Test DoubleRange filter with float batch (schema evolution slow path).
+  // When a double filter is applied to float data, it falls back to
+  // element-by-element testing instead of SIMD batch processing.
+  filter = betweenDouble(1.2, 3.4);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {1.0f, std::nanf("nan"), 3.4f, 3.1f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
+
+  filter = lessThanOrEqualDouble(1.2);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
+
+  filter = greaterThanDouble(1.2);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
 }
 
 TEST(FilterTest, floatRange) {

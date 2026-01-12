@@ -132,6 +132,20 @@ Array Functions
         SELECT array_min(ARRAY[{-1, -2, -3, nan()]); -- -1
         SELECT array_min(ARRAY[{infinity(), nan()]); -- Infinity
 
+.. function:: array_max_by(array(T), function(T, U)) -> T()
+
+    Applies the provided function to each element, and returns the element that gives the maximum value.
+    ``U`` can be any orderable type. ::
+
+        SELECT array_max_by(ARRAY ['a', 'bbb', 'cc'], x -> LENGTH(x)) -- 'bbb'
+
+.. function:: array_min_by(array(T), function(T, U)) -> T
+
+    Applies the provided function to each element, and returns the element that gives the minimum value.
+    ``U`` can be any orderable type. ::
+
+        SELECT array_min_by(ARRAY ['a', 'bbb', 'cc'], x -> LENGTH(x)) -- 'a'
+
 .. function:: array_normalize(array(E), E) -> array(E)
 
     Normalizes array ``x`` by dividing each element by the p-norm of the array. It is equivalent to ``TRANSFORM(array, v -> v / REDUCE(array, 0, (a, v) -> a + POW(ABS(v), p), a -> POW(a, 1 / p))``, but the reduce part is only executed once. Returns null if the array is null or there are null array elements. If ``p`` is 0, then the input array is returned. Only REAL and DOUBLE types are supported.

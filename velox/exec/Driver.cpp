@@ -96,7 +96,7 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
-const std::optional<TraceConfig>& DriverCtx::traceConfig() const {
+const std::optional<trace::TraceConfig>& DriverCtx::traceConfig() const {
   return task->traceConfig();
 }
 
@@ -281,6 +281,7 @@ RowVectorPtr Driver::next(
   ScopedDriverThreadContext scopedDriverThreadContext(self->driverCtx());
   std::shared_ptr<BlockingState> blockingState;
   RowVectorPtr result;
+
   const auto stop = runInternal(self, blockingState, result);
 
   if (blockingState != nullptr) {
@@ -460,6 +461,7 @@ StopReason Driver::runInternal(
     RowVectorPtr& result) {
   const auto now = getCurrentTimeMicro();
   const auto queuedTimeUs = now - queueTimeStartUs_;
+
   // Update the next operator's queueTime.
   StopReason stop =
       closed_ ? StopReason::kTerminate : task()->enter(state_, now);
@@ -569,9 +571,11 @@ StopReason Driver::runInternal(
               nextOp,
               curOperatorId_ + 1,
               kOpMethodNeedsInput);
+
           if (needsInput) {
             uint64_t resultBytes = 0;
             RowVectorPtr intermediateResult;
+
             withDeltaCpuWallTimer(op, &OperatorStats::getOutputTiming, [&]() {
               TestValue::adjust(
                   "facebook::velox::exec::Driver::runInternal::getOutput", op);
@@ -598,6 +602,7 @@ StopReason Driver::runInternal(
                       lockedStats->addInputVector(
                           resultBytes, intermediateResult->size());
                     }
+
                     nextOp->traceInput(intermediateResult);
                     TestValue::adjust(
                         "facebook::velox::exec::Driver::runInternal::addInput",
@@ -706,7 +711,7 @@ StopReason Driver::runInternal(
     }
   } catch (velox::VeloxException&) {
     task()->setError(std::current_exception());
-    // The CancelPoolGuard will close 'self' and remove from Task.
+    // The CancelGuard will close 'self' and remove from Task.
     return StopReason::kAlreadyTerminated;
   } catch (std::exception&) {
     task()->setError(std::current_exception());

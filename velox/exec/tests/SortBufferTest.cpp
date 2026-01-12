@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/SortBuffer.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -119,7 +120,7 @@ class SortBufferTest : public OperatorTestBase,
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
       memory::memoryManager()->addLeafPool("SortBufferTest");
 

@@ -17,13 +17,14 @@
 #include <gtest/gtest.h>
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/resources/GeometryTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/prestosql/types/BingTileType.h"
 
 using facebook::velox::functions::test::FunctionBaseTest;
 using namespace facebook::velox;
+using namespace facebook::velox::common::geospatial;
 
 class GeometryFunctionsTest : public FunctionBaseTest {
  public:
@@ -1251,12 +1252,10 @@ TEST_F(GeometryFunctionsTest, testStIsSimpleValid) {
       "MULTIPOLYGON (((18.6317421 49.9605785, 18.6318832 49.9607979, 18.6324683 49.9607312, 18.6332842 49.9605658, 18.6332003 49.9603557, 18.6339711 49.9602283, 18.6341994 49.9601905, 18.6343455 49.96016, 18.6344167 49.9601452, 18.6346696 49.9600919, 18.6349643 49.9600567, 18.6352271 49.9601455, 18.6354493 49.9600501, 18.6358024 49.9601071, 18.6358911 49.9600263, 18.6336542 49.9592453, 18.6334794 49.9591838, 18.6337483 49.9581339, 18.6335303 49.9580562, 18.6331284 49.9579122, 18.6324931 49.9576885, 18.6322503 49.9575998, 18.6321381 49.9581593, 18.6321172 49.9582692, 18.6324683 49.9583852, 18.6325255 49.9584004, 18.6327588 49.958489, 18.6324792 49.9588351, 18.6323941 49.9588049, 18.6323261 49.9587807, 18.6320354 49.9586789, 18.6319443 49.9592903, 18.6326731 49.9595648, 18.6331388 49.9594836, 18.6335981 49.959673, 18.6333065 49.9597934, 18.6328096 49.9600844, 18.6330209 49.9601348, 18.633424 49.9602597, 18.6332263 49.960317, 18.6315633 49.9597642, 18.6309331 49.9600741, 18.6317421 49.9605785)), ((18.6298591 49.9606201, 18.6298592 49.96062, 18.6298589 49.9606193, 18.6298591 49.9606201)))",
       true,
       true);
-  ASSERT_THROW(
-      assertStIsValidSimpleFunc(
-          "MULTIPOLYGON (((18.6317421 49.9605785, 18.6318832 49.9607979, 18.6324683 49.9607312, 18.6332842 49.9605658, 18.6332003 49.9603557, 18.6339711 49.9602283, 18.6341994 49.9601905, 18.6343455 49.96016, 18.6344167 49.9601452, 18.6346696 49.9600919, 18.6349643 49.9600567, 18.6352271 49.9601455, 18.6354493 49.9600501, 18.6358024 49.9601071, 18.6358911 49.9600263, 18.6336542 49.9592453, 18.6334794 49.9591838, 18.6337483 49.9581339, 18.6335303 49.9580562, 18.6331284 49.9579122, 18.6324931 49.9576885, 18.6322503 49.9575998, 18.6321381 49.9581593, 18.6321172 49.9582692, 18.6324683 49.9583852, 18.6325255 49.9584004, 18.6327588 49.958489, 18.6324792 49.9588351, 18.6323941 49.9588049, 18.6323261 49.9587807, 18.6320354 49.9586789, 18.6319443 49.9592903, 18.6326731 49.9595648, 18.6331388 49.9594836, 18.6335981 49.959673, 18.6333065 49.9597934, 18.6328096 49.9600844, 18.6330209 49.9601348, 18.633424 49.9602597, 18.6332263 49.960317, 18.6315633 49.9597642, 18.6309331 49.9600741, 18.6317421 49.9605785)), ((18.6298591 49.9606201, 18.6298592 49.96062, 18.6298592 49.96062, 18.6298591 49.9606201)))",
-          true,
-          true),
-      facebook::velox::VeloxUserError);
+  assertStIsValidSimpleFunc(
+      "MULTIPOLYGON (((18.6317421 49.9605785, 18.6318832 49.9607979, 18.6324683 49.9607312, 18.6332842 49.9605658, 18.6332003 49.9603557, 18.6339711 49.9602283, 18.6341994 49.9601905, 18.6343455 49.96016, 18.6344167 49.9601452, 18.6346696 49.9600919, 18.6349643 49.9600567, 18.6352271 49.9601455, 18.6354493 49.9600501, 18.6358024 49.9601071, 18.6358911 49.9600263, 18.6336542 49.9592453, 18.6334794 49.9591838, 18.6337483 49.9581339, 18.6335303 49.9580562, 18.6331284 49.9579122, 18.6324931 49.9576885, 18.6322503 49.9575998, 18.6321381 49.9581593, 18.6321172 49.9582692, 18.6324683 49.9583852, 18.6325255 49.9584004, 18.6327588 49.958489, 18.6324792 49.9588351, 18.6323941 49.9588049, 18.6323261 49.9587807, 18.6320354 49.9586789, 18.6319443 49.9592903, 18.6326731 49.9595648, 18.6331388 49.9594836, 18.6335981 49.959673, 18.6333065 49.9597934, 18.6328096 49.9600844, 18.6330209 49.9601348, 18.633424 49.9602597, 18.6332263 49.960317, 18.6315633 49.9597642, 18.6309331 49.9600741, 18.6317421 49.9605785)), ((18.6298591 49.9606201, 18.6298592 49.96062, 18.6298592 49.96062, 18.6298591 49.9606201)))",
+      false,
+      false);
 }
 
 TEST_F(GeometryFunctionsTest, testStArea) {
@@ -3268,39 +3267,27 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
   // Geometries at boundaries of tiles
   testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 1, {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+      fmt::format("POINT ({} 0)", kMaxLongitude), 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+      fmt::format("POINT (0 {})", kMinBingTileLatitude), 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 1, {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMinBingTileLatitude),
       1,
       {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       1,
       {{"0"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMaxBingTileLatitude),
       1,
       {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMinBingTileLatitude),
       1,
       {{"3"}});
   testGeometryToBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
@@ -3308,31 +3295,19 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
   testGeometryToBingTilesFunc("LINESTRING (0 -1, 0 -2)", 1, {{"3"}});
   testGeometryToBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMinLongitude, kMinLongitude),
       1,
       {{"0"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMinLongitude, kMinLongitude),
       1,
       {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"3"}});
 
@@ -3421,14 +3396,11 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
       8,
       {{"22200000"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 5, {{"20000"}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 5, {{"20000"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 5, {{"10000"}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 5, {{"10000"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       5,
       {{"00000"}});
 
@@ -3546,76 +3518,52 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   // Geometries at tile borders
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 0, {{""}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 0, {{""}});
+      fmt::format("POINT ({} 0)", kMaxLongitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 0, {{""}});
+      fmt::format("POINT (0 {})", kMinBingTileLatitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 0, {{""}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMinBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMaxBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMinBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 1, {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+      fmt::format("POINT ({} 0)", kMaxLongitude), 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+      fmt::format("POINT (0 {})", kMinBingTileLatitude), 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 1, {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMinBingTileLatitude),
       1,
       {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       1,
       {{"0"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMaxBingTileLatitude),
       1,
       {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMinBingTileLatitude),
       1,
       {{"3"}});
   testGeometryToDissolvedBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
@@ -3624,31 +3572,19 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   testGeometryToDissolvedBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
 
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMinLongitude, kMinLongitude),
       1,
       {{"0"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMinLongitude, kMinLongitude),
       1,
       {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"3"}});
 
@@ -4441,12 +4377,12 @@ TEST_F(GeometryFunctionsTest, testDegeneratePolygons) {
       "POLYGON ((1 2, 3 4, 5 7, 1 2))",
       "POLYGON ((1 2, 5 7, 3 4, 1 2))"); // note: this should be fine
 
-  // Single polygons with no area- should not reverse these
+  // Single polygons with zero area
   testDegeneratePolygonsFunc(
-      "POLYGON ((1 2, 5 6, 3 4, 1 2))", "POLYGON ((1 2, 5 6, 3 4, 1 2))");
+      "POLYGON ((1 2, 5 6, 3 4, 1 2))", "POLYGON ((1 2, 3 4, 5 6, 1 2))");
 
   testDegeneratePolygonsFunc(
-      "POLYGON ((1 2, 3 4, 5 6, 1 2))", "POLYGON ((1 2, 3 4, 5 6, 1 2))");
+      "POLYGON ((1 2, 3 4, 5 6, 1 2))", "POLYGON ((1 2, 5 6, 3 4, 1 2))");
 
   // Single polygons with interior rings- should canonicalize so any shells have
   // CW orientation and holes have CCW orientation.
@@ -4492,81 +4428,56 @@ TEST_F(GeometryFunctionsTest, testDegeneratePolygons) {
       "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
       "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
 
-  // MultiPolygons with zero-area rings. These need to fail because our
-  // serialization format holds MultiPolygons as single vectors that rely on
-  // orientation for determining shell start points.
+  // MultiPolygons with zero-area rings. These rings are considered CCW before
+  // and after rotation, and can cause deformed multipolygons. This is being
+  // included to reach bug parity with Java, but we should alter these tests
+  // once we are able to implement the correct behavior!
 
-  // Second polygon is zero area
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((1 1, 2 1, 2 2, 1 1)), ((1 1, 2 2, 3 3, 2 2, 1 1)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
-
-  // Single polygon with zero area
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((5 10, 25 30, 15 20, 5 10)))", ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc("MULTIPOLYGON (((1 1, 1 2, 1 3, 1 1)))", ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((1 1, 1 2, 1 3, 1 1)))",
+      "MULTIPOLYGON (((1 1, 1 3, 1 2, 1 1)))");
 
   // First polygon has CW shell and CCW hole, second polygon has CW shell and
   // zero-area hole
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))");
 
   // First polygon has CW shell and CCW hole, second polygon has zero-area shell
   // and CCW hole
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3), (0 0, 0 10, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
 
   // First polygon has CW shell and CCW hole, second polygon has CW shell
   // and zero-area hole
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))");
 
   // First polygon has CW shell and CCW hole, second polygon has zero-area shell
   // and zero-area hole
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 9 9, 14 14, 6 6)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3), (0 0, 0 10, 0 20, 0 0), (6 6, 9 9, 14 14, 6 6)))");
 
   // First polygon has zero-area shell and CCW hole, second polygon has CW shell
   // and CCW hole
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 0 15, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6))))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 0 15, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6))))",
+      "MULTIPOLYGON (((0 0, 0 15, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
 
   // First polygon has CW shell and zero-area hole, second polygon has CW shell
   // and CCW hole-
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
 
   // First polygon has zero-area shell and zero-area hole, second polygon has CW
   // shell and CCW hole
-  VELOX_ASSERT_USER_THROW(
-      testDegeneratePolygonsFunc(
-          "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
-          ""),
-      "Input MultiPolygon contains one or more zero-area rings.");
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
 }
 
 TEST_F(GeometryFunctionsTest, testStSphericalArea) {

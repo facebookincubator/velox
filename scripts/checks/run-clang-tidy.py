@@ -58,7 +58,7 @@ def git_changed_lines(commit):
 
 
 def check_output(output):
-    return re.match(r"^/.* warning: ", output)
+    return re.match(r"(^/.* warning: |^$)", output)
 
 
 def tidy(args):
