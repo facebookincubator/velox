@@ -109,13 +109,13 @@ CudfVector::CudfVector(
           size,
           std::vector<VectorPtr>(),
           std::nullopt),
-      table_{std::move(table)},
-      packedTable_{nullptr},
+      tableStorage_{std::move(table)},
       stream_{stream} {
-  auto [bytes, tableOut] = getTableSize(std::move(table_));
+  auto& tablePtr = std::get<std::unique_ptr<cudf::table>>(tableStorage_);
+  auto [bytes, tableOut] = getTableSize(std::move(tablePtr));
   flatSize_ = bytes;
-  table_ = std::move(tableOut);
-  tabView_ = table_->view();
+  tablePtr = std::move(tableOut);
+  tabView_ = tablePtr->view();
 }
 
 CudfVector::CudfVector(
@@ -131,27 +131,30 @@ CudfVector::CudfVector(
           size,
           std::vector<VectorPtr>(),
           std::nullopt),
-      table_{nullptr},
-      packedTable_{std::move(packedTable)},
-      tabView_{packedTable_->table},
+      tableStorage_{std::move(packedTable)},
       stream_{stream} {
+  auto& packedPtr = std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
+  tabView_ = packedPtr->table;
   // For packed table, flatSize is the size of the GPU data buffer
-  flatSize_ = packedTable_->data.gpu_data->size();
+  flatSize_ = packedPtr->data.gpu_data->size();
 }
 
 std::unique_ptr<cudf::table> CudfVector::release() {
   flatSize_ = 0;
-  if (table_) {
+  if (auto* tablePtr =
+          std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
     // Constructed from owned table - just move it out
-    return std::move(table_);
+    return std::move(*tablePtr);
   }
   // Constructed from packed_table - materialize a table from the view.
   // This copies the data since the view references the packed buffer.
+  auto& packedPtr =
+      std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
   auto mr = cudf::get_current_device_resource_ref();
   auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
   stream_.synchronize();
   // Clear the packed table since we've materialized
-  packedTable_.reset();
+  packedPtr.reset();
   return materializedTable;
 }
 

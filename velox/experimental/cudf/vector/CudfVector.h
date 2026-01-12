@@ -26,6 +26,7 @@
 
 #include <memory>
 #include <utility>
+#include <variant>
 
 namespace facebook::velox::cudf_velox {
 
@@ -70,13 +71,12 @@ class CudfVector : public RowVector {
   uint64_t estimateFlatSize() const override;
 
  private:
-  // Owned table - set when constructed from cudf::table, or materialized
-  // on release() when constructed from packed_table.
-  std::unique_ptr<cudf::table> table_;
-
-  // Packed table - set when constructed from packed_table.
-  // Keeps the packed data alive while tabView_ references it.
-  std::unique_ptr<cudf::packed_table> packedTable_;
+  // Storage for either an owned table or packed table.
+  // Only one is active at a time - using variant enforces this at compile time.
+  using TableStorage = std::variant<
+      std::unique_ptr<cudf::table>,
+      std::unique_ptr<cudf::packed_table>>;
+  TableStorage tableStorage_;
 
   // Table view - always valid, points to either table_->view() or
   // packedTable_->table.
