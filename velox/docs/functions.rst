@@ -21,6 +21,8 @@ Presto Functions
     functions/presto/aggregate
     functions/presto/window
     functions/presto/hyperloglog
+    functions/presto/khyperloglog
+    functions/presto/setdigest
     functions/presto/tdigest
     functions/presto/qdigest
     functions/presto/geospatial
