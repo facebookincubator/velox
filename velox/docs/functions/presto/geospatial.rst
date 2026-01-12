@@ -550,6 +550,16 @@ for more details.
 
     Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.
 
+.. function:: bing_tiles_around(latitude, longitude, zoom_level) -> array(BingTile)
+
+    Returns a collection of Bing tiles that surround the point specified
+    by the latitude and longitude arguments at a given zoom level.
+
+.. function:: bing_tiles_around(latitude, longitude, zoom_level, radius_in_km) -> array(BingTile)
+
+    Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
+    radius in km around a specified (latitude, longitude) point.
+
 .. function:: bing_tile_coordinates(tile: BingTile) -> coords: row(integer,integer)
 
     Returns the ``x``, ``y`` coordinates of a given Bing tile as ``row(x, y)``.
