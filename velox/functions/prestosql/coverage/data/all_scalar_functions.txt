@@ -102,7 +102,6 @@ features
 filter
 find_first
 find_first_index
-filter
 flatten
 flatten_geometry_collections
 floor
