@@ -22,6 +22,7 @@ velox_add_library(
   FlatVector.cpp
   LazyVector.cpp
   MapConcat.cpp
+  PartitionedVector.cpp
   SelectivityVector.cpp
   SequenceVector.cpp
   SimpleVector.cpp

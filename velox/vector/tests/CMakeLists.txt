@@ -25,6 +25,7 @@ add_executable(
   LazyVectorTest.cpp
   MapConcatTest.cpp
   MayHaveNullsRecursiveTest.cpp
+  PartitionedVectorTest.cpp
   SelectivityVectorTest.cpp
   StringVectorBufferTest.cpp
   VariantToVectorTest.cpp
