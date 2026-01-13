@@ -222,76 +222,156 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     :widths: auto
     :class: coverage
 
-    =========================================  =========================================  =========================================  =========================================  =========================================  ==  =========================================  ==  =========================================
-    Scalar Functions                                                                                                                                                                                                           Aggregate Functions                            Window Functions
-    =====================================================================================================================================================================================================================  ==  =========================================  ==  =========================================
-    :spark:func:`abs`                          count_if                                   inline                                     nvl                                        :spark:func:`sqrt`                             any                                            cume_dist
-    :spark:func:`acos`                         count_min_sketch                           inline_outer                               nvl2                                       stack                                          approx_count_distinct                          :spark:func:`dense_rank`
-    :spark:func:`acosh`                        covar_pop                                  input_file_block_length                    octet_length                               std                                            :spark:func:`approx_percentile`                first_value
-    :spark:func:`add_months`                   covar_samp                                 input_file_block_start                     or                                         stddev                                         array_agg                                      lag
-    :spark:func:`aggregate`                    :spark:func:`crc32`                        input_file_name                            :spark:func:`overlay`                      stddev_pop                                     :spark:func:`avg`                              last_value
-    and                                        cume_dist                                  :spark:func:`instr`                        parse_url                                  stddev_samp                                    bit_and                                        lead
-    any                                        current_catalog                            int                                        percent_rank                               :spark:func:`str_to_map`                       bit_or                                         :spark:func:`nth_value`
-    approx_count_distinct                      current_database                           :spark:func:`isnan`                        percentile                                 string                                         :spark:func:`bit_xor`                          :spark:func:`ntile`
-    approx_percentile                          current_date                               :spark:func:`isnotnull`                    percentile_approx                          struct                                         bool_and                                       percent_rank
-    :spark:func:`array`                        current_timestamp                          :spark:func:`isnull`                       pi                                         substr                                         bool_or                                        :spark:func:`rank`
-    :spark:func:`array_contains`               current_timezone                           java_method                                :spark:func:`pmod`                         :spark:func:`substring`                        :spark:func:`collect_list`                     :spark:func:`row_number`
-    :spark:func:`array_distinct`               current_user                               :spark:func:`json_array_length`            posexplode                                 :spark:func:`substring_index`                  :spark:func:`collect_set`
-    :spark:func:`array_except`                 date                                       :spark:func:`json_object_keys`             posexplode_outer                           sum                                            :spark:func:`corr`
-    :spark:func:`array_intersect`              :spark:func:`date_add`                     json_tuple                                 position                                   :spark:func:`tan`                              count
-    :spark:func:`array_join`                   :spark:func:`date_format`                  kurtosis                                   positive                                   :spark:func:`tanh`                             count_if
-    :spark:func:`array_max`                    :spark:func:`date_from_unix_date`          lag                                        pow                                        timestamp                                      count_min_sketch
-    :spark:func:`array_min`                    date_part                                  last                                       :spark:func:`power`                        :spark:func:`timestamp_micros`                 covar_pop
-    :spark:func:`array_position`               :spark:func:`date_sub`                     :spark:func:`last_day`                     printf                                     :spark:func:`timestamp_millis`                 :spark:func:`covar_samp`
-    :spark:func:`array_remove`                 :spark:func:`date_trunc`                   last_value                                 :spark:func:`quarter`                      :spark:func:`timestamp_seconds`                every
-    :spark:func:`array_repeat`                 :spark:func:`datediff`                     lcase                                      :spark:func:`radians`                      tinyint                                        :spark:func:`first`
-    :spark:func:`array_sort`                   :spark:func:`day`                          lead                                       :spark:func:`raise_error`                  to_csv                                         first_value
-    :spark:func:`array_union`                  :spark:func:`dayofmonth`                   :spark:func:`least`                        :spark:func:`rand`                         to_date                                        grouping
-    arrays_overlap                             :spark:func:`dayofweek`                    :spark:func:`left`                         :spark:func:`randn`                        :spark:func:`to_json`                          grouping_id
-    :spark:func:`arrays_zip`                   :spark:func:`dayofyear`                    :spark:func:`length`                       :spark:func:`random`                       to_timestamp                                   histogram_numeric
-    :spark:func:`ascii`                        decimal                                    :spark:func:`levenshtein`                  range                                      :spark:func:`to_unix_timestamp`                :spark:func:`kurtosis`
-    :spark:func:`asin`                         decode                                     :spark:func:`like`                         rank                                       :spark:func:`to_utc_timestamp`                 :spark:func:`last`
-    :spark:func:`asinh`                        :spark:func:`degrees`                      :spark:func:`ln`                           reflect                                    :spark:func:`transform`                        last_value
-    assert_true                                dense_rank                                 :spark:func:`locate`                       regexp                                     transform_keys                                 :spark:func:`max`
-    :spark:func:`atan`                         :spark:func:`div`                          :spark:func:`log`                          :spark:func:`regexp_extract`               :spark:func:`transform_values`                 :spark:func:`max_by`
-    :spark:func:`atan2`                        double                                     :spark:func:`log10`                        :spark:func:`regexp_extract_all`           :spark:func:`translate`                        mean
-    :spark:func:`atanh`                        e                                          :spark:func:`log1p`                        regexp_like                                :spark:func:`trim`                             :spark:func:`min`
-    avg                                        :spark:func:`element_at`                   :spark:func:`log2`                         :spark:func:`regexp_replace`               :spark:func:`trunc`                            :spark:func:`min_by`
-    :spark:func:`base64`                       elt                                        :spark:func:`lower`                        :spark:func:`repeat`                       try_add                                        percentile
-    :spark:func:`between`                      encode                                     :spark:func:`lpad`                         :spark:func:`replace`                      try_divide                                     percentile_approx
-    bigint                                     every                                      :spark:func:`ltrim`                        :spark:func:`reverse`                      typeof                                         regr_avgx
-    :spark:func:`bin`                          :spark:func:`exists`                       :spark:func:`make_date`                    right                                      ucase                                          regr_avgy
-    binary                                     :spark:func:`exp`                          make_dt_interval                           :spark:func:`rint`                         :spark:func:`unbase64`                         regr_count
-    bit_and                                    explode                                    make_interval                              :spark:func:`rlike`                        :spark:func:`unhex`                            regr_r2
-    :spark:func:`bit_count`                    explode_outer                              :spark:func:`make_timestamp`               :spark:func:`round`                        :spark:func:`unix_date`                        :spark:func:`skewness`
-    :spark:func:`bit_get`                      :spark:func:`expm1`                        :spark:func:`make_ym_interval`             row_number                                 :spark:func:`unix_micros`                      some
-    :spark:func:`bit_length`                   extract                                    :spark:func:`map`                          :spark:func:`rpad`                         :spark:func:`unix_millis`                      std
-    bit_or                                     :spark:func:`factorial`                    :spark:func:`map_concat`                   :spark:func:`rtrim`                        :spark:func:`unix_seconds`                     :spark:func:`stddev`
-    bit_xor                                    :spark:func:`filter`                       :spark:func:`map_entries`                  schema_of_csv                              :spark:func:`unix_timestamp`                   stddev_pop
-    bool_and                                   :spark:func:`find_in_set`                  :spark:func:`map_filter`                   schema_of_json                             :spark:func:`upper`                            :spark:func:`stddev_samp`
-    bool_or                                    first                                      :spark:func:`map_from_arrays`              :spark:func:`second`                       :spark:func:`uuid`                             :spark:func:`sum`
-    boolean                                    first_value                                :spark:func:`map_from_entries`             sentences                                  var_pop                                        try_avg
-    bround                                     :spark:func:`flatten`                      :spark:func:`map_keys`                     :spark:func:`sequence`                     var_samp                                       try_sum
-    btrim                                      float                                      :spark:func:`map_values`                   session_window                             variance                                       var_pop
-    cardinality                                :spark:func:`floor`                        :spark:func:`map_zip_with`                 sha                                        version                                        :spark:func:`var_samp`
-    case                                       :spark:func:`forall`                       max                                        :spark:func:`sha1`                         :spark:func:`weekday`                          :spark:func:`variance`
-    cast                                       :spark:func:`format_number`                max_by                                     :spark:func:`sha2`                         weekofyear
-    :spark:func:`cbrt`                         format_string                              :spark:func:`md5`                          :spark:func:`shiftleft`                    when
-    :spark:func:`ceil`                         from_csv                                   mean                                       :spark:func:`shiftright`                   :spark:func:`width_bucket`
-    ceiling                                    from_json                                  min                                        shiftrightunsigned                         window
-    char                                       :spark:func:`from_unixtime`                min_by                                     :spark:func:`shuffle`                      xpath
-    char_length                                :spark:func:`from_utc_timestamp`           :spark:func:`minute`                       :spark:func:`sign`                         xpath_boolean
-    character_length                           :spark:func:`get_json_object`              mod                                        signum                                     xpath_double
-    :spark:func:`chr`                          getbit                                     :spark:func:`monotonically_increasing_id`  :spark:func:`sin`                          xpath_float
-    coalesce                                   :spark:func:`greatest`                     :spark:func:`month`                        :spark:func:`sinh`                         xpath_int
-    collect_list                               grouping                                   :spark:func:`months_between`               :spark:func:`size`                         xpath_long
-    collect_set                                grouping_id                                named_struct                               skewness                                   xpath_number
-    :spark:func:`concat`                       :spark:func:`hash`                         nanvl                                      :spark:func:`slice`                        xpath_short
-    concat_ws                                  :spark:func:`hex`                          negative                                   smallint                                   xpath_string
-    :spark:func:`conv`                         :spark:func:`hour`                         :spark:func:`next_day`                     some                                       :spark:func:`xxhash64`
-    corr                                       :spark:func:`hypot`                        :spark:func:`not`                          :spark:func:`sort_array`                   :spark:func:`year`
-    :spark:func:`cos`                          if                                         now                                        :spark:func:`soundex`                      :spark:func:`zip_with`
-    :spark:func:`cosh`                         ifnull                                     nth_value                                  space
-    :spark:func:`cot`                          :spark:func:`in`                           ntile                                      :spark:func:`spark_partition_id`
-    count                                      :spark:func:`initcap`                      nullif                                     :spark:func:`split`
-    =========================================  =========================================  =========================================  =========================================  =========================================  ==  =========================================  ==  =========================================
+    =================================================  =================================================  =================================================  ==  =================================================  ==  =================================================
+    Scalar Functions                                                                                                                                             Aggregate Functions                                    Window Functions
+    =======================================================================================================================================================  ==  =================================================  ==  =================================================
+    :func:`abs`                                        :func:`hash_counts`                                :func:`s2_cell_from_token`                             :func:`any_value`                                      :func:`cume_dist`
+    :func:`acos`                                       :func:`hmac_md5`                                   :func:`s2_cell_level`                                  :func:`approx_distinct`                                :func:`dense_rank`
+    :func:`all_keys_match`                             :func:`hmac_sha1`                                  :func:`s2_cell_parent`                                 :func:`approx_most_frequent`                           :func:`first_value`
+    :func:`all_match`                                  :func:`hmac_sha256`                                :func:`s2_cell_to_token`                               :func:`approx_percentile`                              :func:`lag`
+    :func:`any_keys_match`                             :func:`hmac_sha512`                                :func:`s2_cells`                                       :func:`approx_set`                                     :func:`last_value`
+    :func:`any_match`                                  :func:`hour`                                       :func:`scale_qdigest`                                  :func:`approx_winsorized_mean`                         :func:`lead`
+    :func:`any_values_match`                           :func:`infinity`                                   :func:`scale_tdigest`                                  :func:`arbitrary`                                      :func:`nth_value`
+    :func:`array_average`                              :func:`intersection_cardinality`                   :func:`second`                                         :func:`array_agg`                                      :func:`ntile`
+    :func:`array_constructor`                          :func:`inverse_beta_cdf`                           :func:`secure_rand`                                    :func:`avg`                                            :func:`percent_rank`
+    :func:`array_cum_sum`                              :func:`inverse_binomial_cdf`                       :func:`secure_random`                                  :func:`bitwise_and_agg`                                :func:`rank`
+    :func:`array_distinct`                             :func:`inverse_cauchy_cdf`                         :func:`sequence`                                       :func:`bitwise_or_agg`                                 :func:`row_number`
+    :func:`array_duplicates`                           :func:`inverse_chi_squared_cdf`                    :func:`sha1`                                           :func:`bitwise_xor_agg`
+    :func:`array_except`                               :func:`inverse_f_cdf`                              :func:`sha256`                                         :func:`bool_and`
+    :func:`array_frequency`                            :func:`inverse_gamma_cdf`                          :func:`sha512`                                         :func:`bool_or`
+    :func:`array_has_duplicates`                       :func:`inverse_laplace_cdf`                        :func:`shuffle`                                        :func:`checksum`
+    :func:`array_intersect`                            :func:`inverse_normal_cdf`                         :func:`sign`                                           :func:`classification_fall_out`
+    :func:`array_join`                                 :func:`inverse_poisson_cdf`                        :func:`simplify_geometry`                              :func:`classification_miss_rate`
+    :func:`array_max`                                  :func:`inverse_t_cdf`                              :func:`sin`                                            :func:`classification_precision`
+    :func:`array_max_by`                               :func:`inverse_weibull_cdf`                        :func:`slice`                                          :func:`classification_recall`
+    :func:`array_min`                                  :func:`ip_prefix`                                  :func:`split`                                          :func:`classification_thresholds`
+    :func:`array_min_by`                               :func:`ip_prefix_collapse`                         :func:`split_part`                                     :func:`convex_hull_agg`
+    :func:`array_normalize`                            :func:`ip_prefix_masklen`                          :func:`split_to_map`                                   :func:`corr`
+    :func:`array_position`                             :func:`ip_prefix_subnets`                          :func:`split_to_multimap`                              :func:`count`
+    :func:`array_remove`                               :func:`ip_subnet_max`                              :func:`spooky_hash_v2_32`                              :func:`count_if`
+    :func:`array_sort`                                 :func:`ip_subnet_min`                              :func:`spooky_hash_v2_64`                              :func:`covar_pop`
+    :func:`array_sort_desc`                            :func:`ip_subnet_range`                            :func:`sqrt`                                           :func:`covar_samp`
+    :func:`array_split_into_chunks`                    :func:`ip_version`                                 :func:`st_area`                                        :func:`entropy`
+    :func:`array_subset`                               :func:`is_finite`                                  :func:`st_asbinary`                                    :func:`every`
+    :func:`array_sum`                                  :func:`is_infinite`                                :func:`st_astext`                                      :func:`geometric_mean`
+    :func:`array_sum_propagate_element_null`           :func:`is_json_scalar`                             :func:`st_boundary`                                    :func:`geometry_union_agg`
+    :func:`array_top_n`                                :func:`is_nan`                                     :func:`st_buffer`                                      :func:`histogram`
+    :func:`array_union`                                :func:`is_null`                                    :func:`st_centroid`                                    :func:`khyperloglog_agg`
+    :func:`arrays_overlap`                             :func:`is_private_ip`                              :func:`st_contains`                                    :func:`kurtosis`
+    :func:`asin`                                       :func:`is_subnet_of`                               :func:`st_convexhull`                                  :func:`make_set_digest`
+    :func:`at_timezone`                                :func:`jaccard_index`                              :func:`st_coorddim`                                    :func:`map_agg`
+    :func:`atan`                                       :func:`jarowinkler_similarity`                     :func:`st_crosses`                                     :func:`map_union`
+    :func:`atan2`                                      :func:`json_array_contains`                        :func:`st_difference`                                  :func:`map_union_sum`
+    :func:`beta_cdf`                                   :func:`json_array_get`                             :func:`st_dimension`                                   :func:`max`
+    :func:`between`                                    :func:`json_array_length`                          :func:`st_disjoint`                                    :func:`max_by`
+    :func:`bing_tile`                                  :func:`json_extract`                               :func:`st_distance`                                    :func:`max_data_size_for_stats`
+    :func:`bing_tile_at`                               :func:`json_extract_scalar`                        :func:`st_endpoint`                                    :func:`merge`
+    :func:`bing_tile_children`                         :func:`json_format`                                :func:`st_envelope`                                    :func:`merge_set_digest`
+    :func:`bing_tile_coordinates`                      :func:`json_parse`                                 :func:`st_envelopeaspts`                               :func:`min`
+    :func:`bing_tile_parent`                           :func:`json_size`                                  :func:`st_equals`                                      :func:`min_by`
+    :func:`bing_tile_polygon`                          :func:`key_sampling_percent`                       :func:`st_exteriorring`                                :func:`multimap_agg`
+    :func:`bing_tile_quadkey`                          :func:`l2_norm`                                    :func:`st_geometries`                                  :func:`noisy_approx_distinct_sfm`
+    :func:`bing_tile_zoom_level`                       :func:`laplace_cdf`                                :func:`st_geometryfromtext`                            :func:`noisy_approx_set_sfm`
+    :func:`bing_tiles_around`                          :func:`last_day_of_month`                          :func:`st_geometryn`                                   :func:`noisy_approx_set_sfm_from_index_and_zeros`
+    :func:`binomial_cdf`                               :func:`least`                                      :func:`st_geometrytype`                                :func:`noisy_avg_gaussian`
+    :func:`bit_count`                                  :func:`length`                                     :func:`st_geomfrombinary`                              :func:`noisy_count_gaussian`
+    :func:`bit_length`                                 :func:`levenshtein_distance`                       :func:`st_interiorringn`                               :func:`noisy_count_if_gaussian`
+    :func:`bitwise_and`                                :func:`like`                                       :func:`st_interiorrings`                               :func:`noisy_sum_gaussian`
+    :func:`bitwise_arithmetic_shift_right`             :func:`line_interpolate_point`                     :func:`st_intersection`                                :func:`numeric_histogram`
+    :func:`bitwise_left_shift`                         :func:`line_locate_point`                          :func:`st_intersects`                                  :func:`qdigest_agg`
+    :func:`bitwise_logical_shift_right`                :func:`ln`                                         :func:`st_isclosed`                                    :func:`reduce_agg`
+    :func:`bitwise_not`                                :func:`localtime`                                  :func:`st_isempty`                                     :func:`regr_avgx`
+    :func:`bitwise_or`                                 :func:`localtimestamp`                             :func:`st_isring`                                      :func:`regr_avgy`
+    :func:`bitwise_right_shift`                        :func:`log10`                                      :func:`st_issimple`                                    :func:`regr_count`
+    :func:`bitwise_right_shift_arithmetic`             :func:`log2`                                       :func:`st_isvalid`                                     :func:`regr_intercept`
+    :func:`bitwise_shift_left`                         :func:`longest_common_prefix`                      :func:`st_length`                                      :func:`regr_r2`
+    :func:`bitwise_xor`                                :func:`lower`                                      :func:`st_linefromtext`                                :func:`regr_slope`
+    :func:`cardinality`                                :func:`lpad`                                       :func:`st_linestring`                                  :func:`regr_sxx`
+    :func:`cauchy_cdf`                                 :func:`lt`                                         :func:`st_multipoint`                                  :func:`regr_sxy`
+    :func:`cbrt`                                       :func:`lte`                                        :func:`st_numgeometries`                               :func:`regr_syy`
+    :func:`ceil`                                       :func:`ltrim`                                      :func:`st_numinteriorring`                             :func:`reservoir_sample`
+    :func:`ceiling`                                    :func:`map`                                        :func:`st_numpoints`                                   :func:`set_agg`
+    :func:`chi_squared_cdf`                            :func:`map_append`                                 :func:`st_overlaps`                                    :func:`set_union`
+    :func:`chr`                                        :func:`map_concat`                                 :func:`st_point`                                       :func:`skewness`
+    :func:`clamp`                                      :func:`map_entries`                                :func:`st_pointn`                                      :func:`stddev`
+    :func:`codepoint`                                  :func:`map_except`                                 :func:`st_points`                                      :func:`stddev_pop`
+    :func:`combinations`                               :func:`map_filter`                                 :func:`st_polygon`                                     :func:`stddev_samp`
+    :func:`combine_hash_internal`                      :func:`map_from_entries`                           :func:`st_relate`                                      :func:`sum`
+    :func:`concat`                                     :func:`map_intersect`                              :func:`st_startpoint`                                  :func:`sum_data_size_for_stats`
+    :func:`construct_tdigest`                          :func:`map_key_exists`                             :func:`st_symdifference`                               :func:`tdigest_agg`
+    :func:`contains`                                   :func:`map_keys`                                   :func:`st_touches`                                     :func:`var_pop`
+    :func:`cos`                                        :func:`map_keys_by_top_n_values`                   :func:`st_union`                                       :func:`var_samp`
+    :func:`cosh`                                       :func:`map_keys_overlap`                           :func:`st_within`                                      :func:`variance`
+    :func:`cosine_similarity`                          :func:`map_normalize`                              :func:`st_x`                                           :func:`vector_sum`
+    :func:`crc32`                                      :func:`map_remove_null_values`                     :func:`st_xmax`
+    :func:`current_date`                               :func:`map_subset`                                 :func:`st_xmin`
+    :func:`current_time`                               :func:`map_subset_key_in_range`                    :func:`st_y`
+    :func:`current_timestamp`                          :func:`map_top_n`                                  :func:`st_ymax`
+    :func:`current_timezone`                           :func:`map_top_n_keys`                             :func:`st_ymin`
+    :func:`date`                                       :func:`map_top_n_values`                           :func:`starts_with`
+    :func:`date_add`                                   :func:`map_trim_values`                            :func:`strpos`
+    :func:`date_diff`                                  :func:`map_update`                                 :func:`strrpos`
+    :func:`date_format`                                :func:`map_values`                                 :func:`subscript`
+    :func:`date_parse`                                 :func:`map_values_all_match`                       :func:`substr`
+    :func:`date_trunc`                                 :func:`map_values_any_match`                       :func:`substring`
+    :func:`day`                                        :func:`map_values_in_range`                        :func:`t_cdf`
+    :func:`day_of_month`                               :func:`map_values_none_match`                      :func:`tan`
+    :func:`day_of_week`                                :func:`map_zip_with`                               :func:`tanh`
+    :func:`day_of_year`                                :func:`md5`                                        :func:`timezone_hour`
+    :func:`degrees`                                    :func:`merge_hll`                                  :func:`timezone_minute`
+    :func:`destructure_tdigest`                        :func:`merge_khll`                                 :func:`to_base`
+    :func:`distinct_from`                              :func:`merge_sfm`                                  :func:`to_base64`
+    :func:`divide`                                     :func:`merge_tdigest`                              :func:`to_base64url`
+    :func:`dot_product`                                :func:`millisecond`                                :func:`to_big_endian_32`
+    :func:`dow`                                        :func:`minus`                                      :func:`to_big_endian_64`
+    :func:`doy`                                        :func:`minute`                                     :func:`to_geometry`
+    :func:`e`                                          :func:`mod`                                        :func:`to_hex`
+    :func:`element_at`                                 :func:`month`                                      :func:`to_ieee754_32`
+    :func:`empty_approx_set`                           :func:`multimap_from_entries`                      :func:`to_ieee754_64`
+    :func:`ends_with`                                  :func:`multiply`                                   :func:`to_iso8601`
+    :func:`enum_key`                                   :func:`murmur3_x64_128`                            :func:`to_milliseconds`
+    :func:`eq`                                         :func:`nan`                                        :func:`to_spherical_geography`
+    :func:`exp`                                        :func:`negate`                                     :func:`to_unixtime`
+    :func:`expand_envelope`                            :func:`neq`                                        :func:`to_utf8`
+    :func:`f_cdf`                                      :func:`ngrams`                                     :func:`trail`
+    :func:`fail`                                       :func:`no_keys_match`                              :func:`transform`
+    :func:`filter`                                     :func:`no_values_match`                            :func:`transform_keys`
+    :func:`find_first`                                 :func:`noisy_empty_approx_set_sfm`                 :func:`transform_values`
+    :func:`find_first_index`                           :func:`none_match`                                 :func:`transform_with_index`
+    :func:`flatten`                                    :func:`normal_cdf`                                 :func:`trim`
+    :func:`flatten_geometry_collections`               :func:`normalize`                                  :func:`trim_array`
+    :func:`floor`                                      :func:`now`                                        :func:`trimmed_mean`
+    :func:`fnv1_32`                                    :func:`parse_datetime`                             :func:`truncate`
+    :func:`fnv1_64`                                    :func:`parse_duration`                             :func:`typeof`
+    :func:`fnv1a_32`                                   :func:`parse_presto_data_size`                     :func:`uniqueness_distribution`
+    :func:`fnv1a_64`                                   :func:`pi`                                         :func:`upper`
+    :func:`format_datetime`                            :func:`plus`                                       :func:`url_decode`
+    :func:`from_base`                                  :func:`pmod`                                       :func:`url_encode`
+    :func:`from_base32`                                :func:`poisson_cdf`                                :func:`url_extract_fragment`
+    :func:`from_base64`                                :func:`pow`                                        :func:`url_extract_host`
+    :func:`from_base64url`                             :func:`power`                                      :func:`url_extract_parameter`
+    :func:`from_big_endian_32`                         :func:`quantile_at_value`                          :func:`url_extract_path`
+    :func:`from_big_endian_64`                         :func:`quantiles_at_values`                        :func:`url_extract_port`
+    :func:`from_hex`                                   :func:`quarter`                                    :func:`url_extract_protocol`
+    :func:`from_ieee754_32`                            :func:`radians`                                    :func:`url_extract_query`
+    :func:`from_ieee754_64`                            :func:`rand`                                       :func:`uuid`
+    :func:`from_iso8601_date`                          :func:`random`                                     :func:`value_at_quantile`
+    :func:`from_iso8601_timestamp`                     :func:`reduce`                                     :func:`values_at_quantiles`
+    :func:`from_unixtime`                              :func:`regexp_extract`                             :func:`week`
+    :func:`from_utf8`                                  :func:`regexp_extract_all`                         :func:`week_of_year`
+    :func:`gamma_cdf`                                  :func:`regexp_like`                                :func:`weibull_cdf`
+    :func:`geometry_as_geojson`                        :func:`regexp_replace`                             :func:`width_bucket`
+    :func:`geometry_from_geojson`                      :func:`regexp_split`                               :func:`wilson_interval_lower`
+    :func:`geometry_invalid_reason`                    :func:`reidentification_potential`                 :func:`wilson_interval_upper`
+    :func:`geometry_nearest_points`                    :func:`remap_keys`                                 :func:`winsorized_mean`
+    :func:`geometry_to_bing_tiles`                     :func:`remove_nulls`                               :func:`word_stem`
+    :func:`geometry_to_dissolved_bing_tiles`           :func:`repeat`                                     :func:`xxhash128`
+    :func:`geometry_union`                             :func:`replace`                                    :func:`xxhash64`
+    :func:`google_polyline_decode`                     :func:`replace_first`                              :func:`xxhash64_internal`
+    :func:`google_polyline_encode`                     :func:`reverse`                                    :func:`year`
+    :func:`great_circle_distance`                      :func:`round`                                      :func:`year_of_week`
+    :func:`greatest`                                   :func:`rpad`                                       :func:`yow`
+    :func:`gt`                                         :func:`rtrim`                                      :func:`zip`
+    :func:`gte`                                        :func:`s2_cell_area_sq_km`                         :func:`zip_with`
+    :func:`hamming_distance`                           :func:`s2_cell_contains`
+    =================================================  =================================================  =================================================  ==  =================================================  ==  =================================================
