@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <cstring>
+
+#include <folly/Likely.h>
+
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
@@ -292,9 +296,9 @@ struct GetJsonObjectFunction {
     const char* end = json + size;
     const char* pos = json;
 
-    while ((pos = static_cast<const char*>(memchr(
+    while ((pos = static_cast<const char*>(std::memchr(
                 pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
-      size_t remaining = static_cast<size_t>(end - pos);
+      const auto remaining = static_cast<size_t>(end - pos);
       if (FOLLY_UNLIKELY(remaining < 2)) {
         return false; // Incomplete escape at end, let parser handle it.
       }
@@ -335,7 +339,7 @@ struct GetJsonObjectFunction {
 
   static FOLLY_ALWAYS_INLINE bool isHexDigit(char c) {
     auto uc = static_cast<unsigned char>(c);
-    return (uc - '0' < 10u) || ((uc | 0x20) - 'a' < 6u);
+    return (uc - '0' < 10U) || ((uc | 0x20) - 'a' < 6U);
   }
 
   // Used for constant json path.
