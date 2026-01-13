@@ -154,7 +154,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
           resultOffset,
           result);
     } else if (frameMetadata.incrementalAggregation) {
-      vector_size_t startRow;
+      vector_size_t startRow = 0;
       if (frameMetadata.usePreviousAggregate) {
         // If incremental aggregation can be resumed from the previous block,
         // then the argument vectors also can be populated from the previous
@@ -347,6 +347,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       aggregateInitialized_ = true;
 
       // Process in batches to prevent memory explosion for large partitions.
+      // NOLINTNEXTLINE(altera-id-dependent-backward-branch)
       for (vector_size_t batchStart = firstRow; batchStart <= lastRow;
            batchStart += maxBatchSize_) {
         auto batchEnd = std::min(batchStart + maxBatchSize_ - 1, lastRow);
