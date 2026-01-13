@@ -161,6 +161,18 @@ for input.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="dayname">
+<span class="sig-name descname"><span class="pre">dayname</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#dayname" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the three-letter abbreviated day name from the given date (Sun, Mon, Tue, Wed, Thu, Fri, Sat).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">dayname</span><span class="p">(</span><span class="s1">&#39;2009-07-30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Thu&#39;</span>
+<span class="n">SELECT</span> <span class="n">dayname</span><span class="p">(</span><span class="s1">&#39;2023-08-20&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Sun&#39;</span>
+<span class="n">SELECT</span> <span class="n">dayname</span><span class="p">(</span><span class="s1">&#39;2023-08-21&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Mon&#39;</span>
+<span class="n">SELECT</span> <span class="n">dayname</span><span class="p">(</span><span class="s1">&#39;1582-10-15&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Fri&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="dayofmonth">
 <span class="sig-name descname"><span class="pre">dayofmonth</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofmonth" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the day of month of the date.</p>
@@ -698,6 +710,7 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#date_sub"><code class="docutils literal notranslate"><span class="pre">date_sub()</span></code></a></li>
 <li><a class="reference internal" href="#date_trunc"><code class="docutils literal notranslate"><span class="pre">date_trunc()</span></code></a></li>
 <li><a class="reference internal" href="#datediff"><code class="docutils literal notranslate"><span class="pre">datediff()</span></code></a></li>
+<li><a class="reference internal" href="#dayname"><code class="docutils literal notranslate"><span class="pre">dayname()</span></code></a></li>
 <li><a class="reference internal" href="#dayofmonth"><code class="docutils literal notranslate"><span class="pre">dayofmonth()</span></code></a></li>
 <li><a class="reference internal" href="#dayofyear"><code class="docutils literal notranslate"><span class="pre">dayofyear()</span></code></a></li>
 <li><a class="reference internal" href="#dayofweek"><code class="docutils literal notranslate"><span class="pre">dayofweek()</span></code></a></li>
