@@ -323,7 +323,7 @@ Accessors
 .. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
 
     Returns the point value that is the mathematical centroid of ``geometry``.
-    Empty geometry inputs result in empty output.
+    Empty geometry inputs result in null output.
 
 .. function:: ST_Centroid(SphericalGeography) -> Point
 
