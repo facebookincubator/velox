@@ -185,17 +185,8 @@ RowVectorPtr TableScan::getOutput() {
     VELOX_CHECK(!hasDrained());
 
     const auto estimatedRowSize = dataSource_->estimatedRowSize();
-    // TODO: Expose this to operator stats.
-    VLOG(1) << "estimatedRowSize = " << estimatedRowSize;
-    readBatchSize_ = estimatedRowSize == connector::DataSource::kUnknownRowSize
-        ? outputBatchRows()
-        : outputBatchRows(estimatedRowSize);
-    int32_t readBatchSize = readBatchSize_;
-    if (maxFilteringRatio_ > 0) {
-      readBatchSize = std::min(
-          maxReadBatchSize_,
-          static_cast<int32_t>(readBatchSize / maxFilteringRatio_));
-    }
+    const int32_t readBatchSize = calculateBatchSize(estimatedRowSize);
+
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
@@ -503,6 +494,32 @@ void TableScan::addDynamicFilterLocked(
     }
   }
   stats_.wlock()->dynamicFilterStats.producerNodeIds.emplace(producer);
+}
+
+int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
+  int64_t estimatedRowSize = connector::DataSource::kUnknownRowSize;
+  if (currentEstimatedRowSize != connector::DataSource::kUnknownRowSize) {
+    // Use current file estimate.
+    fileEstimatedRowSize_ = currentEstimatedRowSize;
+    estimatedRowSize = currentEstimatedRowSize;
+  } else if (fileEstimatedRowSize_ != connector::DataSource::kUnknownRowSize) {
+    // Fallback to previous file estimate.
+    estimatedRowSize = fileEstimatedRowSize_;
+  }
+  // Otherwise, no estimate available: use preferredOutputBatchRows()
+  // (readBatchSize_ default).
+
+  if (estimatedRowSize != connector::DataSource::kUnknownRowSize) {
+    readBatchSize_ = outputBatchRows(estimatedRowSize);
+  }
+
+  int32_t batchSize = readBatchSize_;
+  if (maxFilteringRatio_ > 0) {
+    batchSize = std::min(
+        maxReadBatchSize_,
+        static_cast<int32_t>(batchSize / maxFilteringRatio_));
+  }
+  return batchSize;
 }
 
 void TableScan::close() {
