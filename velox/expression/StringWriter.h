@@ -135,6 +135,20 @@ class StringWriter : public UDFOutputString {
     append(std::string_view(input));
   }
 
+  template <typename T>
+  void writeAt(const T& value, size_t pos) {
+    static_assert(
+        std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+    const char* dataToCopy = reinterpret_cast<const char*>(&value);
+    writeAt(dataToCopy, pos, sizeof(T));
+  }
+
+  void writeAt(const char* value, size_t pos, size_t length) {
+    VELOX_DCHECK(!finalized_);
+    VELOX_CHECK_GE(size(), pos + length);
+    std::memcpy(data() + pos, value, length);
+  }
+
  private:
   StringWriter() = default;
 
