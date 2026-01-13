@@ -24,6 +24,7 @@ add_executable(
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
   MayHaveNullsRecursiveTest.cpp
+  PartitionedVectorTest.cpp
   SelectivityVectorTest.cpp
   StringVectorBufferTest.cpp
   VariantToVectorTest.cpp
