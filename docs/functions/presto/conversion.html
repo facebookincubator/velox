@@ -71,25 +71,27 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in <a class="reference internal" href="json.html"><span class="doc">JSON Functions</span></a>.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
-<col style="width: 5.3%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
+<col style="width: 4.8%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"></th>
@@ -111,6 +113,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <th class="head"><p>ipprefix</p></th>
 <th class="head"><p>tdigest</p></th>
 <th class="head"><p>qdigest</p></th>
+<th class="head"><p>setdigest</p></th>
+<th class="head"><p>khyperloglog</p></th>
 </tr>
 </thead>
 <tbody>
@@ -129,6 +133,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -153,6 +159,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>integer</p></td>
 <td><p>Y</p></td>
@@ -169,6 +177,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -193,6 +203,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>boolean</p></td>
 <td><p>Y</p></td>
@@ -209,6 +221,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -233,6 +247,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>double</p></td>
 <td><p>Y</p></td>
@@ -249,6 +265,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -273,6 +291,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>varbinary</p></td>
 <td></td>
@@ -293,6 +313,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
 </tr>
 <tr class="row-odd"><td><p>timestamp</p></td>
 <td></td>
@@ -307,6 +329,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -333,6 +357,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>date</p></td>
 <td></td>
@@ -353,6 +379,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>interval day to second</p></td>
 <td></td>
@@ -363,6 +391,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -393,6 +423,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>ipaddress</p></td>
 <td></td>
@@ -411,6 +443,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -433,6 +467,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>tdigest</p></td>
 <td></td>
@@ -453,6 +489,8 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>qdigest</p></td>
 <td></td>
@@ -464,6 +502,52 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>setdigest</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>khyperloglog</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -853,6 +937,22 @@ This allows quantile digests to be stored and retrieved for later use.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-setdigest">
+<h3>From SETDIGEST<a class="headerlink" href="#from-setdigest" title="Link to this heading">¶</a></h3>
+<p>Returns the SetDigest as a varbinary string containing the serialized representation of the SetDigest data structure.
+This allows SetDigests to be stored and retrieved for later use.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">make_set_digest</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="k">as</span> <span class="n">varbinary</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="from-khyperloglog">
+<h3>From KHYPERLOGLOG<a class="headerlink" href="#from-khyperloglog" title="Link to this heading">¶</a></h3>
+<p>Returns the KHyperLogLog as a varbinary string containing the serialized representation of the KHyperLogLog data structure.
+This allows KHyperLogLogs to be stored and retrieved for later use.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">khyperloglog_agg</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">123</span><span class="p">)</span> <span class="k">as</span> <span class="n">varbinary</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to TIMESTAMP<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
@@ -1210,10 +1310,32 @@ This allows previously stored quantile digests to be restored for use.</p>
 </div>
 </section>
 </section>
+<section id="cast-to-setdigest">
+<h2>Cast to SETDIGEST<a class="headerlink" href="#cast-to-setdigest" title="Link to this heading">¶</a></h2>
+<section id="id27">
+<h3>From VARBINARY<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<p>Returns a SetDigest reconstructed from the varbinary string containing the serialized representation.
+This allows previously stored SetDigests to be restored for use.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">stored_setdigest_binary</span> <span class="k">as</span> <span class="n">setdigest</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-khyperloglog">
+<h2>Cast to KHYPERLOGLOG<a class="headerlink" href="#cast-to-khyperloglog" title="Link to this heading">¶</a></h2>
+<section id="id28">
+<h3>From VARBINARY<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<p>Returns a KHyperLogLog reconstructed from the varbinary string containing the serialized representation.
+This allows previously stored KHyperLogLogs to be restored for use.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">stored_khyperloglog_binary</span> <span class="k">as</span> <span class="n">khyperloglog</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+</section>
 <section id="cast-to-ipprefix">
 <h2>Cast to IPPREFIX<a class="headerlink" href="#cast-to-ipprefix" title="Link to this heading">¶</a></h2>
-<section id="id27">
-<h3>From VARCHAR<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<section id="id29">
+<h3>From VARCHAR<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
 <p>The IPPREFIX string must be in the form of <em>&lt;ip_address&gt;/&lt;ip_prefix&gt;</em> as defined in <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.3">RFC 4291#section-2.3</a>.
 The IPADDRESS portion of the IPPREFIX follows the same rules as casting
 <a class="reference external" href="#ipaddress-from-varchar">IPADDRESS from VARCHAR</a>.</p>
@@ -1237,8 +1359,8 @@ in the IPPREFIX.</p>
 </pre></div>
 </div>
 </section>
-<section id="id30">
-<h3>From IPADDRESS<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<section id="id32">
+<h3>From IPADDRESS<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
 <p>Returns an IPPREFIX where the prefix length is the length of the entire IP address.
 Prefix length for IPv4 is 32 and for IPv6 it is 128.</p>
 <p>Examples:</p>
@@ -1327,6 +1449,8 @@ Prefix length for IPv4 is 32 and for IPv6 it is 128.</p>
 <li><a class="reference internal" href="#id7">From IPADDRESS</a></li>
 <li><a class="reference internal" href="#from-tdigest-double">From TDIGEST(DOUBLE)</a></li>
 <li><a class="reference internal" href="#from-qdigest-bigint-qdigest-real-qdigest-double">From QDIGEST(BIGINT), QDIGEST(REAL), QDIGEST(DOUBLE)</a></li>
+<li><a class="reference internal" href="#from-setdigest">From SETDIGEST</a></li>
+<li><a class="reference internal" href="#from-khyperloglog">From KHYPERLOGLOG</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to TIMESTAMP</a><ul>
@@ -1368,9 +1492,17 @@ Prefix length for IPv4 is 32 and for IPv6 it is 128.</p>
 <li><a class="reference internal" href="#id26">From VARBINARY</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#cast-to-setdigest">Cast to SETDIGEST</a><ul>
+<li><a class="reference internal" href="#id27">From VARBINARY</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-khyperloglog">Cast to KHYPERLOGLOG</a><ul>
+<li><a class="reference internal" href="#id28">From VARBINARY</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#cast-to-ipprefix">Cast to IPPREFIX</a><ul>
-<li><a class="reference internal" href="#id27">From VARCHAR</a></li>
-<li><a class="reference internal" href="#id30">From IPADDRESS</a></li>
+<li><a class="reference internal" href="#id29">From VARCHAR</a></li>
+<li><a class="reference internal" href="#id32">From IPADDRESS</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#data-size-functions">Data Size Functions</a><ul>
