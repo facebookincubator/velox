@@ -357,15 +357,14 @@ class GeometrySerializer {
     for (size_t geometryIndex = 0;
          geometryIndex < collection.getNumGeometries();
          ++geometryIndex) {
-      auto* geometry = collection.getGeometryN(geometryIndex);
-      // Use a temporary buffer to serialize the geometry and calculate its
-      // length
-      std::string tempBuffer;
-      writeGeometry(*geometry, tempBuffer);
-
-      int32_t length = static_cast<int32_t>(tempBuffer.size());
-      appendBytes(writer, length);
-      writer.append(std::string_view(tempBuffer.data(), tempBuffer.size()));
+      const auto* geometry = collection.getGeometryN(geometryIndex);
+      size_t lengthOffset = writer.size();
+      // Placeholder for the length of the child geometry
+      appendBytes(writer, int32_t{0});
+      writeGeometry(*geometry, writer);
+      int32_t length =
+          static_cast<int32_t>(writer.size() - lengthOffset - sizeof(int32_t));
+      writer.writeAt(length, lengthOffset);
     }
   }
 };
