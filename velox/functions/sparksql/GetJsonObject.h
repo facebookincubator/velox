@@ -291,8 +291,8 @@ struct GetJsonObjectFunction {
     const char* end = json + size;
     const char* pos = json;
 
-    while ((pos = static_cast<const char*>(
-                memchr(pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
+    while ((pos = static_cast<const char*>(memchr(
+                pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
       size_t remaining = static_cast<size_t>(end - pos);
       if (FOLLY_UNLIKELY(remaining < 2)) {
         return false; // Incomplete escape at end, let parser handle it.
@@ -300,20 +300,27 @@ struct GetJsonObjectFunction {
 
       switch (pos[1]) {
         case '"':
+          [[fallthrough]];
         case '\\':
+          [[fallthrough]];
         case '/':
+          [[fallthrough]];
         case 'b':
+          [[fallthrough]];
         case 'f':
+          [[fallthrough]];
         case 'n':
+          [[fallthrough]];
         case 'r':
+          [[fallthrough]];
         case 't':
           pos += 2;
           break;
         case 'u':
-          // Validate \uXXXX
-          if (FOLLY_UNLIKELY(remaining < 6) ||
-              !isHexDigit(pos[2]) || !isHexDigit(pos[3]) ||
-              !isHexDigit(pos[4]) || !isHexDigit(pos[5])) {
+          // Validate \uXXXX.
+          if (FOLLY_UNLIKELY(remaining < 6) || !isHexDigit(pos[2]) ||
+              !isHexDigit(pos[3]) || !isHexDigit(pos[4]) ||
+              !isHexDigit(pos[5])) {
             return true;
           }
           pos += 6;
