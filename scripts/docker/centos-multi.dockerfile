@@ -118,7 +118,8 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
     UV_INSTALL_DIR=/usr/local/bin \
     INSTALL_PREFIX=/deps
 
-RUN bash -c 'source /setup-centos9.sh && install_build_prerequisites'
+# Boost is required by Avro cpp
+RUN bash -c 'source /setup-centos9.sh && install_build_prerequisites && install_boost && rm -rf "$DEPENDENCY_DIR/boost"'
 
 RUN bash /setup-centos-adapters.sh install_adapters && \
     find $INSTALL_PREFIX/lib/cmake -type f -name '*.cmake' -exec sed -i 's|/deps/|/usr/local/|g' {} \;
