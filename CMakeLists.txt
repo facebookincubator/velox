@@ -411,13 +411,6 @@ if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
-# Ensure that we don't bring in headers that might have coroutines enabled. The
-# dependencies turn off coroutines in folly and the other FBOS dependencies. If
-# not explicitly turned off differences in the build using GCC cause libray
-# incompatibilities of the thrift server and the remote functions library
-# causing SEGVs in the tests.
-string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_CFG_NO_COROUTINES")
-
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -664,9 +657,12 @@ if(VELOX_ENABLE_GCS)
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
+# GCC needs to enable co-routines. We only support compiler that
+# support coroutines.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Find Threads library
   find_package(Threads REQUIRED)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
