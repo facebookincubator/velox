@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/AggregateWindow.h"
+
+#include <utility>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
@@ -329,6 +332,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // Check if we have a valid cached result with matching frame bounds.
     // If cached, all subsequent blocks in this partition can reuse it directly.
     if (cachedSameFrameResult_.has_value() &&
+        cachedSameFrameBounds_.has_value() &&
         cachedSameFrameBounds_->first == firstRow &&
         cachedSameFrameBounds_->second == lastRow) {
       validRows.applyToSelected([&](auto i) {
