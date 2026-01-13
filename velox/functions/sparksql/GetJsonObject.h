@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
