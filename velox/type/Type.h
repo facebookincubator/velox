@@ -41,13 +41,16 @@
 #include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
-#include "velox/type/NameToIndex.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
+
+namespace detail {
+class NameToIndex;
+} // namespace detail
 
 using int128_t = __int128_t;
 

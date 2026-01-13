@@ -20,6 +20,7 @@
 #include <fmt/format.h>
 #include <folly/Demangle.h>
 #include <re2/re2.h>
+#include "velox/type/NameToIndex.h"
 
 #include <sstream>
 #include <typeindex>
