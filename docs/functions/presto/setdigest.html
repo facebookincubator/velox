@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>SetDigest Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="T-Digest Functions" href="tdigest.html" />
+    <link rel="prev" title="KHyperLogLog Functions" href="khyperloglog.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="tdigest.html" title="T-Digest Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="khyperloglog.html" title="KHyperLogLog Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">SetDigest Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="setdigest-functions">
+<h1>SetDigest Functions<a class="headerlink" href="#setdigest-functions" title="Link to this heading">¶</a></h1>
+<p>SetDigest is a data sketch for estimating set cardinality and performing set
+operations like intersection cardinality and Jaccard index. It combines HyperLogLog
+for cardinality estimation with MinHash for exact counting and intersection operations.</p>
+<p>SetDigests may be merged, and for storage and retrieval they may be cast to/from <code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code>.</p>
+<section id="data-structures">
+<h2>Data Structures<a class="headerlink" href="#data-structures" title="Link to this heading">¶</a></h2>
+<p>A SetDigest is a data sketch which stores approximate set membership and cardinality
+information. The Velox type for this data structure is called <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code>.
+SetDigests support two element types internally:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">bigint</span></code> - for integer values (all numeric types are converted to bigint)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">varchar</span></code> - for string values</p></li>
+</ul>
+<p>When a SetDigest is exact (cardinality is less than the maximum hash limit),
+operations like intersection cardinality return exact results. When the digest
+becomes approximate (high cardinality), it uses HyperLogLog and MinHash estimation.</p>
+<p>Serialization format is compatible with Presto’s.</p>
+</section>
+<section id="aggregate-functions">
+<h2>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="make_set_digest">
+<span class="sig-name descname"><span class="pre">make_set_digest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SetDigest</span></span></span><a class="headerlink" href="#make_set_digest" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketch which summarizes the input data set of <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+Supported input types include: <code class="docutils literal notranslate"><span class="pre">boolean</span></code>, <code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">integer</span></code>,
+<code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">real</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">date</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code>, and <code class="docutils literal notranslate"><span class="pre">varbinary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="merge_set_digest">
+<span class="sig-name descname"><span class="pre">merge_set_digest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">SetDigest</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SetDigest</span></span></span><a class="headerlink" href="#merge_set_digest" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> of the aggregate union of the individual <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code>
+structures.</p>
+</dd></dl>
+
+</section>
+<section id="scalar-functions">
+<h2>Scalar Functions<a class="headerlink" href="#scalar-functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="cardinality">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the estimated cardinality of the set represented by the <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketch.
+If the digest is exact (low cardinality), returns the exact count.
+Otherwise, returns an approximation using HyperLogLog.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="intersection_cardinality">
+<span class="sig-name descname"><span class="pre">intersection_cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setdigest2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#intersection_cardinality" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the estimated intersection cardinality between two <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketches.</p>
+<ul class="simple">
+<li><p>If both digests are exact: returns the exact intersection count</p></li>
+<li><p>If either digest is approximate: returns an estimation using the Jaccard index</p></li>
+</ul>
+<p>The result is capped at the minimum cardinality of the two input digests to
+ensure logical consistency.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="jaccard_index">
+<span class="sig-name descname"><span class="pre">jaccard_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setdigest2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#jaccard_index" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Jaccard index (similarity coefficient) between two <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketches.
+The Jaccard index is a value in [0, 1] where:</p>
+<ul class="simple">
+<li><p>1.0 means the sets are identical</p></li>
+<li><p>0.0 means the sets are disjoint (no overlap)</p></li>
+</ul>
+<p>Uses MinHash estimation for efficient computation.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">SetDigest Functions</a><ul>
+<li><a class="reference internal" href="#data-structures">Data Structures</a></li>
+<li><a class="reference internal" href="#aggregate-functions">Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#make_set_digest"><code class="docutils literal notranslate"><span class="pre">make_set_digest()</span></code></a></li>
+<li><a class="reference internal" href="#merge_set_digest"><code class="docutils literal notranslate"><span class="pre">merge_set_digest()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#scalar-functions">Scalar Functions</a><ul>
+<li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
+<li><a class="reference internal" href="#intersection_cardinality"><code class="docutils literal notranslate"><span class="pre">intersection_cardinality()</span></code></a></li>
+<li><a class="reference internal" href="#jaccard_index"><code class="docutils literal notranslate"><span class="pre">jaccard_index()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="khyperloglog.html"
+                          title="previous chapter">KHyperLogLog Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="tdigest.html"
+                          title="next chapter">T-Digest Functions</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/setdigest.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="tdigest.html" title="T-Digest Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="khyperloglog.html" title="KHyperLogLog Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">SetDigest Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

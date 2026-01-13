@@ -918,7 +918,7 @@
 </li>
         <li><a href="functions/iceberg/functions.html#bucket">bucket()</a>
 </li>
-        <li><a href="functions/presto/aggregate.html#cardinality">cardinality()</a>, <a href="functions/presto/array.html#cardinality">[1]</a>
+        <li><a href="functions/presto/aggregate.html#cardinality">cardinality()</a>, <a href="functions/presto/array.html#cardinality">[1]</a>, <a href="functions/presto/khyperloglog.html#cardinality">[2]</a>, <a href="functions/presto/setdigest.html#cardinality">[3]</a>
 </li>
         <li><a href="functions/presto/conversion.html#cast">cast()</a>, <a href="functions/spark/conversion.html#cast">[1]</a>
 </li>
@@ -1240,6 +1240,8 @@
 </li>
         <li><a href="functions/spark/string.html#instr">instr()</a>
 </li>
+        <li><a href="functions/presto/khyperloglog.html#intersection_cardinality">intersection_cardinality()</a>, <a href="functions/presto/setdigest.html#intersection_cardinality">[1]</a>
+</li>
         <li><a href="functions/presto/math.html#inverse_beta_cdf">inverse_beta_cdf()</a>
 </li>
         <li><a href="functions/presto/math.html#inverse_binomial_cdf">inverse_binomial_cdf()</a>
@@ -1294,6 +1296,8 @@
 </li>
         <li><a href="functions/spark/comparison.html#isnull">isnull()</a>
 </li>
+        <li><a href="functions/presto/khyperloglog.html#jaccard_index">jaccard_index()</a>, <a href="functions/presto/setdigest.html#jaccard_index">[1]</a>
+</li>
         <li><a href="functions/presto/string.html#jarowinkler_similarity">jarowinkler_similarity()</a>
 </li>
         <li><a href="functions/presto/json.html#json_array_contains">json_array_contains()</a>
@@ -1313,6 +1317,8 @@
         <li><a href="functions/presto/json.html#json_parse">json_parse()</a>
 </li>
         <li><a href="functions/presto/json.html#json_size">json_size()</a>
+</li>
+        <li><a href="functions/presto/khyperloglog.html#khyperloglog_agg">khyperloglog_agg()</a>
 </li>
         <li><a href="functions/presto/aggregate.html#kurtosis">kurtosis()</a>, <a href="functions/spark/aggregate.html#kurtosis">[1]</a>
 </li>
@@ -1382,6 +1388,8 @@
 </li>
         <li><a href="functions/spark/decimal.html#make_decimal">make_decimal()</a>
 </li>
+        <li><a href="functions/presto/setdigest.html#make_set_digest">make_set_digest()</a>
+</li>
         <li><a href="functions/spark/datetime.html#make_timestamp">make_timestamp()</a>
 </li>
         <li><a href="functions/spark/datetime.html#make_ym_interval">make_ym_interval()</a>
@@ -1442,9 +1450,13 @@
 </li>
         <li><a href="functions/presto/binary.html#md5">md5()</a>, <a href="functions/spark/binary.html#md5">[1]</a>
 </li>
-        <li><a href="functions/presto/aggregate.html#merge">merge()</a>, <a href="functions/presto/hyperloglog.html#merge">[1]</a>, <a href="functions/presto/qdigest.html#merge">[2]</a>, <a href="functions/presto/tdigest.html#merge">[3]</a>
+        <li><a href="functions/presto/aggregate.html#merge">merge()</a>, <a href="functions/presto/hyperloglog.html#merge">[1]</a>, <a href="functions/presto/khyperloglog.html#merge">[2]</a>, <a href="functions/presto/qdigest.html#merge">[3]</a>, <a href="functions/presto/tdigest.html#merge">[4]</a>
 </li>
         <li><a href="functions/presto/hyperloglog.html#merge_hll">merge_hll()</a>
+</li>
+        <li><a href="functions/presto/khyperloglog.html#merge_khll">merge_khll()</a>
+</li>
+        <li><a href="functions/presto/setdigest.html#merge_set_digest">merge_set_digest()</a>
 </li>
         <li><a href="functions/presto/aggregate.html#merge_sfm">merge_sfm()</a>
 </li>
@@ -1601,6 +1613,8 @@
         <li><a href="functions/presto/aggregate.html#regr_sxy">regr_sxy()</a>
 </li>
         <li><a href="functions/presto/aggregate.html#regr_syy">regr_syy()</a>
+</li>
+        <li><a href="functions/presto/khyperloglog.html#reidentification_potential">reidentification_potential()</a>
 </li>
         <li><a href="functions/spark/math.html#remainder">remainder()</a>
 </li>
@@ -1900,8 +1914,6 @@
 </li>
         <li><a href="functions/presto/map.html#transform_values">transform_values()</a>
 </li>
-        <li><a href="functions/presto/array.html#transform_with_index">transform_with_index()</a>
-</li>
         <li><a href="functions/spark/string.html#translate">translate()</a>
 </li>
         <li><a href="functions/presto/string.html#trim">trim()</a>, <a href="functions/spark/string.html#trim">[1]</a>
@@ -1923,6 +1935,8 @@
         <li><a href="functions/spark/string.html#unbase64">unbase64()</a>
 </li>
         <li><a href="functions/spark/math.html#unhex">unhex()</a>
+</li>
+        <li><a href="functions/presto/khyperloglog.html#uniqueness_distribution">uniqueness_distribution()</a>
 </li>
         <li><a href="functions/spark/datetime.html#unix_date">unix_date()</a>
 </li>
@@ -2013,7 +2027,7 @@
     cardinality()
 
       <ul>
-        <li><a href="functions/presto/aggregate.html#cardinality">built-in function</a>, <a href="functions/presto/array.html#cardinality">[1]</a>
+        <li><a href="functions/presto/aggregate.html#cardinality">built-in function</a>, <a href="functions/presto/array.html#cardinality">[1]</a>, <a href="functions/presto/khyperloglog.html#cardinality">[2]</a>, <a href="functions/presto/setdigest.html#cardinality">[3]</a>
 </li>
       </ul></li>
       <li>
@@ -3209,6 +3223,13 @@
       <li><a href="bindings/python/type.html#pyvelox.type.INTEGER">INTEGER (class in pyvelox.type)</a>
 </li>
       <li>
+    intersection_cardinality()
+
+      <ul>
+        <li><a href="functions/presto/khyperloglog.html#intersection_cardinality">built-in function</a>, <a href="functions/presto/setdigest.html#intersection_cardinality">[1]</a>
+</li>
+      </ul></li>
+      <li>
     inverse_beta_cdf()
 
       <ul>
@@ -3285,6 +3306,8 @@
         <li><a href="functions/presto/math.html#inverse_weibull_cdf">built-in function</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     ip_prefix()
 
@@ -3292,8 +3315,6 @@
         <li><a href="functions/presto/ipaddress.html#ip_prefix">built-in function</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     ip_prefix_collapse()
 
@@ -3414,6 +3435,13 @@
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li>
+    jaccard_index()
+
+      <ul>
+        <li><a href="functions/presto/khyperloglog.html#jaccard_index">built-in function</a>, <a href="functions/presto/setdigest.html#jaccard_index">[1]</a>
+</li>
+      </ul></li>
+      <li>
     jarowinkler_similarity()
 
       <ul>
@@ -3491,10 +3519,17 @@
 <h2 id="K">K</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="bindings/python/legacy.html#pyvelox.legacy.VeloxType.kind">kind() (pyvelox.legacy.VeloxType method)</a>
+      <li>
+    khyperloglog_agg()
+
+      <ul>
+        <li><a href="functions/presto/khyperloglog.html#khyperloglog_agg">built-in function</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="bindings/python/legacy.html#pyvelox.legacy.VeloxType.kind">kind() (pyvelox.legacy.VeloxType method)</a>
+</li>
       <li>
     kurtosis()
 
@@ -3750,6 +3785,13 @@
 </li>
       </ul></li>
       <li>
+    make_set_digest()
+
+      <ul>
+        <li><a href="functions/presto/setdigest.html#make_set_digest">built-in function</a>
+</li>
+      </ul></li>
+      <li>
     make_timestamp()
 
       <ul>
@@ -3919,8 +3961,6 @@
         <li><a href="functions/presto/map.html#map_values">built-in function</a>, <a href="functions/spark/map.html#map_values">[1]</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     map_zip_with()
 
@@ -3928,6 +3968,8 @@
         <li><a href="functions/presto/map.html#map_zip_with">built-in function</a>, <a href="functions/spark/map.html#map_zip_with">[1]</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     mask()
 
@@ -3969,7 +4011,7 @@
     merge()
 
       <ul>
-        <li><a href="functions/presto/aggregate.html#merge">built-in function</a>, <a href="functions/presto/hyperloglog.html#merge">[1]</a>, <a href="functions/presto/qdigest.html#merge">[2]</a>, <a href="functions/presto/tdigest.html#merge">[3]</a>
+        <li><a href="functions/presto/aggregate.html#merge">built-in function</a>, <a href="functions/presto/hyperloglog.html#merge">[1]</a>, <a href="functions/presto/khyperloglog.html#merge">[2]</a>, <a href="functions/presto/qdigest.html#merge">[3]</a>, <a href="functions/presto/tdigest.html#merge">[4]</a>
 </li>
       </ul></li>
       <li>
@@ -3981,6 +4023,20 @@
       </ul></li>
       <li><a href="bindings/python/plan_builder.html#pyvelox.plan_builder.PlanBuilder.merge_join">merge_join() (pyvelox.plan_builder.PlanBuilder method)</a>
 </li>
+      <li>
+    merge_khll()
+
+      <ul>
+        <li><a href="functions/presto/khyperloglog.html#merge_khll">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    merge_set_digest()
+
+      <ul>
+        <li><a href="functions/presto/setdigest.html#merge_set_digest">built-in function</a>
+</li>
+      </ul></li>
       <li>
     merge_sfm()
 
@@ -4544,8 +4600,6 @@
         <li><a href="functions/presto/aggregate.html#regr_r2">built-in function</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     regr_replacement()
 
@@ -4553,6 +4607,8 @@
         <li><a href="functions/spark/aggregate.html#regr_replacement">built-in function</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     regr_slope()
 
@@ -4579,6 +4635,13 @@
 
       <ul>
         <li><a href="functions/presto/aggregate.html#regr_syy">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    reidentification_potential()
+
+      <ul>
+        <li><a href="functions/presto/khyperloglog.html#reidentification_potential">built-in function</a>
 </li>
       </ul></li>
       <li>
@@ -5580,6 +5643,8 @@
         <li><a href="functions/presto/binary.html#to_ieee754_64">built-in function</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     to_iso8601()
 
@@ -5587,8 +5652,6 @@
         <li><a href="functions/presto/datetime.html#to_iso8601">built-in function</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     to_json()
 
@@ -5668,13 +5731,6 @@
 
       <ul>
         <li><a href="functions/presto/map.html#transform_values">built-in function</a>
-</li>
-      </ul></li>
-      <li>
-    transform_with_index()
-
-      <ul>
-        <li><a href="functions/presto/array.html#transform_with_index">built-in function</a>
 </li>
       </ul></li>
       <li>
@@ -5765,6 +5821,13 @@
 </li>
       </ul></li>
       <li>
+    uniqueness_distribution()
+
+      <ul>
+        <li><a href="functions/presto/khyperloglog.html#uniqueness_distribution">built-in function</a>
+</li>
+      </ul></li>
+      <li>
     unix_date()
 
       <ul>
@@ -5808,6 +5871,8 @@
         <li><a href="functions/spark/decimal.html#unscaled_value">built-in function</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     upper()
 
@@ -5815,8 +5880,6 @@
         <li><a href="functions/presto/string.html#upper">built-in function</a>, <a href="functions/spark/string.html#upper">[1]</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     url_decode()
 

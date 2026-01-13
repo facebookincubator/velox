@@ -262,28 +262,34 @@ The table below shows the supported Presto types.</p>
 <tr class="row-even"><td><p>HYPERLOGLOG</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
-<tr class="row-odd"><td><p>JSON</p></td>
-<td><p>VARCHAR</p></td>
-</tr>
-<tr class="row-even"><td><p>TIMESTAMP WITH TIME ZONE</p></td>
-<td><p>BIGINT</p></td>
-</tr>
-<tr class="row-odd"><td><p>UUID</p></td>
-<td><p>HUGEINT</p></td>
-</tr>
-<tr class="row-even"><td><p>IPADDRESS</p></td>
-<td><p>HUGEINT</p></td>
-</tr>
-<tr class="row-odd"><td><p>IPPREFIX</p></td>
-<td><p>ROW(HUGEINT,TINYINT)</p></td>
-</tr>
-<tr class="row-even"><td><p>BINGTILE</p></td>
-<td><p>BIGINT</p></td>
-</tr>
-<tr class="row-odd"><td><p>GEOMETRY</p></td>
+<tr class="row-odd"><td><p>KHYPERLOGLOG</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
-<tr class="row-even"><td><p>SPHERICALGEOGRAPHY</p></td>
+<tr class="row-even"><td><p>JSON</p></td>
+<td><p>VARCHAR</p></td>
+</tr>
+<tr class="row-odd"><td><p>TIMESTAMP WITH TIME ZONE</p></td>
+<td><p>BIGINT</p></td>
+</tr>
+<tr class="row-even"><td><p>UUID</p></td>
+<td><p>HUGEINT</p></td>
+</tr>
+<tr class="row-odd"><td><p>IPADDRESS</p></td>
+<td><p>HUGEINT</p></td>
+</tr>
+<tr class="row-even"><td><p>IPPREFIX</p></td>
+<td><p>ROW(HUGEINT,TINYINT)</p></td>
+</tr>
+<tr class="row-odd"><td><p>BINGTILE</p></td>
+<td><p>BIGINT</p></td>
+</tr>
+<tr class="row-even"><td><p>GEOMETRY</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-odd"><td><p>SPHERICALGEOGRAPHY</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-even"><td><p>SETDIGEST</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
 <tr class="row-odd"><td><p>TDIGEST</p></td>
@@ -303,6 +309,11 @@ The table below shows the supported Presto types.</p>
 </tr>
 </tbody>
 </table>
+<p>KHYPERLOGLOG is a data sketch for estimating reidentifiability and joinability within a dataset.
+Based on the <a class="reference external" href="https://research.google/pubs/khyperloglog-estimating-reidentifiability-and-joinability-of-large-data-at-scale/">KHyperLogLog paper</a>,
+it maintains a map of K number of HyperLogLog structures, where each entry corresponds to a unique key from one column,
+and the HLL estimates the cardinality of the associated unique identifiers from another column.
+For storage and retrieval it may be cast to/from VARBINARY.</p>
 <p>TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
 from UNIX epoch with timezone information. Its physical type is BIGINT.
 The high 52 bits of bigint store signed integer for milliseconds in UTC.
@@ -330,6 +341,9 @@ As a result the IPPREFIX object stores <em>FFFF:FFFF::</em> and the length 32 fo
 <span class="n">IPPREFIX</span> <span class="s1">&#39;FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32&#39;</span> <span class="o">--</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;FFFF:FFFF:0000:0000:0000:0000:0000:0000/32&#39;</span>
 </pre></div>
 </div>
+<p>SETDIGEST is a data sketch for estimating set cardinality and performing set operations
+like intersection cardinality and Jaccard index. It combines HyperLogLog with MinHash.
+SetDigests may be merged, and for storage and retrieval they may be cast to/from VARBINARY.</p>
 <p>TDIGEST(DOUBLE) is a data sketch for estimating rank-based metrics.
 T-digests may be merged without losing precision, and for storage and retrieval
 they may be cast to/from VARBINARY. The T-digest accepts a parameter of type
