@@ -24,87 +24,52 @@
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/expression/ComplexViewTypes.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/type/StringView.h"
 
 namespace facebook::velox::common::geospatial {
-
-/**
- * VarbinaryWriter is a utility for serializing raw binary data to a
- * generic writer interface. It supports writing either raw byte arrays
- * or trivially copyable types.
- *
- * @tparam StringWriter A type that provides an `append(std::string_view)`
- * method, used to consume the binary output. Examples include `std::string` or
- *         `core::StringWriter`.
- */
-template <typename StringWriter>
-class VarbinaryWriter {
- public:
-  /* implicit */ VarbinaryWriter(StringWriter& stringWriter)
-      : stringWriter_(stringWriter) {}
-  VarbinaryWriter() = delete;
-
-  void write(const char* data, size_t size) {
-    stringWriter_.append(std::string_view(data, size));
-  }
-
-  template <typename T>
-  void write(const T& value) {
-    static_assert(
-        std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-    stringWriter_.append(
-        std::string_view(reinterpret_cast<const char*>(&value), sizeof(T)));
-  }
-
- private:
-  StringWriter& stringWriter_;
-};
 
 class GeometrySerializer {
  public:
   /// Serialize geometry into Velox's internal format.  Do not call this within
   /// GEOS_TRY macro: it will catch the exceptions that need to bubble up.
-  template <typename StringWriter>
   static void serialize(
       const geos::geom::Geometry& geometry,
-      StringWriter& stringWriter) {
-    VarbinaryWriter writer(stringWriter);
+      exec::StringWriter& writer) {
     writeGeometry(geometry, writer);
   }
 
-  template <typename StringWriter>
   static void serializeEnvelope(
       double xMin,
       double yMin,
       double xMax,
       double yMax,
-      StringWriter& stringWriter) {
-    VarbinaryWriter writer(stringWriter);
-    writer.write(static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
-    writer.write(xMin);
-    writer.write(yMin);
-    writer.write(xMax);
-    writer.write(yMax);
+      exec::StringWriter& writer) {
+    appendBytes(
+        writer, static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
+    appendBytes(writer, xMin);
+    appendBytes(writer, yMin);
+    appendBytes(writer, xMax);
+    appendBytes(writer, yMax);
   }
 
-  template <typename StringWriter>
   static void serializeEnvelope(
       geos::geom::Envelope& envelope,
-      StringWriter& stringWriter) {
+      exec::StringWriter& writer) {
     if (FOLLY_UNLIKELY(envelope.isNull())) {
       serializeEnvelope(
           std::numeric_limits<double>::quiet_NaN(),
           std::numeric_limits<double>::quiet_NaN(),
           std::numeric_limits<double>::quiet_NaN(),
           std::numeric_limits<double>::quiet_NaN(),
-          stringWriter);
+          writer);
     } else {
       serializeEnvelope(
           envelope.getMinX(),
           envelope.getMinY(),
           envelope.getMaxX(),
           envelope.getMaxY(),
-          stringWriter);
+          writer);
     }
   }
 
@@ -173,10 +138,19 @@ class GeometrySerializer {
   }
 
  private:
-  template <typename T>
+  /// Append a trivially copyable value to the writer as a binary string.
+  template <typename Writer, typename T>
+  static void appendBytes(Writer& writer, const T& value) {
+    static_assert(
+        std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+    writer.append(
+        std::string_view(reinterpret_cast<const char*>(&value), sizeof(T)));
+  }
+
+  template <typename Writer>
   static void writeGeometry(
       const geos::geom::Geometry& geometry,
-      VarbinaryWriter<T>& writer) {
+      Writer& writer) {
     auto geometryType = geometry.getGeometryTypeId();
     switch (geometryType) {
       case geos::geom::GEOS_POINT:
@@ -209,87 +183,87 @@ class GeometrySerializer {
     }
   }
 
-  template <typename T>
+  template <typename Writer>
   static void writeEnvelope(
       const geos::geom::Geometry& geometry,
-      VarbinaryWriter<T>& writer) {
+      Writer& writer) {
     if (geometry.isEmpty()) {
-      writer.write(std::numeric_limits<double>::quiet_NaN());
-      writer.write(std::numeric_limits<double>::quiet_NaN());
-      writer.write(std::numeric_limits<double>::quiet_NaN());
-      writer.write(std::numeric_limits<double>::quiet_NaN());
+      appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+      appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+      appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+      appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
       return;
     }
 
     auto envelope = geometry.getEnvelopeInternal();
-    writer.write(envelope->getMinX());
-    writer.write(envelope->getMinY());
-    writer.write(envelope->getMaxX());
-    writer.write(envelope->getMaxY());
+    appendBytes(writer, envelope->getMinX());
+    appendBytes(writer, envelope->getMinY());
+    appendBytes(writer, envelope->getMaxX());
+    appendBytes(writer, envelope->getMaxY());
   }
 
-  template <typename T>
+  template <typename Writer>
   static void writeCoordinates(
       const std::unique_ptr<geos::geom::CoordinateSequence>& coords,
-      VarbinaryWriter<T>& writer) {
+      Writer& writer) {
     for (size_t i = 0; i < coords->size(); ++i) {
-      writer.write(coords->getX(i));
-      writer.write(coords->getY(i));
+      appendBytes(writer, coords->getX(i));
+      appendBytes(writer, coords->getY(i));
     }
   }
 
-  template <typename T>
-  static void writePoint(
-      const geos::geom::Geometry& point,
-      VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(GeometrySerializationType::POINT));
+  template <typename Writer>
+  static void writePoint(const geos::geom::Geometry& point, Writer& writer) {
+    appendBytes(writer, static_cast<uint8_t>(GeometrySerializationType::POINT));
     if (!point.isEmpty()) {
       writeCoordinates(point.getCoordinates(), writer);
     } else {
-      writer.write(std::numeric_limits<double>::quiet_NaN());
-      writer.write(std::numeric_limits<double>::quiet_NaN());
+      appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+      appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
     }
   }
 
-  template <typename T>
+  template <typename Writer>
   static void writeMultiPoint(
       const geos::geom::Geometry& geometry,
-      VarbinaryWriter<T>& writer) {
-    writer.write(static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
-    writer.write(static_cast<int32_t>(EsriShapeType::MULTI_POINT));
+      Writer& writer) {
+    appendBytes(
+        writer, static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
+    appendBytes(writer, static_cast<int32_t>(EsriShapeType::MULTI_POINT));
     writeEnvelope(geometry, writer);
-    writer.write(static_cast<int32_t>(geometry.getNumPoints()));
+    appendBytes(writer, static_cast<int32_t>(geometry.getNumPoints()));
     writeCoordinates(geometry.getCoordinates(), writer);
   }
 
-  template <typename T>
+  template <typename Writer>
   static void writePolyline(
       const geos::geom::Geometry& geometry,
-      VarbinaryWriter<T>& writer,
+      Writer& writer,
       bool multiType) {
     size_t numParts;
     size_t numPoints = geometry.getNumPoints();
 
     if (multiType) {
       numParts = geometry.getNumGeometries();
-      writer.write(
+      appendBytes(
+          writer,
           static_cast<uint8_t>(GeometrySerializationType::MULTI_LINE_STRING));
     } else {
       numParts = (numPoints > 0) ? 1 : 0;
-      writer.write(
-          static_cast<uint8_t>(GeometrySerializationType::LINE_STRING));
+      appendBytes(
+          writer, static_cast<uint8_t>(GeometrySerializationType::LINE_STRING));
     }
 
-    writer.write(static_cast<int32_t>(EsriShapeType::POLYLINE));
+    appendBytes(writer, static_cast<int32_t>(EsriShapeType::POLYLINE));
 
     writeEnvelope(geometry, writer);
 
-    writer.write(static_cast<int32_t>(numParts));
-    writer.write(static_cast<int32_t>(numPoints));
+    appendBytes(writer, static_cast<int32_t>(numParts));
+    appendBytes(writer, static_cast<int32_t>(numPoints));
 
     size_t partIndex = 0;
     for (size_t geomIdx = 0; geomIdx < numParts; ++geomIdx) {
-      writer.write(static_cast<int32_t>(partIndex));
+      appendBytes(writer, static_cast<int32_t>(partIndex));
       partIndex += geometry.getGeometryN(geomIdx)->getNumPoints();
     }
 
@@ -303,10 +277,10 @@ class GeometrySerializer {
     }
   }
 
-  template <typename T>
+  template <typename Writer>
   static void writePolygon(
       const geos::geom::Geometry& geometry,
-      VarbinaryWriter<T>& writer,
+      Writer& writer,
       bool multiType) {
     size_t numGeometries = geometry.getNumGeometries();
     size_t numParts = 0;
@@ -321,17 +295,19 @@ class GeometrySerializer {
     }
 
     if (multiType) {
-      writer.write(
+      appendBytes(
+          writer,
           static_cast<uint8_t>(GeometrySerializationType::MULTI_POLYGON));
     } else {
-      writer.write(static_cast<uint8_t>(GeometrySerializationType::POLYGON));
+      appendBytes(
+          writer, static_cast<uint8_t>(GeometrySerializationType::POLYGON));
     }
 
-    writer.write(static_cast<int32_t>(EsriShapeType::POLYGON));
+    appendBytes(writer, static_cast<int32_t>(EsriShapeType::POLYGON));
     writeEnvelope(geometry, writer);
 
-    writer.write(static_cast<int32_t>(numParts));
-    writer.write(static_cast<int32_t>(numPoints));
+    appendBytes(writer, static_cast<int32_t>(numParts));
+    appendBytes(writer, static_cast<int32_t>(numPoints));
 
     if (numParts == 0) {
       return;
@@ -362,7 +338,7 @@ class GeometrySerializer {
     }
 
     for (size_t partIndex : partIndexes) {
-      writer.write(static_cast<int32_t>(partIndex));
+      appendBytes(writer, static_cast<int32_t>(partIndex));
     }
 
     auto coordinates = geometry.getCoordinates();
@@ -370,11 +346,12 @@ class GeometrySerializer {
     writeCoordinates(coordinates, writer);
   }
 
-  template <typename T>
+  template <typename Writer>
   static void writeGeometryCollection(
       const geos::geom::Geometry& collection,
-      VarbinaryWriter<T>& writer) {
-    writer.write(
+      Writer& writer) {
+    appendBytes(
+        writer,
         static_cast<uint8_t>(GeometrySerializationType::GEOMETRY_COLLECTION));
 
     for (size_t geometryIndex = 0;
@@ -384,13 +361,11 @@ class GeometrySerializer {
       // Use a temporary buffer to serialize the geometry and calculate its
       // length
       std::string tempBuffer;
-      VarbinaryWriter tempOutput(tempBuffer);
-
-      writeGeometry(*geometry, tempOutput);
+      writeGeometry(*geometry, tempBuffer);
 
       int32_t length = static_cast<int32_t>(tempBuffer.size());
-      writer.write(length);
-      writer.write(tempBuffer.data(), tempBuffer.size());
+      appendBytes(writer, length);
+      writer.append(std::string_view(tempBuffer.data(), tempBuffer.size()));
     }
   }
 };
