@@ -213,6 +213,7 @@ jobs:
           sed -i 's/-Wno-error=template-id-cdtor//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-Wno-class-memaccess//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-Wno-maybe-uninitialized//g' $BUILD_PATH/compile_commands.json
+          sed -i 's/-fcoroutines//g' $BUILD_PATH/compile_commands.json
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
 
   ubuntu-debug:
