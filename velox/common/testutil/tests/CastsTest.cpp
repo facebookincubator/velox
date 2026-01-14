@@ -93,16 +93,16 @@ class CastsTest : public ::testing::Test {
   DerivedClass* derivedRawPtr_;
 };
 
-// Tests for checked_pointer_cast with shared_ptr
+// Tests for checkedPointerCast with shared_ptr
 TEST_F(CastsTest, checkedPointerCastSharedPtrSuccess) {
   // Cast derived to base (should always work)
-  auto result = checked_pointer_cast<BaseClass>(derivedPtr_);
+  auto result = checkedPointerCast<BaseClass>(derivedPtr_);
   EXPECT_NE(result, nullptr);
   EXPECT_EQ(result->getValue(), 100);
 
   // Cast base to derived when it actually is derived
   std::shared_ptr<BaseClass> basePtrToDerived = derivedPtr_;
-  auto derivedResult = checked_pointer_cast<DerivedClass>(basePtrToDerived);
+  auto derivedResult = checkedPointerCast<DerivedClass>(basePtrToDerived);
   EXPECT_NE(derivedResult, nullptr);
   EXPECT_EQ(derivedResult->getValue(), 100);
   EXPECT_EQ(derivedResult->getDerivedValue(), 200);
@@ -110,22 +110,22 @@ TEST_F(CastsTest, checkedPointerCastSharedPtrSuccess) {
 
 TEST_F(CastsTest, checkedPointerCastSharedPtrFailure) {
   // Try to cast base to derived when it's not actually derived
-  VELOX_ASSERT_THROW(checked_pointer_cast<DerivedClass>(basePtr_), "");
+  VELOX_ASSERT_THROW(checkedPointerCast<DerivedClass>(basePtr_), "");
 
   // Try to cast to unrelated class
-  VELOX_ASSERT_THROW(checked_pointer_cast<UnrelatedClass>(derivedPtr_), "");
+  VELOX_ASSERT_THROW(checkedPointerCast<UnrelatedClass>(derivedPtr_), "");
 }
 
 TEST_F(CastsTest, checkedPointerCastSharedPtrNullInput) {
   std::shared_ptr<BaseClass> nullPtr;
-  VELOX_ASSERT_THROW(checked_pointer_cast<DerivedClass>(nullPtr), "");
+  VELOX_ASSERT_THROW(checkedPointerCast<DerivedClass>(nullPtr), "");
 }
 
-// Tests for checked_pointer_cast with unique_ptr
+// Tests for checkedPointerCast with unique_ptr
 TEST_F(CastsTest, checkedPointerCastUniquePtrSuccess) {
   // Cast derived to base
   auto derivedForCast = std::make_unique<DerivedClass>();
-  auto result = checked_pointer_cast<BaseClass>(std::move(derivedForCast));
+  auto result = checkedPointerCast<BaseClass>(std::move(derivedForCast));
   EXPECT_NE(result, nullptr);
   EXPECT_EQ(result->getValue(), 100);
 
@@ -133,7 +133,7 @@ TEST_F(CastsTest, checkedPointerCastUniquePtrSuccess) {
   std::unique_ptr<BaseClass> basePtrToDerived =
       std::make_unique<DerivedClass>();
   auto derivedResult =
-      checked_pointer_cast<DerivedClass>(std::move(basePtrToDerived));
+      checkedPointerCast<DerivedClass>(std::move(basePtrToDerived));
   EXPECT_NE(derivedResult, nullptr);
   EXPECT_EQ(derivedResult->getValue(), 100);
   EXPECT_EQ(derivedResult->getDerivedValue(), 200);
@@ -143,25 +143,24 @@ TEST_F(CastsTest, checkedPointerCastUniquePtrFailure) {
   // Try to cast base to derived when it's not actually derived
   auto baseForCast = std::make_unique<BaseClass>();
   VELOX_ASSERT_THROW(
-      checked_pointer_cast<DerivedClass>(std::move(baseForCast)), "");
+      checkedPointerCast<DerivedClass>(std::move(baseForCast)), "");
 }
 
 TEST_F(CastsTest, checkedPointerCastUniquePtrNullInput) {
   std::unique_ptr<BaseClass> nullPtr;
-  VELOX_ASSERT_THROW(
-      checked_pointer_cast<DerivedClass>(std::move(nullPtr)), "");
+  VELOX_ASSERT_THROW(checkedPointerCast<DerivedClass>(std::move(nullPtr)), "");
 }
 
-// Tests for checked_pointer_cast with raw pointers
+// Tests for checkedPointerCast with raw pointers
 TEST_F(CastsTest, checkedPointerCastRawPtrSuccess) {
   // Cast derived to base
-  auto result = checked_pointer_cast<BaseClass>(derivedRawPtr_);
+  auto result = checkedPointerCast<BaseClass>(derivedRawPtr_);
   EXPECT_NE(result, nullptr);
   EXPECT_EQ(result->getValue(), 100);
 
   // Cast base to derived when it actually is derived
   BaseClass* basePtrToDerived = derivedRawPtr_;
-  auto derivedResult = checked_pointer_cast<DerivedClass>(basePtrToDerived);
+  auto derivedResult = checkedPointerCast<DerivedClass>(basePtrToDerived);
   EXPECT_NE(derivedResult, nullptr);
   EXPECT_EQ(derivedResult->getValue(), 100);
   EXPECT_EQ(derivedResult->getDerivedValue(), 200);
@@ -169,21 +168,20 @@ TEST_F(CastsTest, checkedPointerCastRawPtrSuccess) {
 
 TEST_F(CastsTest, checkedPointerCastRawPtrFailure) {
   // Try to cast base to derived when it's not actually derived
-  VELOX_ASSERT_THROW(checked_pointer_cast<DerivedClass>(baseRawPtr_), "");
+  VELOX_ASSERT_THROW(checkedPointerCast<DerivedClass>(baseRawPtr_), "");
 }
 
 TEST_F(CastsTest, checkedPointerCastRawPtrNullInput) {
   BaseClass* nullPtr = nullptr;
-  VELOX_ASSERT_THROW(checked_pointer_cast<DerivedClass>(nullPtr), "");
+  VELOX_ASSERT_THROW(checkedPointerCast<DerivedClass>(nullPtr), "");
 }
 
-// Tests for static_unique_pointer_cast
+// Tests for staticUniquePointerCast
 TEST_F(CastsTest, staticUniquePointerCastSuccess) {
   // Create a unique_ptr to derived and cast to base
   auto derivedForCast = std::make_unique<DerivedClass>();
   auto originalPtr = derivedForCast.get();
-  auto result =
-      static_unique_pointer_cast<BaseClass>(std::move(derivedForCast));
+  auto result = staticUniquePointerCast<BaseClass>(std::move(derivedForCast));
 
   EXPECT_NE(result, nullptr);
   EXPECT_EQ(result.get(), originalPtr); // Should be the same pointer
@@ -193,65 +191,65 @@ TEST_F(CastsTest, staticUniquePointerCastSuccess) {
 TEST_F(CastsTest, staticUniquePointerCastNullInput) {
   std::unique_ptr<DerivedClass> nullPtr;
   VELOX_ASSERT_THROW(
-      static_unique_pointer_cast<BaseClass>(std::move(nullPtr)), "");
+      staticUniquePointerCast<BaseClass>(std::move(nullPtr)), "");
 }
 
-// Tests for is_instance_of with shared_ptr
+// Tests for isInstanceOf with shared_ptr
 TEST_F(CastsTest, isInstanceOfSharedPtr) {
   // Test positive cases
-  EXPECT_TRUE(is_instance_of<BaseClass>(derivedPtr_));
-  EXPECT_TRUE(is_instance_of<DerivedClass>(derivedPtr_));
-  EXPECT_TRUE(is_instance_of<BaseClass>(anotherDerivedPtr_));
-  EXPECT_TRUE(is_instance_of<AnotherDerivedClass>(anotherDerivedPtr_));
+  EXPECT_TRUE(isInstanceOf<BaseClass>(derivedPtr_));
+  EXPECT_TRUE(isInstanceOf<DerivedClass>(derivedPtr_));
+  EXPECT_TRUE(isInstanceOf<BaseClass>(anotherDerivedPtr_));
+  EXPECT_TRUE(isInstanceOf<AnotherDerivedClass>(anotherDerivedPtr_));
 
   // Test negative cases
-  EXPECT_FALSE(is_instance_of<DerivedClass>(basePtr_));
-  EXPECT_FALSE(is_instance_of<AnotherDerivedClass>(derivedPtr_));
-  EXPECT_FALSE(is_instance_of<DerivedClass>(anotherDerivedPtr_));
-  EXPECT_FALSE(is_instance_of<UnrelatedClass>(derivedPtr_));
+  EXPECT_FALSE(isInstanceOf<DerivedClass>(basePtr_));
+  EXPECT_FALSE(isInstanceOf<AnotherDerivedClass>(derivedPtr_));
+  EXPECT_FALSE(isInstanceOf<DerivedClass>(anotherDerivedPtr_));
+  EXPECT_FALSE(isInstanceOf<UnrelatedClass>(derivedPtr_));
 }
 
 TEST_F(CastsTest, isInstanceOfSharedPtrNullInput) {
   std::shared_ptr<BaseClass> nullPtr;
-  VELOX_ASSERT_THROW(is_instance_of<DerivedClass>(nullPtr), "");
+  VELOX_ASSERT_THROW(isInstanceOf<DerivedClass>(nullPtr), "");
 }
 
-// Tests for is_instance_of with unique_ptr
+// Tests for isInstanceOf with unique_ptr
 TEST_F(CastsTest, isInstanceOfUniquePtr) {
   // Test positive cases
-  EXPECT_TRUE(is_instance_of<BaseClass>(derivedUniquePtr_));
-  EXPECT_TRUE(is_instance_of<DerivedClass>(derivedUniquePtr_));
+  EXPECT_TRUE(isInstanceOf<BaseClass>(derivedUniquePtr_));
+  EXPECT_TRUE(isInstanceOf<DerivedClass>(derivedUniquePtr_));
 
   // Test negative cases
-  EXPECT_FALSE(is_instance_of<DerivedClass>(baseUniquePtr_));
-  EXPECT_FALSE(is_instance_of<AnotherDerivedClass>(derivedUniquePtr_));
+  EXPECT_FALSE(isInstanceOf<DerivedClass>(baseUniquePtr_));
+  EXPECT_FALSE(isInstanceOf<AnotherDerivedClass>(derivedUniquePtr_));
 }
 
 TEST_F(CastsTest, isInstanceOfUniquePtrNullInput) {
   std::unique_ptr<BaseClass> nullPtr;
-  VELOX_ASSERT_THROW(is_instance_of<DerivedClass>(nullPtr), "");
+  VELOX_ASSERT_THROW(isInstanceOf<DerivedClass>(nullPtr), "");
 }
 
-// Tests for is_instance_of with raw pointers
+// Tests for isInstanceOf with raw pointers
 TEST_F(CastsTest, isInstanceOfRawPtr) {
   // Test positive cases
-  EXPECT_TRUE(is_instance_of<BaseClass>(derivedRawPtr_));
-  EXPECT_TRUE(is_instance_of<DerivedClass>(derivedRawPtr_));
+  EXPECT_TRUE(isInstanceOf<BaseClass>(derivedRawPtr_));
+  EXPECT_TRUE(isInstanceOf<DerivedClass>(derivedRawPtr_));
 
   // Test negative cases
-  EXPECT_FALSE(is_instance_of<DerivedClass>(baseRawPtr_));
-  EXPECT_FALSE(is_instance_of<AnotherDerivedClass>(derivedRawPtr_));
+  EXPECT_FALSE(isInstanceOf<DerivedClass>(baseRawPtr_));
+  EXPECT_FALSE(isInstanceOf<AnotherDerivedClass>(derivedRawPtr_));
 }
 
 TEST_F(CastsTest, isInstanceOfRawPtrNullInput) {
   BaseClass* nullPtr = nullptr;
-  VELOX_ASSERT_THROW(is_instance_of<DerivedClass>(nullPtr), "");
+  VELOX_ASSERT_THROW(isInstanceOf<DerivedClass>(nullPtr), "");
 }
 
 // Test error messages contain useful information
 TEST_F(CastsTest, errorMessageContent) {
   try {
-    checked_pointer_cast<DerivedClass>(basePtr_);
+    checkedPointerCast<DerivedClass>(basePtr_);
     FAIL() << "Expected VeloxException to be thrown";
   } catch (const VeloxException& e) {
     const std::string& message = e.message();
@@ -266,12 +264,12 @@ TEST_F(CastsTest, errorMessageContent) {
 TEST_F(CastsTest, objectIdentityPreserved) {
   // For shared_ptr
   std::shared_ptr<BaseClass> basePtrToDerived = derivedPtr_;
-  auto castedShared = checked_pointer_cast<DerivedClass>(basePtrToDerived);
+  auto castedShared = checkedPointerCast<DerivedClass>(basePtrToDerived);
   EXPECT_EQ(castedShared.get(), derivedPtr_.get());
 
   // For raw ptr
   BaseClass* basePtrToDerivedRaw = derivedRawPtr_;
-  auto castedRaw = checked_pointer_cast<DerivedClass>(basePtrToDerivedRaw);
+  auto castedRaw = checkedPointerCast<DerivedClass>(basePtrToDerivedRaw);
   EXPECT_EQ(castedRaw, derivedRawPtr_);
 }
 
@@ -280,7 +278,7 @@ TEST_F(CastsTest, uniquePtrExceptionSafety) {
   auto baseForCast = std::make_unique<BaseClass>();
 
   try {
-    checked_pointer_cast<DerivedClass>(std::move(baseForCast));
+    checkedPointerCast<DerivedClass>(std::move(baseForCast));
     FAIL() << "Expected VeloxException to be thrown";
   } catch (const VeloxException&) {
     // The unique_ptr should have been restored and the object should still

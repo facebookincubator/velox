@@ -17,10 +17,13 @@
 #pragma once
 
 #include "velox/common/base/GTestMacros.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 #include "velox/dwio/dwrf/writer/WriterSink.h"
 
 namespace facebook::velox::dwrf {
+
+using dwio::common::ArenaCreate;
 
 class WriterBase {
  public:
@@ -89,8 +92,7 @@ class WriterBase {
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
         context_->getConfigs());
-    auto dwrfFooter_ =
-        google::protobuf::Arena::CreateMessage<proto::Footer>(arena_.get());
+    auto dwrfFooter_ = ArenaCreate<proto::Footer>(arena_.get());
     footer_ = std::make_unique<FooterWriteWrapper>(dwrfFooter_);
   }
 

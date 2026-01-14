@@ -20,16 +20,18 @@
 #include <optional>
 #include <tuple>
 
-#include <velox/expression/VectorReaders.h>
-#include <velox/vector/ComplexVector.h>
-#include <velox/vector/DecodedVector.h>
-#include <velox/vector/SelectivityVector.h>
 #include "folly/container/F14Map.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SelectivityVector.h"
 namespace facebook::velox {
 namespace {
 
@@ -137,6 +139,12 @@ class MapWriterTest : public functions::test::FunctionBaseTest {
     writer.writer->init(*writer.result->as<MapVector>());
     writer.writer->setOffset(0);
     return writer;
+  }
+
+ protected:
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    common::testutil::TestValue::enable();
   }
 };
 
@@ -556,7 +564,7 @@ TEST_F(MapWriterTest, copyFromNullableMapView) {
       Map<int64_t, int64_t>>({"copy_from_nullable_map_view"});
 
   auto result = evaluate(
-      "copy_from_nullable_map_view(map(array_constructor(1,2,3),array_constructor(4,null,6)))",
+      "copy_from_nullable_map_view(map(array_constructor(1,2,3),array_constructor(4,null::bigint,6)))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   // Test results.
@@ -800,6 +808,70 @@ TEST_F(MapWriterTest, errorHandlingE2E) {
   auto expected = makeMapVector(outerOffsets, outerKeys, innerMaps, {1, 3, 5});
 
   assertEqualVectors(result, expected);
+}
+
+DEBUG_ONLY_TEST_F(MapWriterTest, resizeErrorHandling) {
+  // When resizing the child Vectors it's possible that an error is thrown, e.g.
+  // due to running out of memory or the Driver shutting down, ensure the Writer
+  // does not end up in an inconsistent state when this happens.
+  auto [result, vectorWriter] = makeTestWriter();
+  const auto keysVector = vectorWriter->vector().mapKeys();
+  const auto valuesVector = vectorWriter->vector().mapValues();
+
+  vectorWriter->setOffset(0);
+  auto& mapWriter = vectorWriter->current();
+  mapWriter.add_item() = std::make_tuple(100, 100);
+
+  // Simulate an error growing the Values Buffer in the key's Vector.
+  {
+    const std::string errorMessage = "Simulated failure in memory allocation";
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::FlatVector::resizeValues",
+        std::function<void(FlatVector<int64_t>*)>(
+            [&](FlatVector<int64_t>*) { VELOX_FAIL(errorMessage); }));
+    VELOX_ASSERT_THROW(mapWriter.add_item(), errorMessage);
+  }
+
+  // The child Vectors should not have been resized due to the error.
+  VELOX_CHECK_EQ(keysVector->size(), 1);
+  VELOX_CHECK_EQ(valuesVector->size(), 1);
+
+  // If we call add_item again it should resize the child Vectors to accommodate
+  // the new entry. If the MapWriter is in an invalid state it will think the
+  // children have already been resized.
+  mapWriter.add_item() = std::make_tuple(200, 200);
+  VELOX_CHECK_EQ(keysVector->size(), 2);
+  VELOX_CHECK_EQ(valuesVector->size(), 2);
+
+  // Simulate an error growing the Values Buffer in the value's Vector.
+  {
+    const std::string errorMessage = "Simulated failure in memory allocation";
+    // Fail on the second call since the first call will be for the key's
+    // Vector.
+    size_t callCount = 0;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::FlatVector::resizeValues",
+        std::function<void(FlatVector<int64_t>*)>([&](FlatVector<int64_t>*) {
+          callCount++;
+
+          if (callCount == 2) {
+            VELOX_FAIL(errorMessage);
+          }
+        }));
+    VELOX_ASSERT_THROW(mapWriter.add_item(), errorMessage);
+  }
+
+  // The key Vector should have been resized by the value Vector should not have
+  // been due to the error.
+  VELOX_CHECK_EQ(keysVector->size(), 4);
+  VELOX_CHECK_EQ(valuesVector->size(), 2);
+
+  // If we call add_item again it should resize the value Vector to accommodate
+  // the new entry. If the MapWriter is in an invalid state it will think the
+  // children have already been resized.
+  mapWriter.add_item() = std::make_tuple(300, 300);
+  VELOX_CHECK_EQ(keysVector->size(), 4);
+  VELOX_CHECK_EQ(valuesVector->size(), 4);
 }
 
 } // namespace

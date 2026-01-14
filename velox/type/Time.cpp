@@ -197,7 +197,8 @@ Expected<int64_t> fromTimeString(const char* buf, size_t len) {
   return timeComponentsToMillis(components);
 }
 
-Expected<int16_t> parseTimezoneOffset(const char* buf, size_t len) {
+Expected<int16_t>
+parseTimezoneOffset(const char* buf, size_t len, bool allowCompactFormat) {
   if (len < 2) {
     return folly::makeUnexpected(
         Status::UserError("Invalid timezone offset: too short"));
@@ -216,10 +217,12 @@ Expected<int16_t> parseTimezoneOffset(const char* buf, size_t len) {
   const size_t startPos = pos;
 
   // Parse offset hours/minutes
-  // Supports three formats:
-  // 1. +HH:mm (e.g., +07:09) - colon separates hours and minutes
-  // 2. +HHmm (e.g., +0709) - exactly 4 digits, no colon
-  // 3. +HH (e.g., +07) - exactly 2 digits, no colon
+  // Supports formats based on allowCompactFormat flag:
+  // Always supported:
+  //   1. +HH:mm (e.g., +07:09) - colon separates hours and minutes
+  //   2. +HH (e.g., +07) - exactly 2 digits, no colon
+  // Conditionally supported (allowCompactFormat=true):
+  //   3. +HHmm (e.g., +0709) - exactly 4 digits, no colon
 
   int32_t offsetHours = 0;
   int32_t offsetMinutes = 0;
@@ -249,6 +252,12 @@ Expected<int16_t> parseTimezoneOffset(const char* buf, size_t len) {
     }
   } else if (digitsRead == 4) {
     // Format: +HHmm (e.g., +0709)
+    // Only allowed if allowCompactFormat is true
+    if (!allowCompactFormat) {
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Invalid timezone offset format: compact format +HHmm not allowed, use +HH:mm or +HH"));
+    }
     // Extract last 2 digits as minutes
     offsetMinutes = offsetHours % 100;
     offsetHours = offsetHours / 100;
@@ -259,7 +268,7 @@ Expected<int16_t> parseTimezoneOffset(const char* buf, size_t len) {
     // Invalid: 1, 3, or 5+ digits without colon
     return folly::makeUnexpected(
         Status::UserError(
-            "Invalid timezone offset format: expected +HH:mm, +HHmm, or +HH"));
+            "Invalid timezone offset format: expected +HH:mm or +HH"));
   }
 
   // Check for trailing characters
@@ -287,7 +296,10 @@ Expected<int16_t> parseTimezoneOffset(const char* buf, size_t len) {
   return static_cast<int16_t>(totalOffsetMinutes);
 }
 
-Expected<int64_t> fromTimeWithTimezoneString(const char* buf, size_t len) {
+Expected<int64_t> fromTimeWithTimezoneString(
+    const char* buf,
+    size_t len,
+    bool allowCompactFormat) {
   if (len == 0) {
     return folly::makeUnexpected(
         Status::UserError("Invalid time with timezone: empty string"));
@@ -324,15 +336,21 @@ Expected<int64_t> fromTimeWithTimezoneString(const char* buf, size_t len) {
     return folly::makeUnexpected(timeResult.error());
   }
 
-  int64_t millisUtc = timeResult.value();
+  int64_t millisLocal = timeResult.value();
 
-  // Parse timezone offset
-  auto tzOffsetResult = parseTimezoneOffset(buf + tzStartPos, len - tzStartPos);
+  // Parse timezone offset, passing through the allowCompactFormat flag
+  auto tzOffsetResult = parseTimezoneOffset(
+      buf + tzStartPos, len - tzStartPos, allowCompactFormat);
   if (tzOffsetResult.hasError()) {
     return folly::makeUnexpected(tzOffsetResult.error());
   }
 
   int16_t offsetMinutes = tzOffsetResult.value();
+
+  // Convert local time to UTC using utility function
+  // Example: 12:00:00+05:30 means the local time is 12:00 in UTC+5:30
+  // To get UTC time, we subtract 5:30, resulting in 06:30:00 UTC
+  int64_t millisUtc = localToUtcTime(millisLocal, offsetMinutes);
 
   // Encode timezone offset and pack with time
   int16_t encodedTimezone = biasEncode(offsetMinutes);

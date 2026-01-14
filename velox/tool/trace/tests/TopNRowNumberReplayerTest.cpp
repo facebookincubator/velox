@@ -21,11 +21,11 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/TopNRowNumberReplayer.h"
 
@@ -178,6 +178,7 @@ TEST_F(TopNRowNumberReplayerTest, basic) {
                                    topNRowNumberId_,
                                    "TopNRowNumber",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -217,6 +218,7 @@ TEST_F(TopNRowNumberReplayerTest, withoutRowNumber) {
                                    task->taskId(),
                                    topNRowNumberId_,
                                    "TopNRowNumber",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())
@@ -258,6 +260,7 @@ TEST_F(TopNRowNumberReplayerTest, multiplePartitions) {
                                    topNRowNumberId_,
                                    "TopNRowNumber",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -297,6 +300,7 @@ TEST_F(TopNRowNumberReplayerTest, noPartitionKeys) {
                                    task->taskId(),
                                    topNRowNumberId_,
                                    "TopNRowNumber",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())
@@ -340,6 +344,7 @@ TEST_F(TopNRowNumberReplayerTest, multipleSortingKeys) {
                                    topNRowNumberId_,
                                    "TopNRowNumber",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -379,6 +384,7 @@ TEST_F(TopNRowNumberReplayerTest, limitOne) {
                                    task->taskId(),
                                    topNRowNumberId_,
                                    "TopNRowNumber",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())

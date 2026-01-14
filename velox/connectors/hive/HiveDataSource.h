@@ -37,9 +37,9 @@ class HiveDataSource : public DataSource {
   HiveDataSource(
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,
-      const connector::ColumnHandleMap& columnHandles,
+      const connector::ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
@@ -147,6 +147,10 @@ class HiveDataSource : public DataSource {
     return emptyOutput_;
   }
 
+  // Add the information from column handle to the corresponding fields in this
+  // object.
+  void processColumnHandle(const HiveColumnHandlePtr& handle);
+
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
   core::ExpressionEvaluator* const expressionEvaluator_;
@@ -157,6 +161,7 @@ class HiveDataSource : public DataSource {
   std::vector<common::Subfield> remainingFilterSubfields_;
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
+  std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
   common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;

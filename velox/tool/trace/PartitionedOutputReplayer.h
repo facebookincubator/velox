@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/system/HardwareConcurrency.h>
 #include <utility>
 
 #include "velox/core/PlanNode.h"
@@ -66,7 +67,7 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
       exec::OutputBufferManager::getInstanceRef()};
   const std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency(),
+          folly::hardware_concurrency(),
           std::make_shared<folly::NamedThreadFactory>("Driver"))};
   const ConsumerCallBack consumerCb_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> consumerExecutor_;

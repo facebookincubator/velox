@@ -24,14 +24,15 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "folly/Conv.h"
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
@@ -44,6 +45,7 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
@@ -116,22 +118,28 @@ bool CompileState::compile(bool allowCpuFallback) {
     return true;
   };
 
-  auto isFilterProjectSupported = [getPlanNode](const exec::Operator* op) {
+  auto isFilterProjectSupported = [getPlanNode, ctx](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
       auto filterNode = filterProjectOp->filterNode();
-      bool canBeEvaluated = true;
-      if (projectPlanNode &&
-          !ExpressionEvaluator::canBeEvaluated(
-              projectPlanNode->projections())) {
-        canBeEvaluated = false;
+
+      // Check filter separately.
+      if (filterNode) {
+        if (!canBeEvaluatedByCudf(
+                {filterNode->filter()}, ctx->task->queryCtx().get())) {
+          return false;
+        }
       }
-      if (canBeEvaluated && filterNode &&
-          !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
-        canBeEvaluated = false;
+
+      // Check projects separately.
+      if (projectPlanNode) {
+        if (!canBeEvaluatedByCudf(
+                projectPlanNode->projections(), ctx->task->queryCtx().get())) {
+          return false;
+        }
       }
-      return canBeEvaluated;
+      return true;
     }
     return false;
   };
@@ -161,11 +169,14 @@ bool CompileState::compile(bool allowCpuFallback) {
           const exec::Operator* op) {
         return isAnyOf<
                    exec::OrderBy,
+                   exec::TopN,
                    exec::HashAggregation,
+                   exec::StreamingAggregation,
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange,
-                   exec::AssignUniqueId>(op) ||
+                   exec::AssignUniqueId,
+                   CudfOperator>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
             isTableScanSupported(op);
       };
@@ -180,10 +191,13 @@ bool CompileState::compile(bool allowCpuFallback) {
                           isJoinSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
+               exec::TopN,
                exec::HashAggregation,
+               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalPartition,
-               exec::AssignUniqueId>(op) ||
+               exec::AssignUniqueId,
+               CudfOperator>(op) ||
         isFilterProjectSupported(op) || isJoinSupported(op);
   };
   auto producesGpuOutput = [isFilterProjectSupported,
@@ -191,10 +205,13 @@ bool CompileState::compile(bool allowCpuFallback) {
                             isTableScanSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
+               exec::TopN,
                exec::HashAggregation,
+               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalExchange,
-               exec::AssignUniqueId>(op) ||
+               exec::AssignUniqueId,
+               CudfOperator>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
         (isTableScanSupported(op));
@@ -268,9 +285,16 @@ bool CompileState::compile(bool allowCpuFallback) {
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
-    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
+    } else if (auto topNOp = dynamic_cast<exec::TopN*>(oper)) {
+      auto planNode = std::dynamic_pointer_cast<const core::TopNNode>(
+          getPlanNode(topNOp->planNodeId()));
+      VELOX_CHECK(planNode != nullptr);
+      replaceOp.push_back(std::make_unique<CudfTopN>(id, ctx, planNode));
+    } else if (
+        dynamic_cast<exec::HashAggregation*>(oper) or
+        dynamic_cast<exec::StreamingAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
-          getPlanNode(hashAggOp->planNodeId()));
+          getPlanNode(oper->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, planNode));
@@ -331,12 +355,10 @@ bool CompileState::compile(bool allowCpuFallback) {
     }
 
     if (CudfConfig::getInstance().debugEnabled) {
-      std::printf(
-          "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
-          oper->operatorId(),
-          oper->toString().c_str(),
-          keepOperator,
-          replaceOp.size());
+      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
+                << oper->toString().c_str()
+                << ", keepOperator = " << keepOperator
+                << ", replaceOp.size() = " << replaceOp.size() << "\n";
     }
     auto GpuReplacedOperator = [](const exec::Operator* op) {
       return isAnyOf<
@@ -350,7 +372,8 @@ bool CompileState::compile(bool allowCpuFallback) {
           exec::LocalPartition,
           exec::LocalExchange,
           exec::FilterProject,
-          exec::AssignUniqueId>(op);
+          exec::AssignUniqueId,
+          CudfOperator>(op);
     };
     auto GpuRetainedOperator =
         [isTableScanSupported](const exec::Operator* op) {
@@ -405,8 +428,6 @@ bool CompileState::compile(bool allowCpuFallback) {
 std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 struct CudfDriverAdapter {
-  bool allowCpuFallback_;
-
   CudfDriverAdapter(bool allowCpuFallback)
       : allowCpuFallback_{allowCpuFallback} {}
 
@@ -421,6 +442,9 @@ struct CudfDriverAdapter {
     auto res = state.compile(allowCpuFallback_);
     return res;
   }
+
+ private:
+  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
@@ -450,6 +474,11 @@ void registerCudf() {
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+
+  if (CudfConfig::getInstance().astExpressionEnabled) {
+    registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -488,6 +517,13 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
+  }
+  if (config.find(kCudfAstExpressionEnabled) != config.end()) {
+    astExpressionEnabled = folly::to<bool>(config[kCudfAstExpressionEnabled]);
+  }
+  if (config.find(kCudfAstExpressionPriority) != config.end()) {
+    astExpressionPriority =
+        folly::to<int32_t>(config[kCudfAstExpressionPriority]);
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);

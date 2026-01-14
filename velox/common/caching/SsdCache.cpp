@@ -32,7 +32,8 @@ SsdCache::SsdCache(const Config& config)
     : filePrefix_(config.filePrefix),
       numShards_(config.numShards),
       groupStats_(std::make_unique<FileGroupStats>()),
-      executor_(config.executor) {
+      executor_(config.executor),
+      maxEntries_(config.maxEntries) {
   // Make sure the given path of Ssd files has the prefix for local file system.
   // Local file system would be derived based on the prefix.
   VELOX_CHECK(
@@ -58,6 +59,9 @@ SsdCache::SsdCache(const Config& config)
   const uint64_t sizeQuantum = numShards_ * SsdFile::kRegionSize;
   const int32_t fileMaxRegions =
       bits::roundUp(config.maxBytes, sizeQuantum) / sizeQuantum;
+  // Distribute maxEntries across shards
+  const uint64_t maxEntriesPerShard =
+      maxEntries_ == 0 ? 0 : bits::divRoundUp(maxEntries_, numShards_);
   for (auto i = 0; i < numShards_; ++i) {
     const auto fileConfig = SsdFile::Config(
         fmt::format("{}{}", filePrefix_, i),
@@ -67,6 +71,7 @@ SsdCache::SsdCache(const Config& config)
         config.disableFileCow,
         config.checksumEnabled,
         checksumReadVerificationEnabled,
+        maxEntriesPerShard,
         executor_);
     files_.push_back(std::make_unique<SsdFile>(fileConfig));
   }
@@ -193,7 +198,11 @@ std::string SsdCache::toString() const {
   out << "Ssd cache IO: Write " << succinctBytes(data.bytesWritten) << " read "
       << succinctBytes(data.bytesRead) << " Size " << succinctBytes(capacity)
       << " Occupied " << succinctBytes(data.bytesCached);
-  out << " " << (data.entriesCached >> 10) << "K entries.";
+  out << " " << (data.entriesCached >> 10) << "K entries";
+  if (maxEntries_ > 0) {
+    out << " (max " << (maxEntries_ >> 10) << "K)";
+  }
+  out << ".";
   out << "\nGroupStats: " << groupStats_->toString(capacity);
   return out.str();
 }
@@ -209,7 +218,7 @@ void SsdCache::shutdown() {
 
   VELOX_SSD_CACHE_LOG(INFO) << "SSD cache is shutting down";
   while (writesInProgress_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+    std::this_thread::sleep_for(kWriteWaitMs);
   }
   for (auto& file : files_) {
     file->checkpoint(true);
@@ -225,7 +234,7 @@ void SsdCache::clear() {
 
 void SsdCache::waitForWriteToFinish() {
   while (writesInProgress_ != 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+    std::this_thread::sleep_for(kWriteWaitMs);
   }
 }
 

@@ -312,6 +312,13 @@ bool assertEqualResults(
     const core::PlanNodePtr& plan1,
     const core::PlanNodePtr& plan2);
 
+bool assertEqualResults(
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedType,
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& actualType,
+    const std::string& message);
+
 /// Ensure both datasets have the same type and number of rows.
 void assertEqualTypeAndNumRows(
     const TypePtr& expectedType,

@@ -544,4 +544,99 @@ FbDedupNormalizeTextArgValuesGenerator::generate(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> AtTimezoneArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_EQ(signature.args.size(), 2);
+  populateInputTypesAndNames(signature, state);
+
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+
+  // First argument - use default generation (TIME WITH TIME ZONE or TIMESTAMP
+  // WITH TIME ZONE)
+  state.customInputGenerators_.emplace_back(nullptr);
+  inputExpressions[0] = std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0], state.inputRowNames_[state.inputRowNames_.size() - 2]);
+
+  // Second argument - constrain to valid timezone offset formats
+  // Valid formats: "+HH:mm" or "-HH:mm" (Presto-compatible)
+  // Offset range: -14:00 to +14:00
+  // Uses shared timezone generation utility (25% frequently used, 75% random)
+  state.customInputGenerators_.emplace_back(nullptr);
+
+  // Generate random timezone offset and convert to string
+  int16_t offsetMinutes = generateRandomTimezoneOffset(rng);
+  std::string timezoneString = timezoneOffsetToString(offsetMinutes);
+  inputExpressions[1] = std::make_shared<core::ConstantTypedExpr>(
+      VARCHAR(), variant(timezoneString));
+
+  return inputExpressions;
+}
+
+std::vector<core::TypedExprPtr> SetDigestArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  populateInputTypesAndNames(signature, state);
+  const auto seed = rand<uint32_t>(rng);
+  const auto nullRatio = options.nullRatio;
+  std::vector<core::TypedExprPtr> inputExpressions;
+
+  VELOX_CHECK_GE(signature.args.size(), 1);
+  VELOX_CHECK_LE(signature.args.size(), 2);
+
+  const std::vector<std::string> singleArgFunctions = {
+      "hash_counts", "cardinality"};
+  const std::vector<std::string> twoArgFunctions = {
+      "jaccard_index", "intersection_cardinality"};
+
+  if (std::find(
+          singleArgFunctions.begin(),
+          singleArgFunctions.end(),
+          functionName_) != singleArgFunctions.end()) {
+    // Functions with one SetDigest input
+    VELOX_CHECK_EQ(signature.args.size(), 1);
+
+    state.customInputGenerators_.emplace_back(
+        std::make_shared<fuzzer::SetDigestInputGenerator>(
+            seed, signature.args[0], nullRatio));
+
+    VELOX_CHECK_GE(state.inputRowNames_.size(), 1);
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[0], state.inputRowNames_.back()));
+  } else if (
+      std::find(
+          twoArgFunctions.begin(), twoArgFunctions.end(), functionName_) !=
+      twoArgFunctions.end()) {
+    // Functions with two SetDigest inputs
+    VELOX_CHECK_EQ(signature.args.size(), 2);
+
+    // First SetDigest input
+    state.customInputGenerators_.emplace_back(
+        std::make_shared<fuzzer::SetDigestInputGenerator>(
+            seed, signature.args[0], nullRatio));
+
+    VELOX_CHECK_GE(state.inputRowNames_.size(), 2);
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[0],
+            state.inputRowNames_[state.inputRowNames_.size() - 2]));
+
+    // Second SetDigest input
+    state.customInputGenerators_.emplace_back(
+        std::make_shared<fuzzer::SetDigestInputGenerator>(
+            seed + 1, signature.args[1], nullRatio));
+
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[1],
+            state.inputRowNames_[state.inputRowNames_.size() - 1]));
+  }
+  return inputExpressions;
+}
 } // namespace facebook::velox::fuzzer

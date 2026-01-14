@@ -21,10 +21,10 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TaskTraceReader.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 #include "velox/tool/trace/TraceReplayTaskRunner.h"
@@ -33,11 +33,12 @@ using namespace facebook::velox;
 
 namespace facebook::velox::tool::trace {
 OperatorReplayerBase::OperatorReplayerBase(
-    std::string traceDir,
-    std::string queryId,
-    std::string taskId,
-    std::string nodeId,
-    std::string nodeName,
+    const std::string& traceDir,
+    const std::string& queryId,
+    const std::string& taskId,
+    const std::string& nodeId,
+    const std::string& nodeName,
+    const std::string& spillBaseDir,
     const std::string& driverIds,
     uint64_t queryCapacity,
     folly::Executor* executor)
@@ -48,6 +49,7 @@ OperatorReplayerBase::OperatorReplayerBase(
       taskTraceDir_(
           exec::trace::getTaskTraceDirectory(traceDir, queryId_, taskId_)),
       nodeTraceDir_(exec::trace::getNodeTraceDirectory(taskTraceDir_, nodeId_)),
+      spillBaseDir_(spillBaseDir),
       fs_(filesystems::getFileSystem(taskTraceDir_, nullptr)),
       pipelineIds_(exec::trace::listPipelineIds(nodeTraceDir_, fs_)),
       driverIds_(
@@ -62,7 +64,7 @@ OperatorReplayerBase::OperatorReplayerBase(
   VELOX_USER_CHECK(!taskId_.empty());
   VELOX_USER_CHECK(!nodeId_.empty());
   VELOX_USER_CHECK(!nodeName_.empty());
-  if (nodeName_ == "HashJoin") {
+  if (nodeName_ == "HashJoin" || nodeName_ == "MergeJoin") {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 2);
   } else {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 1);
@@ -83,15 +85,17 @@ OperatorReplayerBase::OperatorReplayerBase(
 
 RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
   auto queryCtx = createQueryCtx();
-  std::shared_ptr<exec::test::TempDirectoryPath> spillDirectory;
-  if (queryCtx->queryConfig().spillEnabled()) {
-    spillDirectory = exec::test::TempDirectoryPath::create();
+  std::shared_ptr<exec::test::TempDirectoryPath> localSpillDirectory;
+  if (queryCtx->queryConfig().spillEnabled() && spillBaseDir_.empty()) {
+    localSpillDirectory = exec::test::TempDirectoryPath::create();
   }
 
   TraceReplayTaskRunner traceTaskRunner(createPlan(), std::move(queryCtx));
   auto [task, result] =
       traceTaskRunner.maxDrivers(driverIds_.size())
-          .spillDirectory(spillDirectory ? spillDirectory->getPath() : "")
+          .spillDirectory(
+              localSpillDirectory != nullptr ? localSpillDirectory->getPath()
+                                             : spillBaseDir_)
           .run(copyResults);
   printStats(task);
   return result;

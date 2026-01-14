@@ -208,7 +208,7 @@ DataSetBuilder& DataSetBuilder::withUniqueStringsForField(
       if (strings->isNullAt(row)) {
         continue;
       }
-      std::string value = strings->valueAt(row);
+      auto value = std::string(strings->valueAt(row));
       value += fmt::format("{}", row);
       strings->set(row, StringView(value));
     }
@@ -283,7 +283,7 @@ DataSetBuilder& DataSetBuilder::makeMapStringValues(
             continue;
           }
           if (!keys->isNullAt(i) && i % 3 == 0) {
-            std::string str = keys->valueAt(i);
+            auto str = std::string(keys->valueAt(i));
             str += "----123456789";
             keys->set(i, StringView(str));
           }
@@ -305,7 +305,7 @@ DataSetBuilder& DataSetBuilder::makeMapStringValues(
             continue;
           }
           if (!values->isNullAt(i) && i % 3 == 0) {
-            std::string str = values->valueAt(i);
+            auto str = std::string(values->valueAt(i));
             str += "----123456789";
             values->set(i, StringView(str));
           }

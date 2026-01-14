@@ -17,6 +17,7 @@ add_executable(
   BingTileTypeTest.cpp
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
+  KHyperLogLogTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp
   TimeWithTimezoneTypeTest.cpp
   TDigestTypeTest.cpp

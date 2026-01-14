@@ -34,10 +34,10 @@ class ColumnStatistics;
 }
 namespace common {
 
-// Describes the filtering and value extraction for a
-// SelectiveColumnReader. This is owned by the TableScan Operator and
-// is passed to SelectiveColumnReaders at construction.  This is
-// mutable by readers to reflect filter order and other adaptations.
+/// Describes the filtering and value extraction for a
+/// SelectiveColumnReader. This is owned by the TableScan Operator and
+/// is passed to SelectiveColumnReaders at construction.  This is
+/// mutable by readers to reflect filter order and other adaptations.
 class ScanSpec {
  public:
   enum class ColumnType : int8_t {
@@ -46,7 +46,7 @@ class ScanSpec {
     kComposite, // A struct with all children not read from file
   };
 
-  // Convert ColumnType to its string name representation.
+  /// Convert ColumnType to its string name representation.
   static std::string_view columnTypeString(ColumnType columnType);
 
   static constexpr column_index_t kNoChannel = ~0;
@@ -56,9 +56,9 @@ class ScanSpec {
 
   explicit ScanSpec(const std::string& name) : fieldName_(name) {}
 
-  // Filter to apply. If 'this' corresponds to a struct/list/map, this
-  // can only be isNull or isNotNull, other filtering is given by
-  // 'children'.
+  /// Filter to apply. If 'this' corresponds to a struct/list/map, this
+  /// can only be isNull or isNotNull, other filtering is given by
+  /// 'children'.
   const common::Filter* filter() const {
     return filterDisabled_ ? nullptr : filter_.get();
   }
@@ -167,8 +167,8 @@ class ScanSpec {
     return projectOut_ || deltaUpdate_;
   }
 
-  // Position in the RowVector returned by the top level scan. Applies
-  // only to children of the root struct where projectOut_ is true.
+  /// Position in the RowVector returned by the top level scan. Applies
+  /// only to children of the root struct where projectOut_ is true.
   column_index_t channel() const {
     return channel_;
   }
@@ -408,29 +408,29 @@ class ScanSpec {
   // Number of times read is called on the corresponding reader. This
   // is used for setup on first use and to produce a read sequence
   // number for LazyVectors.
-  uint64_t numReads_ = 0;
+  uint64_t numReads_{0};
 
   // Ordinal position of 'this' in its containing spec. For a struct
   // member this is the position of the reader in the child
   // readers. If this describes an operation on an array element or a
   // map with numeric key, this is the subscript as defined for array
   // or map.
-  int64_t subscript_ = -1;
+  int64_t subscript_{-1};
   // Column name if this is a struct mamber. String key if this
   // describes an operation on a map value.
   std::string fieldName_;
   // Ordinal position of the extracted value in the containing
   // RowVector. Set only when this describes a struct member.
-  column_index_t channel_ = kNoChannel;
+  column_index_t channel_{kNoChannel};
 
   VectorPtr constantValue_;
-  bool projectOut_ = false;
+  bool projectOut_{false};
 
-  ColumnType columnType_ = ColumnType::kRegular;
+  ColumnType columnType_{ColumnType::kRegular};
 
   // True if a string dictionary or flat map in this field should be
   // returned as flat.
-  bool makeFlat_ = false;
+  bool makeFlat_{false};
   std::shared_ptr<const common::Filter> filter_;
   bool filterDisabled_ = false;
   dwio::common::DeltaColumnUpdater* deltaUpdate_ = nullptr;

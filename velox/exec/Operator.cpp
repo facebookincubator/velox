@@ -13,14 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/Operator.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/OperatorTraceWriter.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/expression/Expr.h"
 
 using facebook::velox::common::testutil::TestValue;

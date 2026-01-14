@@ -21,6 +21,7 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/external/md5/md5.h"
@@ -257,9 +258,10 @@ template <typename T>
 struct FromHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
+      const TInput& input) {
     VELOX_USER_CHECK_EQ(
         input.size() % 2,
         0,
@@ -311,11 +313,33 @@ struct FromBase64Function {
   }
 };
 
+template <typename TExec>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    auto inputSize = input.size();
+    auto decodedSize =
+        encoding::Base32::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base32::decode(
+        input.data(), inputSize, result.data(), result.size());
+  }
+};
+
 template <typename T>
 struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE Status
-  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
+  call(out_type<Varbinary>& result, const TInput& input) {
     auto inputSize = input.size();
     auto decodedSize =
         encoding::Base64::calculateDecodedSize(input.data(), inputSize);
@@ -497,6 +521,83 @@ struct Murmur3X64_128Function {
     result.resize(16);
     common::hll::Murmur3Hash128::hash(
         input.data(), input.size(), 0, result.data());
+  }
+};
+
+/// Computes FNV hash for the given data.
+/// FNV-1 multiplies then XORs, FNV-1a XORs then multiplies.
+template <typename HashType, bool XORFirst>
+FOLLY_ALWAYS_INLINE HashType computeFnvHash(
+    const unsigned char* data,
+    size_t size,
+    HashType offsetBasis,
+    HashType prime) {
+  HashType hash = offsetBasis;
+  for (auto i = 0; i < size; ++i) {
+    if constexpr (XORFirst) {
+      hash ^= data[i];
+      hash *= prime;
+    } else {
+      hash *= prime;
+      hash ^= data[i];
+    }
+  }
+  return hash;
+}
+
+template <typename T>
+struct Fnv1_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
+    static constexpr uint32_t kPrime = 0x01000193;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint32_t, false>(
+        data, input.size(), kOffsetBasis, kPrime);
+  }
+};
+
+template <typename T>
+struct Fnv1_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
+    static constexpr uint64_t kPrime = 0x100000001b3L;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint64_t, false>(
+        data, input.size(), kOffsetBasis, kPrime);
+  }
+};
+
+template <typename T>
+struct Fnv1a_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
+    static constexpr uint32_t kPrime = 0x01000193;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint32_t, true>(
+        data, input.size(), kOffsetBasis, kPrime);
+  }
+};
+
+template <typename T>
+struct Fnv1a_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
+    static constexpr uint64_t kPrime = 0x100000001b3L;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint64_t, true>(
+        data, input.size(), kOffsetBasis, kPrime);
   }
 };
 

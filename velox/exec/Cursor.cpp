@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Cursor.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/file/FileSystems.h"
 
 #include <filesystem>
@@ -67,7 +68,8 @@ exec::BlockingReason TaskQueue::enqueue(
     consumerPromise_.setValue();
   }
   if (totalBytes_ > maxBytes_) {
-    auto [unblockPromise, unblockFuture] = makeVeloxContinuePromiseContract();
+    auto [unblockPromise, unblockFuture] =
+        makeVeloxContinuePromiseContract("TaskQueue::enqueue");
     producerUnblockPromises_.emplace_back(std::move(unblockPromise));
     *future = std::move(unblockFuture);
     return exec::BlockingReason::kWaitForConsumer;
@@ -99,7 +101,7 @@ RowVectorPtr TaskQueue::dequeue() {
       }
       if (!vector) {
         consumerBlocked_ = true;
-        consumerPromise_ = ContinuePromise();
+        consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
       }
     }
@@ -213,7 +215,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
       : TaskCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
-                std::thread::hardware_concurrency())),
+                folly::hardware_concurrency())),
         maxDrivers_{params.maxDrivers},
         numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
         numSplitGroups_{params.numSplitGroups} {

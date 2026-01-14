@@ -18,22 +18,35 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/io/Options.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
+#include <cudf/io/datasource.hpp>
+#include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
+
+#include <mutex>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
+
+using CudfParquetReader = cudf::io::chunked_parquet_reader;
+using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
+
+using CudfHybridScanReader =
+    cudf::io::parquet::experimental::hybrid_scan_reader;
+using CudfHybridScanReaderPtr = std::unique_ptr<CudfHybridScanReader>;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
@@ -41,6 +54,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& columnHandles,
+      facebook::velox::FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
@@ -74,8 +88,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  private:
-  // Create a cudf::io::chunked_parquet_reader with the given split.
-  std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
+  // Create a CudfParquetReader with the given split.
+  CudfParquetReaderPtr createSplitReader();
+  CudfHybridScanReaderPtr createExperimentalSplitReader();
+
   // Clear split_ and splitReader after split has been fully processed.  Keep
   // readers around to hold adaptation.
   void resetSplit();
@@ -88,26 +104,31 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
     }
     return emptyOutput_;
   }
+
+  // Setup the cuDF data source and options
+  void setupCudfDataSourceAndOptions();
+
   RowVectorPtr emptyOutput_;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
       tableHandle_;
 
-  const std::shared_ptr<CudfHiveConfig> parquetConfig_;
-
+  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
+  facebook::velox::FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
   memory::MemoryPool* const pool_;
 
-  // cuDF CudfHive reader stuff.
+  // cuDF split reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
-  std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
+  std::shared_ptr<cudf::io::datasource> dataSource_;
+  std::unique_ptr<std::once_flag> tableMaterialized_;
+  CudfParquetReaderPtr splitReader_;
+  CudfHybridScanReaderPtr exptSplitReader_;
+  bool useExperimentalSplitReader_;
   rmm::cuda_stream_view stream_;
-
-  // Table column names read from the CudfHive file
-  std::vector<std::string> columnNames_;
 
   // Output type from file reader.  This is different from outputType_ that it
   // contains column names before assignment, and columns that only used in
@@ -118,6 +139,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::vector<std::string> readColumnNames_;
 
   std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+
+  dwio::common::ReaderOptions baseReaderOpts_;
 
   size_t completedRows_{0};
   size_t completedBytes_{0};
@@ -128,7 +152,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  velox::cudf_velox::ExpressionEvaluator cudfExpressionEvaluator_;
+  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;

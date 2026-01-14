@@ -23,7 +23,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
-#include "velox/common/caching/FileIds.h"
 
 #define VELOX_CACHE_ERROR(errorMessage)                             \
   _VELOX_THROW(                                                     \
@@ -492,7 +491,7 @@ void CacheShard::freeAllocations(std::vector<memory::Allocation>& allocations) {
 }
 
 void CacheShard::calibrateThresholdLocked() {
-  auto numSamples = std::min<int32_t>(10, entries_.size());
+  auto numSamples = std::min<int32_t>(kMaxEvictionSamples, entries_.size());
   auto now = accessTime();
   auto entryIndex = (clockHand_ % entries_.size());
   auto step = entries_.size() / numSamples;
@@ -511,22 +510,32 @@ void CacheShard::calibrateThresholdLocked() {
         return score;
       },
       numSamples,
-      80);
+      kEvictionPercentile);
 }
 
 void CacheShard::updateStats(CacheStats& stats) {
   std::lock_guard<std::mutex> l(mutex_);
   for (auto& entry : entries_) {
-    if (!entry || !entry->key_.fileNum.hasValue()) {
+    if (!entry) {
       ++stats.numEmptyEntries;
       continue;
     }
 
     if (entry->isExclusive()) {
-      stats.exclusivePinnedBytes +=
-          entry->data().byteSize() + entry->tinyData_.capacity();
+      // We cannot read data() or tinyData_ which are being allocated during
+      // initialize(). Use size_ as an approximation of the pinned bytes.
+      stats.exclusivePinnedBytes += entry->size_;
       ++stats.numExclusive;
-    } else if (entry->isShared()) {
+      // Skip rest of the field accesses while entry is being initialized.
+      continue;
+    }
+
+    if (!entry->key_.fileNum.hasValue()) {
+      ++stats.numEmptyEntries;
+      continue;
+    }
+
+    if (entry->isShared()) {
       stats.sharedPinnedBytes +=
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numShared;
@@ -840,7 +849,6 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
   LOG(INFO) << "Try to shrink cache to free up "
             << velox::succinctBytes(targetBytes) << "  memory";
 
-  const uint64_t minBytesToEvict = 8UL << 20;
   uint64_t evictedBytes{0};
   uint64_t shrinkTimeUs{0};
   {
@@ -848,7 +856,8 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
     for (int shard = 0; shard < shards_.size(); ++shard) {
       memory::Allocation unused;
       evictedBytes += shards_[shardCounter_++ & (kShardMask)]->evict(
-          std::max<uint64_t>(minBytesToEvict, targetBytes - evictedBytes),
+          std::max<uint64_t>(
+              CacheShard::kMinBytesToEvict, targetBytes - evictedBytes),
           // Cache shrink is triggered when server is under low memory pressure
           // so need to free up memory as soon as possible. So we always avoid
           // triggering ssd save to accelerate the cache evictions.

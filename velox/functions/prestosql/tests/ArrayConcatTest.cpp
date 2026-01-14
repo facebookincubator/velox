@@ -124,7 +124,9 @@ TEST_F(ArrayConcatTest, arity) {
       "concat(c0, c1, c2, c3)", {array1, array4, array3, array2}, expected);
 
   testExpressionWithError(
-      "concat(c0)", {array1}, "There must be 2 or more arguments to concat");
+      "concat(c0)",
+      {array1},
+      "Scalar function signature is not supported: concat(ARRAY<BIGINT>).");
 
   std::stringstream expression;
   std::vector<VectorPtr> inputArrayVector;

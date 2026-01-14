@@ -194,6 +194,8 @@ class TestIndexSource : public connector::IndexSource,
         std::unique_ptr<HashLookup> lookupResult,
         folly::Executor* executor);
 
+    bool hasNext() override;
+
     std::optional<std::unique_ptr<LookupResult>> next(
         vector_size_t size,
         ContinueFuture& future) override;

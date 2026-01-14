@@ -33,6 +33,12 @@ template <typename T>
 static simdjson::error_code validate(T value) {
   SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
   switch (type) {
+    case simdjson::ondemand::json_type::unknown: {
+      // In simdjson 4.0.7+, unknown type is returned for invalid JSON values
+      // like NaN, Infinity, etc. Return INCORRECT_TYPE to indicate invalid
+      // JSON.
+      return simdjson::INCORRECT_TYPE;
+    }
     case simdjson::ondemand::json_type::array: {
       SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
       for (auto elementOrError : array) {
@@ -389,6 +395,12 @@ class JsonParseImpl {
   simdjson::error_code generateViews(T value) const {
     SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
     switch (type) {
+      case simdjson::ondemand::json_type::unknown: {
+        // In simdjson 4.0.7+, unknown type is returned for invalid JSON values
+        // like NaN, Infinity, etc. Return INCORRECT_TYPE to indicate invalid
+        // JSON.
+        return simdjson::INCORRECT_TYPE;
+      }
       case simdjson::ondemand::json_type::array: {
         SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
         return generateViewsFromArray<kNeedNormalize>(array);
@@ -761,6 +773,12 @@ struct JsonExtractImpl {
       // contents directly) and we might miss invalid JSON.
       SIMDJSON_ASSIGN_OR_RAISE(auto vtype, v.type());
       switch (vtype) {
+        case simdjson::ondemand::json_type::unknown: {
+          // In simdjson 4.0.7+, unknown type is returned for invalid JSON
+          // values like NaN, Infinity, etc. Return INCORRECT_TYPE to indicate
+          // invalid JSON.
+          return simdjson::INCORRECT_TYPE;
+        }
         case simdjson::ondemand::json_type::object: {
           SIMDJSON_ASSIGN_OR_RAISE(
               auto jsonStr, simdjson::to_json_string(v.get_object()));
@@ -787,7 +805,9 @@ struct JsonExtractImpl {
       return simdjson::SUCCESS;
     };
 
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+    // TODO: Remove explicit std::string_view cast.
+    auto& extractor =
+        SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
     bool isDefinitePath = true;
     simdjson::padded_string paddedJson(json.data(), json.size());
 

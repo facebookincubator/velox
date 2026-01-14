@@ -44,6 +44,7 @@ FetchContent_Declare(
 # that.
 set(GIT_COMMIT_HASH "6536a77")
 set(BUILD_UNITTESTS OFF)
+set(BUILD_TESTING OFF)
 set(ENABLE_SANITIZER OFF)
 set(ENABLE_UBSAN OFF)
 set(BUILD_SHELL OFF)
@@ -65,3 +66,5 @@ endif()
 
 set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})
 set(CMAKE_BUILD_TYPE ${PREVIOUS_BUILD_TYPE})
+# Some DuckDB third-party package sets this flags. We cannot control that.
+unset(BUILD_TESTING)

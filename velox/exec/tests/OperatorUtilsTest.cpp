@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/MergeTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -58,7 +59,8 @@ class OperatorUtilsTest : public OperatorTestBase {
   void gatherCopyTest(
       const std::shared_ptr<const RowType>& targetType,
       const std::shared_ptr<const RowType>& sourceType,
-      int numSources) {
+      int numSources,
+      bool flattenSources = true) {
     folly::Random::DefaultGenerator rng(1);
     const int kNumRows = 500;
     const int kNumColumns = sourceType->size();
@@ -77,6 +79,23 @@ class OperatorUtilsTest : public OperatorTestBase {
           nullRow +=
               std::max<int>(1, (folly::Random::rand32() % kNumColumns) / 4);
         }
+      }
+    }
+
+    if (!flattenSources) {
+      for (int i = 0; i < numSources; ++i) {
+        const auto source = sources[i];
+        const auto numRows = source->size();
+        std::vector<vector_size_t> sortIndices(numRows, 0);
+        for (auto i = 0; i < numRows; ++i) {
+          sortIndices[i] = i;
+        }
+        BufferPtr indices = allocateIndices(numRows, pool_.get());
+        auto rawIndices = indices->asMutable<vector_size_t>();
+        for (size_t i = 0; i < numRows; ++i) {
+          rawIndices[i] = sortIndices[i];
+        }
+        sources[i] = wrap(numRows, indices, source);
       }
     }
 
@@ -131,6 +150,61 @@ class OperatorUtilsTest : public OperatorTestBase {
                 source, targetIndex + j, sourceIndices[j]));
           }
         }
+      }
+    }
+  }
+
+  void gatherMergeTest(
+      int32_t numValues,
+      int numMergeWays,
+      int targetSize,
+      bool useRandom) {
+    auto goldenVector = makeRowVector({
+        makeFlatVector<int32_t>(numValues, [&](auto row) { return row; }),
+    });
+    std::vector<std::vector<int32_t>> mergeWays(numMergeWays);
+    for (int32_t value = 0; value < numValues; value++) {
+      int way = useRandom ? folly::Random::rand32() % numMergeWays
+                          : value % numMergeWays;
+      mergeWays[way].push_back(value);
+    }
+    std::vector<RowVectorPtr> sources;
+    std::vector<std::unique_ptr<SpillMergeStream>> streams;
+    std::vector<SpillSortKey> sortKeys = {{0, {true, true}}};
+    for (int way = 0; way < numMergeWays; way++) {
+      auto source = makeRowVector({
+          makeFlatVector<int32_t>(
+              mergeWays[way].size(),
+              [&](auto row) { return mergeWays[way][row]; }),
+      });
+      sources.push_back(source);
+      streams.push_back(
+          std::make_unique<TestingSpillMergeStream>(way, sortKeys, source));
+    }
+    auto mergeTree =
+        std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+    RowVectorPtr targetVector = std::static_pointer_cast<RowVector>(
+        BaseVector::create(sources[0]->type(), targetSize, pool_.get()));
+    std::vector<const RowVector*> bufferSources(targetSize);
+    std::vector<vector_size_t> bufferSourceIndices(targetSize);
+    for (int32_t batch = 0; batch * targetSize < numValues; batch++) {
+      int32_t valueBegin = batch * targetSize;
+      int32_t valueEnd = valueBegin + targetSize;
+      valueEnd = std::min(valueEnd, numValues);
+      VectorPtr tmp = std::move(targetVector);
+      BaseVector::prepareForReuse(tmp, targetSize);
+      targetVector = std::static_pointer_cast<RowVector>(tmp);
+      for (auto& child : targetVector->children()) {
+        child->resize(targetSize);
+      }
+      int count = 0;
+      testingGatherMerge(
+          targetVector, *mergeTree, count, bufferSources, bufferSourceIndices);
+      EXPECT_EQ(count, valueEnd - valueBegin);
+      auto result = targetVector->childAt(0).get();
+      auto golden = goldenVector->childAt(0).get();
+      for (int32_t row = 0; row < valueEnd - valueBegin; row++) {
+        EXPECT_TRUE(result->equalValueAt(golden, row, valueBegin + row));
       }
     }
   }
@@ -373,6 +447,67 @@ TEST_F(OperatorUtilsTest, gatherCopy) {
       ASSERT_TRUE(vector->equalValueAt(source, j, sourceIndices[j]));
     }
   }
+}
+
+TEST_F(OperatorUtilsTest, gatherCopyEncoding) {
+  std::shared_ptr<const RowType> rowType;
+  std::shared_ptr<const RowType> reversedRowType;
+  {
+    std::vector<std::string> names = {
+        "bool_val",
+        "tiny_val",
+        "small_val",
+        "int_val",
+        "long_val",
+        "ordinal",
+        "float_val",
+        "double_val",
+        "string_val",
+        "array_val",
+        "struct_val",
+        "map_val"};
+    std::vector<std::string> reversedNames = names;
+    std::reverse(reversedNames.begin(), reversedNames.end());
+
+    std::vector<std::shared_ptr<const Type>> types = {
+        BOOLEAN(),
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        BIGINT(),
+        REAL(),
+        DOUBLE(),
+        VARCHAR(),
+        ARRAY(VARCHAR()),
+        ROW({{"s_int", INTEGER()}, {"s_array", ARRAY(REAL())}}),
+        MAP(VARCHAR(),
+            MAP(BIGINT(),
+                ROW({{"s2_int", INTEGER()}, {"s2_string", VARCHAR()}})))};
+    std::vector<std::shared_ptr<const Type>> reversedTypes = types;
+    std::reverse(reversedTypes.begin(), reversedTypes.end());
+
+    rowType = ROW(std::move(names), std::move(types));
+    reversedRowType = ROW(std::move(reversedNames), std::move(reversedTypes));
+  }
+
+  // Gather copy with identical column mapping.
+  gatherCopyTest(rowType, rowType, 1, false);
+  gatherCopyTest(rowType, rowType, 5, false);
+  // Gather copy with non-identical column mapping.
+  gatherCopyTest(rowType, reversedRowType, 1, false);
+  gatherCopyTest(rowType, reversedRowType, 5, false);
+}
+
+TEST_F(OperatorUtilsTest, gatherMerge) {
+  gatherMergeTest(1234, 2, 10, false);
+  gatherMergeTest(1234, 2, 100, false);
+  gatherMergeTest(1234, 10, 10, false);
+  gatherMergeTest(1234, 10, 100, false);
+  gatherMergeTest(1234, 2, 10, true);
+  gatherMergeTest(1234, 2, 100, true);
+  gatherMergeTest(1234, 10, 10, true);
+  gatherMergeTest(1234, 10, 100, true);
 }
 
 TEST_F(OperatorUtilsTest, makeOperatorSpillPath) {

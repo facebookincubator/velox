@@ -371,7 +371,7 @@ int load_dists() {
   read_ptr = tpcds_idx + tpcds_idx_len - (entry_count * IDX_SIZE);
   for (int i = 0; i < entry_count; i++) {
     d_idx_t entry;
-    memset(&entry, 0, sizeof(const d_idx_t));
+    memset(reinterpret_cast<uint8_t*>(&entry), 0, sizeof(const d_idx_t));
     memcpy(entry.name, read_ptr, D_NAME_LEN);
     read_ptr += D_NAME_LEN;
     entry.name[D_NAME_LEN] = '\0';

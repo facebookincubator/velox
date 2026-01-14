@@ -612,7 +612,7 @@ TEST_F(ArraySortTest, unsupporteLambda) {
 
 TEST_F(ArraySortTest, failOnMapTypeSort) {
   static const std::string kErrorMessage =
-      "Scalar function signature is not supported"_sv;
+      "Scalar function signature is not supported";
   auto data = makeRowVector({BaseVector::createNullConstant(
       ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool())});
   auto testFail = [&](const std::string& name) {

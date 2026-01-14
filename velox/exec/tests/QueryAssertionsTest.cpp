@@ -182,7 +182,7 @@ TEST_F(QueryAssertionsTest, singleFloatColumn) {
           size,
           [&](auto row) {
             return row == 302
-                ? 2.01 + std::max(kEpsilon, double(6 * FLT_EPSILON))
+                ? 2.01 + std::max(Variant::kEpsilon, double(6 * FLT_EPSILON))
                 : row % 6 + 0.01;
           },
           nullEvery(7)),
@@ -282,15 +282,17 @@ TEST_F(QueryAssertionsTest, multiFloatColumnWithUniqueKeys) {
       makeFlatVector<float>(
           size,
           [&](auto row) {
-            return row == 6 ? 2 + std::max(float(kEpsilon), 6 * FLT_EPSILON)
-                            : row % 4;
+            return row == 6
+                ? 2 + std::max(float(Variant::kEpsilon), 6 * FLT_EPSILON)
+                : row % 4;
           },
           nullEvery(5)),
       makeFlatVector<double>(
           size,
           [&](auto row) {
-            return row == 1 ? 1.01 + std::max(kEpsilon, double(3 * FLT_EPSILON))
-                            : row % 6 + 0.01;
+            return row == 1
+                ? 1.01 + std::max(Variant::kEpsilon, double(3 * FLT_EPSILON))
+                : row % 6 + 0.01;
           },
           nullEvery(7)),
   });

@@ -46,6 +46,10 @@ add_executable(
   SimpleFunctionInitTest.cpp
   SimpleFunctionPresetNullsTest.cpp
   SimpleFunctionTest.cpp
+  SpecialFormRewriteTestBase.cpp
+  SwitchRewriteTest.cpp
+  CoalesceRewriteTest.cpp
+  ConjunctRewriteTest.cpp
   StringWriterTest.cpp
   TryExprTest.cpp
   VariadicViewTest.cpp

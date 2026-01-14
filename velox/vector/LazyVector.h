@@ -177,6 +177,8 @@ class ValueHook {
   }
 };
 
+class ChainedVectorLoader;
+
 // Produces values for a LazyVector for a set of positions.
 class VectorLoader {
  public:
@@ -211,11 +213,36 @@ class VectorLoader {
   }
 
  protected:
+  friend class ChainedVectorLoader;
+
   virtual void loadInternal(
       RowSet rows,
       ValueHook* hook,
       vector_size_t resultSize,
       VectorPtr* result) = 0;
+};
+
+class ChainedVectorLoader : public VectorLoader {
+ public:
+  using PostVectorLoadProcessor = std::function<void(VectorPtr&)>;
+
+  ChainedVectorLoader(
+      std::unique_ptr<VectorLoader> loader,
+      PostVectorLoadProcessor postLoadProc)
+      : loader_(std::move(loader)), postLoadProc_(std::move(postLoadProc)) {}
+
+ private:
+  void loadInternal(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) override {
+    loader_->loadInternal(rows, hook, resultSize, result);
+    postLoadProc_(*result);
+  }
+
+  std::unique_ptr<VectorLoader> loader_;
+  PostVectorLoadProcessor postLoadProc_;
 };
 
 // Vector class which produces values on first use. This is used for
@@ -339,11 +366,6 @@ class LazyVector : public BaseVector {
     return loadedVector()->containsNullAt(index);
   }
 
-  uint64_t retainedSize() const override {
-    return isLoaded() ? loadedVector()->retainedSize()
-                      : BaseVector::retainedSize();
-  }
-
   /// Returns zero if vector has not been loaded yet.
   uint64_t estimateFlatSize() const override {
     return isLoaded() ? loadedVector()->estimateFlatSize() : 0;
@@ -357,6 +379,12 @@ class LazyVector : public BaseVector {
 
   bool supportsHook() const {
     return loader_->supportsHook();
+  }
+
+  void chain(ChainedVectorLoader::PostVectorLoadProcessor postLoadProc) {
+    VELOX_CHECK(!allLoaded_);
+    loader_ = std::make_unique<ChainedVectorLoader>(
+        std::move(loader_), std::move(postLoadProc));
   }
 
   // Loads 'rows' of 'vector'. 'vector' may be an arbitrary wrapping
@@ -398,6 +426,11 @@ class LazyVector : public BaseVector {
       SelectivityVector& baseRows);
 
   void loadVectorInternal() const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return isLoaded() ? loadedVector()->retainedSize(totalStringBufferSize)
+                      : BaseVector::retainedSizeImpl();
+  }
 
   std::unique_ptr<VectorLoader> loader_;
 

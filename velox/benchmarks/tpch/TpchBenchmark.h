@@ -15,4 +15,31 @@
  */
 #pragma once
 
+#include "velox/benchmarks/QueryBenchmarkBase.h"
+#include "velox/exec/tests/utils/TpchQueryBuilder.h"
+
+class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
+ public:
+  void initialize() override;
+
+  void shutdown() override;
+
+  void runMain(std::ostream& out, facebook::velox::RunStats& runStats) override;
+
+  void runQuery(int32_t queryId) {
+    const auto planContext = queryBuilder_->getQueryPlan(queryId);
+    run(planContext, queryConfigs_);
+  }
+
+ protected:
+  std::unordered_map<std::string, std::string> queryConfigs_;
+
+ private:
+  void initQueryBuilder();
+
+  std::shared_ptr<facebook::velox::exec::test::TpchQueryBuilder> queryBuilder_;
+};
+
+extern std::unique_ptr<TpchBenchmark> benchmark;
+
 void tpchBenchmarkMain();

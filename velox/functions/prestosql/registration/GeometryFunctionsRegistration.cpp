@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/GeometryFunctions.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
+#include "velox/functions/prestosql/types/SphericalGeographyRegistration.h"
 
 namespace facebook::velox::functions {
 
@@ -31,6 +32,8 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "ST_GeomFromBinary"}});
   registerFunction<StAsTextFunction, Varchar, Geometry>(
       {{prefix + "ST_AsText"}});
+  registerFunction<SphericalAsTextFunction, Varchar, SphericalGeography>(
+      {{prefix + "ST_AsText"}});
   registerFunction<StAsBinaryFunction, Varbinary, Geometry>(
       {{prefix + "ST_AsBinary"}});
   registerFunction<StPointFunction, Geometry, double, double>(
@@ -41,6 +44,23 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "ST_LineString"}});
   registerFunction<StMultiPointFunction, Geometry, Array<Geometry>>(
       {{prefix + "ST_MultiPoint"}});
+  registerFunction<ToSphericalGeographyFunction, SphericalGeography, Geometry>(
+      {{prefix + "to_spherical_geography"}});
+  registerFunction<ToGeometryFunction, Geometry, SphericalGeography>(
+      {{prefix + "to_geometry"}});
+  registerFunction<
+      StSphericalCentroidFunction,
+      SphericalGeography,
+      SphericalGeography>({{prefix + "st_centroid"}});
+  registerFunction<
+      StSphericalDistanceFunction,
+      double,
+      SphericalGeography,
+      SphericalGeography>({{prefix + "st_distance"}});
+  registerFunction<StSphericalLengthFunction, double, SphericalGeography>(
+      {{prefix + "st_length"}});
+  registerFunction<StSphericalAreaFunction, double, SphericalGeography>(
+      {{prefix + "st_area"}});
 }
 
 void registerRelationPredicates(const std::string& prefix) {
@@ -198,6 +218,7 @@ void registerBingTileGeometryFunctions(const std::string& prefix) {
 
 void registerGeometryFunctions(const std::string& prefix) {
   registerGeometryType();
+  registerSphericalGeographyType();
   registerConstructors(prefix);
   registerRelationPredicates(prefix);
   registerOverlayOperations(prefix);
