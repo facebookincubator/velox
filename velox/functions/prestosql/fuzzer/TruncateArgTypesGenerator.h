@@ -29,7 +29,9 @@ class TruncateArgTypesGenerator : public fuzzer::ArgTypesGenerator {
     // Only the single-arg truncate function is supported because
     // ArgumentTypeFuzzer can generate argument types for the two-arg truncate
     // function.
-    VELOX_CHECK_EQ(1, signature.argumentTypes().size());
+    if (signature.argumentTypes().size() != 1) {
+      return {};
+    }
     // Generates a decimal type following below formulas:
     // p = max(p1 - s1, 1)
     // s = 0

@@ -204,7 +204,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARBINARY(),
       TIMESTAMP(),
       TIMESTAMP_WITH_TIME_ZONE(),
-  };
+      IPADDRESS()};
   return kScalarTypes;
 }
 
@@ -362,7 +362,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
       usesTypeName(signature, "p4hyperloglog") ||
-      usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
 }
