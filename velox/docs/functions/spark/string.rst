@@ -286,6 +286,23 @@ String Functions
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: randstr(length[, seed]) -> varchar
+
+    Returns a string of the specified ``length`` whose characters are chosen uniformly
+    at random from the following pool of characters: 0-9, a-z, A-Z.
+    ``length`` must be a constant non-negative integer (SMALLINT or INT).
+    ``seed``, if provided, must be a constant integer (INT or BIGINT).
+    If ``seed`` is null, it is treated as 0.
+    With the same ``seed`` and partition, the function produces deterministic results.
+    The partition is determined by the ``spark_partition_id`` query configuration.
+    Without ``seed``, the function is non-deterministic.
+    This function was added in Spark 4.0. ::
+
+        SELECT randstr(5); -- "ceV0P" (random)
+        SELECT randstr(0); -- ""
+        SELECT randstr(5, 0);  -- "ceV0P" (deterministic with seed)
+        SELECT randstr(10, 0); -- "ceV0PXaR2I"
+
 .. spark:function:: read_side_padding(string, limit) -> varchar
 
     Right-pads the given string with spaces to the specified length ``limit``.
