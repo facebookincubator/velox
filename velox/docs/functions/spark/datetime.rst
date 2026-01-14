@@ -253,6 +253,15 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT month('2009-07-30'); -- 7
 
+.. spark:function:: monthname(date) -> varchar
+
+    Returns the three-letter abbreviated month name from the given date (Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec). ::
+
+        SELECT monthname('2008-02-20'); -- 'Feb'
+        SELECT monthname('2011-05-06'); -- 'May'
+        SELECT monthname('2023-08-20'); -- 'Aug'
+        SELECT monthname('1582-10-15'); -- 'Oct'
+
 .. spark:function:: months_between(timestamp1, timestamp2, roundOff) -> double
 
     Returns number of months between times ``timestamp1`` and ``timestamp2``.
