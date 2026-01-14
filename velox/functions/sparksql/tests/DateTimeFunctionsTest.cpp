@@ -676,6 +676,24 @@ TEST_F(DateTimeFunctionsTest, dayNameDate) {
       "Fri", dayName(parseDate("1582-10-15"))); // Gregorian calendar start.
 }
 
+TEST_F(DateTimeFunctionsTest, monthNameDate) {
+  const auto monthName = [&](std::optional<int32_t> date) {
+    return evaluateOnce<std::string>("monthname(c0)", DATE(), date);
+  };
+
+  // Test epoch date (1970-01-01).
+  EXPECT_EQ("Jan", monthName(0));
+
+  // Test various months across different years.
+  EXPECT_EQ("Jan", monthName(parseDate("2017-01-27")));
+  EXPECT_EQ("Feb", monthName(parseDate("2008-02-20")));
+  EXPECT_EQ("May", monthName(parseDate("2011-05-06")));
+  EXPECT_EQ("Aug", monthName(parseDate("2023-08-20")));
+  EXPECT_EQ("Aug", monthName(parseDate("2023-08-21")));
+  EXPECT_EQ(
+      "Oct", monthName(parseDate("1582-10-15"))); // Gregorian calendar start.
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](std::optional<int32_t> endDate,
                             std::optional<int32_t> startDate) {
