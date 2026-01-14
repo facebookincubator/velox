@@ -21,6 +21,7 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "velox/common/base/Fs.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/exec/OperatorUtils.h"
@@ -48,7 +49,8 @@ template <>
 folly::dynamic extractPartitionValue<TypeKind::VARBINARY>(
     const VectorPtr& child,
     vector_size_t row) {
-  return child->as<SimpleVector<StringView>>()->valueAt(row).str();
+  return encoding::Base64::encode(
+      child->as<SimpleVector<StringView>>()->valueAt(row));
 }
 
 template <>
