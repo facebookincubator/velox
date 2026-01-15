@@ -84,7 +84,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
                 << requestedSequence;
         int64_t nExtra = requestedSequence - sequence;
         VELOX_CHECK(nExtra < data.size());
-        data.erase(data.begin(), data.begin() + nExtra);
+        data.erase(data.cbegin(), data.cbegin() + nExtra);
         sequence = requestedSequence;
       }
       if (data.empty()) {

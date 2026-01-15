@@ -3008,7 +3008,7 @@ class TestBarrierOperator : public exec::Operator {
       return nullptr;
     }
     auto output = inputs_.front();
-    inputs_.erase(inputs_.begin());
+    inputs_.erase(inputs_.cbegin());
     return output;
   }
 
