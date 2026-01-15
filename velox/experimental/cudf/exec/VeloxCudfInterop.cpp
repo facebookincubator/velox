@@ -133,11 +133,28 @@ RowVectorPtr toVeloxColumn(
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata,
     rmm::cuda_stream_view stream) {
+
+  // To avoid ownership issues, we make copies of the Arrow objects
+  // returned from CUDF as unique_ptrs, then mark the originals as
+  // released so their destructors don't try to free the resources.
+  //
+  // A better solution would be alternative versions of the CUDF
+  // to_arrow_host functions that return Arrow objects by value
+  // or populate objects passed by reference, but that would require
+  // changes to CUDF.
+  //
+  // seves 1/17/26
+
   auto arrowDeviceArray = cudf::to_arrow_host(table, stream);
-  auto& arrowArray = arrowDeviceArray->array;
+  ArrowArray arrayCopy = arrowDeviceArray->array;
+  arrowDeviceArray->array.release = nullptr;
 
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
-  auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
+  ArrowSchema schemaCopy = *arrowSchema;
+  arrowSchema->release = nullptr;
+
+  auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
+
   // BaseVector to RowVector
   auto castedPtr =
       std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
