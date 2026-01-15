@@ -461,8 +461,8 @@ class MockFileSink : public dwio::common::FileSink {
 // initializes one: /usr/include/gtest/gtest-matchers.h:302:33 resulting in
 // error:
 // '<unnamed>.testing::Matcher<const
-// facebook::velox::FileStorageContext&>::<unnamed>.testing::internal::MatcherBase<const
-// facebook::velox::FileStorageContext&>::buffer_' is used uninitialized
+// facebook::velox::FileIoContext&>::<unnamed>.testing::internal::MatcherBase<const
+// facebook::velox::FileIoContext&>::buffer_' is used uninitialized
 // [-Werror=uninitialized]
 //  302 |       : vtable_(other.vtable_), buffer_(other.buffer_) {
 // Fix: https://github.com/google/googletest/pull/3797
