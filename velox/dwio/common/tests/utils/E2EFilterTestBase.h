@@ -364,7 +364,7 @@ class E2EFilterTestBase : public testing::Test {
   }
 
   const size_t kBatchCount = 4;
-  // kBatchSize must be greater than 10000 for RowGroup skipping test
+  // kBatchSize must be greater than 10'000 for RowGroup skipping test
   const size_t kBatchSize = 25'000;
 
   std::unique_ptr<test::DataSetBuilder> dataSetBuilder_;

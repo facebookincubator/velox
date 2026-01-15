@@ -92,7 +92,17 @@ struct StringView {
       // small string: inlined. Zero the last 8 bytes first to allow for whole
       // word comparison.
       value_.data = nullptr;
+#ifdef __GNUC__
+      // Use asm volatile to prevent GCC's interprocedural analysis from
+      // incorrectly concluding that size could exceed kInlineSize. This is a
+      // workaround for a false positive -Wstringop-overflow warning when GCC
+      // cannot prove the size constraint through deep template inlining.
+      auto sz = static_cast<size_t>(size_);
+      asm volatile("" : "+r"(sz));
+      memcpy(prefix_, data, sz);
+#else
       memcpy(prefix_, data, size_);
+#endif
     } else {
       // large string: store pointer
       memcpy(prefix_, data, kPrefixSize);

@@ -522,7 +522,9 @@ class RowReaderOptions {
 
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
-  bool passStringBuffersFromDecoder_{true};
+  // NOTE: we will control this option with a session property
+  // for prod. Tests are parameterized on both branches.
+  bool passStringBuffersFromDecoder_{false};
 };
 
 /// Options for creating a Reader.
