@@ -220,6 +220,21 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
+  // reject anything with DECIMAL to force to Function Evaluator path
+  // seves 1/14/26
+  if (expr->type()->isDecimal()) {
+    std::cout << "**** DECIMAL type (output) not supported in AST: "
+              << expr->toString() << std::endl;
+    return false;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (input->type()->isDecimal()) {
+      std::cout << "**** DECIMAL type (input) not supported in AST: "
+                   << expr->toString() << std::endl;
+      return false;
+    }
+  }
+
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
