@@ -54,7 +54,7 @@ Geometry type is a plane. The shortest path between two points on the plane is a
 straight line. That means calculations on geometries (areas, distances, lengths,
 intersections, etc) can be calculated using cartesian mathematics and straight
 line vectors.</p>
-<p>Functions that begin with the <a href="#id10"><span class="problematic" id="id11">ST_</span></a> prefix are compliant with the <a href="#id12"><span class="problematic" id="id13">`SQL/MM Part 3:
+<p>Functions that begin with the <a href="#id11"><span class="problematic" id="id12">ST_</span></a> prefix are compliant with the <a href="#id13"><span class="problematic" id="id14">`SQL/MM Part 3:
 Spatial`_</span></a> specification`. As such, many Geometry functions assume that
 geometries that are operated on are both simple and valid. Functions may raise
 an exception or return an arbitrary value for non-simple or non-valid
@@ -335,14 +335,14 @@ returns null.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsValid">
 <span class="sig-name descname"><span class="pre">ST_IsValid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">valid:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsValid" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id14"><span class="problematic" id="id15">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id15"><span class="problematic" id="id16">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-valid geometries include Polygons with self-intersecting shells.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsSimple">
 <span class="sig-name descname"><span class="pre">ST_IsSimple</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">simple:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsSimple" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id16"><span class="problematic" id="id17">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id17"><span class="problematic" id="id18">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-simple geometries include LineStrings with self-intersections,
 Polygons with empty rings for holes, and more.</p>
 </dd></dl>
@@ -432,6 +432,12 @@ return null.</p>
 <dd><p>If <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is not valid or not simple, return a description of the
 reason. If the geometry is valid and simple (or <code class="docutils literal notranslate"><span class="pre">NULL</span></code>), return <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.
 This function is relatively expensive.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="great_circle_distance">
+<span class="sig-name descname"><span class="pre">great_circle_distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">latitude1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">latitude2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#great_circle_distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the great-circle distance between two points on Earth’s surface in kilometers.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -738,6 +744,20 @@ described above.  Invalid parameters will return a User Error.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="bing_tiles_around">
+<span class="sig-name descname"><span class="pre">bing_tiles_around</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">latitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#bing_tiles_around" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a collection of Bing tiles that surround the point specified
+by the latitude and longitude arguments at a given zoom level.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id8">
+<span class="sig-name descname"><span class="pre">bing_tiles_around</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">latitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius_in_km</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
+radius in km around a specified (latitude, longitude) point.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="bing_tile_coordinates">
 <span class="sig-name descname"><span class="pre">bing_tile_coordinates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile:</span> <span class="pre">BingTile)</span> <span class="pre">-&gt;</span> <span class="pre">coords:</span> <span class="pre">row(integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#bing_tile_coordinates" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">x</span></code>, <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinates of a given Bing tile as <code class="docutils literal notranslate"><span class="pre">row(x,</span> <span class="pre">y)</span></code>.</p>
@@ -757,8 +777,8 @@ exception if tile is at zoom level 0.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id8">
-<span class="sig-name descname"><span class="pre">bing_tile_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parentZoom</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id9">
+<span class="sig-name descname"><span class="pre">bing_tile_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parentZoom</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id9" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the parent of the Bing tile at the specified lower zoom level.
 Throws an exception if parentZoom is less than 0, or parentZoom is greater
 than the tile’s zoom.</p>
@@ -772,12 +792,26 @@ exception if tile is at max zoom level.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id9">
-<span class="sig-name descname"><span class="pre">bing_tile_children</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">childZoom)</span> <span class="pre">-&gt;</span> <span class="pre">children:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id9" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id10">
+<span class="sig-name descname"><span class="pre">bing_tile_children</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">childZoom)</span> <span class="pre">-&gt;</span> <span class="pre">children:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id10" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the children of the Bing tile at the specified higher zoom level.
 Throws an exception if childZoom is greater than the max zoom level, or
 childZoom is less than the tile’s zoom.  The order is deterministic but not
 specified.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bing_tile_polygon">
+<span class="sig-name descname"><span class="pre">bing_tile_polygon</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Geometry</span></span></span><a class="headerlink" href="#bing_tile_polygon" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the polygon representation of a given Bing tile.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bing_tile_at">
+<span class="sig-name descname"><span class="pre">bing_tile_at</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">latitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">BingTile</span></span></span><a class="headerlink" href="#bing_tile_at" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a Bing tile at a given zoom level containing a point at a given latitude
+and longitude. Latitude must be within <code class="docutils literal notranslate"><span class="pre">[-85.05112878,</span> <span class="pre">85.05112878]</span></code> range.
+Longitude must be within <code class="docutils literal notranslate"><span class="pre">[-180,</span> <span class="pre">180]</span></code> range. Zoom levels from 1 to 23 are supported.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -873,6 +907,7 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#geometry_nearest_points"><code class="docutils literal notranslate"><span class="pre">geometry_nearest_points()</span></code></a></li>
 <li><a class="reference internal" href="#ST_EnvelopeAsPts"><code class="docutils literal notranslate"><span class="pre">ST_EnvelopeAsPts()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
+<li><a class="reference internal" href="#great_circle_distance"><code class="docutils literal notranslate"><span class="pre">great_circle_distance()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
@@ -910,12 +945,16 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
 <li><a class="reference internal" href="#bing_tile"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
 <li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
+<li><a class="reference internal" href="#bing_tiles_around"><code class="docutils literal notranslate"><span class="pre">bing_tiles_around()</span></code></a></li>
+<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">bing_tiles_around()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_coordinates"><code class="docutils literal notranslate"><span class="pre">bing_tile_coordinates()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_zoom_level"><code class="docutils literal notranslate"><span class="pre">bing_tile_zoom_level()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_parent"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
-<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
+<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_children"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
-<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
+<li><a class="reference internal" href="#id10"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
+<li><a class="reference internal" href="#bing_tile_polygon"><code class="docutils literal notranslate"><span class="pre">bing_tile_polygon()</span></code></a></li>
+<li><a class="reference internal" href="#bing_tile_at"><code class="docutils literal notranslate"><span class="pre">bing_tile_at()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_quadkey"><code class="docutils literal notranslate"><span class="pre">bing_tile_quadkey()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_to_bing_tiles"><code class="docutils literal notranslate"><span class="pre">geometry_to_bing_tiles()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_to_dissolved_bing_tiles"><code class="docutils literal notranslate"><span class="pre">geometry_to_dissolved_bing_tiles()</span></code></a></li>
