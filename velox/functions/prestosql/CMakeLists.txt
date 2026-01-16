@@ -54,6 +54,8 @@ velox_add_library(
   MapExcept.cpp
   MapKeysAndValues.cpp
   MapSubset.cpp
+  MapTopNKeys.cpp
+  MapTopNValues.cpp
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
@@ -123,6 +125,7 @@ velox_add_library(
   MapTopN.h
   MapTopNImpl.h
   MapTopNKeys.h
+  MapTopNLambdaImpl.h
   MapTopNValues.h
   MapTrimValues.h
   MapUpdate.h
