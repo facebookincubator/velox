@@ -42,6 +42,7 @@ target_link_libraries(
   velox_tpch_connector
   velox_aggregates
   velox_tpch_gen
+  velox_dwio_parquet_thrift
   ${TEST_LINK_LIBS}
 )
 

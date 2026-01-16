@@ -109,7 +109,21 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     MAIN_DEPENDENCY "${THRIFT_FILE}"
     DEPENDS ${ARG_DEPENDS} "${FBTHRIFT_COMPILER}")
 
+  # Mark generated files as GENERATED so CMake knows they don't exist yet.
+  # This is critical for Ninja to correctly order the thrift generation
+  # before attempting to compile these files.
+  set_source_files_properties(
+    ${generated_headers} ${generated_sources}
+    PROPERTIES GENERATED TRUE
+  )
+
   add_library("${LIB_NAME}" STATIC ${generated_sources})
+
+  # Ensure thrift generation completes before any compilation that depends on
+  # this library. This prevents Ninja race conditions where compilation might
+  # start before thrift file generation is fully complete.
+  add_custom_target("${LIB_NAME}_gen" DEPENDS ${generated_headers} ${generated_sources})
+  add_dependencies("${LIB_NAME}" "${LIB_NAME}_gen")
 
   target_include_directories(
     "${LIB_NAME}" PUBLIC "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>"

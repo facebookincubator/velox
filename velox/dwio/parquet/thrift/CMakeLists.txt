@@ -19,6 +19,9 @@ add_library(velox_dwio_parquet_thrift INTERFACE)
 target_link_libraries(velox_dwio_parquet_thrift INTERFACE velox_dwio_parquet_thrift_raw)
 if(VELOX_MONO_LIBRARY)
   target_link_libraries(velox velox_dwio_parquet_thrift_raw)
+  # Ensure the mono velox target waits for thrift file generation to complete.
+  # This prevents race conditions where compilation starts before generated files exist.
+  add_dependencies(velox velox_dwio_parquet_thrift_raw_gen)
 endif()
 
 velox_install_library_headers()
