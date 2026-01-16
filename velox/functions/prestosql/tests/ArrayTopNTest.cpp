@@ -443,4 +443,227 @@ TEST_F(ArrayTopNTest, verifyValidInput) {
       "Scalar function signature is not supported: array_top_n(ARRAY<INTEGER>, BIGINT).");
 }
 
+// Tests for array_top_n with comparator lambda.
+TEST_F(ArrayTopNTest, comparatorBasic) {
+  // Test basic usage with default comparator (descending order).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[4, 5, 6]",
+      "[7, 8, 9]",
+  });
+
+  // Comparator returns 1 if x > y, 0 if x == y, -1 if x < y (natural order).
+  // This should give same results as array_top_n without comparator.
+  auto expected =
+      makeArrayVectorFromJson<int32_t>({"[3, 2]", "[6, 5]", "[9, 8]"});
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorReverseOrder) {
+  // Test with reverse comparator (ascending order - smallest elements first).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[4, 5, 6]",
+      "[7, 8, 9]",
+  });
+
+  // Comparator returns -1 if x > y, 0 if x == y, 1 if x < y (reverse order).
+  auto expected =
+      makeArrayVectorFromJson<int32_t>({"[1, 2]", "[4, 5]", "[7, 8]"});
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', (x, y) -> if(x < y, BIGINT '1', if(x > y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorCustomSort) {
+  // Test with custom comparator sorting by absolute value (descending).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[-5, 2, -3, 4, 1]",
+      "[10, -20, 15]",
+  });
+
+  // Sort by absolute value descending.
+  auto expected =
+      makeArrayVectorFromJson<int32_t>({"[-5, 4, -3]", "[-20, 15, 10]"});
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '3', (x, y) -> if(abs(x) > abs(y), BIGINT '1', if(abs(x) < abs(y), BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorWithNulls) {
+  // Test comparator with null elements in array.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, null, 3, null, 5]",
+      "[null, 2, null]",
+  });
+
+  // Nulls should be placed at the end.
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[5, 3, 1]",
+      "[2, null, null]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '3', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorEmptyAndSingleElement) {
+  // Test with empty array and single element.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[]",
+      "[42]",
+      "[1, 2]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[]",
+      "[42]",
+      "[2, 1]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorNZero) {
+  // Test with n = 0.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '0', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorNLargerThanArray) {
+  // Test when n is larger than array size.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2]",
+      "[3]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[2, 1]",
+      "[3]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '10', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorStrings) {
+  // Test with string arrays.
+  auto input = makeArrayVectorFromJson<std::string>({
+      "[\"apple\", \"banana\", \"cherry\"]",
+      "[\"zebra\", \"ant\", \"monkey\"]",
+  });
+
+  // Default string comparison (descending).
+  auto expected = makeArrayVectorFromJson<std::string>({
+      "[\"cherry\", \"banana\"]",
+      "[\"zebra\", \"monkey\"]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorStringsByLength) {
+  // Test sorting strings by length (longest first).
+  auto input = makeArrayVectorFromJson<std::string>({
+      "[\"a\", \"bbb\", \"cc\", \"dddd\"]",
+  });
+
+  auto expected = makeArrayVectorFromJson<std::string>({
+      "[\"dddd\", \"bbb\"]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', (x, y) -> if(length(x) > length(y), BIGINT '1', if(length(x) < length(y), BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorNegativeN) {
+  // Test with negative n - should fail.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_top_n(c0, INTEGER '-1', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+          makeRowVector({input})),
+      "Parameter n: -1 to ARRAY_TOP_N is negative");
+}
+
+TEST_F(ArrayTopNTest, comparatorInvalidReturnValue) {
+  // Test with comparator returning invalid value (not -1, 0, or 1).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_top_n(c0, INTEGER '2', (x, y) -> BIGINT '5')",
+          makeRowVector({input})),
+      "Comparator function must return -1, 0, or 1, got: 5");
+}
+
+TEST_F(ArrayTopNTest, comparatorReturnsNull) {
+  // Test with comparator returning NULL - should fail.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_top_n(c0, INTEGER '2', (x, y) -> cast(null as bigint))",
+          makeRowVector({input})),
+      "Comparator function must not return NULL");
+}
+
+TEST_F(ArrayTopNTest, comparatorAllNulls) {
+  // Test with array containing only nulls.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[null, null, null]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[null, null]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, comparatorDuplicateElements) {
+  // Test with duplicate elements.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[3, 1, 3, 2, 1, 3]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[3, 3, 3]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '3', (x, y) -> if(x > y, BIGINT '1', if(x < y, BIGINT '-1', BIGINT '0')))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
 } // namespace

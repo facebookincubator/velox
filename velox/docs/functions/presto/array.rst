@@ -252,6 +252,37 @@ Array Functions
     Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
     T must be coercible to double. Returns bigint if T is coercible to bigint. Otherwise, returns double.
 
+.. function:: array_top_n(array(T), n) -> array(T)
+
+    Returns the top ``n`` elements of the array in descending order according to the natural ordering of the elements.
+    If ``n`` is larger than the size of the array, returns all elements sorted in descending order.
+    If ``n`` is zero, returns an empty array. Null elements are placed at the end of the result. ::
+
+        SELECT array_top_n(ARRAY [1, 100, 2, 5, 3], 3); -- [100, 5, 3]
+        SELECT array_top_n(ARRAY [1, 100], 5); -- [100, 1]
+        SELECT array_top_n(ARRAY [1, NULL, 2], 3); -- [2, 1, NULL]
+        SELECT array_top_n(ARRAY [1, 2, 3], 0); -- []
+
+.. function:: array_top_n(array(T), n, function(T, T, bigint)) -> array(T)
+    :noindex:
+
+    Returns the top ``n`` elements of the array sorted in descending order according to
+    the given comparator function. The comparator takes two nullable arguments representing
+    two elements of the array and returns:
+
+    - -1 if the first element is less than the second
+    - 0 if the elements are equal
+    - 1 if the first element is greater than the second
+
+    The comparator must not return NULL. If ``n`` is larger than the size of the array,
+    returns all elements sorted according to the comparator. If ``n`` is zero, returns an
+    empty array. Null elements are placed at the end of the result. ::
+
+        SELECT array_top_n(ARRAY [1, 2, 3], 2, (x, y) -> IF(x > y, 1, IF(x < y, -1, 0))); -- [3, 2]
+        SELECT array_top_n(ARRAY [1, 2, 3], 2, (x, y) -> IF(x < y, 1, IF(x > y, -1, 0))); -- [1, 2] (reverse order)
+        SELECT array_top_n(ARRAY [-5, 2, -3, 4], 2, (x, y) -> IF(abs(x) > abs(y), 1, IF(abs(x) < abs(y), -1, 0))); -- [-5, 4] (by absolute value)
+        SELECT array_top_n(ARRAY ['a', 'bbb', 'cc'], 2, (x, y) -> IF(length(x) > length(y), 1, IF(length(x) < length(y), -1, 0))); -- ['bbb', 'cc'] (by length)
+
 .. function:: cardinality(x) -> bigint
 
     Returns the cardinality (size) of the array ``x``.

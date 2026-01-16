@@ -28,6 +28,7 @@ velox_add_library(
   ArrayPosition.cpp
   ArraySort.cpp
   ArraySum.cpp
+  ArrayTopNComparator.cpp
   Comparisons.cpp
   DecimalFunctions.cpp
   ElementAt.cpp
