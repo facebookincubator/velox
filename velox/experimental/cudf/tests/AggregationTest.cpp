@@ -699,4 +699,93 @@ TEST_F(EmptyInputAggregationTest, globalPartialFinalAggregation) {
       "SELECT sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10");
 }
 
+TEST_F(AggregationTest, globalApproxDistinct) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
+      makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  
+  ASSERT_EQ(result->size(), 1);
+  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+  
+  EXPECT_GE(c0_estimate, 4);
+  EXPECT_LE(c0_estimate, 6);
+  
+  EXPECT_GE(c1_estimate, 4);
+  EXPECT_LE(c1_estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctWithNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 3, 4, 5, 1, 2, 3}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  
+  EXPECT_GE(estimate, 4);
+  EXPECT_LE(estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctHighCardinality) {
+  std::vector<int64_t> values;
+  for (int64_t i = 0; i < 10000; ++i) {
+    values.push_back(i);
+  }
+  
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(values),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  
+  double error_rate = std::abs(static_cast<double>(estimate) - 10000.0) / 10000.0;
+  EXPECT_LT(error_rate, 0.05);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctEmpty) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>{}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  
+  EXPECT_EQ(estimate, 0);
+}
+
 } // namespace facebook::velox::exec::test
