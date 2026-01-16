@@ -23,10 +23,38 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/python/plan_builder/PyPlanBuilder.h"
 #include "velox/python/type/PyType.h"
+#include "velox/python/vector/PyVector.h"
 
 namespace facebook::velox::py {
 
-class PyTaskIterator;
+/// Iterator class that extracts PyVectors from a TaskCursor created by a Runner
+/// such as PyLocalRunner, providing an iterable API for Python.
+class PyTaskIterator {
+ public:
+  PyTaskIterator(
+      std::shared_ptr<memory::MemoryPool> pool,
+      std::shared_ptr<exec::TaskCursor> cursor);
+
+  PyTaskIterator& iter() {
+    return *this;
+  }
+
+  PyVector next();
+
+  std::optional<PyVector> current() const {
+    if (!vector_) {
+      return std::nullopt;
+    }
+    return PyVector{vector_, outputPool_};
+  }
+
+ private:
+  std::shared_ptr<memory::MemoryPool> outputPool_;
+  std::shared_ptr<exec::TaskCursor> cursor_;
+
+  // Stores the current vector being iterated on.
+  RowVectorPtr vector_{nullptr};
+};
 
 /// A C++ wrapper to allow Python clients to execute plans using TaskCursor.
 ///
@@ -36,7 +64,7 @@ class PyTaskIterator;
 /// @param executor The executor that will be used by drivers.
 class PyLocalRunner {
  public:
-  explicit PyLocalRunner(
+  PyLocalRunner(
       const PyPlanNode& pyPlanNode,
       const std::shared_ptr<memory::MemoryPool>& pool,
       const std::shared_ptr<folly::CPUThreadPoolExecutor>& executor);
@@ -60,19 +88,24 @@ class PyLocalRunner {
       const std::string& configName,
       const std::string& configValue);
 
-  /// Execute the task and returns an iterable to the output vectors.
+  /// Execute the task and returns an iterable to the output vectors. It's the
+  /// caller's responsibility to ensure that the iterator will outlive the
+  /// runner. This is guaranteed in the Python API by using pybind's
+  /// py::keep_alive<>.
+  ///
+  /// Can be executed many times; it returns a new TaskIterator object with its
+  /// own task cursor underneath. Consumes all splits whenever execute() is
+  /// called.
   ///
   /// @param maxDrivers Maximum number of drivers to use when executing the
   /// plan.
-  pybind11::iterator execute(int32_t maxDrivers = 1);
+  PyTaskIterator execute(int32_t maxDrivers = 1);
 
   /// Prints a descriptive debug message containing plan and execution stats.
   /// If the task hasn't finished, will print the plan with the current stats.
   std::string printPlanWithStats() const;
 
  private:
-  friend class PyTaskIterator;
-
   // Memory pools and thread pool to be used by queryCtx.
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> outputPool_;
@@ -84,68 +117,11 @@ class PyLocalRunner {
   // The task cursor that executed the Velox Task.
   std::shared_ptr<exec::TaskCursor> cursor_;
 
-  // The Python iterator that exposes output vectors.
-  std::shared_ptr<PyTaskIterator> pyIterator_;
-
   // Pointer to the list of splits to be added to the task.
   TScanFiles scanFiles_;
 
   // Query configs to be passed to the task.
   TQueryConfigs queryConfigs_;
-};
-
-// Iterator class that wraps around a PyLocalRunner and provides an iterable API
-// for Python. It needs to provide a .begin() and .end() methods, and the object
-// returned by them needs to be comparable and incrementable.
-class PyTaskIterator {
- public:
-  explicit PyTaskIterator(
-      const std::shared_ptr<exec::TaskCursor>& cursor,
-      const std::shared_ptr<memory::MemoryPool>& pool)
-      : outputPool_(pool), cursor_(cursor) {}
-
-  class Iterator {
-   public:
-    Iterator() {}
-
-    explicit Iterator(
-        const std::shared_ptr<exec::TaskCursor>& cursor,
-        const std::shared_ptr<memory::MemoryPool>& pool)
-        : outputPool_(pool), cursor_(cursor) {
-      // Advance to the first batch.
-      advance();
-    }
-
-    PyVector operator*() const;
-
-    void advance();
-
-    Iterator& operator++() {
-      advance();
-      return *this;
-    }
-
-    bool operator==(const Iterator& other) const {
-      return vector_ == other.vector_;
-    }
-
-   private:
-    std::shared_ptr<memory::MemoryPool> outputPool_;
-    std::shared_ptr<exec::TaskCursor> cursor_;
-    RowVectorPtr vector_{nullptr};
-  };
-
-  Iterator begin() const {
-    return Iterator(cursor_, outputPool_);
-  }
-
-  Iterator end() const {
-    return Iterator();
-  }
-
- private:
-  std::shared_ptr<memory::MemoryPool> outputPool_;
-  std::shared_ptr<exec::TaskCursor> cursor_;
 };
 
 /// To avoid desctruction order issues during shutdown, this function will
