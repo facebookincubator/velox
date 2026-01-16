@@ -42,6 +42,7 @@ TEST(TypeCoercerTest, basic) {
   testCoercion(TINYINT(), TINYINT());
   testCoercion(TINYINT(), BIGINT());
   testCoercion(TINYINT(), REAL());
+  testCoercion(DATE(), TIMESTAMP());
 
   testNoCoercion(TINYINT(), VARCHAR());
   testNoCoercion(TINYINT(), DATE());

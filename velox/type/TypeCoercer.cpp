@@ -49,6 +49,7 @@ allowedCoercions() {
   add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
+  add(DATE(), {TIMESTAMP()});
 
   return coercions;
 }
