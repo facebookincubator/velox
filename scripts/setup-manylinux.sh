@@ -38,8 +38,6 @@ USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
-export THRIFT_VERSION="v0.21.0"
-
 # CMake 4.0 removed support for cmake minimums of <=3.5 and will fail builds, this overrides it
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
@@ -122,7 +120,6 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
 }
 

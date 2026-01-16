@@ -20,6 +20,8 @@
 #include "velox/dwio/parquet/writer/arrow/SchemaInternal.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 
+#include <thrift/lib/cpp2/FieldRef.h>
+
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -459,27 +461,28 @@ std::unique_ptr<Node> GroupNode::FromParquet(
           opaque_element);
 
   int field_id = -1;
-  if (element->__isset.field_id) {
-    field_id = element->field_id;
+  if (element->field_id()) {
+    field_id = *element->field_id();
   }
 
   std::unique_ptr<GroupNode> group_node;
-  if (element->__isset.logicalType) {
+  if (element->logicalType()) {
     // updated writer with logical type present
     group_node = std::unique_ptr<GroupNode>(new GroupNode(
-        element->name,
-        LoadEnumSafe(&element->repetition_type),
+        apache::thrift::can_throw(*element->name()),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->repetition_type())),
         fields,
-        LogicalType::FromThrift(element->logicalType),
+        LogicalType::FromThrift(
+            apache::thrift::can_throw(*element->logicalType())),
         field_id));
   } else {
     group_node = std::unique_ptr<GroupNode>(new GroupNode(
-        element->name,
-        LoadEnumSafe(&element->repetition_type),
+        apache::thrift::can_throw(*element->name()),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->repetition_type())),
         fields,
-        (element->__isset.converted_type
-             ? LoadEnumSafe(&element->converted_type)
-             : ConvertedType::NONE),
+        (element->converted_type() ? LoadEnumSafe(&apache::thrift::can_throw(
+                                         *element->converted_type()))
+                                   : ConvertedType::NONE),
         field_id));
   }
 
@@ -492,39 +495,40 @@ std::unique_ptr<Node> PrimitiveNode::FromParquet(const void* opaque_element) {
           opaque_element);
 
   int field_id = -1;
-  if (element->__isset.field_id) {
-    field_id = element->field_id;
+  if (element->field_id()) {
+    field_id = *element->field_id();
   }
 
   std::unique_ptr<PrimitiveNode> primitive_node;
-  if (element->__isset.logicalType) {
+  if (element->logicalType()) {
     // updated writer with logical type present
     primitive_node = std::unique_ptr<PrimitiveNode>(new PrimitiveNode(
-        element->name,
-        LoadEnumSafe(&element->repetition_type),
-        LogicalType::FromThrift(element->logicalType),
-        LoadEnumSafe(&element->type),
-        element->type_length,
+        apache::thrift::can_throw(*element->name()),
+        LoadEnumSafe(apache::thrift::can_throw(&*element->repetition_type())),
+        LogicalType::FromThrift(
+            apache::thrift::can_throw(*element->logicalType())),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->type())),
+        element->type_length().value_or(0),
         field_id));
-  } else if (element->__isset.converted_type) {
+  } else if (element->converted_type()) {
     // legacy writer with converted type present
     primitive_node = std::unique_ptr<PrimitiveNode>(new PrimitiveNode(
-        element->name,
-        LoadEnumSafe(&element->repetition_type),
-        LoadEnumSafe(&element->type),
-        LoadEnumSafe(&element->converted_type),
-        element->type_length,
-        element->precision,
-        element->scale,
+        apache::thrift::can_throw(*element->name()),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->repetition_type())),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->type())),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->converted_type())),
+        element->type_length().value_or(0),
+        element->precision().value_or(0),
+        element->scale().value_or(0),
         field_id));
   } else {
     // logical type not present
     primitive_node = std::unique_ptr<PrimitiveNode>(new PrimitiveNode(
-        element->name,
-        LoadEnumSafe(&element->repetition_type),
+        apache::thrift::can_throw(*element->name()),
+        LoadEnumSafe(&apache::thrift::can_throw(*element->repetition_type())),
         NoLogicalType::Make(),
-        LoadEnumSafe(&element->type),
-        element->type_length,
+        LoadEnumSafe(&apache::thrift::can_throw(*element->type())),
+        element->type_length().value_or(0),
         field_id));
   }
 
@@ -550,17 +554,17 @@ void GroupNode::ToParquet(void* opaque_element) const {
   facebook::velox::parquet::thrift::SchemaElement* element =
       static_cast<facebook::velox::parquet::thrift::SchemaElement*>(
           opaque_element);
-  element->__set_name(name_);
-  element->__set_num_children(field_count());
-  element->__set_repetition_type(ToThrift(repetition_));
+  element->name() = name_;
+  element->num_children() = field_count();
+  element->repetition_type() = ToThrift(repetition_);
   if (converted_type_ != ConvertedType::NONE) {
-    element->__set_converted_type(ToThrift(converted_type_));
+    element->converted_type() = ToThrift(converted_type_);
   }
   if (field_id_ >= 0) {
-    element->__set_field_id(field_id_);
+    element->field_id() = field_id_;
   }
   if (logical_type_ && logical_type_->is_serialized()) {
-    element->__set_logicalType(logical_type_->ToThrift());
+    element->logicalType() = logical_type_->ToThrift();
   }
   return;
 }
@@ -569,11 +573,11 @@ void PrimitiveNode::ToParquet(void* opaque_element) const {
   facebook::velox::parquet::thrift::SchemaElement* element =
       static_cast<facebook::velox::parquet::thrift::SchemaElement*>(
           opaque_element);
-  element->__set_name(name_);
-  element->__set_repetition_type(ToThrift(repetition_));
+  element->name() = name_;
+  element->repetition_type() = ToThrift(repetition_);
   if (converted_type_ != ConvertedType::NONE) {
     if (converted_type_ != ConvertedType::NA) {
-      element->__set_converted_type(ToThrift(converted_type_));
+      element->converted_type() = ToThrift(converted_type_);
     } else {
       // ConvertedType::NA is an unreleased, obsolete synonym for
       // LogicalType::Null. Never emit it (see PARQUET-1990 for discussion).
@@ -584,21 +588,21 @@ void PrimitiveNode::ToParquet(void* opaque_element) const {
     }
   }
   if (field_id_ >= 0) {
-    element->__set_field_id(field_id_);
+    element->field_id() = field_id_;
   }
   if (logical_type_ && logical_type_->is_serialized() &&
       // TODO(tpboudreau): remove the following conjunct to enable serialization
       // of IntervalTypes after parquet.thrift recognizes them
       !logical_type_->is_interval()) {
-    element->__set_logicalType(logical_type_->ToThrift());
+    element->logicalType() = logical_type_->ToThrift();
   }
-  element->__set_type(ToThrift(physical_type_));
+  element->type() = ToThrift(physical_type_);
   if (physical_type_ == Type::FIXED_LEN_BYTE_ARRAY) {
-    element->__set_type_length(type_length_);
+    element->type_length() = type_length_;
   }
   if (decimal_metadata_.isset) {
-    element->__set_precision(decimal_metadata_.precision);
-    element->__set_scale(decimal_metadata_.scale);
+    element->precision() = decimal_metadata_.precision;
+    element->scale() = decimal_metadata_.scale;
   }
   return;
 }
@@ -609,7 +613,7 @@ void PrimitiveNode::ToParquet(void* opaque_element) const {
 std::unique_ptr<Node> Unflatten(
     const facebook::velox::parquet::thrift::SchemaElement* elements,
     int length) {
-  if (elements[0].num_children == 0) {
+  if (elements[0].num_children().value_or(0) == 0) {
     if (length == 1) {
       // Degenerate case of Parquet file with no columns
       return GroupNode::FromParquet(elements, {});
@@ -631,13 +635,13 @@ std::unique_ptr<Node> Unflatten(
     const SchemaElement& element = elements[pos++];
     const void* opaque_element = static_cast<const void*>(&element);
 
-    if (element.num_children == 0 && element.__isset.type) {
+    if (element.num_children().value_or(0) == 0 && element.type()) {
       // Leaf (primitive) node: always has a type
       return PrimitiveNode::FromParquet(opaque_element);
     } else {
       // Group node (may have 0 children, but cannot have a type)
       NodeVector fields;
-      for (int i = 0; i < element.num_children; ++i) {
+      for (int i = 0; i < element.num_children().value_or(0); ++i) {
         std::unique_ptr<Node> field = NextNode();
         fields.push_back(NodePtr(field.release()));
       }

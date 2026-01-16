@@ -15,7 +15,9 @@
  */
 
 #include "velox/dwio/parquet/reader/Metadata.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
+
+#include <thrift/lib/cpp2/FieldRef.h>
 
 namespace facebook::velox::parquet {
 
@@ -28,52 +30,49 @@ inline const T load(const char* ptr) {
 
 template <typename T>
 inline std::optional<T> getMin(const thrift::Statistics& columnChunkStats) {
-  return columnChunkStats.__isset.min_value
-      ? load<T>(columnChunkStats.min_value.data())
-      : (columnChunkStats.__isset.min
-             ? std::optional<T>(load<T>(columnChunkStats.min.data()))
+  return columnChunkStats.min_value()
+      ? load<T>(columnChunkStats.min_value()->data())
+      : (columnChunkStats.min()
+             ? std::optional<T>(load<T>(columnChunkStats.min()->data()))
              : std::nullopt);
 }
 
 template <typename T>
 inline std::optional<T> getMax(const thrift::Statistics& columnChunkStats) {
-  return columnChunkStats.__isset.max_value
-      ? std::optional<T>(load<T>(columnChunkStats.max_value.data()))
-      : (columnChunkStats.__isset.max
-             ? std::optional<T>(load<T>(columnChunkStats.max.data()))
+  return columnChunkStats.max_value()
+      ? std::optional<T>(load<T>(columnChunkStats.max_value()->data()))
+      : (columnChunkStats.max()
+             ? std::optional<T>(load<T>(columnChunkStats.max()->data()))
              : std::nullopt);
 }
 
 template <>
 inline std::optional<std::string> getMin(
     const thrift::Statistics& columnChunkStats) {
-  return columnChunkStats.__isset.min_value
-      ? std::optional(columnChunkStats.min_value)
-      : (columnChunkStats.__isset.min ? std::optional(columnChunkStats.min)
-                                      : std::nullopt);
+  return columnChunkStats.min_value()
+      ? columnChunkStats.min_value().to_optional()
+      : columnChunkStats.min().to_optional();
 }
 
 template <>
 inline std::optional<std::string> getMax(
     const thrift::Statistics& columnChunkStats) {
-  return columnChunkStats.__isset.max_value
-      ? std::optional(columnChunkStats.max_value)
-      : (columnChunkStats.__isset.max ? std::optional(columnChunkStats.max)
-                                      : std::nullopt);
+  return columnChunkStats.max_value()
+      ? columnChunkStats.max_value().to_optional()
+      : columnChunkStats.max().to_optional();
 }
 
 std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
     const thrift::Statistics& columnChunkStats,
     const velox::Type& type,
     uint64_t numRowsInRowGroup) {
-  std::optional<uint64_t> nullCount = columnChunkStats.__isset.null_count
-      ? std::optional<uint64_t>(columnChunkStats.null_count)
-      : std::nullopt;
-  std::optional<uint64_t> valueCount = nullCount.has_value()
+  std::optional<uint64_t> nullCount =
+      columnChunkStats.null_count().to_optional();
+  std::optional<uint64_t> valueCount = nullCount
       ? std::optional<uint64_t>(numRowsInRowGroup - nullCount.value())
       : std::nullopt;
-  std::optional<bool> hasNull = columnChunkStats.__isset.null_count
-      ? std::optional<bool>(columnChunkStats.null_count > 0)
+  std::optional<bool> hasNull = columnChunkStats.null_count()
+      ? std::optional<bool>(*columnChunkStats.null_count() > 0)
       : std::nullopt;
 
   switch (type.kind()) {
@@ -152,7 +151,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
 }
 
 common::CompressionKind thriftCodecToCompressionKind(
-    thrift::CompressionCodec::type codec) {
+    thrift::CompressionCodec codec) {
   switch (codec) {
     case thrift::CompressionCodec::UNCOMPRESSED:
       return common::CompressionKind::CompressionKind_NONE;
@@ -171,7 +170,7 @@ common::CompressionKind thriftCodecToCompressionKind(
     default:
       VELOX_UNSUPPORTED(
           "Unsupported compression type: " +
-          facebook::velox::parquet::thrift::to_string(codec));
+          std::to_string(static_cast<int>(codec)));
       break;
   }
 }
@@ -187,21 +186,26 @@ FOLLY_ALWAYS_INLINE const thrift::ColumnChunk* thriftColumnChunkPtr(
 }
 
 int64_t ColumnChunkMetaDataPtr::numValues() const {
-  return thriftColumnChunkPtr(ptr_)->meta_data.num_values;
+  return apache::thrift::can_throw(
+      *thriftColumnChunkPtr(ptr_)->meta_data()->num_values());
 }
 
 bool ColumnChunkMetaDataPtr::hasMetadata() const {
-  return thriftColumnChunkPtr(ptr_)->__isset.meta_data;
+  return thriftColumnChunkPtr(ptr_)->meta_data().has_value();
 }
 
 bool ColumnChunkMetaDataPtr::hasStatistics() const {
   return hasMetadata() &&
-      thriftColumnChunkPtr(ptr_)->meta_data.__isset.statistics;
+      apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+          ->statistics()
+          .has_value();
 }
 
 bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
   return hasMetadata() &&
-      thriftColumnChunkPtr(ptr_)->meta_data.__isset.dictionary_page_offset;
+      apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+          ->dictionary_page_offset()
+          .has_value();
 }
 
 std::unique_ptr<dwio::common::ColumnStatistics>
@@ -210,44 +214,70 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
     int64_t numRows) {
   VELOX_CHECK(hasStatistics());
   return buildColumnStatisticsFromThrift(
-      thriftColumnChunkPtr(ptr_)->meta_data.statistics, *type, numRows);
+      apache::thrift::can_throw(
+          *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+               ->statistics()),
+      *type,
+      numRows);
 };
 
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
   VELOX_CHECK(hasStatistics());
-  return thriftColumnChunkPtr(ptr_)->meta_data.statistics.min_value;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(
+           apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+               ->statistics())
+           ->min_value());
 }
 
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMaxValue() {
   VELOX_CHECK(hasStatistics());
-  return thriftColumnChunkPtr(ptr_)->meta_data.statistics.max_value;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(
+           apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+               ->statistics())
+           ->max_value());
 }
 
 int64_t ColumnChunkMetaDataPtr::getColumnMetadataStatsNullCount() {
   VELOX_CHECK(hasStatistics());
-  return thriftColumnChunkPtr(ptr_)->meta_data.statistics.null_count;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(
+           apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+               ->statistics())
+           ->null_count());
 }
 
 int64_t ColumnChunkMetaDataPtr::dataPageOffset() const {
-  return thriftColumnChunkPtr(ptr_)->meta_data.data_page_offset;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+           ->data_page_offset());
 }
 
 int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
   VELOX_CHECK(hasDictionaryPageOffset());
-  return thriftColumnChunkPtr(ptr_)->meta_data.dictionary_page_offset;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+           ->dictionary_page_offset());
 }
 
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
-      thriftColumnChunkPtr(ptr_)->meta_data.codec);
+      apache::thrift::can_throw(
+          *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+               ->codec()));
 }
 
 int64_t ColumnChunkMetaDataPtr::totalCompressedSize() const {
-  return thriftColumnChunkPtr(ptr_)->meta_data.total_compressed_size;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+           ->total_compressed_size());
 }
 
 int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
-  return thriftColumnChunkPtr(ptr_)->meta_data.total_uncompressed_size;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+           ->total_uncompressed_size());
 }
 
 FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(
@@ -261,48 +291,55 @@ RowGroupMetaDataPtr::RowGroupMetaDataPtr(const void* metadata)
 RowGroupMetaDataPtr::~RowGroupMetaDataPtr() = default;
 
 int RowGroupMetaDataPtr::numColumns() const {
-  return thriftRowGroupPtr(ptr_)->columns.size();
+  return thriftRowGroupPtr(ptr_)->columns()->size();
 }
 
 int32_t RowGroupMetaDataPtr::sortingColumnIdx(int i) const {
-  return thriftRowGroupPtr(ptr_)->sorting_columns[i].column_idx;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(*thriftRowGroupPtr(ptr_)->sorting_columns())[i]
+           .column_idx());
 }
 
 bool RowGroupMetaDataPtr::sortingColumnDescending(int i) const {
-  return thriftRowGroupPtr(ptr_)->sorting_columns[i].descending;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(*thriftRowGroupPtr(ptr_)->sorting_columns())[i]
+           .descending());
 }
 
 bool RowGroupMetaDataPtr::sortingColumnNullsFirst(int i) const {
-  return thriftRowGroupPtr(ptr_)->sorting_columns[i].nulls_first;
+  return apache::thrift::can_throw(
+      *apache::thrift::can_throw(*thriftRowGroupPtr(ptr_)->sorting_columns())[i]
+           .nulls_first());
 }
 
 int64_t RowGroupMetaDataPtr::numRows() const {
-  return thriftRowGroupPtr(ptr_)->num_rows;
+  return *thriftRowGroupPtr(ptr_)->num_rows();
 }
 
 int64_t RowGroupMetaDataPtr::totalByteSize() const {
-  return thriftRowGroupPtr(ptr_)->total_byte_size;
+  return *thriftRowGroupPtr(ptr_)->total_byte_size();
 }
 
 bool RowGroupMetaDataPtr::hasFileOffset() const {
-  return thriftRowGroupPtr(ptr_)->__isset.file_offset;
+  return thriftRowGroupPtr(ptr_)->file_offset().has_value();
 }
 
 int64_t RowGroupMetaDataPtr::fileOffset() const {
-  return thriftRowGroupPtr(ptr_)->file_offset;
+  return apache::thrift::can_throw(*thriftRowGroupPtr(ptr_)->file_offset());
 }
 
 bool RowGroupMetaDataPtr::hasTotalCompressedSize() const {
-  return thriftRowGroupPtr(ptr_)->__isset.total_compressed_size;
+  return thriftRowGroupPtr(ptr_)->total_compressed_size().has_value();
 }
 
 int64_t RowGroupMetaDataPtr::totalCompressedSize() const {
-  return thriftRowGroupPtr(ptr_)->total_compressed_size;
+  return apache::thrift::can_throw(
+      *thriftRowGroupPtr(ptr_)->total_compressed_size());
 }
 
 ColumnChunkMetaDataPtr RowGroupMetaDataPtr::columnChunk(int i) const {
   return ColumnChunkMetaDataPtr(
-      reinterpret_cast<const void*>(&thriftRowGroupPtr(ptr_)->columns[i]));
+      reinterpret_cast<const void*>(&(*thriftRowGroupPtr(ptr_)->columns())[i]));
 }
 
 FOLLY_ALWAYS_INLINE const thrift::FileMetaData* thriftFileMetaDataPtr(
@@ -317,26 +354,29 @@ FileMetaDataPtr::~FileMetaDataPtr() = default;
 RowGroupMetaDataPtr FileMetaDataPtr::rowGroup(int i) const {
   return RowGroupMetaDataPtr(
       reinterpret_cast<const void*>(
-          &thriftFileMetaDataPtr(ptr_)->row_groups[i]));
+          &(*thriftFileMetaDataPtr(ptr_)->row_groups())[i]));
 }
 
 int64_t FileMetaDataPtr::numRows() const {
-  return thriftFileMetaDataPtr(ptr_)->num_rows;
+  return *thriftFileMetaDataPtr(ptr_)->num_rows();
 }
 
 int FileMetaDataPtr::numRowGroups() const {
-  return thriftFileMetaDataPtr(ptr_)->row_groups.size();
+  return thriftFileMetaDataPtr(ptr_)->row_groups()->size();
 }
 
 int64_t FileMetaDataPtr::keyValueMetadataSize() const {
-  return thriftFileMetaDataPtr(ptr_)->key_value_metadata.size();
+  return apache::thrift::can_throw(
+             thriftFileMetaDataPtr(ptr_)->key_value_metadata())
+      ->size();
 }
 
 bool FileMetaDataPtr::keyValueMetadataContains(
     const std::string_view key) const {
-  auto thriftKeyValueMeta = thriftFileMetaDataPtr(ptr_)->key_value_metadata;
+  auto thriftKeyValueMeta = apache::thrift::can_throw(
+      *thriftFileMetaDataPtr(ptr_)->key_value_metadata());
   for (const auto& kv : thriftKeyValueMeta) {
-    if (kv.key == key) {
+    if (*kv.key() == key) {
       return true;
     }
   }
@@ -347,15 +387,22 @@ std::string FileMetaDataPtr::keyValueMetadataValue(
     const std::string_view key) const {
   int thriftKeyValueMetaSize = keyValueMetadataSize();
   for (size_t i = 0; i < thriftKeyValueMetaSize; i++) {
-    if (key == thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].key) {
-      return thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].value;
+    if (key ==
+        apache::thrift::can_throw(
+            *apache::thrift::can_throw(
+                 *thriftFileMetaDataPtr(ptr_)->key_value_metadata())[i]
+                 .key())) {
+      return apache::thrift::can_throw(
+          *apache::thrift::can_throw(
+               *thriftFileMetaDataPtr(ptr_)->key_value_metadata())[i]
+               .value());
     }
   }
   VELOX_FAIL(fmt::format("Input key {} is not in the key value metadata", key));
 }
 
 std::string FileMetaDataPtr::createdBy() const {
-  return thriftFileMetaDataPtr(ptr_)->created_by;
+  return apache::thrift::can_throw(*thriftFileMetaDataPtr(ptr_)->created_by());
 }
 
 } // namespace facebook::velox::parquet

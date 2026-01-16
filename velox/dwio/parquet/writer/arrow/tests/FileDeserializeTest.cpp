@@ -50,38 +50,37 @@ using ::arrow::io::BufferReader;
 template <typename H>
 static inline void
 AddDummyStats(int stat_size, H& header, bool fill_all_stats = false) {
+  header.statistics().ensure();
+
   std::vector<uint8_t> stat_bytes(stat_size);
   // Some non-zero value
   std::fill(stat_bytes.begin(), stat_bytes.end(), 1);
-  header.statistics.__set_max(
-      std::string(reinterpret_cast<const char*>(stat_bytes.data()), stat_size));
+  header.statistics()->max() =
+      std::string(reinterpret_cast<const char*>(stat_bytes.data()), stat_size);
 
   if (fill_all_stats) {
-    header.statistics.__set_min(
-        std::string(
-            reinterpret_cast<const char*>(stat_bytes.data()), stat_size));
-    header.statistics.__set_null_count(42);
-    header.statistics.__set_distinct_count(1);
+    header.statistics()->min() = std::string(
+        reinterpret_cast<const char*>(stat_bytes.data()), stat_size);
+    header.statistics()->null_count() = 42;
+    header.statistics()->distinct_count() = 1;
   }
-
-  header.__isset.statistics = true;
 }
 
 template <typename H>
 static inline void CheckStatistics(
     const H& expected,
     const EncodedStatistics& actual) {
-  if (expected.statistics.__isset.max) {
-    ASSERT_EQ(expected.statistics.max, actual.max());
+  if (expected.statistics()->max()) {
+    ASSERT_EQ(*expected.statistics()->max(), actual.max());
   }
-  if (expected.statistics.__isset.min) {
-    ASSERT_EQ(expected.statistics.min, actual.min());
+  if (expected.statistics()->min()) {
+    ASSERT_EQ(*expected.statistics()->min(), actual.min());
   }
-  if (expected.statistics.__isset.null_count) {
-    ASSERT_EQ(expected.statistics.null_count, actual.null_count);
+  if (expected.statistics()->null_count()) {
+    ASSERT_EQ(*expected.statistics()->null_count(), actual.null_count);
   }
-  if (expected.statistics.__isset.distinct_count) {
-    ASSERT_EQ(expected.statistics.distinct_count, actual.distinct_count);
+  if (expected.statistics()->distinct_count()) {
+    ASSERT_EQ(*expected.statistics()->distinct_count(), actual.distinct_count);
   }
 }
 
@@ -106,12 +105,14 @@ static std::vector<Compression::type> GetSupportedCodecTypes() {
 class TestPageSerde : public ::testing::Test {
  public:
   void SetUp() {
-    data_page_header_.encoding =
+    data_page_header_.encoding() =
         facebook::velox::parquet::thrift::Encoding::PLAIN;
-    data_page_header_.definition_level_encoding =
+    data_page_header_.definition_level_encoding() =
         facebook::velox::parquet::thrift::Encoding::RLE;
-    data_page_header_.repetition_level_encoding =
+    data_page_header_.repetition_level_encoding() =
         facebook::velox::parquet::thrift::Encoding::RLE;
+
+    data_page_header_v2_.is_compressed() = false;
 
     ResetStream();
   }
@@ -135,12 +136,12 @@ class TestPageSerde : public ::testing::Test {
     // have meaningful data associated with them
 
     // Serialize the Page header
-    page_header_.__set_data_page_header(data_page_header_);
-    page_header_.uncompressed_page_size = uncompressed_size;
-    page_header_.compressed_page_size = compressed_size;
-    page_header_.type = facebook::velox::parquet::thrift::PageType::DATA_PAGE;
+    page_header_.data_page_header() = data_page_header_;
+    page_header_.uncompressed_page_size() = uncompressed_size;
+    page_header_.compressed_page_size() = compressed_size;
+    page_header_.type() = facebook::velox::parquet::thrift::PageType::DATA_PAGE;
     if (checksum.has_value()) {
-      page_header_.__set_crc(checksum.value());
+      page_header_.crc() = checksum.value();
     }
 
     ThriftSerializer serializer;
@@ -156,13 +157,13 @@ class TestPageSerde : public ::testing::Test {
     // have meaningful data associated with them
 
     // Serialize the Page header
-    page_header_.__set_data_page_header_v2(data_page_header_v2_);
-    page_header_.uncompressed_page_size = uncompressed_size;
-    page_header_.compressed_page_size = compressed_size;
-    page_header_.type =
+    page_header_.data_page_header_v2() = data_page_header_v2_;
+    page_header_.uncompressed_page_size() = uncompressed_size;
+    page_header_.compressed_page_size() = compressed_size;
+    page_header_.type() =
         facebook::velox::parquet::thrift::PageType::DATA_PAGE_V2;
     if (checksum.has_value()) {
-      page_header_.__set_crc(checksum.value());
+      page_header_.crc() = checksum.value();
     }
 
     ThriftSerializer serializer;
@@ -173,13 +174,13 @@ class TestPageSerde : public ::testing::Test {
       int32_t uncompressed_size = 0,
       int32_t compressed_size = 0,
       std::optional<int32_t> checksum = std::nullopt) {
-    page_header_.__set_dictionary_page_header(dictionary_page_header_);
-    page_header_.uncompressed_page_size = uncompressed_size;
-    page_header_.compressed_page_size = compressed_size;
-    page_header_.type =
+    page_header_.dictionary_page_header() = dictionary_page_header_;
+    page_header_.uncompressed_page_size() = uncompressed_size;
+    page_header_.compressed_page_size() = compressed_size;
+    page_header_.type() =
         facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE;
     if (checksum.has_value()) {
-      page_header_.__set_crc(checksum.value());
+      page_header_.crc() = checksum.value();
     }
 
     ThriftSerializer serializer;
@@ -189,10 +190,11 @@ class TestPageSerde : public ::testing::Test {
   void WriteIndexPageHeader(
       int32_t uncompressed_size = 0,
       int32_t compressed_size = 0) {
-    page_header_.__set_index_page_header(index_page_header_);
-    page_header_.uncompressed_page_size = uncompressed_size;
-    page_header_.compressed_page_size = compressed_size;
-    page_header_.type = facebook::velox::parquet::thrift::PageType::INDEX_PAGE;
+    page_header_.index_page_header() = index_page_header_;
+    page_header_.uncompressed_page_size() = uncompressed_size;
+    page_header_.compressed_page_size() = compressed_size;
+    page_header_.type() =
+        facebook::velox::parquet::thrift::PageType::INDEX_PAGE;
 
     ThriftSerializer serializer;
     ASSERT_NO_THROW(serializer.Serialize(&page_header_, out_stream_.get()));
@@ -238,11 +240,11 @@ void TestPageSerde::TestPageSerdeCrc(
   codec_types.push_back(Compression::UNCOMPRESSED);
   const int32_t num_rows = 32; // dummy value
   if (write_data_page_v2) {
-    data_page_header_v2_.num_values = num_rows;
+    data_page_header_v2_.num_values() = num_rows;
   } else {
-    data_page_header_.num_values = num_rows;
+    data_page_header_.num_values() = num_rows;
   }
-  dictionary_page_header_.num_values = num_rows;
+  dictionary_page_header_.num_values() = num_rows;
 
   const int num_pages = 10;
 
@@ -286,6 +288,7 @@ void TestPageSerde::TestPageSerdeCrc(
             data_size, static_cast<int32_t>(actual_size), checksum_opt));
       } else {
         if (write_data_page_v2) {
+          data_page_header_v2_.is_compressed() = (codec != nullptr);
           ASSERT_NO_FATAL_FAILURE(WriteDataPageHeaderV2(
               1024,
               data_size,
@@ -349,14 +352,19 @@ void CheckDataPageHeader(
   ASSERT_EQ(PageType::DATA_PAGE, page->type());
 
   const DataPageV1* data_page = static_cast<const DataPageV1*>(page);
-  ASSERT_EQ(expected.num_values, data_page->num_values());
-  ASSERT_EQ(expected.encoding, data_page->encoding());
+  ASSERT_EQ(*expected.num_values(), data_page->num_values());
   ASSERT_EQ(
-      expected.definition_level_encoding,
-      data_page->definition_level_encoding());
+      *expected.encoding(),
+      static_cast<facebook::velox::parquet::thrift::Encoding>(
+          data_page->encoding()));
   ASSERT_EQ(
-      expected.repetition_level_encoding,
-      data_page->repetition_level_encoding());
+      *expected.definition_level_encoding(),
+      static_cast<facebook::velox::parquet::thrift::Encoding>(
+          data_page->definition_level_encoding()));
+  ASSERT_EQ(
+      *expected.repetition_level_encoding(),
+      static_cast<facebook::velox::parquet::thrift::Encoding>(
+          data_page->repetition_level_encoding()));
   CheckStatistics(expected, data_page->statistics());
 }
 
@@ -367,17 +375,20 @@ void CheckDataPageHeader(
   ASSERT_EQ(PageType::DATA_PAGE_V2, page->type());
 
   const DataPageV2* data_page = static_cast<const DataPageV2*>(page);
-  ASSERT_EQ(expected.num_values, data_page->num_values());
-  ASSERT_EQ(expected.num_nulls, data_page->num_nulls());
-  ASSERT_EQ(expected.num_rows, data_page->num_rows());
-  ASSERT_EQ(expected.encoding, data_page->encoding());
+  ASSERT_EQ(*expected.num_values(), data_page->num_values());
+  ASSERT_EQ(*expected.num_nulls(), data_page->num_nulls());
+  ASSERT_EQ(*expected.num_rows(), data_page->num_rows());
   ASSERT_EQ(
-      expected.definition_levels_byte_length,
+      *expected.encoding(),
+      static_cast<facebook::velox::parquet::thrift::Encoding>(
+          data_page->encoding()));
+  ASSERT_EQ(
+      *expected.definition_levels_byte_length(),
       data_page->definition_levels_byte_length());
   ASSERT_EQ(
-      expected.repetition_levels_byte_length,
+      *expected.repetition_levels_byte_length(),
       data_page->repetition_levels_byte_length());
-  ASSERT_EQ(expected.is_compressed, data_page->is_compressed());
+  ASSERT_EQ(*expected.is_compressed(), data_page->is_compressed());
   CheckStatistics(expected, data_page->statistics());
 }
 
@@ -385,7 +396,7 @@ TEST_F(TestPageSerde, DataPageV1) {
   int stats_size = 512;
   const int32_t num_rows = 4444;
   AddDummyStats(stats_size, data_page_header_, /* fill_all_stats = */ true);
-  data_page_header_.num_values = num_rows;
+  data_page_header_.num_values() = num_rows;
 
   ASSERT_NO_FATAL_FAILURE(WriteDataPageHeader());
   InitSerializedPageReader(num_rows);
@@ -418,12 +429,12 @@ void PageFilterTest<
     int32_t num_rows = i + 100;
     total_rows_ += num_rows;
     int data_size = i + 1024;
-    this->data_page_header_.__set_num_values(num_rows);
-    this->data_page_header_.statistics.__set_min_value("A" + std::to_string(i));
-    this->data_page_header_.statistics.__set_max_value("Z" + std::to_string(i));
-    this->data_page_header_.statistics.__set_null_count(0);
-    this->data_page_header_.statistics.__set_distinct_count(num_rows);
-    this->data_page_header_.__isset.statistics = true;
+    this->data_page_header_.num_values() = num_rows;
+    this->data_page_header_.statistics().ensure();
+    this->data_page_header_.statistics()->min_value() = "A" + std::to_string(i);
+    this->data_page_header_.statistics()->max_value() = "Z" + std::to_string(i);
+    this->data_page_header_.statistics()->null_count() = 0;
+    this->data_page_header_.statistics()->distinct_count() = num_rows;
     ASSERT_NO_FATAL_FAILURE(this->WriteDataPageHeader(
         /*max_serialized_len=*/1024, data_size, data_size));
     data_page_headers_.push_back(this->data_page_header_);
@@ -442,15 +453,15 @@ void PageFilterTest<
     int32_t num_rows = i + 100;
     total_rows_ += num_rows;
     int data_size = i + 1024;
-    this->data_page_header_v2_.__set_num_values(num_rows);
-    this->data_page_header_v2_.__set_num_rows(num_rows);
-    this->data_page_header_v2_.statistics.__set_min_value(
-        "A" + std::to_string(i));
-    this->data_page_header_v2_.statistics.__set_max_value(
-        "Z" + std::to_string(i));
-    this->data_page_header_v2_.statistics.__set_null_count(0);
-    this->data_page_header_v2_.statistics.__set_distinct_count(num_rows);
-    this->data_page_header_v2_.__isset.statistics = true;
+    this->data_page_header_v2_.num_values() = num_rows;
+    this->data_page_header_v2_.num_rows() = num_rows;
+    this->data_page_header_v2_.statistics().ensure();
+    this->data_page_header_v2_.statistics()->min_value() =
+        "A" + std::to_string(i);
+    this->data_page_header_v2_.statistics()->max_value() =
+        "Z" + std::to_string(i);
+    this->data_page_header_v2_.statistics()->null_count() = 0;
+    this->data_page_header_v2_.statistics()->distinct_count() = num_rows;
     ASSERT_NO_FATAL_FAILURE(this->WriteDataPageHeaderV2(
         /*max_serialized_len=*/1024, data_size, data_size));
     data_page_headers_.push_back(this->data_page_header_v2_);
@@ -467,7 +478,7 @@ void PageFilterTest<
   int32_t num_rows = 100;
   total_rows_ += num_rows;
   int data_size = 1024;
-  this->data_page_header_.__set_num_values(num_rows);
+  this->data_page_header_.num_values() = num_rows;
   ASSERT_NO_FATAL_FAILURE(this->WriteDataPageHeader(
       /*max_serialized_len=*/1024, data_size, data_size));
   data_page_headers_.push_back(this->data_page_header_);
@@ -482,8 +493,8 @@ void PageFilterTest<facebook::velox::parquet::thrift::DataPageHeaderV2>::
   int32_t num_rows = 100;
   total_rows_ += num_rows;
   int data_size = 1024;
-  this->data_page_header_v2_.__set_num_values(num_rows);
-  this->data_page_header_v2_.__set_num_rows(num_rows);
+  this->data_page_header_v2_.num_values() = num_rows;
+  this->data_page_header_v2_.num_rows() = num_rows;
   ASSERT_NO_FATAL_FAILURE(this->WriteDataPageHeaderV2(
       /*max_serialized_len=*/1024, data_size, data_size));
   data_page_headers_.push_back(this->data_page_header_v2_);
@@ -505,7 +516,7 @@ void PageFilterTest<facebook::velox::parquet::thrift::DataPageHeaderV2>::
     CheckNumRows(
         std::optional<int32_t> num_rows,
         const facebook::velox::parquet::thrift::DataPageHeaderV2& header) {
-  ASSERT_EQ(*num_rows, header.num_rows);
+  ASSERT_EQ(*num_rows, *header.num_rows());
 }
 
 using DataPageHeaderTypes = ::testing::Types<
@@ -574,7 +585,7 @@ TYPED_TEST(PageFilterTest, TestPageFilterCallback) {
       ASSERT_EQ(read_stats[i].null_count, encoded_statistics.null_count);
       ASSERT_EQ(
           read_stats[i].distinct_count, encoded_statistics.distinct_count);
-      ASSERT_EQ(read_num_values[i], this->data_page_headers_[i].num_values);
+      ASSERT_EQ(read_num_values[i], *this->data_page_headers_[i].num_values());
       this->CheckNumRows(read_num_rows[i], this->data_page_headers_[i]);
     }
     ASSERT_EQ(this->page_reader_->NextPage(), nullptr);
@@ -721,7 +732,7 @@ TEST_F(TestPageSerde, DataPageV2) {
   int stats_size = 512;
   const int32_t num_rows = 4444;
   AddDummyStats(stats_size, data_page_header_v2_, /* fill_all_stats = */ true);
-  data_page_header_v2_.num_values = num_rows;
+  data_page_header_v2_.num_values() = num_rows;
 
   ASSERT_NO_FATAL_FAILURE(WriteDataPageHeaderV2());
   InitSerializedPageReader(num_rows);
@@ -736,7 +747,7 @@ TEST_F(TestPageSerde, TestLargePageHeaders) {
 
   // Any number to verify metadata roundtrip
   const int32_t num_rows = 4141;
-  data_page_header_.num_values = num_rows;
+  data_page_header_.num_values() = num_rows;
 
   int max_header_size = 512 * 1024; // 512 KB
   ASSERT_NO_FATAL_FAILURE(WriteDataPageHeader(max_header_size));
@@ -781,7 +792,7 @@ void TestPageSerde::TestPageCompressionRoundTrip(
   auto codec_types = GetSupportedCodecTypes();
 
   const int32_t num_rows = 32; // dummy value
-  data_page_header_.num_values = num_rows;
+  data_page_header_.num_values() = num_rows;
 
   std::vector<std::vector<uint8_t>> faux_data;
   int num_pages = static_cast<int>(page_sizes.size());
@@ -862,7 +873,7 @@ TEST_F(TestPageSerde, NoCrc) {
   int stats_size = 512;
   const int32_t num_rows = 4444;
   AddDummyStats(stats_size, data_page_header_, /*fill_all_stats=*/true);
-  data_page_header_.num_values = num_rows;
+  data_page_header_.num_values() = num_rows;
 
   ASSERT_NO_FATAL_FAILURE(WriteDataPageHeader());
   ReaderProperties readerProperties;
@@ -876,7 +887,7 @@ TEST_F(TestPageSerde, NoCrc) {
 
 TEST_F(TestPageSerde, NoCrcDict) {
   const int32_t num_rows = 4444;
-  dictionary_page_header_.num_values = num_rows;
+  dictionary_page_header_.num_values() = num_rows;
 
   ASSERT_NO_FATAL_FAILURE(WriteDictionaryPageHeader());
   ReaderProperties readerProperties;

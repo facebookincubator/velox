@@ -18,6 +18,8 @@
 
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 
+#include <thrift/lib/cpp2/FieldRef.h>
+
 #include <algorithm>
 #include <cinttypes>
 #include <ostream>
@@ -96,33 +98,64 @@ static std::shared_ptr<Statistics> MakeTypedColumnStats(
   if (descr->column_order().get_order() == ColumnOrder::TYPE_DEFINED_ORDER) {
     return MakeStatistics<DType>(
         descr,
-        metadata.statistics.min_value,
-        metadata.statistics.max_value,
-        metadata.num_values - metadata.statistics.null_count,
-        metadata.statistics.null_count,
-        metadata.statistics.distinct_count,
-        metadata.statistics.__isset.max_value ||
-            metadata.statistics.__isset.min_value,
-        metadata.statistics.__isset.null_count,
-        metadata.statistics.__isset.distinct_count);
+        apache::thrift::can_throw(metadata.statistics())
+            ->min_value()
+            .value_or(""),
+        apache::thrift::can_throw(metadata.statistics())
+            ->max_value()
+            .value_or(""),
+        apache::thrift::can_throw(*metadata.num_values()) -
+            apache::thrift::can_throw(metadata.statistics())
+                ->null_count()
+                .value_or(0),
+        apache::thrift::can_throw(metadata.statistics())
+            ->null_count()
+            .value_or(0),
+        apache::thrift::can_throw(metadata.statistics())
+            ->distinct_count()
+            .value_or(0),
+        apache::thrift::can_throw(metadata.statistics())
+                ->max_value()
+                .has_value() ||
+            apache::thrift::can_throw(metadata.statistics())
+                ->min_value()
+                .has_value(),
+        apache::thrift::can_throw(metadata.statistics())
+            ->null_count()
+            .has_value(),
+        apache::thrift::can_throw(metadata.statistics())
+            ->distinct_count()
+            .has_value());
   }
   // Default behavior
   return MakeStatistics<DType>(
       descr,
-      metadata.statistics.min,
-      metadata.statistics.max,
-      metadata.num_values - metadata.statistics.null_count,
-      metadata.statistics.null_count,
-      metadata.statistics.distinct_count,
-      metadata.statistics.__isset.max || metadata.statistics.__isset.min,
-      metadata.statistics.__isset.null_count,
-      metadata.statistics.__isset.distinct_count);
+      apache::thrift::can_throw(metadata.statistics())->min().value_or(""),
+      apache::thrift::can_throw(metadata.statistics())->max().value_or(""),
+      apache::thrift::can_throw(*metadata.num_values()) -
+          apache::thrift::can_throw(metadata.statistics())
+              ->null_count()
+              .value_or(0),
+      apache::thrift::can_throw(metadata.statistics())
+          ->null_count()
+          .value_or(0),
+      apache::thrift::can_throw(metadata.statistics())
+          ->distinct_count()
+          .value_or(0),
+      apache::thrift::can_throw(metadata.statistics())->max().has_value() ||
+          apache::thrift::can_throw(metadata.statistics())->min().has_value(),
+      apache::thrift::can_throw(metadata.statistics())
+          ->null_count()
+          .has_value(),
+      apache::thrift::can_throw(metadata.statistics())
+          ->distinct_count()
+          .has_value());
 }
 
 std::shared_ptr<Statistics> MakeColumnStats(
     const facebook::velox::parquet::thrift::ColumnMetaData& meta_data,
     const ColumnDescriptor* descr) {
-  switch (static_cast<Type::type>(meta_data.type)) {
+  switch (static_cast<Type::type>(*meta_data.type())) {
     case Type::BOOLEAN:
       return MakeTypedColumnStats<BooleanType>(meta_data, descr);
     case Type::INT32:
@@ -157,17 +190,24 @@ class ColumnCryptoMetaData::ColumnCryptoMetaDataImpl {
       : crypto_metadata_(crypto_metadata) {}
 
   bool encrypted_with_footer_key() const {
-    return crypto_metadata_->__isset.ENCRYPTION_WITH_FOOTER_KEY;
+    return crypto_metadata_->getType() ==
+        facebook::velox::parquet::thrift::ColumnCryptoMetaData::Type::
+            ENCRYPTION_WITH_FOOTER_KEY;
   }
   bool encrypted_with_column_key() const {
-    return crypto_metadata_->__isset.ENCRYPTION_WITH_COLUMN_KEY;
+    return crypto_metadata_->getType() ==
+        facebook::velox::parquet::thrift::ColumnCryptoMetaData::Type::
+            ENCRYPTION_WITH_COLUMN_KEY;
   }
   std::shared_ptr<schema::ColumnPath> path_in_schema() const {
     return std::make_shared<schema::ColumnPath>(
-        crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
+        *crypto_metadata_->get_ENCRYPTION_WITH_COLUMN_KEY().path_in_schema());
   }
   const std::string& key_metadata() const {
-    return crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY.key_metadata;
+    return apache::thrift::can_throw(
+        crypto_metadata_->get_ENCRYPTION_WITH_COLUMN_KEY()
+            .key_metadata()
+            .value());
   }
 
  private:
@@ -215,20 +255,22 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
         descr_(descr),
         properties_(properties),
         writer_version_(writer_version) {
-    column_metadata_ = &column->meta_data;
-    if (column->__isset.crypto_metadata) { // column metadata is encrypted
+    column_metadata_ = &apache::thrift::can_throw(*column->meta_data());
+    if (column->crypto_metadata()) { // column metadata is encrypted
       facebook::velox::parquet::thrift::ColumnCryptoMetaData ccmd =
-          column->crypto_metadata;
+          *column->crypto_metadata();
 
-      if (ccmd.__isset.ENCRYPTION_WITH_COLUMN_KEY) {
+      if (ccmd.getType() ==
+          facebook::velox::parquet::thrift::ColumnCryptoMetaData::Type::
+              ENCRYPTION_WITH_COLUMN_KEY) {
         if (file_decryptor != nullptr &&
             file_decryptor->properties() != nullptr) {
           // should decrypt metadata
           std::shared_ptr<schema::ColumnPath> path =
               std::make_shared<schema::ColumnPath>(
-                  ccmd.ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
-          std::string key_metadata =
-              ccmd.ENCRYPTION_WITH_COLUMN_KEY.key_metadata;
+                  *ccmd.get_ENCRYPTION_WITH_COLUMN_KEY().path_in_schema());
+          std::string key_metadata = apache::thrift::can_throw(
+              ccmd.get_ENCRYPTION_WITH_COLUMN_KEY().key_metadata().value());
 
           std::string aad_column_metadata = encryption::CreateModuleAad(
               file_decryptor->file_aad(),
@@ -238,12 +280,15 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
               static_cast<int16_t>(-1));
           auto decryptor = file_decryptor->GetColumnMetaDecryptor(
               path->ToDotString(), key_metadata, aad_column_metadata);
-          auto len =
-              static_cast<uint32_t>(column->encrypted_column_metadata.size());
+          auto len = static_cast<uint32_t>(
+              apache::thrift::can_throw(*column->encrypted_column_metadata())
+                  .size());
           ThriftDeserializer deserializer(properties_);
           deserializer.DeserializeMessage(
               reinterpret_cast<const uint8_t*>(
-                  column->encrypted_column_metadata.c_str()),
+                  apache::thrift::can_throw(
+                      *column->encrypted_column_metadata())
+                      .c_str()),
               &len,
               &decrypted_metadata_,
               decryptor);
@@ -255,14 +300,16 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
         }
       }
     }
-    for (const auto& encoding : column_metadata_->encodings) {
+    for (const auto& encoding : *column_metadata_->encodings()) {
       encodings_.push_back(LoadEnumSafe(&encoding));
     }
-    for (const auto& encoding_stats : column_metadata_->encoding_stats) {
-      encoding_stats_.push_back(
-          {LoadEnumSafe(&encoding_stats.page_type),
-           LoadEnumSafe(&encoding_stats.encoding),
-           encoding_stats.count});
+    if (column_metadata_->encoding_stats()) {
+      for (const auto& encoding_stats : *column_metadata_->encoding_stats()) {
+        encoding_stats_.push_back(
+            {LoadEnumSafe(&*encoding_stats.page_type()),
+             LoadEnumSafe(&*encoding_stats.encoding()),
+             *encoding_stats.count()});
+      }
     }
     possible_stats_ = nullptr;
   }
@@ -273,23 +320,28 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
 
   // column chunk
   inline int64_t file_offset() const {
-    return column_->file_offset;
+    return *column_->file_offset();
   }
+
+  inline bool has_file_path() const {
+    return column_->file_path().has_value();
+  }
+
   inline const std::string& file_path() const {
-    return column_->file_path;
+    return apache::thrift::can_throw(*column_->file_path());
   }
 
   inline Type::type type() const {
-    return LoadEnumSafe(&column_metadata_->type);
+    return LoadEnumSafe(&*column_metadata_->type());
   }
 
   inline int64_t num_values() const {
-    return column_metadata_->num_values;
+    return *column_metadata_->num_values();
   }
 
   std::shared_ptr<schema::ColumnPath> path_in_schema() {
     return std::make_shared<schema::ColumnPath>(
-        column_metadata_->path_in_schema);
+        *column_metadata_->path_in_schema());
   }
 
   // Check if statistics are set and are valid
@@ -299,7 +351,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
     VELOX_DCHECK_NOT_NULL(writer_version_);
     // If the column statistics don't exist or column sort order is unknown
     // we cannot use the column stats
-    if (!column_metadata_->__isset.statistics ||
+    if (!column_metadata_->statistics() ||
         descr_->sort_order() == SortOrder::UNKNOWN) {
       return false;
     }
@@ -316,7 +368,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   }
 
   inline Compression::type compression() const {
-    return LoadEnumSafe(&column_metadata_->codec);
+    return LoadEnumSafe(&*column_metadata_->codec());
   }
 
   const std::vector<Encoding::type>& encodings() const {
@@ -328,63 +380,58 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   }
 
   inline std::optional<int64_t> bloom_filter_offset() const {
-    if (column_metadata_->__isset.bloom_filter_offset) {
-      return column_metadata_->bloom_filter_offset;
-    }
-    return std::nullopt;
+    return column_metadata_->bloom_filter_offset().to_optional();
   }
 
   inline bool has_dictionary_page() const {
-    return column_metadata_->__isset.dictionary_page_offset;
+    return column_metadata_->dictionary_page_offset().has_value();
   }
 
   inline int64_t dictionary_page_offset() const {
-    return column_metadata_->dictionary_page_offset;
+    return column_metadata_->dictionary_page_offset().value_or(0);
   }
 
   inline int64_t data_page_offset() const {
-    return column_metadata_->data_page_offset;
+    return *column_metadata_->data_page_offset();
   }
 
   inline bool has_index_page() const {
-    return column_metadata_->__isset.index_page_offset;
+    return column_metadata_->index_page_offset().has_value();
   }
 
   inline int64_t index_page_offset() const {
-    return column_metadata_->index_page_offset;
+    return apache::thrift::can_throw(*column_metadata_->index_page_offset());
   }
 
   inline int64_t total_compressed_size() const {
-    return column_metadata_->total_compressed_size;
+    return *column_metadata_->total_compressed_size();
   }
 
   inline int64_t total_uncompressed_size() const {
-    return column_metadata_->total_uncompressed_size;
+    return *column_metadata_->total_uncompressed_size();
   }
 
   inline std::unique_ptr<ColumnCryptoMetaData> crypto_metadata() const {
-    if (column_->__isset.crypto_metadata) {
+    if (column_->crypto_metadata()) {
       return ColumnCryptoMetaData::Make(
-          reinterpret_cast<const uint8_t*>(&column_->crypto_metadata));
+          reinterpret_cast<const uint8_t*>(&*column_->crypto_metadata()));
     } else {
       return nullptr;
     }
   }
 
   std::optional<IndexLocation> GetColumnIndexLocation() const {
-    if (column_->__isset.column_index_offset &&
-        column_->__isset.column_index_length) {
+    if (column_->column_index_offset() && column_->column_index_length()) {
       return IndexLocation{
-          column_->column_index_offset, column_->column_index_length};
+          *column_->column_index_offset(), *column_->column_index_length()};
     }
     return std::nullopt;
   }
 
   std::optional<IndexLocation> GetOffsetIndexLocation() const {
-    if (column_->__isset.offset_index_offset &&
-        column_->__isset.offset_index_length) {
+    if (column_->offset_index_offset() && column_->offset_index_length()) {
       return IndexLocation{
-          column_->offset_index_offset, column_->offset_index_length};
+          *column_->offset_index_offset(), *column_->offset_index_length()};
     }
     return std::nullopt;
   }
@@ -463,6 +510,10 @@ ColumnChunkMetaData::~ColumnChunkMetaData() = default;
 // column chunk
 int64_t ColumnChunkMetaData::file_offset() const {
   return impl_->file_offset();
+}
+
+bool ColumnChunkMetaData::has_file_path() const {
+  return impl_->has_file_path();
 }
 
 const std::string& ColumnChunkMetaData::file_path() const {
@@ -577,10 +628,10 @@ class RowGroupMetaData::RowGroupMetaDataImpl {
         writer_version_(writer_version),
         file_decryptor_(std::move(file_decryptor)) {
     if (ARROW_PREDICT_FALSE(
-            row_group_->columns.size() >
+            row_group_->columns()->size() >
             static_cast<size_t>(std::numeric_limits<int>::max()))) {
       throw ParquetException(
-          "Row group had too many columns: ", row_group_->columns.size());
+          "Row group had too many columns: ", row_group_->columns()->size());
     }
   }
 
@@ -589,23 +640,23 @@ class RowGroupMetaData::RowGroupMetaDataImpl {
   }
 
   inline int num_columns() const {
-    return static_cast<int>(row_group_->columns.size());
+    return static_cast<int>(row_group_->columns()->size());
   }
 
   inline int64_t num_rows() const {
-    return row_group_->num_rows;
+    return *row_group_->num_rows();
   }
 
   inline int64_t total_byte_size() const {
-    return row_group_->total_byte_size;
+    return *row_group_->total_byte_size();
   }
 
   inline int64_t total_compressed_size() const {
-    return row_group_->total_compressed_size;
+    return apache::thrift::can_throw(*row_group_->total_compressed_size());
   }
 
   inline int64_t file_offset() const {
-    return row_group_->file_offset;
+    return apache::thrift::can_throw(*row_group_->file_offset());
   }
 
   inline const SchemaDescriptor* schema() const {
@@ -615,11 +666,11 @@ class RowGroupMetaData::RowGroupMetaDataImpl {
   std::unique_ptr<ColumnChunkMetaData> ColumnChunk(int i) {
     if (i >= 0 && i < num_columns()) {
       return ColumnChunkMetaData::Make(
-          &row_group_->columns[i],
+          &row_group_->columns()[i],
           schema_->Column(i),
           properties_,
           writer_version_,
-          row_group_->ordinal,
+          row_group_->ordinal().value_or(0),
           i,
           file_decryptor_);
     }
@@ -632,12 +683,12 @@ class RowGroupMetaData::RowGroupMetaDataImpl {
 
   std::vector<SortingColumn> sorting_columns() const {
     std::vector<SortingColumn> sorting_columns;
-    if (!row_group_->__isset.sorting_columns) {
+    if (!row_group_->sorting_columns()) {
       return sorting_columns;
     }
-    sorting_columns.resize(row_group_->sorting_columns.size());
+    sorting_columns.resize(row_group_->sorting_columns()->size());
     for (size_t i = 0; i < sorting_columns.size(); ++i) {
-      sorting_columns[i] = FromThrift(row_group_->sorting_columns[i]);
+      sorting_columns[i] = FromThrift((*row_group_->sorting_columns())[i]);
     }
     return sorting_columns;
   }
@@ -763,8 +814,8 @@ class FileMetaData::FileMetaDataImpl {
         footer_decryptor);
     metadata_len_ = *metadata_len;
 
-    if (metadata_->__isset.created_by) {
-      writer_version_ = ApplicationVersion(metadata_->created_by);
+    if (metadata_->created_by()) {
+      writer_version_ = ApplicationVersion(*metadata_->created_by());
     } else {
       writer_version_ = ApplicationVersion("unknown 0.0.0");
     }
@@ -835,29 +886,30 @@ class FileMetaData::FileMetaDataImpl {
     return schema_.num_columns();
   }
   inline int64_t num_rows() const {
-    return metadata_->num_rows;
+    return *metadata_->num_rows();
   }
   inline int num_row_groups() const {
-    return static_cast<int>(metadata_->row_groups.size());
+    return static_cast<int>(metadata_->row_groups()->size());
   }
   inline int32_t version() const {
-    return metadata_->version;
+    return *metadata_->version();
   }
   inline const std::string& created_by() const {
-    return metadata_->created_by;
+    return apache::thrift::can_throw(*metadata_->created_by());
   }
   inline int num_schema_elements() const {
-    return static_cast<int>(metadata_->schema.size());
+    return static_cast<int>(metadata_->schema()->size());
   }
 
   inline bool is_encryption_algorithm_set() const {
-    return metadata_->__isset.encryption_algorithm;
+    return metadata_->encryption_algorithm().has_value();
   }
   inline EncryptionAlgorithm encryption_algorithm() {
-    return FromThrift(metadata_->encryption_algorithm);
+    return FromThrift(
+        apache::thrift::can_throw(*metadata_->encryption_algorithm()));
   }
   inline const std::string& footer_signing_key_metadata() {
-    return metadata_->footer_signing_key_metadata;
+    return apache::thrift::can_throw(*metadata_->footer_signing_key_metadata());
   }
 
   const ApplicationVersion& writer_version() const {
@@ -904,7 +956,7 @@ class FileMetaData::FileMetaDataImpl {
       throw ParquetException(ss.str());
     }
     return RowGroupMetaData::Make(
-        &metadata_->row_groups[i],
+        &(*metadata_->row_groups())[i],
         &schema_,
         properties_,
         &writer_version_,
@@ -925,10 +977,10 @@ class FileMetaData::FileMetaDataImpl {
 
   void set_file_path(const std::string& path) {
     for (facebook::velox::parquet::thrift::RowGroup& row_group :
-         metadata_->row_groups) {
+         *metadata_->row_groups()) {
       for (facebook::velox::parquet::thrift::ColumnChunk& chunk :
-           row_group.columns) {
-        chunk.__set_file_path(path);
+           *row_group.columns()) {
+        chunk.file_path() = path;
       }
     }
   }
@@ -940,7 +992,7 @@ class FileMetaData::FileMetaDataImpl {
          << " row groups, requested metadata for row group: " << i;
       throw ParquetException(ss.str());
     }
-    return metadata_->row_groups[i];
+    return (*metadata_->row_groups())[i];
   }
 
   void AppendRowGroups(const std::unique_ptr<FileMetaDataImpl>& other) {
@@ -958,11 +1010,12 @@ class FileMetaData::FileMetaDataImpl {
     // and incur O(n²) behavior on repeated calls to AppendRowGroups().
     // (see https://en.cppreference.com/w/cpp/container/vector/reserve
     //  about inappropriate uses of reserve()).
-    const auto start = metadata_->row_groups.size();
-    metadata_->row_groups.resize(start + n);
+    const auto start = metadata_->row_groups()->size();
+    metadata_->row_groups()->resize(start + n);
     for (int i = 0; i < n; i++) {
-      metadata_->row_groups[start + i] = other->row_group(i);
-      metadata_->num_rows += metadata_->row_groups[start + i].num_rows;
+      (*metadata_->row_groups())[start + i] = other->row_group(i);
+      metadata_->num_rows() = *metadata_->num_rows() +
+          *((*metadata_->row_groups())[start + i].num_rows());
     }
   }
 
@@ -984,23 +1037,24 @@ class FileMetaData::FileMetaDataImpl {
         std::make_unique<facebook::velox::parquet::thrift::FileMetaData>();
 
     auto metadata = out->impl_->metadata_.get();
-    metadata->version = metadata_->version;
-    metadata->schema = metadata_->schema;
+    metadata->version() = *metadata_->version();
+    metadata->schema() = *metadata_->schema();
 
-    metadata->row_groups.resize(row_groups.size());
+    metadata->row_groups()->resize(row_groups.size());
     int i = 0;
     for (int selected_index : row_groups) {
-      metadata->num_rows += row_group(selected_index).num_rows;
-      metadata->row_groups[i++] = row_group(selected_index);
+      metadata->num_rows() =
+          *metadata->num_rows() + *row_group(selected_index).num_rows();
+      (*metadata->row_groups())[i++] = row_group(selected_index);
     }
 
-    metadata->key_value_metadata = metadata_->key_value_metadata;
-    metadata->created_by = metadata_->created_by;
-    metadata->column_orders = metadata_->column_orders;
-    metadata->encryption_algorithm = metadata_->encryption_algorithm;
-    metadata->footer_signing_key_metadata =
-        metadata_->footer_signing_key_metadata;
-    metadata->__isset = metadata_->__isset;
+    metadata->key_value_metadata().copy_from(metadata_->key_value_metadata());
+    metadata->created_by().copy_from(metadata_->created_by());
+    metadata->column_orders().copy_from(metadata_->column_orders());
+    metadata->encryption_algorithm().copy_from(
+        metadata_->encryption_algorithm());
+    metadata->footer_signing_key_metadata().copy_from(
+        metadata_->footer_signing_key_metadata());
 
     out->impl_->schema_ = schema_;
     out->impl_->writer_version_ = writer_version_;
@@ -1026,21 +1080,23 @@ class FileMetaData::FileMetaDataImpl {
   std::shared_ptr<InternalFileDecryptor> file_decryptor_;
 
   void InitSchema() {
-    if (metadata_->schema.empty()) {
+    if (metadata_->schema()->empty()) {
       throw ParquetException("Empty file schema (no root)");
     }
     schema_.Init(
         schema::Unflatten(
-            &metadata_->schema[0], static_cast<int>(metadata_->schema.size())));
+            &(*metadata_->schema())[0],
+            static_cast<int>(metadata_->schema()->size())));
   }
 
   void InitColumnOrders() {
     // update ColumnOrder
     std::vector<ColumnOrder> column_orders;
-    if (metadata_->__isset.column_orders) {
-      column_orders.reserve(metadata_->column_orders.size());
-      for (auto column_order : metadata_->column_orders) {
-        if (column_order.__isset.TYPE_ORDER) {
+    if (metadata_->column_orders()) {
+      column_orders.reserve(metadata_->column_orders()->size());
+      for (auto column_order : *metadata_->column_orders()) {
+        if (column_order.getType() ==
+            facebook::velox::parquet::thrift::ColumnOrder::Type::TYPE_ORDER) {
           column_orders.push_back(ColumnOrder::type_defined_);
         } else {
           column_orders.push_back(ColumnOrder::undefined_);
@@ -1055,10 +1111,12 @@ class FileMetaData::FileMetaDataImpl {
 
   void InitKeyValueMetadata() {
     std::shared_ptr<KeyValueMetadata> metadata = nullptr;
-    if (metadata_->__isset.key_value_metadata) {
+    if (metadata_->key_value_metadata()) {
       metadata = std::make_shared<KeyValueMetadata>();
-      for (const auto& it : metadata_->key_value_metadata) {
-        metadata->Append(it.key, it.value);
+      for (const auto& it : *metadata_->key_value_metadata()) {
+        metadata->Append(
+            apache::thrift::can_throw(*it.key()),
+            apache::thrift::can_throw(*it.value()));
       }
     }
     key_value_metadata_ = std::move(metadata);
@@ -1220,11 +1278,12 @@ class FileCryptoMetaData::FileCryptoMetaDataImpl {
   }
 
   EncryptionAlgorithm encryption_algorithm() const {
-    return FromThrift(metadata_.encryption_algorithm);
+    return FromThrift(
+        apache::thrift::can_throw(*metadata_.encryption_algorithm()));
   }
 
   const std::string& key_metadata() const {
-    return metadata_.key_metadata;
+    return apache::thrift::can_throw(*metadata_.key_metadata());
   }
 
   void WriteTo(::arrow::io::OutputStream* dst) const {
@@ -1709,12 +1768,13 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
 
   // column chunk
   void set_file_path(const std::string& val) {
-    column_chunk_->__set_file_path(val);
+    column_chunk_->file_path() = val;
   }
 
   // column metadata
   void SetStatistics(const EncodedStatistics& val) {
-    column_chunk_->meta_data.__set_statistics(ToThrift(val));
+    apache::thrift::can_throw(*column_chunk_->meta_data()).statistics() =
+        ToThrift(val);
   }
 
   void Finish(
@@ -1729,48 +1789,45 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
       const std::map<Encoding::type, int32_t>& dict_encoding_stats,
       const std::map<Encoding::type, int32_t>& data_encoding_stats,
       const std::shared_ptr<Encryptor>& encryptor) {
+    column_chunk_->meta_data().ensure();
     if (dictionary_page_offset > 0) {
-      column_chunk_->meta_data.__set_dictionary_page_offset(
-          dictionary_page_offset);
-      column_chunk_->__set_file_offset(
-          dictionary_page_offset + compressed_size);
+      column_chunk_->meta_data()->dictionary_page_offset() =
+          dictionary_page_offset;
+      column_chunk_->file_offset() = dictionary_page_offset + compressed_size;
     } else {
-      column_chunk_->__set_file_offset(data_page_offset + compressed_size);
+      column_chunk_->file_offset() = data_page_offset + compressed_size;
     }
-    column_chunk_->__isset.meta_data = true;
-    column_chunk_->meta_data.__set_num_values(num_values);
+    column_chunk_->meta_data()->num_values() = num_values;
     if (index_page_offset >= 0) {
-      column_chunk_->meta_data.__set_index_page_offset(index_page_offset);
+      column_chunk_->meta_data()->index_page_offset() = index_page_offset;
     }
-    column_chunk_->meta_data.__set_data_page_offset(data_page_offset);
-    column_chunk_->meta_data.__set_total_uncompressed_size(uncompressed_size);
-    column_chunk_->meta_data.__set_total_compressed_size(compressed_size);
+    column_chunk_->meta_data()->data_page_offset() = data_page_offset;
+    column_chunk_->meta_data()->total_uncompressed_size() = uncompressed_size;
+    column_chunk_->meta_data()->total_compressed_size() = compressed_size;
 
-    std::vector<facebook::velox::parquet::thrift::Encoding::type>
-        thrift_encodings;
+    std::vector<facebook::velox::parquet::thrift::Encoding> thrift_encodings;
     std::vector<facebook::velox::parquet::thrift::PageEncodingStats>
         thrift_encoding_stats;
-    auto add_encoding =
-        [&thrift_encodings](
-            facebook::velox::parquet::thrift::Encoding::type value) {
-          auto it = std::find(
-              thrift_encodings.cbegin(), thrift_encodings.cend(), value);
-          if (it == thrift_encodings.cend()) {
-            thrift_encodings.push_back(value);
-          }
-        };
+    auto add_encoding = [&thrift_encodings](
+                            facebook::velox::parquet::thrift::Encoding value) {
+      auto it =
+          std::find(thrift_encodings.cbegin(), thrift_encodings.cend(), value);
+      if (it == thrift_encodings.cend()) {
+        thrift_encodings.push_back(value);
+      }
+    };
     // Add dictionary page encoding stats
     if (has_dictionary) {
       for (const auto& entry : dict_encoding_stats) {
         facebook::velox::parquet::thrift::PageEncodingStats dict_enc_stat;
-        dict_enc_stat.__set_page_type(
-            facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE);
+        dict_enc_stat.page_type() =
+            facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE;
         // Dictionary Encoding would be PLAIN_DICTIONARY in v1 and
         // PLAIN in v2.
-        facebook::velox::parquet::thrift::Encoding::type dict_encoding =
+        facebook::velox::parquet::thrift::Encoding dict_encoding =
             ToThrift(entry.first);
-        dict_enc_stat.__set_encoding(dict_encoding);
-        dict_enc_stat.__set_count(entry.second);
+        dict_enc_stat.encoding() = dict_encoding;
+        dict_enc_stat.count() = entry.second;
         thrift_encoding_stats.push_back(dict_enc_stat);
         add_encoding(dict_encoding);
       }
@@ -1784,37 +1841,34 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     // Add data page encoding stats
     for (const auto& entry : data_encoding_stats) {
       facebook::velox::parquet::thrift::PageEncodingStats data_enc_stat;
-      data_enc_stat.__set_page_type(
-          facebook::velox::parquet::thrift::PageType::DATA_PAGE);
-      facebook::velox::parquet::thrift::Encoding::type data_encoding =
+      data_enc_stat.page_type() =
+          facebook::velox::parquet::thrift::PageType::DATA_PAGE;
+      facebook::velox::parquet::thrift::Encoding data_encoding =
           ToThrift(entry.first);
-      data_enc_stat.__set_encoding(data_encoding);
-      data_enc_stat.__set_count(entry.second);
+      data_enc_stat.encoding() = data_encoding;
+      data_enc_stat.count() = entry.second;
       thrift_encoding_stats.push_back(data_enc_stat);
       add_encoding(data_encoding);
     }
-    column_chunk_->meta_data.__set_encodings(thrift_encodings);
-    column_chunk_->meta_data.__set_encoding_stats(thrift_encoding_stats);
+    column_chunk_->meta_data()->encodings() = thrift_encodings;
+    column_chunk_->meta_data()->encoding_stats() = thrift_encoding_stats;
 
     const auto& encrypt_md = properties_->column_encryption_properties(
         column_->path()->ToDotString());
     // column is encrypted
     if (encrypt_md != nullptr && encrypt_md->is_encrypted()) {
-      column_chunk_->__isset.crypto_metadata = true;
       facebook::velox::parquet::thrift::ColumnCryptoMetaData ccmd;
       if (encrypt_md->is_encrypted_with_footer_key()) {
         // encrypted with footer key
-        ccmd.__isset.ENCRYPTION_WITH_FOOTER_KEY = true;
-        ccmd.__set_ENCRYPTION_WITH_FOOTER_KEY(
+        ccmd.set_ENCRYPTION_WITH_FOOTER_KEY(
             facebook::velox::parquet::thrift::EncryptionWithFooterKey());
       } else { // encrypted with column key
         facebook::velox::parquet::thrift::EncryptionWithColumnKey eck;
-        eck.__set_key_metadata(encrypt_md->key_metadata());
-        eck.__set_path_in_schema(column_->path()->ToDotVector());
-        ccmd.__isset.ENCRYPTION_WITH_COLUMN_KEY = true;
-        ccmd.__set_ENCRYPTION_WITH_COLUMN_KEY(eck);
+        eck.key_metadata() = encrypt_md->key_metadata();
+        eck.path_in_schema() = column_->path()->ToDotVector();
+        ccmd.set_ENCRYPTION_WITH_COLUMN_KEY(eck);
       }
-      column_chunk_->__set_crypto_metadata(ccmd);
+      column_chunk_->crypto_metadata() = ccmd;
 
       bool encrypted_footer =
           properties_->file_encryption_properties()->encrypted_footer();
@@ -1830,7 +1884,7 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
         uint32_t serialized_len;
 
         serializer.SerializeToBuffer(
-            &column_chunk_->meta_data, &serialized_len, &serialized_data);
+            &*column_chunk_->meta_data(), &serialized_len, &serialized_data);
 
         std::vector<uint8_t> encrypted_data(
             encryptor->CiphertextSizeDelta() + serialized_len);
@@ -1840,16 +1894,17 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
         const char* temp = const_cast<const char*>(
             reinterpret_cast<char*>(encrypted_data.data()));
         std::string encrypted_column_metadata(temp, encrypted_len);
-        column_chunk_->__set_encrypted_column_metadata(
-            encrypted_column_metadata);
+        column_chunk_->encrypted_column_metadata() = encrypted_column_metadata;
 
         if (encrypted_footer) {
-          column_chunk_->__isset.meta_data = false;
+          column_chunk_->meta_data().reset();
         } else {
           // Keep redacted metadata version for old readers
-          column_chunk_->__isset.meta_data = true;
-          column_chunk_->meta_data.__isset.statistics = false;
-          column_chunk_->meta_data.__isset.encoding_stats = false;
+          if (!column_chunk_->meta_data()) {
+            column_chunk_->meta_data().ensure();
+          }
+          column_chunk_->meta_data()->statistics().reset();
+          column_chunk_->meta_data()->encoding_stats().reset();
         }
       }
     }
@@ -1864,18 +1919,21 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     return column_;
   }
   int64_t total_compressed_size() const {
-    return column_chunk_->meta_data.total_compressed_size;
+    return apache::thrift::can_throw(
+        *apache::thrift::can_throw(*column_chunk_->meta_data())
+             .total_compressed_size());
   }
 
  private:
   void Init(facebook::velox::parquet::thrift::ColumnChunk* column_chunk) {
     column_chunk_ = column_chunk;
 
-    column_chunk_->meta_data.__set_type(ToThrift(column_->physical_type()));
-    column_chunk_->meta_data.__set_path_in_schema(
-        column_->path()->ToDotVector());
-    column_chunk_->meta_data.__set_codec(
-        ToThrift(properties_->compression(column_->path())));
+    column_chunk_->meta_data().ensure();
+    column_chunk_->meta_data()->type() = ToThrift(column_->physical_type());
+    column_chunk_->meta_data()->path_in_schema() =
+        column_->path()->ToDotVector();
+    column_chunk_->meta_data()->codec() =
+        ToThrift(properties_->compression(column_->path()));
   }
 
   facebook::velox::parquet::thrift::ColumnChunk* column_chunk_;
@@ -1991,7 +2049,7 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
     }
     auto column = schema_->Column(next_column_);
     auto column_builder = ColumnChunkMetaDataBuilder::Make(
-        properties_, column, &row_group_->columns[next_column_++]);
+        properties_, column, &(*row_group_->columns())[next_column_++]);
     auto column_builder_ptr = column_builder.get();
     column_builders_.push_back(std::move(column_builder));
     return column_builder_ptr;
@@ -2012,21 +2070,22 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
     int64_t file_offset = 0;
     int64_t total_compressed_size = 0;
     for (int i = 0; i < schema_->num_columns(); i++) {
-      if (!(row_group_->columns[i].file_offset >= 0)) {
+      if (!(apache::thrift::can_throw(
+                *(*row_group_->columns())[i].file_offset()) >= 0)) {
         std::stringstream ss;
         ss << "Column " << i << " is not complete.";
         throw ParquetException(ss.str());
       }
       if (i == 0) {
         const facebook::velox::parquet::thrift::ColumnMetaData& first_col =
-            row_group_->columns[0].meta_data;
+            apache::thrift::can_throw(*(*row_group_->columns())[0].meta_data());
         // As per spec, file_offset for the row group points to the first
         // dictionary or data page of the column.
-        if (first_col.__isset.dictionary_page_offset &&
-            first_col.dictionary_page_offset > 0) {
-          file_offset = first_col.dictionary_page_offset;
+        if (first_col.dictionary_page_offset() &&
+            *first_col.dictionary_page_offset() > 0) {
+          file_offset = *first_col.dictionary_page_offset();
         } else {
-          file_offset = first_col.data_page_offset;
+          file_offset = *first_col.data_page_offset();
         }
       }
       // sometimes column metadata is encrypted and not available to read,
@@ -2041,30 +2100,30 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
       for (size_t i = 0; i < sorting_columns.size(); ++i) {
         thrift_sorting_columns[i] = ToThrift(sorting_columns[i]);
       }
-      row_group_->__set_sorting_columns(std::move(thrift_sorting_columns));
+      row_group_->sorting_columns() = std::move(thrift_sorting_columns);
     }
 
-    row_group_->__set_file_offset(file_offset);
-    row_group_->__set_total_compressed_size(total_compressed_size);
-    row_group_->__set_total_byte_size(total_bytes_written);
-    row_group_->__set_ordinal(row_group_ordinal);
+    row_group_->file_offset() = file_offset;
+    row_group_->total_compressed_size() = total_compressed_size;
+    row_group_->total_byte_size() = total_bytes_written;
+    row_group_->ordinal() = row_group_ordinal;
   }
 
   void set_num_rows(int64_t num_rows) {
-    row_group_->num_rows = num_rows;
+    row_group_->num_rows() = num_rows;
   }
 
   int num_columns() {
-    return static_cast<int>(row_group_->columns.size());
+    return static_cast<int>(row_group_->columns()->size());
   }
 
   int64_t num_rows() {
-    return row_group_->num_rows;
+    return *row_group_->num_rows();
   }
 
  private:
   void InitializeColumns(int ncols) {
-    row_group_->columns.resize(ncols);
+    row_group_->columns()->resize(ncols);
   }
 
   facebook::velox::parquet::thrift::RowGroup* row_group_;
@@ -2145,34 +2204,38 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
   }
 
   void SetPageIndexLocation(const PageIndexLocation& location) {
-    auto set_index_location = [this](
-                                  size_t row_group_ordinal,
-                                  const PageIndexLocation::FileIndexLocation&
-                                      file_index_location,
-                                  bool column_index) {
-      auto& row_group_metadata = this->row_groups_.at(row_group_ordinal);
-      auto iter = file_index_location.find(row_group_ordinal);
-      if (iter != file_index_location.cend()) {
-        const auto& row_group_index_location = iter->second;
-        for (size_t i = 0; i < row_group_index_location.size(); ++i) {
-          if (i >= row_group_metadata.columns.size()) {
-            throw ParquetException(
-                "Cannot find metadata for column ordinal ", i);
-          }
-          auto& column_metadata = row_group_metadata.columns.at(i);
-          const auto& index_location = row_group_index_location.at(i);
-          if (index_location.has_value()) {
-            if (column_index) {
-              column_metadata.__set_column_index_offset(index_location->offset);
-              column_metadata.__set_column_index_length(index_location->length);
-            } else {
-              column_metadata.__set_offset_index_offset(index_location->offset);
-              column_metadata.__set_offset_index_length(index_location->length);
+    auto set_index_location =
+        [this](
+            size_t row_group_ordinal,
+            const PageIndexLocation::FileIndexLocation& file_index_location,
+            bool column_index) {
+          auto& row_group_metadata = this->row_groups_.at(row_group_ordinal);
+          auto iter = file_index_location.find(row_group_ordinal);
+          if (iter != file_index_location.cend()) {
+            const auto& row_group_index_location = iter->second;
+            for (size_t i = 0; i < row_group_index_location.size(); ++i) {
+              if (i >= row_group_metadata.columns()->size()) {
+                throw ParquetException(
+                    "Cannot find metadata for column ordinal ", i);
+              }
+              auto& column_metadata = row_group_metadata.columns()->at(i);
+              const auto& index_location = row_group_index_location.at(i);
+              if (index_location.has_value()) {
+                if (column_index) {
+                  column_metadata.column_index_offset() =
+                      index_location->offset;
+                  column_metadata.column_index_length() =
+                      index_location->length;
+                } else {
+                  column_metadata.offset_index_offset() =
+                      index_location->offset;
+                  column_metadata.offset_index_length() =
+                      index_location->length;
+                }
+              }
             }
           }
-        }
-      }
-    };
+        };
 
     for (size_t i = 0; i < row_groups_.size(); ++i) {
       set_index_location(i, location.column_index_location, true);
@@ -2184,10 +2247,10 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
       const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
     int64_t total_rows = 0;
     for (auto row_group : row_groups_) {
-      total_rows += row_group.num_rows;
+      total_rows += *row_group.num_rows();
     }
-    metadata_->__set_num_rows(total_rows);
-    metadata_->__set_row_groups(row_groups_);
+    metadata_->num_rows() = total_rows;
+    metadata_->row_groups() = row_groups_;
 
     if (key_value_metadata_ || key_value_metadata) {
       if (!key_value_metadata_) {
@@ -2195,15 +2258,18 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
       } else if (key_value_metadata) {
         key_value_metadata_ = key_value_metadata_->Merge(*key_value_metadata);
       }
-      metadata_->key_value_metadata.clear();
-      metadata_->key_value_metadata.reserve(key_value_metadata_->size());
+      if (metadata_->key_value_metadata()) {
+        metadata_->key_value_metadata()->clear();
+      } else {
+        metadata_->key_value_metadata().ensure();
+      }
+      metadata_->key_value_metadata()->reserve(key_value_metadata_->size());
       for (int64_t i = 0; i < key_value_metadata_->size(); ++i) {
         facebook::velox::parquet::thrift::KeyValue kv_pair;
-        kv_pair.__set_key(key_value_metadata_->key(i));
-        kv_pair.__set_value(key_value_metadata_->value(i));
-        metadata_->key_value_metadata.push_back(kv_pair);
+        kv_pair.key() = key_value_metadata_->key(i);
+        kv_pair.value() = key_value_metadata_->value(i);
+        metadata_->key_value_metadata()->push_back(kv_pair);
       }
-      metadata_->__isset.key_value_metadata = true;
     }
 
     int32_t file_version = 0;
@@ -2215,8 +2281,8 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
         file_version = 2;
         break;
     }
-    metadata_->__set_version(file_version);
-    metadata_->__set_created_by(properties_->created_by());
+    metadata_->version() = file_version;
+    metadata_->created_by() = properties_->created_by();
 
     // Users cannot set the `ColumnOrder` since we do not have user defined sort
     // order in the spec yet. We always default to `TYPE_DEFINED_ORDER`. We can
@@ -2225,10 +2291,9 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
     // ConvertedType/PhysicalType
     facebook::velox::parquet::thrift::TypeDefinedOrder type_defined_order;
     facebook::velox::parquet::thrift::ColumnOrder column_order;
-    column_order.__set_TYPE_ORDER(type_defined_order);
-    column_order.__isset.TYPE_ORDER = true;
-    metadata_->column_orders.resize(schema_->num_columns(), column_order);
-    metadata_->__isset.column_orders = true;
+    column_order.set_TYPE_ORDER(type_defined_order);
+    metadata_->column_orders().ensure();
+    metadata_->column_orders()->resize(schema_->num_columns(), column_order);
 
     // if plaintext footer, set footer signing algorithm
     auto file_encryption_properties = properties_->file_encryption_properties();
@@ -2243,18 +2308,17 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
       }
       signing_algorithm.algorithm = ParquetCipher::AES_GCM_V1;
 
-      metadata_->__set_encryption_algorithm(ToThrift(signing_algorithm));
+      metadata_->encryption_algorithm() = ToThrift(signing_algorithm);
       const std::string& footer_signing_key_metadata =
           file_encryption_properties->footer_key_metadata();
       if (footer_signing_key_metadata.size() > 0) {
-        metadata_->__set_footer_signing_key_metadata(
-            footer_signing_key_metadata);
+        metadata_->footer_signing_key_metadata() = footer_signing_key_metadata;
       }
     }
 
     ToParquet(
         static_cast<schema::GroupNode*>(schema_->schema_root().get()),
-        &metadata_->schema);
+        &*metadata_->schema());
     auto file_meta_data = std::unique_ptr<FileMetaData>(new FileMetaData());
     file_meta_data->impl_->metadata_ = std::move(metadata_);
     file_meta_data->impl_->InitSchema();
@@ -2269,13 +2333,13 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
 
     auto file_encryption_properties = properties_->file_encryption_properties();
 
-    crypto_metadata_->__set_encryption_algorithm(
-        ToThrift(file_encryption_properties->algorithm()));
+    crypto_metadata_->encryption_algorithm() =
+        ToThrift(file_encryption_properties->algorithm());
     std::string key_metadata =
         file_encryption_properties->footer_key_metadata();
 
     if (!key_metadata.empty()) {
-      crypto_metadata_->__set_key_metadata(key_metadata);
+      crypto_metadata_->key_metadata() = key_metadata;
     }
 
     std::unique_ptr<FileCryptoMetaData> file_crypto_metadata(
