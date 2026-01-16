@@ -1349,9 +1349,10 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
   if (*writerInfo_->nonReclaimableSectionHolder.get()) {
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     LOG(WARNING) << "Can't reclaim from hive writer pool " << pool->name()
-                 << " which is under non-reclaimable section, "
-                 << " reserved memory: "
-                 << succinctBytes(pool->reservedBytes());
+                 << " which is under non-reclaimable section, root pool: "
+                 << pool->root()->name()
+                 << ", state: " << stateString(dataSink_->state_)
+                 << ", reservation: " << succinctBytes(pool->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
