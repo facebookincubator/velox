@@ -45,6 +45,7 @@
 #include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/SetDigestResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -160,9 +161,6 @@ int main(int argc, char** argv) {
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
-      // Come back to SetDigest and KHLL aggregate functions.
-      "make_set_digest",
-      "merge_set_digest",
       "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
       // verifier is added.
       // The list below also contains their companion functions.
@@ -195,6 +193,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::NoisyCountResultVerifier;
   using facebook::velox::exec::test::NoisySumResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
+  using facebook::velox::exec::test::SetDigestResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
   using facebook::velox::exec::test::TDigestAggregateResultVerifier;
   using facebook::velox::exec::test::TransformResultVerifier;
@@ -264,6 +263,8 @@ int main(int argc, char** argv) {
           {"convex_hull_agg_merge", nullptr},
           {"convex_hull_agg_extract", nullptr},
           {"convex_hull_agg_merge_extract", nullptr},
+          {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
+          {"merge_set_digest", std::make_shared<SetDigestResultVerifier>()},
       };
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
