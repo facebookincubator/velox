@@ -133,7 +133,8 @@ CudfVector::CudfVector(
           std::nullopt),
       tableStorage_{std::move(packedTable)},
       stream_{stream} {
-  auto& packedPtr = std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
+  auto& packedPtr =
+      std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
   tabView_ = packedPtr->table;
   // For packed table, flatSize is the size of the GPU data buffer
   flatSize_ = packedPtr->data.gpu_data->size();
