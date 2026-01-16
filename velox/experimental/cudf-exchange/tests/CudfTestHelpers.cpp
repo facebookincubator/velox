@@ -117,11 +117,7 @@ std::shared_ptr<Task> createPartitionedOutputTask(
   }
 
   auto rowVector = std::make_shared<RowVector>(
-      pool.get(),
-      rowType,
-      BufferPtr(nullptr),
-      vectorSize,
-      vecPtrs);
+      pool.get(), rowType, BufferPtr(nullptr), vectorSize, vecPtrs);
 
   // Build the plan: Values -> PartitionedOutput
   auto planFragment = exec::test::PlanBuilder()

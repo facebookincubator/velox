@@ -37,21 +37,26 @@ SourceDriverMock::SourceDriverMock(
   auto partitionedOutputNode =
       std::dynamic_pointer_cast<const core::PartitionedOutputNode>(planNode);
   VELOX_CHECK_NOT_NULL(
-      partitionedOutputNode,
-      "Plan node must be a PartitionedOutputNode");
+      partitionedOutputNode, "Plan node must be a PartitionedOutputNode");
 
   uint32_t operatorId = 0;
 
   // Create the set of CudfPartitionedOutput operators, one per driver.
   for (uint32_t driverId = 0; driverId < numDrivers; ++driverId) {
-    driverCtxs_.emplace_back(std::make_shared<exec::DriverCtx>(
-        task_, driverId, kPipelineId, exec::kUngroupedGroupId, kPartitionId));
+    driverCtxs_.emplace_back(
+        std::make_shared<exec::DriverCtx>(
+            task_,
+            driverId,
+            kPipelineId,
+            exec::kUngroupedGroupId,
+            kPartitionId));
 
-    partitionedOutputs_.emplace_back(std::make_unique<CudfPartitionedOutput>(
-        operatorId,
-        driverCtxs_.back().get(),
-        partitionedOutputNode,
-        false /* eagerFlush */));
+    partitionedOutputs_.emplace_back(
+        std::make_unique<CudfPartitionedOutput>(
+            operatorId,
+            driverCtxs_.back().get(),
+            partitionedOutputNode,
+            false /* eagerFlush */));
   }
 }
 
@@ -59,7 +64,9 @@ void SourceDriverMock::run() {
   threads_.clear();
   for (uint32_t driver = 0; driver < numDrivers_; ++driver) {
     threads_.emplace_back(
-        &SourceDriverMock::sendAllData, this, partitionedOutputs_[driver].get());
+        &SourceDriverMock::sendAllData,
+        this,
+        partitionedOutputs_[driver].get());
   }
 }
 

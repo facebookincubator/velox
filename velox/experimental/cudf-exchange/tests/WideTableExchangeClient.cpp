@@ -54,10 +54,19 @@ DEFINE_string(server_host, "127.0.0.1", "Server hostname or IP address");
 DEFINE_uint32(server_port, 21346, "Server port for UCX communication");
 DEFINE_string(task_id, "wideTableTask0", "Remote task ID to fetch data from");
 DEFINE_uint32(partition_id, 0, "Partition ID to fetch (0, 1, ...)");
-DEFINE_uint32(num_sink_drivers, 4, "Number of sink drivers (parallel receivers)");
+DEFINE_uint32(
+    num_sink_drivers,
+    4,
+    "Number of sink drivers (parallel receivers)");
 DEFINE_uint32(client_port, 21347, "Local port for UCX communication");
-DEFINE_uint32(rmm_pool_percent, 50, "Percentage of free GPU memory for RMM pool");
-DEFINE_bool(complex_types, false, "If true, expect WideComplexTestTable schema (includes STRING and STRUCT)");
+DEFINE_uint32(
+    rmm_pool_percent,
+    50,
+    "Percentage of free GPU memory for RMM pool");
+DEFINE_bool(
+    complex_types,
+    false,
+    "If true, expect WideComplexTestTable schema (includes STRING and STRUCT)");
 
 /// @brief Creates a remote split pointing to the server's partition.
 /// The URL format follows Velox's exchange protocol.
@@ -68,11 +77,9 @@ exec::Split createRemoteSplit(
     int partitionId) {
   // Port offset -3 is used per the cudf-exchange test infrastructure
   // to derive the HTTP port from the UCX port
-  std::string remoteUrl = "http://" + host + ":" +
-      std::to_string(port - 3) + "/v1/task/" + taskId +
-      "/results/" + std::to_string(partitionId);
-  return exec::Split(
-      std::make_shared<exec::RemoteConnectorSplit>(remoteUrl));
+  std::string remoteUrl = "http://" + host + ":" + std::to_string(port - 3) +
+      "/v1/task/" + taskId + "/results/" + std::to_string(partitionId);
+  return exec::Split(std::make_shared<exec::RemoteConnectorSplit>(remoteUrl));
 }
 
 int main(int argc, char** argv) {
@@ -89,12 +96,16 @@ int main(int argc, char** argv) {
   std::cout << "Wide Table Exchange Client" << std::endl;
   std::cout << "========================================" << std::endl;
   std::cout << "Configuration:" << std::endl;
-  std::cout << "  Server: " << FLAGS_server_host << ":" << FLAGS_server_port << std::endl;
+  std::cout << "  Server: " << FLAGS_server_host << ":" << FLAGS_server_port
+            << std::endl;
   std::cout << "  Task ID: " << FLAGS_task_id << std::endl;
   std::cout << "  Partition ID: " << FLAGS_partition_id << std::endl;
   std::cout << "  Sink drivers: " << FLAGS_num_sink_drivers << std::endl;
   std::cout << "  Client port: " << FLAGS_client_port << std::endl;
-  std::cout << "  Complex types: " << (FLAGS_complex_types ? "yes (STRING + STRUCT)" : "no (numeric only)") << std::endl;
+  std::cout << "  Complex types: "
+            << (FLAGS_complex_types ? "yes (STRING + STRUCT)"
+                                    : "no (numeric only)")
+            << std::endl;
   std::cout << "========================================" << std::endl;
 
   // Setup RMM memory resource with a pool
@@ -110,7 +121,8 @@ int main(int argc, char** argv) {
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
   // Initialize local Communicator (needed for UCX endpoint management)
-  std::cout << "Initializing local Communicator on port " << FLAGS_client_port << "..." << std::endl;
+  std::cout << "Initializing local Communicator on port " << FLAGS_client_port
+            << "..." << std::endl;
   ContinueFuture readyFuture;
   auto communicator = Communicator::initAndGet(
       FLAGS_client_port, "http://localhost:12345/unused", &readyFuture);
@@ -121,9 +133,7 @@ int main(int argc, char** argv) {
   }
 
   // Start communicator in background thread
-  std::thread communicatorThread([&]() {
-    communicator->run();
-  });
+  std::thread communicatorThread([&]() { communicator->run(); });
 
   // Wait for communicator to be ready
   readyFuture.wait();
@@ -131,10 +141,10 @@ int main(int argc, char** argv) {
 
   // Create sink task for this partition
   // Use the appropriate row type based on --complex_types flag
-  auto rowType = FLAGS_complex_types
-      ? WideComplexTestTable::kRowType
-      : WideTestTable::kRowType;
-  std::string sinkTaskId = "clientSinkTask_p" + std::to_string(FLAGS_partition_id);
+  auto rowType = FLAGS_complex_types ? WideComplexTestTable::kRowType
+                                     : WideTestTable::kRowType;
+  std::string sinkTaskId =
+      "clientSinkTask_p" + std::to_string(FLAGS_partition_id);
   core::PlanNodeId exchangeNodeId;
   auto sinkTask = createExchangeTask(
       sinkTaskId, rowType, FLAGS_partition_id, exchangeNodeId);
@@ -150,7 +160,8 @@ int main(int argc, char** argv) {
       FLAGS_server_host, FLAGS_server_port, FLAGS_task_id, FLAGS_partition_id));
   sinkDriver->addSplits(splits);
 
-  std::cout << "Connecting to server and fetching partition " << FLAGS_partition_id << "..." << std::endl;
+  std::cout << "Connecting to server and fetching partition "
+            << FLAGS_partition_id << "..." << std::endl;
 
   // ========================================
   // NVTX marker: Start of exchange region

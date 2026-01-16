@@ -59,11 +59,13 @@ void Acceptor::cStyleAMCallback(
   // Register exchangeServer with communicator.
   communicator->registerCommElement(exchangeServer);
   VLOG(3) << "Registered new exchange server task: "
-          << exchangeServer->toString() << " (sourceListener: "
-          << sourceListenerIp << ":" << sourceListenerPort << ")";
+          << exchangeServer->toString()
+          << " (sourceListener: " << sourceListenerIp << ":"
+          << sourceListenerPort << ")";
 
-  // Send HandshakeResponse back to the source to inform about intra-node transfer.
-  // This allows the source to bypass UCXX for all subsequent data transfers.
+  // Send HandshakeResponse back to the source to inform about intra-node
+  // transfer. This allows the source to bypass UCXX for all subsequent data
+  // transfers.
   auto response = std::make_shared<HandshakeResponse>();
   response->isIntraNodeTransfer = exchangeServer->isIntraNodeTransfer();
 

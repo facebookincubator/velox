@@ -130,7 +130,8 @@ std::vector<std::string> getStringCol(
     cudf::size_type max_rows,
     rmm::cuda_stream_view stream);
 
-/// @brief Helper function to create a strings column from a vector of host strings.
+/// @brief Helper function to create a strings column from a vector of host
+/// strings.
 /// @param host_strings The vector of strings to use for creating the column.
 /// @return A unique pointer to the created strings column.
 std::unique_ptr<cudf::column> make_strings_column_from_host(

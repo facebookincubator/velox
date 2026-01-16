@@ -67,7 +67,8 @@ void CudfPartitionedOutputMock::publishDataChunks() {
       } else {
         table = tableGenerator_->makeTable(stream);
       }
-      auto packedCols = std::make_unique<cudf::packed_columns>(cudf::pack(table->view(), stream));
+      auto packedCols = std::make_unique<cudf::packed_columns>(
+          cudf::pack(table->view(), stream));
       // Sync the stream since UCXX/UCX is not stream oriented and without
       // syncing, data could get lost. Syncing here is  easy but not the most
       // efficient. A better approach is to create an event and pass it along
@@ -75,10 +76,7 @@ void CudfPartitionedOutputMock::publishDataChunks() {
       // into UCXX.
       stream.synchronize();
       queueManager_->enqueue(
-          taskId_,
-          partition,
-          std::move(packedCols),
-          numRowsPerChunk_);
+          taskId_, partition, std::move(packedCols), numRowsPerChunk_);
     }
   }
   // tell the queue manager that we are done.

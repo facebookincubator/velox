@@ -47,7 +47,7 @@ bool EndpointRef::addCommElem(std::shared_ptr<CommElement> commElem) {
 void EndpointRef::removeCommElem(std::shared_ptr<CommElement> commElem) {
   if (!commElem) {
     return;
-  }  
+  }
   communicators_.erase(commElem);
 }
 
@@ -65,7 +65,7 @@ bool EndpointRef::operator<(EndpointRef const& other) {
 }
 
 void EndpointRef::cleanup() {
-  for(auto it = communicators_.begin(); it != communicators_.end();) {
+  for (auto it = communicators_.begin(); it != communicators_.end();) {
     if (it->expired()) {
       it = communicators_.erase(it);
     } else {

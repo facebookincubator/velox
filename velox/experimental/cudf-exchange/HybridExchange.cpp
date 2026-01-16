@@ -77,8 +77,8 @@ HybridExchange::HybridExchange(
         task->destination(),
         1 // number of consumers, is always 1.
     );
-    exchangeClient_ =
-        std::make_shared<ExchangeClientFacade>(taskId(), pipelineId_, std::move(client), nullptr);
+    exchangeClient_ = std::make_shared<ExchangeClientFacade>(
+        taskId(), pipelineId_, std::move(client), nullptr);
     exchangeClient_->activateCudfExchangeClient();
   }
 }
@@ -96,13 +96,17 @@ void HybridExchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
 }
 
 void HybridExchange::getSplits(ContinueFuture* future) {
-  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " getSplits called for task: " << taskId();
+  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+          << " getSplits called for task: " << taskId();
   if (!processSplits_) {
-    VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " getSplits: Not allowed to process splits for task: " << taskId();
+    VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+            << " getSplits: Not allowed to process splits for task: "
+            << taskId();
     return;
   }
   if (noMoreSplits_) {
-    VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " getSplits: No more splits for task: " << taskId();
+    VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+            << " getSplits: No more splits for task: " << taskId();
     return;
   }
   std::vector<std::string> remoteTaskIds;
@@ -118,8 +122,8 @@ void HybridExchange::getSplits(ContinueFuture* future) {
     }
 
     if (split.hasConnectorSplit()) {
-      auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
-          split.connectorSplit);
+      auto remoteSplit =
+          std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
       VELOX_CHECK_NOT_NULL(remoteSplit, "Wrong type of split");
       remoteTaskIds.push_back(remoteSplit->taskId);
       // check for more splits.

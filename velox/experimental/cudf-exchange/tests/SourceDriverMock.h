@@ -28,13 +28,15 @@ namespace facebook::velox::cudf_exchange {
 /// CudfPartitionedOutputMock which bypasses the operator entirely.
 class SourceDriverMock {
  public:
-  /// @brief Creates a mock driver to execute a pipeline with CudfPartitionedOutput
-  /// operators.
-  /// @param task A pointer to the source task with a PartitionedOutput plan node.
+  /// @brief Creates a mock driver to execute a pipeline with
+  /// CudfPartitionedOutput operators.
+  /// @param task A pointer to the source task with a PartitionedOutput plan
+  /// node.
   /// @param numDrivers The number of drivers (parallel operator instances).
   /// @param numChunks The number of data chunks each driver will send.
   /// @param numRowsPerChunk The number of rows per chunk.
-  /// @param tableGenerator Optional table generator for test data (for integrity testing).
+  /// @param tableGenerator Optional table generator for test data (for
+  /// integrity testing).
   SourceDriverMock(
       std::shared_ptr<facebook::velox::exec::Task> task,
       uint32_t numDrivers,
@@ -42,7 +44,8 @@ class SourceDriverMock {
       size_t numRowsPerChunk,
       std::shared_ptr<BaseTableGenerator> tableGenerator = nullptr);
 
-  /// @brief Starts the driver threads to send data through CudfPartitionedOutput.
+  /// @brief Starts the driver threads to send data through
+  /// CudfPartitionedOutput.
   void run();
 
   /// @brief Waits until all threads have terminated.

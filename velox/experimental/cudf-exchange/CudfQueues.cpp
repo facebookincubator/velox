@@ -258,7 +258,7 @@ void CudfOutputQueue::getData(
         // outside of lock:
         // wake up any producers that are waiting for queue to become less full.
         if (promises.empty()) {
-            VLOG(3) << "No waiting producers in task: " << task_->taskId();
+          VLOG(3) << "No waiting producers in task: " << task_->taskId();
         } else {
           VLOG(3) << "Waking up producers in task: " << task_->taskId();
         }
