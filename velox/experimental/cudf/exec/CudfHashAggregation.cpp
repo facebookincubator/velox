@@ -465,6 +465,10 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       rmm::cuda_stream_view stream) override {
+    VELOX_CHECK(
+        step != core::AggregationNode::Step::kIntermediate,
+        "ApproxDistinctAggregator does not support intermediate aggregation step");
+
     if (exec::isRawInput(step)) {
       return doPartialReduce(input, stream);
     } else {
