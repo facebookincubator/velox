@@ -208,9 +208,11 @@ TEST_P(CudfExchangeTest, basicTest) {
   VLOG(3) << "+ CudfExchangeTest::basicTest";
   ExchangeTestParams p = GetParam();
 
-  // Skip wide table tests - CudfPartitionedOutputMock only supports narrow tables
+  // Skip wide table tests - CudfPartitionedOutputMock only supports narrow
+  // tables
   if (shouldSkipWideTable()) {
-    GTEST_SKIP() << "basicTest skipped for WideTable - uses CudfPartitionedOutputMock";
+    GTEST_SKIP()
+        << "basicTest skipped for WideTable - uses CudfPartitionedOutputMock";
   }
 
   int numUpstreamTasks = p.numUpstreamTasks;
@@ -282,8 +284,9 @@ TEST_P(CudfExchangeTest, basicTest) {
   VLOG(3) << "All sink tasks done.";
 
   // Total rows received across all partitions should equal total rows sent.
-  // CudfPartitionedOutputMock sends numChunks * numRowsPerChunk to EACH partition,
-  // so total rows = chunks * rowsPerChunk * partitions * upstreamTasks * srcDrivers
+  // CudfPartitionedOutputMock sends numChunks * numRowsPerChunk to EACH
+  // partition, so total rows = chunks * rowsPerChunk * partitions *
+  // upstreamTasks * srcDrivers
   size_t expectedRows = static_cast<size_t>(p.numChunks) * p.numRowsPerChunk *
       p.numPartitions * numUpstreamTasks * p.numSrcDrivers;
   size_t totalReceivedRows = 0;
@@ -305,9 +308,11 @@ TEST_P(CudfExchangeTest, dataIntegrityTest) {
   VLOG(3) << "+ CudfExchangeTest::dataIntegrityTest";
   ExchangeTestParams p = GetParam();
 
-  // Skip wide table tests - CudfPartitionedOutputMock only supports narrow tables
+  // Skip wide table tests - CudfPartitionedOutputMock only supports narrow
+  // tables
   if (shouldSkipWideTable()) {
-    GTEST_SKIP() << "dataIntegrityTest skipped for WideTable - uses CudfPartitionedOutputMock";
+    GTEST_SKIP()
+        << "dataIntegrityTest skipped for WideTable - uses CudfPartitionedOutputMock";
   }
 
   int numUpstreamTasks = p.numUpstreamTasks;
@@ -416,9 +421,11 @@ TEST_P(CudfExchangeTest, bandwidthTest) {
         << "Bandwidth test skipped. Set RUN_BANDWIDTH_TEST=1 to enable.";
   }
 
-  // Skip wide table tests - CudfPartitionedOutputMock only supports narrow tables
+  // Skip wide table tests - CudfPartitionedOutputMock only supports narrow
+  // tables
   if (shouldSkipWideTable()) {
-    GTEST_SKIP() << "bandwidthTest skipped for WideTable - uses CudfPartitionedOutputMock";
+    GTEST_SKIP()
+        << "bandwidthTest skipped for WideTable - uses CudfPartitionedOutputMock";
   }
 
   VLOG(3) << "+ CudfExchangeTest::bandwidthTest";
@@ -527,8 +534,9 @@ TEST_P(CudfExchangeTest, realPartitionedOutputTest) {
   VLOG(3) << "+ CudfExchangeTest::realPartitionedOutputTest";
   ExchangeTestParams p = GetParam();
 
-  // Wide table multi-partition tests work by using structs_column_view::get_sliced_child()
-  // in CudfExchangeServer/CudfExchangeProtocol to get STRUCT children with the
+  // Wide table multi-partition tests work by using
+  // structs_column_view::get_sliced_child() in
+  // CudfExchangeServer/CudfExchangeProtocol to get STRUCT children with the
   // parent's offset/size applied after cudf::split.
 
   // Use unique task prefix to avoid collisions between parametrized tests
@@ -550,8 +558,7 @@ TEST_P(CudfExchangeTest, realPartitionedOutputTest) {
 
   // Create source task with PartitionedOutput plan node
   auto srcTask = createPartitionedOutputTask(
-      srcTaskId, pool_, rowType, p.numPartitions,
-      partitionKeys);
+      srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
   queueManager_->initializeTask(srcTask, p.numPartitions, p.numSrcDrivers);
@@ -574,10 +581,11 @@ TEST_P(CudfExchangeTest, realPartitionedOutputTest) {
     const std::string sinkTaskId =
         taskPrefix + "sinkTask" + std::to_string(partitionId);
     core::PlanNodeId exchangeNodeId;
-    auto sinkTask = createExchangeTask(
-        sinkTaskId, rowType, partitionId, exchangeNodeId);
+    auto sinkTask =
+        createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
 
-    auto sinkDriver = std::make_shared<SinkDriverMock>(sinkTask, p.numDstDrivers);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, p.numDstDrivers);
 
     // Add remote split for this partition
     std::vector<facebook::velox::exec::Split> splits;
@@ -623,9 +631,12 @@ TEST_P(CudfExchangeTest, realPartitionedOutputTest) {
 
 // Test using real CudfPartitionedOutput with data integrity verification.
 // This test:
-// 1. Creates reference data (CudfTestData or WideTestTable) - same as dataIntegrityTest
-// 2. For narrow tables with multi-partition: partitions that data using cudf::hash_partition
-//    (same algorithm as CudfPartitionedOutput) to create per-partition reference data
+// 1. Creates reference data (CudfTestData or WideTestTable) - same as
+// dataIntegrityTest
+// 2. For narrow tables with multi-partition: partitions that data using
+// cudf::hash_partition
+//    (same algorithm as CudfPartitionedOutput) to create per-partition
+//    reference data
 // 3. Sends data through SourceDriverMock (which uses CudfPartitionedOutput)
 // 4. Each SinkDriverMock verifies received data against its partition's
 //    expected data using row-by-row comparison
@@ -633,8 +644,9 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
   VLOG(3) << "+ CudfExchangeTest::realPartitionedOutputDataIntegrityTest";
   ExchangeTestParams p = GetParam();
 
-  // Wide table multi-partition tests work by using structs_column_view::get_sliced_child()
-  // in CudfExchangeServer/CudfExchangeProtocol to get STRUCT children with the
+  // Wide table multi-partition tests work by using
+  // structs_column_view::get_sliced_child() in
+  // CudfExchangeServer/CudfExchangeProtocol to get STRUCT children with the
   // parent's offset/size applied after cudf::split.
 
   // Use unique task prefix to avoid collisions between parametrized tests
@@ -649,7 +661,8 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
   // Get the row type based on the table type
   auto rowType = getRowType(p.tableType);
 
-  // Create reference data that will be sent - CudfTestData for narrow, WideTestTable for wide
+  // Create reference data that will be sent - CudfTestData for narrow,
+  // WideTestTable for wide
   std::shared_ptr<BaseTableGenerator> tableGenerator;
   if (p.tableType == TableType::WIDE) {
     auto wideTable = std::make_shared<WideTestTable>();
@@ -662,7 +675,8 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
   }
 
   // Specify partition keys when numPartitions > 1 to enable hash partitioning.
-  // Use "c0" for narrow tables (column index 0) or "int32_col" for wide tables (column index 2).
+  // Use "c0" for narrow tables (column index 0) or "int32_col" for wide tables
+  // (column index 2).
   std::vector<std::string> partitionKeys;
   std::vector<cudf::size_type> partitionKeyIndices;
   if (p.numPartitions > 1) {
@@ -681,32 +695,30 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
   std::vector<std::shared_ptr<BaseTableGenerator>> partitionedDataToVerify(
       p.numPartitions);
 
-  // For narrow tables with multi-partition, we can compute per-partition reference data
-  // For wide tables or single partition, we use the tableGenerator directly
+  // For narrow tables with multi-partition, we can compute per-partition
+  // reference data For wide tables or single partition, we use the
+  // tableGenerator directly
   bool canVerifyDataIntegrity = true;
 
   if (p.numPartitions > 1 && !partitionKeyIndices.empty()) {
     // Multi-partition: skip data integrity verification.
     // cudf::hash_partition does not guarantee deterministic row ordering within
-    // partitions, so the reference data created here may have different row order
-    // than the data sent through CudfPartitionedOutput::hashPartition(), even though
-    // both use the same input data and hash function.
-    // Row count verification still confirms all data is transferred correctly.
+    // partitions, so the reference data created here may have different row
+    // order than the data sent through CudfPartitionedOutput::hashPartition(),
+    // even though both use the same input data and hash function. Row count
+    // verification still confirms all data is transferred correctly.
     canVerifyDataIntegrity = false;
     VLOG(3) << "Multi-partition test: skipping data integrity verification "
             << "(hash_partition row order is not deterministic)";
   } else {
-    // Single partition: all data goes to partition 0, use tableGenerator directly
+    // Single partition: all data goes to partition 0, use tableGenerator
+    // directly
     partitionedDataToVerify[0] = tableGenerator;
   }
 
   // Create source task with PartitionedOutput plan node
   auto srcTask = createPartitionedOutputTask(
-      srcTaskId,
-      pool_,
-      rowType,
-      p.numPartitions,
-      partitionKeys);
+      srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
   queueManager_->initializeTask(srcTask, p.numPartitions, numSrcDrivers);
@@ -722,13 +734,16 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
     const std::string sinkTaskId =
         taskPrefix + "sinkTask" + std::to_string(partitionId);
     core::PlanNodeId exchangeNodeId;
-    auto sinkTask = createExchangeTask(
-        sinkTaskId, rowType, partitionId, exchangeNodeId);
+    auto sinkTask =
+        createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
 
-    // Pass the partitioned reference data for this partition (may be nullptr for wide multi-partition)
+    // Pass the partitioned reference data for this partition (may be nullptr
+    // for wide multi-partition)
     auto sinkDriver = std::make_shared<SinkDriverMock>(
-        sinkTask, p.numDstDrivers,
-        canVerifyDataIntegrity ? partitionedDataToVerify[partitionId] : nullptr);
+        sinkTask,
+        p.numDstDrivers,
+        canVerifyDataIntegrity ? partitionedDataToVerify[partitionId]
+                               : nullptr);
 
     std::vector<facebook::velox::exec::Split> splits;
     splits.emplace_back(remoteSplit(srcTaskId, partitionId));
@@ -777,7 +792,8 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
 
     GTEST_ASSERT_EQ(allDataValid, true);
   } else {
-    VLOG(3) << "Data integrity verification skipped for wide table with multi-partition";
+    VLOG(3)
+        << "Data integrity verification skipped for wide table with multi-partition";
   }
 
   // Cleanup

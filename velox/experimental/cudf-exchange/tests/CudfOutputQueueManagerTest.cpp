@@ -67,7 +67,8 @@ class CudfOutputQueueManagerTest : public testing::Test {
     // Create table directly without going through pack/unpack
     auto table = facebook::velox::cudf_exchange::makeTable(
         numRows, CudfTestData::kTestRowType, stream);
-    auto cols = std::make_unique<cudf::packed_columns>(cudf::pack(table->view(), stream));
+    auto cols = std::make_unique<cudf::packed_columns>(
+        cudf::pack(table->view(), stream));
     stream.synchronize();
     return cols;
   }

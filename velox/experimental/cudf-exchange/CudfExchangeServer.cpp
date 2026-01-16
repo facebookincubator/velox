@@ -40,7 +40,8 @@ CudfExchangeServer::CudfExchangeServer(
   // Detect if the source is on the same node by comparing listener addresses.
   std::string myIp = communicator_->getListenerIp();
   uint16_t myPort = communicator_->getListenerPort();
-  isIntraNodeTransfer_ = (myIp == sourceListenerIp_) && (myPort == sourceListenerPort_);
+  isIntraNodeTransfer_ =
+      (myIp == sourceListenerIp_) && (myPort == sourceListenerPort_);
 
   if (isIntraNodeTransfer_) {
     VLOG(3) << "@" << partitionKey_.taskId
@@ -78,7 +79,8 @@ void CudfExchangeServer::process() {
       // If the queue doesn't exist yet, getData will create an empty
       // queue and the callback will be triggered once the corresponding
       // source task has initialized the queue and added data to it.
-      // Use weak_ptr to prevent use-after-free if close() is called during callback
+      // Use weak_ptr to prevent use-after-free if close() is called during
+      // callback
       std::weak_ptr<CudfExchangeServer> weakQueue = weak_from_this();
       queueMgr_->getData(
           partitionKey_.taskId,
@@ -90,7 +92,8 @@ void CudfExchangeServer::process() {
             if (!self) {
               return; // Object was destroyed, safe to ignore
             }
-            // Check if close() was called - avoid processing if we're shutting down
+            // Check if close() was called - avoid processing if we're shutting
+            // down
             if (self->closed_.load(std::memory_order_acquire)) {
               VLOG(3) << "@" << self->partitionKey_.taskId
                       << " getData callback called after close, ignoring";
@@ -126,7 +129,8 @@ void CudfExchangeServer::process() {
     case ServerState::WaitingForIntraNodeRetrieve:
       // Intra-node transfer: check if the source has retrieved the data
       if (intraNodeRetrieveFuture_.valid()) {
-        auto status = intraNodeRetrieveFuture_.wait_for(std::chrono::milliseconds(0));
+        auto status =
+            intraNodeRetrieveFuture_.wait_for(std::chrono::milliseconds(0));
         if (status == std::future_status::ready) {
           intraNodeRetrieveFuture_.get(); // Clear the future
           onIntraNodeRetrieveComplete();
@@ -187,7 +191,8 @@ void CudfExchangeServer::sendData() {
   std::lock_guard<std::recursive_mutex> lock(dataMutex_);
 
   if (isIntraNodeTransfer_) {
-    // INTRA-NODE TRANSFER PATH: Use registry for all communication, no UCXX needed
+    // INTRA-NODE TRANSFER PATH: Use registry for all communication, no UCXX
+    // needed
     sendStart_ = std::chrono::high_resolution_clock::now();
 
     if (dataPtr_) {
@@ -205,7 +210,8 @@ void CudfExchangeServer::sendData() {
       IntraNodeTransferKey key{
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
-          IntraNodeTransferRegistry::getInstance()->publish(key, sharedData, /*atEnd=*/false);
+          IntraNodeTransferRegistry::getInstance()->publish(
+              key, sharedData, /*atEnd=*/false);
       intraNodeAtEndPublished_ = false;
 
       // Transition to WaitingForIntraNodeRetrieve state
@@ -221,7 +227,8 @@ void CudfExchangeServer::sendData() {
       IntraNodeTransferKey key{
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
-          IntraNodeTransferRegistry::getInstance()->publish(key, nullptr, /*atEnd=*/true);
+          IntraNodeTransferRegistry::getInstance()->publish(
+              key, nullptr, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
@@ -292,8 +299,9 @@ void CudfExchangeServer::sendData() {
       sendStart_ = std::chrono::high_resolution_clock::now();
       bytes_ = dataPtr_->gpu_data->size();
 
-      VLOG(3) << "@" << partitionKey_.taskId << " Sending rmm::buffer: "
-              << std::hex << dataPtr_->gpu_data.get()
+      VLOG(3) << "@" << partitionKey_.taskId
+              << " Sending rmm::buffer: " << std::hex
+              << dataPtr_->gpu_data.get()
               << " pointing to device memory: " << std::hex
               << dataPtr_->gpu_data->data() << std::dec << " to task "
               << partitionKey_.toString() << ":" << this->sequenceNumber_
@@ -381,10 +389,10 @@ void CudfExchangeServer::onIntraNodeRetrieveComplete() {
       std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
   auto throughput = (micros > 0) ? (bytes_ / micros) : 0;
 
-  VLOG(3) << "@" << partitionKey_.taskId << " Intra-node transfer duration: "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(duration)
-                 .count()
-          << " ms ";
+  VLOG(3)
+      << "@" << partitionKey_.taskId << " Intra-node transfer duration: "
+      << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count()
+      << " ms ";
   VLOG(3) << "@" << partitionKey_.taskId
           << " Intra-node transfer throughput: " << throughput << " MByte/s";
 

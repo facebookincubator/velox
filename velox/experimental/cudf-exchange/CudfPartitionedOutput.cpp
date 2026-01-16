@@ -83,7 +83,8 @@ CudfPartitionedOutput::CudfPartitionedOutput(
 }
 
 void CudfPartitionedOutput::addInput(RowVectorPtr input) {
-  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " addInput";
+  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+          << " addInput";
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
@@ -136,13 +137,15 @@ void CudfPartitionedOutput::addInput(RowVectorPtr input) {
       lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
     }
     if (blocked) {
-      VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " is blocked, can no longer write to output!";
+      VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+              << " is blocked, can no longer write to output!";
     }
     blockingReason_ = blocked ? exec::BlockingReason::kWaitForConsumer
                               : exec::BlockingReason::kNotBlocked;
 
   } catch (const rmm::bad_alloc& e) {
-    VLOG(1) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+    VLOG(1)
+        << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
         << " caught memory alloc error, removing all memory in output queues";
     for (int i = 0; i < numPartitions_; i++) {
       sharedQueueManager()->deleteResults(this->taskId(), i);
@@ -239,7 +242,8 @@ void CudfPartitionedOutput::initPartitionKeys(
 void CudfPartitionedOutput::hashPartition(
     cudf::table_view tableView,
     rmm::cuda_stream_view stream) {
-  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " Hashing and partitioning into " << numPartitions_ << " chunks";
+  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+          << " Hashing and partitioning into " << numPartitions_ << " chunks";
 
   // Use cudf hash partitioning
   std::vector<cudf::size_type> partitionKeyIndices;
@@ -267,7 +271,8 @@ void CudfPartitionedOutput::hashPartition(
 void CudfPartitionedOutput::equalPartition(
     cudf::table_view tableView,
     rmm::cuda_stream_view stream) {
-  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_ << " Splitting into " << numPartitions_ << " chunks";
+  VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+          << " Splitting into " << numPartitions_ << " chunks";
   std::vector<cudf::size_type> offsets;
   cudf::size_type size = tableView.num_rows();
   for (int i = 1; i < numPartitions_; ++i) {
@@ -299,7 +304,10 @@ void CudfPartitionedOutput::splitAndEnqueue(
 
     // enqueue partition data on Cudf Output Buffer
     queueManager->enqueue(
-        this->taskId(), i, std::move(packedColsPtr), partitionTable.table.num_rows());
+        this->taskId(),
+        i,
+        std::move(packedColsPtr),
+        partitionTable.table.num_rows());
   }
 }
 

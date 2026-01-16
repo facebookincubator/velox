@@ -72,7 +72,8 @@ class CudfExchangeServer
     WaitingForDataFromQueue,
     DataReady,
     WaitingForSendComplete,
-    WaitingForIntraNodeRetrieve, // Intra-node transfer: waiting for source to retrieve
+    WaitingForIntraNodeRetrieve, // Intra-node transfer: waiting for source to
+                                 // retrieve
     Done
   };
 

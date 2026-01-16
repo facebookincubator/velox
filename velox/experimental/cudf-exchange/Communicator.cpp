@@ -83,8 +83,10 @@ Communicator::~Communicator() {
 /// All operations of the communicator will be carried out in the thread
 /// that calls run.
 void Communicator::run() {
-  VLOG(3)  << "Using error handling mode: " << CudfConfig::getInstance().ucxxErrorHandling << std::endl;
-  VLOG(3)  << "Using blocking progress mode: " << CudfConfig::getInstance().ucxxBlockingPolling << std::endl;
+  VLOG(3) << "Using error handling mode: "
+          << CudfConfig::getInstance().ucxxErrorHandling << std::endl;
+  VLOG(3) << "Using blocking progress mode: "
+          << CudfConfig::getInstance().ucxxBlockingPolling << std::endl;
 
   running_.store(true);
   // Force CUDA context creation
@@ -188,7 +190,9 @@ std::shared_ptr<EndpointRef> Communicator::assocEndpointRef(
   }
   // endpoint doesn't exist. Need to connect. Enable error handling.
   auto ep = worker_->createEndpointFromHostname(
-      hostPort.hostname, hostPort.port, CudfConfig::getInstance().ucxxErrorHandling);
+      hostPort.hostname,
+      hostPort.port,
+      CudfConfig::getInstance().ucxxErrorHandling);
   std::shared_ptr<EndpointRef> epRef = nullptr;
   if (ep != nullptr) {
     epRef = std::make_shared<EndpointRef>(ep);
@@ -259,7 +263,8 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
   // shared. This guarantees that between any two nodes, there will be at most 2
   // endpoints, one per direction. For compatibility reasons, both incoming and
   // outgoing endpoints are represented using the EndpointRef.
-  auto endpoint = listener_->createEndpointFromConnRequest(conn_request, CudfConfig::getInstance().ucxxErrorHandling);
+  auto endpoint = listener_->createEndpointFromConnRequest(
+      conn_request, CudfConfig::getInstance().ucxxErrorHandling);
   auto epRef = std::make_shared<EndpointRef>(endpoint);
   if (CudfConfig::getInstance().ucxxErrorHandling) {
     endpoint->setCloseCallback(EndpointRef::onClose, epRef);

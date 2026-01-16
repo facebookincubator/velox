@@ -40,8 +40,8 @@ void CudfExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
     } else {
       sources_.push_back(source);
       queue_->addSourceLocked();
-      VLOG(3) << "@" << taskId_ << " Added remote split for task: "
-              << remoteTaskId;
+      VLOG(3) << "@" << taskId_
+              << " Added remote split for task: " << remoteTaskId;
     }
   }
 
@@ -106,8 +106,8 @@ folly::F14FastMap<std::string, RuntimeMetric> CudfExchangeClient::stats()
 
 PackedTableWithStreamPtr
 CudfExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
-  VLOG(3) << "@" << taskId_ << " CudfExchangeClient::next called for consumerId "
-          << consumerId;
+  VLOG(3) << "@" << taskId_
+          << " CudfExchangeClient::next called for consumerId " << consumerId;
   PackedTableWithStreamPtr data;
   ContinuePromise stalePromise = ContinuePromise::makeEmpty();
   {

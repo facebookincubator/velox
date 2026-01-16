@@ -30,8 +30,8 @@ namespace facebook::velox::cudf_exchange {
 
 /// @brief Enum to identify different table types for testing
 enum class TableType {
-  NARROW,      // Original CudfTestData structure (INT32, FLOAT64, VARCHAR)
-  WIDE,        // Numeric types only (no STRING or STRUCT)
+  NARROW, // Original CudfTestData structure (INT32, FLOAT64, VARCHAR)
+  WIDE, // Numeric types only (no STRING or STRUCT)
   WIDE_COMPLEX // All cudf data types including STRING and STRUCT
 };
 
@@ -106,8 +106,8 @@ class BaseTableGenerator {
       rmm::cuda_stream_view stream);
 };
 
-/// @brief Original test data structure with narrow schema (INT32, FLOAT64, VARCHAR).
-/// Preserves compatibility with existing tests.
+/// @brief Original test data structure with narrow schema (INT32, FLOAT64,
+/// VARCHAR). Preserves compatibility with existing tests.
 class CudfTestData : public BaseTableGenerator {
  public:
   inline static const std::vector<std::string> kTestColumnNames = {
@@ -127,10 +127,8 @@ class CudfTestData : public BaseTableGenerator {
     initialize(numRows, STRING_LENGTH, STRING_LENGTH);
   }
 
-  void initialize(
-      size_t numRows,
-      size_t minStringLength,
-      size_t maxStringLength);
+  void
+  initialize(size_t numRows, size_t minStringLength, size_t maxStringLength);
 
   facebook::velox::RowTypePtr getRowType() const override {
     return kTestRowType;
@@ -180,38 +178,39 @@ class CudfTestData : public BaseTableGenerator {
 };
 
 /// @brief Wide table generator with numeric cudf data types only.
-/// Used to test that numeric column types transfer correctly through the exchange.
-/// Does NOT include STRING or STRUCT columns - use WideComplexTestTable for those.
+/// Used to test that numeric column types transfer correctly through the
+/// exchange. Does NOT include STRING or STRUCT columns - use
+/// WideComplexTestTable for those.
 class WideTestTable : public BaseTableGenerator {
  public:
   // Column names for the wide table (numeric types only)
   inline static const std::vector<std::string> kColumnNames = {
-      "int8_col",      // INT8
-      "int16_col",     // INT16
-      "int32_col",     // INT32
-      "int64_col",     // INT64
-      "uint8_col",     // UINT8
-      "uint16_col",    // UINT16
-      "uint32_col",    // UINT32
-      "uint64_col",    // UINT64
-      "float32_col",   // FLOAT32
-      "float64_col",   // FLOAT64
-      "bool_col"       // BOOL8
+      "int8_col", // INT8
+      "int16_col", // INT16
+      "int32_col", // INT32
+      "int64_col", // INT64
+      "uint8_col", // UINT8
+      "uint16_col", // UINT16
+      "uint32_col", // UINT32
+      "uint64_col", // UINT64
+      "float32_col", // FLOAT32
+      "float64_col", // FLOAT64
+      "bool_col" // BOOL8
   };
 
   // Column types for Velox (numeric types only)
   inline static const std::vector<TypePtr> kColumnTypes = {
-      TINYINT(),                           // INT8
-      SMALLINT(),                          // INT16
-      INTEGER(),                           // INT32
-      BIGINT(),                            // INT64
-      TINYINT(),                           // UINT8 (mapped to TINYINT)
-      SMALLINT(),                          // UINT16 (mapped to SMALLINT)
-      INTEGER(),                           // UINT32 (mapped to INTEGER)
-      BIGINT(),                            // UINT64 (mapped to BIGINT)
-      REAL(),                              // FLOAT32
-      DOUBLE(),                            // FLOAT64
-      BOOLEAN()};                          // BOOL8
+      TINYINT(), // INT8
+      SMALLINT(), // INT16
+      INTEGER(), // INT32
+      BIGINT(), // INT64
+      TINYINT(), // UINT8 (mapped to TINYINT)
+      SMALLINT(), // UINT16 (mapped to SMALLINT)
+      INTEGER(), // UINT32 (mapped to INTEGER)
+      BIGINT(), // UINT64 (mapped to BIGINT)
+      REAL(), // FLOAT32
+      DOUBLE(), // FLOAT64
+      BOOLEAN()}; // BOOL8
 
   inline static const facebook::velox::RowTypePtr kRowType =
       ROW(kColumnNames, kColumnTypes);
@@ -271,42 +270,43 @@ class WideTestTable : public BaseTableGenerator {
   size_t numRows_ = 0;
 };
 
-/// @brief Wide table generator that extends WideTestTable with STRING and STRUCT columns.
-/// Used to test that all column types including complex types transfer correctly.
+/// @brief Wide table generator that extends WideTestTable with STRING and
+/// STRUCT columns. Used to test that all column types including complex types
+/// transfer correctly.
 class WideComplexTestTable : public WideTestTable {
  public:
   // Column names: base numeric columns + string + struct
   inline static const std::vector<std::string> kColumnNames = {
-      "int8_col",      // INT8
-      "int16_col",     // INT16
-      "int32_col",     // INT32
-      "int64_col",     // INT64
-      "uint8_col",     // UINT8
-      "uint16_col",    // UINT16
-      "uint32_col",    // UINT32
-      "uint64_col",    // UINT64
-      "float32_col",   // FLOAT32
-      "float64_col",   // FLOAT64
-      "bool_col",      // BOOL8
-      "string_col",    // STRING
-      "struct_col"     // STRUCT<int64, float64>
+      "int8_col", // INT8
+      "int16_col", // INT16
+      "int32_col", // INT32
+      "int64_col", // INT64
+      "uint8_col", // UINT8
+      "uint16_col", // UINT16
+      "uint32_col", // UINT32
+      "uint64_col", // UINT64
+      "float32_col", // FLOAT32
+      "float64_col", // FLOAT64
+      "bool_col", // BOOL8
+      "string_col", // STRING
+      "struct_col" // STRUCT<int64, float64>
   };
 
   // Column types for Velox: base numeric types + string + struct
   inline static const std::vector<TypePtr> kColumnTypes = {
-      TINYINT(),                           // INT8
-      SMALLINT(),                          // INT16
-      INTEGER(),                           // INT32
-      BIGINT(),                            // INT64
-      TINYINT(),                           // UINT8 (mapped to TINYINT)
-      SMALLINT(),                          // UINT16 (mapped to SMALLINT)
-      INTEGER(),                           // UINT32 (mapped to INTEGER)
-      BIGINT(),                            // UINT64 (mapped to BIGINT)
-      REAL(),                              // FLOAT32
-      DOUBLE(),                            // FLOAT64
-      BOOLEAN(),                           // BOOL8
-      VARCHAR(),                           // STRING
-      ROW({"field1", "field2"},            // STRUCT
+      TINYINT(), // INT8
+      SMALLINT(), // INT16
+      INTEGER(), // INT32
+      BIGINT(), // INT64
+      TINYINT(), // UINT8 (mapped to TINYINT)
+      SMALLINT(), // UINT16 (mapped to SMALLINT)
+      INTEGER(), // UINT32 (mapped to INTEGER)
+      BIGINT(), // UINT64 (mapped to BIGINT)
+      REAL(), // FLOAT32
+      DOUBLE(), // FLOAT64
+      BOOLEAN(), // BOOL8
+      VARCHAR(), // STRING
+      ROW({"field1", "field2"}, // STRUCT
           {BIGINT(), DOUBLE()})};
 
   inline static const facebook::velox::RowTypePtr kRowType =

@@ -55,7 +55,8 @@ void CudfExchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
   std::shuffle(std::begin(remoteTaskIds), std::end(remoteTaskIds), rng_);
   for (const std::string& remoteTaskId : remoteTaskIds) {
     exchangeClient_->addRemoteTaskId(remoteTaskId);
-    VLOG(3) << "@" << taskId() << " CudfExchange::addRemoteTasksIds: " << remoteTaskId;
+    VLOG(3) << "@" << taskId()
+            << " CudfExchange::addRemoteTasksIds: " << remoteTaskId;
   }
   stats_.wlock()->numSplits += remoteTaskIds.size();
 }

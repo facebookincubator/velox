@@ -24,7 +24,8 @@ IntraNodeTransferRegistry::getInstance() {
   // In C++11, the static local variable is guaranteed to only be initialized
   // once even in a multi-threaded context.
   static std::shared_ptr<IntraNodeTransferRegistry> instance =
-      std::shared_ptr<IntraNodeTransferRegistry>(new IntraNodeTransferRegistry());
+      std::shared_ptr<IntraNodeTransferRegistry>(
+          new IntraNodeTransferRegistry());
   return instance;
 }
 
