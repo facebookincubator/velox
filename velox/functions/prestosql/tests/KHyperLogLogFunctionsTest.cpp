@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/common/hyperloglog/KHyperLogLog.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
 
