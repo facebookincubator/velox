@@ -1,0 +1,38 @@
+This tests does a simple exchange using the one billion
+row challenge example, which is implemented as 2 Velox tasks
+that communicate via the CudfExchange/UCXX:
+
+- the 1brc_server reads a parquet file containing the challenge data
+- the 1brc_client does the actual processing
+
+First create the image:
+
+$ cd velox/experimental/cudf-exchange/tests/containers
+$ ./create_docker.sh
+
+Then start the image this will be called  `velox-dev-ucx-test`
+You will need to have a large one billion row challenge  parquet file and
+change the mount volume in the following script to use this:
+
+./start_docker.sh
+
+
+Start the 1brc_server by logging it to container from a terminal:
+
+$ docker exec -it velox-dev-ucx-test /bin/bash
+$$ cd velox/experimental/cudf-exchange/tests/scripts
+$$ ./1brc_server.sh
+
+Start the 1brc_client in the same way:
+
+$ docker exec -it velox-dev-ucx-test /bin/bash
+$$ cd velox/experimental/cudf-exchange/tests/scripts
+$$ ./1brc_server.sh
+
+The scripts can be changed to use different UCX configurations,
+for example changing the memory from async to pool bt
+setting `-velox_cudf_memory_resource=pool`
+
+IMPORTANT one can set whatever port one wants at the server,
+BUT the nodes defined at the client MUST  be that
+port+3, this is an artifact of Velox
