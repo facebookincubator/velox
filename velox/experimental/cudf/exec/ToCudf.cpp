@@ -127,8 +127,9 @@ bool CompileState::compile(bool allowCpuFallback) {
       if (projectPlanNode) {
         if (projectPlanNode->sources()[0]->outputType()->size() == 0 ||
             projectPlanNode->outputType()->size() == 0) {
-          canBeEvaluated = false;
+          return false;
         }
+      }
 
       // Check filter separately.
       if (filterNode) {
