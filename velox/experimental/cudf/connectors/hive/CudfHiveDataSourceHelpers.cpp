@@ -138,28 +138,28 @@ std::vector<rmm::device_buffer> fetchByteRanges(
           auto buffer = rmm::device_buffer(
               cudf::util::round_up_safe<size_t>(
                   byteRange.size(), bufferPaddingMultiple),
-              stream_,
+              stream,
               mr);
           // Directly read the column chunk data to the device buffer if
           // supported
-          if (dataSource_->supports_device_read() and
-              dataSource_->is_device_read_preferred(byteRange.size())) {
-            std::ignore = dataSource_->device_read_async(
+          if (dataSource->supports_device_read() and
+              dataSource->is_device_read_preferred(byteRange.size())) {
+            std::ignore = dataSource->device_read_async(
                 byteRange.offset(),
                 byteRange.size(),
                 static_cast<uint8_t*>(buffer.data()),
-                stream_);
+                stream);
           } else {
             // Read the column chunk data to the host buffer and copy it to
             // the device buffer
             auto hostBuffer =
-                dataSource_->host_read(byteRange.offset(), byteRange.size());
+                dataSource->host_read(byteRange.offset(), byteRange.size());
             CUDF_CUDA_TRY(cudaMemcpyAsync(
                 buffer.data(),
                 hostBuffer->data(),
                 byteRange.size(),
                 cudaMemcpyHostToDevice,
-                stream_.value()));
+                stream.value()));
           }
           return buffer;
         });

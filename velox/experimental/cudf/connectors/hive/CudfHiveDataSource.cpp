@@ -172,7 +172,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   // Record start time before reading chunk
   auto startTimeUs = getCurrentTimeMicro();
 
-  if (useOldCudfReader_) {
+  if (useOldSplitReader_) {
     // Read table using the old cudf parquet reader
     VELOX_CHECK_NOT_NULL(splitReader_, "Old cudf split reader not present");
 
@@ -180,7 +180,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       return nullptr;
     }
 
-    std::bind(cudfTable, metadata) = splitReader_->read_chunk();
+    auto tableWithMetadata = splitReader_->read_chunk();
+    cudfTable = std::move(tableWithMetadata.tbl);
+    metadata = std::move(tableWithMetadata.metadata);
   } else {
     // Read table using the experimental parquet reader
     VELOX_CHECK_NOT_NULL(
@@ -193,13 +195,13 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 
       if (readerOptions_.get_filter().has_value()) {
         rowGroupIndices = exptSplitReader_->filter_row_groups_with_stats(
-            rowGroupIndices, tmpOptions, stream_);
+            rowGroupIndices, readerOptions_, stream_);
       }
 
       // Get column chunk byte ranges to fetch
       const auto columnChunkByteRanges =
           exptSplitReader_->all_column_chunks_byte_ranges(
-              rowGroupIndices, tmpOptions);
+              rowGroupIndices, readerOptions_);
 
       // Fetch column chunk byte ranges
       const auto columnChunkBuffers = fetchByteRanges(
@@ -212,9 +214,10 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       const auto columnChunkData = makeDeviceSpans<uint8_t>(columnChunkBuffers);
 
       // Read table
-      std::bind(cudfTable, metadata) =
-          exptSplitReader_->materialize_all_columns(
-              rowGroupIndices, columnChunkData, readerOptions_, stream_);
+      auto tableWithMetadata = exptSplitReader_->materialize_all_columns(
+          rowGroupIndices, columnChunkData, readerOptions_, stream_);
+      cudfTable = std::move(tableWithMetadata.tbl);
+      metadata = std::move(tableWithMetadata.metadata);
     });
 
     if (cudfTable == nullptr) {

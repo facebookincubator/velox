@@ -89,8 +89,8 @@ std::vector<cudf::device_span<T const>> makeDeviceSpans(
       buffers.end(),
       deviceSpans.begin(),
       [](auto const& buffer) {
-        return cudf::device_span<T>{
-            static_cast<T const*>((buffer.data())), buffer.size()};
+        return cudf::device_span<T const>{
+            static_cast<T const*>(buffer.data()), buffer.size()};
       });
   return deviceSpans;
 }
