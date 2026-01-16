@@ -707,19 +707,20 @@ TEST_F(AggregationTest, globalApproxDistinct) {
 
   auto plan = PlanBuilder()
                   .values({data})
-                  .partialAggregation({}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .partialAggregation(
+                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
                   .finalAggregation()
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
-  
+
   ASSERT_EQ(result->size(), 1);
   auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
   auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
-  
+
   EXPECT_GE(c0_estimate, 4);
   EXPECT_LE(c0_estimate, 6);
-  
+
   EXPECT_GE(c1_estimate, 4);
   EXPECT_LE(c1_estimate, 6);
 }
@@ -736,10 +737,10 @@ TEST_F(AggregationTest, globalApproxDistinctWithNulls) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
-  
+
   ASSERT_EQ(result->size(), 1);
   auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
-  
+
   EXPECT_GE(estimate, 4);
   EXPECT_LE(estimate, 6);
 }
@@ -749,7 +750,7 @@ TEST_F(AggregationTest, globalApproxDistinctHighCardinality) {
   for (int64_t i = 0; i < 10000; ++i) {
     values.push_back(i);
   }
-  
+
   auto data = makeRowVector({
       makeFlatVector<int64_t>(values),
   });
@@ -761,11 +762,12 @@ TEST_F(AggregationTest, globalApproxDistinctHighCardinality) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
-  
+
   ASSERT_EQ(result->size(), 1);
   auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
-  
-  double error_rate = std::abs(static_cast<double>(estimate) - 10000.0) / 10000.0;
+
+  double error_rate =
+      std::abs(static_cast<double>(estimate) - 10000.0) / 10000.0;
   EXPECT_LT(error_rate, 0.05);
 }
 
@@ -781,10 +783,10 @@ TEST_F(AggregationTest, globalApproxDistinctEmpty) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
-  
+
   ASSERT_EQ(result->size(), 1);
   auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
-  
+
   EXPECT_EQ(estimate, 0);
 }
 

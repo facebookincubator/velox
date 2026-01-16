@@ -431,7 +431,9 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       std::int32_t precision = 11)
       : Aggregator(
             step,
-            cudf::aggregation::NUNIQUE, // a dummy value, we don't use the standard aggregation path TODO: change this to a real value
+            cudf::aggregation::NUNIQUE, // a dummy value, we don't use the
+                                        // standard aggregation path TODO:
+                                        // change this to a real value
             inputIndex,
             constant,
             isGlobal,
@@ -475,37 +477,38 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& input,
       rmm::cuda_stream_view stream) {
     auto inputTable = cudf::table_view({input.column(inputIndex)});
-    
+
     cudf::approx_distinct_count sketch{
         inputTable,
         precision_,
         cudf::null_policy::EXCLUDE,
         cudf::nan_policy::NAN_IS_NULL,
         stream};
-    
+
     auto sketch_bytes = sketch.sketch();
     auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
-    
+
     cudf::size_type offsets[2] = {0, sketch_size};
-    rmm::device_buffer offsets_device{offsets, 2 * sizeof(cudf::size_type), stream};
-    
+    rmm::device_buffer offsets_device{
+        offsets, 2 * sizeof(cudf::size_type), stream};
+
     auto offsets_column = std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT32},
         2,
         std::move(offsets_device),
         rmm::device_buffer{},
         0);
-    
+
     rmm::device_buffer sketch_device{
         sketch_bytes.data(), sketch_bytes.size(), stream};
-    
+
     auto child_column = std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::UINT8},
         sketch_bytes.size(),
         std::move(sketch_device),
         rmm::device_buffer{},
         0);
-    
+
     return cudf::make_lists_column(
         1,
         std::move(offsets_column),
@@ -519,51 +522,50 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& input,
       rmm::cuda_stream_view stream) {
     auto sketch_column = input.column(inputIndex);
-    
+
     if (sketch_column.size() == 0) {
       return cudf::make_column_from_scalar(
           cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
     }
-    
+
     auto lists_col = cudf::lists_column_view(sketch_column);
     auto child_col = lists_col.get_sliced_child(stream);
     auto offsets_iter = lists_col.offsets_begin();
-    
+
     cudf::size_type first_offset = offsets_iter[0];
     cudf::size_type second_offset = offsets_iter[1];
     cudf::size_type first_size = second_offset - first_offset;
-    
-    auto sketch_data_ptr = const_cast<cuda::std::byte*>(
-        static_cast<cuda::std::byte const*>(
+
+    auto sketch_data_ptr =
+        const_cast<cuda::std::byte*>(static_cast<cuda::std::byte const*>(
             static_cast<void const*>(child_col.template data<uint8_t>())));
-    
+
     cudf::approx_distinct_count merged_sketch(
         cuda::std::span<cuda::std::byte>(
-            sketch_data_ptr + first_offset,
-            first_size),
+            sketch_data_ptr + first_offset, first_size),
         precision_,
         cudf::null_policy::EXCLUDE,
         cudf::nan_policy::NAN_IS_NULL,
         stream);
-    
+
     for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
       cudf::size_type start_offset = offsets_iter[i];
       cudf::size_type end_offset = offsets_iter[i + 1];
       cudf::size_type size = end_offset - start_offset;
-      
+
       if (size > 0) {
         merged_sketch.merge(
             cuda::std::span<cuda::std::byte>(
-                sketch_data_ptr + start_offset,
-                size),
+                sketch_data_ptr + start_offset, size),
             stream);
       }
     }
-    
+
     std::size_t estimate = merged_sketch.estimate(stream);
-    
+
     return cudf::make_column_from_scalar(
-        cudf::numeric_scalar<int64_t>(static_cast<int64_t>(estimate), true, stream),
+        cudf::numeric_scalar<int64_t>(
+            static_cast<int64_t>(estimate), true, stream),
         1,
         stream);
   }
