@@ -510,6 +510,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "s2_cell_to_token",
     "ip_version", // New function, pending Presto Java implementation
     "ip_prefix_masklen", // New function, pending Presto Java implementation
+    // Velox uses a transform lambda function(K,V,U) while Presto uses a
+    // comparator lambda function(K,K,integer).
+    "map_top_n_keys(map(K,V),bigint,function(K,V,U)) -> array(K)",
 };
 
 int main(int argc, char** argv) {
