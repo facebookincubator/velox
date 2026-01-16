@@ -142,6 +142,15 @@ Variant BaseVector::variantAt(vector_size_t index) const {
   return variantAtImpl(this, index);
 }
 
+std::vector<Variant> BaseVector::toVariants() const {
+  std::vector<Variant> result;
+  result.reserve(size());
+  for (auto i = 0; i < size(); ++i) {
+    result.push_back(variantAt(i));
+  }
+  return result;
+}
+
 BaseVector::BaseVector(
     velox::memory::MemoryPool* pool,
     std::shared_ptr<const Type> type,
@@ -1020,6 +1029,14 @@ VectorPtr BaseVector::createConstant(
 
   auto variantVector = callMakeVector(type, {value}, pool);
   return BaseVector::wrapInConstant(size, 0, std::move(variantVector));
+}
+
+// static
+VectorPtr BaseVector::createFromVariants(
+    const TypePtr& type,
+    const std::vector<Variant>& values,
+    velox::memory::MemoryPool* pool) {
+  return callMakeVector(type, values, pool);
 }
 
 // static
