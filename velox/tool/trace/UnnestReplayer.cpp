@@ -16,8 +16,8 @@
 
 #include "velox/tool/trace/UnnestReplayer.h"
 
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

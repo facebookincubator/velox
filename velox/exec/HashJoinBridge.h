@@ -200,7 +200,7 @@ class HashJoinBridge : public JoinBridge {
   // output build-side rows. When drivers are allowed to output build-side rows
   // in parallel, drivers call getAndIncrementClaimedRowContainerId() to ensure
   // the row containers they process do not overlap with each other.
-  std::atomic<int> unclaimedRowContainerId_{0};
+  std::atomic_int unclaimedRowContainerId_{0};
 
   friend test::HashJoinBridgeTestHelper;
 };

@@ -69,6 +69,12 @@ jobs:
           # Remove Haskell
           sudo rm -rf /opt/ghc || true
           sudo rm -rf /usr/local/.ghcup || true
+          # Remove Powershell
+          sudo rm -rf /usr/local/share/powershell || true
+          # Remove Node
+          sudo rm -rf /usr/local/lib/node_modules || true
+          # Remove Go
+          sudo rm -rf /opt/hostedtoolcache/go || true
           # Show after
           echo "New available disk space: " $(getAvailableSpace)
 
