@@ -25,17 +25,17 @@ namespace facebook::velox::dwrf {
 
 class IndexBuilderTest : public testing::Test {
  protected:
-  static const proto::RowIndexEntry& getEntry(
+  static const RowIndexEntryWriteWrapper getEntry(
       IndexBuilder& builder,
       size_t index) {
-    return *builder.getEntry(index);
+    return builder.getEntry(index);
   }
 
   static std::vector<uint64_t> getPositions(
       IndexBuilder& builder,
       size_t index) {
-    auto& positions = builder.getEntry(index)->positions();
-    return std::vector<uint64_t>{positions.begin(), positions.end()};
+    auto& positions = builder.getEntry(index).positions();
+    return std::vector<uint64_t>{positions.cbegin(), positions.cend()};
   }
 
   StatisticsBuilderOptions options_{16};
@@ -45,7 +45,7 @@ TEST_F(IndexBuilderTest, Constructor) {
   IndexBuilder builder{nullptr};
   EXPECT_EQ(1, builder.getEntrySize());
   // Ensure a clean start.
-  EXPECT_EQ(0, getEntry(builder, 0).positions_size());
+  EXPECT_EQ(0, getEntry(builder, 0).positionsSize());
 }
 
 TEST_F(IndexBuilderTest, AddEntry) {
@@ -65,8 +65,8 @@ TEST_F(IndexBuilderTest, AddEntry) {
   ASSERT_EQ(51, builder.getEntrySize());
   for (size_t i = 0; i != 50; ++i) {
     // The newly added entries should be empty.
-    EXPECT_EQ(0, getEntry(builder, i + 1).positions_size());
-    EXPECT_TRUE(getEntry(builder, i).has_statistics());
+    EXPECT_EQ(0, getEntry(builder, i + 1).positionsSize());
+    EXPECT_TRUE(getEntry(builder, i).hasStatistics());
   }
 }
 
@@ -94,9 +94,9 @@ TEST_F(IndexBuilderTest, Backfill) {
   IndexBuilder builder{nullptr};
   StatisticsBuilder sb{options_};
   builder.addEntry(sb);
-  ASSERT_EQ(0, getEntry(builder, 0).positions_size());
+  ASSERT_EQ(0, getEntry(builder, 0).positionsSize());
   builder.add(0uL);
-  ASSERT_EQ(0, getEntry(builder, 0).positions_size());
+  ASSERT_EQ(0, getEntry(builder, 0).positionsSize());
   ASSERT_THAT(getPositions(builder, 1), ElementsAreArray({0uL}));
 
   builder.add(42uL, 0);
@@ -112,16 +112,16 @@ TEST_F(IndexBuilderTest, Backfill) {
     builder.addEntry(sb);
   }
   for (size_t i = 2; i != 7; ++i) {
-    ASSERT_EQ(0, getEntry(builder, i).positions_size());
+    ASSERT_EQ(0, getEntry(builder, i).positionsSize());
   }
   builder.add(144uL, 4);
   EXPECT_THAT(getPositions(builder, 0), ElementsAreArray({42uL}));
   EXPECT_THAT(getPositions(builder, 1), ElementsAreArray({0uL, 0uL, 7uL}));
-  ASSERT_EQ(0, getEntry(builder, 2).positions_size());
-  ASSERT_EQ(0, getEntry(builder, 3).positions_size());
+  ASSERT_EQ(0, getEntry(builder, 2).positionsSize());
+  ASSERT_EQ(0, getEntry(builder, 3).positionsSize());
   EXPECT_THAT(getPositions(builder, 4), ElementsAreArray({144uL}));
-  ASSERT_EQ(0, getEntry(builder, 5).positions_size());
-  ASSERT_EQ(0, getEntry(builder, 6).positions_size());
+  ASSERT_EQ(0, getEntry(builder, 5).positionsSize());
+  ASSERT_EQ(0, getEntry(builder, 6).positionsSize());
 }
 
 TEST_F(IndexBuilderTest, RemovePresentStreamPositions) {

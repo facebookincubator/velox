@@ -229,6 +229,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
   auto expectedTypes = std::unordered_set<std::string>{
       "JSON",
       "HYPERLOGLOG",
+      "KHYPERLOGLOG",
       "TIMESTAMP WITH TIME ZONE",
       "UUID",
       "IPADDRESS",
@@ -244,6 +245,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "TIME WITH TIME ZONE"};
 #ifdef VELOX_ENABLE_GEO
   expectedTypes.insert("GEOMETRY");
+  expectedTypes.insert("SPHERICALGEOGRAPHY");
 #endif
   ASSERT_EQ(expectedTypes, getCustomTypeNames());
 
@@ -410,7 +412,7 @@ struct TimeWithTimezonePlusOneFunction {
   void call(
       out_type<TimeWithTimezone>& out,
       const arg_type<TimeWithTimezone>& input) {
-    out = input + 1;
+    out = *input + 1;
   }
 };
 
@@ -423,7 +425,7 @@ struct ArrayTimeWithTimezoneFunction {
       const arg_type<Array<TimeWithTimezone>>& input) {
     for (int i = 0; i < input.size(); i++) {
       if (input[i].has_value()) {
-        out.push_back(input[i].value());
+        out.push_back(*input[i].value());
       }
     }
   }

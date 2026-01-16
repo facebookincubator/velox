@@ -33,6 +33,7 @@ add_executable(
   VectorPoolTest.cpp
   VectorPrepareForReuseTest.cpp
   VectorPrinterTest.cpp
+  VectorRetainedSizeTest.cpp
   VectorSaverTest.cpp
   VectorStreamTest.cpp
   VectorStreamGroupTest.cpp
@@ -54,12 +55,12 @@ target_link_libraries(
   velox_presto_types
   velox_temp_path
   velox_type_test_lib
+  velox_common_fuzzer_util
   Boost::atomic
   Boost::context
   Boost::date_time
   Boost::filesystem
   Boost::program_options
-  Boost::regex
   Boost::thread
   Boost::system
   GTest::gtest

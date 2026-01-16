@@ -137,23 +137,21 @@ cappedByteLength(const TString& input, size_t maxCharacters) {
   }
 }
 
-/// Write the Unicode codePoint as string to the output string. The function
+/// Write the Unicode codePoint as string to an output StringView. The function
 /// behavior is undefined when code point it invalid. Implements the logic of
 /// presto chr function.
-template <typename TOutString>
-FOLLY_ALWAYS_INLINE void codePointToString(
-    TOutString& output,
-    const int64_t codePoint) {
+///
+/// Returns an StringView with an inlined buffer (since the maximum string size
+/// is only 4 bytes).
+FOLLY_ALWAYS_INLINE StringView codePointToString(const int64_t codePoint) {
   auto validCodePoint =
       codePoint <= INT32_MAX && utf8proc_codepoint_valid(codePoint);
   VELOX_USER_CHECK(
       validCodePoint, "Not a valid Unicode code point: {}", codePoint);
 
-  output.reserve(4);
-  auto size = utf8proc_encode_char(
-      codePoint, reinterpret_cast<unsigned char*>(output.data()));
-
-  output.resize(size);
+  unsigned char output[4];
+  auto size = utf8proc_encode_char(codePoint, output);
+  return StringView((const char*)output, size);
 }
 
 /// Returns the Unicode code point of the first char in a single char input

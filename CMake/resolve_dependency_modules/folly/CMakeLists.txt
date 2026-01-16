@@ -14,8 +14,8 @@
 project(Folly)
 cmake_minimum_required(VERSION 3.28)
 
-velox_set_source(fastfloat)
-velox_resolve_dependency(fastfloat CONFIG REQUIRED)
+velox_set_source(FastFloat)
+velox_resolve_dependency(FastFloat CONFIG REQUIRED)
 
 set(VELOX_FOLLY_BUILD_VERSION v2025.04.28.00)
 set(
@@ -54,8 +54,6 @@ set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 
 # Enable INT128 support
 set(FOLLY_HAVE_INT128_T ON)
-set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DFOLLY_CFG_NO_COROUTINES")
 
 FetchContent_MakeAvailable(folly)
 
@@ -66,4 +64,3 @@ add_library(Folly::follybenchmark ALIAS follybenchmark)
 if(gflags_SOURCE STREQUAL "BUNDLED")
   add_dependencies(folly glog::glog gflags::gflags fmt::fmt)
 endif()
-set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})

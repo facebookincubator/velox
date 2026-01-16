@@ -26,7 +26,6 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_vector_fuzzer
   velox_caching
-  Boost::regex
   velox_link_libs
   Folly::folly
   ${TEST_LINK_LIBS}
@@ -34,7 +33,7 @@ target_link_libraries(
   fmt::fmt
 )
 
-add_executable(velox_parquet_writer_test ParquetWriterTest.cpp)
+add_executable(velox_parquet_writer_test ParquetWriterFieldIdTest.cpp ParquetWriterTest.cpp)
 
 add_test(
   NAME velox_parquet_writer_test
@@ -44,12 +43,12 @@ add_test(
 
 target_link_libraries(
   velox_parquet_writer_test
+  velox_dwio_arrow_parquet_writer_test_lib
   velox_dwio_parquet_writer
   velox_dwio_parquet_reader
   velox_dwio_common_test_utils
   velox_caching
   velox_link_libs
-  Boost::regex
   Folly::folly
   ${TEST_LINK_LIBS}
   GTest::gtest

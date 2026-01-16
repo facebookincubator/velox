@@ -21,11 +21,11 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/OrderByReplayer.h"
 
@@ -148,6 +148,7 @@ TEST_F(OrderByReplayerTest, basic) {
                                    orderById_,
                                    "OrderBy",
                                    "",
+                                   "",
                                    0,
                                    executor_.get())
                                    .run();
@@ -186,6 +187,7 @@ TEST_F(OrderByReplayerTest, partial) {
                                    task->taskId(),
                                    orderById_,
                                    "OrderBy",
+                                   "",
                                    "",
                                    0,
                                    executor_.get())

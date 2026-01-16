@@ -226,28 +226,37 @@ void MergeJoin::addInput(RowVectorPtr input) {
 
 // static
 int32_t MergeJoin::compare(
-    const std::vector<column_index_t>& keys,
-    const RowVectorPtr& batch,
-    vector_size_t index,
-    const std::vector<column_index_t>& otherKeys,
-    const RowVectorPtr& otherBatch,
-    vector_size_t otherIndex) {
-  for (auto i = 0; i < keys.size(); ++i) {
+    const std::vector<column_index_t>& leftKeys,
+    const RowVectorPtr& leftBatch,
+    vector_size_t leftIndex,
+    const std::vector<column_index_t>& rightKeys,
+    const RowVectorPtr& rightBatch,
+    vector_size_t rightIndex) {
+  for (auto i = 0; i < leftKeys.size(); ++i) {
     static const CompareFlags kCompareFlags = {
         .equalsOnly = true,
         .nullHandlingMode =
             CompareFlags::NullHandlingMode::kNullAsIndeterminate};
-    const auto compare = batch->childAt(keys[i])->compare(
-        otherBatch->childAt(otherKeys[i]).get(),
-        index,
-        otherIndex,
-        kCompareFlags);
+    const auto compare = leftBatch->childAt(leftKeys[i])
+                             ->compare(
+                                 rightBatch->childAt(rightKeys[i]).get(),
+                                 leftIndex,
+                                 rightIndex,
+                                 kCompareFlags);
 
-    // Comparing null with anything will return std::nullopt.
     if (!compare.has_value()) {
-      // The SQL semantics of Presto and Spark will always return false if
-      // comparing a NULL value with any other value.
-      return -1;
+      // Under CompareFlags::NullHandlingMode::kNullAsIndeterminate,
+      // std::nullopt is returned in three cases:
+      //   1) Both the left key and the right key are null.
+      //   2) The left key is null, and the right key is not null.
+      //   3) The left key is not null, and the right key is null.
+      //
+      // However, the comparison result semantics differ:
+      // - Cases (1) and (2): return -1, meaning input_ should catch up with
+      // rightInput_.
+      // - Case (3): return 1, indicating the left key is considered greater,
+      //   so rightInput_ should catch up with input_ in the subsequent steps.
+      return leftBatch->childAt(leftKeys[i])->isNullAt(leftIndex) ? -1 : 1;
     } else if (compare.value() != 0) {
       return compare.value();
     }
@@ -996,18 +1005,22 @@ RowVectorPtr MergeJoin::doGetOutput() {
           leftEndRow < input_->size(),
           std::nullopt};
 
-      vector_size_t endRightRow = rightRowIndex_ + 1;
-      while (endRightRow < rightInput_->size() &&
-             compareRight(endRightRow) == 0) {
-        ++endRightRow;
+      vector_size_t rightEndRow = rightRowIndex_ + 1;
+      while (rightEndRow < rightInput_->size() &&
+             compareRight(rightEndRow) == 0) {
+        ++rightEndRow;
       }
 
       rightMatch_ = Match{
           {rightInput_},
           rightRowIndex_,
-          endRightRow,
-          endRightRow < rightInput_->size(),
+          rightEndRow,
+          rightEndRow < rightInput_->size(),
           std::nullopt};
+
+      // Track matched rows for this key match.
+      matchedLeftRows_ += leftEndRow - leftMatch_->startRowIndex;
+      matchedRightRows_ += rightEndRow - rightMatch_->startRowIndex;
 
       if (!leftMatch_->complete || !rightMatch_->complete) {
         if (!leftMatch_->complete) {
@@ -1024,10 +1037,10 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
       leftRowIndex_ = leftEndRow;
       if (isFullJoin(joinType_) || isRightJoin(joinType_)) {
-        rightRowIndex_ = endRightRow;
+        rightRowIndex_ = rightEndRow;
       } else {
         rightRowIndex_ =
-            firstNonNull(rightInput_, rightKeyChannels_, endRightRow);
+            firstNonNull(rightInput_, rightKeyChannels_, rightEndRow);
       }
 
       if (rightBatchFinished()) {
@@ -1464,6 +1477,14 @@ bool MergeJoin::isFinished() {
 }
 
 void MergeJoin::close() {
+  // Report match ratio statistics.
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addRuntimeStat(
+        "matchedLeftRows", RuntimeCounter(matchedLeftRows_));
+    lockedStats->addRuntimeStat(
+        "matchedRightRows", RuntimeCounter(matchedRightRows_));
+  }
   if (rightSource_) {
     rightSource_->close();
   }

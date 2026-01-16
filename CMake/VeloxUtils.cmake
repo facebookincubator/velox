@@ -135,10 +135,10 @@ function(velox_add_library TARGET)
           list(APPEND system_dependencies Snappy zstd)
         endif()
         foreach(system_dependency ${system_dependencies})
-          install(
-            FILES "${PROJECT_SOURCE_DIR}/CMake/Find${system_dependency}.cmake"
-            DESTINATION "${package_cmake_dir}"
-          )
+          set(velox_find_module "${PROJECT_SOURCE_DIR}/CMake/Find${system_dependency}.cmake")
+          if(EXISTS "${velox_find_module}")
+            install(FILES "${velox_find_module}" DESTINATION "${package_cmake_dir}")
+          endif()
         endforeach()
         # TODO: We can enable this once we add version to Velox.
         # set(version_cmake "${PROJECT_BINARY_DIR}/CMake/VeloxConfigVersion.cmake")

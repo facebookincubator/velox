@@ -17,15 +17,19 @@
 #pragma once
 
 #include "velox/common/base/GTestMacros.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 #include "velox/dwio/dwrf/writer/WriterSink.h"
 
 namespace facebook::velox::dwrf {
 
+using dwio::common::ArenaCreate;
+
 class WriterBase {
  public:
   explicit WriterBase(std::unique_ptr<dwio::common::FileSink> sink)
-      : sink_{std::move(sink)} {
+      : sink_{std::move(sink)},
+        arena_(std::make_unique<google::protobuf::Arena>()) {
     VELOX_CHECK_NOT_NULL(sink_);
   }
 
@@ -88,6 +92,8 @@ class WriterBase {
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
         context_->getConfigs());
+    auto dwrfFooter_ = ArenaCreate<proto::Footer>(arena_.get());
+    footer_ = std::make_unique<FooterWriteWrapper>(dwrfFooter_);
   }
 
   void initBuffers();
@@ -107,7 +113,7 @@ class WriterBase {
     auto holder = context_->newDataBufferHolder();
     auto stream = context_->newStream(kind, *holder);
 
-    t.SerializeToZeroCopyStream(stream.get());
+    t->SerializeToZeroCopyStream(stream.get());
     stream->flush();
 
     writerSink_->addBuffers(*holder);
@@ -131,23 +137,23 @@ class WriterBase {
     }
   }
 
-  proto::StripeInformation& addStripeInfo() {
-    auto stripe = footer_.add_stripes();
-    stripe->set_numberofrows(context_->stripeRowCount());
+  StripeInformationWriteWrapper addStripeInfo() {
+    auto stripe = footer_->addStripes();
+    stripe.setNumberOfRows(context_->stripeRowCount());
     if (context_->stripeRawSize() > 0 || context_->stripeRowCount() == 0) {
       // ColumnTransformWriter, when rewriting presto written
       // file does not have rawSize.
-      stripe->set_rawdatasize(context_->stripeRawSize());
+      stripe.setRawDataSize(context_->stripeRawSize());
     }
 
     auto* checksum = writerSink_->getChecksum();
     if (checksum != nullptr) {
-      stripe->set_checksum(checksum->getDigest());
+      stripe.setChecksum(checksum->getDigest());
     }
-    return *stripe;
+    return stripe;
   }
 
-  proto::Footer& getFooter() {
+  std::unique_ptr<FooterWriteWrapper>& getFooter() {
     return footer_;
   }
 
@@ -170,8 +176,10 @@ class WriterBase {
   std::unique_ptr<WriterContext> context_;
   std::unique_ptr<dwio::common::FileSink> sink_;
   std::unique_ptr<WriterSink> writerSink_;
-  proto::Footer footer_;
+  std::unique_ptr<FooterWriteWrapper> footer_;
+  proto::orc::Metadata metadata_;
   std::unordered_map<std::string, std::string> userMetadata_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
 
   friend class WriterTest;
   VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);

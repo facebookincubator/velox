@@ -69,7 +69,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const std::string& text,
       const RowTypePtr& rowType,
       const VectorPtr& complexConstants = nullptr) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(
         untyped, rowType, execCtx_->pool(), complexConstants);
   }
@@ -78,7 +78,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const std::string& text,
       const RowTypePtr& rowType,
       const std::vector<TypePtr>& lambdaInputTypes) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(
         untyped, rowType, lambdaInputTypes, execCtx_->pool(), nullptr);
   }
@@ -86,13 +86,15 @@ class ExprTest : public testing::Test, public VectorTestBase {
   std::vector<core::TypedExprPtr> parseMultipleExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseMultipleExpressions(text, options_);
-    std::vector<core::TypedExprPtr> parsed;
-    for (auto& iExpr : untyped) {
-      parsed.push_back(
-          core::Expressions::inferTypes(iExpr, rowType, execCtx_->pool()));
+    auto untypedExprs =
+        parse::DuckSqlExpressionsParser(options_).parseExprs(text);
+    std::vector<core::TypedExprPtr> typedExprs;
+    typedExprs.reserve(untypedExprs.size());
+    for (const auto& expr : untypedExprs) {
+      typedExprs.push_back(
+          core::Expressions::inferTypes(expr, rowType, execCtx_->pool()));
     }
-    return parsed;
+    return typedExprs;
   }
 
   // T can be ExprSet or ExprSetSimplified.
@@ -237,8 +239,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const RowVectorPtr& input,
       VectorPtr& result,
       const VectorPtr& expected) {
-    parse::ParseOptions options;
-    auto untyped = parse::parseExpr(expr, options);
+    auto untyped = parse::DuckSqlExpressionsParser().parseExpr(expr);
     auto typedExpr = core::Expressions::inferTypes(
         untyped, asRowType(input->type()), pool());
 
@@ -3657,10 +3658,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
   // not.  Conjuncts have the nice property that they set throwOnError to
   // false and don't check if the result VectorPtr is nullptr.
   assertError(
-      "always_throws_vector_function(c0) AND true",
+      "always_throws_vector_function(c0) AND (c0 = 1)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
-      "Top-level Expression: and(always_throws_vector_function(c0), true:BOOLEAN)",
+      "Top-level Expression: and(always_throws_vector_function(c0), eq(cast((c0) as BIGINT), 1:BIGINT))",
       TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3669,10 +3670,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
       std::make_unique<NoOpVectorFunction>());
 
   assertError(
-      "no_op(c0) AND true",
+      "no_op(c0) AND (c0 = 2)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "no_op(c0)",
-      "Top-level Expression: and(no_op(c0), true:BOOLEAN)",
+      "Top-level Expression: and(no_op(c0), eq(cast((c0) as BIGINT), 2:BIGINT))",
       "Function neither returned results nor threw exception.");
 }
 
@@ -5183,17 +5184,11 @@ TEST_F(ExprTest, peelingOnDeterministicFunctionInNonDeterministicExpr) {
 }
 
 TEST_F(ExprTest, lambdaConstantFolded) {
-  const auto makeTypedExpr =
-      [this](const std::string& text, const RowTypePtr& rowType) {
-        auto untyped = parse::parseExpr(text, {});
-        return core::Expressions::inferTypes(untyped, rowType, pool());
-      };
-
   // Test the resource clear of lambda constant folding which relies on an
   // uninitialized ExprSet for eval.
   std::string expression =
       "reduce(regexp_split('a,b,c,d,e,f,g,h',','), array[array['']], (acc, x) -> array[array[x]], (id) -> id)";
-  auto typedExpr = makeTypedExpr(expression, ROW({"c0"}, {INTEGER()}));
+  auto typedExpr = parseExpression(expression, ROW({"c0"}, {INTEGER()}));
   exec::ExprSet exprSet({typedExpr}, execCtx_.get());
   exprSet.clear();
 }

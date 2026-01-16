@@ -122,6 +122,27 @@ cudf::data_type CudfHiveConfig::timestampTypeSession(
   return cudf::data_type(cudf::type_id{unit});
 }
 
+bool CudfHiveConfig::useBufferedInput() const {
+  return config_->get<bool>(kUseBufferedInput, true);
+}
+
+bool CudfHiveConfig::useBufferedInputSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kUseBufferedInputSession, config_->get<bool>(kUseBufferedInput, true));
+}
+
+bool CudfHiveConfig::useExperimentalCudfReader() const {
+  return config_->get<bool>(kUseExperimentalCudfReader, false);
+}
+
+bool CudfHiveConfig::useExperimentalCudfReaderSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kUseExperimentalCudfReaderSession,
+      config_->get<bool>(kUseExperimentalCudfReader, false));
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

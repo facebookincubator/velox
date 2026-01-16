@@ -241,7 +241,9 @@ struct JsonExtractScalarFunction {
       return simdjson::SUCCESS;
     };
 
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+    // TODO: Remove explicit std::string_view cast.
+    auto& extractor =
+        SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
 
     // Check for valid json
     simdjson::padded_string paddedJson(json.data(), json.size());
@@ -303,12 +305,17 @@ struct JsonSizeFunction {
           case simdjson::ondemand::json_type::null:
             singleResultSize = 0;
             break;
+          case simdjson::ondemand::json_type::unknown: {
+            return simdjson::INCORRECT_TYPE;
+          }
         }
       }
       return simdjson::SUCCESS;
     };
 
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+    // TODO: Remove explicit std::string_view cast.
+    auto& extractor =
+        SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
     bool isDefinitePath = true;
     simdjson::padded_string paddedJson(json.data(), json.size());
     SIMDJSON_TRY(extractor.extract(paddedJson, consumer, isDefinitePath));

@@ -23,6 +23,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Driver.h"
@@ -66,6 +67,7 @@ using facebook::velox::connector::hive::HiveConnectorFactory;
 
 CudfHiveConnectorTestBase::CudfHiveConnectorTestBase() {
   filesystems::registerLocalFileSystem();
+  filesystems::registerS3FileSystem();
   tests::utils::registerFaultyFileSystem();
 }
 
@@ -78,10 +80,13 @@ void CudfHiveConnectorTestBase::SetUp() {
   // Register Hive connector
   facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
       factory;
+  auto config = std::unordered_map<std::string, std::string>{};
+  // TODO(mh):Enable experimental cudf reader
+  // config.insert({facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::kUseExperimentalCudfReader,
+  // "true"});
   auto hiveConnector = factory.newConnector(
       kCudfHiveConnectorId,
-      std::make_shared<facebook::velox::config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()),
+      std::make_shared<facebook::velox::config::ConfigBase>(std::move(config)),
       ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();

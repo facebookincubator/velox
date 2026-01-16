@@ -292,11 +292,12 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
       outTimestamp;
 
   switch (unit) {
-    // Year, quarter or month are not uniformly incremented in terms of number
-    // of days. So we treat them differently.
+    // Year, quarter, month or week are not uniformly incremented in terms of
+    // number of days. So we treat them differently.
     case DateTimeUnit::kYear:
     case DateTimeUnit::kQuarter:
     case DateTimeUnit::kMonth:
+    case DateTimeUnit::kWeek:
     case DateTimeUnit::kDay: {
       const int32_t inDate =
           std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
@@ -320,15 +321,6 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
     }
     case DateTimeUnit::kMillisecond: {
       outTimestamp = inTimestamp + std::chrono::milliseconds(value);
-      break;
-    }
-    case DateTimeUnit::kWeek: {
-      const int32_t inDate =
-          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
-              .count();
-      const int32_t outDate = addToDate(inDate, DateTimeUnit::kDay, 7 * value);
-
-      outTimestamp = inTimestamp + date::days(outDate - inDate);
       break;
     }
     default:
@@ -391,12 +383,60 @@ FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
     return time;
   }
 
-  // IntervalDayTime is already in milliseconds, add it directly to the time
-  // and handle 24-hour wraparound using modulo
-  int64_t newTime = (time + valueInMillis) % kMillisInDay;
-  if (FOLLY_UNLIKELY(newTime < 0)) {
-    newTime += kMillisInDay;
+  // Use std::chrono for safe duration arithmetic with overflow protection
+  const auto timeDuration = std::chrono::milliseconds(time);
+  const auto valueDuration = std::chrono::milliseconds(valueInMillis);
+  const auto resultDuration = timeDuration + valueDuration;
+
+  // Handle 24-hour wraparound using modulo
+  const auto dayDuration = std::chrono::milliseconds(kMillisInDay);
+  auto newTime = resultDuration % dayDuration;
+
+  // Ensure result is positive (C++ modulo can return negative values)
+  if (FOLLY_UNLIKELY(newTime.count() < 0)) {
+    newTime += dayDuration;
   }
-  return newTime;
+
+  return newTime.count();
+}
+
+/// Truncates a TIME value to the specified unit. TIME represents milliseconds
+/// since midnight (0 to 86399999ms). Only time-related units (millisecond,
+/// second, minute, hour) are supported.
+FOLLY_ALWAYS_INLINE int64_t truncateTime(int64_t time, DateTimeUnit unit) {
+  VELOX_USER_CHECK(
+      time >= 0 && time < kMillisInDay,
+      "TIME value {} is out of range [0, 86400000)",
+      time);
+
+  // Validate that the unit is appropriate for TIME type
+  VELOX_USER_CHECK(isTimeUnit(unit), "Unsupported time unit for TIME type");
+
+  const auto duration = std::chrono::milliseconds(time);
+
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      return time;
+    case DateTimeUnit::kSecond: {
+      const auto seconds =
+          std::chrono::duration_cast<std::chrono::seconds>(duration);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(seconds)
+          .count();
+    }
+    case DateTimeUnit::kMinute: {
+      const auto minutes =
+          std::chrono::duration_cast<std::chrono::minutes>(duration);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(minutes)
+          .count();
+    }
+    case DateTimeUnit::kHour: {
+      const auto hours =
+          std::chrono::duration_cast<std::chrono::hours>(duration);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(hours)
+          .count();
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
 }
 } // namespace facebook::velox::functions

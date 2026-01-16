@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/type/SimpleFunctionApi.h"
+#include "velox/type/Time.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -26,11 +27,9 @@ namespace facebook::velox {
 /// - Most significant bits: milliseconds since midnight UTC (similar to TIME)
 /// - Least significant bits : timezone information
 class TimeWithTimezoneType final : public BigintType {
-  TimeWithTimezoneType() = default;
+  constexpr TimeWithTimezoneType() : BigintType{ProvideCustomComparison{}} {}
 
  public:
-  static constexpr int16_t kTimeZoneBias = 840;
-  static constexpr int16_t kMinutesInHour = 60;
   static constexpr int16_t kTimeWithTimezoneToVarcharRowSize = 18;
 
   static std::shared_ptr<const TimeWithTimezoneType> get() {
@@ -41,6 +40,20 @@ class TimeWithTimezoneType final : public BigintType {
   bool equivalent(const Type& other) const override {
     // Pointer comparison works since this type is a singleton.
     return this == &other;
+  }
+
+  int32_t compare(const int64_t& left, const int64_t& right) const override {
+    const int64_t leftNormalized = normalizeForComparison(left);
+    const int64_t rightNormalized = normalizeForComparison(right);
+
+    // Compare the normalized time values.
+    return leftNormalized < rightNormalized ? -1
+        : leftNormalized == rightNormalized ? 0
+                                            : 1;
+  }
+
+  uint64_t hash(const int64_t& value) const override {
+    return folly::hasher<int64_t>()(util::unpackMillisUtc(value));
   }
 
   const char* name() const override {
@@ -69,19 +82,38 @@ class TimeWithTimezoneType final : public BigintType {
     return true;
   }
 
-  /// Encodes the timezone offset in the upper bits of the bigint.
-  /// The timezone offset is encoded as an integer in the range [-840, 840]
-  /// representing the number of minutes from UTC. The bias is added to the
-  /// timezone offset to ensure that the timezone offset is positive.
-  /// Typically called before a call to pack which will encode the timezone
-  /// offset along with the time value.
-  static inline int16_t biasEncode(int16_t timeZoneOffsetMinutes) {
-    VELOX_CHECK(
-        -kTimeZoneBias <= timeZoneOffsetMinutes &&
-            timeZoneOffsetMinutes <= kTimeZoneBias,
-        "Timezone offset must be between -840 and 840 minutes. Got: ",
-        timeZoneOffsetMinutes);
-    return timeZoneOffsetMinutes + kTimeZoneBias;
+ private:
+  // Normalizes the UTC time to the range of a day.
+  //
+  // If the local time is outside the range of a day,
+  // this means that during storage there was a wrap around
+  // as UTC would have either exceeded the range of a day
+  // or would have been negative. We need to adjust the UTC
+  // value to restore the original value for comparison.
+  //
+  // For example, if the local time is 00:00:00.000+08:00, then
+  // the UTC time is 16:00:00.000 (the previous day). The previous day
+  // is lost in the conversion. We need to subtract a day to the UTC
+  // time for appropriate comparison.
+  //
+  // Similarly, if the local time is 23:59:59.999-08:00, then
+  // the UTC time is 07:59:59.999 (the next day). The next day
+  // is lost in the conversion. We need to add a day to the UTC
+  // time for appropriate comparison.
+  int64_t normalizeForComparison(int64_t value) const {
+    auto millisUtc = util::unpackMillisUtc(value);
+    auto zoneOffsetMinutes =
+        util::decodeTimezoneOffset(util::unpackZoneOffset(value));
+    auto localMillis = millisUtc + (zoneOffsetMinutes * util::kMillisInMinute);
+
+    if (localMillis < 0) {
+      millisUtc += util::kMillisInDay;
+    }
+
+    if (localMillis >= util::kMillisInDay) {
+      millisUtc -= util::kMillisInDay;
+    }
+    return millisUtc;
   }
 };
 
@@ -100,6 +132,6 @@ struct TimeWithTimezoneT {
   static constexpr const char* typeName = "time with time zone";
 };
 
-using TimeWithTimezone = CustomType<TimeWithTimezoneT>;
+using TimeWithTimezone = CustomType<TimeWithTimezoneT, true>;
 
 } // namespace facebook::velox

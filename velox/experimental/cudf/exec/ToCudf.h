@@ -19,7 +19,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
-#include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/device_memory_resource.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -34,7 +34,7 @@ class CompileState {
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
-  bool compile(bool force_replace);
+  bool compile(bool allow_cpu_fallback);
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;

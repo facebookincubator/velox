@@ -17,6 +17,8 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/functions/lib/SetDigest.h"
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
@@ -282,8 +284,82 @@ variant TDigestInputGenerator::generate() {
   size_t byteSize = digest.serializedByteSize();
   std::string serializedDigest(byteSize, '\0');
   digest.serialize(&serializedDigest[0]);
-  StringView serializedView(serializedDigest.data(), serializedDigest.size());
   return variant::create<TypeKind::VARBINARY>(serializedDigest);
+}
+
+SetDigestInputGenerator::SetDigestInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio),
+      pool_(velox::memory::memoryManager()->addLeafPool()),
+      allocator_(std::make_unique<HashStringAllocator>(pool_.get())) {
+  // SetDigest supports int64_t and StringView
+  static const std::vector<TypePtr> kBaseTypes{BIGINT(), VARCHAR()};
+  baseType_ = kBaseTypes[rand<size_t>(rng_, 0, kBaseTypes.size() - 1)];
+}
+
+SetDigestInputGenerator::~SetDigestInputGenerator() = default;
+
+template <typename T>
+variant SetDigestInputGenerator::generateTyped() {
+  velox::functions::SetDigest<int64_t> digest(allocator_.get());
+
+  // SetDigest defaults to maxHashes=8192. Usually generate small datasets
+  // (exact mode), but occasionally generate >8192 values to test approximate
+  // mode.
+  int numValues = coinToss(rng_, 0.1) ? rand<int>(rng_, 8500, 10000)
+                                      : rand<int>(rng_, 10, 100);
+  for (int i = 0; i < numValues; ++i) {
+    int64_t value = rand<int64_t>(rng_);
+    digest.add(value);
+  }
+
+  size_t byteSize = digest.estimatedSerializedSize();
+  std::string serializedDigest(byteSize, '\0');
+  digest.serialize(&serializedDigest[0]);
+  return variant::create<TypeKind::VARBINARY>(serializedDigest);
+}
+
+template <>
+variant SetDigestInputGenerator::generateTyped<std::string>() {
+  velox::functions::SetDigest<StringView> digest(allocator_.get());
+
+  int numValues = coinToss(rng_, 0.1) ? rand<int>(rng_, 8500, 10000)
+                                      : rand<int>(rng_, 10, 100);
+  static const std::vector<UTF8CharList> encodings{
+      UTF8CharList::ASCII,
+      UTF8CharList::UNICODE_CASE_SENSITIVE,
+      UTF8CharList::EXTENDED_UNICODE,
+      UTF8CharList::MATHEMATICAL_SYMBOLS};
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+#pragma GCC diagnostic pop
+
+  for (int i = 0; i < numValues; ++i) {
+    auto size = rand<int32_t>(rng_, 0, 100);
+    std::string result;
+    auto str = randString(rng_, size, encodings, result, converter);
+    digest.add(StringView(str));
+  }
+
+  size_t byteSize = digest.estimatedSerializedSize();
+  std::string serializedDigest(byteSize, '\0');
+  digest.serialize(&serializedDigest[0]);
+  return variant::create<TypeKind::VARBINARY>(serializedDigest);
+}
+
+variant SetDigestInputGenerator::generate() {
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+
+  if (baseType_->isBigint()) {
+    return generateTyped<int64_t>();
+  } else {
+    return generateTyped<std::string>();
+  }
 }
 
 // BingTileInputGenerator
@@ -537,7 +613,6 @@ CastVarcharInputGenerator::CastVarcharInputGenerator(
 
 CastVarcharInputGenerator::~CastVarcharInputGenerator() = default;
 
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 std::string CastVarcharInputGenerator::generateValidPrimitiveAsString() {
   switch (castToType_->kind()) {
     case TypeKind::BOOLEAN: {
@@ -575,7 +650,10 @@ std::string CastVarcharInputGenerator::generateValidPrimitiveAsString() {
     case TypeKind::VARCHAR: {
       // Generate random string.
       std::string input;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
       std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+#pragma GCC diagnostic pop
       auto randomStr = randString(
           rng_,
           rand<size_t>(rng_, 0, 20),

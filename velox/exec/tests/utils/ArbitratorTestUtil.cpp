@@ -19,9 +19,6 @@
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/TableWriter.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::exec::test;
 using namespace facebook::velox::memory;
 
 namespace facebook::velox::exec::test {
@@ -31,18 +28,11 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
     folly::Executor* executor,
     int64_t memoryCapacity,
     const std::string& queryId) {
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>> configs;
-  std::shared_ptr<MemoryPool> pool =
-      memoryManager->addRootPool("", memoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor,
-      core::QueryConfig({}),
-      configs,
-      cache::AsyncDataCache::getInstance(),
-      std::move(pool),
-      nullptr,
-      queryId);
-  return queryCtx;
+  return core::QueryCtx::Builder()
+      .executor(executor)
+      .pool(memoryManager->addRootPool("", memoryCapacity))
+      .queryId(queryId)
+      .build();
 }
 
 std::unique_ptr<memory::MemoryManager> createMemoryManager(

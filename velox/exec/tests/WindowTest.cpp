@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
@@ -63,12 +64,13 @@ class WindowTest : public OperatorTestBase {
         0,
         0,
         "none",
+        0,
         prefixSortConfig);
   }
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
 
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
@@ -430,6 +432,122 @@ DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
       .assertResults(
           "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
   ASSERT_TRUE(isStreamCreated.load());
+}
+
+TEST_F(WindowTest, prePartitionedSortBuild) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  const int numSubPartitions = 4;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
+TEST_F(WindowTest, prePartitionedSortBuildSkewed) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 4;
+  const int numSubPartitions = 16;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
+TEST_F(WindowTest, prePartitionedBuildWithSpill) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  const int numSubPartitions = 4;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(
+              core::QueryConfig::kWindowNumSubPartitions,
+              std::to_string(numSubPartitions))
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .config(core::QueryConfig::kOrderBySpillEnabled, "false")
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {

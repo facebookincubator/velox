@@ -35,9 +35,16 @@ enum class Table : uint8_t;
 
 namespace facebook::velox::exec::test {
 
+struct AggregationConfig {
+  std::vector<std::string> groupingKeys;
+  std::vector<std::string> aggregates;
+};
+
 struct PushdownConfig {
   common::SubfieldFilters subfieldFiltersMap;
   std::string remainingFilter;
+  // Aggregation pushdown configuration
+  std::optional<AggregationConfig> aggregationConfig;
 };
 
 /// A builder class with fluent API for building query plans. Plans are built
@@ -289,6 +296,8 @@ class PlanBuilder {
     /// AND'ed with all the subfieldFilters.
     TableScanBuilder& remainingFilter(std::string remainingFilter);
 
+    TableScanBuilder& sampleRate(double sampleRate);
+
     /// @param dataColumns can be different from 'outputType' for the purposes
     /// of testing queries using missing columns. It is used, if specified, for
     /// parseExpr call and as 'dataColumns' for the TableHandle. You supply more
@@ -316,6 +325,12 @@ class PlanBuilder {
       return *this;
     }
 
+    TableScanBuilder& filterColumnHandles(
+        std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles) {
+      filterColumnHandles_ = std::move(filterColumnHandles);
+      return *this;
+    }
+
     /// @param assignments Optional ColumnHandles.
     /// outputType names should match the keys in the 'assignments' map. The
     /// 'assignments' map may contain more columns than 'outputType' if some
@@ -340,7 +355,9 @@ class PlanBuilder {
     std::string connectorId_{kHiveDefaultConnectorId};
     RowTypePtr outputType_;
     core::ExprPtr remainingFilter_;
+    double sampleRate_{1.0};
     RowTypePtr dataColumns_;
+    std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
     connector::ColumnHandleMap assignments_;
@@ -734,7 +751,10 @@ class PlanBuilder {
   /// Add a FilterNode using specified SQL expression.
   ///
   /// @param filter SQL expression of type boolean.
-  PlanBuilder& filter(const std::string& filter);
+  PlanBuilder& filter(const std::string& filterExpr);
+
+  /// Same as above, but takes an untyped expression.
+  PlanBuilder& filter(const core::ExprPtr& filterExpr);
 
   /// Similar to filter() except 'optionalFilter' could be empty and the
   /// function will skip creating a FilterNode in that case.
@@ -1029,7 +1049,8 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys);
+      bool ignoreNullKeys,
+      bool noGroupsSpanBatches = false);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
   /// aggregation inputs and a groupId column name.

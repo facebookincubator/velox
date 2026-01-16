@@ -43,6 +43,16 @@ Generic Configuration
      - integer
      - 80
      - Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.
+   * - abandon_dedup_hashmap_min_rows
+     - integer
+     - 100,000
+     - Number of input rows to receive before starting to check whether to abandon building a HashTable without
+       duplicates in HashBuild for left semi/anti join.
+   * - abandon_dedup_hashmap_min_pct
+     - integer
+     - 0
+     - Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of
+       distinct keys in the HashTable exceeds this threshold. Zero means 'disable this optimization'.
    * - session_timezone
      - string
      -
@@ -73,6 +83,11 @@ Generic Configuration
      - bool
      - true
      - If true, the conjunction expression can reorder inputs based on the time taken to calculate them.
+   * - parallel_join_build_rows_enabled
+     - bool
+     - false
+     - If true, the hash probe drivers can output build-side rows in parallel for full and right joins (only when spilling is not
+     - enabled by hash probe). If false, only the last prober is allowed to output build-side rows.
    * - max_local_exchange_buffer_size
      - integer
      - 32MB
@@ -106,6 +121,12 @@ Generic Configuration
        client. Enforced approximately, not strictly. A larger size can increase network throughput
        for larger clusters and thus decrease query processing time at the expense of reducing the
        amount of memory available for other usage.
+   * - skip_request_data_size_with_single_source_enabled
+     - bool
+     - false
+     -  If true, skip request data size if there is only single source.
+        This is used to optimize the Presto-on-Spark use case where each exchange client
+        has only one shuffle partition source.
    * - local_merge_source_queue_size
      - integer
      - 2
@@ -126,6 +147,17 @@ Generic Configuration
      - integer
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
+   * - hash_probe_dynamic_filter_pushdown_enabled
+     - bool
+     - true
+     - Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.
+   * - hash_probe_bloom_filter_pushdown_max_size
+     - integer
+     - 0
+     - The maximum byte size of Bloom filter that can be generated from hash
+       probe.  When set to 0, no Bloom filter will be generated.  To achieve
+       optimal performance, this should not be too larger than the CPU cache
+       size on the host.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -148,6 +180,12 @@ Generic Configuration
      - 0
      - If it is not zero, specifies the time limit that a driver can continuously
        run on a thread before yield. If it is zero, then it no limit.
+   * - window_num_sub_partitions
+     - integer
+     - 1
+     - Window operator can be configured to sub-divide window partitions on each thread of execution into groups of
+       sub partitions for sequential processing. This setting specifies how many sub-partitions to create for each
+       thread. Use 1 to disable sub partitioning.
    * - prefixsort_normalized_key_max_bytes
      - integer
      - 128
@@ -220,6 +258,13 @@ Expression Evaluation Configuration
      - false
      - Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
        when processing small batches, e.g. < 10K rows.
+   * - expression.track_cpu_usage_for_functions
+     - string
+     - ""
+     - Comma-separated list of function names to selectively track CPU usage for. Only applicable when
+       ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
+       to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
+       be monitored.
    * - legacy_cast
      - bool
      - false
@@ -433,6 +478,12 @@ Spilling
      - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
        efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
        none means no compression.
+   * - spill_num_max_merge_files
+     - integer
+     - 0
+     - The max number of files to merge at a time when merging sorted files into a single ordered stream. 0 means unlimited.
+       This is used to reduce memory pressure by capping the number of open files when merging spilled sorted files to
+       avoid using too much memory and causing OOM. Note that this is only applicable for ordered spill.
    * - spill_prefixsort_enabled
      - bool
      - false
@@ -470,6 +521,21 @@ Aggregation
      - integer
      - 80
      - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
+   * - aggregation_compaction_bytes_threshold
+     - integer
+     - 0
+     - Memory threshold in bytes for triggering string compaction during global
+       aggregation. When total string storage exceeds this limit with high unused
+       memory ratio, compaction is triggered to reclaim dead strings. Disabled by
+       default (0). Currently only applies to approx_most_frequent aggregate with
+       StringView type during global aggregation.
+   * - aggregation_compaction_unused_memory_ratio
+     - double
+     - 0.25
+     - Ratio of unused (evicted) bytes to total bytes that triggers compaction.
+       The value is in the range of [0, 1). Currently only applies to approx_most_frequent
+       aggregate with StringView type during global aggregation. May be extended
+       to other aggregation types on-demand.
    * - streaming_aggregation_min_output_batch_rows
      - integer
      - 0
@@ -1113,3 +1179,55 @@ Tracing
      - false
      - If true, we only collect the input trace for a given operator but without the actual
        execution. This is used for crash debugging.
+
+Cudf-specific Configuration (Experimental)
+------------------------------------------
+These configurations are available when `compiled with cuDF <https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/README.md#getting-started-with-velox-cudf>`_.
+Note: These configurations are experimental and subject to change.
+
+.. list-table::
+   :widths: 30 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - cudf.enabled
+     - bool
+     - true
+     - If true, enable cuDF. By default, it is enabled if compiled with cuDF.
+   * - cudf.memory_resource
+     - string
+     - async
+     - The memory resource to use for cuDF. Possible values are (cuda, pool, async, arena, managed, managed_pool, prefetch_managed, prefetch_managed_pool).
+       The prefetch options enable automatic prefetching for better GPU memory performance: prefetch_managed uses CUDA unified memory with prefetching,
+       prefetch_managed_pool uses a pooled version of CUDA unified memory with prefetching.
+   * - cudf.memory_percent
+     - integer
+     - 50
+     - The initial percent of GPU memory to allocate for pool or arena memory resources.
+   * - cudf.function_name_prefix
+     - string
+     - ""
+     - The prefix to use for the function names in cuDF.
+   * - cudf.ast_expression_enabled
+     - bool
+     - true
+     - If true, enable using cuDF AST-based expression evaluation when supported.
+   * - cudf.ast_expression_priority
+     - integer
+     - 100
+     - Priority of cuDF AST expressions. Higher value wins when multiple cuDF execution options are available for the same Velox expression. Standalone cuDF functions have priority 50. If enabled, with a default priority of 100, AST will be chosen as replacement for cudf execution.
+   * - cudf.allow_cpu_fallback
+     - bool
+     - true
+     - If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.
+   * - cudf.debug_enabled
+     - bool
+     - false
+     - If true, enable debug printing.
+   * - cudf.log_fallback
+     - bool
+     - true
+     - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.

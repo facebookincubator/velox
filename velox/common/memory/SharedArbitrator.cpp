@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/SharedArbitrator.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <folly/system/ThreadName.h>
 #include <pthread.h>
 #include <mutex>
@@ -296,8 +297,7 @@ SharedArbitrator::SharedArbitrator(const Config& config)
       "memoryReclaimThreadsHwMultiplier_ needs to be positive");
 
   const uint64_t numReclaimThreads = std::max<size_t>(
-      1,
-      std::thread::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
+      1, folly::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
   memoryReclaimExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
       numReclaimThreads,
       std::make_shared<folly::NamedThreadFactory>("MemoryReclaim"));
@@ -897,13 +897,16 @@ void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
   RETURN_IF_TRUE(maybeGrowFromSelf(op));
 
   if (!ensureCapacity(op)) {
+    const auto maxCapacity = op.participant()->maxCapacity();
     MEM_POOL_CAP_EXCEEDED(
         fmt::format(
-            "Can't grow {} capacity with {}. This will exceed its max capacity "
+            "Can't grow {} capacity with {}. This will exceed its {} "
             "{}, current capacity {}.",
             op.participant()->name(),
             succinctBytes(op.requestBytes()),
-            succinctBytes(op.participant()->maxCapacity()),
+            capacity_ < maxCapacity ? "arbitrator capacity"
+                                    : "memory pool capacity",
+            succinctBytes(std::min(capacity_, maxCapacity)),
             succinctBytes(op.participant()->capacity())),
         op.participant()->pool());
   }
@@ -1401,7 +1404,6 @@ uint64_t SharedArbitrator::reclaim(
   if (participant->aborted()) {
     removeGlobalArbitrationWaiter(participant->id());
   }
-  freeCapacity(reclaimedBytes);
 
   updateMemoryReclaimStats(
       reclaimedBytes, reclaimTimeNs, localArbitration, stats);
@@ -1413,6 +1415,8 @@ uint64_t SharedArbitrator::reclaim(
                       << " stats " << succinctBytes(stats.reclaimedBytes)
                       << " numNonReclaimableAttempts "
                       << stats.numNonReclaimableAttempts;
+
+  freeCapacity(reclaimedBytes);
   if (reclaimedBytes == 0) {
     FB_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
         "Nothing reclaimed from memory pool {} with reclaim target {},  memory pool stats:\n{}\n{}",

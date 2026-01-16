@@ -3322,9 +3322,9 @@ TEST_F(CastExprTest, varcharToTimeCast) {
   }
 
   {
-    // Test time formats without milliseconds
-    auto varcharVector =
-        makeFlatVector<StringView>({"00:00:00", "12:30:45", "23:59:59"});
+    // Test time formats without seconds and milliseconds
+    auto varcharVector = makeFlatVector<StringView>(
+        {"00:00:00", "12:30:45", "23:59:59", "12:30"});
 
     auto inputField =
         std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
@@ -3335,7 +3335,8 @@ TEST_F(CastExprTest, varcharToTimeCast) {
         {
             0, // 00:00:00
             45045000, // 12:30:45 = 12*3600*1000 + 30*60*1000 + 45*1000
-            86399000 // 23:59:59 = 23*3600*1000 + 59*60*1000 + 59*1000
+            86399000, // 23:59:59 = 23*3600*1000 + 59*60*1000 + 59*1000
+            45000000, // 12:30 = 12*3600*1000 + 30*60*1000
         },
         TIME());
 
@@ -3349,8 +3350,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
         "25:00:00.000", // invalid hour
         "12:60:00.000", // invalid minute
         "12:30:60.000", // invalid second
-        "invalid", // completely invalid
-        "12:30" // missing seconds
+        "invalid" // completely invalid
     });
 
     auto inputField =
@@ -3364,8 +3364,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
             std::nullopt, // invalid hour
             std::nullopt, // invalid minute
             std::nullopt, // invalid second
-            std::nullopt, // completely invalid
-            std::nullopt // missing seconds
+            std::nullopt // completely invalid
         },
         TIME());
 
@@ -3415,7 +3414,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
     // Should throw error for Unicode digits
     VELOX_ASSERT_THROW(
         evaluate(castExpr, makeRowVector({varcharVector})),
-        "Failed to parse minute in time string");
+        "Invalid time format: expected ':' after hour");
 
     // Test with try_cast - should return null for Unicode digits
     auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
@@ -3992,6 +3991,71 @@ TEST_F(CastExprTest, timeToTimestampCast) {
 
     assertEqualVectors(expected, result);
   }
+}
+
+TEST_F(CastExprTest, timestampToTimeCast) {
+  // Test casting TIMESTAMP to TIME
+  // TIME values represent milliseconds since midnight (time-of-day)
+  // TIMESTAMP to TIME extracts the time-of-day component
+  // This matches Presto's behavior (see TestTimestampBase.java:185-188)
+
+  std::vector<std::optional<Timestamp>> inputTimestamps = {
+      Timestamp::fromMillis(0), // 00:00:00.000
+      Timestamp::fromMillis(3661000), // 01:01:01.000
+      Timestamp::fromMillis(43200000), // 12:00:00.000
+      Timestamp::fromMillis(86399999), // 23:59:59.999
+      Timestamp::fromMillis(86400000), // Next day 00:00:00.000
+      Timestamp::fromMillis(86400000 + 3661000), // Next day 01:01:01.000
+      Timestamp::fromMillis(2 * 86400000 + 43200000), // Two days later
+                                                      // 12:00:00.000
+      std::nullopt};
+
+  std::vector<std::optional<int64_t>> expectedTime = {
+      0, // 00:00:00.000
+      3661000, // 01:01:01.000
+      43200000, // 12:00:00.000
+      86399999, // 23:59:59.999
+      0, // 00:00:00.000 (wraps to midnight)
+      3661000, // 01:01:01.000
+      43200000, // 12:00:00.000
+      std::nullopt};
+
+  testCast(TIMESTAMP(), TIME(), inputTimestamps, expectedTime);
+
+  // Test with negative timestamps (before epoch)
+  // Negative timestamps should correctly wrap around to positive time-of-day
+  std::vector<std::optional<Timestamp>> negativeTimestamps = {
+      Timestamp::fromMillis(-1), // 1ms before epoch -> 23:59:59.999
+      Timestamp::fromMillis(-3600000), // 1 hour before epoch -> 23:00:00.000
+      Timestamp::fromMillis(-86400000), // Exactly 1 day before epoch ->
+                                        // 00:00:00.000
+      Timestamp::fromMillis(-86400000 - 3661000), // 1 day + 1:01:01 before
+                                                  // epoch -> 22:58:59.000
+  };
+
+  std::vector<std::optional<int64_t>> expectedNegativeTime = {
+      86399999, // 23:59:59.999
+      82800000, // 23:00:00.000 (86400000 - 3600000)
+      0, // 00:00:00.000
+      82739000, // 22:58:59.000
+  };
+
+  testCast(TIMESTAMP(), TIME(), negativeTimestamps, expectedNegativeTime);
+
+  // Test specific timestamps that span multiple days
+  std::vector<std::optional<Timestamp>> realTimestamps = {
+      parseTimestamp("2023-05-15 14:30:45.123"),
+      parseTimestamp("1990-01-01 08:15:30.500"),
+      parseTimestamp("2050-12-31 23:59:59.999"),
+  };
+
+  std::vector<std::optional<int64_t>> expectedRealTime = {
+      14 * 3600000 + 30 * 60000 + 45 * 1000 + 123, // 14:30:45.123
+      8 * 3600000 + 15 * 60000 + 30 * 1000 + 500, // 08:15:30.500
+      23 * 3600000 + 59 * 60000 + 59 * 1000 + 999, // 23:59:59.999
+  };
+
+  testCast(TIMESTAMP(), TIME(), realTimestamps, expectedRealTime);
 }
 } // namespace
 } // namespace facebook::velox::test

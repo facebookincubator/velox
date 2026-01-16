@@ -248,7 +248,7 @@ class WriterFuzzer {
   };
 
   // Supported partition key column types
-  // According to VectorHasher::typeKindSupportsValueIds and
+  // According to VectorHasher::typeSupportsValueIds and
   // https://github.com/prestodb/presto/blob/10143be627beb2c61aba5b3d36af473d2a8ef65e/presto-hive/src/main/java/com/facebook/presto/hive/HiveUtil.java#L593
   const std::vector<TypePtr> kPartitionKeyTypes_{
       BOOLEAN(),
@@ -707,8 +707,9 @@ RowVectorPtr WriterFuzzer::veloxToPrestoResult(const RowVectorPtr& result) {
 std::string WriterFuzzer::getReferenceOutputDirectoryPath(int32_t layers) {
   auto filePath =
       referenceQueryRunner_->execute("SELECT \"$path\" FROM tmp_write");
+  auto stringView = extractSingleValue<StringView>(filePath);
   auto tableDirectoryPath =
-      fs::path(extractSingleValue<StringView>(filePath)).parent_path();
+      fs::path(std::string_view(stringView)).parent_path();
   while (layers-- > 0) {
     tableDirectoryPath = tableDirectoryPath.parent_path();
   }

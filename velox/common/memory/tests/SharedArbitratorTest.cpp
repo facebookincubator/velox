@@ -760,7 +760,7 @@ DEBUG_ONLY_TEST_P(
     folly::EventCount taskPauseWait;
     auto taskPauseWaitKey = taskPauseWait.prepareWait();
 
-    const auto fakeAllocationSize = kMemoryCapacity - (32L << 20);
+    const auto fakeAllocationSize = kMemoryCapacity - (2L << 20);
 
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
@@ -1379,6 +1379,7 @@ TEST_P(
           if (e.errorCode() != error_code::kMemCapExceeded.c_str() &&
               e.errorCode() != error_code::kMemAborted.c_str() &&
               e.errorCode() != error_code::kMemAllocError.c_str() &&
+              e.errorCode() != error_code::kMemArbitrationTimeout.c_str() &&
               (e.message() != "Aborted for external error")) {
             std::rethrow_exception(std::current_exception());
           }

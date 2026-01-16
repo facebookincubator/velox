@@ -394,6 +394,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       topTable_->prepareJoinTable(
           std::move(otherTables),
           BaseHashTable::kNoSpillInputStartPartitionBit,
+          1'000'000,
+          false,
           executor_.get());
     }
     buildTime_ = buildClocks;

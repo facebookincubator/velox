@@ -16,6 +16,7 @@
 #pragma once
 
 #define XXH_INLINE_ALL
+#include <fast_float/fast_float.h>
 #include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
@@ -23,7 +24,9 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -562,6 +565,29 @@ struct TimeMinusInterval {
   }
 };
 
+template <typename T>
+struct TimeMinusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<Time>& a,
+      const arg_type<Time>& b) {
+    // Validate inputs are in valid TIME range [0, 86400000)
+    VELOX_USER_CHECK(
+        a >= 0 && a < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        a);
+    VELOX_USER_CHECK(
+        b >= 0 && b < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        b);
+
+    // Simple subtraction returns interval in milliseconds
+    result = a - b;
+  }
+};
+
 // Optimized vector function for Time +/- IntervalYearMonth
 // This case is special because result = time (identity function), allowing
 // for significant optimizations.
@@ -1070,14 +1096,12 @@ inline std::optional<DateTimeUnit> getTimeUnit(
   std::optional<DateTimeUnit> unit =
       fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
 
-  if (unit.has_value()) {
-    // Only allow time-related units for TIME type
-    if (unit.value() == DateTimeUnit::kMillisecond ||
-        unit.value() == DateTimeUnit::kSecond ||
-        unit.value() == DateTimeUnit::kMinute ||
-        unit.value() == DateTimeUnit::kHour) {
-      return unit;
-    }
+  // Presto does not support microseconds for TIME type operations.
+  // Only millisecond, second, minute, and hour are valid TIME fields.
+  // See: presto-main-base/.../DateTimeFunctions.java:getTimeField()
+  if (unit.has_value() && isTimeUnit(unit.value()) &&
+      unit.value() != DateTimeUnit::kMicrosecond) {
+    return unit;
   }
 
   if (throwIfInvalid) {
@@ -1133,6 +1157,16 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>* /*timestamp*/) {
     if (unitString != nullptr) {
       unit_ = getTimestampUnit(*unitString);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Time>* /*time*/) {
+    if (unitString != nullptr) {
+      unit_ = getTimeUnit(*unitString);
     }
   }
 
@@ -1216,6 +1250,19 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
 
     result = pack(resultMillis, unpackZoneKeyId(*timestampWithTimezone));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Time>& time) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      unit = getTimeUnit(unitString).value();
+    }
+    result = truncateTime(time, unit);
   }
 };
 
@@ -1760,6 +1807,44 @@ struct CurrentDateFunction {
 };
 
 template <typename T>
+struct CurrentTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  std::string tzName_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>&,
+      const core::QueryConfig& config) {
+    tzName_ = config.sessionTimezone();
+  }
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
+    result = std::string_view(tzName_);
+  }
+};
+
+template <typename T>
+struct CurrentTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int64_t result_{0};
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+    result_ = pack(ts, timeZone_->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
+    result = result_;
+  }
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1880,6 +1965,40 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+template <typename T>
+struct AtTimezoneTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& timeWithTz,
+      const arg_type<Varchar>& targetTimezone) {
+    // Extract milliseconds UTC from the input
+    auto millisUtc = util::unpackMillisUtc(*timeWithTz);
+
+    // Parse the target timezone offset from the VARCHAR string
+    auto offsetResult = util::parseTimezoneOffset(
+        targetTimezone.data(),
+        targetTimezone.size(),
+        /*allowCompactFormat*/ false);
+    if (offsetResult.hasError()) {
+      if (offsetResult.error().isUserError()) {
+        VELOX_USER_FAIL(offsetResult.error().message());
+      } else {
+        VELOX_FAIL(offsetResult.error().message());
+      }
+    }
+
+    auto targetOffsetMinutes = offsetResult.value();
+
+    // Encode the timezone offset using bias encoding
+    auto encodedOffset = util::biasEncode(targetOffsetMinutes);
+
+    // Pack and return the result with the same UTC time but new timezone
+    result = util::pack(millisUtc, encodedOffset);
+  }
+};
+
 template <typename TExec>
 struct ToMillisecondFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -1919,57 +2038,58 @@ struct XxHash64TimestampFunction {
   }
 };
 
+/// xxhash64(Time) → bigint
+/// Return a xxhash64 of input Time
+template <typename T>
+struct XxHash64TimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Time>& input) {
+    // TIME is represented as milliseconds since midnight
+    // Convert to big-endian to match Presto's xxhash64 behavior
+    auto bigEndianValue = folly::Endian::big(input);
+    result = XXH64(&bigEndianValue, sizeof(bigEndianValue), 0);
+  }
+};
+
 template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<RE2> durationRegex_;
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ =
-        std::make_unique<RE2>(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
-  }
-
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
+    static const LazyRE2 kDurationRegex{
+        .pattern_ = R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)",
+        .options_ = {},
+    };
+    // TODO: Remove re2::StringPiece != std::string_view hacks.
+    // It's needed because for some systems in CI,
+    // re2 and abseil libraries are old.
     re2::StringPiece valueStr;
-    re2::StringPiece unit;
-    if (!RE2::FullMatch(
-            re2::StringPiece(amountUnit.data(), amountUnit.size()),
-            *durationRegex_,
-            &valueStr,
-            &unit)) {
+    re2::StringPiece unitStr;
+    re2::StringPiece amountUnitStr{amountUnit.data(), amountUnit.size()};
+    if (!RE2::FullMatch(amountUnitStr, *kDurationRegex, &valueStr, &unitStr)) {
       VELOX_USER_FAIL(
-          "Input duration is not a valid data duration string: {}", amountUnit);
+          "Input duration is not a valid data duration string: {}",
+          std::string_view(amountUnitStr.data(), amountUnitStr.size()));
     }
 
     double value{};
-    try {
-      size_t pos = 0;
-      // Create temporary string from re2::StringPiece for stod
-      std::string valueString(valueStr.data(), valueStr.size());
-      value = std::stod(valueString, &pos);
-      if (pos != valueString.size()) {
-        VELOX_USER_FAIL(
-            "Input duration value is not a valid number: {}",
-            std::string_view(valueStr.data(), valueStr.size()));
-      }
-    } catch (const std::out_of_range&) {
+    auto [_, error] = fast_float::from_chars(
+        valueStr.data(), valueStr.data() + valueStr.size(), value);
+    if (error == std::errc::result_out_of_range) {
       VELOX_USER_FAIL(
           "Input duration value is out of range for double: {}",
           std::string_view(valueStr.data(), valueStr.size()));
-    } catch (const std::exception&) {
+    } else if (error != std::errc{}) {
       VELOX_USER_FAIL(
           "Input duration value is not a valid number: {}",
           std::string_view(valueStr.data(), valueStr.size()));
     }
 
-    result = valueOfTimeUnitToMillis(
-        value, std::string_view(unit.data(), unit.size()));
+    result = valueOfTimeUnitToMillis(value, {unitStr.data(), unitStr.size()});
   }
 };
 

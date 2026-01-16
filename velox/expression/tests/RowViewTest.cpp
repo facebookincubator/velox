@@ -23,11 +23,10 @@
 #include "velox/functions/prestosql/Comparisons.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
+namespace facebook::velox::functions::test {
 namespace {
 
-using namespace facebook::velox;
-using namespace facebook::velox::functions;
-using namespace facebook::velox::test;
+using velox::test::assertEqualVectors;
 
 DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
   SelectivityVector rows(vector.size());
@@ -397,7 +396,7 @@ TEST_F(NullFreeRowViewTest, e2eCompare) {
 
 TEST_F(NullableRowViewTest, materialize) {
   auto result = evaluate(
-      "row_constructor(1, 'hi', array_constructor(1, 2, null))",
+      "row_constructor(1, 'hi', array_constructor(1, 2, null::bigint))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;
@@ -406,7 +405,7 @@ TEST_F(NullableRowViewTest, materialize) {
 
   std::tuple<
       std::optional<int64_t>,
-      std::optional<std::string>,
+      std::optional<StringView>,
       std::optional<std::vector<std::optional<int64_t>>>>
       expected{1, "hi", {{1, 2, std::nullopt}}};
   ASSERT_EQ(reader[0].materialize(), expected);
@@ -517,4 +516,6 @@ TEST_F(DynamicRowViewTest, castToDynamicRowInFunction) {
     assertEqualVectors(makeFlatVector<int64_t>({2, 2}), result);
   }
 }
+
 } // namespace
+} // namespace facebook::velox::functions::test

@@ -40,6 +40,7 @@ velox_add_library(
   MapEntries.cpp
   MapFromEntries.cpp
   MapKeysAndValues.cpp
+  MapSubset.cpp
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
@@ -75,6 +76,7 @@ velox_link_libraries(
   velox_presto_types
   velox_functions_util
   Folly::folly
+  FastFloat::fast_float
   stemmer::stemmer
 )
 

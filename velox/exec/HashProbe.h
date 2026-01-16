@@ -378,6 +378,14 @@ class HashProbe : public Operator {
 
   const RowTypePtr probeType_;
 
+  // Flag to indicate whether this hash probe operator can output build-side
+  // rows in parallel with the peer operators for the current hash table.
+  // Outputing build-side rows in parallel is currently not allowed in either of
+  // the following cases:
+  // 1. QueryConfig::kParallelOutputJoinBuildRowsEnabled is false.
+  // 2. Spill is enabled.
+  const bool canOutputBuildRowsInParallel_;
+
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
@@ -630,7 +638,7 @@ class HashProbe : public Operator {
     std::optional<bool> currentRowPassed;
   };
 
-  BaseHashTable::RowsIterator lastProbeIterator_;
+  RowContainerIterator lastProbeIterator_;
 
   // For left and anti join with filter, tracks the probe side rows which had
   // matches on the build side but didn't pass the filter.
@@ -728,6 +736,10 @@ class HashProbe : public Operator {
 
   // Input vector used for listing rows with null keys.
   VectorPtr nullKeyProbeInput_;
+
+  // The index of the row container in the current hash table that this hash
+  // probe oprator is processing to output build-side rows.
+  int buildSideOutputRowContainerId_{-1};
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {

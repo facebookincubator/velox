@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/SplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -50,18 +51,6 @@ VectorPtr newConstantFromStringImpl(
     }
     return std::make_shared<ConstantVector<int32_t>>(
         pool, 1, false, type, std::move(days));
-  }
-
-  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-    if (type->isDecimal()) {
-      auto [precision, scale] = getDecimalPrecisionScale(*type);
-      T result;
-      const auto status = DecimalUtil::castFromString<T>(
-          StringView(value.value()), precision, scale, result);
-      VELOX_USER_CHECK(status.ok(), status.message());
-      return std::make_shared<ConstantVector<T>>(
-          pool, 1, false, type, std::move(result));
-    }
   }
 
   if constexpr (std::is_same_v<T, StringView>) {
@@ -342,7 +331,7 @@ void SplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
-  auto baseFileInput = createBufferedInput(
+  auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,
       connectorQueryCtx_,

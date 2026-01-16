@@ -48,10 +48,10 @@ struct FileOptions {
   /// etc.
   static constexpr folly::StringPiece kFileCreateConfig{"file-create-config"};
 
-  std::unordered_map<std::string, std::string> values;
+  std::unordered_map<std::string, std::string> values{};
   memory::MemoryPool* pool{nullptr};
   /// If specified then can be trusted to be the file size.
-  std::optional<int64_t> fileSize;
+  std::optional<int64_t> fileSize{};
 
   /// Whether to create parent directories if they don't exist.
   ///

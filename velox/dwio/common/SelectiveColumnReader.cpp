@@ -479,7 +479,7 @@ void SelectiveColumnReader::addSkippedParentNulls(
     int64_t from,
     int64_t to,
     int32_t numNulls) {
-  auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
+  const auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
   if (rowsPerRowGroup.has_value() &&
       from / rowsPerRowGroup.value() >
           parentNullsRecordedTo_ / rowsPerRowGroup.value()) {
@@ -487,7 +487,7 @@ void SelectiveColumnReader::addSkippedParentNulls(
     parentNullsRecordedTo_ = from;
     numParentNulls_ = 0;
   }
-  if (parentNullsRecordedTo_) {
+  if (parentNullsRecordedTo_ > 0) {
     VELOX_CHECK_EQ(parentNullsRecordedTo_, from);
   }
   numParentNulls_ += numNulls;

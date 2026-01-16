@@ -44,7 +44,7 @@ jobs:
     steps:
       - shell: python
         env:
-          title: '${{ github.event.pull_request.title }}'
+          title: "${{ github.event.pull_request.title }}"
         run: |
           import re
           import os

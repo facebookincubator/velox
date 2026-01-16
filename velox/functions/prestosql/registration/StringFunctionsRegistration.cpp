@@ -44,7 +44,13 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "hamming_distance"});
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
+  registerFunction<JaroWinklerSimilarityFunction, double, Varchar, Varchar>(
+      {prefix + "jarowinkler_similarity"});
+  registerFunction<LongestCommonPrefixFunction, Varchar, Varchar, Varchar>(
+      {prefix + "longest_common_prefix"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
+  registerFunction<BitLengthFunction, int64_t, Varchar>(
+      {prefix + "bit_length"});
   registerFunction<XxHash64StringFunction, int64_t, Varchar>(
       {prefix + "xxhash64_internal"});
 

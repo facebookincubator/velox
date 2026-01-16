@@ -30,11 +30,13 @@ velox_add_library(
   IntegerFunctionsRegistration.cpp
   FloatingPointFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
+  KHyperLogLogFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp
   MathematicalFunctionsRegistration.cpp
   MathematicalOperatorsRegistration.cpp
   ProbabilityTrigonometricFunctionsRegistration.cpp
   RegistrationFunctions.cpp
+  SetDigestFunctionsRegistration.cpp
   SfmSketchFunctionsRegistration.cpp
   StringFunctionsRegistration.cpp
   TDigestFunctionsRegistration.cpp
@@ -44,7 +46,10 @@ velox_add_library(
 
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_functions_prestosql PRIVATE VELOX_ENABLE_GEO)
-  velox_sources(velox_functions_prestosql PRIVATE GeometryFunctionsRegistration.cpp)
+  velox_sources(
+    velox_functions_prestosql
+    PRIVATE GeometryFunctionsRegistration.cpp SphericalGeographyFunctionsRegistration.cpp
+  )
 endif()
 
 if(VELOX_ENABLE_FAISS)

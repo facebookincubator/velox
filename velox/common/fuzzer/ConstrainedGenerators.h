@@ -21,6 +21,7 @@
 #include "folly/json.h"
 
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/functions/lib/QuantileDigest.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -525,6 +526,23 @@ class TDigestInputGenerator : public AbstractInputGenerator {
   ~TDigestInputGenerator() override;
 
   variant generate() override;
+};
+
+class SetDigestInputGenerator : public AbstractInputGenerator {
+ public:
+  SetDigestInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+
+  ~SetDigestInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  template <typename T>
+  variant generateTyped();
+
+  TypePtr baseType_;
+  std::shared_ptr<memory::MemoryPool> pool_;
+  std::unique_ptr<HashStringAllocator> allocator_;
 };
 
 class BingTileInputGenerator : public AbstractInputGenerator {

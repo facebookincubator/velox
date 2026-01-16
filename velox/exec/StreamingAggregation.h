@@ -96,10 +96,19 @@ class StreamingAggregation : public Operator {
   // Maximum number of rows in the output batch.
   const vector_size_t minOutputBatchSize_;
 
+  // If the size of the data in the RowContainer exceeds this value, we will
+  // output a batch regardless of the number of rows.
+  const uint64_t maxOutputBatchBytes_;
+
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const core::AggregationNode::Step step_;
+
+  // When true, indicates that no sort group spans across input batches. Each
+  // input batch contains complete data for its groups. This allows the
+  // streaming aggregation operator to produce all group results for each input.
+  const bool noGroupsSpanBatches_;
 
   std::vector<column_index_t> groupingKeys_;
   std::vector<AggregateInfo> aggregates_;

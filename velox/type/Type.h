@@ -18,7 +18,6 @@
 #include <folly/CPortability.h>
 #include <folly/Hash.h>
 #include <folly/Random.h>
-#include <folly/Range.h>
 #include <folly/container/F14Set.h>
 #include <folly/dynamic.h>
 
@@ -29,6 +28,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <typeindex>
@@ -363,6 +363,17 @@ struct TypeTraits<TypeKind::OPAQUE> {
   static constexpr const char* name = "OPAQUE";
 };
 
+// Convenience constexpr function to check for string-like and nested type
+// kinds.
+constexpr bool is_string_kind(TypeKind kind) {
+  return kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY;
+}
+
+constexpr bool is_nested_kind(TypeKind kind) {
+  return kind == TypeKind::ARRAY || kind == TypeKind::MAP ||
+      kind == TypeKind::ROW;
+}
+
 template <TypeKind KIND>
 struct TypeFactory;
 
@@ -555,7 +566,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   virtual const char* name() const = 0;
 
   /// Returns a possibly empty list of type parameters.
-  virtual const std::vector<TypeParameter>& parameters() const = 0;
+  virtual std::span<const TypeParameter> parameters() const = 0;
 
   /// Returns physical type name. Multiple logical types may share the same
   /// physical type backing and therefore return the same physical type name.
@@ -724,9 +735,8 @@ class TypeBase : public Type {
     return TypeTraits<KIND>::name;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
-    return kEmpty;
+  std::span<const TypeParameter> parameters() const override {
+    return {};
   }
 };
 
@@ -852,7 +862,7 @@ class DecimalType : public ScalarType<KIND> {
     return obj;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 
@@ -876,7 +886,7 @@ class DecimalType : public ScalarType<KIND> {
   }
 
  private:
-  const std::vector<TypeParameter> parameters_;
+  const std::array<TypeParameter, 2> parameters_;
 };
 
 class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
@@ -1011,15 +1021,15 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
   folly::dynamic serialize() const override;
 
-  const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+  std::span<const TypeParameter> parameters() const override {
+    return {&parameter_, 1};
   }
 
  protected:
   bool equals(const Type& other) const override;
 
   const TypePtr child_;
-  const std::vector<TypeParameter> parameters_;
+  const TypeParameter parameter_;
 };
 
 using ArrayTypePtr = std::shared_ptr<const ArrayType>;
@@ -1067,7 +1077,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
   folly::dynamic serialize() const override;
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 
@@ -1077,7 +1087,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
  private:
   TypePtr keyType_;
   TypePtr valueType_;
-  const std::vector<TypeParameter> parameters_;
+  const std::array<TypeParameter, 2> parameters_;
 };
 
 using MapTypePtr = std::shared_ptr<const MapType>;
@@ -1179,7 +1189,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return names_;
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     const auto* parameters = parameters_.load(std::memory_order_acquire);
     if (parameters) [[likely]] {
       return *parameters;
@@ -1251,7 +1261,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
 
   folly::dynamic serialize() const override;
 
-  const std::vector<TypeParameter>& parameters() const override {
+  std::span<const TypeParameter> parameters() const override {
     return parameters_;
   }
 
@@ -1352,6 +1362,15 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
         deserializeTypeErased);
   }
 
+  // This function is used to remove the serialization/deserialization functions
+  // for a type. It reverses the state changes made by registerSerialization
+  // function.
+  // @return true if the functions are found and removed
+  // successfully. False otherwise.
+  static bool unregisterSerialization(
+      const std::shared_ptr<const OpaqueType>& opaqueType,
+      const std::string& persistentName);
+
   static void clearSerializationRegistry();
 
  protected:
@@ -1366,6 +1385,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
       SerializeFunc<void> serialize = nullptr,
       DeserializeFunc<void> deserialize = nullptr);
 };
+
+using OpaqueTypePtr = std::shared_ptr<const OpaqueType>;
 
 using IntegerType = ScalarType<TypeKind::INTEGER>;
 using BooleanType = ScalarType<TypeKind::BOOLEAN>;
@@ -2224,6 +2245,11 @@ inline std::string to(const int128_t& value) {
   return std::to_string(value);
 }
 
+template <typename T>
+inline T to(const velox::StringView& value) {
+  return to<T>(std::string_view(value.data(), value.size()));
+}
+
 template <>
 inline std::string to(const velox::StringView& value) {
   return std::string(value.data(), value.size());
@@ -2356,6 +2382,7 @@ bool registerOpaqueType(const std::string& alias) {
 template <typename Class>
 bool unregisterOpaqueType(const std::string& alias) {
   auto typeIndex = std::type_index(typeid(Class));
+  OpaqueType::unregisterSerialization(OpaqueType::create<Class>(), alias);
   return getTypeIndexByOpaqueAlias().erase(alias) == 1 &&
       getOpaqueAliasByTypeIndex().erase(typeIndex) == 1;
 }

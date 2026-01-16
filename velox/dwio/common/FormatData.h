@@ -126,13 +126,20 @@ class FormatData {
   virtual bool parentNullsInLeaves() const {
     return false;
   }
+
+  bool getStringBuffersFromDecoder() const {
+    return getStringBuffersFromDecoder_;
+  }
+
+ protected:
+  bool getStringBuffersFromDecoder_{false};
 };
 
 /// Base class for format-specific reader initialization arguments.
 class FormatParams {
  public:
-  explicit FormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
-      : pool_(pool), stats_(stats) {}
+  FormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
+      : pool_(&pool), stats_(&stats) {}
 
   virtual ~FormatParams() = default;
 
@@ -143,16 +150,16 @@ class FormatParams {
       const velox::common::ScanSpec& scanSpec) = 0;
 
   memory::MemoryPool& pool() {
-    return pool_;
+    return *pool_;
   }
 
   ColumnReaderStatistics& runtimeStatistics() {
-    return stats_;
+    return *stats_;
   }
 
  private:
-  memory::MemoryPool& pool_;
-  ColumnReaderStatistics& stats_;
+  memory::MemoryPool* const pool_;
+  ColumnReaderStatistics* const stats_;
 };
 
 } // namespace facebook::velox::dwio::common

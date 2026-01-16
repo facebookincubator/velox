@@ -16,12 +16,14 @@
 
 #pragma once
 
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
 namespace facebook::velox::dwrf {
 
+using dwio::common::ArenaCreate;
 using dwio::common::BufferedOutputStream;
 using dwio::common::PositionRecorder;
 
@@ -35,41 +37,50 @@ constexpr int32_t PRESENT_STREAM_INDEX_ENTRIES_PAGED =
 
 class IndexBuilder : public PositionRecorder {
  public:
-  IndexBuilder(std::unique_ptr<BufferedOutputStream> out)
-      : out_{std::move(out)} {}
+  IndexBuilder(
+      std::unique_ptr<BufferedOutputStream> out,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF)
+      : out_{std::move(out)},
+        arena_(std::make_unique<google::protobuf::Arena>()) {
+    auto rowIndex = ArenaCreate<proto::RowIndex>(arena_.get());
+    auto rowIndexEntry = ArenaCreate<proto::RowIndexEntry>(arena_.get());
+
+    index_ = std::make_unique<RowIndexWriteWrapper>(rowIndex);
+    entry_ = std::make_unique<RowIndexEntryWriteWrapper>(rowIndexEntry);
+  }
 
   virtual ~IndexBuilder() = default;
 
   void add(uint64_t pos, int32_t index = -1) override {
-    getEntry(index)->add_positions(pos);
+    getEntry(index).addPositions(pos);
   }
 
   virtual void addEntry(const StatisticsBuilder& writer) {
-    auto* stats = entry_.mutable_statistics();
-    writer.toProto(*stats);
-    *index_.add_entry() = entry_;
-    entry_.Clear();
+    auto stats = entry_->mutableStatistics();
+    writer.toProto(stats);
+    index_->addEntry(entry_);
+    entry_->clear();
   }
 
   virtual size_t getEntrySize() const {
-    const int32_t size = index_.entry_size() + 1;
+    const int32_t size = index_->entrySize() + 1;
     VELOX_CHECK_GT(size, 0, "Invalid entry size or missing current entry.");
     return size;
   }
 
   virtual void flush() {
     // remove isPresent positions if none is null
-    index_.SerializeToZeroCopyStream(out_.get());
+    index_->SerializeToZeroCopyStream(out_.get());
     out_->flush();
-    index_.Clear();
-    entry_.Clear();
+    index_->clear();
+    entry_->clear();
   }
 
   void capturePresentStreamOffset() {
     if (!presentStreamOffset_.has_value()) {
-      presentStreamOffset_ = entry_.positions_size();
+      presentStreamOffset_ = entry_->positionsSize();
     } else {
-      DWIO_ENSURE_EQ(presentStreamOffset_.value(), entry_.positions_size());
+      DWIO_ENSURE_EQ(presentStreamOffset_.value(), entry_->positionsSize());
     }
   }
 
@@ -79,27 +90,28 @@ class IndexBuilder : public PositionRecorder {
                                      : PRESENT_STREAM_INDEX_ENTRIES_UNPAGED;
 
     // Only need to process entries that have been added to the row index
-    for (uint32_t i = 0; i < index_.entry_size(); ++i) {
-      index_.mutable_entry(i)->mutable_positions()->ExtractSubrange(
-          presentStreamOffset_.value(), streamCount, nullptr);
+    for (uint32_t i = 0; i < index_->entrySize(); ++i) {
+      index_->mutableEntry(i).mutablePositions(
+          presentStreamOffset_.value(), streamCount);
     }
   }
 
  private:
-  proto::RowIndexEntry* getEntry(int32_t index) {
+  RowIndexEntryWriteWrapper getEntry(int32_t index) {
     if (index < 0) {
-      return &entry_;
-    } else if (index < index_.entry_size()) {
-      return index_.mutable_entry(index);
+      return *entry_;
+    } else if (index < index_->entrySize()) {
+      return index_->mutableEntry(index);
     } else {
-      VELOX_CHECK_EQ(index, index_.entry_size());
-      return &entry_;
+      VELOX_CHECK_EQ(index, index_->entrySize());
+      return *entry_;
     }
   }
 
   const std::unique_ptr<BufferedOutputStream> out_;
-  proto::RowIndex index_;
-  proto::RowIndexEntry entry_;
+  std::unique_ptr<RowIndexWriteWrapper> index_;
+  std::unique_ptr<RowIndexEntryWriteWrapper> entry_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
   std::optional<int32_t> presentStreamOffset_;
 
   friend class IndexBuilderTest;

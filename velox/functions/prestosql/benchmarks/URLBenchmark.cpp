@@ -32,7 +32,7 @@ template <typename Fn, typename TOutString, typename TInputString>
 FOLLY_ALWAYS_INLINE bool
 runURIFn(Fn func, TOutString& result, TInputString& url) {
   try {
-    auto parsedUrl = folly::Uri(url);
+    auto parsedUrl = folly::Uri(std::string_view(url));
     auto datum = (parsedUrl.*func)();
     result.resize(datum.size());
     if (datum.size() != 0) {
@@ -123,7 +123,7 @@ struct FollyUrlExtractPortFunction {
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Varchar>& url) {
     try {
-      auto parsedUrl = folly::Uri(url);
+      auto parsedUrl = folly::Uri(std::string_view(url));
       result = parsedUrl.port();
     } catch (const folly::ConversionError&) {
       return false;
@@ -145,7 +145,7 @@ struct FollyUrlExtractParameterFunction {
       const arg_type<Varchar>& url,
       const arg_type<Varchar>& param) {
     try {
-      auto parsedUrl = folly::Uri(url);
+      auto parsedUrl = folly::Uri(std::string_view(url));
       auto params = parsedUrl.getQueryParams();
 
       for (const auto& pair : params) {

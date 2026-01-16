@@ -129,7 +129,7 @@ void RemoteVectorFunction::applyRemote(
         return;
       }
       try {
-        throw std::runtime_error(errorsVector->valueAt(i));
+        throw std::runtime_error(std::string(errorsVector->valueAt(i)));
       } catch (const std::exception&) {
         context.setError(i, std::current_exception());
       }

@@ -27,8 +27,14 @@ namespace {
 
 using namespace facebook::velox::exec::test;
 
-class StreamingAggregationTest : public HiveConnectorTestBase,
-                                 public testing::WithParamInterface<int32_t> {
+struct TestParams {
+  int32_t streamingMinOutputBatchSize;
+  uint64_t preferredOutputBatchBytes;
+};
+
+class StreamingAggregationTest
+    : public HiveConnectorTestBase,
+      public testing::WithParamInterface<TestParams> {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
@@ -36,7 +42,11 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
   }
 
   int32_t flushRows() {
-    return GetParam();
+    return GetParam().streamingMinOutputBatchSize;
+  }
+
+  uint64_t preferredOutputBatchBytes() {
+    return GetParam().preferredOutputBatchBytes;
   }
 
   AssertQueryBuilder& config(
@@ -48,7 +58,10 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
             std::to_string(outputBatchSize))
         .config(
             core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
-            std::to_string(flushRows()));
+            std::to_string(flushRows()))
+        .config(
+            core::QueryConfig::kPreferredOutputBatchBytes,
+            std::to_string(preferredOutputBatchBytes()));
   }
 
   void testAggregation(
@@ -593,13 +606,32 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
 VELOX_INSTANTIATE_TEST_SUITE_P(
     StreamingAggregationTest,
     StreamingAggregationTest,
-    testing::ValuesIn({0, 1, 64, std::numeric_limits<int32_t>::max()}),
-    [](const testing::TestParamInfo<int32_t>& info) {
+    testing::Values(
+        TestParams{0, 1},
+        TestParams{0, 1024},
+        TestParams{0, std::numeric_limits<uint64_t>::max()},
+        TestParams{1, 1},
+        TestParams{1, 1024},
+        TestParams{1, std::numeric_limits<uint64_t>::max()},
+        TestParams{64, 1},
+        TestParams{64, 1024},
+        TestParams{64, std::numeric_limits<uint64_t>::max()},
+        TestParams{std::numeric_limits<int32_t>::max(), 1},
+        TestParams{std::numeric_limits<int32_t>::max(), 1024},
+        TestParams{
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<uint64_t>::max()}),
+    [](const testing::TestParamInfo<TestParams>& info) {
       return fmt::format(
-          "streamingMinOutputBatchSize_{}",
-          info.param == std::numeric_limits<int32_t>::max()
+          "streamingMinOutputBatchSize_{}_preferredOutputBatchBytes_{}",
+          info.param.streamingMinOutputBatchSize ==
+                  std::numeric_limits<int32_t>::max()
               ? "inf"
-              : std::to_string(info.param));
+              : std::to_string(info.param.streamingMinOutputBatchSize),
+          info.param.preferredOutputBatchBytes ==
+                  std::numeric_limits<uint64_t>::max()
+              ? "inf"
+              : std::to_string(info.param.preferredOutputBatchBytes));
     });
 
 TEST_P(StreamingAggregationTest, smallInputBatches) {
@@ -1141,6 +1173,123 @@ TEST_P(StreamingAggregationTest, constantInput) {
   });
   config(AssertQueryBuilder(plan), 1).assertResults(expected);
   config(AssertQueryBuilder(plan), 10).assertResults(expected);
+}
+
+TEST_P(StreamingAggregationTest, preferredOutputBatchBytes) {
+  // Use grouping keys that span one or more batches.
+  std::vector<VectorPtr> keys = {
+      makeNullableFlatVector<int32_t>({1, 1, std::nullopt, 2, 2}),
+      makeFlatVector<int32_t>({2, 3, 3, 4}),
+      makeFlatVector<int32_t>({5, 6, 6, 6}),
+      makeFlatVector<int32_t>({6, 6, 6, 6}),
+      makeFlatVector<int32_t>({6, 7, 8}),
+  };
+
+  auto data = addPayload(keys, 1);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialStreamingAggregation(
+                      {"c0"},
+                      {"count(1)",
+                       "min(c1)",
+                       "max(c1)",
+                       "sum(c1)",
+                       "sumnonpod(1)",
+                       "sum(cast(NULL as INT))"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto results =
+      config(AssertQueryBuilder(plan), 1024).copyResultBatches(pool_.get());
+
+  // If streamingMinOutputBatchSize is set to 1, we expect an output batch for:
+  // {1, NULL}, {2}, {3, 4}, {5}, {6}, {7, 8}.
+  // Otherwise, we expect the output batches to be determined by
+  // preferredOutputBatchBytes.
+  size_t expectedOutputBatches;
+  if (GetParam().streamingMinOutputBatchSize == 1) {
+    expectedOutputBatches = 6;
+  } else if (GetParam().preferredOutputBatchBytes == 1) {
+    expectedOutputBatches = 5;
+  } else if (GetParam().preferredOutputBatchBytes == 1024) {
+    expectedOutputBatches = 2;
+  } else {
+    ASSERT_EQ(
+        GetParam().preferredOutputBatchBytes,
+        std::numeric_limits<uint64_t>::max());
+    expectedOutputBatches = 1;
+  }
+
+  ASSERT_EQ(results.size(), expectedOutputBatches);
+}
+
+// Tests that when noGroupsSpanBatches is set, the number of output batches
+// matches the number of input batches when minOutputBatchRows is set to 1.
+// When minOutputBatchRows is set to an extremely large value, we expect a
+// single output batch.
+TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
+  // Create input batches where no group spans across batches.
+  // Each batch has unique grouping keys that don't appear in other batches.
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>({1, 1, 2, 2}),
+      makeFlatVector<int32_t>({3, 3, 4, 4}),
+      makeFlatVector<int32_t>({5, 5, 6, 6}),
+      makeFlatVector<int32_t>({7, 7, 8, 8}),
+      makeFlatVector<int32_t>({9, 9, 10, 10}),
+  };
+
+  auto data = addPayload(keys, 1);
+  createDuckDbTable(data);
+
+  struct {
+    int32_t minOutputBatchRows;
+    size_t expectedOutputBatches;
+
+    std::string debugString() const {
+      return fmt::format(
+          "minOutputBatchRows={}, expectedOutputBatches={}",
+          minOutputBatchRows,
+          expectedOutputBatches);
+    }
+  } testSettings[] = {
+      // When minOutputBatchRows is 1, each input batch produces an output batch
+      {1, keys.size()},
+      // When minOutputBatchRows is very large, all groups are batched together
+      // into a single output
+      {std::numeric_limits<int32_t>::max(), 1},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId aggregationNodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(data)
+                    .streamingAggregation(
+                        {"c0"},
+                        {"count(1)", "sum(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/true)
+                    .capturePlanNodeId(aggregationNodeId)
+                    .planNode();
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+                std::to_string(testData.minOutputBatchRows))
+            .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
+
+    // Verify the number of output batches.
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(
+        velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+        testData.expectedOutputBatches);
+  }
 }
 
 namespace {

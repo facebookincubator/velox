@@ -577,20 +577,21 @@ TEST(TypeTest, rowParametersMultiThreaded) {
   }
   auto type = ROW(std::move(names), std::move(types));
   constexpr int kNumThreads = 72;
-  const std::vector<TypeParameter>* parameters[kNumThreads];
+  std::span<const TypeParameter> parameters[kNumThreads];
   std::vector<std::thread> threads;
   for (int i = 0; i < kNumThreads; ++i) {
-    threads.emplace_back([&, i] { parameters[i] = &type->parameters(); });
+    threads.emplace_back([&, i] { parameters[i] = type->parameters(); });
   }
   for (auto& thread : threads) {
     thread.join();
   }
   for (int i = 1; i < kNumThreads; ++i) {
-    ASSERT_TRUE(parameters[i] == parameters[0]);
+    ASSERT_TRUE(parameters[i].data() == parameters[0].data());
+    ASSERT_TRUE(parameters[i].size() == parameters[0].size());
   }
-  ASSERT_EQ(parameters[0]->size(), type->size());
-  for (int i = 0; i < parameters[0]->size(); ++i) {
-    ASSERT_TRUE((*parameters[0])[i].type.get() == type->childAt(i).get());
+  ASSERT_EQ(parameters[0].size(), type->size());
+  for (int i = 0; i < parameters[0].size(); ++i) {
+    ASSERT_TRUE(parameters[0][i].type.get() == type->childAt(i).get());
   }
 }
 
@@ -660,12 +661,24 @@ TEST(TypeTest, opaque) {
   auto foo3 = Type::create(foo->serialize());
   ASSERT_EQ(*foo, *foo3);
 
+  // Clearing the serialization registry when no serialization/deserialization
+  // functions have been provided, should return true, since the registry
+  // contained nullptr as serialization/deserialization functions.
+  EXPECT_TRUE(OpaqueType::unregisterSerialization(foo2, "id_of_foo"));
+  // Clearing the serialization registry a second time should return false.
+  EXPECT_FALSE(OpaqueType::unregisterSerialization(foo2, "id_of_foo"));
+
   OpaqueType::registerSerialization<Bar>(
       "id_of_bar",
       [](const std::shared_ptr<Bar>&) -> std::string { return ""; },
       [](const std::string&) -> std::shared_ptr<Bar> { return nullptr; });
   bar->getSerializeFunc();
   bar->getDeserializeFunc();
+
+  // Clearing the serialization registry should return true.
+  EXPECT_TRUE(
+      OpaqueType::unregisterSerialization(
+          OpaqueType::create<Bar>(), "id_of_bar"));
 }
 
 // Example of an opaque type that keeps some additional type-level metadata.

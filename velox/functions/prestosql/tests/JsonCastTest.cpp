@@ -1122,12 +1122,12 @@ TEST_F(JsonCastTest, toDouble) {
       JSON(),
       DOUBLE(),
       {"Infinity"_sv},
-      "The JSON document has an improper structure");
+      "The JSON element does not have the requested type");
   testThrow<JsonNativeType>(
       JSON(),
       DOUBLE(),
       {"NaN"_sv},
-      "The JSON document has an improper structure");
+      "The JSON element does not have the requested type");
 
   testThrow<JsonNativeType>(
       JSON(),
@@ -1821,4 +1821,19 @@ TEST_F(JsonCastTest, castFromJsonWithEscapingForSpecialUniocodeCharacters) {
   testCast(R"(["\u0020"])", "\u0020");
   testCast(R"(["\u007F"])", "\u007F");
   testCast(R"(["\u008A"])", "\u008A");
+}
+
+TEST_F(JsonCastTest, uniqueErrorContextMessage) {
+  // Verify that exceptions thrown have the correct error context information.
+  testContextMessageOnThrow(
+      "cast((c0) as DOUBLE)",
+      makeRowVector({makeNullableFlatVector<JsonNativeType>({"\"abc\""_sv})}),
+      "Top-level Expression: cast((c0) as DOUBLE)");
+
+  // Test twice to ensure that the context is correctly generated for each
+  // expression and not cached and reused.
+  testContextMessageOnThrow(
+      "cast((c0) as BIGINT)",
+      makeRowVector({makeNullableFlatVector<JsonNativeType>({"\"abc\""_sv})}),
+      "Top-level Expression: cast((c0) as BIGINT)");
 }

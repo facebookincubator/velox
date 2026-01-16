@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
@@ -182,8 +183,7 @@ class AssertQueryBuilder {
       const TypePtr& expectedType,
       vector_size_t expectedNumRows);
 
-  /// Run the query and collect all results into a single vector. Throws if
-  /// query returns empty result.
+  /// Run the query and collect all results into a single vector.
   RowVectorPtr copyResults(memory::MemoryPool* pool);
 
   /// Similar to above method and also returns the task.
@@ -191,8 +191,15 @@ class AssertQueryBuilder {
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
 
+  /// Run the query and copy the result Vectors as their original batches.
+  std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
+
   /// Run the query and return the number of result rows.
-  uint64_t runWithoutResults(std::shared_ptr<Task>& task);
+  uint64_t countResults(std::shared_ptr<Task>& task);
+
+  /// Run the query and return the number of result rows without requiring a
+  /// task parameter.
+  uint64_t countResults();
 
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
@@ -200,7 +207,7 @@ class AssertQueryBuilder {
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
-        std::thread::hardware_concurrency());
+        folly::hardware_concurrency());
   }
 
   // Used by the created task as the default driver executor.

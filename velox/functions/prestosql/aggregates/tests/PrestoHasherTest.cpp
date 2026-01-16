@@ -433,7 +433,7 @@ TEST_F(PrestoHasherTest, timestampWithTimezone) {
 }
 
 TEST_F(PrestoHasherTest, ipAddress) {
-  auto makeIpAdressFromString = [](const std::string& ipAddr) -> int128_t {
+  auto makeIpAdressFromString = [](std::string_view ipAddr) -> int128_t {
     auto ret = ipaddress::tryGetIPv6asInt128FromString(ipAddr);
     return ret.value();
   };
