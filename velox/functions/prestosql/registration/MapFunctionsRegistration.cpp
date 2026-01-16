@@ -262,6 +262,7 @@ void registerMapFunctions(const std::string& prefix) {
       prefix + "map_from_entries", /*throwForNull=*/true);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_top_n_keys, prefix + "map_top_n_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, prefix + "map_zip_with");
 
