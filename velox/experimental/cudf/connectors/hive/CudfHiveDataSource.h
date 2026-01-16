@@ -127,7 +127,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unique_ptr<std::once_flag> tableMaterialized_;
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
-  bool useExperimentalSplitReader_;
+  bool useOldSplitReader_;
   rmm::cuda_stream_view stream_;
 
   // Output type from file reader.  This is different from outputType_ that it

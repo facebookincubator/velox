@@ -90,10 +90,9 @@ class CudfHiveConfig {
   static constexpr const char* kUseBufferedInputSession =
       "cudf.hive.use_buffered_input";
 
-  static constexpr const char* kUseExperimentalCudfReader =
-      "cudf.hive.use-experimental-reader";
-  static constexpr const char* kUseExperimentalCudfReaderSession =
-      "cudf.hive.use_experimental_reader";
+  static constexpr const char* kUseOldCudfReader = "cudf.hive.use-old-reader";
+  static constexpr const char* kUseOldCudfReaderSession =
+      "cudf.hive.use_old_reader";
 
   // Writer config options
 
@@ -165,9 +164,8 @@ class CudfHiveConfig {
   bool useBufferedInput() const;
   bool useBufferedInputSession(const config::ConfigBase* session) const;
 
-  bool useExperimentalCudfReader() const;
-  bool useExperimentalCudfReaderSession(
-      const config::ConfigBase* session) const;
+  bool useOldCudfReader() const;
+  bool useOldCudfReaderSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 
