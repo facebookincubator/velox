@@ -262,6 +262,51 @@ Map Functions
         SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- ['c', 'b']
         SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 0) --- []
 
+.. function:: map_top_n_keys(map(K,V), n, function(K,V,U)) -> array(K)
+
+    Returns the top N keys of the map sorted by the transform function in descending order.
+    The lambda function is applied to each (key, value) pair and produces an orderable value of type U.
+    Keys are then sorted based on these transformed values, and the top N keys are returned.
+    U must be an orderable type. ``n`` must be a non-negative BIGINT value. ::
+
+        SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> k); -- [3, 2]
+        SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> v); -- [3, 2]
+        SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> -k); -- [1, 2]
+
+    .. note::
+
+        Only the transform form of the lambda is supported. The comparator form
+        ``function(K,K,integer)`` accepted by Presto Java will not be added. A
+        comparator-shaped lambda binds to the transform signature instead of failing to
+        resolve, and silently returns a wrong result: it is applied to each ``(key, value)``
+        pair, so the lambda below returns ``1`` for every entry and leaves all entries tied::
+
+            SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[30, 20, 10]), 2, (a, b) -> IF(a < b, 1, -1)); -- [3, 2]
+
+        See `Sorting arrays <https://velox-lib.io/blog/array-sort/>`_ for why Velox prefers
+        transform lambdas over comparators.
+
+    .. note::
+
+        **Tie-breaking behavior**: When multiple elements have equal transformed values, the tie is
+        broken on the map keys, in descending order, so the result does not depend on the order in
+        which the map stores its entries. Keys that are not orderable, such as map-typed keys, break
+        ties on the position of the entry in the input instead. For example::
+
+            SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[5, 5, 5]), 2, (k, v) -> 0); -- [3, 2]
+
+    .. note::
+
+        Due to a signature mismatch between the Java and C++ implementations, certain queries
+        with lambda functions may fail when using Presto Java without sidecar mode enabled.
+        For example, the following query will fail in Presto Java::
+
+            SELECT map_top_n_keys(MAP(ARRAY['cat', 'leopard', 'mouse'], ARRAY[1, 2, 3]), 2, (k, v) -> length(k));
+            -- Error: Unexpected parameters for function map_top_n_keys
+
+        This query works correctly in Velox (C++) but requires sidecar mode to be enabled
+        when running through Presto Java to delegate execution to the Velox engine.
+
 .. function:: map_top_n_values(map(K,V), n) -> array(V)
 
     Returns top N values from a map, by sorting its values in descending order. Both keys and values should be orderable.
@@ -269,6 +314,51 @@ Map Functions
     ``n`` must be a non-negative BIGINT value.::
 
         SELECT map_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- [3, 2]
+
+.. function:: map_top_n_values(map(K,V), n, function(K,V,U)) -> array(V)
+
+    Returns the top N values of the map sorted by the transform function in descending order.
+    The lambda function is applied to each (key, value) pair and produces an orderable value of type U.
+    Values are then sorted based on these transformed values, and the top N Values are returned.
+    U must be an orderable type. ``n`` must be a non-negative BIGINT value. ::
+
+        SELECT map_top_n_values(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> k); -- [30, 20]
+        SELECT map_top_n_values(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> v); -- [30, 20]
+        SELECT map_top_n_values(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> -k); -- [10, 20]
+
+    .. note::
+
+        Only the transform form of the lambda is supported. The comparator form
+        ``function(V,V,integer)`` accepted by Presto Java will not be added. A
+        comparator-shaped lambda binds to the transform signature instead of failing to
+        resolve, and silently returns a wrong result: it is applied to each ``(key, value)``
+        pair, so the lambda below returns ``1`` for every entry and leaves all entries tied::
+
+            SELECT map_top_n_values(MAP(ARRAY[1, 2, 3], ARRAY[30, 20, 10]), 2, (a, b) -> IF(a < b, 1, -1)); -- [10, 20]
+
+        See `Sorting arrays <https://velox-lib.io/blog/array-sort/>`_ for why Velox prefers
+        transform lambdas over comparators.
+
+    .. note::
+
+        **Tie-breaking behavior**: When multiple elements have equal transformed values, the tie is
+        broken on the map keys, in descending order, so the result does not depend on the order in
+        which the map stores its entries. Keys that are not orderable, such as map-typed keys, break
+        ties on the position of the entry in the input instead. For example::
+
+            SELECT map_top_n_values(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> 0); -- [30, 20]
+
+    .. note::
+
+        Due to a signature mismatch between the Java and C++ implementations, certain queries
+        with lambda functions may fail when using Presto Java without sidecar mode enabled.
+        For example, the following query will fail in Presto Java::
+
+            SELECT map_top_n_values(MAP(ARRAY['cat', 'leopard', 'mouse'], ARRAY[1, 2, 3]), 2, (k, v) -> length(k));
+            -- Error: Unexpected parameters for function map_top_n_values
+
+        This query works correctly in Velox (C++) but requires sidecar mode to be enabled
+        when running through Presto Java to delegate execution to the Velox engine.
 
 .. function:: map_keys(x(K,V)) -> array(K)
 
