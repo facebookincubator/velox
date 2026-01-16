@@ -20,7 +20,7 @@
 #include <gflags/gflags.h>
 #include <string>
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/file/Utils.h"
+#include "velox/common/file/FileUtils.h"
 
 DECLARE_string(source_root_dir);
 DECLARE_string(dest_root_dir);

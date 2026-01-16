@@ -23,7 +23,6 @@
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -2232,7 +2231,7 @@ int32_t HashTable<ignoreNullKeys>::listAllRows(
 template <bool ignoreNullKeys>
 template <RowContainer::ProbeType probeType>
 int32_t HashTable<ignoreNullKeys>::listRows(
-    RowContainerIterator& rowContainerIterator,
+    RowContainerIterator& rowContainerIt,
     int rowContainerId,
     int32_t maxRows,
     uint64_t maxBytes,
@@ -2241,44 +2240,41 @@ int32_t HashTable<ignoreNullKeys>::listRows(
       ? rows_.get()
       : otherTables_[rowContainerId - 1]->rows();
   const auto numRows = rowContainer->template listRows<probeType>(
-      &rowContainerIterator, maxRows, maxBytes, rows);
-  if (numRows > 0) {
-    return numRows;
-  }
-  return 0;
+      &rowContainerIt, maxRows, maxBytes, rows);
+  return numRows;
 }
 
 template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listNotProbedRows(
-    RowContainerIterator& rowContainerIterator,
+    RowContainerIterator& rowContainerIt,
     int rowContainerId,
     int32_t maxRows,
     uint64_t maxBytes,
     char** rows) {
   return listRows<RowContainer::ProbeType::kNotProbed>(
-      rowContainerIterator, rowContainerId, maxRows, maxBytes, rows);
+      rowContainerIt, rowContainerId, maxRows, maxBytes, rows);
 }
 
 template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listProbedRows(
-    RowContainerIterator& rowContainerIterator,
+    RowContainerIterator& rowContainerIt,
     int rowContainerId,
     int32_t maxRows,
     uint64_t maxBytes,
     char** rows) {
   return listRows<RowContainer::ProbeType::kProbed>(
-      rowContainerIterator, rowContainerId, maxRows, maxBytes, rows);
+      rowContainerIt, rowContainerId, maxRows, maxBytes, rows);
 }
 
 template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listAllRows(
-    RowContainerIterator& rowContainerIterator,
+    RowContainerIterator& rowContainerIt,
     int rowContainerId,
     int32_t maxRows,
     uint64_t maxBytes,
     char** rows) {
   return listRows<RowContainer::ProbeType::kAll>(
-      rowContainerIterator, rowContainerId, maxRows, maxBytes, rows);
+      rowContainerIt, rowContainerId, maxRows, maxBytes, rows);
 }
 
 template <>
