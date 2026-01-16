@@ -13,18 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/vector/FunctionVector.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
 
 /// See documentation at https://prestodb.io/docs/current/functions/map.html
-/// Implements the map_top_n_keys with lambda comparator function.
+/// Implements the map_top_n_keys with transform lambda function.
 /// Returns the top N keys of the given map sorting its keys using the provided
-/// lambda comparator.
+/// transform lambda.
 class MapTopNKeysLambdaFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -42,6 +41,7 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
     VELOX_CHECK_NOT_NULL(flatMap);
 
     auto mapKeys = flatMap->mapKeys();
+    auto mapValues = flatMap->mapValues();
     auto numKeys = mapKeys->size();
 
     // Decode the n parameter.
@@ -56,101 +56,39 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
       }
     });
 
-    // Count total pairs needed for comparison across all maps.
-    vector_size_t totalPairs = 0;
-    rows.applyToSelected([&](vector_size_t row) {
-      if (!decodedMap.isNullAt(row)) {
-        auto mapIndex = decodedMap.index(row);
-        auto mapSize = flatMap->sizeAt(mapIndex);
-        if (mapSize > 1) {
-          totalPairs += mapSize * (mapSize - 1);
-        }
-      }
-    });
+    std::vector<VectorPtr> lambdaArgs = {mapKeys, mapValues};
+    auto newNumElements = mapKeys->size();
+    SelectivityVector validRowsInReusedResult =
+        toElementRows<MapVector>(newNumElements, rows, flatMap.get());
 
-    // Build vectors for all pairs to evaluate in batch.
-    std::vector<vector_size_t> leftIndices;
-    std::vector<vector_size_t> rightIndices;
-    std::vector<vector_size_t> pairToRow;
-    leftIndices.reserve(totalPairs);
-    rightIndices.reserve(totalPairs);
-    pairToRow.reserve(totalPairs);
+    VectorPtr newElements;
+    auto elementToTopLevelRows = getElementToTopLevelRows(
+        newNumElements, rows, flatMap.get(), context.pool());
 
-    rows.applyToSelected([&](vector_size_t row) {
-      if (decodedMap.isNullAt(row)) {
-        return;
-      }
+    // Loop over lambda functions and apply these to elements of the base array.
+    // In most cases there will be only one function and the loop will run once.
+    auto it = args[2]->asUnchecked<FunctionVector>()->iterator(&rows);
+    while (auto entry = it.next()) {
+      auto elementRows =
+          toElementRows<MapVector>(newNumElements, *entry.rows, flatMap.get());
+      auto wrapCapture = toWrapCapture<MapVector>(
+          newNumElements, entry.callable, *entry.rows, flatMap);
 
-      auto mapIndex = decodedMap.index(row);
-      auto mapOffset = flatMap->offsetAt(mapIndex);
-      auto mapSize = flatMap->sizeAt(mapIndex);
-
-      // Each element in the map pair it up with other elements.
-      for (vector_size_t i = 0; i < mapSize; ++i) {
-        for (vector_size_t j = 0; j < mapSize; ++j) {
-          if (i != j) {
-            leftIndices.push_back(mapOffset + i);
-            rightIndices.push_back(mapOffset + j);
-            pairToRow.push_back(row);
-          }
-        }
-      }
-    });
-
-    // Evaluate comparator lambda on all pairs at once.
-    std::map<std::pair<vector_size_t, vector_size_t>, int64_t> comparisonCache;
-
-    if (!leftIndices.empty() && !rightIndices.empty()) {
-      auto leftIndicesBuffer =
-          allocateIndices(leftIndices.size(), context.pool());
-      auto rightIndicesBuffer =
-          allocateIndices(rightIndices.size(), context.pool());
-
-      auto* rawLeftIndices = leftIndicesBuffer->asMutable<vector_size_t>();
-      auto* rawRightIndices = rightIndicesBuffer->asMutable<vector_size_t>();
-
-      for (size_t i = 0; i < leftIndices.size(); ++i) {
-        rawLeftIndices[i] = leftIndices[i];
-        rawRightIndices[i] = rightIndices[i];
-      }
-
-      auto leftVector = BaseVector::wrapInDictionary(
-          nullptr, leftIndicesBuffer, leftIndices.size(), mapKeys);
-      auto rightVector = BaseVector::wrapInDictionary(
-          nullptr, rightIndicesBuffer, rightIndices.size(), mapKeys);
-
-      std::vector<VectorPtr> lambdaArgs = {leftVector, rightVector};
-      SelectivityVector allPairsRows(leftIndices.size());
-
-      VectorPtr lambdaResult;
-
-      // Loop over lambda functions and apply comparator.
-      auto it = args[2]->asUnchecked<FunctionVector>()->iterator(&rows);
-      while (auto entry = it.next()) {
-        entry.callable->apply(
-            allPairsRows,
-            nullptr,
-            nullptr,
-            &context,
-            lambdaArgs,
-            nullptr,
-            &lambdaResult);
-      }
-
-      // Extract comparison results into cache.
-      exec::LocalDecodedVector decodedResult(
-          context, *lambdaResult, allPairsRows);
-      for (size_t i = 0; i < leftIndices.size(); ++i) {
-        if (decodedResult->isNullAt(i)) {
-          VELOX_FAIL("Lambda comparator must return either -1, 0, or 1");
-        }
-        auto cmp = decodedResult->valueAt<int32_t>(i);
-        if (cmp != -1 && cmp != 1 && cmp != 0) {
-          VELOX_FAIL("Lambda comparator must return either -1, 0, or 1");
-        }
-        comparisonCache[{leftIndices[i], rightIndices[i]}] = cmp;
-      }
+      entry.callable->apply(
+          elementRows,
+          &validRowsInReusedResult,
+          wrapCapture,
+          &context,
+          lambdaArgs,
+          elementToTopLevelRows,
+          &newElements);
     }
+
+    // Decode the transformed values from the lambda.
+    exec::LocalDecodedVector decodedElements(
+        context, *newElements, validRowsInReusedResult);
+    auto* baseElements = decodedElements->base();
+    auto decodedIndices = decodedElements->indices();
 
     // Build indices buffer for sorting.
     BufferPtr indices = allocateIndices(numKeys, context.pool());
@@ -159,7 +97,7 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
       rawIndices[i] = i;
     }
 
-    // Sort each map's keys using the cached comparisons.
+    CompareFlags flags{.nullsFirst = false, .ascending = true};
     rows.applyToSelected([&](vector_size_t row) {
       if (decodedMap.isNullAt(row)) {
         return;
@@ -179,27 +117,41 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
       std::stable_sort(
           rawIndices + mapOffset,
           rawIndices + mapOffset + mapSize,
-          [&comparisonCache](vector_size_t leftIdx, vector_size_t rightIdx) {
+          [&](vector_size_t leftIdx, vector_size_t rightIdx) {
             if (leftIdx == rightIdx) {
               return false;
             }
 
-            // Try forward lookup
-            auto it = comparisonCache.find({leftIdx, rightIdx});
-            if (it != comparisonCache.end()) {
-              // If comparator says left < right (negative), put left first
-              // (ascending).
-              return it->second < 0;
+            // Handle null values in transformed results.
+            bool leftNull = decodedElements->isNullAt(leftIdx);
+            bool rightNull = decodedElements->isNullAt(rightIdx);
+
+            if (leftNull && rightNull) {
+              return false;
             }
-            return false;
+            if (leftNull) {
+              return false;
+            }
+            if (rightNull) {
+              return true;
+            }
+
+            auto result = baseElements->compare(
+                baseElements,
+                decodedIndices[leftIdx],
+                decodedIndices[rightIdx],
+                flags);
+
+            if (!result.has_value()) {
+              VELOX_USER_FAIL("Ordering nulls is not supported");
+            }
+
+            return result.value() < 0;
           });
 
-      // Reverse the sorted array to get descending order (matching Java's
-      // reverse())
       std::reverse(rawIndices + mapOffset, rawIndices + mapOffset + mapSize);
     });
 
-    // Build result array with top N keys.
     vector_size_t totalElements = 0;
     rows.applyToSelected([&](vector_size_t row) {
       if (decodedMap.isNullAt(row) || decodedN.isNullAt(row)) {
@@ -214,7 +166,6 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
       totalElements += resultSize;
     });
 
-    // Create result array vector.
     auto elements = BaseVector::create(
         outputType->asArray().elementType(), totalElements, context.pool());
 
@@ -250,7 +201,6 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
       rawOffsets[row] = elemIdx;
       rawSizes[row] = resultSize;
 
-      // Copy top N sorted keys to result.
       for (vector_size_t i = 0; i < resultSize; ++i) {
         elements->copy(mapKeys.get(), elemIdx++, rawIndices[mapOffset + i], 1);
       }
@@ -260,15 +210,15 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // double check java code to make sure all types are same...
-    // map_top_n_keys(map(K,V), bigint, function(K,K,integer)) -> array(K)
+    // map_top_n_keys(map(K,V), bigint, function(K,V,U)) -> array(K)
     return {exec::FunctionSignatureBuilder()
                 .typeVariable("K")
                 .typeVariable("V")
+                .orderableTypeVariable("U")
                 .returnType("array(K)")
                 .argumentType("map(K,V)")
                 .argumentType("bigint")
-                .argumentType("function(K,K,integer)")
+                .argumentType("function(K, V, U)")
                 .build()};
   }
 };
