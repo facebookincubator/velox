@@ -17,29 +17,46 @@
 
 namespace facebook::velox {
 
-int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
-  int64_t cost = 0;
+CallableCost Coercion::overallCost(const std::vector<Coercion>& coercions) {
+  CallableCost cost = 0;
   for (const auto& coercion : coercions) {
-    if (coercion.type != nullptr) {
-      cost += coercion.cost;
-    }
+    VELOX_DCHECK(coercion);
+    cost += coercion.cost;
   }
-
   return cost;
 }
 
+void Coercion::convert(
+    const std::vector<Coercion>& from,
+    std::vector<TypePtr>* to) {
+  if (!to) {
+    return;
+  }
+  to->clear();
+  to->reserve(from.size());
+  for (const auto& coercion : from) {
+    VELOX_DCHECK(coercion);
+    to->push_back(coercion.type);
+  }
+}
+
 namespace {
+
+// This is cost of CAST from UNKNOWN type to any other type.
+// This is the lowest for any implicit CAST.
+// Any other implicit CAST will have cost higher than this.
+constexpr CallableCost kNullCoercionCost = 1;
 
 std::unordered_map<std::pair<std::string, std::string>, Coercion>
 allowedCoercions() {
   std::unordered_map<std::pair<std::string, std::string>, Coercion> coercions;
 
   auto add = [&](const TypePtr& from, const std::vector<TypePtr>& to) {
-    int32_t cost = 0;
+    auto cost = kNullCoercionCost;
     for (const auto& toType : to) {
       coercions.emplace(
           std::make_pair<std::string, std::string>(
-              from->kindName(), toType->kindName()),
+              from->name(), toType->name()),
           Coercion{.type = toType, .cost = ++cost});
     }
   };
@@ -52,56 +69,65 @@ allowedCoercions() {
 
   return coercions;
 }
+
 } // namespace
 
 // static
-std::optional<Coercion> TypeCoercer::coerceTypeBase(
+Coercion TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const std::string& toTypeName) {
-  static const auto kAllowedCoercions = allowedCoercions();
   if (fromType->name() == toTypeName) {
-    return Coercion{.type = fromType, .cost = 0};
+    return {{}, 0};
   }
 
+  if (fromType == UNKNOWN()) {
+    // Cast unknown to complex type in function is not supported yet
+    return {getType(toTypeName, {}), kNullCoercionCost};
+  }
+
+  static const auto kAllowedCoercions = allowedCoercions();
   auto it = kAllowedCoercions.find({fromType->name(), toTypeName});
   if (it != kAllowedCoercions.end()) {
     return it->second;
   }
 
-  return std::nullopt;
+  return {{}, kImpossibleCoercionCost};
 }
 
 // static
-std::optional<int32_t> TypeCoercer::coercible(
+Coercion TypeCoercer::coercible(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  if (fromType->isUnKnown()) {
-    return 1;
+  if (fromType->equivalent(*toType)) {
+    return {{}, 0};
+  }
+
+  if (fromType == UNKNOWN()) {
+    return {toType, kNullCoercionCost};
+  }
+
+  if (fromType->size() != toType->size()) {
+    return {{}, kImpossibleCoercionCost};
   }
 
   if (fromType->size() == 0) {
-    if (auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name())) {
-      return coercion->cost;
-    }
-
-    return std::nullopt;
+    return TypeCoercer::coerceTypeBase(fromType, toType->name());
   }
 
-  if (fromType->name() != toType->name() ||
-      fromType->size() != toType->size()) {
-    return std::nullopt;
+  if (fromType->name() != toType->name()) {
+    return {{}, kImpossibleCoercionCost};
   }
 
-  int32_t totalCost = 0;
-  for (auto i = 0; i < fromType->size(); i++) {
-    if (auto cost = coercible(fromType->childAt(i), toType->childAt(i))) {
-      totalCost += cost.value();
+  CallableCost cost = 0;
+  for (size_t i = 0; i < fromType->size(); i++) {
+    if (auto c = coercible(fromType->childAt(i), toType->childAt(i))) {
+      cost += c.cost;
     } else {
-      return std::nullopt;
+      return {{}, kImpossibleCoercionCost};
     }
   }
 
-  return totalCost;
+  return {toType, cost};
 }
 
 namespace {
@@ -138,12 +164,24 @@ TypePtr leastCommonSuperRowType(const RowType& a, const RowType& b) {
 
 // static
 TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
-  if (a->isUnKnown()) {
+  if (!b) {
+    return a;
+  }
+
+  if (!a) {
     return b;
   }
 
-  if (b->isUnKnown()) {
+  if (a->equivalent(*b)) {
     return a;
+  }
+
+  if (b == UNKNOWN()) {
+    return a;
+  }
+
+  if (a == UNKNOWN()) {
+    return b;
   }
 
   if (a->size() != b->size()) {
@@ -151,12 +189,12 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
   }
 
   if (a->size() == 0) {
-    if (TypeCoercer::coerceTypeBase(a, b->name())) {
-      return b;
-    }
-
     if (TypeCoercer::coerceTypeBase(b, a->name())) {
       return a;
+    }
+
+    if (TypeCoercer::coerceTypeBase(a, b->name())) {
+      return b;
     }
 
     return nullptr;
@@ -166,15 +204,15 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
     return nullptr;
   }
 
-  if (a->name() == TypeKindName::toName(TypeKind::ROW)) {
+  if (a->isRow()) {
     return leastCommonSuperRowType(a->asRow(), b->asRow());
   }
 
   std::vector<TypeParameter> childTypes;
   childTypes.reserve(a->size());
-  for (auto i = 0; i < a->size(); i++) {
+  for (size_t i = 0; i < a->size(); ++i) {
     if (auto childType = leastCommonSuperType(a->childAt(i), b->childAt(i))) {
-      childTypes.push_back(TypeParameter(childType));
+      childTypes.emplace_back(childType);
     } else {
       return nullptr;
     }
