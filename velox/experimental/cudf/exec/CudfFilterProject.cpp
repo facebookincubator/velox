@@ -152,42 +152,28 @@ CudfFilterProject::CudfFilterProject(
   }
 }
 
-std::mutex g_cudf_filter_project_initialize_mutex;
-
 void CudfFilterProject::initialize() {
-  std::lock_guard<std::mutex> l(g_cudf_filter_project_initialize_mutex);
-  std::cout << "***** CudfFilterProject::initialize() called *****" << std::endl;
   Operator::initialize();
 
-  std::cout << "  Building expressions vector..." << std::endl;
   std::vector<core::TypedExprPtr> allExprs;
   if (hasFilter_) {
     VELOX_CHECK_NOT_NULL(filter_);
-    std::cout << "    Has a filter (adding)" << std::endl;
     allExprs.push_back(filter_->filter());
-  } else {
-    std::cout << "    No filter (not adding)" << std::endl;
   }
 
   if (project_) {
-    std::cout << "    Is a project" << std::endl;
     const auto& inputType = project_->sources()[0]->outputType();
 
-    std::cout << "      has " << project_->projections().size() << " projections" << std::endl;
     for (column_index_t i = 0; i < project_->projections().size(); i++) {
       auto& projection = project_->projections()[i];
       bool identityProjection = checkAddIdentityProjection(
           projection, inputType, i, identityProjections_);
       if (!identityProjection) {
-        std::cout << "      Projection " << i << " not identity (adding)" << std::endl;
         allExprs.push_back(projection);
         resultProjections_.emplace_back(allExprs.size() - 1, i);
-      } else {
-        std::cout << "      Projection " << i << " is identity (not adding)" << std::endl;
       }
     }
   } else {
-    std::cout << "    Is not a project (nothing to add)" << std::endl;
     for (column_index_t i = 0; i < outputType_->size(); ++i) {
       identityProjections_.emplace_back(i, i);
     }
@@ -198,25 +184,21 @@ void CudfFilterProject::initialize() {
       (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
        nullptr);
   VELOX_CHECK(!(lazyDereference && filter_));
-  std::cout << "    Lazy dereference: " << lazyDereference << std::endl;
   auto expr = exec::makeExprSetFromFlag(
       std::move(allExprs), operatorCtx_->execCtx(), lazyDereference);
 
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
-  std::cout << "    Input type: " << inputType->toString() << std::endl;
 
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
-    std::cout << "  Expressions to print: " << expr->exprs().size() << std::endl;
     for (const auto& expr : expr->exprs()) {
       LOG(INFO) << "expr[" << i++ << "] " << expr->toString() << std::endl;
-      debugPrintTree(expr, 4);
+      debugPrintTree(expr);
       ++i;
     }
   }
-  std::cout << "  Creating CUDF expressions" << std::endl;
   if (hasFilter_) {
     // First expr is Filter, rest are Project
     filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
@@ -239,7 +221,6 @@ void CudfFilterProject::initialize() {
 
   filter_.reset();
   project_.reset();
-  std::cout << "***** CudfFilterProject::initialize() done *****" << std::endl;
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
