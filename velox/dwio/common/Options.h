@@ -75,6 +75,10 @@ enum class SerDeSeparator {
 
 class SerDeOptions {
  public:
+  // JSON-based Avro schema defined by the Avro specification.
+  inline static const std::string kAvroSchema{"avro.schema.literal"};
+  std::optional<std::string> avroSchema{std::nullopt};
+
   /// The following members control how data is separated in TEXT format files:
   ///
   /// - 'separators': An array of separator characters used to delimit columns
