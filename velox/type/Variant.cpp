@@ -682,7 +682,9 @@ folly::dynamic Variant::serialize() const {
       break;
     }
     case TypeKind::HUGEINT: {
-      objValue = value<TypeKind::HUGEINT>();
+      auto& val = value<TypeKind::HUGEINT>();
+      const std::string str(reinterpret_cast<const char*>(&val), sizeof(val));
+      objValue = encoding::Base64::encode(str);
       break;
     }
     case TypeKind::BOOLEAN: {
@@ -787,8 +789,11 @@ Variant Variant::create(const folly::dynamic& variantobj) {
       return Variant::create<TypeKind::INTEGER>(obj.asInt());
     case TypeKind::BIGINT:
       return Variant::create<TypeKind::BIGINT>(obj.asInt());
-    case TypeKind::HUGEINT:
-      return Variant::create<TypeKind::HUGEINT>(obj.asInt());
+    case TypeKind::HUGEINT: {
+      auto str = encoding::Base64::decode(obj.asString());
+      auto result = *reinterpret_cast<int128_t*>(str.data());
+      return Variant::create<TypeKind::HUGEINT>(result);
+    }
     case TypeKind::BOOLEAN: {
       return Variant(obj.asBool());
     }
