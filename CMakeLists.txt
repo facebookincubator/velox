@@ -634,6 +634,7 @@ velox_resolve_dependency(FastFloat)
 
 velox_set_source(folly)
 velox_resolve_dependency(folly)
+add_definitions(-DFOLLY_MEMCPY_IS_MEMCPY -DFOLLY_MEMSET_IS_MEMSET)
 
 if(${VELOX_BUILD_TESTING})
   # Spark query runner depends on absl, gRPC.
