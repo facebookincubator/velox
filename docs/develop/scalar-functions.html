@@ -272,6 +272,33 @@ the function must define a static constexpr bool is_deterministic member:</p>
 </pre></div>
 </div>
 </section>
+<section id="function-owner">
+<h3>Function Owner<a class="headerlink" href="#function-owner" title="Link to this heading">¶</a></h3>
+<p>Functions can specify an owner (team or individual) responsible for the function.
+This information is included in exception context messages to help with error
+attribution and debugging. By default, no owner is set.</p>
+<p>To specify a custom owner, define a static <code class="docutils literal notranslate"><span class="pre">owner</span></code> variable in your function class:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Specify the team or individual responsible for this function.</span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">owner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;my-team&quot;</span><span class="p">;</span>
+
+<span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>When an exception occurs during function evaluation, the error context will
+include the owner information (if specified), making it easier to identify which team should
+investigate the issue. For example, an error message might look like:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Owner: my-team. Expression: my_function(c0)
+</pre></div>
+</div>
+</section>
 <section id="all-ascii-fast-path">
 <h3>All-ASCII Fast Path<a class="headerlink" href="#all-ascii-fast-path" title="Link to this heading">¶</a></h3>
 <p>Functions that process string inputs must work correctly for UTF-8 inputs.
@@ -876,9 +903,24 @@ using context.setError.</p>
 <p>exec::registerVectorFunction takes a name, a list of supported signatures
 and unique_ptr to an instance of the function. It takes an optional ‘metadata’
 parameter that specifies whether a function is deterministic, has default null
-behavior, and other properties. A helper VectorFunctionMetadataBuilder class
+behavior, owner, and other properties. A helper VectorFunctionMetadataBuilder class
 allows to easily construct ‘metadata’. For example,</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorFunctionMetadataBuilder</span><span class="p">().</span><span class="n">defaultNullBehavior</span><span class="p">(</span><span class="nb">false</span><span class="p">).</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>To specify a custom owner for a vector function, use the owner() method of
+VectorFunctionMetadataBuilder:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorFunctionMetadataBuilder</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">defaultNullBehavior</span><span class="p">(</span><span class="nb">false</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">owner</span><span class="p">(</span><span class="s">&quot;my-team&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>The owner information is included in exception context messages to help with
+error attribution and debugging. By default, no owner is set.
+When an exception occurs during function evaluation, the error message will
+include the owner (if specified), for example:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Owner: my-team. Expression: my_vector_function(c0)
 </pre></div>
 </div>
 <p>An optional “overwrite” flag specifies whether to overwrite a function if a function
@@ -1149,6 +1191,7 @@ functions are listed in alphabetical order.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#determinism">Determinism</a></li>
+<li><a class="reference internal" href="#function-owner">Function Owner</a></li>
 <li><a class="reference internal" href="#all-ascii-fast-path">All-ASCII Fast Path</a></li>
 <li><a class="reference internal" href="#zero-copy-string-result">Zero-copy String Result</a></li>
 <li><a class="reference internal" href="#access-to-session-properties-and-constant-inputs">Access to Session Properties and Constant Inputs</a></li>
