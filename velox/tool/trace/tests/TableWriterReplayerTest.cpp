@@ -248,7 +248,8 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
         std::vector<core::FieldAccessTypedExprPtr>{},
         aggregateNames,
         aggregates,
-        false, // ignoreNullKeys
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         source);
   }
 
