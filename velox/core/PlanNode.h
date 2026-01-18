@@ -1137,26 +1137,6 @@ class AggregationNode : public PlanNode {
       bool noGroupsSpanBatches,
       PlanNodePtr source);
 
-  AggregationNode(
-      const PlanNodeId& id,
-      Step step,
-      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
-      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
-      const std::vector<std::string>& aggregateNames,
-      const std::vector<Aggregate>& aggregates,
-      bool ignoreNullKeys,
-      PlanNodePtr source)
-      : AggregationNode(
-            id,
-            step,
-            groupingKeys,
-            preGroupedKeys,
-            aggregateNames,
-            aggregates,
-            ignoreNullKeys,
-            /*noGroupsSpanBatches=*/false,
-            source) {}
-
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
   /// by the preceding GroupId node
   /// @param groupId Group ID key produced by the preceding GroupId node. Must
@@ -1178,30 +1158,6 @@ class AggregationNode : public PlanNode {
       bool ignoreNullKeys,
       bool noGroupsSpanBatches,
       PlanNodePtr source);
-
-  AggregationNode(
-      const PlanNodeId& id,
-      Step step,
-      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
-      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
-      const std::vector<std::string>& aggregateNames,
-      const std::vector<Aggregate>& aggregates,
-      const std::vector<vector_size_t>& globalGroupingSets,
-      const std::optional<FieldAccessTypedExprPtr>& groupId,
-      bool ignoreNullKeys,
-      PlanNodePtr source)
-      : AggregationNode(
-            id,
-            step,
-            groupingKeys,
-            preGroupedKeys,
-            aggregateNames,
-            aggregates,
-            globalGroupingSets,
-            groupId,
-            ignoreNullKeys,
-            /*noGroupsSpanBatches=*/false,
-            source) {}
 
   class Builder {
    public:
