@@ -29,7 +29,7 @@ class SparkCastHooks : public exec::CastHooks {
       bool allowOverflow);
 
   // TODO: Spark hook allows more string patterns than Presto.
-  Expected<std::optional<Timestamp>> castStringToTimestamp(
+  Expected<Timestamp> castStringToTimestamp(
       const StringView& view) const override;
 
   /// When casting integral value as timestamp, the input is treated as the
@@ -77,6 +77,10 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   exec::PolicyType getPolicy() const override;
+
+  bool isAnsiEnabled() const {
+    return config_.sparkAnsiEnabled();
+  }
 
  private:
   // Casts a number to a timestamp. The number is treated as the number of
