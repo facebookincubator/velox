@@ -305,6 +305,7 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
       "2015-03-18T12:03:17.123",
       "2015-03-18T12:03:17.456",
       "2015-03-18 12:03:17.456",
+      "201QINVALID5-03-18 12:03INVALID:17.456",
   };
   std::vector<std::optional<Timestamp>> expected{
       Timestamp(0, 0),
@@ -322,6 +323,7 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
       Timestamp(1426680197, 123000000),
       Timestamp(1426680197, 456000000),
       Timestamp(1426680197, 456000000),
+      std::nullopt, // This occurs when ANSI support is turned off
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
 
@@ -336,6 +338,12 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
        Timestamp(0, 0),
        Timestamp(59, 0),
        Timestamp(-8 * 3600, 0)});
+  setAnsiSupport(true);
+
+  testInvalidCast<std::string>(
+      "timestamp",
+      {"INVALIDTIMESTAMP"},
+      "Unable to parse timestamp value: \"INVALIDTIMESTAMP\"");
 }
 
 TEST_F(SparkCastExprTest, intToTimestamp) {

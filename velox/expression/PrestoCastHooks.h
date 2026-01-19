@@ -27,7 +27,7 @@ class PrestoCastHooks : public CastHooks {
   explicit PrestoCastHooks(const core::QueryConfig& config);
 
   // Uses the default implementation of 'castFromDateString'.
-  Expected<Timestamp> castStringToTimestamp(
+  Expected<std::optional<Timestamp>> castStringToTimestamp(
       const StringView& view) const override;
 
   Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
