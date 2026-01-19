@@ -127,6 +127,21 @@ void CastExpr::applyCastKernel(
                                   result->set(row, castResult.value());
                                 }
                               };
+  // If castResult has an error, set the error in context. Otherwise, set the
+  // value in castResult directly to result. This lambda should be called only
+  // when ToKind is primitive and is not VARCHAR or VARBINARY.
+  auto setResultNullOrError = [&](const auto& castResult,
+                                  vector_size_t row) INLINE_LAMBDA {
+    if (castResult.hasError()) {
+      setError(castResult.error().message());
+    } else {
+      if (castResult.value()) {
+        result->set(row, castResult.value().value());
+      } else {
+        result->setNull(row, true);
+      }
+    }
+  };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -149,10 +164,28 @@ void CastExpr::applyCastKernel(
     }
 
     if constexpr (
-        (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
-         ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
-        FromKind == TypeKind::TIMESTAMP) {
-      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
+        (ToKind == TypeKind::TINYINT) && FromKind == TypeKind::TIMESTAMP) {
+      const auto castResult = hooks_->castTimestampToInt8(inputRowValue);
+      setResultNullOrError(castResult, row);
+      return;
+    }
+
+    if constexpr (
+        (ToKind == TypeKind::SMALLINT) && FromKind == TypeKind::TIMESTAMP) {
+      const auto castResult = hooks_->castTimestampToInt16(inputRowValue);
+      setResultNullOrError(castResult, row);
+      return;
+    }
+
+    if constexpr (
+        (ToKind == TypeKind::INTEGER) && FromKind == TypeKind::TIMESTAMP) {
+      const auto castResult = hooks_->castTimestampToInt32(inputRowValue);
+      setResultNullOrError(castResult, row);
+      return;
+    }
+    if constexpr (
+        (ToKind == TypeKind::BIGINT) && FromKind == TypeKind::TIMESTAMP) {
+      const auto castResult = hooks_->castTimestampToInt64(inputRowValue);
       setResultOrError(castResult, row);
       return;
     }

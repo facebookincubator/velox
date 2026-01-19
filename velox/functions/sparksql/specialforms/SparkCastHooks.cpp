@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
+#include <velox/common/base/Exceptions.h>
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -71,7 +72,67 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
   return castNumberToTimestamp(seconds);
 }
 
-Expected<int64_t> SparkCastHooks::castTimestampToInt(
+Expected<std::optional<int8_t>> SparkCastHooks::castTimestampToInt8(
+    Timestamp timestamp) const {
+  auto secondsExp = castTimestampToInt64(timestamp);
+  if (!secondsExp.hasValue()) {
+    return folly::makeUnexpected(secondsExp.error());
+  }
+
+  const int64_t seconds = secondsExp.value();
+
+  if (seconds < std::numeric_limits<int8_t>::min() ||
+      seconds > std::numeric_limits<int8_t>::max()) {
+    if (config_.sparkAnsiEnabled()) {
+      return folly::makeUnexpected(
+          Status::UserError(("Timestamp out of range for INT8")));
+    }
+    return std::nullopt;
+  }
+  return static_cast<int8_t>(seconds);
+}
+
+Expected<std::optional<int16_t>> SparkCastHooks::castTimestampToInt16(
+    Timestamp timestamp) const {
+  auto secondsExp = castTimestampToInt64(timestamp);
+  if (!secondsExp.hasValue()) {
+    return folly::makeUnexpected(secondsExp.error());
+  }
+
+  const int64_t seconds = secondsExp.value();
+
+  if (seconds < std::numeric_limits<int16_t>::min() ||
+      seconds > std::numeric_limits<int16_t>::max()) {
+    if (config_.sparkAnsiEnabled()) {
+      return folly::makeUnexpected(
+          Status::UserError(("Timestamp out of range for INT16")));
+    }
+    return std::nullopt;
+  }
+  return static_cast<int16_t>(seconds);
+}
+
+Expected<std::optional<int32_t>> SparkCastHooks::castTimestampToInt32(
+    Timestamp timestamp) const {
+  auto secondsExp = castTimestampToInt64(timestamp);
+  if (!secondsExp.hasValue()) {
+    return folly::makeUnexpected(secondsExp.error());
+  }
+
+  const int64_t seconds = secondsExp.value();
+
+  if (seconds < std::numeric_limits<int32_t>::min() ||
+      seconds > std::numeric_limits<int32_t>::max()) {
+    if (config_.sparkAnsiEnabled()) {
+      return folly::makeUnexpected(
+          Status::UserError(("Timestamp out of range for INT32")));
+    }
+    return std::nullopt;
+  }
+  return static_cast<int32_t>(seconds);
+}
+
+Expected<int64_t> SparkCastHooks::castTimestampToInt64(
     Timestamp timestamp) const {
   auto micros = timestamp.toMicros();
   if (micros < 0) {
