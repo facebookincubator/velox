@@ -21,6 +21,7 @@ add_executable(
   FilterSerDeTest.cpp
   FloatingPointUtilTest.cpp
   HugeIntTest.cpp
+  NameToIndexTest.cpp
   OpaqueCustomTypesTest.cpp
   StringViewTest.cpp
   SubfieldTest.cpp
