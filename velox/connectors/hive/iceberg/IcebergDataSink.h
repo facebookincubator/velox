@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldStatsConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -263,6 +264,8 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+  std::vector<IcebergFieldStatsConfig> icebergStatsConfig_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

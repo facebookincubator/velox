@@ -163,6 +163,13 @@ struct WriterOptions : public dwio::common::WriterOptions {
   static constexpr const char* kParquetSerdeTimestampTimezone =
       "parquet.writer.timestamp.timezone";
 
+  // Serde parameter key for field IDs. The value is a JSON-serialized array
+  // of field ID structures. Each structure has "fieldId" (int32) and optional
+  // "children" (array of nested structures).
+  // Example: [{"fieldId":1,"children":[{"fieldId":2}]},{"fieldId":3}].
+  static constexpr const char* kParquetSerdeFieldIds =
+      "parquet.writer.field_ids";
+
   // Process hive connector and session configs.
   void processConfigs(
       const config::ConfigBase& connectorConfig,

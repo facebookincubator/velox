@@ -19,6 +19,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <folly/json.h>
 #include <memory>
 #include <string>
 #include <utility>
@@ -230,6 +231,51 @@ RowTypePtr createPartitionRowType(
   return ROW(std::move(partitionKeyNames), std::move(partitionKeyTypes));
 }
 
+// Recursively builds IcebergFieldStatsConfig from a ParquetFieldId and Type.
+// This function traverses the type hierarchy (ROW, ARRAY, MAP) and creates
+// corresponding stats config entries with field IDs for each level.
+//
+// @param field The Parquet field ID containing the field ID and child field
+// IDs.
+// @param type The Velox type corresponding to this field.
+// @param skipBounds Whether to skip bounds collection for this field and its
+// descendants.
+// @return IcebergFieldStatsConfig with field ID, skipBounds flag, and
+// recursively built children configs.
+IcebergFieldStatsConfig toIcebergFieldStatsConfig(
+    const parquet::ParquetFieldId& field,
+    const TypePtr& type,
+    bool skipBounds) {
+  VELOX_CHECK_NOT_NULL(type, "Input column type cannot be null.");
+  bool currentSkipBounds = skipBounds || type->isMap() || type->isArray();
+  IcebergFieldStatsConfig config(field.fieldId, currentSkipBounds);
+
+  if (!field.children.empty()) {
+    VELOX_CHECK_EQ(field.children.size(), type->size());
+    config.children.reserve(field.children.size());
+
+    if (type->isRow()) {
+      auto rowType = asRowType(type);
+      for (size_t i = 0; i < field.children.size(); ++i) {
+        config.children.push_back(toIcebergFieldStatsConfig(
+            field.children[i], rowType->childAt(i), currentSkipBounds));
+      }
+    } else if (type->isArray()) {
+      auto arrayType = type->asArray();
+      config.children.push_back(toIcebergFieldStatsConfig(
+          field.children[0], arrayType.elementType(), currentSkipBounds));
+    } else if (type->isMap()) {
+      auto mapType = type->asMap();
+      for (size_t i = 0; i < field.children.size(); ++i) {
+        config.children.push_back(toIcebergFieldStatsConfig(
+            field.children[i], mapType.childAt(i), currentSkipBounds));
+      }
+    }
+  }
+
+  return config;
+}
+
 } // namespace
 
 IcebergDataSink::IcebergDataSink(
@@ -304,6 +350,13 @@ IcebergDataSink::IcebergDataSink(
               : nullptr),
       partitionRowType_(std::move(partitionRowType)) {
   commitPartitionValue_.resize(maxOpenWriters_);
+
+  for (const auto& columnHandle : insertTableHandle_->inputColumns()) {
+    auto icebergColumnHandle =
+        checkedPointerCast<const IcebergColumnHandle>(columnHandle);
+    icebergStatsConfig_.push_back(toIcebergFieldStatsConfig(
+        icebergColumnHandle->field(), icebergColumnHandle->dataType(), false));
+  }
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
@@ -392,6 +445,28 @@ IcebergDataSink::createWriterOptions() const {
   // (TimestampPrecision::kMicroseconds).
   options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
   options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
+
+  std::function<folly::dynamic(const IcebergFieldStatsConfig&)> toJson =
+      [&toJson](const IcebergFieldStatsConfig& icebergField) -> folly::dynamic {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["fieldId"] = icebergField.fieldId;
+    if (!icebergField.children.empty()) {
+      folly::dynamic childrenArray = folly::dynamic::array;
+      for (const auto& child : icebergField.children) {
+        childrenArray.push_back(toJson(child));
+      }
+      obj["children"] = std::move(childrenArray);
+    }
+    return obj;
+  };
+
+  folly::dynamic fieldIdsArray = folly::dynamic::array;
+  for (const auto& config : icebergStatsConfig_) {
+    fieldIdsArray.push_back(toJson(config));
+  }
+  options->serdeParameters["parquet.writer.field_ids"] =
+      folly::toJson(fieldIdsArray);
+
   // Re-process configs to apply the serde parameters we just set.
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
