@@ -6,6 +6,11 @@ Map Functions
 
     Returns value for given ``key``, or ``NULL`` if the key is not contained in the map.
 
+.. spark:function:: checked_element_at(map(K,V), key) -> V
+
+    Returns value for given ``key``. Throws an error if the key is not contained in the map.
+    Corresponds to Spark's ``element_at`` with ``spark.sql.ansi.enabled`` set to true.
+
 .. spark:function:: map(K, V, K, V, ...) -> map(K,V)
 
     Returns a map created using the given key/value pairs. If there is duplicate key, by default that

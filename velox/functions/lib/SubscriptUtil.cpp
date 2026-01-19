@@ -63,7 +63,8 @@ VectorPtr applyMapTyped(
     const SelectivityVector& rows,
     const DecodedVector& decodedMap,
     const VectorPtr& indexArg,
-    exec::EvalCtx& context) {
+    exec::EvalCtx& context,
+    bool throwOnMissingKey = false) {
   static constexpr vector_size_t kMinCachedMapSize = 100;
   using TKey = typename TypeTraits<kind>::NativeType;
 
@@ -147,7 +148,12 @@ VectorPtr applyMapTyped(
 
     // Handle NULLs.
     if (!found) {
-      nullsBuilder.setNull(row);
+      if (throwOnMissingKey) {
+        context.setStatus(
+            row, Status::UserError("Key not found in map"));
+      } else {
+        nullsBuilder.setNull(row);
+      }
     }
   };
 
@@ -255,7 +261,8 @@ VectorPtr applyMapComplexType(
     const VectorPtr& indexArg,
     exec::EvalCtx& context,
     bool triggerCaching,
-    std::shared_ptr<detail::LookupTableBase>& cachedLookupTablePtr) {
+    std::shared_ptr<detail::LookupTableBase>& cachedLookupTablePtr,
+    bool throwOnMissingKey = false) {
   auto* pool = context.pool();
 
   // Use indices with the mapValues wrapped in a dictionary vector.
@@ -330,7 +337,12 @@ VectorPtr applyMapComplexType(
       if (it != hashMapPtr->end()) {
         rawIndices[row] = it->index;
       } else {
-        nullsBuilder.setNull(row);
+        if (throwOnMissingKey) {
+          context.setStatus(
+              row, Status::UserError("Key not found in map"));
+        } else {
+          nullsBuilder.setNull(row);
+        }
       }
     });
 
@@ -353,7 +365,12 @@ VectorPtr applyMapComplexType(
       }
 
       if (!found) {
-        nullsBuilder.setNull(row);
+        if (throwOnMissingKey) {
+          context.setStatus(
+              row, Status::UserError("Key not found in map"));
+        } else {
+          nullsBuilder.setNull(row);
+        }
       }
     });
   }
@@ -412,7 +429,8 @@ VectorPtr MapSubscript::applyMap(
         rows,
         *decodedMap,
         indexArg,
-        context);
+        context,
+        throwOnMissingKey_);
   } else {
     // We use applyMapComplexType when the key type is complex, but also when it
     // provides custom comparison operators because the main difference between
@@ -420,7 +438,13 @@ VectorPtr MapSubscript::applyMap(
     // Vector's equalValueAt method, which calls the Types custom comparison
     // operator internally.
     return applyMapComplexType(
-        rows, *decodedMap, indexArg, context, triggerCaching, lookupTable_);
+        rows,
+        *decodedMap,
+        indexArg,
+        context,
+        triggerCaching,
+        lookupTable_,
+        throwOnMissingKey_);
   }
 }
 } // namespace detail
