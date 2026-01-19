@@ -61,11 +61,6 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
-  void setAnsiSupport(bool value) {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, std::to_string(value)}});
-  }
-
   void setSessionStartTimeAndTimeZone(
       const int64_t sessionStartTimeMs,
       const std::string& timeZoneName) {
