@@ -229,12 +229,12 @@ class TypedDistinctAggregations : public DistinctAggregations {
           reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
 
       const auto numDistinct = accumulator->size();
+      VELOX_DCHECK_GT(numDistinct, 0);
+
       rawSizes[i] = numDistinct;
       rawOffsets[i] = offset;
 
       offset += numDistinct;
-
-      VELOX_DCHECK_GT(numDistinct, 0);
     }
 
     auto& elementsVector = arrayVector->elements();
