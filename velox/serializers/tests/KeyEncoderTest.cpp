@@ -3481,6 +3481,46 @@ TEST_F(KeyEncoderTest, errorEmptyKeyColumns) {
       "");
 }
 
+TEST_F(KeyEncoderTest, sortOrders) {
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<int32_t>({4, 5, 6}),
+      makeFlatVector<std::string>({"a", "b", "c"}),
+  });
+
+  // Single column with different sort orders.
+  {
+    const std::vector<std::string> keyColumns = {"c0"};
+    for (const auto& sortOrder :
+         {velox::core::kAscNullsFirst,
+          velox::core::kAscNullsLast,
+          velox::core::kDescNullsFirst,
+          velox::core::kDescNullsLast}) {
+      const std::vector<velox::core::SortOrder> sortOrders = {sortOrder};
+      auto keyEncoder = KeyEncoder::create(
+          keyColumns, asRowType(input->type()), sortOrders, pool_.get());
+      ASSERT_EQ(keyEncoder->sortOrders().size(), 1);
+      EXPECT_EQ(keyEncoder->sortOrders()[0], sortOrder);
+    }
+  }
+
+  // Multiple columns with different sort orders.
+  {
+    const std::vector<std::string> keyColumns = {"c0", "c1", "c2"};
+    const std::vector<velox::core::SortOrder> sortOrders = {
+        velox::core::kAscNullsFirst,
+        velox::core::kDescNullsLast,
+        velox::core::kAscNullsLast,
+    };
+    auto keyEncoder = KeyEncoder::create(
+        keyColumns, asRowType(input->type()), sortOrders, pool_.get());
+    ASSERT_EQ(keyEncoder->sortOrders().size(), 3);
+    EXPECT_EQ(keyEncoder->sortOrders()[0], velox::core::kAscNullsFirst);
+    EXPECT_EQ(keyEncoder->sortOrders()[1], velox::core::kDescNullsLast);
+    EXPECT_EQ(keyEncoder->sortOrders()[2], velox::core::kAscNullsLast);
+  }
+}
+
 TEST_F(KeyEncoderTest, unsupportedIndexColumnType) {
   // Test ARRAY type
   {
