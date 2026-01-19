@@ -46,7 +46,7 @@ core::TypedExprPtr parseExpr(
     const RowTypePtr& rowType,
     const parse::ParseOptions& options,
     memory::MemoryPool* pool) {
-  auto untyped = parse::parseExpr(text, options);
+  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
   return core::Expressions::inferTypes(untyped, rowType, pool);
 }
 
@@ -143,7 +143,8 @@ PlanBuilder& PlanBuilder::tpchTableScan(
 
   core::TypedExprPtr filterExpression;
   if (!filter.empty()) {
-    auto expression = parse::parseExpr(filter, options_);
+    auto expression =
+        parse::DuckSqlExpressionsParser(options_).parseExpr(filter);
     filterExpression =
         core::Expressions::inferTypes(expression, rowType, pool_);
   }
@@ -257,7 +258,8 @@ PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::subfieldFilters(
   const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
   for (const auto& filter : subfieldFilters) {
-    auto untypedExpr = parse::parseExpr(filter, planBuilder_.options_);
+    auto untypedExpr = parse::DuckSqlExpressionsParser(planBuilder_.options_)
+                           .parseExpr(filter);
 
     // Parse directly to subfieldFiltersMap_
     auto filterExpr = core::Expressions::inferTypes(
@@ -291,7 +293,8 @@ PlanBuilder::TableScanBuilder::subfieldFiltersMap(
 PlanBuilder::TableScanBuilder& PlanBuilder::TableScanBuilder::remainingFilter(
     std::string remainingFilter) {
   if (!remainingFilter.empty()) {
-    remainingFilter_ = parse::parseExpr(remainingFilter, planBuilder_.options_);
+    remainingFilter_ = parse::DuckSqlExpressionsParser(planBuilder_.options_)
+                           .parseExpr(remainingFilter);
   }
   return *this;
 }
@@ -535,7 +538,7 @@ parseOrderByClauses(
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
   std::vector<core::SortOrder> sortingOrders;
   for (const auto& key : keys) {
-    auto orderBy = parse::parseOrderByExpr(key);
+    auto orderBy = parse::DuckSqlExpressionsParser().parseOrderByExpr(key);
     auto typedExpr =
         core::Expressions::inferTypes(orderBy.expr, inputType, pool);
 
@@ -627,7 +630,8 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
   std::vector<std::shared_ptr<const core::IExpr>> expressions;
   expressions.reserve(projections.size());
   for (auto i = 0; i < projections.size(); ++i) {
-    expressions.push_back(parse::parseExpr(projections[i], options_));
+    expressions.push_back(
+        parse::DuckSqlExpressionsParser(options_).parseExpr(projections[i]));
   }
   return projectExpressions(expressions);
 }
@@ -649,7 +653,8 @@ PlanBuilder& PlanBuilder::parallelProject(
     typedExprs.reserve(group.size());
 
     for (const auto& expr : group) {
-      const auto typedExpr = inferTypes(parse::parseExpr(expr, options_));
+      const auto typedExpr =
+          inferTypes(parse::DuckSqlExpressionsParser(options_).parseExpr(expr));
       typedExprs.push_back(typedExpr);
 
       if (auto fieldExpr =
@@ -680,7 +685,8 @@ PlanBuilder& PlanBuilder::lazyDereference(
   std::vector<core::TypedExprPtr> expressions;
   std::vector<std::string> projectNames;
   for (auto i = 0; i < projections.size(); ++i) {
-    auto expr = inferTypes(parse::parseExpr(projections[i], options_));
+    auto expr = inferTypes(
+        parse::DuckSqlExpressionsParser(options_).parseExpr(projections[i]));
     expressions.push_back(expr);
     if (auto* fieldExpr =
             dynamic_cast<const core::FieldAccessExpr*>(expr.get())) {
@@ -727,7 +733,8 @@ PlanBuilder& PlanBuilder::filter(const core::ExprPtr& filterExpr) {
 }
 
 PlanBuilder& PlanBuilder::filter(const std::string& filterExpr) {
-  return filter(parse::parseExpr(filterExpr, options_));
+  return filter(
+      parse::DuckSqlExpressionsParser(options_).parseExpr(filterExpr));
 }
 
 PlanBuilder& PlanBuilder::tableWrite(
@@ -1175,7 +1182,8 @@ PlanBuilder& PlanBuilder::groupId(
   std::vector<core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
   groupingKeyInfos.reserve(groupingKeys.size());
   for (const auto& groupingKey : groupingKeys) {
-    auto untypedExpr = parse::parseExpr(groupingKey, options_);
+    auto untypedExpr =
+        parse::DuckSqlExpressionsParser(options_).parseExpr(groupingKey);
     const auto* fieldAccessExpr =
         dynamic_cast<const core::FieldAccessExpr*>(untypedExpr.get());
     VELOX_USER_CHECK(
@@ -1244,7 +1252,9 @@ PlanBuilder& PlanBuilder::expand(
     std::vector<core::TypedExprPtr> projectExpr;
     VELOX_CHECK_EQ(numColumns, projections[i].size());
     for (auto j = 0; j < numColumns; j++) {
-      auto untypedExpression = parse::parseExpr(projections[i][j], options_);
+      auto untypedExpression =
+          parse::DuckSqlExpressionsParser(options_).parseExpr(
+              projections[i][j]);
       auto typedExpression = inferTypes(untypedExpression);
 
       if (i == 0) {
@@ -2585,7 +2595,9 @@ std::vector<core::TypedExprPtr> PlanBuilder::exprs(
   std::vector<core::TypedExprPtr> typedExpressions;
   for (auto& expr : expressions) {
     auto typedExpression = core::Expressions::inferTypes(
-        parse::parseExpr(expr, options_), inputType, pool_);
+        parse::DuckSqlExpressionsParser(options_).parseExpr(expr),
+        inputType,
+        pool_);
 
     if (dynamic_cast<const core::FieldAccessTypedExpr*>(
             typedExpression.get())) {

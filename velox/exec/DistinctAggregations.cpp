@@ -41,25 +41,26 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
   /// Returns metadata about the accumulator used to store unique inputs.
   Accumulator accumulator() const override {
-    return {
-        false, // isFixedSize
-        sizeof(AccumulatorType),
-        false, // usesExternalMemory
-        1, // alignment
-        spillType_,
-        [this](folly::Range<char**> groups, VectorPtr& result) {
-          extractForSpill(groups, result);
-        },
-        [this](folly::Range<char**> groups) {
-          for (auto* group : groups) {
-            if (!isInitialized(group)) {
-              continue;
-            }
-            auto* accumulator =
-                reinterpret_cast<AccumulatorType*>(group + offset_);
-            accumulator->free(*allocator_);
-          }
-        }};
+    return {/*isFixedSize=*/false,
+            sizeof(AccumulatorType),
+            /*usesExternalMemory=*/false,
+            /*alignment=*/1,
+            spillType_,
+            /*spillExtractFunction=*/
+            [this](folly::Range<char**> groups, VectorPtr& result) {
+              extractForSpill(groups, result);
+            },
+            /*destroyFunction=*/
+            [this](folly::Range<char**> groups) {
+              for (auto* group : groups) {
+                if (!isInitialized(group)) {
+                  continue;
+                }
+                auto* accumulator =
+                    reinterpret_cast<AccumulatorType*>(group + offset_);
+                accumulator->free(*allocator_);
+              }
+            }};
   }
 
   void addInput(
@@ -161,9 +162,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
   void initializeNewGroupsInternal(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
-    for (auto i : indices) {
-      groups[i][nullByte_] |= nullMask_;
-      new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);
+    for (auto index : indices) {
+      groups[index][nullByte_] |= nullMask_;
+      new (groups[index] + offset_) AccumulatorType(inputType_, allocator_);
     }
 
     for (auto i = 0; i < aggregates_.size(); ++i) {
@@ -180,17 +181,20 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
   static TypePtr makeInputTypeForAccumulator(
       const RowTypePtr& rowType,
-      const std::vector<column_index_t>& inputs) {
-    if (inputs.size() == 1) {
-      return rowType->childAt(inputs[0]);
+      const std::vector<column_index_t>& inputChannels) {
+    const auto numInputChannels = inputChannels.size();
+    if (numInputChannels == 1) {
+      return rowType->childAt(inputChannels[0]);
     }
 
     // Otherwise, synthesize a ROW(distinct_channels[0..N])
     std::vector<TypePtr> types;
+    types.reserve(numInputChannels);
     std::vector<std::string> names;
-    for (column_index_t channelIndex : inputs) {
-      names.emplace_back(rowType->nameOf(channelIndex));
-      types.emplace_back(rowType->childAt(channelIndex));
+    names.reserve(numInputChannels);
+    for (column_index_t inputChannel : inputChannels) {
+      names.emplace_back(rowType->nameOf(inputChannel));
+      types.emplace_back(rowType->childAt(inputChannel));
     }
     return ROW(std::move(names), std::move(types));
   }

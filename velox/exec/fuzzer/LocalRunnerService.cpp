@@ -71,6 +71,7 @@ std::pair<RowVectorPtr, std::string> execute(
 
   try {
     exec::test::AssertQueryBuilder queryBuilder(plan);
+    queryBuilder.config("session_timezone", "America/Los_Angeles");
 
     std::shared_ptr<exec::Task> task;
     auto results = queryBuilder.copyResults(pool.get(), task);

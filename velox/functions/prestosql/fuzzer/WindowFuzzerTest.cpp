@@ -26,10 +26,12 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/KHyperLogLogResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/SetDigestResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
@@ -139,9 +141,6 @@ int main(int argc, char** argv) {
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
-      // Come back to SetDigest and KHLL aggregate functions.
-      "make_set_digest",
-      "merge_set_digest",
       "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
       // verifier is added.
       "convex_hull_agg",
@@ -172,7 +171,9 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::AverageResultVerifier;
+  using facebook::velox::exec::test::KHyperLogLogResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
+  using facebook::velox::exec::test::SetDigestResultVerifier;
   using facebook::velox::exec::test::TDigestAggregateResultVerifier;
 
   static const std::unordered_map<
@@ -187,6 +188,7 @@ int main(int argc, char** argv) {
           {"approx_most_frequent", nullptr},
           {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
+          {"khyperloglog_agg", std::make_shared<KHyperLogLogResultVerifier>()},
           {"merge", nullptr},
           // Semantically inconsistent functions
           {"skewness", nullptr},
@@ -196,6 +198,8 @@ int main(int argc, char** argv) {
           {"max_data_size_for_stats", nullptr},
           {"sum_data_size_for_stats", nullptr},
           {"avg", std::make_shared<AverageResultVerifier>()},
+          {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
+          {"merge_set_digest", std::make_shared<SetDigestResultVerifier>()},
       };
 
   static const std::unordered_set<std::string> orderDependentFunctions = {

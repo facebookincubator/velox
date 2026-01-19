@@ -319,14 +319,7 @@ std::string FilterGenerator::specsToString(
       out << ", ";
     }
     first = false;
-    out << spec.field;
-    if (spec.filterKind == FilterKind::kIsNull) {
-      out << " is null";
-    } else if (spec.filterKind == FilterKind::kIsNotNull) {
-      out << " is not null";
-    } else {
-      out << ":" << spec.selectPct << "," << spec.startPct << " ";
-    }
+    out << spec.toString();
   }
   return out.str();
 }

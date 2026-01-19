@@ -21,6 +21,7 @@
 #include <string>
 
 namespace facebook::velox::exec::trace {
+
 /// Defines the shared constants used by query trace implementation.
 struct TraceTraits {
   static inline const std::string kPlanNodeKey = "planNode";

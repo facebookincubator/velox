@@ -111,7 +111,7 @@ std::vector<core::TypedExprPtr> ExpressionRunner::parseSql(
     const TypePtr& inputType,
     memory::MemoryPool* pool,
     const VectorPtr& complexConstants) {
-  auto exprs = parse::parseMultipleExpressions(sql, {});
+  auto exprs = parse::DuckSqlExpressionsParser().parseExprs(sql);
 
   std::vector<core::TypedExprPtr> typedExprs;
   typedExprs.reserve(exprs.size());

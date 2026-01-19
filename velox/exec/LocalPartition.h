@@ -270,6 +270,11 @@ class LocalPartition : public Operator {
   std::vector<vector_size_t*> rawIndices_;
 
  private:
+  // Try getting a reusable vector for 'partition' from the corresponding
+  // local-exchange vector pool of this partition. If none is available, create
+  // a new vector.
+  VectorPtr getOrCreateVector(const size_t partition);
+
   RowVectorPtr wrapChildren(
       const RowVectorPtr& input,
       vector_size_t size,
@@ -279,6 +284,7 @@ class LocalPartition : public Operator {
   void copy(
       const RowVectorPtr& input,
       const folly::Range<const BaseVector::CopyRange*>& ranges,
+      const size_t partition,
       VectorPtr& target);
 
   /// Add rows from 'input' to 'partitionBuffers_' that every row belongs to.

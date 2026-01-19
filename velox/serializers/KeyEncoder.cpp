@@ -785,41 +785,25 @@ void encodeColumnTyped(
 
 bool incrementStringValue(std::string* value, bool descending) {
   if (!descending) {
-    // Ascending order: increment
-    for (int i = value->size() - 1; i >= 0; --i) {
-      auto& byte = (*value)[i];
-      unsigned char uByte = static_cast<unsigned char>(byte);
-
-      // Check if we can increment without overflow
-      if (uByte != 0xFF) {
-        byte = static_cast<char>(uByte + 1);
-        return true;
-      }
-      // This byte is at max, try next byte
-    }
-    // All bytes are at max value, append zero byte to get next larger string
+    // Ascending order: append the smallest possible byte (null byte) to get the
+    // immediate next string. For any string s, s < s + '\0' < s + '\x01' < ...
     value->push_back('\0');
     return true;
   } else {
-    // Descending order: decrement
-    for (int i = value->size() - 1; i >= 0; --i) {
-      auto& byte = (*value)[i];
-      unsigned char uByte = static_cast<unsigned char>(byte);
-
-      // Check if we can decrement without underflow
-      if (uByte != 0x00) {
-        byte = static_cast<char>(uByte - 1);
-        return true;
-      }
-      // This byte is at min, try next byte
+    // Descending order: decrement is only possible if the string ends with
+    // '\0'. This is the inverse of the increment operation - truncate the
+    // trailing null byte. This approach aligns with Apache Kudu's
+    // DecrementStringCell.
+    //
+    // For strings not ending with '\0', there is no finite immediate
+    // predecessor (e.g., predecessor of "abc" would be "ab\xFF\xFF\xFF..." with
+    // infinite 0xFF bytes). Return false to signal caller should use exclusive
+    // bounds.
+    if (value->empty() || value->back() != '\0') {
+      return false;
     }
-    // All bytes are at min value, remove last byte to get next smaller string
-    if (!value->empty()) {
-      value->pop_back();
-      return true;
-    }
-    // Empty string, cannot decrement further
-    return false;
+    value->pop_back();
+    return true;
   }
 }
 
@@ -916,12 +900,16 @@ bool incrementColumnValueTyped(
     if (!descending) {
       // Ascending: false -> true, true cannot increment
       if (value) {
+        // Overflow: wrap around to min value (false) for proper bound encoding.
+        resultVector->set(row, false);
         return false;
       }
       resultVector->set(row, true);
     } else {
       // Descending: true -> false, false cannot decrement
       if (!value) {
+        // Underflow: wrap around to max value (true) for proper bound encoding.
+        resultVector->set(row, true);
         return false;
       }
       resultVector->set(row, false);
@@ -938,12 +926,16 @@ bool incrementColumnValueTyped(
     if (!descending) {
       // Ascending: increment
       if (value == std::numeric_limits<T>::max()) {
+        // Overflow: wrap around to min value for proper bound encoding.
+        resultVector->set(row, std::numeric_limits<T>::min());
         return false;
       }
       resultVector->set(row, value + 1);
     } else {
       // Descending: decrement
       if (value == std::numeric_limits<T>::min()) {
+        // Underflow: wrap around to max value for proper bound encoding.
+        resultVector->set(row, std::numeric_limits<T>::max());
         return false;
       }
       resultVector->set(row, value - 1);
@@ -958,6 +950,8 @@ bool incrementColumnValueTyped(
     if (!descending) {
       // Ascending: increment to next representable value
       if (std::isinf(value) && value > 0) {
+        // Overflow: wrap around to min value (-inf) for proper bound encoding.
+        resultVector->set(row, -std::numeric_limits<T>::infinity());
         return false;
       }
       resultVector->set(
@@ -965,6 +959,8 @@ bool incrementColumnValueTyped(
     } else {
       // Descending: decrement to previous representable value
       if (std::isinf(value) && value < 0) {
+        // Underflow: wrap around to max value (+inf) for proper bound encoding.
+        resultVector->set(row, std::numeric_limits<T>::infinity());
         return false;
       }
       resultVector->set(
@@ -980,6 +976,12 @@ bool incrementColumnValueTyped(
     const auto value = inputVector->valueAt(row);
     std::string incrementedStr(value.data(), value.size());
     if (!incrementStringValue(&incrementedStr, descending)) {
+      if (!descending) {
+        // Ascending overflow: set to min value (empty string)
+        resultVector->set(row, StringView(""));
+      }
+      // For descending underflow: cannot represent max string value,
+      // leave value unchanged as there's no finite predecessor.
       return false;
     }
     resultVector->set(row, StringView(incrementedStr));
@@ -1001,6 +1003,8 @@ bool incrementColumnValueTyped(
       } else if (seconds < Timestamp::kMaxSeconds) {
         resultVector->set(row, Timestamp(seconds + 1, 0));
       } else {
+        // Overflow: wrap around to min timestamp for proper bound encoding.
+        resultVector->set(row, Timestamp(Timestamp::kMinSeconds, 0));
         return false;
       }
     } else {
@@ -1012,6 +1016,9 @@ bool incrementColumnValueTyped(
       } else if (seconds > Timestamp::kMinSeconds) {
         resultVector->set(row, Timestamp(seconds - 1, Timestamp::kMaxNanos));
       } else {
+        // Underflow: wrap around to max timestamp for proper bound encoding.
+        resultVector->set(
+            row, Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos));
         return false;
       }
     }

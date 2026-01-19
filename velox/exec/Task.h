@@ -18,7 +18,6 @@
 #include <folly/container/IntrusiveList.h>
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
-#include "velox/common/base/TraceConfig.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -28,6 +27,7 @@
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
+#include "velox/exec/trace/TraceConfig.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -153,7 +153,7 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   /// Returns query trace config if specified.
-  const std::optional<TraceConfig>& traceConfig() const {
+  const std::optional<trace::TraceConfig>& traceConfig() const {
     return traceConfig_;
   }
 
@@ -1118,7 +1118,7 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t pipelineId) const;
 
   // Builds the query trace config.
-  std::optional<TraceConfig> maybeMakeTraceConfig() const;
+  std::optional<trace::TraceConfig> maybeMakeTraceConfig() const;
 
   // Create a 'QueryMetadtaWriter' to trace the query metadata if the query
   // trace enabled.
@@ -1165,7 +1165,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // and all its plan nodes support barrier processing.
   const core::PlanNode* firstNodeNotSupportingBarrier_{};
 
-  const std::optional<TraceConfig> traceConfig_;
+  const std::optional<trace::TraceConfig> traceConfig_;
 
   inline static std::atomic_uint64_t numCreatedTasks_;
 

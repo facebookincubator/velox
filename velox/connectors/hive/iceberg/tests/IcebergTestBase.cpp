@@ -17,7 +17,11 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <filesystem>
+
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
@@ -138,35 +142,51 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
                         : std::make_shared<IcebergPartitionSpec>(1, fields);
 }
 
+namespace {
+
+parquet::ParquetFieldId makeField(const TypePtr& type, int32_t& fieldId) {
+  const int32_t currentId = fieldId++;
+  std::vector<parquet::ParquetFieldId> children;
+  children.reserve(type->size());
+  for (auto i = 0; i < type->size(); ++i) {
+    children.push_back(makeField(type->childAt(i), fieldId));
+  }
+  return parquet::ParquetFieldId{currentId, children};
+}
+
 void addColumnHandles(
     const RowTypePtr& rowType,
     const std::vector<PartitionField>& partitionFields,
-    std::vector<HiveColumnHandlePtr>& columnHandles) {
+    std::vector<IcebergColumnHandlePtr>& columnHandles) {
   std::unordered_set<int32_t> partitionColumnIds;
   for (const auto& field : partitionFields) {
     partitionColumnIds.insert(field.id);
   }
 
+  int32_t fieldId = 1;
   columnHandles.reserve(rowType->size());
   for (auto i = 0; i < rowType->size(); ++i) {
-    const auto columnType = partitionColumnIds.contains(i)
-        ? HiveColumnHandle::ColumnType::kPartitionKey
-        : HiveColumnHandle::ColumnType::kRegular;
-
+    const auto& columnName = rowType->nameOf(i);
+    const auto& type = rowType->childAt(i);
+    auto field = makeField(type, fieldId);
     columnHandles.push_back(
-        std::make_shared<HiveColumnHandle>(
-            rowType->nameOf(i),
-            columnType,
-            rowType->childAt(i),
-            rowType->childAt(i)));
+        std::make_shared<const IcebergColumnHandle>(
+            columnName,
+            partitionColumnIds.contains(i)
+                ? HiveColumnHandle::ColumnType::kPartitionKey
+                : HiveColumnHandle::ColumnType::kRegular,
+            type,
+            field));
   }
 }
+
+} // namespace
 
 IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
     const std::vector<PartitionField>& partitionFields) {
-  std::vector<HiveColumnHandlePtr> columnHandles;
+  std::vector<IcebergColumnHandlePtr> columnHandles;
   addColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(

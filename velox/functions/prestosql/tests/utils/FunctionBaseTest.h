@@ -94,7 +94,7 @@ class FunctionBaseTest : public testing::Test,
   core::TypedExprPtr makeTypedExpr(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_.pool());
   }
 
@@ -310,18 +310,11 @@ class FunctionBaseTest : public testing::Test,
                                : TReturn(result->valueAt(0));
   }
 
-  core::TypedExprPtr parseExpression(
-      const std::string& text,
-      const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
-    return core::Expressions::inferTypes(untyped, rowType, pool());
-  }
-
   std::unique_ptr<exec::ExprSet> compileExpression(
       const std::string& expr,
       const RowTypePtr& rowType) {
     std::vector<core::TypedExprPtr> expressions = {
-        parseExpression(expr, rowType)};
+        makeTypedExpr(expr, rowType)};
     return std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
   }
 
@@ -331,7 +324,7 @@ class FunctionBaseTest : public testing::Test,
     std::vector<core::TypedExprPtr> expressions;
     expressions.reserve(exprs.size());
     for (const auto& expr : exprs) {
-      expressions.emplace_back(parseExpression(expr, rowType));
+      expressions.emplace_back(makeTypedExpr(expr, rowType));
     }
     return std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
   }
