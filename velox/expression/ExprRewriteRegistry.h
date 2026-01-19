@@ -22,8 +22,8 @@ namespace facebook::velox::expression {
 
 /// An expression re-writer that takes an expression and returns an equivalent
 /// expression or nullptr if re-write is not possible.
-using ExpressionRewrite =
-    std::function<core::TypedExprPtr(const core::TypedExprPtr)>;
+using ExpressionRewrite = std::function<
+    core::TypedExprPtr(const core::TypedExprPtr, memory::MemoryPool*)>;
 
 class ExprRewriteRegistry {
  public:
@@ -40,7 +40,9 @@ class ExprRewriteRegistry {
 
   /// Rewrites input expression to an equivalent expression. Throws if the
   /// expression only has constant inputs.
-  core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+  core::TypedExprPtr rewrite(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool);
 
   static ExprRewriteRegistry& instance() {
     static ExprRewriteRegistry kInstance;
