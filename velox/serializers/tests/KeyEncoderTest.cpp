@@ -9817,8 +9817,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
   // with '\0', otherwise increment fails and we get unbounded upper
   // (std::nullopt)
   {
-    // For DESC order with inclusive upper bound on "orange" (doesn't end with
-    // '\0'), decrement fails, so upper bound becomes unbounded (std::nullopt)
     EncodeIndexBoundsTestCase ascNullsFirstTestCase;
     ascNullsFirstTestCase.indexColumns = {"c0"};
     ascNullsFirstTestCase.lowerBound = IndexBound{
@@ -9851,37 +9849,40 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    // For DESC order, decrement fails on "orange" (doesn't end with '\0'),
-    // so upper bound becomes unbounded
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound =
-        makeRowVector({makeFlatVector<std::string>({"apple"})});
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // For DESC order, decrement fails on "orange" which throws
+    // VELOX_UNREACHABLE because VARCHAR filter conversion is disabled for
+    // descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound =
-        makeRowVector({makeFlatVector<std::string>({"apple"})});
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 2: Only lower bound
@@ -9912,7 +9913,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
 
   // Test Case 3: Only upper bound (inclusive)
   // For ASC: increment appends '\0'
-  // For DESC: decrement fails on "orange", upper becomes unbounded
+  // For DESC: decrement fails on "orange" which throws VELOX_UNREACHABLE
+  // because VARCHAR filter conversion is disabled for descending order.
   {
     EncodeIndexBoundsTestCase ascNullsFirstTestCase;
     ascNullsFirstTestCase.indexColumns = {"c0"};
@@ -9940,29 +9942,36 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0"};
-    descNullsFirstTestCase.lowerBound = std::nullopt;
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound = std::nullopt;
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // For DESC order, decrement fails on "orange" which throws
+    // VELOX_UNREACHABLE because VARCHAR filter conversion is disabled for
+    // descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0"};
+      descNullsFirstTestCase.lowerBound = std::nullopt;
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0"};
-    descNullsLastTestCase.lowerBound = std::nullopt;
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound = std::nullopt;
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0"};
+      descNullsLastTestCase.lowerBound = std::nullopt;
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 4: String ending with '\0' - decrement should work
@@ -10020,36 +10029,39 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    // For DESC order, decrement fails on "abc", upper becomes unbounded
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({""})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound =
-        makeRowVector({makeFlatVector<std::string>({""})});
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // For DESC order, decrement fails on "abc" which throws VELOX_UNREACHABLE
+    // because VARCHAR filter conversion is disabled for descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({""})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({""})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound =
-        makeRowVector({makeFlatVector<std::string>({""})});
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({""})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"abc"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 6: Multi-column, both inclusive
@@ -10100,46 +10112,47 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     testIndexBounds(ascNullsLastTestCase);
 
     // For DESC order, decrement fails on rightmost column "peach",
-    // then tries leftmost "orange" which also fails -> unbounded
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peach"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<std::string>({"apple"}),
-         makeFlatVector<std::string>({"banana"})});
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // which throws VELOX_UNREACHABLE because VARCHAR filter conversion is
+    // disabled for descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"apple"}),
+               makeFlatVector<std::string>({"banana"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeFlatVector<std::string>({"peach"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0", "c1"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peach"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<std::string>({"apple"}),
-         makeFlatVector<std::string>({"banana"})});
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0", "c1"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"apple"}),
+               makeFlatVector<std::string>({"banana"})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeFlatVector<std::string>({"peach"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 7: Single column with null in lower bound
@@ -10180,39 +10193,42 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeNullableFlatVector<std::string>({std::nullopt})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound =
-        makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
-    // Decrement fails on "orange", upper becomes unbounded
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // For DESC order, decrement fails on "orange" which throws
+    // VELOX_UNREACHABLE because VARCHAR filter conversion is disabled for
+    // descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeNullableFlatVector<std::string>({std::nullopt})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound =
-        makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
-    // Decrement fails on "orange", upper becomes unbounded
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"orange"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 8: Single column with null in upper bound
@@ -10295,46 +10311,48 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    // DESC order: decrement fails on both columns -> unbounded
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeNullableFlatVector<std::string>({std::nullopt}),
-             makeFlatVector<std::string>({"banana"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peach"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
-        {makeNullableFlatVector<std::string>({std::nullopt}),
-         makeFlatVector<std::string>({"banana"})});
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // DESC order: decrement fails on both columns which throws
+    // VELOX_UNREACHABLE because VARCHAR filter conversion is disabled for
+    // descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt}),
+               makeFlatVector<std::string>({"banana"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeFlatVector<std::string>({"peach"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0", "c1"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeNullableFlatVector<std::string>({std::nullopt}),
-             makeFlatVector<std::string>({"banana"})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peach"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound = makeRowVector(
-        {makeNullableFlatVector<std::string>({std::nullopt}),
-         makeFlatVector<std::string>({"banana"})});
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0", "c1"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt}),
+               makeFlatVector<std::string>({"banana"})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeFlatVector<std::string>({"peach"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 10: Multi-column with null in second column lower bound
@@ -10384,46 +10402,47 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    // DESC order: decrement fails -> unbounded
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeNullableFlatVector<std::string>({std::nullopt})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peach"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<std::string>({"apple"}),
-         makeNullableFlatVector<std::string>({std::nullopt})});
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // DESC order: decrement fails which throws VELOX_UNREACHABLE
+    // because VARCHAR filter conversion is disabled for descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"apple"}),
+               makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeFlatVector<std::string>({"peach"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0", "c1"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeNullableFlatVector<std::string>({std::nullopt})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeFlatVector<std::string>({"peach"})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<std::string>({"apple"}),
-         makeNullableFlatVector<std::string>({std::nullopt})});
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0", "c1"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"apple"}),
+               makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeFlatVector<std::string>({"peach"})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test Case 11: Multi-column with null in upper bound
@@ -10477,52 +10496,55 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
-    // DESC order: decrement fails on null in second column,
-    // then fails on first column "orange" -> unbounded
-    EncodeIndexBoundsTestCase descNullsFirstTestCase;
-    descNullsFirstTestCase.indexColumns = {"c0", "c1"};
-    descNullsFirstTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}),
-        .inclusive = true};
-    descNullsFirstTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeNullableFlatVector<std::string>({std::nullopt})}),
-        .inclusive = true};
-    descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
-    descNullsFirstTestCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<std::string>({"apple"}),
-         makeFlatVector<std::string>({"banana"})});
-    descNullsFirstTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsFirstTestCase.debugString());
-    testIndexBounds(descNullsFirstTestCase);
+    // DESC order: decrement fails on null in second column, then fails on
+    // first column "orange" which throws VELOX_UNREACHABLE because VARCHAR
+    // filter conversion is disabled for descending order.
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0", "c1"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"apple"}),
+               makeFlatVector<std::string>({"banana"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
 
-    EncodeIndexBoundsTestCase descNullsLastTestCase;
-    descNullsLastTestCase.indexColumns = {"c0", "c1"};
-    descNullsLastTestCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"apple"}),
-             makeFlatVector<std::string>({"banana"})}),
-        .inclusive = true};
-    descNullsLastTestCase.upperBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<std::string>({"orange"}),
-             makeNullableFlatVector<std::string>({std::nullopt})}),
-        .inclusive = true};
-    descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
-    descNullsLastTestCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<std::string>({"apple"}),
-         makeFlatVector<std::string>({"banana"})});
-    descNullsLastTestCase.expectedUpperBound = std::nullopt;
-    SCOPED_TRACE(descNullsLastTestCase.debugString());
-    testIndexBounds(descNullsLastTestCase);
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0", "c1"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"apple"}),
+               makeFlatVector<std::string>({"banana"})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeFlatVector<std::string>({"orange"}),
+               makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Unexpected string underflow during descending bound increment");
+    }
   }
 
   // Test lower bound bump failures
   // Test Case 11: Single column lower bound bump failure - exclusive bound
-  // with string of max characters
+  // with empty string. For DESC order, decrement fails which throws
+  // VELOX_UNREACHABLE because VARCHAR filter conversion is disabled for
+  // descending order.
   {
     EncodeIndexBoundsTestCase testCase;
     testCase.indexColumns = {"c0"};
@@ -10531,9 +10553,10 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kDescNullsFirst;
-    testCase.expectedFailure = true;
     SCOPED_TRACE(testCase.debugString());
-    testIndexBounds(testCase);
+    VELOX_ASSERT_THROW(
+        testIndexBounds(testCase),
+        "Unexpected string underflow during descending bound increment");
   }
 
   // Test Case 12: Single column lower bound bump failure - exclusive bound
@@ -10552,8 +10575,10 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     testIndexBounds(testCase);
   }
 
-  // Test Case 13: Multi-column lower bound bump failure - all columns at max
-  // value
+  // Test Case 13: Multi-column lower bound bump failure - all columns with
+  // empty strings. For DESC order, decrement fails which throws
+  // VELOX_UNREACHABLE because VARCHAR filter conversion is disabled for
+  // descending order.
   {
     EncodeIndexBoundsTestCase testCase;
     testCase.indexColumns = {"c0", "c1"};
@@ -10564,9 +10589,10 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kDescNullsFirst;
-    testCase.expectedFailure = true;
     SCOPED_TRACE(testCase.debugString());
-    testIndexBounds(testCase);
+    VELOX_ASSERT_THROW(
+        testIndexBounds(testCase),
+        "Unexpected string underflow during descending bound increment");
   }
 
   // Test Case 14: Multi-column lower bound bump failure - all columns at max
