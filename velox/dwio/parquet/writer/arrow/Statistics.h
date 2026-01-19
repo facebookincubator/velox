@@ -281,6 +281,42 @@ class PARQUET_EXPORT Statistics {
   /// \brief Plain-encoded maximum value
   virtual std::string EncodeMax() const = 0;
 
+  /// \brief Encoded lower bound value compatible with Iceberg.
+  ///
+  /// Returns an encoded value guaranteed to be <= the actual minimum value.
+  /// For string types, truncates to at most \p truncateTo Unicode code points.
+  /// For decimal types, encodes the value in big-endian format as required by
+  /// Iceberg's single-value serialization specification.
+  /// For all other data types, uses the same plain encoding as Parquet
+  /// (returns the exact encoded minimum value).
+  ///
+  /// @param truncateTo Maximum number of Unicode code points for string types.
+  virtual std::string IcebergLowerBoundInclusive(int32_t truncateTo) const = 0;
+
+  /// \brief Encoded upper bound value compatible with Iceberg.
+  ///
+  /// Returns an encoded value guaranteed to be >= the actual maximum value.
+  /// For string types:
+  /// - If the maximum value has <= \p truncateTo Unicode code points, returns
+  ///   the exact encoded maximum value (inclusive upper bound).
+  /// - If the maximum value has > \p truncateTo Unicode code points, truncates
+  ///   to \p truncateTo code points and increments the last code point to
+  ///   produce an exclusive upper bound that is greater than the maximum value.
+  /// - Returns std::nullopt if no valid upper bound can be computed (e.g.,
+  ///   all code points in the truncated portion are at the maximum Unicode
+  ///   value U+10FFFF). This allows distinguishing between "upper bound is
+  ///   empty string" and "no valid upper bound exists".
+  /// For decimal types, encodes the value in big-endian format as required by
+  /// Iceberg's single-value serialization specification.
+  /// For all other data types, uses the same plain encoding as Parquet
+  /// (returns the exact encoded maximum value).
+  ///
+  /// @param truncateTo Maximum number of Unicode code points for string types.
+  /// @return Encoded upper bound value, or std::nullopt if no valid upper
+  ///         bound can be computed.
+  virtual std::optional<std::string> IcebergUpperBoundExclusive(
+      int32_t truncateTo) const = 0;
+
   /// \brief The finalized encoded form of the statistics for transport
   virtual EncodedStatistics Encode() = 0;
 
@@ -292,6 +328,14 @@ class PARQUET_EXPORT Statistics {
 
   /// \brief Check two Statistics for equality
   virtual bool Equals(const Statistics& other) const = 0;
+
+  /// \brief Return true if this object's max is greater than the other's max
+  /// \param[in] other the Statistics object to compare against
+  virtual bool MaxGreaterThan(const Statistics& other) const = 0;
+
+  /// \brief Return true if this object's min is less than the other's min
+  /// \param[in] other the Statistics object to compare against
+  virtual bool MinLessThan(const Statistics& other) const = 0;
 
  protected:
   static std::shared_ptr<Statistics> Make(
