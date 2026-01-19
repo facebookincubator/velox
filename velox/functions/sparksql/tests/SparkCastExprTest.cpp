@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/core/QueryConfig.h"
 
 using namespace facebook::velox;
 namespace facebook::velox::test {
@@ -467,6 +468,52 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
   }
 }
 
+TEST_F(SparkCastExprTest, ansiStringToBoolean) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+  
+  // Valid strings for true (case-insensitive): t, true, y, yes, 1
+  testCast<std::string, bool>(
+      "boolean",
+      {"t", "T", "true", "TRUE", "TrUe", "y", "Y", "yes", "YES", "YeS", "1"},
+      {true, true, true, true, true, true, true, true, true, true, true});
+  
+  // Valid strings for false (case-insensitive): f, false, n, no, 0
+  testCast<std::string, bool>(
+      "boolean",
+      {"f", "F", "false", "FALSE", "FaLsE", "n", "N", "no", "NO", "nO", "0"},
+      {false, false, false, false, false, false, false, false, false, false, false});
+  
+  // Whitespace should be trimmed before validation
+  testCast<std::string, bool>(
+      "boolean",
+      {" true", "false ", " 1 ", "  yes  ", "  no  "},
+      {true, false, true, true, false});
+  
+  // NULL values should remain NULL
+  testCast<std::string, bool>(
+      "boolean",
+      {"true", std::nullopt, "false", std::nullopt},
+      {true, std::nullopt, false, std::nullopt});
+  
+  // Invalid strings should throw in ANSI mode
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeNullableFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        evaluate("cast(c0 as boolean)", input), "Cannot cast");
+  };
+  
+  testInvalidString("invalid");
+  testInvalidString("tru");
+  testInvalidString("2");
+  testInvalidString("-1");
+  testInvalidString("on");
+  testInvalidString("off");
+  testInvalidString("");
+  testInvalidString(" ");
+  testInvalidString("nan");
+}
+
 TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
   // To integer.
   {
@@ -546,6 +593,37 @@ TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
     testCast<float, std::string>("varchar", {kInf}, {"Infinity"});
     testCast<float, std::string>("varchar", {kNan}, {"NaN"});
   }
+}
+
+TEST_F(SparkCastExprTest, nonAnsiStringToBoolean) {
+  // Non-ANSI mode (default) - valid strings should convert correctly
+  testCast<std::string, bool>(
+      "boolean",
+      {"1", "t", "T", "y", "Y", "yes", "YES", "true", "TRUE", "TrUe"},
+      {true, true, true, true, true, true, true, true, true, true});
+  
+  testCast<std::string, bool>(
+      "boolean",
+      {"0", "f", "F", "n", "N", "no", "NO", "false", "FALSE", "FaLsE"},
+      {false, false, false, false, false, false, false, false, false, false});
+  
+  // Whitespace should be trimmed
+  testCast<std::string, bool>(
+      "boolean",
+      {" true", "false ", " 1 ", "  yes  ", "  no  "},
+      {true, false, true, true, false});
+  
+  // Invalid strings should return NULL (not throw)
+  testCast<std::string, bool>(
+      "boolean",
+      {"invalid", "tru", "2", "-1", "on", "off", "nan", "", " "},
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  
+  // Mixed valid, invalid, and null values
+  testCast<std::string, bool>(
+      "boolean",
+      {"true", "invalid", "false", std::nullopt, "1", "2", "0"},
+      {true, std::nullopt, false, std::nullopt, true, std::nullopt, false});
 }
 
 TEST_F(SparkCastExprTest, truncate) {

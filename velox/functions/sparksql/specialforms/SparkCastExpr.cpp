@@ -33,12 +33,15 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   // The distinction between CAST (ANSI off) and TRY_CAST is limited to
   // overflow handling, which is managed by the 'allowOverflow' flag in
   // SparkCastHooks.
+  const bool ansiEnabled = config.sparkAnsiEnabled();
+  const bool isTryCast = !ansiEnabled;
+  const bool allowOverflow = !ansiEnabled;
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
-      true,
-      std::make_shared<SparkCastHooks>(config, true));
+      isTryCast,
+      std::make_shared<SparkCastHooks>(config, allowOverflow));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
