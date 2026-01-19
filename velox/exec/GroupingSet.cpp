@@ -1417,19 +1417,21 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 
-  int index = aggregates_.size() + keyChannels_.size();
+  int sortOrDistinctAggIndex = aggregates_.size() + keyChannels_.size();
   if (sortedAggregations_ != nullptr) {
-    const auto& vector = input.current().childAt(index);
+    const auto& vector = input.current().childAt(sortOrDistinctAggIndex);
     sortedAggregations_->addSingleGroupSpillInput(
         row, vector, input.currentIndex());
-    index++;
+    ++sortOrDistinctAggIndex;
   }
 
   for (const auto& distinctAgg : distinctAggregations_) {
     if (distinctAgg != nullptr) {
       distinctAgg->addSingleGroupSpillInput(
-          row, input.current().childAt(index), input.currentIndex());
-      index++;
+          row,
+          input.current().childAt(sortOrDistinctAggIndex),
+          input.currentIndex());
+      ++sortOrDistinctAggIndex;
     }
   }
 }

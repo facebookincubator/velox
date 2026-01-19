@@ -2135,7 +2135,11 @@ TEST_P(DistinctAggregationTest, spillingForAggrsWithDistinct) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     DistinctAggregationTest,
     DistinctAggregationTest,
-    ::testing::Values(0, 0.5, 1));
+    ::testing::Values(0, 0.5, 1),
+    [](const testing::TestParamInfo<double>& info) {
+      int ratio = static_cast<int>(info.param * 100);
+      return fmt::format("nullRatio_{}", ratio);
+    });
 
 TEST_F(AggregationTest, spillingForAggrsWithSorting) {
   auto vectors = makeVectors(rowType_, 100, 10);
