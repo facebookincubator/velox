@@ -16,74 +16,13 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/functions/lib/MakeRowDefaultValue.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions {
-
-// Used to create a vector of a given type with default values. For primitive
-// types, it will be set to the c++ default, like 0 for INTEGER and empty string
-// for VARCHAR. For Array/Map they will be set to an empty array or map. Not
-// supported for ROW or UNKNOWN types.
-class MakeRowFromMapDefaults {
- public:
-  // Returns a vector with flat encoding of the given type and size with default
-  // values. Optionally accepts a vector pool to enable recycling of vectors.
-  static VectorPtr createFlat(
-      const TypePtr& type,
-      const vector_size_t size,
-      memory::MemoryPool& pool,
-      VectorPool* vectorPool) {
-    VectorPtr result = vectorPool ? vectorPool->get(type, size)
-                                  : BaseVector::create(type, size, &pool);
-    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(fillWithDefaultValue, type->kind(), result);
-    return result;
-  }
-
-  // Returns a vector with constant encoding of the given type and size with
-  // default values.
-  static VectorPtr createConstant(
-      const TypePtr& type,
-      const vector_size_t size,
-      memory::MemoryPool& pool) {
-    VectorPtr result = velox::BaseVector::create(type, 1, &pool);
-    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(fillWithDefaultValue, type->kind(), result);
-    result = velox::BaseVector::wrapInConstant(size, 0, result);
-    return result;
-  }
-
- private:
-  template <TypeKind ValueKind>
-  static void fillWithDefaultValue(VectorPtr& vector) {
-    VELOX_CHECK_NOT_NULL(vector);
-    if constexpr (
-        (TypeTraits<ValueKind>::isPrimitiveType ||
-         ValueKind == TypeKind::OPAQUE) &&
-        ValueKind != TypeKind::UNKNOWN) {
-      using T = typename TypeTraits<ValueKind>::NativeType;
-      VELOX_CHECK(vector->isFlatEncoding());
-      auto* rawValues = vector->asFlatVector<T>()->mutableRawValues();
-      std::fill(rawValues, rawValues + vector->size(), T());
-    } else if constexpr (
-        ValueKind == TypeKind::ARRAY || ValueKind == TypeKind::MAP) {
-      auto vectorSize = vector->size();
-      auto arrayBaseVector = vector->asChecked<ArrayVectorBase>();
-      VELOX_CHECK_NOT_NULL(arrayBaseVector);
-      auto* rawOffsets = arrayBaseVector->mutableOffsets(vectorSize)
-                             ->asMutable<vector_size_t>();
-      auto* rawSizes =
-          arrayBaseVector->mutableSizes(vectorSize)->asMutable<vector_size_t>();
-      std::fill(rawOffsets, rawOffsets + vectorSize, 0);
-      std::fill(rawSizes, rawSizes + vectorSize, 0);
-    } else {
-      VELOX_USER_FAIL(
-          "Unsupported type for replacing nulls: {}",
-          vector->type()->toString());
-    }
-  }
-};
 
 struct MakeRowFromMapOptions {
   /// The list of keys to extract from each map. The type should be the same
@@ -220,7 +159,7 @@ class MakeRowFromMap {
     for (size_t i = 0; i < keyToIndex_.size(); ++i) {
       if (replaceNulls_) {
         children.push_back(
-            MakeRowFromMapDefaults::createFlat(
+            MakeRowDefaultValue::createFlat(
                 valueType, outputSize, *mapBase->pool(), vectorPool));
       } else {
         children.push_back(

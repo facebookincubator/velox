@@ -23,6 +23,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/lib/MakeRowDefaultValue.h"
 #include "velox/functions/lib/MakeRowFromMap.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -596,8 +597,8 @@ TEST_F(MakeRowFroMapTest, duplicateKey) {
   test::assertEqualVectors(expected, result, rows);
 }
 
-class MakeRowFromMapDefaultsTest : public testing::Test,
-                                   public test::VectorTestBase {
+class MakeRowDefaultValueTest : public testing::Test,
+                                public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -624,44 +625,44 @@ class MakeRowFromMapDefaultsTest : public testing::Test,
   }
 };
 
-TEST_F(MakeRowFromMapDefaultsTest, createFlatPrimitiveTypes) {
+TEST_F(MakeRowDefaultValueTest, createFlatPrimitiveTypes) {
   vector_size_t size = 5;
   // Test INTEGER
   auto integerVector =
-      MakeRowFromMapDefaults::createFlat(INTEGER(), size, *pool(), nullptr);
+      MakeRowDefaultValue::createFlat(INTEGER(), size, *pool(), nullptr);
   verifyPrimitiveDefaults<int32_t>(integerVector, 0);
 
   // Test VARCHAR
   auto varcharVector =
-      MakeRowFromMapDefaults::createFlat(VARCHAR(), size, *pool(), nullptr);
+      MakeRowDefaultValue::createFlat(VARCHAR(), size, *pool(), nullptr);
   verifyPrimitiveDefaults<StringView>(varcharVector, StringView());
 
   // Test TIMESTAMP
   auto timestampVector =
-      MakeRowFromMapDefaults::createFlat(TIMESTAMP(), size, *pool(), nullptr);
+      MakeRowDefaultValue::createFlat(TIMESTAMP(), size, *pool(), nullptr);
   verifyPrimitiveDefaults<Timestamp>(timestampVector, Timestamp());
 }
 
-TEST_F(MakeRowFromMapDefaultsTest, createFlatComplexTypes) {
+TEST_F(MakeRowDefaultValueTest, createFlatComplexTypes) {
   vector_size_t size = 5;
 
   // Test ARRAY
-  auto arrayVector = MakeRowFromMapDefaults::createFlat(
-      ARRAY(INTEGER()), size, *pool(), nullptr);
+  auto arrayVector =
+      MakeRowDefaultValue::createFlat(ARRAY(INTEGER()), size, *pool(), nullptr);
   verifyArrayVectorBaseDefaults(arrayVector);
 
   // Test MAP
-  auto mapVector = MakeRowFromMapDefaults::createFlat(
+  auto mapVector = MakeRowDefaultValue::createFlat(
       MAP(INTEGER(), VARCHAR()), size, *pool(), nullptr);
   verifyArrayVectorBaseDefaults(mapVector);
 }
 
-TEST_F(MakeRowFromMapDefaultsTest, createConstantPrimitiveTypes) {
+TEST_F(MakeRowDefaultValueTest, createConstantPrimitiveTypes) {
   vector_size_t size = 5;
 
   // Test BIGINT constant
   auto bigintConstant =
-      MakeRowFromMapDefaults::createConstant(BIGINT(), size, *pool());
+      MakeRowDefaultValue::createConstant(BIGINT(), size, *pool());
   ASSERT_TRUE(bigintConstant->isConstantEncoding());
   ASSERT_EQ(bigintConstant->size(), size);
   ASSERT_EQ(
@@ -669,7 +670,7 @@ TEST_F(MakeRowFromMapDefaultsTest, createConstantPrimitiveTypes) {
 
   // Test VARCHAR constant
   auto varcharConstant =
-      MakeRowFromMapDefaults::createConstant(VARCHAR(), size, *pool());
+      MakeRowDefaultValue::createConstant(VARCHAR(), size, *pool());
   ASSERT_TRUE(varcharConstant->isConstantEncoding());
   ASSERT_EQ(varcharConstant->size(), size);
   ASSERT_EQ(
@@ -677,33 +678,33 @@ TEST_F(MakeRowFromMapDefaultsTest, createConstantPrimitiveTypes) {
       StringView());
 }
 
-TEST_F(MakeRowFromMapDefaultsTest, createConstantComplexTypes) {
+TEST_F(MakeRowDefaultValueTest, createConstantComplexTypes) {
   vector_size_t size = 5;
 
   // Test ARRAY constant
   auto arrayConstant =
-      MakeRowFromMapDefaults::createConstant(ARRAY(INTEGER()), size, *pool());
+      MakeRowDefaultValue::createConstant(ARRAY(INTEGER()), size, *pool());
   ASSERT_TRUE(arrayConstant->isConstantEncoding());
   ASSERT_EQ(arrayConstant->size(), size);
   verifyArrayVectorBaseDefaults(arrayConstant->valueVector());
 
   // Test MAP constant
-  auto mapConstant = MakeRowFromMapDefaults::createConstant(
+  auto mapConstant = MakeRowDefaultValue::createConstant(
       MAP(BIGINT(), VARCHAR()), size, *pool());
   ASSERT_TRUE(mapConstant->isConstantEncoding());
   ASSERT_EQ(mapConstant->size(), size);
   verifyArrayVectorBaseDefaults(mapConstant->valueVector());
 }
 
-TEST_F(MakeRowFromMapDefaultsTest, unsupportedTypes) {
+TEST_F(MakeRowDefaultValueTest, unsupportedTypes) {
   vector_size_t size = 5;
 
   VELOX_ASSERT_THROW(
-      MakeRowFromMapDefaults::createConstant(ROW({BIGINT()}), size, *pool()),
+      MakeRowDefaultValue::createConstant(ROW({BIGINT()}), size, *pool()),
       "Unsupported type for replacing nulls: ROW<\"\":BIGINT>");
 
   VELOX_ASSERT_THROW(
-      MakeRowFromMapDefaults::createConstant(UNKNOWN(), size, *pool()),
+      MakeRowDefaultValue::createConstant(UNKNOWN(), size, *pool()),
       "Unsupported type for replacing nulls: UNKNOWN");
 }
 } // namespace
