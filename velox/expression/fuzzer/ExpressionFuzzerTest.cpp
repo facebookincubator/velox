@@ -201,6 +201,14 @@ std::unordered_set<std::string> skipFunctions = {
     // https://github.com/facebookincubator/velox/issues/13047
     "inverse_poisson_cdf",
     "map_subset", // https://github.com/facebookincubator/velox/issues/12654
+    // Presto doesn't support varbinary variants of strpos, strrpos and
+    // contains. Presto only has contains(array(T), T), not contains(varbinary,
+    // varbinary).
+    "strpos(varbinary,varbinary) -> bigint",
+    "strpos(varbinary,varbinary,bigint) -> bigint",
+    "strrpos(varbinary,varbinary) -> bigint",
+    "strrpos(varbinary,varbinary,bigint) -> bigint",
+    "contains(varbinary,varbinary) -> boolean",
     // JSON not supported, Real doesn't match exactly, etc.
     "array_join(array(json),varchar) -> varchar",
     "array_join(array(json),varchar,varchar) -> varchar",
