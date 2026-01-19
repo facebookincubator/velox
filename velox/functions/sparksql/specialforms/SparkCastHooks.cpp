@@ -31,19 +31,23 @@ SparkCastHooks::SparkCastHooks(
   }
 }
 
-Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
+Expected<std::optional<Timestamp>> SparkCastHooks::castStringToTimestamp(
     const StringView& view) const {
   auto conversionResult = util::fromTimestampWithTimezoneString(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
   if (conversionResult.hasError()) {
-    return folly::makeUnexpected(conversionResult.error());
+    if (config_.sparkAnsiEnabled()) {
+      return folly::makeUnexpected(conversionResult.error());
+    }
+    return std::nullopt;
   }
 
   auto sessionTimezone = config_.sessionTimezone().empty()
       ? nullptr
       : tz::locateZone(config_.sessionTimezone());
-  return util::fromParsedTimestampWithTimeZone(
-      conversionResult.value(), sessionTimezone);
+
+  return std::optional<Timestamp>{util::fromParsedTimestampWithTimeZone(
+      conversionResult.value(), sessionTimezone)};
 }
 
 template <typename T>
