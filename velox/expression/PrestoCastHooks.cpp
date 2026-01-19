@@ -38,7 +38,7 @@ PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
   }
 }
 
-Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
+Expected<std::optional<Timestamp>> PrestoCastHooks::castStringToTimestamp(
     const StringView& view) const {
   const auto conversionResult = util::fromTimestampWithTimezoneString(
       view.data(),
