@@ -33,15 +33,21 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   // The distinction between CAST (ANSI off) and TRY_CAST is limited to
   // overflow handling, which is managed by the 'allowOverflow' flag in
   // SparkCastHooks.
+  //
+  // Exception: For string-to-boolean casts, Spark checks ANSI mode to determine
+  // whether to throw on invalid input (ANSI on) or return NULL (ANSI off).
   const bool ansiEnabled = config.sparkAnsiEnabled();
-  const bool isTryCast = !ansiEnabled;
-  const bool allowOverflow = !ansiEnabled;
+  const auto& fromType = compiledChildren[0]->type();
+  const bool isStringToBoolean =
+      fromType->isVarchar() && type->isBoolean();
+  const bool isTryCast = isStringToBoolean ? !ansiEnabled : true;
+  
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, allowOverflow));
+      std::make_shared<SparkCastHooks>(config, true));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
