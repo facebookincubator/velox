@@ -146,11 +146,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
       const VectorPtr& input,
       vector_size_t index) override {
     auto* elementArray = input->asChecked<ArrayVector>();
-
     decodedInput_.decode(*elementArray->elements());
 
     auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
-
     RowSizeTracker<char, uint32_t> tracker(group[rowSizeOffset_], *allocator_);
     accumulator->addValues(*elementArray, index, decodedInput_, allocator_);
   }

@@ -1354,7 +1354,7 @@ void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
     mergeRows_->store(stream.decoded(i), stream.currentIndex(), mergeState_, i);
   }
   vector_size_t zero = 0;
-  for (auto i = 0; i < aggregates_.size(); i++) {
+  for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
     }
@@ -1417,7 +1417,7 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 
-  int sortOrDistinctAggIndex = aggregates_.size() + keyChannels_.size();
+  auto sortOrDistinctAggIndex = aggregates_.size() + keyChannels_.size();
   if (sortedAggregations_ != nullptr) {
     const auto& vector = input.current().childAt(sortOrDistinctAggIndex);
     sortedAggregations_->addSingleGroupSpillInput(
