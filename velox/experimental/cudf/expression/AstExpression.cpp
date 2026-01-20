@@ -16,13 +16,6 @@
 
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 
-/// START HACK
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstringop-overread"
-#include "velox/experimental/cudf/expression/AstExpression.h"
-#pragma GCC diagnostic pop
-/// END HACK
-
 namespace facebook::velox::cudf_velox {
 
 // Create tree from Expr
