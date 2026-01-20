@@ -38,7 +38,8 @@ namespace {
 void debugPrintTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
     int indent = 0) {
-  std::cout << std::string(indent, ' ') << expr->name() << std::endl;
+  std::cout << std::string(indent, ' ') << expr->name() << "("
+            << expr->type()->toString() << ")" << std::endl;
   for (auto& input : expr->inputs()) {
     debugPrintTree(input, indent + 2);
   }

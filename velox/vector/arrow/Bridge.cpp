@@ -1290,15 +1290,15 @@ TypePtr parseDecimalFormat(const char* format) {
     // Parse "d:".
     int precision = std::stoi(&format[2], &sz);
     int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
-    // If bitwidth is provided, check if it is equal to 128.
-    if (secondCommaIdx != std::string::npos) {
-      int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
-      VELOX_USER_CHECK_EQ(
-          bitWidth,
-          128,
-          "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
-          format);
-    }
+    // // If bitwidth is provided, check if it is equal to 128.
+    // if (secondCommaIdx != std::string::npos) {
+    //   int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
+    //   if (bitWidth != 128) {
+    //     VELOX_USER_FAIL(
+    //         "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
+    //         format);
+    //   }
+    // }
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
     VELOX_USER_FAIL(invalidFormatMsg, format);

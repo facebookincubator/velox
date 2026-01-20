@@ -15,8 +15,17 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
+/// START HACK
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#pragma GCC diagnostic pop
+/// END HACK
+
+#include "velox/experimental/cudf/expression/AstPrinter.hpp"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/vector/TableViewPrinter.hpp"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -217,6 +226,21 @@ bool isOpAndInputsSupported(
 bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
+
+  // reject anything with DECIMAL to force to Function Evaluator path
+  // seves 1/14/26
+  if (expr->type()->isDecimal()) {
+    std::cout << "**** DECIMAL type (output) not supported in AST: "
+              << expr->toString() << std::endl;
+    return false;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (input->type()->isDecimal()) {
+      std::cout << "**** DECIMAL type (input) not supported in AST: "
+                   << expr->toString() << std::endl;
+      return false;
+    }
+  }
 
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
@@ -714,6 +738,12 @@ ColumnOrView ASTExpression::eval(
             precomputedColumns[columnIndex - inputTableColumns.size()]);
       }
     } else {
+      if (CudfConfig::getInstance().debugEnabled) {
+        LOG(INFO) << cudf::ast::expression_to_string(cudfTree_.back())
+                  << std::endl;
+        LOG(INFO) << cudf::table_schema_to_string(astInputTableView)
+                  << std::endl;
+      }
       return cudf::compute_column(
           astInputTableView, cudfTree_.back(), stream, mr);
     }

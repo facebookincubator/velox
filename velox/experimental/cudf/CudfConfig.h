@@ -48,7 +48,7 @@ struct CudfConfig {
   bool enabled{true};
 
   /// Enable debug printing.
-  bool debugEnabled{false};
+  bool debugEnabled{true};
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};

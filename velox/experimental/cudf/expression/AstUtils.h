@@ -81,15 +81,23 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
-      VELOX_FAIL("Decimal not supported");
-      /* TODO: enable after rewriting using binary ops
-     using CudfDecimalType = cudf::numeric::decimal64;
-     using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
-     auto scalar = std::make_unique<cudfScalarType>(value,
-                   type->scale(),
-                    true,
-                    stream,
-                    mr);*/
+      // Velox DECIMAL scale is positive for fractional digits
+      // cuDF scale is negative for fractional digits
+      // @TODO check the bigger picture here!
+      if (type->kind() == TypeKind::BIGINT) {
+        auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
+        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
+        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal64>;
+        return std::make_unique<CudfDecimalType>(value, cudfScale, !isNull, stream, mr);
+      } else if (type->kind() == TypeKind::HUGEINT) {
+        auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
+        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
+        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal128>;
+        return std::make_unique<CudfDecimalType>(value, cudfScale, !isNull, stream, mr);
+      }
+      VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {
