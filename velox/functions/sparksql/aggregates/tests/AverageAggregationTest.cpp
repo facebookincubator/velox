@@ -72,6 +72,7 @@ class AverageAggregationTest : public AggregationTestBase {
         std::vector<std::string>{"c0"},
         std::vector{avgAggregate},
         /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         std::move(child));
   }
 };
