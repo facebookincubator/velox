@@ -775,6 +775,7 @@ TEST_F(MergeJoinTest, rightJoinWithDuplicateMatch) {
               core::JoinType::kRight)
           .planNode();
   AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
       .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
 }
 
@@ -1083,9 +1084,7 @@ TEST_F(MergeJoinTest, semiJoinWithMultipleMatchVectors) {
                         outputLayout,
                         joinType)
                     .planNode();
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kMaxOutputBatchRows, "1")
-        .assertResults(sql);
+    AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(sql);
   };
 
   testSemiJoin(
@@ -2234,4 +2233,221 @@ TEST_F(MergeJoinTest, testJoinWithTwoKeysAndSecondColumnHasNulls) {
        makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"})});
 
   testJoinTwoKeysWithNulls(left, right);
+}
+// Test for pending miss handling across batch boundaries when all filter
+// matches fail for a key. The bug occurs when:
+// 1. Batch N ends with matches for left row L1 where all filters fail
+// 2. Batch N+1 starts with a different left row L2 (even if same key value)
+// 3. When detecting the key change, onMiss(currentRow_) is called where
+//    currentRow_ is an index from the OLD batch, but we're modifying the NEW
+//    batch's output vector, corrupting the data.
+//
+// To trigger this bug, we need:
+// - Multiple left rows with the same key so leftMatch_ stays set
+// - Multiple right rows to create a cartesian product that spans batches
+// - All filter matches fail so miss rows need to be produced
+// - Batch boundaries fall between different left rows
+//
+// With batch size 2:
+// - Rows 0-1: (left[0], right[0]), (left[0], right[1]) - same left row
+// - Row 2: (left[1], right[0]) - DIFFERENT left row, starts new batch
+// When processing row 2, key change detected, onMiss called with currentRow_
+// from previous batch (index 1), but output vector is the new batch.
+TEST_F(MergeJoinTest, leftJoinFilterFailAcrossBatches) {
+  // Left side: key 1 appears TWICE (rows 0 and 1), key 2 appears once
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int32_t>({100, 100, 5}),
+      });
+  // Right side: key 1 has 2 matches to create cartesian product
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int32_t>({1, 2, 10}),
+      });
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Filter: b < d. For key 1 (both left rows), b=100 vs d=1,2 - all fail.
+  // Cartesian product for key 1:
+  //   Row 0: (left[0], right[0]) - (1, 100, 1, 1), fails filter
+  //   Row 1: (left[0], right[1]) - (1, 100, 1, 2), fails filter
+  //   Row 2: (left[1], right[0]) - (1, 100, 1, 1), fails filter
+  //   Row 3: (left[1], right[1]) - (1, 100, 1, 2), fails filter
+  //
+  // With batch size 2:
+  //   Batch 0: rows 0-1 (both left[0])
+  //   Batch 1: rows 2-3 (starts with left[1] - key change!)
+  //
+  // Expected: Both left rows with key 1 produce miss rows (null right side).
+  // Bug: onMiss for left[0] is called in batch 1 with currentRow_=1 (from batch
+  // 0), which corrupts batch 1's row 1 instead of producing proper miss for
+  // left[0].
+  auto leftPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kLeft)
+          .planNode();
+  // Test with batch size 2 to have the key change happen at a batch boundary.
+  AssertQueryBuilder(leftPlan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .assertResults("SELECT * FROM t LEFT JOIN u ON a = c AND b < d");
+}
+// Test for pending miss handling across batch boundaries for RIGHT JOIN.
+// Same bug scenario as left join but for right join:
+// The pending miss from the previous batch references an index in the OLD
+// output vector, but onMiss modifies the NEW output vector.
+//
+// For RIGHT JOIN, the outer side is the RIGHT side, so we need:
+// - Multiple right rows with the same key (so rightMatch_ stays set)
+// - Multiple left rows to create cartesian product spanning batches
+// - All filter matches fail so miss rows need to be produced
+TEST_F(MergeJoinTest, rightJoinFilterFailAcrossBatches) {
+  // For right join, we need the RIGHT side to have duplicate key values
+  // so that we have multiple "right rows" for the same key, and when
+  // transitioning between them, the bug triggers.
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          // Key 1 has 2 left-side matches to create cartesian product
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int32_t>({1, 2, 10}),
+      });
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          // Key 1 appears twice on the right side (the outer side for RIGHT
+          // JOIN)
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int32_t>({100, 100, 5}),
+      });
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Filter: b > d. For key 1 (both right rows), d=100 vs b=1,2 - all fail.
+  // Cartesian product for key 1:
+  //   Row 0: (left[0], right[0]) - (1, 1, 1, 100), fails filter (1 > 100 =
+  //   false) Row 1: (left[1], right[0]) - (1, 2, 1, 100), fails filter (2 > 100
+  //   = false) Row 2: (left[0], right[1]) - (1, 1, 1, 100), fails filter Row 3:
+  //   (left[1], right[1]) - (1, 2, 1, 100), fails filter
+  //
+  // With batch size 2:
+  //   Batch 0: rows 0-1 (both right[0])
+  //   Batch 1: rows 2-3 (starts with right[1] - key change!)
+  //
+  // Expected: Both right rows with key 1 produce miss rows (null left side).
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b > d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  // Test with batch size 2 to have the key change happen at a batch boundary.
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .assertResults("SELECT * FROM t RIGHT JOIN u ON a = c AND b > d");
+}
+// Test for pending miss with multiple consecutive keys where all filters fail,
+// followed by a key with no matches.
+// Each key appears TWICE on the left side to trigger the cross-batch bug.
+TEST_F(MergeJoinTest, leftJoinMultipleKeyFilterFailAcrossBatches) {
+  // Keys 1, 2, 3 each appear twice on the left (outer) side.
+  // Key 4 has no right matches (miss row), key 5 has a passing match.
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          // Keys 1, 2, 3 appear twice each to trigger cross-batch bug
+          // Key 4 appears once (no right match)
+          // Key 5 appears once (will pass filter)
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3, 4, 5}),
+          makeFlatVector<int32_t>({100, 100, 100, 100, 100, 100, 50, 5}),
+      });
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          // Keys 1,2,3 have matches that will fail filter
+          // Key 4 has NO match (will produce miss row)
+          // Key 5 has a match that will pass
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3, 5}),
+          makeFlatVector<int32_t>({1, 2, 1, 2, 1, 2, 10}),
+      });
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Filter: b < d. Keys 1, 2, 3 all fail (b=100 vs d=1,2).
+  // Key 4 has no right match (miss row, no filter).
+  // Key 5 passes (b=5 < d=10).
+  auto leftPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kLeft)
+          .planNode();
+  // Test with batch size 2 to force key change across batch boundaries.
+  AssertQueryBuilder(leftPlan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .assertResults("SELECT * FROM t LEFT JOIN u ON a = c AND b < d");
+}
+// Test for pending miss with RIGHT JOIN where multiple keys fail filters,
+// followed by a key with no matches.
+// Each key appears TWICE on the right side to trigger the cross-batch bug.
+TEST_F(MergeJoinTest, rightJoinMultipleKeyFilterFailAcrossBatches) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          // Keys 1,2,3 have matches that will fail filter
+          // Key 4 has NO match (will produce miss row)
+          // Key 5 has a match that will pass
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3, 5}),
+          makeFlatVector<int32_t>({1, 2, 1, 2, 1, 2, 10}),
+      });
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          // Keys 1, 2, 3 appear twice each to trigger cross-batch bug
+          // Key 4 appears once (no left match)
+          // Key 5 appears once (will pass filter)
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3, 4, 5}),
+          makeFlatVector<int32_t>({100, 100, 100, 100, 100, 100, 50, 5}),
+      });
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Filter: b > d. Keys 1, 2, 3 on right all fail (d=100 vs b=1,2).
+  // Key 4 has no left match (miss row, no filter).
+  // Key 5 passes (b=10 > d=5).
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b > d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  // Test with batch size 2 to force key change across batch boundaries.
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .assertResults("SELECT * FROM t RIGHT JOIN u ON a = c AND b > d");
 }

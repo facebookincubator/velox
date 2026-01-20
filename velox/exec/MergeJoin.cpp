@@ -758,13 +758,26 @@ RowVectorPtr MergeJoin::getOutput() {
 
   // TODO Finish early if ran out of data on either side of the join.
   for (;;) {
-    auto output = doGetOutput();
+    // If we have a pending output from a previous call (stored when we returned
+    // a pending miss), process it first.
+    RowVectorPtr output;
+    if (pendingFilterOutput_) {
+      output = std::move(pendingFilterOutput_);
+    } else {
+      output = doGetOutput();
+    }
+
     if (output != nullptr && output->size() > 0) {
       if (filter_) {
         output = applyFilter(output);
         if (output != nullptr) {
-          for (const auto [channel, _] : filterInputToOutputChannel_) {
-            filterInput_->childAt(channel).reset();
+          // Only reset filterInput_ children if we're not storing an output
+          // for later processing. If pendingFilterOutput_ is set, we need to
+          // preserve the filterInput_ state for when it's processed.
+          if (!pendingFilterOutput_) {
+            for (const auto [channel, _] : filterInputToOutputChannel_) {
+              filterInput_->childAt(channel).reset();
+            }
           }
           return output;
         }
@@ -1294,7 +1307,48 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     if (!filterRows.hasSelections()) {
       // No matches in the output, no need to evaluate the filter.
+      // But first check if we need to emit a pending miss since all rows
+      // are miss rows, meaning the previous key has ended.
+      if (joinTracker_->hasPendingMiss()) {
+        auto pendingMissOutput = joinTracker_->getAndClearPendingMissOutput();
+        bool shouldEmit = !joinTracker_->currentRowPassed();
+        if (shouldEmit && !isSemiFilterJoin(joinType_)) {
+          // Store current output for next call.
+          pendingFilterOutput_ = output;
+          return pendingMissOutput;
+        }
+      }
       return output;
+    }
+
+    // Handle any pending miss from a previous batch before processing rows.
+    // We need to emit it if:
+    // 1. First row is a miss row (previous key has ended - no more match rows)
+    // 2. First row is a match row with a different key
+    // If we need to emit it, store the current output for the next call and
+    // return the pending miss as a single-row result.
+    if (joinTracker_->hasPendingMiss() && numRows > 0) {
+      auto pendingMissOutput = joinTracker_->getAndClearPendingMissOutput();
+      bool shouldEmit = true;
+
+      if (!filterRows.isValid(0)) {
+        // First row is a miss row - previous key has ended.
+        // Since we have a pending miss, no rows could have passed for the
+        // previous key (otherwise we wouldn't have stored the pending miss).
+        VELOX_DCHECK(
+            !joinTracker_->currentRowPassed(),
+            "Pending miss should only exist when no rows passed for the key");
+      } else {
+        // First row is a match row - check if key changed.
+        shouldEmit =
+            joinTracker_->shouldEmitPendingMiss(joinTracker_->getRowNumber(0));
+      }
+
+      if (shouldEmit && !isSemiFilterJoin(joinType_)) {
+        // Store current output for next call.
+        pendingFilterOutput_ = output;
+        return pendingMissOutput;
+      }
     }
 
     evaluateFilter(filterRows);
@@ -1417,6 +1471,14 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
     // same left row number as the last key match.
     if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
       joinTracker_->noMoreFilterResults(onMiss);
+    } else {
+      // The same outer row continues in the next batch. Store the current
+      // row data (with nulls applied) so we can include it in the output
+      // later if the key ends without any passing rows.
+      // For right join, we null out left projections; otherwise right.
+      const auto& nullProjections =
+          isRightJoin(joinType_) ? leftProjections_ : rightProjections_;
+      joinTracker_->endBatchMidRow(output, nullProjections);
     }
   } else {
     filterRows_.resize(numRows);
@@ -1449,7 +1511,6 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
   if (fullOuterOutput) {
     return wrap(numPassed, indices, fullOuterOutput);
   }
-
   return wrap(numPassed, indices, output);
 }
 
@@ -1507,6 +1568,7 @@ void MergeJoin::finishDrain() {
   clearRightInput();
   leftMatch_.reset();
   rightMatch_.reset();
+  pendingFilterOutput_.reset();
   if (joinTracker_.has_value()) {
     joinTracker_->reset();
   }
@@ -1519,6 +1581,7 @@ void MergeJoin::JoinTracker::reset() {
   currentRow_ = -1;
   currentLeftRowNumber_ = -1;
   currentRowPassed_ = false;
+  pendingMissOutput_.reset();
 }
 
 } // namespace facebook::velox::exec
