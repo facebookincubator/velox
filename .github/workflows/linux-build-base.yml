@@ -274,7 +274,6 @@ jobs:
           export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
 
           curl -LsSf https://astral.sh/uv/install.sh | sh
-          source $HOME/.local/bin/env
           uv tool update-shell
 
           uv tool install cmake==3.30.4
@@ -289,7 +288,7 @@ jobs:
           export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$DEPS_PATH/kvikio-build:$DEPS_PATH/curl-build:$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$DEPS_PATH/rapids_logger-build:$DEPS_PATH/nvcomp_proprietary_binary-src/lib64:$LD_LIBRARY_PATH
-          ctest
+          /bin/ctest
 
   ubuntu-debug:
     runs-on: 8-core-ubuntu-22.04
