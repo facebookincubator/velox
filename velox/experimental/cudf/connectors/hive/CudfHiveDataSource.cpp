@@ -433,8 +433,13 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       // Remove "file:" prefix from the file path if present
       std::string cleanedPath = hiveSplit->filePath;
       constexpr std::string_view kFilePrefix = "file:";
+      constexpr std::string_view kS3APrefix = "s3a:";
       if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
         cleanedPath = cleanedPath.substr(kFilePrefix.size());
+      } else if (cleanedPath.compare(0, kS3APrefix.size(), kS3APrefix) == 0) {
+        // KvikIO does not support "s3a:" prefix. We need to translate it to
+        // "s3:".
+        cleanedPath.erase(kS3APrefix.size() - 2, 1);
       }
       return CudfHiveConnectorSplitBuilder(cleanedPath)
           .connectorId(hiveSplit->connectorId)
