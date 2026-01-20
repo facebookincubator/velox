@@ -53,6 +53,16 @@ struct is_templated_create<
     T,
     std::void_t<decltype(T::template create<T>(
         std::declval<folly::dynamic>()))>> : std::true_type {};
+
+template <class, class = void>
+struct is_templated_create_with_context : std::false_type {};
+
+template <class T>
+struct is_templated_create_with_context<
+    T,
+    std::void_t<decltype(T::template create<T>(
+        std::declval<folly::dynamic>(),
+        std::declval<void*>()))>> : std::true_type {};
 } // namespace detail
 
 template <class T>
@@ -62,6 +72,17 @@ void registerDeserializer() {
         T::getClassName(), T::template create<T>);
   } else {
     DeserializationRegistryForSharedPtr().Register(
+        T::getClassName(), T::create);
+  }
+}
+
+template <class T>
+void registerDeserializerWithContext() {
+  if constexpr (detail::is_templated_create_with_context<T>::value) {
+    DeserializationWithContextRegistryForSharedPtr().Register(
+        T::getClassName(), T::template create<T>);
+  } else {
+    DeserializationWithContextRegistryForSharedPtr().Register(
         T::getClassName(), T::create);
   }
 }

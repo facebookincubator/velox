@@ -145,7 +145,9 @@ class SimpleFunctionRegistry {
       return VectorFunctionMetadata{
           false,
           functionEntry_.getMetadata().isDeterministic(),
-          functionEntry_.getMetadata().defaultNullBehavior()};
+          functionEntry_.getMetadata().defaultNullBehavior(),
+          false,
+          functionEntry_.getMetadata().owner()};
     }
 
    private:

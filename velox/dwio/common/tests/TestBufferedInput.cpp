@@ -36,8 +36,8 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
 // initializes one: /usr/include/gtest/gtest-matchers.h:302:33 resulting in
 // error:
 // '<unnamed>.testing::Matcher<const
-// facebook::velox::FileStorageContext&>::<unnamed>.testing::internal::MatcherBase<const
-// facebook::velox::FileStorageContext&>::buffer_' is used uninitialized
+// facebook::velox::FileIoContext&>::<unnamed>.testing::internal::MatcherBase<const
+// facebook::velox::FileIoContext&>::buffer_' is used uninitialized
 // [-Werror=uninitialized]
 //  302 |       : vtable_(other.vtable_), buffer_(other.buffer_) {
 // Fix: https://github.com/google/googletest/pull/3797
@@ -49,7 +49,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
       (uint64_t offset,
        uint64_t length,
        void* buf,
-       (const facebook::velox::FileStorageContext&)fileStorageContext),
+       (const facebook::velox::FileIoContext&)context),
       (const, override));
 
   MOCK_METHOD(bool, shouldCoalesce, (), (const, override));
@@ -62,7 +62,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
       preadv,
       (folly::Range<const Region*> regions,
        folly::Range<folly::IOBuf*> iobufs,
-       (const facebook::velox::FileStorageContext&)fileStorageContext),
+       (const facebook::velox::FileIoContext&)context),
       (const, override));
 };
 
@@ -81,7 +81,7 @@ void expectPreads(
                 uint64_t offset,
                 uint64_t length,
                 void* buf,
-                const facebook::velox::FileStorageContext& fileStorageContext)
+                const facebook::velox::FileIoContext& context)
                 -> std::string_view {
               memcpy(buf, content.data() + offset, length);
               return {content.data() + offset, length};
@@ -101,8 +101,7 @@ void expectPreadvs(
           [content, reads](
               folly::Range<const Region*> regions,
               folly::Range<folly::IOBuf*> iobufs,
-              const facebook::velox::FileStorageContext& fileStorageContext)
-              -> uint64_t {
+              const facebook::velox::FileIoContext& context) -> uint64_t {
             EXPECT_EQ(regions.size(), reads.size());
             uint64_t length = 0;
             for (size_t i = 0; i < reads.size(); ++i) {

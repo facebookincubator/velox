@@ -309,6 +309,10 @@ Accessors
     reason. If the geometry is valid and simple (or ``NULL``), return ``NULL``.
     This function is relatively expensive.
 
+.. function:: great_circle_distance(latitude1, longitude1, latitude2, longitude2) -> double
+
+    Returns the great-circle distance between two points on Earth's surface in kilometers.
+
 .. function:: ST_Area(geometry: Geometry) -> area: double
 
     Returns the 2D Euclidean area of ``geometry``.
@@ -550,6 +554,16 @@ for more details.
 
     Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.
 
+.. function:: bing_tiles_around(latitude, longitude, zoom_level) -> array(BingTile)
+
+    Returns a collection of Bing tiles that surround the point specified
+    by the latitude and longitude arguments at a given zoom level.
+
+.. function:: bing_tiles_around(latitude, longitude, zoom_level, radius_in_km) -> array(BingTile)
+
+    Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
+    radius in km around a specified (latitude, longitude) point.
+
 .. function:: bing_tile_coordinates(tile: BingTile) -> coords: row(integer,integer)
 
     Returns the ``x``, ``y`` coordinates of a given Bing tile as ``row(x, y)``.
@@ -580,6 +594,16 @@ for more details.
     Throws an exception if childZoom is greater than the max zoom level, or
     childZoom is less than the tile's zoom.  The order is deterministic but not
     specified.
+
+.. function:: bing_tile_polygon(tile) -> Geometry
+
+    Returns the polygon representation of a given Bing tile.
+
+.. function:: bing_tile_at(latitude, longitude, zoom_level) -> BingTile
+
+    Returns a Bing tile at a given zoom level containing a point at a given latitude
+    and longitude. Latitude must be within ``[-85.05112878, 85.05112878]`` range.
+    Longitude must be within ``[-180, 180]`` range. Zoom levels from 1 to 23 are supported.
 
 .. function:: bing_tile_quadkey() -> quadKey: varchar
 

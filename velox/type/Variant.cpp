@@ -182,14 +182,14 @@ std::string stringifyFloatingPointerValue(T val) {
 }
 
 void Variant::throwCheckIsKindError(TypeKind kind) const {
-  throw std::invalid_argument{fmt::format(
+  VELOX_USER_FAIL(
       "wrong kind! {} != {}",
       TypeKindName::toName(kind_),
-      TypeKindName::toName(kind))};
+      TypeKindName::toName(kind));
 }
 
 void Variant::throwCheckPtrError() const {
-  throw std::invalid_argument{"missing Variant value"};
+  VELOX_USER_FAIL("missing Variant value");
 }
 
 std::string Variant::toString(const TypePtr& type) const {

@@ -87,7 +87,7 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_stripe_stream_test TestStripeStream.cpp)
+add_executable(velox_dwio_dwrf_stripe_stream_test StripeStreamTest.cpp)
 add_test(velox_dwio_dwrf_stripe_stream_test velox_dwio_dwrf_stripe_stream_test)
 
 target_link_libraries(

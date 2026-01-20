@@ -839,7 +839,9 @@ TEST(VariantOpaqueTest, opaque) {
     EXPECT_TRUE(v.hasValue());
     EXPECT_EQ(TypeKind::OPAQUE, v.kind());
     EXPECT_EQ(foo, v.opaque<Foo>());
-    EXPECT_THROW(v.opaque<Bar>(), std::exception);
+    VELOX_ASSERT_THROW(
+        v.opaque<Bar>(),
+        "Requested OPAQUE<facebook::velox::test::(anonymous namespace)::Bar> but contains OPAQUE<facebook::velox::test::(anonymous namespace)::Foo>");
     EXPECT_EQ(*v.inferType(), *OPAQUE<Foo>());
   }
 
@@ -901,7 +903,7 @@ TEST(VariantOpaqueTest, opaque) {
     EXPECT_EQ(castFoo1, foo);
     EXPECT_EQ(castBar1, nullptr);
     EXPECT_EQ(castBar2, bar);
-    EXPECT_THROW(int1.tryOpaque<Foo>(), std::invalid_argument);
+    VELOX_ASSERT_THROW(int1.tryOpaque<Foo>(), "wrong kind! BIGINT != OPAQUE");
   }
 }
 
@@ -1833,6 +1835,18 @@ TEST(VariantTest, nullableMapOfArraysGetter) {
       {{"a", std::vector<std::optional<int64_t>>{1, std::nullopt}},
        {"b", std::nullopt},
        {"c", std::vector<std::optional<int64_t>>{3}}});
+}
+
+TEST(VariantTest, accessNullVariantValue) {
+  Variant nullVar = Variant::null(TypeKind::INTEGER);
+  VELOX_ASSERT_THROW(
+      nullVar.value<TypeKind::INTEGER>(), "missing Variant value");
+}
+
+TEST(VariantTest, accessWrongTypeVariantValue) {
+  Variant intVar = Variant::create<int32_t>(1);
+  VELOX_ASSERT_THROW(
+      intVar.value<TypeKind::VARCHAR>(), "wrong kind! INTEGER != VARCHAR");
 }
 
 } // namespace

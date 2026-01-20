@@ -79,15 +79,13 @@ class S3ReadFile ::Impl {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      const FileStorageContext& fileStorageContext) const {
+      const FileIoContext& context) const {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(
-      uint64_t offset,
-      uint64_t length,
-      const FileStorageContext& fileStorageContext) const {
+  std::string
+  pread(uint64_t offset, uint64_t length, const FileIoContext& context) const {
     std::string result(length, 0);
     char* position = result.data();
     preadInternal(offset, length, position);
@@ -97,7 +95,7 @@ class S3ReadFile ::Impl {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      const FileStorageContext& fileStorageContext) const {
+      const FileIoContext& context) const {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support
@@ -185,22 +183,22 @@ std::string_view S3ReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    const FileStorageContext& fileStorageContext) const {
-  return impl_->pread(offset, length, buf, fileStorageContext);
+    const FileIoContext& context) const {
+  return impl_->pread(offset, length, buf, context);
 }
 
 std::string S3ReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    const FileStorageContext& fileStorageContext) const {
-  return impl_->pread(offset, length, fileStorageContext);
+    const FileIoContext& context) const {
+  return impl_->pread(offset, length, context);
 }
 
 uint64_t S3ReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    const FileStorageContext& fileStorageContext) const {
-  return impl_->preadv(offset, buffers, fileStorageContext);
+    const FileIoContext& context) const {
+  return impl_->preadv(offset, buffers, context);
 }
 
 uint64_t S3ReadFile::size() const {

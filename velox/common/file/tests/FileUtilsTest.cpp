@@ -17,8 +17,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/file/FileUtils.h"
 #include "velox/common/file/Region.h"
-#include "velox/common/file/Utils.h"
 #include "velox/common/file/tests/TestUtils.h"
 
 using namespace ::testing;

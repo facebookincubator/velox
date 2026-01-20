@@ -159,7 +159,8 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
                 .rawInputTypes = {},
             },
         },
-        /*ignoreNullKeys*/ false,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         projectNode);
     VELOX_ASSERT_THROW(
         PlanConsistencyChecker::check(aggregationNode), "Field not found: x");
@@ -183,7 +184,8 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
                 .rawInputTypes = {},
             },
         },
-        /*ignoreNullKeys*/ false,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         projectNode);
     VELOX_ASSERT_THROW(
         PlanConsistencyChecker::check(aggregationNode), "Field not found: y");
@@ -208,7 +210,8 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
                 .rawInputTypes = {},
             },
         },
-        /*ignoreNullKeys*/ false,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         projectNode);
     VELOX_ASSERT_THROW(
         PlanConsistencyChecker::check(aggregationNode), "Field not found: z");
@@ -232,7 +235,8 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
                 .rawInputTypes = {},
             },
         },
-        /*ignoreNullKeys*/ false,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         projectNode);
     VELOX_ASSERT_THROW(
         PlanConsistencyChecker::check(aggregationNode),
