@@ -263,25 +263,22 @@ Array Functions
         SELECT array_top_n(ARRAY [1, NULL, 2], 3); -- [2, 1, NULL]
         SELECT array_top_n(ARRAY [1, 2, 3], 0); -- []
 
-.. function:: array_top_n(array(T), n, function(T, T, bigint)) -> array(T)
+.. function:: array_top_n(array(T), n, function(T, U)) -> array(T)
     :noindex:
 
     Returns the top ``n`` elements of the array sorted in descending order according to
-    the given comparator function. The comparator takes two nullable arguments representing
-    two elements of the array and returns:
+    values computed by the transform function. The transform function takes each element
+    and returns a sorting key. Elements are sorted by their keys in descending order.
+    U must be an orderable type.
 
-    - -1 if the first element is less than the second
-    - 0 if the elements are equal
-    - 1 if the first element is greater than the second
+    If ``n`` is larger than the size of the array, returns all elements sorted by the
+    transform key. If ``n`` is zero, returns an empty array. Null elements and elements
+    with null transform results are placed at the end of the result. ::
 
-    The comparator must not return NULL. If ``n`` is larger than the size of the array,
-    returns all elements sorted according to the comparator. If ``n`` is zero, returns an
-    empty array. Null elements are placed at the end of the result. ::
-
-        SELECT array_top_n(ARRAY [1, 2, 3], 2, (x, y) -> IF(x > y, 1, IF(x < y, -1, 0))); -- [3, 2]
-        SELECT array_top_n(ARRAY [1, 2, 3], 2, (x, y) -> IF(x < y, 1, IF(x > y, -1, 0))); -- [1, 2] (reverse order)
-        SELECT array_top_n(ARRAY [-5, 2, -3, 4], 2, (x, y) -> IF(abs(x) > abs(y), 1, IF(abs(x) < abs(y), -1, 0))); -- [-5, 4] (by absolute value)
-        SELECT array_top_n(ARRAY ['a', 'bbb', 'cc'], 2, (x, y) -> IF(length(x) > length(y), 1, IF(length(x) < length(y), -1, 0))); -- ['bbb', 'cc'] (by length)
+        SELECT array_top_n(ARRAY [1, 2, 3], 2, x -> x); -- [3, 2]
+        SELECT array_top_n(ARRAY [1, 2, 3], 2, x -> 0 - x); -- [1, 2] (ascending order via negation)
+        SELECT array_top_n(ARRAY [-5, 2, -3, 4], 2, x -> abs(x)); -- [-5, 4] (by absolute value)
+        SELECT array_top_n(ARRAY ['a', 'bbb', 'cc'], 2, x -> length(x)); -- ['bbb', 'cc'] (by length)
 
 .. function:: cardinality(x) -> bigint
 

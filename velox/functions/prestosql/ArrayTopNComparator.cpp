@@ -23,14 +23,12 @@
 namespace facebook::velox::functions {
 namespace {
 
-// Implements array_top_n(array(T), n, function(T, T, bigint)) -> array(T)
-// Returns the top n elements of the array based on the given comparator.
-// The comparator takes two nullable elements and returns:
-//   -1 if first element is less than second
-//    0 if elements are equal
-//    1 if first element is greater than second
-// The result is sorted in descending order according to the comparator.
-class ArrayTopNComparatorFunction : public exec::VectorFunction {
+// Implements array_top_n(array(T), n, function(T, U)) -> array(T)
+// Returns the top n elements of the array sorted in descending order
+// according to values computed by the transform function.
+// The transform function computes a sorting key for each element.
+// Elements are sorted by keys in descending order, with nulls at the end.
+class ArrayTopNTransformFunction : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
@@ -58,6 +56,41 @@ class ArrayTopNComparatorFunction : public exec::VectorFunction {
     auto pool = context.pool();
     auto elementsVector = flatArray->elements();
     auto elementType = flatArray->type()->childAt(0);
+    auto numElements = elementsVector->size();
+
+    // Apply transform lambda to compute sorting keys.
+    std::vector<VectorPtr> lambdaArgs = {elementsVector};
+    SelectivityVector validRowsInReusedResult =
+        toElementRows<ArrayVector>(numElements, rows, flatArray.get());
+    VectorPtr transformedKeys;
+
+    auto elementToTopLevelRows =
+        getElementToTopLevelRows(numElements, rows, flatArray.get(), pool);
+
+    // Loop over lambda functions and apply these to elements.
+    auto it = functionVector->iterator(&rows);
+    while (auto entry = it.next()) {
+      auto elementRows =
+          toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
+      auto wrapCapture = toWrapCapture<ArrayVector>(
+          numElements, entry.callable, *entry.rows, flatArray);
+
+      entry.callable->apply(
+          elementRows,
+          &validRowsInReusedResult,
+          wrapCapture,
+          &context,
+          lambdaArgs,
+          elementToTopLevelRows,
+          &transformedKeys);
+    }
+
+    // Decode transformed keys for comparison.
+    SelectivityVector allElementRows(numElements);
+    exec::LocalDecodedVector decodedKeys(
+        context, *transformedKeys, allElementRows);
+    auto* baseKeysVector = decodedKeys->base();
+    auto* keyIndices = decodedKeys->indices();
 
     // Count total elements needed for the result.
     vector_size_t totalResultElements = 0;
@@ -85,189 +118,92 @@ class ArrayTopNComparatorFunction : public exec::VectorFunction {
 
     vector_size_t currentOffset = 0;
 
+    // Compare flags for descending order with nulls last.
+    CompareFlags flags{
+        .nullsFirst = false,
+        .ascending = false,
+        .nullHandlingMode =
+            CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+
     // Process each row.
-    auto it = functionVector->iterator(&rows);
-    while (auto entry = it.next()) {
-      entry.rows->applyToSelected([&](vector_size_t row) {
-        if (flatArray->isNullAt(row)) {
-          rawResultOffsets[row] = currentOffset;
-          rawResultSizes[row] = 0;
-          return;
-        }
-
-        auto n = decodedN.valueAt<int32_t>(row);
-        VELOX_USER_CHECK_GE(
-            n, 0, "Parameter n: {} to ARRAY_TOP_N is negative", n);
-
-        auto arraySize = flatArray->sizeAt(row);
-        auto offset = flatArray->offsetAt(row);
-
-        if (n == 0 || arraySize == 0) {
-          rawResultOffsets[row] = currentOffset;
-          rawResultSizes[row] = 0;
-          return;
-        }
-
-        // Build indices for this array, separating nulls from non-nulls.
-        std::vector<vector_size_t> nonNullIndices;
-        std::vector<vector_size_t> nullIndices;
-
-        for (vector_size_t i = 0; i < arraySize; ++i) {
-          auto idx = offset + i;
-          if (elementsVector->isNullAt(idx)) {
-            nullIndices.push_back(idx);
-          } else {
-            nonNullIndices.push_back(idx);
-          }
-        }
-
-        auto numNonNull = nonNullIndices.size();
-
-        // If we have elements to compare, evaluate the lambda.
-        if (numNonNull > 1) {
-          // Create a comparison cache.
-          std::unordered_map<int64_t, int64_t> comparisonCache;
-
-          auto makeKey = [](vector_size_t a, vector_size_t b) -> int64_t {
-            return (static_cast<int64_t>(a) << 32) |
-                static_cast<int64_t>(static_cast<uint32_t>(b));
-          };
-
-          // Build vectors of left and right elements for all pairs.
-          std::vector<vector_size_t> leftIndices;
-          std::vector<vector_size_t> rightIndices;
-          leftIndices.reserve(numNonNull * (numNonNull - 1));
-          rightIndices.reserve(numNonNull * (numNonNull - 1));
-
-          for (size_t i = 0; i < numNonNull; ++i) {
-            for (size_t j = 0; j < numNonNull; ++j) {
-              if (i != j) {
-                leftIndices.push_back(nonNullIndices[i]);
-                rightIndices.push_back(nonNullIndices[j]);
-              }
-            }
-          }
-
-          if (!leftIndices.empty()) {
-            // Create dictionary vectors for left and right elements.
-            auto leftIndicesBuffer = allocateIndices(leftIndices.size(), pool);
-            auto rightIndicesBuffer =
-                allocateIndices(rightIndices.size(), pool);
-
-            auto* rawLeftIndices =
-                leftIndicesBuffer->asMutable<vector_size_t>();
-            auto* rawRightIndices =
-                rightIndicesBuffer->asMutable<vector_size_t>();
-
-            for (size_t i = 0; i < leftIndices.size(); ++i) {
-              rawLeftIndices[i] = leftIndices[i];
-              rawRightIndices[i] = rightIndices[i];
-            }
-
-            auto leftVector = BaseVector::wrapInDictionary(
-                nullptr, leftIndicesBuffer, leftIndices.size(), elementsVector);
-            auto rightVector = BaseVector::wrapInDictionary(
-                nullptr,
-                rightIndicesBuffer,
-                rightIndices.size(),
-                elementsVector);
-
-            // Evaluate the lambda on all pairs.
-            std::vector<VectorPtr> lambdaArgs = {leftVector, rightVector};
-            SelectivityVector allPairsRows(leftIndices.size());
-            SelectivityVector validRows(leftIndices.size());
-
-            // Create element to top level rows mapping (all map to this row).
-            BufferPtr elementToTopLevelRows =
-                allocateIndices(leftIndices.size(), pool);
-            auto* rawElementToTopLevel =
-                elementToTopLevelRows->asMutable<vector_size_t>();
-            for (size_t i = 0; i < leftIndices.size(); ++i) {
-              rawElementToTopLevel[i] = row;
-            }
-
-            VectorPtr lambdaResult;
-            auto wrapCapture = toWrapCapture<ArrayVector>(
-                leftIndices.size(), entry.callable, allPairsRows, flatArray);
-
-            entry.callable->apply(
-                allPairsRows,
-                &validRows,
-                wrapCapture,
-                &context,
-                lambdaArgs,
-                elementToTopLevelRows,
-                &lambdaResult);
-
-            // Extract comparison results.
-            exec::LocalDecodedVector decodedResult(
-                context, *lambdaResult, allPairsRows);
-
-            size_t pairIdx = 0;
-            for (size_t i = 0; i < numNonNull; ++i) {
-              for (size_t j = 0; j < numNonNull; ++j) {
-                if (i != j) {
-                  auto key = makeKey(nonNullIndices[i], nonNullIndices[j]);
-                  if (decodedResult->isNullAt(pairIdx)) {
-                    VELOX_USER_FAIL("Comparator function must not return NULL");
-                  }
-                  auto cmp = decodedResult->valueAt<int64_t>(pairIdx);
-                  VELOX_USER_CHECK(
-                      cmp == -1 || cmp == 0 || cmp == 1,
-                      "Comparator function must return -1, 0, or 1, got: {}",
-                      cmp);
-                  comparisonCache[key] = cmp;
-                  pairIdx++;
-                }
-              }
-            }
-
-            // Sort using cached comparisons.
-            // For descending order (top N), we want larger elements first.
-            // Comparator returns 1 if first > second, so for descending sort,
-            // we want elements where compare(a, b) > 0 to come first.
-            std::sort(
-                nonNullIndices.begin(),
-                nonNullIndices.end(),
-                [&](vector_size_t a, vector_size_t b) {
-                  if (a == b) {
-                    return false;
-                  }
-                  auto key = makeKey(a, b);
-                  auto cacheIt = comparisonCache.find(key);
-                  if (cacheIt != comparisonCache.end()) {
-                    // For descending order: if compare(a, b) > 0, a is greater,
-                    // so a should come before b.
-                    return cacheIt->second > 0;
-                  }
-                  // Fallback (should not happen if cache is complete).
-                  return false;
-                });
-          }
-        }
-
-        // Build result: take top n elements (non-nulls first, then nulls).
-        auto resultSize = std::min(static_cast<vector_size_t>(n), arraySize);
-
+    rows.applyToSelected([&](vector_size_t row) {
+      if (flatArray->isNullAt(row)) {
         rawResultOffsets[row] = currentOffset;
-        rawResultSizes[row] = resultSize;
+        rawResultSizes[row] = 0;
+        return;
+      }
 
-        vector_size_t added = 0;
-        // Add non-null elements first (sorted by comparator).
-        for (size_t i = 0; i < nonNullIndices.size() && added < resultSize;
-             ++i) {
-          resultIndices.push_back(nonNullIndices[i]);
-          added++;
-        }
-        // Add nulls to fill if needed.
-        for (size_t i = 0; i < nullIndices.size() && added < resultSize; ++i) {
-          resultIndices.push_back(nullIndices[i]);
-          added++;
-        }
+      auto n = decodedN.valueAt<int32_t>(row);
+      VELOX_USER_CHECK_GE(
+          n, 0, "Parameter n: {} to ARRAY_TOP_N is negative", n);
 
-        currentOffset += resultSize;
-      });
-    }
+      auto arraySize = flatArray->sizeAt(row);
+      auto offset = flatArray->offsetAt(row);
+
+      if (n == 0 || arraySize == 0) {
+        rawResultOffsets[row] = currentOffset;
+        rawResultSizes[row] = 0;
+        return;
+      }
+
+      // Build indices for this array, separating nulls from non-nulls.
+      // An element is considered "null" if either the original element is null
+      // or the transform result is null.
+      std::vector<vector_size_t> nonNullIndices;
+      std::vector<vector_size_t> nullIndices;
+
+      for (vector_size_t i = 0; i < arraySize; ++i) {
+        auto idx = offset + i;
+        bool elementIsNull = elementsVector->isNullAt(idx);
+        bool keyIsNull = decodedKeys->isNullAt(idx);
+
+        if (elementIsNull || keyIsNull) {
+          nullIndices.push_back(idx);
+        } else {
+          nonNullIndices.push_back(idx);
+        }
+      }
+
+      auto numNonNull = nonNullIndices.size();
+      auto k = std::min(static_cast<size_t>(n), numNonNull);
+
+      // Sort non-null indices by their transformed keys in descending order.
+      if (numNonNull > 1 && k > 0) {
+        std::partial_sort(
+            nonNullIndices.begin(),
+            nonNullIndices.begin() + k,
+            nonNullIndices.end(),
+            [&](vector_size_t a, vector_size_t b) {
+              // Compare transformed keys in descending order.
+              auto result = baseKeysVector->compare(
+                  baseKeysVector, keyIndices[a], keyIndices[b], flags);
+              if (!result.has_value()) {
+                VELOX_USER_FAIL("Ordering nulls is not supported");
+              }
+              return result.value() < 0;
+            });
+      }
+
+      // Build result: take top n elements (non-nulls first, then nulls).
+      auto resultSize = std::min(static_cast<vector_size_t>(n), arraySize);
+
+      rawResultOffsets[row] = currentOffset;
+      rawResultSizes[row] = resultSize;
+
+      vector_size_t added = 0;
+      // Add non-null elements first (sorted by transform key, descending).
+      for (size_t i = 0; i < nonNullIndices.size() && added < resultSize; ++i) {
+        resultIndices.push_back(nonNullIndices[i]);
+        added++;
+      }
+      // Add nulls to fill if needed.
+      for (size_t i = 0; i < nullIndices.size() && added < resultSize; ++i) {
+        resultIndices.push_back(nullIndices[i]);
+        added++;
+      }
+
+      currentOffset += resultSize;
+    });
 
     // Build the result elements vector using dictionary wrapping.
     VectorPtr resultElements;
@@ -299,13 +235,14 @@ class ArrayTopNComparatorFunction : public exec::VectorFunction {
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   return {
-      // array(T), integer, function(T, T, bigint) -> array(T)
+      // array(T), integer, function(T, U) -> array(T)
       exec::FunctionSignatureBuilder()
           .typeVariable("T")
+          .orderableTypeVariable("U")
           .returnType("array(T)")
           .argumentType("array(T)")
           .argumentType("integer")
-          .argumentType("function(T,T,bigint)")
+          .constantArgumentType("function(T,U)")
           .build(),
   };
 }
@@ -320,6 +257,6 @@ void registerArrayTopNComparatorFunction(const std::string& prefix) {
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_top_n_comparator,
     signatures(),
-    std::make_unique<ArrayTopNComparatorFunction>());
+    std::make_unique<ArrayTopNTransformFunction>());
 
 } // namespace facebook::velox::functions

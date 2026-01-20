@@ -19,10 +19,12 @@
 
 namespace facebook::velox::functions {
 
-/// Registers the array_top_n function with a comparator lambda.
-/// Signature: array_top_n(array(T), integer, function(T, T, bigint)) ->
-/// array(T) Returns the top n elements of the array sorted in descending order
-/// according to the comparator function.
+/// Registers the array_top_n function with a transform lambda.
+/// Signature: array_top_n(array(T), integer, function(T, U)) -> array(T)
+/// Returns the top n elements of the array sorted in descending order
+/// according to values computed by the transform function.
+/// The transform function computes a sorting key for each element.
+/// Elements are sorted by keys in descending order, with nulls at the end.
 void registerArrayTopNComparatorFunction(const std::string& prefix);
 
 } // namespace facebook::velox::functions
