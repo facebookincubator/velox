@@ -191,8 +191,9 @@ struct SplitGroupState {
   /// This map will contain all other custom bridges.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>>
       customBridges;
-  /// Holds states for Task::allPeersFinished.
-  std::unordered_map<core::PlanNodeId, BarrierState> barriers;
+  /// Holds states for Task::allPeersFinished. Each PlanNode can have multiple
+  /// barriers if needed.
+  std::unordered_map<core::PlanNodeId, std::vector<BarrierState>> barriers;
 
   /// Map of merge sources keyed on LocalMergeNode plan node ID.
   std::

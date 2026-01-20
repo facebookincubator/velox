@@ -740,6 +740,11 @@ class HashProbe : public Operator {
   // The index of the row container in the current hash table that this hash
   // probe oprator is processing to output build-side rows.
   int buildSideOutputRowContainerId_{-1};
+
+  // Flag to indicate whether this hash probe operator has more build-side rows
+  // to output for the current hash table. This flag is only used when
+  // `outputBuildRowsInParallel_` is true.
+  bool hasMoreBuildSideOutput_{true};
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {
