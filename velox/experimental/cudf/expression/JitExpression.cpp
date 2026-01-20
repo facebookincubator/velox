@@ -13,80 +13,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 
 /// START HACK
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-overread"
-#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 #pragma GCC diagnostic pop
 /// END HACK
 
 namespace facebook::velox::cudf_velox {
 
-// Create tree from Expr
-// and collect precompute instructions for non-ast operations
-cudf::ast::expression const& createAstTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    cudf::ast::tree& tree,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precomputeInstructions) {
-  static constexpr bool kAllowPureAstOnly = false;
-  AstContext context{
-      tree,
-      scalars,
-      {inputRowSchema},
-      {precomputeInstructions},
-      expr,
-      kAllowPureAstOnly};
-  return context.pushExprToTree(expr);
-}
-
-cudf::ast::expression const& createAstTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    cudf::ast::tree& tree,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& leftRowSchema,
-    const RowTypePtr& rightRowSchema,
-    std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const bool allowPureAstOnly) {
-  AstContext context{
-      tree,
-      scalars,
-      {leftRowSchema, rightRowSchema},
-      {leftPrecomputeInstructions, rightPrecomputeInstructions},
-      expr,
-      allowPureAstOnly};
-  return context.pushExprToTree(expr);
-}
-
-ASTExpression::ASTExpression(
+JitExpression::JitExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema)
-    : expr_(expr), inputRowSchema_(inputRowSchema) {
-  createAstTree(
-      expr, cudfTree_, scalars_, inputRowSchema, precomputeInstructions_);
+    : expr_{expr, inputRowSchema} {}
+
+void JitExpression::close() {
+  expr_.close();
 }
 
-void ASTExpression::close() {
-  cudfTree_ = {};
-  scalars_.clear();
-  precomputeInstructions_.clear();
-}
-
-ColumnOrView ASTExpression::eval(
+ColumnOrView JitExpression::eval(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   auto precomputedColumns = precomputeSubexpressions(
       inputTableColumns,
-      precomputeInstructions_,
-      scalars_,
-      inputRowSchema_,
+      expr_.precomputeInstructions_,
+      expr_.scalars_,
+      expr_.inputRowSchema_,
       stream);
 
   // Make table_view from input columns and precomputed columns
@@ -105,7 +61,7 @@ ColumnOrView ASTExpression::eval(
 
   auto result = [&]() -> ColumnOrView {
     if (auto colRefPtr = dynamic_cast<cudf::ast::column_reference const*>(
-            &cudfTree_.back())) {
+            &expr_.cudfTree_.back())) {
       auto columnIndex = colRefPtr->get_column_index();
       if (columnIndex < inputTableColumns.size()) {
         return inputTableColumns[columnIndex]->view();
@@ -115,13 +71,13 @@ ColumnOrView ASTExpression::eval(
             precomputedColumns[columnIndex - inputTableColumns.size()]);
       }
     } else {
-      return cudf::compute_column(
-          astInputTableView, cudfTree_.back(), stream, mr);
+      return cudf::compute_column_jit(
+          astInputTableView, expr_.cudfTree_.back(), stream, mr);
     }
   }();
   if (finalize) {
     const auto requestedType =
-        cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_->type()));
+        cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_.expr_->type()));
     auto resultView = asView(result);
     if (resultView.type() != requestedType) {
       result = cudf::cast(resultView, requestedType, stream, mr);
@@ -130,21 +86,19 @@ ColumnOrView ASTExpression::eval(
   return result;
 }
 
-bool ASTExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
-      nullptr ||
-      detail::isAstExprSupported(expr);
+bool JitExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
+  return ASTExpression::canEvaluate(expr);
 }
 
-void registerAstEvaluator(int priority) {
+void registerJitEvaluator(int priority) {
   registerCudfExpressionEvaluator(
-      kAstEvaluatorName,
+      kJitEvaluatorName,
       priority,
       [](std::shared_ptr<velox::exec::Expr> expr) {
-        return ASTExpression::canEvaluate(expr);
+        return JitExpression::canEvaluate(expr);
       },
       [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-        return std::make_shared<ASTExpression>(std::move(expr), row);
+        return std::make_shared<JitExpression>(std::move(expr), row);
       },
       /*overwrite=*/false);
 }
