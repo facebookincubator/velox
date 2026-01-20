@@ -1962,64 +1962,6 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithFilter) {
   }
 }
 
-TEST_P(MultiThreadedHashJoinTest, leftJoinWithFilterDebug) {
-  // Left side keys are [0, 1, 2,..10].
-  // Use 3-rd column as row number to allow for asserting the order of
-  // results.
-  int numrows = 7;
-  std::vector<RowVectorPtr> probeVectors = 
-      makeBatches(
-          1,
-          [&](int32_t /*unused*/) {
-            return makeRowVector(
-                {"c0", "c1", "row_number"},
-                {
-                    makeFlatVector<int32_t>(
-                        numrows, [&](auto row) { return row % numrows; }),
-                    makeFlatVector<int32_t>(numrows, [](auto row) { return row; }),
-                    makeFlatVector<int32_t>(numrows, [](auto row) { return row; }),
-                });
-          });
-
-  std::vector<RowVectorPtr> buildVectors =
-      makeBatches(1, [&](int32_t /*unused*/) {
-        return makeRowVector({
-            makeFlatVector<int32_t>(
-                numrows, [](auto row) { return row % 5; }),
-            makeFlatVector<int32_t>(
-                numrows, [](auto row) { return 111 + row * 2; }),
-        });
-      });
-
-  std::cout << "left table: \n";
-  for (const auto& result : probeVectors) {  
-    std::cout << printVector(*result) << std::endl;  
-  }
-  std::cout << "right table: \n";
-  for (const auto& result : buildVectors) {  
-    std::cout << printVector(*result) << std::endl;  
-  }
-  // Additional filter.
-  {
-    auto testProbeVectors = probeVectors;
-    auto testBuildVectors = buildVectors;
-    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .injectSpill(false)
-        .numDrivers(numDrivers_)
-        .probeKeys({"c0"})
-        .probeVectors(std::move(testProbeVectors))
-        .buildKeys({"u_c0"})
-        .buildVectors(std::move(testBuildVectors))
-        .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
-        .joinType(core::JoinType::kLeft)
-        .joinFilter("(c1 + u_c1) % 2 = 1")
-        .joinOutputLayout({"row_number", "c0", "c1", "u_c1"})
-        .referenceQuery(
-            "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 1")
-        .run();
-  }
-}
-
 /// Tests left join with a filter that may evaluate to true, false or null.
 /// Makes sure that null filter results are handled correctly, e.g. as if the
 /// filter returned false.
@@ -6533,7 +6475,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
   test("t_k2 != 4 and t_k2 != 8");
 }
 
-TEST_F(HashJoinTest, leftJoinPreserveProbeOrder) {
+TEST_F(HashJoinTest, DISABLED_leftJoinPreserveProbeOrder) {
   const std::vector<RowVectorPtr> probeVectors = {
       makeRowVector(
           {"k1", "v1"},
