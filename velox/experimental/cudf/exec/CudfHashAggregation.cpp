@@ -451,14 +451,14 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests) override {
     VELOX_UNSUPPORTED(
-        "approx_distinct should use doReduce, not groupby requests");
+        "approx_distinct is not supported as a group aggregation");
   }
 
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
     VELOX_UNSUPPORTED(
-        "approx_distinct should use doReduce, not makeOutputColumn");
+        "approx_distinct is not supported as a group aggregation");
   }
 
   std::unique_ptr<cudf::column> doReduce(
