@@ -233,6 +233,26 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
+  std::optional<T> checkedUnaryminus(std::optional<T> arg) {
+    return evaluateOnce<T>("checked_unaryminus(c0)", arg);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedUnaryminus(
+      const std::optional<T> a,
+      const std::string& errorMessage) {
+    auto res = evaluateOnce<T>("try(checked_unaryminus(c0))", a);
+    ASSERT_TRUE(!res.has_value());
+    try {
+      evaluateOnce<T>("checked_unaryminus(c0)", a);
+      FAIL() << "Expected an error";
+    } catch (const std::exception& e) {
+      ASSERT_TRUE(
+          std::string(e.what()).find(errorMessage) != std::string::npos);
+    }
+  }
+
+  template <typename T>
   std::optional<T> abs(const std::optional<T> input) {
     return evaluateOnce<T>("abs(c0)", input);
   }
@@ -787,6 +807,29 @@ TEST_F(ArithmeticTest, checkedDiv) {
   // Division overflow.
   assertErrorForCheckedDiv<int64_t>(
       INT64_MIN, -1, "Overflow in integral divide");
+}
+
+TEST_F(ArithmeticTest, checkedUnaryminus) {
+  // Normal cases should work fine.
+  EXPECT_EQ(checkedUnaryminus<int8_t>(1), -1);
+  EXPECT_EQ(checkedUnaryminus<int16_t>(2), -2);
+  EXPECT_EQ(checkedUnaryminus<int32_t>(3), -3);
+  EXPECT_EQ(checkedUnaryminus<int64_t>(4), -4);
+  EXPECT_EQ(checkedUnaryminus<int8_t>(-1), 1);
+  EXPECT_EQ(checkedUnaryminus<int16_t>(-2), 2);
+  EXPECT_EQ(checkedUnaryminus<int32_t>(-3), 3);
+  EXPECT_EQ(checkedUnaryminus<int64_t>(-4), 4);
+  EXPECT_EQ(checkedUnaryminus<int8_t>(0), 0);
+
+  // Negating MIN value overflows for all integer types.
+  assertErrorForCheckedUnaryminus<int8_t>(
+      INT8_MIN, "Arithmetic overflow: --128");
+  assertErrorForCheckedUnaryminus<int16_t>(
+      INT16_MIN, "Arithmetic overflow: --32768");
+  assertErrorForCheckedUnaryminus<int32_t>(
+      INT32_MIN, "Arithmetic overflow: --2147483648");
+  assertErrorForCheckedUnaryminus<int64_t>(
+      INT64_MIN, "Arithmetic overflow: --9223372036854775808");
 }
 
 TEST_F(ArithmeticTest, abs) {
