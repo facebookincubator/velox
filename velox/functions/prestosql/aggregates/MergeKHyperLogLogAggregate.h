@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/common/hyperloglog/KHyperLogLog.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
