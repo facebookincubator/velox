@@ -33,9 +33,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
-
 #include "velox/vector/VectorPrinter.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <fmt/format.h>
 #include <re2/re2.h>

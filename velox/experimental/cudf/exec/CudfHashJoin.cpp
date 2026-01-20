@@ -661,8 +661,15 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     cudf::column_view rightIndicesCol,
     cudf::join_kind joinKind,
     rmm::cuda_stream_view stream) {
-
-  auto [filteredLeftJoinIndices, filteredRightJoinIndices] = cudf::filter_join_indices(leftTableView, rightTableView, leftIndicesCol, rightIndicesCol, tree_.back(), joinKind, stream);
+  auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
+      cudf::filter_join_indices(
+          leftTableView,
+          rightTableView,
+          leftIndicesCol,
+          rightIndicesCol,
+          tree_.back(),
+          joinKind,
+          stream);
 
   auto filteredLeftIndicesSpan =
       cudf::device_span<cudf::size_type const>{*filteredLeftJoinIndices};
@@ -671,12 +678,11 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
   auto filteredLeftIndicesCol = cudf::column_view{filteredLeftIndicesSpan};
   auto filteredRightIndicesCol = cudf::column_view{filteredRightIndicesSpan};
   return unfilteredOutput(
-    leftTableView,
-    filteredLeftIndicesCol,
-    rightTableView,
-    filteredRightIndicesCol,
-    stream);
-
+      leftTableView,
+      filteredLeftIndicesCol,
+      rightTableView,
+      filteredRightIndicesCol,
+      stream);
 }
 
 std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
