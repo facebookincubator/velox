@@ -338,9 +338,25 @@ class BinaryFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     if (left_ == nullptr && right_ == nullptr) {
+      // Ensure decimal promotion is respected by casting inputs to the output
+      // decimal type (e.g. DECIMAL64 -> DECIMAL128) before multiplication.
+      auto lhsView = asView(inputColumns[0]);
+      auto rhsView = asView(inputColumns[1]);
+      std::unique_ptr<cudf::column> lhsCast;
+      std::unique_ptr<cudf::column> rhsCast;
+      if (type_.id() == cudf::type_id::DECIMAL128) {
+        if (lhsView.type() != type_) {
+          lhsCast = cudf::cast(lhsView, type_, stream, mr);
+          lhsView = lhsCast->view();
+        }
+        if (rhsView.type() != type_) {
+          rhsCast = cudf::cast(rhsView, type_, stream, mr);
+          rhsView = rhsCast->view();
+        }
+      }
       return cudf::binary_operation(
-          asView(inputColumns[0]),
-          asView(inputColumns[1]),
+          lhsView,
+          rhsView,
           op_,
           type_,
           stream,

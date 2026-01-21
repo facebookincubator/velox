@@ -244,5 +244,110 @@ TEST_F(CudfDecimalTest, decimalAddition64And128) {
           "SELECT d64_a + d64_b AS sum64, d128_a + d128_b AS sum128 FROM tmp");
 }
 
+TEST_F(CudfDecimalTest, decimalMultiplyPromotesToLong) {
+  // Two short decimals whose product requires long decimal precision.
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 0)},
+      {"b", DECIMAL(10, 0)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {9'999'999'999, 1'234'567'890, -2'000'000'000},
+              DECIMAL(10, 0)),
+          makeFlatVector<int64_t>(
+              {9'999'999'999, -2, 4},
+              DECIMAL(10, 0)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a * b AS prod"})
+                  .planNode();
+
+  const int128_t expected0 =
+      static_cast<int128_t>(9'999'999'999LL) * static_cast<int128_t>(9'999'999'999LL);
+  auto expected = makeRowVector(
+      {"prod"},
+      {makeFlatVector<int128_t>(
+          {expected0,
+           static_cast<int128_t>(-2'469'135'780LL),
+           static_cast<int128_t>(-8'000'000'000LL)},
+          DECIMAL(20, 0))});
+
+  // CPU (no cuDF adapter registered).
+  unregisterCudf();
+  auto cpuResult = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                       .copyResults(pool());
+  registerCudf();
+
+  // GPU (enable cuDF, no fallback).
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  // Verify promotion to long decimal and exact results on CPU/GPU.
+  ASSERT_TRUE(cpuResult->childAt(0)->type()->isLongDecimal());
+  ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
+  facebook::velox::test::assertEqualVectors(expected, cpuResult);
+  facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
+  // Two short decimals whose sum requires long decimal precision.
+  auto rowType = ROW({
+      {"a", DECIMAL(18, 0)},
+      {"b", DECIMAL(18, 0)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {999'999'999'999'999'999LL,
+               -900'000'000'000'000'000LL,
+               123'456'789'012'345'678LL},
+              DECIMAL(18, 0)),
+          makeFlatVector<int64_t>(
+              {999'999'999'999'999'999LL,
+               -900'000'000'000'000'000LL,
+               -123'456'789'012'345'678LL},
+              DECIMAL(18, 0)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a + b AS sum"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"sum"},
+      {makeFlatVector<int128_t>(
+          {static_cast<int128_t>(1'999'999'999'999'999'998LL),
+           static_cast<int128_t>(-1'800'000'000'000'000'000LL),
+           static_cast<int128_t>(0)},
+          DECIMAL(19, 0))});
+
+  // CPU (no cuDF adapter registered).
+  unregisterCudf();
+  auto cpuResult = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                       .copyResults(pool());
+  registerCudf();
+
+  // GPU (cuDF enabled).
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_TRUE(cpuResult->childAt(0)->type()->isLongDecimal());
+  ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
+  facebook::velox::test::assertEqualVectors(expected, cpuResult);
+  facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
