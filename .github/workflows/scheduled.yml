@@ -222,6 +222,7 @@ jobs:
             -DVELOX_MONO_LIBRARY=ON
             -DVELOX_BUILD_PYTHON_PACKAGE=ON
             -DVELOX_PYTHON_LEGACY_ONLY=ON
+            -DVELOX_ENABLE_LOCAL_RUNNER_SERVICE=ON
             ${{ inputs.extraCMakeFlags }}
         run: |
           make python-venv
