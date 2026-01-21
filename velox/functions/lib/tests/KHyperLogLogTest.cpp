@@ -35,8 +35,11 @@ const double kDefaultStandardError = 1.04 / std::sqrt(kDefaultNumBuckets);
 
 class KHyperLogLogTest : public ::testing::Test {
  public:
+  static void SetUpTestSuite() {
+    facebook::velox::memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    facebook::velox::memory::MemoryManager::initialize({});
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
     hsa_ = std::make_unique<HashStringAllocator>(pool_.get());
     allocator_ = hsa_.get();
