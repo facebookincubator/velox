@@ -385,10 +385,7 @@ RowVectorPtr SourceMerger::getOutput(
   VELOX_CHECK_GT(outputBatchRows_, 0);
 
   if (!output_) {
-    output_ = BaseVector::create<RowVector>(type_, outputBatchRows_, pool_);
-    for (auto& child : output_->children()) {
-      child->resize(outputBatchRows_);
-    }
+    createOutputVector();
   }
 
   for (;;) {
@@ -431,6 +428,47 @@ RowVectorPtr SourceMerger::getOutput(
     if (!sourceBlockingFutures.empty()) {
       return nullptr;
     }
+  }
+}
+
+void SourceMerger::createOutputVector() {
+  // Attempt to generate output vector using stream data to preserve encodings.
+  // First, find the first stream with non-null data to determine column
+  // encodings.
+  const RowVector* source = nullptr;
+  for (const auto* stream : streams_) {
+    if (stream->hasData() && (source = stream->data())) {
+      std::vector<VectorPtr> children;
+      for (auto i = 0; i < type_->size(); ++i) {
+        const auto* child = source->childAt(i).get();
+        if (child != nullptr) {
+          children.push_back(
+              BaseVector::create(
+                  type_->childAt(i),
+                  outputBatchRows_,
+                  pool_,
+                  child->encoding()));
+        } else {
+          children.push_back(
+              BaseVector::create(type_->childAt(i), outputBatchRows_, pool_));
+        }
+      }
+
+      output_ = std::make_shared<RowVector>(
+          pool_,
+          type_,
+          /*nulls=*/nullptr,
+          outputBatchRows_,
+          std::move(children));
+      return;
+    }
+  }
+
+  // If a non-null stream cannot be found, default to generating row vector by
+  // type.
+  output_ = BaseVector::create<RowVector>(type_, outputBatchRows_, pool_);
+  for (auto& child : output_->children()) {
+    child->resize(outputBatchRows_);
   }
 }
 
