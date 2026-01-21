@@ -252,34 +252,6 @@ Array Functions
     Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
     T must be coercible to double. Returns bigint if T is coercible to bigint. Otherwise, returns double.
 
-.. function:: array_top_n(array(T), n) -> array(T)
-
-    Returns the top ``n`` elements of the array in descending order according to the natural ordering of the elements.
-    If ``n`` is larger than the size of the array, returns all elements sorted in descending order.
-    If ``n`` is zero, returns an empty array. Null elements are placed at the end of the result. ::
-
-        SELECT array_top_n(ARRAY [1, 100, 2, 5, 3], 3); -- [100, 5, 3]
-        SELECT array_top_n(ARRAY [1, 100], 5); -- [100, 1]
-        SELECT array_top_n(ARRAY [1, NULL, 2], 3); -- [2, 1, NULL]
-        SELECT array_top_n(ARRAY [1, 2, 3], 0); -- []
-
-.. function:: array_top_n(array(T), n, function(T, U)) -> array(T)
-    :noindex:
-
-    Returns the top ``n`` elements of the array sorted in descending order according to
-    values computed by the transform function. The transform function takes each element
-    and returns a sorting key. Elements are sorted by their keys in descending order.
-    U must be an orderable type.
-
-    If ``n`` is larger than the size of the array, returns all elements sorted by the
-    transform key. If ``n`` is zero, returns an empty array. Null elements and elements
-    with null transform results are placed at the end of the result. ::
-
-        SELECT array_top_n(ARRAY [1, 2, 3], 2, x -> x); -- [3, 2]
-        SELECT array_top_n(ARRAY [1, 2, 3], 2, x -> 0 - x); -- [1, 2] (ascending order via negation)
-        SELECT array_top_n(ARRAY [-5, 2, -3, 4], 2, x -> abs(x)); -- [-5, 4] (by absolute value)
-        SELECT array_top_n(ARRAY ['a', 'bbb', 'cc'], 2, x -> length(x)); -- ['bbb', 'cc'] (by length)
-
 .. function:: cardinality(x) -> bigint
 
     Returns the cardinality (size) of the array ``x``.
