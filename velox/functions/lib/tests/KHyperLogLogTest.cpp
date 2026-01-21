@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/hyperloglog/KHyperLogLog.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/common/memory/Memory.h"
 
 #include <folly/Random.h>

@@ -20,7 +20,7 @@
 
 #include <folly/container/F14Map.h>
 #include "velox/common/base/Status.h"
-#include "velox/common/hyperloglog/HllAccumulator.h"
+#include "velox/functions/lib/HllAccumulator.h"
 
 namespace facebook::velox::common::hll {
 
@@ -170,4 +170,4 @@ class KHyperLogLog {
 
 } // namespace facebook::velox::common::hll
 
-#include "velox/common/hyperloglog/KHyperLogLogImpl.h"
+#include "velox/functions/lib/KHyperLogLogImpl.h"

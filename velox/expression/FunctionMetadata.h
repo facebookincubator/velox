@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 namespace facebook::velox::exec {
 
 struct VectorFunctionMetadata {
@@ -43,6 +45,10 @@ struct VectorFunctionMetadata {
 
   /// Indicates if this is a companion function.
   bool companionFunction{false};
+
+  /// The owner/team responsible for this function. Used for logging and
+  /// attribution.
+  std::string_view owner{""};
 };
 
 class VectorFunctionMetadataBuilder {
@@ -64,6 +70,11 @@ class VectorFunctionMetadataBuilder {
 
   VectorFunctionMetadataBuilder& companionFunction(bool companionFunction) {
     metadata_.companionFunction = companionFunction;
+    return *this;
+  }
+
+  VectorFunctionMetadataBuilder& owner(std::string_view owner) {
+    metadata_.owner = owner;
     return *this;
   }
 
