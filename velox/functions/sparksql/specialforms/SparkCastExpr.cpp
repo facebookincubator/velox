@@ -41,13 +41,7 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
   
   const auto& fromType = compiledChildren[0]->type();
-  
-  // For ANSI-supported casts, check ANSI configuration to determine behavior.
-  //
-  // Exception: For string-to-boolean casts, Spark checks ANSI mode to determine
-  // whether to throw on invalid input (ANSI on) or return NULL (ANSI off).
-  const bool ansiEnabled = config.sparkAnsiEnabled();
-  const bool isTryCast = isAnsiSupported(fromType, type) ? !ansiEnabled : true;
+  const bool isTryCast = isAnsiSupported(fromType, type) ? !config.sparkAnsiEnabled() : true;
   
   return std::make_shared<SparkCastExpr>(
       type,

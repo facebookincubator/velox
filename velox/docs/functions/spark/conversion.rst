@@ -5,11 +5,8 @@ Conversion Functions
 .. spark:function:: cast(value AS type) -> type
 
     Explicitly cast a ``value`` to a specified ``type``.
-    
-    **Note:** String-to-boolean casts are *ANSI compliant* (subject to :doc:`spark.ansi_enabled </configs>`).
-    When ANSI is enabled, invalid strings throw errors; when disabled, they return NULL.
-    
-    For other cast types, follows the behavior when Spark ANSI mode is disabled:
+    Follows the behavior when Spark ANSI mode is disabled, and does not support
+    the behavior when ANSI is turned on:
 
     * If the ``value`` exceeds the range of the ``type``, no error is raised.
       Instead, the ``value`` is "wrapped" around.
@@ -158,7 +155,7 @@ Cast to Boolean
 From VARCHAR
 ^^^^^^^^^^^^
 
-*ANSI compliant* (subject to :doc:`spark.ansi_enabled </configs>`)
+*(ANSI compliant)*
 
 The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
 equivalents are allowed to be casted to boolean.
