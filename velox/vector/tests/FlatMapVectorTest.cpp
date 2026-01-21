@@ -748,6 +748,66 @@ TEST_F(FlatMapVectorTest, toMapVector) {
   });
 }
 
+/// Tests that BaseVector::create generates a FlatMapVector when the
+/// FLAT_MAP encoding is specified.
+TEST_F(FlatMapVectorTest, baseVectorCreate) {
+  auto type = MAP(BIGINT(), INTEGER());
+  auto size = 10;
+
+  // Default encoding creates MapVector.
+  auto mapVector = BaseVector::create(type, size, pool_.get());
+  EXPECT_EQ(mapVector->encoding(), VectorEncoding::Simple::MAP);
+  EXPECT_EQ(mapVector->size(), size);
+  EXPECT_EQ(mapVector->type()->toString(), type->toString());
+
+  // FLAT_MAP encoding creates FlatMapVector.
+  auto flatMapVector = BaseVector::create(
+      type, size, pool_.get(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(flatMapVector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(flatMapVector->size(), size);
+  EXPECT_EQ(flatMapVector->type()->toString(), type->toString());
+
+  auto* flatMap = flatMapVector->as<FlatMapVector>();
+  ASSERT_NE(flatMap, nullptr);
+  EXPECT_EQ(flatMap->numDistinctKeys(), 0);
+  EXPECT_TRUE(flatMap->inMaps().empty());
+  EXPECT_FALSE(flatMap->mayHaveNulls());
+}
+
+/// Tests that BaseVector::create<FlatMapVector> works correctly.
+TEST_F(FlatMapVectorTest, baseVectorCreateTemplate) {
+  auto type = MAP(INTEGER(), VARCHAR());
+  auto size = 5;
+
+  auto flatMapVector = BaseVector::create<FlatMapVector>(
+      type, size, pool_.get(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(flatMapVector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(flatMapVector->size(), size);
+  EXPECT_EQ(flatMapVector->numDistinctKeys(), 0);
+
+  // Verify the created FlatMapVector can be resized and used.
+  flatMapVector->resize(10);
+  EXPECT_EQ(flatMapVector->size(), 10);
+}
+
+/// Tests that BaseVector::create with FLAT_MAP encoding works for nested
+/// types.
+TEST_F(FlatMapVectorTest, baseVectorCreateNestedType) {
+  auto valueType = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
+  auto type = MAP(BIGINT(), valueType);
+  auto size = 3;
+
+  auto flatMapVector = BaseVector::create(
+      type, size, pool_.get(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(flatMapVector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(flatMapVector->size(), size);
+
+  auto* flatMap = flatMapVector->as<FlatMapVector>();
+  ASSERT_NE(flatMap, nullptr);
+  EXPECT_EQ(flatMap->valueType()->toString(), valueType->toString());
+  EXPECT_EQ(flatMap->keyType()->kind(), TypeKind::BIGINT);
+}
+
 TEST_F(FlatMapVectorTest, copyRanges) {
   std::vector<std::string> baseData = {
       "{1:10, 2:20, 3:null}",
