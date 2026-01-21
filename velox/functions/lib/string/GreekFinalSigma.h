@@ -18,7 +18,7 @@
 #include "folly/CPortability.h"
 #include "velox/external/utf8proc/utf8procImpl.h"
 
-namespace facebook::velox::functions::detail {
+namespace facebook::velox::functions {
 
 /// Helper function to check if a character is cased. Compatible with the
 /// 'isCased' implementation in 'ConditionalSpecialCasting.java' of JDK, which
@@ -178,4 +178,4 @@ FOLLY_ALWAYS_INLINE int writeLowerSigma(char* output, bool isFinal) {
       lowerSigma, reinterpret_cast<unsigned char*>(output));
 }
 
-} // namespace facebook::velox::functions::detail
+} // namespace facebook::velox::functions

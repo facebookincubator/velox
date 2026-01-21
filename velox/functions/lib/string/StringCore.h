@@ -216,12 +216,12 @@ FOLLY_ALWAYS_INLINE size_t lowerUnicode(
 
     if constexpr (greekFinalSigma) {
       // Handle Greek final sigma for Σ (U+03A3).
-      // See detail::isFinalSigma for the Final_Sigma rule reference.
+      // See isFinalSigma() for the Final_Sigma rule reference.
       if (nextCodePoint == 0x03A3) {
         size_t sigmaStartPos = inputIdx - size;
         bool isFinal =
-            detail::isFinalSigma(input, inputLength, sigmaStartPos, inputIdx);
-        outputIdx += detail::writeLowerSigma(&output[outputIdx], isFinal);
+            isFinalSigma(input, inputLength, sigmaStartPos, inputIdx);
+        outputIdx += writeLowerSigma(&output[outputIdx], isFinal);
         continue;
       }
     }
