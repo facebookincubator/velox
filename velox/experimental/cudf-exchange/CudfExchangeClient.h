@@ -59,7 +59,7 @@ class CudfExchangeClient
 
   // Returns runtime statistics aggregated across all of the exchange sources.
   // ExchangeClient is expected to report background CPU time by including a
-  // runtime metric named ExchangeClient::kBackgroundCpuTimeMs.
+  // runtime metric named Operator::kBackgroundCpuTimeNanos.
   folly::F14FastMap<std::string, RuntimeMetric> stats() const;
 
   const std::shared_ptr<CudfExchangeQueue>& queue() const {

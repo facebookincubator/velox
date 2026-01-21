@@ -17,7 +17,6 @@ add_library(
   CudfPartitionedOutput.cpp
   CudfOutputQueueManager.cpp
   CudfQueues.cpp
-  CudfExchange.cpp
   HybridExchange.cpp
   ExchangeClientFacade.cpp
   CudfExchangeProtocol.cpp
