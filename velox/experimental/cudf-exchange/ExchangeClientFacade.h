@@ -25,7 +25,7 @@ namespace facebook::velox::cudf_exchange {
 
 // Define the return types from the two types of exchange clients as a variant
 using SerPageVector =
-    std::vector<std::unique_ptr<facebook::velox::exec::SerializedPage>>;
+    std::vector<std::unique_ptr<facebook::velox::exec::SerializedPageBase>>;
 // PackedTableWithStreamPtr is defined in CudfExchangeQueue.h
 using ResultVariant = std::variant<SerPageVector, PackedTableWithStreamPtr>;
 
