@@ -698,4 +698,32 @@ TEST_F(ArrayTopNTest, transformDoubleArray) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(ArrayTopNTest, transformNestedNulls) {
+  // Test with transform returning arrays that contain nested nulls.
+  // This triggers the "Ordering nulls is not supported" error during
+  // comparison. The function should handle this gracefully using try().
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[4, 5]",
+  });
+
+  // Transform returns an array with nested nulls - this causes comparison
+  // to fail because arrays with nested nulls can't be compared.
+  // The error should be caught and the row should produce an error/null.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_top_n(c0, INTEGER '2', x -> array[null, 1])",
+          makeRowVector({input})),
+      "Ordering nulls is not supported");
+
+  // When wrapped in try(), it should return null for rows that fail.
+  auto result = evaluate(
+      "try(array_top_n(c0, INTEGER '2', x -> array[null, 1]))",
+      makeRowVector({input}));
+
+  // Both rows should be null because the comparison fails due to nested nulls.
+  ASSERT_TRUE(result->isNullAt(0));
+  ASSERT_TRUE(result->isNullAt(1));
+}
+
 } // namespace

@@ -126,84 +126,9 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
             CompareFlags::NullHandlingMode::kNullAsIndeterminate};
 
     // Process each row.
-    rows.applyToSelected([&](vector_size_t row) {
-      if (flatArray->isNullAt(row)) {
-        rawResultOffsets[row] = currentOffset;
-        rawResultSizes[row] = 0;
-        return;
-      }
-
-      auto n = decodedN.valueAt<int32_t>(row);
-      VELOX_USER_CHECK_GE(
-          n, 0, "Parameter n: {} to ARRAY_TOP_N is negative", n);
-
-      auto arraySize = flatArray->sizeAt(row);
-      auto offset = flatArray->offsetAt(row);
-
-      if (n == 0 || arraySize == 0) {
-        rawResultOffsets[row] = currentOffset;
-        rawResultSizes[row] = 0;
-        return;
-      }
-
-      // Build indices for this array, separating nulls from non-nulls.
-      // An element is considered "null" if either the original element is null
-      // or the transform result is null.
-      std::vector<vector_size_t> nonNullIndices;
-      std::vector<vector_size_t> nullIndices;
-
-      for (vector_size_t i = 0; i < arraySize; ++i) {
-        auto idx = offset + i;
-        bool elementIsNull = elementsVector->isNullAt(idx);
-        bool keyIsNull = decodedKeys->isNullAt(idx);
-
-        if (elementIsNull || keyIsNull) {
-          nullIndices.push_back(idx);
-        } else {
-          nonNullIndices.push_back(idx);
-        }
-      }
-
-      auto numNonNull = nonNullIndices.size();
-      auto k = std::min(static_cast<size_t>(n), numNonNull);
-
-      // Sort non-null indices by their transformed keys in descending order.
-      if (numNonNull > 1 && k > 0) {
-        std::partial_sort(
-            nonNullIndices.begin(),
-            nonNullIndices.begin() + k,
-            nonNullIndices.end(),
-            [&](vector_size_t a, vector_size_t b) {
-              // Compare transformed keys in descending order.
-              auto result = baseKeysVector->compare(
-                  baseKeysVector, keyIndices[a], keyIndices[b], flags);
-              if (!result.has_value()) {
-                VELOX_USER_FAIL("Ordering nulls is not supported");
-              }
-              return result.value() < 0;
-            });
-      }
-
-      // Build result: take top n elements (non-nulls first, then nulls).
-      auto resultSize = std::min(static_cast<vector_size_t>(n), arraySize);
-
-      rawResultOffsets[row] = currentOffset;
-      rawResultSizes[row] = resultSize;
-
-      vector_size_t added = 0;
-      // Add non-null elements first (sorted by transform key, descending).
-      for (size_t i = 0; i < nonNullIndices.size() && added < resultSize; ++i) {
-        resultIndices.push_back(nonNullIndices[i]);
-        added++;
-      }
-      // Add nulls to fill if needed.
-      for (size_t i = 0; i < nullIndices.size() && added < resultSize; ++i) {
-        resultIndices.push_back(nullIndices[i]);
-        added++;
-      }
-
-      currentOffset += resultSize;
-    });
+    // Use applyToSelectedNoThrow to handle errors (e.g., nested nulls in
+    // complex types) gracefully - failed rows will be marked as errors while
+    // other rows continue processing.
 
     // Build the result elements vector using dictionary wrapping.
     VectorPtr resultElements;
