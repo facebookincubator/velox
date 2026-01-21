@@ -27,6 +27,7 @@ const auto& subfieldKindNames() {
       {SubfieldKind::kNestedField, "NestedField"},
       {SubfieldKind::kStringSubscript, "StringSubscript"},
       {SubfieldKind::kLongSubscript, "LongSubscript"},
+      {SubfieldKind::kArrayOrMapSubscript, "ArrayOrMapSubscript"},
   };
 
   return kNames;

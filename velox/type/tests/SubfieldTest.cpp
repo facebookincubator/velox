@@ -157,3 +157,248 @@ TEST(SubfieldTest, longSubscript) {
   ASSERT_TRUE(longSubscript);
   ASSERT_EQ(longSubscript->index(), 3309189884973035076);
 }
+
+TEST(SubfieldTest, structureOnlySubscript) {
+  // Test basic parsing of x[$]
+  Subfield subfield("x[$]");
+  ASSERT_EQ(subfield.path().size(), 2);
+  EXPECT_EQ(subfield.path()[0]->kind(), SubfieldKind::kNestedField);
+  EXPECT_EQ(subfield.path()[1]->kind(), SubfieldKind::kArrayOrMapSubscript);
+
+  // Verify toString round-trip
+  EXPECT_EQ(subfield.toString(), "x[$]");
+
+  // Test with nested field
+  Subfield nestedSubfield("a.b[$]");
+  ASSERT_EQ(nestedSubfield.path().size(), 3);
+  EXPECT_EQ(nestedSubfield.path()[0]->kind(), SubfieldKind::kNestedField);
+  EXPECT_EQ(nestedSubfield.path()[1]->kind(), SubfieldKind::kNestedField);
+  EXPECT_EQ(
+      nestedSubfield.path()[2]->kind(), SubfieldKind::kArrayOrMapSubscript);
+  EXPECT_EQ(nestedSubfield.toString(), "a.b[$]");
+}
+
+TEST(SubfieldTest, structureOnlyEquality) {
+  // Test equality of structure-only subscripts
+  Subfield s1("x[$]");
+  Subfield s2("x[$]");
+  Subfield s3("y[$]");
+
+  EXPECT_EQ(s1, s2);
+  EXPECT_NE(s1, s3);
+
+  // Test path element equality
+  auto structureOnly1 = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  auto structureOnly2 = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  EXPECT_EQ(*structureOnly1, *structureOnly2);
+}
+
+TEST(SubfieldTest, structureOnlyHash) {
+  // Test hashing works correctly
+  std::unordered_set<Subfield> subfields;
+  subfields.emplace("x[$]");
+  subfields.emplace("y[$]");
+  subfields.emplace("x[$]"); // Duplicate, should not increase size
+
+  EXPECT_EQ(subfields.size(), 2);
+  EXPECT_TRUE(subfields.find(Subfield("x[$]")) != subfields.end());
+  EXPECT_TRUE(subfields.find(Subfield("y[$]")) != subfields.end());
+}
+
+TEST(SubfieldTest, nestedStructureOnly) {
+  // Test arr[*][$] for array of maps
+  Subfield subfield("arr[*][$]");
+  ASSERT_EQ(subfield.path().size(), 3);
+  EXPECT_EQ(subfield.path()[0]->kind(), SubfieldKind::kNestedField);
+  EXPECT_EQ(subfield.path()[1]->kind(), SubfieldKind::kAllSubscripts);
+  EXPECT_EQ(subfield.path()[2]->kind(), SubfieldKind::kArrayOrMapSubscript);
+  EXPECT_EQ(subfield.toString(), "arr[*][$]");
+
+  // Test map_col[*][*][$] for nested structures
+  Subfield complexSubfield("data[*][\"key\"][$]");
+  ASSERT_EQ(complexSubfield.path().size(), 4);
+  EXPECT_EQ(complexSubfield.path()[0]->kind(), SubfieldKind::kNestedField);
+  EXPECT_EQ(complexSubfield.path()[1]->kind(), SubfieldKind::kAllSubscripts);
+  EXPECT_EQ(complexSubfield.path()[2]->kind(), SubfieldKind::kStringSubscript);
+  EXPECT_EQ(
+      complexSubfield.path()[3]->kind(), SubfieldKind::kArrayOrMapSubscript);
+}
+
+TEST(SubfieldTest, structureOnlyRoundTrip) {
+  // Test round-trip through tokenization
+  std::vector<std::string> testPaths = {
+      "x[$]",
+      "a.b[$]",
+      "arr[*][$]",
+      "map_col[\"key\"][$]",
+      "data[123][$]",
+      "nested[*][\"field\"][$]"};
+
+  for (const auto& path : testPaths) {
+    Subfield original(path);
+    ASSERT_TRUE(original.valid());
+
+    // Convert to string and parse back
+    auto roundTrip = Subfield(original.toString());
+    ASSERT_TRUE(roundTrip.valid());
+    EXPECT_EQ(original, roundTrip) << "Failed round-trip for: " << path;
+    EXPECT_EQ(original.toString(), roundTrip.toString());
+  }
+}
+
+TEST(SubfieldTest, structureOnlyInCreateElements) {
+  // Add ArrayOrMapSubscript to the mix of all subscript types
+  auto elements = createElements();
+  elements.push_back(std::make_unique<Subfield::ArrayOrMapSubscript>());
+
+  // Test with base field
+  std::vector<std::unique_ptr<Subfield::PathElement>> newElements;
+  newElements.push_back(std::make_unique<Subfield::NestedField>("a"));
+  newElements.push_back(std::make_unique<Subfield::ArrayOrMapSubscript>());
+  testRoundTrip(Subfield(std::move(newElements)));
+}
+
+TEST(SubfieldTest, arrayOrMapSubscriptStructureOnly) {
+  // Test basic ArrayOrMapSubscript in structure-only mode (equivalent to [$])
+  auto arrayOrMap = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  EXPECT_TRUE(arrayOrMap->isStructureOnly());
+  EXPECT_FALSE(arrayOrMap->includeKeys());
+  EXPECT_FALSE(arrayOrMap->includeValues());
+  EXPECT_EQ(arrayOrMap->subscript(), nullptr);
+  EXPECT_EQ(arrayOrMap->toString(), "[$]");
+
+  // Test in a full subfield path
+  std::vector<std::unique_ptr<Subfield::PathElement>> elements;
+  elements.push_back(std::make_unique<Subfield::NestedField>("x"));
+  elements.push_back(std::make_unique<Subfield::ArrayOrMapSubscript>());
+  Subfield subfield(std::move(elements));
+  EXPECT_EQ(subfield.toString(), "x[$]");
+}
+
+TEST(SubfieldTest, arrayOrMapSubscriptEquality) {
+  // Test equality of structure-only subscripts
+  auto sub1 = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  auto sub2 = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  EXPECT_EQ(*sub1, *sub2);
+
+  // Test clone
+  auto cloned = sub1->clone();
+  EXPECT_EQ(*sub1, *cloned);
+}
+
+TEST(SubfieldTest, arrayOrMapSubscriptDesignPatterns) {
+  // Pattern 1: Structure-only mode [$]
+  auto structureOnly = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  EXPECT_TRUE(structureOnly->isStructureOnly());
+  EXPECT_EQ(structureOnly->toString(), "[$]");
+
+  // Future patterns (not yet implemented in parser, but data structure
+  // supports): Pattern 2: All keys only [K*, *]
+  auto allKeys = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      true /* includeKeys */,
+      false /* includeValues */,
+      std::make_unique<Subfield::AllSubscripts>());
+  EXPECT_TRUE(allKeys->includeKeys());
+  EXPECT_FALSE(allKeys->includeValues());
+  EXPECT_NE(allKeys->subscript(), nullptr);
+  EXPECT_EQ(allKeys->subscript()->kind(), SubfieldKind::kAllSubscripts);
+
+  // Pattern 3: Only keys with LongSubscript 42 [K*, 42]
+  auto keysWithLong = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      true /* includeKeys */,
+      false /* includeValues */,
+      std::make_unique<Subfield::LongSubscript>(42));
+  EXPECT_TRUE(keysWithLong->includeKeys());
+  EXPECT_FALSE(keysWithLong->includeValues());
+  EXPECT_EQ(keysWithLong->subscript()->kind(), SubfieldKind::kLongSubscript);
+  EXPECT_EQ(keysWithLong->toString(), "[K*, 42]");
+
+  // Pattern 4: Only keys with StringSubscript 'foo' [K*, 'foo']
+  auto keysWithString = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      true /* includeKeys */,
+      false /* includeValues */,
+      std::make_unique<Subfield::StringSubscript>("foo"));
+  EXPECT_TRUE(keysWithString->includeKeys());
+  EXPECT_FALSE(keysWithString->includeValues());
+  EXPECT_EQ(
+      keysWithString->subscript()->kind(), SubfieldKind::kStringSubscript);
+  EXPECT_EQ(keysWithString->toString(), "[K*, 'foo']");
+
+  // Pattern 5: All values only [V*, *]
+  auto allValues = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      false /* includeKeys */,
+      true /* includeValues */,
+      std::make_unique<Subfield::AllSubscripts>());
+  EXPECT_FALSE(allValues->includeKeys());
+  EXPECT_TRUE(allValues->includeValues());
+  EXPECT_EQ(allValues->subscript()->kind(), SubfieldKind::kAllSubscripts);
+
+  // Pattern 6: Only values with key equals to LongSubscript 42 [V*, 42]
+  auto valuesWithLong = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      false /* includeKeys */,
+      true /* includeValues */,
+      std::make_unique<Subfield::LongSubscript>(42));
+  EXPECT_FALSE(valuesWithLong->includeKeys());
+  EXPECT_TRUE(valuesWithLong->includeValues());
+  EXPECT_EQ(valuesWithLong->subscript()->kind(), SubfieldKind::kLongSubscript);
+  EXPECT_EQ(valuesWithLong->toString(), "[V*, 42]");
+
+  // Pattern 7: Only values with key equals to StringSubscript 'foo' [V*, 'foo']
+  auto valuesWithString = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      false /* includeKeys */,
+      true /* includeValues */,
+      std::make_unique<Subfield::StringSubscript>("foo"));
+  EXPECT_FALSE(valuesWithString->includeKeys());
+  EXPECT_TRUE(valuesWithString->includeValues());
+  EXPECT_EQ(
+      valuesWithString->subscript()->kind(), SubfieldKind::kStringSubscript);
+  EXPECT_EQ(valuesWithString->toString(), "[V*, 'foo']");
+
+  // Pattern 8: All keys and values with no [*, *]
+  auto allKeysAndValues = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      true /* includeKeys */,
+      true /* includeValues */,
+      std::make_unique<Subfield::AllSubscripts>());
+  EXPECT_TRUE(allKeysAndValues->includeKeys());
+  EXPECT_TRUE(allKeysAndValues->includeValues());
+  EXPECT_EQ(allKeysAndValues->toString(), "[*]");
+
+  // Pattern 9: All keys and values with StringSubscript
+  auto keysAndValuesWithString =
+      std::make_unique<Subfield::ArrayOrMapSubscript>(
+          true /* includeKeys */,
+          true /* includeValues */,
+          std::make_unique<Subfield::StringSubscript>("foo"));
+  EXPECT_TRUE(keysAndValuesWithString->includeKeys());
+  EXPECT_TRUE(keysAndValuesWithString->includeValues());
+  EXPECT_EQ(
+      keysAndValuesWithString->subscript()->kind(),
+      SubfieldKind::kStringSubscript);
+  EXPECT_EQ(keysAndValuesWithString->toString(), "[\"foo\"]");
+
+  // Pattern 10: All keys and values with LongSubscript
+  auto keysAndValuesWithLong = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      true /* includeKeys */,
+      true /* includeValues */,
+      std::make_unique<Subfield::LongSubscript>(42));
+  EXPECT_TRUE(keysAndValuesWithLong->includeKeys());
+  EXPECT_TRUE(keysAndValuesWithLong->includeValues());
+  EXPECT_EQ(
+      keysAndValuesWithLong->subscript()->kind(), SubfieldKind::kLongSubscript);
+  EXPECT_EQ(keysAndValuesWithLong->toString(), "[42]");
+}
+
+TEST(SubfieldTest, arrayOrMapSubscriptHash) {
+  // Test hashing for structure-only mode
+  auto sub1 = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  auto sub2 = std::make_unique<Subfield::ArrayOrMapSubscript>();
+  EXPECT_EQ(sub1->hash(), sub2->hash());
+
+  // Test hashing for different configurations
+  auto allKeys = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      true, false, std::make_unique<Subfield::AllSubscripts>());
+  auto allValues = std::make_unique<Subfield::ArrayOrMapSubscript>(
+      false, true, std::make_unique<Subfield::AllSubscripts>());
+  // Different configurations should have different hashes (usually)
+  EXPECT_NE(allKeys->hash(), allValues->hash());
+}
