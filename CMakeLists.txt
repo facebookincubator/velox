@@ -74,7 +74,7 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 option(
   VELOX_BUILD_TESTING
   "Enable Velox tests. This will enable all other build options automatically."
-  ON
+  OFF
 )
 option(
   VELOX_BUILD_MINIMAL
@@ -181,7 +181,6 @@ option(VELOX_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang
 
 if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
-  set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
   set(VELOX_ENABLE_EXPRESSION ON)
   set(VELOX_ENABLE_EXEC OFF)
@@ -212,6 +211,11 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_BUILD_TEST_UTILS ON)
 endif()
 
+if(${VELOX_ENABLE_EXAMPLES})
+  set(VELOX_ENABLE_EXPRESSION ON)
+  set(VELOX_BUILD_TEST_UTILS ON)
+endif()
+
 if(VELOX_ENABLE_CUDF)
   if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     message(FATAL_ERROR "cuDF requires GCC. Found ${CMAKE_CXX_COMPILER_ID}.")
@@ -236,10 +240,6 @@ endif()
 
 if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   set(VELOX_ENABLE_COMPRESSION_LZ4 ON)
-endif()
-
-if(${VELOX_ENABLE_EXAMPLES})
-  set(VELOX_ENABLE_EXPRESSION ON)
 endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
@@ -649,7 +649,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_BUILD_TESTING)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)

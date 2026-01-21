@@ -269,6 +269,7 @@ jobs:
             -DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY
             -DVELOX_ENABLE_PARQUET=ON
             -DVELOX_ENABLE_EXAMPLES=ON
+            -DVELOX_BUILD_TESTING=OFF
         run: |
           # Faiss (link issue when using Clang) is excluded for Clang compilation and needs to be added back when using GCC.
           if [[ "${USE_CLANG}" = "true" ]]; then
