@@ -17,6 +17,7 @@
 #include "velox/vector/EncodedVectorCopy.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/RandomSeed.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -564,6 +565,135 @@ TEST_P(EncodedVectorCopyTest, allNullsMap) {
   auto expected = makeAllNullMapVector(4, BIGINT(), BIGINT());
   ;
   runTests(source, folly::Range(&range, 1), target, expected);
+}
+
+/// Tests copying a FlatMapVector to a new target using EncodedVectorCopy.
+TEST_P(EncodedVectorCopyTest, flatMapVector) {
+  auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{2, 40}, {3, 50}},
+  });
+
+  // Test creating a new vector from FlatMapVector.
+  {
+    SCOPED_TRACE("New full copy");
+    BaseVector::CopyRange range = {0, 0, source->size()};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    test::assertEqualVectors(source, actual);
+  }
+
+  // Test slicing a FlatMapVector.
+  {
+    SCOPED_TRACE("New slice copy");
+    BaseVector::CopyRange range = {1, 0, 2};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(actual->size(), 2);
+
+    auto* flatMap = actual->as<FlatMapVector>();
+    ASSERT_NE(flatMap, nullptr);
+    // The copy should contain keys 1, 2, 3 from the sliced rows.
+    EXPECT_EQ(flatMap->numDistinctKeys(), 3);
+  }
+}
+
+/// Tests copying a FlatMapVector with nulls.
+TEST_P(EncodedVectorCopyTest, flatMapVectorWithNulls) {
+  auto source = vectorMaker_.flatMapVectorNullable<int64_t, int64_t>({
+      std::nullopt,
+      {{{1, 10}, {2, 20}}},
+      {{{3, std::nullopt}}},
+  });
+
+  // Test creating a new vector from FlatMapVector with nulls.
+  {
+    SCOPED_TRACE("New full copy with nulls");
+    BaseVector::CopyRange range = {0, 0, source->size()};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    test::assertEqualVectors(source, actual);
+  }
+
+  // Test copying only non-null rows.
+  {
+    SCOPED_TRACE("Copy non-null slice");
+    BaseVector::CopyRange range = {1, 0, 2};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(actual->size(), 2);
+  }
+}
+
+/// Tests copying FlatMapVector with empty maps.
+TEST_P(EncodedVectorCopyTest, flatMapVectorEmpty) {
+  auto source = vectorMaker_.flatMapVectorNullable<int64_t, int64_t>({
+      {{}},
+      {{{1, 10}}},
+      {{}},
+  });
+
+  BaseVector::CopyRange range = {0, 0, source->size()};
+  VectorPtr actual;
+  copy(source, folly::Range(&range, 1), actual);
+  EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  test::assertEqualVectors(source, actual);
+}
+
+/// Tests copying multiple ranges of a FlatMapVector.
+TEST_P(EncodedVectorCopyTest, flatMapVectorMultipleRanges) {
+  auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 20}},
+      {{3, 30}},
+      {{4, 40}},
+  });
+
+  // Copy non-contiguous ranges.
+  BaseVector::CopyRange ranges[] = {{0, 0, 1}, {2, 1, 2}};
+  VectorPtr actual;
+  copy(source, folly::Range(ranges, 2), actual);
+  EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(actual->size(), 3);
+
+  // Verify the content.
+  auto* flatMap = actual->as<FlatMapVector>();
+  ASSERT_NE(flatMap, nullptr);
+  // Copy preserves all distinct keys from source (1, 2, 3, 4).
+  EXPECT_EQ(flatMap->numDistinctKeys(), 4);
+}
+
+/// Tests copying FlatMapVector with complex value types.
+TEST_P(EncodedVectorCopyTest, flatMapVectorComplexValues) {
+  // Create FlatMapVector with ROW value type.
+  auto valueType = ROW({{"a", BIGINT()}});
+  auto mapType = MAP(INTEGER(), valueType);
+
+  // Create source with row values.
+  auto distinctKeys = makeFlatVector<int32_t>({1, 2});
+  std::vector<VectorPtr> mapValues;
+  mapValues.push_back(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
+  mapValues.push_back(makeRowVector({makeFlatVector<int64_t>({40, 50, 60})}));
+
+  auto source = std::make_shared<FlatMapVector>(
+      pool(),
+      mapType,
+      nullptr,
+      3,
+      distinctKeys,
+      std::move(mapValues),
+      std::vector<BufferPtr>{nullptr, nullptr});
+
+  BaseVector::CopyRange range = {0, 0, source->size()};
+  VectorPtr actual;
+  copy(source, folly::Range(&range, 1), actual);
+  EXPECT_EQ(actual->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  test::assertEqualVectors(source, actual);
 }
 
 TEST_P(EncodedVectorCopyTest, flatArray) {
