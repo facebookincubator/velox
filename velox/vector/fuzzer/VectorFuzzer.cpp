@@ -331,7 +331,9 @@ VectorPtr VectorFuzzer::fuzz(
   }
 
   // 20% chance of adding a constant vector.
+  bool tookConstantBranch = false;
   if (opts_.allowConstantVector && coinToss(0.2)) {
+    tookConstantBranch = true;
     vector = fuzzConstant(type, vectorSize, inputGenerator);
   } else if (type->isOpaque()) {
     vector = fuzzFlatOpaque(type, vectorSize);
@@ -341,6 +343,14 @@ VectorPtr VectorFuzzer::fuzz(
     vector = type->isPrimitiveType() ? fuzzFlatPrimitive(type, vectorSize)
                                      : fuzzComplex(type, vectorSize);
   }
+
+  // Debug logging to understand how often each encoding branch is taken for
+  // different types, especially BIGINT join keys.
+  LOG(INFO) << "ManuVF.fuzzBranch type=" << type->toString()
+            << " tookConstant=" << (tookConstantBranch ? 1 : 0)
+            << " isOpaque=" << (type->isOpaque() ? 1 : 0)
+            << " hasCustomGenerator=" << (inputGenerator ? 1 : 0)
+            << " isPrimitive=" << (type->isPrimitiveType() ? 1 : 0);
 
   if (vectorSize > size) {
     auto offset = rand<uint32_t>(rng_) % (vectorSize - size + 1);

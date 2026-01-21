@@ -1198,6 +1198,8 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
           operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+      LOG(INFO) << "ManuHP.listJoinResults inputSize=" << inputSize
+                << " batchOutputRowsBeforeFilter=" << numOut;
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -1210,6 +1212,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     VELOX_CHECK_LE(numOut, outputBatchSize);
 
     numOut = evalFilter(numOut);
+    LOG(INFO) << "ManuHP.afterFilter batchOutputRowsAfterFilter=" << numOut;
 
     if (numOut == 0) {
       // The hash probe might get stuck in the output loop if the filter is
