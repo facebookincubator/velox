@@ -18,9 +18,9 @@
 
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/OperatorTraceConfig.h"
+#include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/Split.h"
-#include "velox/exec/trace/TraceConfig.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/exec/trace/TraceWriter.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/VectorStream.h"
