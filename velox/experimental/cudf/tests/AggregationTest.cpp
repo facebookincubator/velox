@@ -790,4 +790,31 @@ TEST_F(AggregationTest, globalApproxDistinctEmpty) {
   EXPECT_EQ(estimate, 0);
 }
 
+TEST_F(AggregationTest, globalApproxDistinctPartialIntermediateFinal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
+      makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation(
+                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(c0_estimate, 4);
+  EXPECT_LE(c0_estimate, 6);
+
+  EXPECT_GE(c1_estimate, 4);
+  EXPECT_LE(c1_estimate, 6);
+}
+
 } // namespace facebook::velox::exec::test

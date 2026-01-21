@@ -466,31 +466,19 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       rmm::cuda_stream_view stream) override {
-    VELOX_CHECK(
-        step != core::AggregationNode::Step::kIntermediate,
-        "ApproxDistinctAggregator does not support intermediate aggregation step");
-
     if (exec::isRawInput(step)) {
       return doPartialReduce(input, stream);
+    } else if (step == core::AggregationNode::Step::kIntermediate) {
+      return doIntermediateReduce(input, stream);
     } else {
       return doFinalReduce(input, stream);
     }
   }
 
  private:
-  std::unique_ptr<cudf::column> doPartialReduce(
-      cudf::table_view const& input,
+  std::unique_ptr<cudf::column> makeSketchColumn(
+      cuda::std::span<cuda::std::byte const> sketch_bytes,
       rmm::cuda_stream_view stream) {
-    auto inputTable = cudf::table_view({input.column(inputIndex)});
-
-    cudf::approx_distinct_count sketch{
-        inputTable,
-        precision_,
-        cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_NULL,
-        stream};
-
-    auto sketch_bytes = sketch.sketch();
     auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
 
     cudf::size_type offsets[2] = {0, sketch_size};
@@ -523,16 +511,9 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         stream);
   }
 
-  std::unique_ptr<cudf::column> doFinalReduce(
-      cudf::table_view const& input,
+  cudf::approx_distinct_count mergeSketches(
+      cudf::column_view const& sketch_column,
       rmm::cuda_stream_view stream) {
-    auto sketch_column = input.column(inputIndex);
-
-    if (sketch_column.size() == 0) {
-      return cudf::make_column_from_scalar(
-          cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
-    }
-
     auto lists_col = cudf::lists_column_view(sketch_column);
     auto child_col = lists_col.get_sliced_child(stream);
     auto offsets_iter = lists_col.offsets_begin();
@@ -566,6 +547,48 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       }
     }
 
+    return merged_sketch;
+  }
+
+  std::unique_ptr<cudf::column> doPartialReduce(
+      cudf::table_view const& input,
+      rmm::cuda_stream_view stream) {
+    auto inputTable = cudf::table_view({input.column(inputIndex)});
+
+    cudf::approx_distinct_count sketch{
+        inputTable,
+        precision_,
+        cudf::null_policy::EXCLUDE,
+        cudf::nan_policy::NAN_IS_NULL,
+        stream};
+
+    return makeSketchColumn(sketch.sketch(), stream);
+  }
+
+  std::unique_ptr<cudf::column> doIntermediateReduce(
+      cudf::table_view const& input,
+      rmm::cuda_stream_view stream) {
+    auto sketch_column = input.column(inputIndex);
+
+    if (sketch_column.size() == 0) {
+      return makeSketchColumn({}, stream);
+    }
+
+    auto merged_sketch = mergeSketches(sketch_column, stream);
+    return makeSketchColumn(merged_sketch.sketch(), stream);
+  }
+
+  std::unique_ptr<cudf::column> doFinalReduce(
+      cudf::table_view const& input,
+      rmm::cuda_stream_view stream) {
+    auto sketch_column = input.column(inputIndex);
+
+    if (sketch_column.size() == 0) {
+      return cudf::make_column_from_scalar(
+          cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
+    }
+
+    auto merged_sketch = mergeSketches(sketch_column, stream);
     std::size_t estimate = merged_sketch.estimate(stream);
 
     return cudf::make_column_from_scalar(
