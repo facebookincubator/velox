@@ -87,6 +87,32 @@ struct HoursFunction {
   }
 };
 
+// timestamp_ns(input) -> nanoseconds from 1970-01-01 00:00:00.000000000
+// Input is timestamp.
+template <typename TExec>
+struct TimestampNsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = epochNanos(timestamp);
+  }
+};
+
+// timestamptz_ns(input) -> nanoseconds from 1970-01-01 00:00:00.000000000 UTC
+// Input is timestamp with timezone.
+template <typename TExec>
+struct TimestamptzNsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = epochNanos(timestamp);
+  }
+};
+
 void registerDateTimeFunctions(const std::string& prefix) {
   registerFunction<YearsFunction, int32_t, Timestamp>({prefix + "years"});
   registerFunction<YearsFunction, int32_t, Date>({prefix + "years"});
@@ -95,6 +121,10 @@ void registerDateTimeFunctions(const std::string& prefix) {
   registerFunction<DaysFunction, Date, Timestamp>({prefix + "days"});
   registerFunction<DaysFunction, Date, Date>({prefix + "days"});
   registerFunction<HoursFunction, int32_t, Timestamp>({prefix + "hours"});
+  registerFunction<TimestampNsFunction, int64_t, Timestamp>(
+      {prefix + "timestamp_ns"});
+  registerFunction<TimestamptzNsFunction, int64_t, Timestamp>(
+      {prefix + "timestamptz_ns"});
 }
 
 } // namespace facebook::velox::functions::iceberg
