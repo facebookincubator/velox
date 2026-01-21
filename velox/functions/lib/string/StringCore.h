@@ -22,6 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/external/utf8proc/utf8procImpl.h"
+#include "velox/functions/lib/string/GreekFinalSigma.h"
 
 #if (ENABLE_VECTORIZATION > 0) && !defined(_DEBUG) && !defined(DEBUG)
 #if defined(__clang__) && (__clang_major__ > 7)
@@ -43,148 +44,6 @@
 #endif
 
 namespace facebook::velox::functions {
-namespace detail {
-
-// Helper function to check if a character is cased. Compatible with the
-// 'isCased' implementation in 'ConditionalSpecialCasting.java' of JDK, which is
-// used by 'toLowerCase' function in Spark SQL.
-FOLLY_ALWAYS_INLINE bool isCased(utf8proc_int32_t ch) {
-  auto type = utf8proc_category(ch);
-  // Lowercase letter, uppercase letter or titlecase letter.
-  if (type == UTF8PROC_CATEGORY_LL || type == UTF8PROC_CATEGORY_LU ||
-      type == UTF8PROC_CATEGORY_LT) {
-    return true;
-  }
-  // Modifier letters and special cases.
-  if ((ch >= 0x02B0 && ch <= 0x02B8) || (ch >= 0x02C0 && ch <= 0x02C1) ||
-      (ch >= 0x02E0 && ch <= 0x02E4) || ch == 0x0345 || ch == 0x037A ||
-      (ch >= 0x1D2C && ch <= 0x1D61) || (ch >= 0x2160 && ch <= 0x217F) ||
-      (ch >= 0x24B6 && ch <= 0x24E9)) {
-    return true;
-  }
-  return false;
-}
-
-// Helper function to check if a character is case-ignorable according to
-// Unicode specification. Case-ignorable characters can be skipped when
-// determining the context for final sigma conversion.
-// Reference: https://www.unicode.org/Public/UCD/latest/ucd/DerivedCoreProperties.txt
-FOLLY_ALWAYS_INLINE bool isCaseIgnorable(utf8proc_int32_t ch) {
-  auto cat = utf8proc_category(ch);
-
-  // General_Category: Mn (Mark, Nonspacing), Me (Mark, Enclosing),
-  // Cf (Format), Lm (Letter, Modifier), Sk (Symbol, Modifier)
-  if (cat == UTF8PROC_CATEGORY_MN || cat == UTF8PROC_CATEGORY_ME ||
-      cat == UTF8PROC_CATEGORY_CF || cat == UTF8PROC_CATEGORY_LM ||
-      cat == UTF8PROC_CATEGORY_SK) {
-    return true;
-  }
-
-  // Word_Break property: MidLetter, MidNumLet, Single_Quote
-  // Reference: https://www.unicode.org/Public/UCD/latest/ucd/auxiliary/WordBreakProperty.txt
-  switch (ch) {
-    // MidLetter
-    case 0x00B7: // · MIDDLE DOT
-    case 0x0387: // · GREEK ANO TELEIA
-    case 0x05F4: // ״ HEBREW PUNCTUATION GERSHAYIM
-    case 0x2027: // ‧ HYPHENATION POINT
-    case 0xFE13: // ︓ PRESENTATION FORM FOR VERTICAL COLON
-    case 0xFE55: // ﹕ SMALL COLON
-    case 0xFF1A: // ： FULLWIDTH COLON
-    // MidNumLet
-    case 0x002E: // . FULL STOP
-    case 0x2018: // ' LEFT SINGLE QUOTATION MARK
-    case 0x2019: // ' RIGHT SINGLE QUOTATION MARK
-    case 0x2024: // ․ ONE DOT LEADER
-    case 0xFE52: // ﹒ SMALL FULL STOP
-    case 0xFF07: // ＇ FULLWIDTH APOSTROPHE
-    case 0xFF0E: // ． FULLWIDTH FULL STOP
-    // Single_Quote
-    case 0x0027: // ' APOSTROPHE
-      return true;
-    default:
-      return false;
-  }
-}
-
-// Scan backward from the given position to check if there is a cased character.
-// Skips case-ignorable characters during the scan.
-// Returns true if a cased character is found before encountering a non-cased,
-// non-case-ignorable character.
-FOLLY_ALWAYS_INLINE bool hasCasedBefore(
-    const char* input,
-    size_t sigmaStartPos) {
-  if (sigmaStartPos == 0) {
-    return false;
-  }
-
-  size_t pos = sigmaStartPos;
-  while (pos > 0) {
-    // Move backward to find the start of the previous UTF-8 character.
-    // UTF-8 continuation bytes have the form 10xxxxxx (0x80-0xBF).
-    size_t prevPos = pos - 1;
-    while (prevPos > 0 &&
-           (static_cast<unsigned char>(input[prevPos]) & 0xC0) == 0x80) {
-      --prevPos;
-    }
-
-    int size;
-    utf8proc_int32_t cp =
-        utf8proc_codepoint(&input[prevPos], &input[pos], size);
-
-    if (cp == -1) {
-      // Invalid UTF-8, treat as non-cased, non-case-ignorable.
-      return false;
-    }
-
-    if (isCased(cp)) {
-      return true; // Found a cased character.
-    }
-    if (!isCaseIgnorable(cp)) {
-      return false; // Non-case-ignorable stops the search.
-    }
-
-    pos = prevPos; // Continue scanning backward.
-  }
-
-  return false;
-}
-
-// Scan forward from the given position to check if there is a cased character.
-// Skips case-ignorable characters during the scan.
-// Returns true if a cased character is found before encountering a non-cased,
-// non-case-ignorable character.
-FOLLY_ALWAYS_INLINE bool hasCasedAfter(
-    const char* input,
-    size_t inputLength,
-    size_t afterSigmaPos) {
-  size_t pos = afterSigmaPos;
-
-  while (pos < inputLength) {
-    int size;
-    utf8proc_int32_t cp =
-        utf8proc_codepoint(&input[pos], input + inputLength, size);
-
-    if (cp == -1) {
-      // Invalid UTF-8, treat as non-cased, non-case-ignorable.
-      return false;
-    }
-
-    if (isCased(cp)) {
-      return true; // Found a cased character.
-    }
-    if (!isCaseIgnorable(cp)) {
-      return false; // Non-case-ignorable stops the search.
-    }
-
-    pos += size; // Continue scanning forward.
-  }
-
-  return false;
-}
-
-} // namespace detail
-
 namespace stringCore {
 
 /// Check if a given string is ascii
@@ -357,26 +216,12 @@ FOLLY_ALWAYS_INLINE size_t lowerUnicode(
 
     if constexpr (greekFinalSigma) {
       // Handle Greek final sigma for Σ (U+03A3).
-      // According to Unicode specification, Σ should be converted to ς (final
-      // sigma) only when:
-      // 1. There is a cased character before Σ (possibly separated by
-      //    case-ignorable characters)
-      // 2. There is no cased character after Σ (possibly separated by
-      //    case-ignorable characters)
+      // See detail::isFinalSigma for the Final_Sigma rule reference.
       if (nextCodePoint == 0x03A3) {
-        // inputIdx now points to the byte after Σ.
-        // We need to check:
-        // - hasCasedBefore: scan backward from the start of Σ
-        // - hasCasedAfter: scan forward from after Σ
         size_t sigmaStartPos = inputIdx - size;
-        bool isFinal = detail::hasCasedBefore(input, sigmaStartPos) &&
-            !detail::hasCasedAfter(input, inputLength, inputIdx);
-
-        // Convert to ς (U+03C2) if final, otherwise σ (U+03C3).
-        utf8proc_int32_t lowerSigma = isFinal ? 0x03C2 : 0x03C3;
-        auto newSize = utf8proc_encode_char(
-            lowerSigma, reinterpret_cast<unsigned char*>(&output[outputIdx]));
-        outputIdx += newSize;
+        bool isFinal =
+            detail::isFinalSigma(input, inputLength, sigmaStartPos, inputIdx);
+        outputIdx += detail::writeLowerSigma(&output[outputIdx], isFinal);
         continue;
       }
     }

@@ -71,96 +71,37 @@ TEST_F(UpperLowerTest, lowerUnicode) {
 }
 
 TEST_F(UpperLowerTest, lowerGreek) {
-  // Basic cases: Σ at word end (preceded by cased letter, not followed by
-  // cased letter) → ς
   EXPECT_EQ("πας", lower("ΠΑΣ"));
   EXPECT_EQ("πας ", lower("ΠΑΣ "));
   EXPECT_EQ("πασα", lower("ΠΑΣΑ"));
-
-  // Case-ignorable characters (. is MidNumLet) don't break the context.
-  // Σ preceded by cased Α, followed by case-ignorable '.', no cased after → ς
   EXPECT_EQ("πας.", lower("ΠΑΣ."));
-
-  // Space is NOT case-ignorable, it breaks the context.
-  // After space, 'A' is cased but space already stopped the forward scan.
-  // Σ preceded by cased Α, space stops forward scan (no cased found) → ς
   EXPECT_EQ("πας   a", lower("ΠΑΣ   A"));
-
-  // ` (backtick) is NOT case-ignorable, stops the forward scan.
   EXPECT_EQ("πας`", lower("ΠΑΣ`"));
-
-  // Hebrew א and Japanese あ are NOT cased and NOT case-ignorable.
-  // They stop the forward scan, no cased after → ς
   EXPECT_EQ("παςא", lower("ΠΑΣא"));
   EXPECT_EQ("παςあ", lower("ΠΑΣあ"));
-
-  // ʰ (U+02B0) is a modifier letter (Lm), which is case-ignorable.
-  // But it's also considered cased in our isCased() function.
-  // So Σ is followed by cased character → σ
   EXPECT_EQ("πασʰ", lower("ΠΑΣʰ"));
-
-  // ǅ (U+01C5) is a titlecase letter (Lt), which is cased.
-  // Σ is followed by cased character → σ
   EXPECT_EQ("πασǆ", lower("ΠΑΣǅ"));
-
-  // σ is lowercase letter (Ll), which is cased.
-  // Σ is followed by cased character → σ
   EXPECT_EQ("πασσ", lower("ΠΑΣσ"));
-
-  // Д is Cyrillic uppercase (Lu), which is cased.
-  // Σ is followed by cased character → σ
   EXPECT_EQ("πασд", lower("ΠΑΣД"));
-
-  // Cases where Σ is NOT preceded by a cased character → always σ
-  // Space before Σ breaks the backward scan.
+  // Σ not preceded by a cased character.
   EXPECT_EQ("hello σ", lower("hello Σ"));
   EXPECT_EQ("hello σ world", lower("hello Σ world"));
   EXPECT_EQ("ab σ", lower("ab Σ"));
   EXPECT_EQ("   σ", lower("   Σ"));
-
-  // Standalone Σ (no cased before) → σ
   EXPECT_EQ("σ", lower("Σ"));
-
-  // CJK characters are NOT cased and NOT case-ignorable.
-  // They break the backward scan.
   EXPECT_EQ("中文σ", lower("中文Σ"));
   EXPECT_EQ("ab中σ中", lower("ab中Σ中"));
-
-  // Σ preceded by cased, followed by CJK (stops forward scan) → ς
+  // Σ preceded by a cased character.
   EXPECT_EQ("abς中", lower("abΣ中"));
-
-  // Σ preceded by cased, followed by symbol (stops forward scan) → ς
   EXPECT_EQ("abς<", lower("abΣ<"));
-
-  // Apostrophe (') is case-ignorable (Single_Quote).
-  // Σ preceded by cased 'o' (skipping '), not followed by cased → ς
   EXPECT_EQ("hello'ς", lower("hello'Σ"));
-
-  // Dot (.) is case-ignorable (MidNumLet).
   EXPECT_EQ("hello.ς", lower("hello.Σ"));
-
-  // Combining acute accent (U+0301) is case-ignorable (Mn category).
-  // a + combining accent is still 'a' (cased).
   EXPECT_EQ("a\u0301ς", lower("a\u0301Σ"));
-
-  // Multiple Σ in sequence.
-  // First Σ: preceded by nothing → σ
-  // Second Σ: preceded by cased Σ, followed by cased Σ → σ
-  // Third Σ: preceded by cased Σ, not followed by cased → ς
   EXPECT_EQ("σσς", lower("ΣΣΣ"));
-
-  // aΣbΣ: first Σ preceded by a, followed by b (cased) → σ
-  //       second Σ preceded by b, not followed by cased → ς
   EXPECT_EQ("aσbς", lower("aΣbΣ"));
-
-  // helloΣ: Σ directly preceded by cased 'o' → ς
   EXPECT_EQ("helloς", lower("helloΣ"));
-
-  // Complex case with Japanese parenthesis.
-  // Σ preceded by CJK '音', which breaks backward scan → σ
-  EXPECT_EQ(
-      "一只可爱的小狐狸能发出多少种声音σ（・□・；）",
-      lower("一只可爱的小狐狸能发出多少种声音Σ（・□・；）"));
+  // Σ preceded by CJK character which breaks the cased chain → σ
+  EXPECT_EQ("汉字σ!", lower("汉字Σ!"));
 }
 
 TEST_F(UpperLowerTest, upperAscii) {
