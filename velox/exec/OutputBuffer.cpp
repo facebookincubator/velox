@@ -278,7 +278,7 @@ std::vector<std::shared_ptr<SerializedPageBase>> DestinationBuffer::acknowledge(
     stats_.recordAcknowledge(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
-  data_.erase(data_.begin(), data_.begin() + numDeleted);
+  data_.erase(data_.cbegin(), data_.cbegin() + numDeleted);
   sequence_ += numDeleted;
   return freed;
 }

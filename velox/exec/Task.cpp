@@ -299,7 +299,7 @@ bool registerSplitListenerFactory(
 bool unregisterSplitListenerFactory(
     const std::shared_ptr<SplitListenerFactory>& factory) {
   return splitListenerFactories().withWLock([&](auto& factories) {
-    for (auto it = factories.begin(); it != factories.end(); ++it) {
+    for (auto it = factories.cbegin(); it != factories.cend(); ++it) {
       if ((*it) == factory) {
         factories.erase(it);
         return true;
@@ -1891,8 +1891,8 @@ void Task::dropInputLocked(
     VELOX_CHECK(!drivers.empty());
     const auto dropNodeId = *dropNodeIds.begin();
     bool foundDriver{false};
-    auto it = drivers.begin();
-    while (it != drivers.end()) {
+    auto it = drivers.cbegin();
+    while (it != drivers.cend()) {
       Driver* driver = *it;
       VELOX_CHECK_NOT_NULL(driver);
       if (auto* dropOp = driver->findOperator(dropNodeId)) {
