@@ -148,22 +148,4 @@ PolicyType PrestoCastHooks::getPolicy() const {
   return legacyCast_ ? PolicyType::LegacyCastPolicy
                      : PolicyType::PrestoCastPolicy;
 }
-
-size_t PrestoCastHooks::applyCastFromDecimalToString(
-    int64_t unscaledValue,
-    int32_t scale,
-    int32_t maxSize,
-    char* const startPosition) const {
-  return DecimalUtil::castToString(
-      unscaledValue, scale, maxSize, startPosition);
-}
-
-size_t PrestoCastHooks::applyCastFromDecimalToString(
-    int128_t unscaledValue,
-    int32_t scale,
-    int32_t maxSize,
-    char* const startPosition) const {
-  return DecimalUtil::castToString(
-      unscaledValue, scale, maxSize, startPosition);
-}
 } // namespace facebook::velox::exec
