@@ -140,6 +140,16 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
+cudf::data_type makeOutputCudfType(const TypePtr& type) {
+  auto typeId = cudf_velox::veloxToCudfTypeId(type);
+  if (type->isDecimal()) {
+    // Velox scale is positive for fractional digits; cuDF expects negative.
+    auto scale = getDecimalPrecisionScale(*type).second;
+    return cudf::data_type(typeId, -static_cast<int32_t>(scale));
+  }
+  return cudf::data_type(typeId);
+}
+
 } // namespace
 
 class SplitFunction : public CudfFunction {
@@ -299,20 +309,10 @@ class RoundFunction : public CudfFunction {
 
 class BinaryFunction : public CudfFunction {
  public:
-  static cudf::data_type makeOutputType(const TypePtr& type) {
-    auto typeId = cudf_velox::veloxToCudfTypeId(type);
-    if (type->isDecimal()) {
-      // Velox scale is positive for fractional digits; cuDF expects negative.
-      auto scale = getDecimalPrecisionScale(*type).second;
-      return cudf::data_type(typeId, -static_cast<int32_t>(scale));
-    }
-    return cudf::data_type(typeId);
-  }
-
   BinaryFunction(
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
-      : op_(op), type_(makeOutputType(expr->type())) {
+      : op_(op), type_(makeOutputCudfType(expr->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
     if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
@@ -1149,14 +1149,7 @@ ColumnOrView FunctionExpression::eval(
 
     auto result = function_->eval(inputColumns, stream, mr);
     if (finalize) {
-      auto requestedType =
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_->type()));
-      if (expr_->type()->isDecimal()) {
-        auto scale = getDecimalPrecisionScale(*expr_->type()).second;
-        requestedType = cudf::data_type(
-            cudf_velox::veloxToCudfTypeId(expr_->type()),
-            -static_cast<int32_t>(scale));
-      }
+      auto requestedType = makeOutputCudfType(expr_->type());
       auto resultView = asView(result);
       if (resultView.type() != requestedType) {
         return cudf::cast(resultView, requestedType, stream, mr);
