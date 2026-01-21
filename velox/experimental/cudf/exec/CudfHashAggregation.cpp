@@ -428,7 +428,8 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       VectorPtr constant,
       bool isGlobal,
       const TypePtr& resultType,
-      std::int32_t precision = 11)
+      std::int32_t precision = 11)  // Default 11 matches Velox's 2.3% standard
+                                    // error (2^11 = 2048 buckets)
       : Aggregator(
             step,
             cudf::aggregation::NUNIQUE, // a dummy value, we don't use the
@@ -437,145 +438,146 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             inputIndex,
             constant,
             isGlobal,
-            resultType),
-        precision_(precision) {
+            resultType},
+        precision_{precision} {
     VELOX_CHECK(
         constant == nullptr,
         "ApproxDistinctAggregator does not support constant input");
-    VELOX_CHECK(
-        isGlobal,
-        "ApproxDistinctAggregator currently only supports global aggregation");
+VELOX_CHECK(
+    isGlobal,
+    "ApproxDistinctAggregator currently only supports global aggregation");
+}
+
+void addGroupbyRequest(
+    cudf::table_view const& tbl,
+    std::vector<cudf::groupby::aggregation_request>& requests) override {
+  VELOX_UNSUPPORTED(
+      "approx_distinct should use doReduce, not groupby requests");
+}
+
+std::unique_ptr<cudf::column> makeOutputColumn(
+    std::vector<cudf::groupby::aggregation_result>& results,
+    rmm::cuda_stream_view stream) override {
+  VELOX_UNSUPPORTED(
+      "approx_distinct should use doReduce, not makeOutputColumn");
+}
+
+std::unique_ptr<cudf::column> doReduce(
+    cudf::table_view const& input,
+    TypePtr const& outputType,
+    rmm::cuda_stream_view stream) override {
+  VELOX_CHECK(
+      step != core::AggregationNode::Step::kIntermediate,
+      "ApproxDistinctAggregator does not support intermediate aggregation step");
+
+  if (exec::isRawInput(step)) {
+    return doPartialReduce(input, stream);
+  } else {
+    return doFinalReduce(input, stream);
   }
+}
 
-  void addGroupbyRequest(
-      cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
-    VELOX_UNSUPPORTED(
-        "approx_distinct should use doReduce, not groupby requests");
-  }
+private:
+std::unique_ptr<cudf::column> doPartialReduce(
+    cudf::table_view const& input,
+    rmm::cuda_stream_view stream) {
+  auto inputTable = cudf::table_view({input.column(inputIndex)});
 
-  std::unique_ptr<cudf::column> makeOutputColumn(
-      std::vector<cudf::groupby::aggregation_result>& results,
-      rmm::cuda_stream_view stream) override {
-    VELOX_UNSUPPORTED(
-        "approx_distinct should use doReduce, not makeOutputColumn");
-  }
+  cudf::approx_distinct_count sketch{
+      inputTable,
+      precision_,
+      cudf::null_policy::EXCLUDE,
+      cudf::nan_policy::NAN_IS_NULL,
+      stream};
 
-  std::unique_ptr<cudf::column> doReduce(
-      cudf::table_view const& input,
-      TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
-    VELOX_CHECK(
-        step != core::AggregationNode::Step::kIntermediate,
-        "ApproxDistinctAggregator does not support intermediate aggregation step");
+  auto sketch_bytes = sketch.sketch();
+  auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
 
-    if (exec::isRawInput(step)) {
-      return doPartialReduce(input, stream);
-    } else {
-      return doFinalReduce(input, stream);
-    }
-  }
+  cudf::size_type offsets[2] = {0, sketch_size};
+  rmm::device_buffer offsets_device{
+      offsets, 2 * sizeof(cudf::size_type), stream};
 
- private:
-  std::unique_ptr<cudf::column> doPartialReduce(
-      cudf::table_view const& input,
-      rmm::cuda_stream_view stream) {
-    auto inputTable = cudf::table_view({input.column(inputIndex)});
+  auto offsets_column = std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::INT32},
+      2,
+      std::move(offsets_device),
+      rmm::device_buffer{},
+      0);
 
-    cudf::approx_distinct_count sketch{
-        inputTable,
-        precision_,
-        cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_NULL,
-        stream};
+  rmm::device_buffer sketch_device{
+      sketch_bytes.data(), sketch_bytes.size(), stream};
 
-    auto sketch_bytes = sketch.sketch();
-    auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
+  auto child_column = std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::UINT8},
+      sketch_bytes.size(),
+      std::move(sketch_device),
+      rmm::device_buffer{},
+      0);
 
-    cudf::size_type offsets[2] = {0, sketch_size};
-    rmm::device_buffer offsets_device{
-        offsets, 2 * sizeof(cudf::size_type), stream};
+  return cudf::make_lists_column(
+      1,
+      std::move(offsets_column),
+      std::move(child_column),
+      0,
+      rmm::device_buffer{},
+      stream);
+}
 
-    auto offsets_column = std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::INT32},
-        2,
-        std::move(offsets_device),
-        rmm::device_buffer{},
-        0);
+std::unique_ptr<cudf::column> doFinalReduce(
+    cudf::table_view const& input,
+    rmm::cuda_stream_view stream) {
+  auto sketch_column = input.column(inputIndex);
 
-    rmm::device_buffer sketch_device{
-        sketch_bytes.data(), sketch_bytes.size(), stream};
-
-    auto child_column = std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::UINT8},
-        sketch_bytes.size(),
-        std::move(sketch_device),
-        rmm::device_buffer{},
-        0);
-
-    return cudf::make_lists_column(
-        1,
-        std::move(offsets_column),
-        std::move(child_column),
-        0,
-        rmm::device_buffer{},
-        stream);
-  }
-
-  std::unique_ptr<cudf::column> doFinalReduce(
-      cudf::table_view const& input,
-      rmm::cuda_stream_view stream) {
-    auto sketch_column = input.column(inputIndex);
-
-    if (sketch_column.size() == 0) {
-      return cudf::make_column_from_scalar(
-          cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
-    }
-
-    auto lists_col = cudf::lists_column_view(sketch_column);
-    auto child_col = lists_col.get_sliced_child(stream);
-    auto offsets_iter = lists_col.offsets_begin();
-
-    cudf::size_type first_offset = offsets_iter[0];
-    cudf::size_type second_offset = offsets_iter[1];
-    cudf::size_type first_size = second_offset - first_offset;
-
-    auto sketch_data_ptr =
-        const_cast<cuda::std::byte*>(static_cast<cuda::std::byte const*>(
-            static_cast<void const*>(child_col.template data<uint8_t>())));
-
-    cudf::approx_distinct_count merged_sketch(
-        cuda::std::span<cuda::std::byte>(
-            sketch_data_ptr + first_offset, first_size),
-        precision_,
-        cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_NULL,
-        stream);
-
-    for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
-      cudf::size_type start_offset = offsets_iter[i];
-      cudf::size_type end_offset = offsets_iter[i + 1];
-      cudf::size_type size = end_offset - start_offset;
-
-      if (size > 0) {
-        merged_sketch.merge(
-            cuda::std::span<cuda::std::byte>(
-                sketch_data_ptr + start_offset, size),
-            stream);
-      }
-    }
-
-    std::size_t estimate = merged_sketch.estimate(stream);
-
+  if (sketch_column.size() == 0) {
     return cudf::make_column_from_scalar(
-        cudf::numeric_scalar<int64_t>(
-            static_cast<int64_t>(estimate), true, stream),
-        1,
-        stream);
+        cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
   }
 
-  std::int32_t precision_;
-};
+  auto lists_col = cudf::lists_column_view(sketch_column);
+  auto child_col = lists_col.get_sliced_child(stream);
+  auto offsets_iter = lists_col.offsets_begin();
+
+  cudf::size_type first_offset = offsets_iter[0];
+  cudf::size_type second_offset = offsets_iter[1];
+  cudf::size_type first_size = second_offset - first_offset;
+
+  auto sketch_data_ptr =
+      const_cast<cuda::std::byte*>(static_cast<cuda::std::byte const*>(
+          static_cast<void const*>(child_col.template data<uint8_t>())));
+
+  cudf::approx_distinct_count merged_sketch(
+      cuda::std::span<cuda::std::byte>(
+          sketch_data_ptr + first_offset, first_size),
+      precision_,
+      cudf::null_policy::EXCLUDE,
+      cudf::nan_policy::NAN_IS_NULL,
+      stream);
+
+  for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
+    cudf::size_type start_offset = offsets_iter[i];
+    cudf::size_type end_offset = offsets_iter[i + 1];
+    cudf::size_type size = end_offset - start_offset;
+
+    if (size > 0) {
+      merged_sketch.merge(
+          cuda::std::span<cuda::std::byte>(
+              sketch_data_ptr + start_offset, size),
+          stream);
+    }
+  }
+
+  std::size_t estimate = merged_sketch.estimate(stream);
+
+  return cudf::make_column_from_scalar(
+      cudf::numeric_scalar<int64_t>(
+          static_cast<int64_t>(estimate), true, stream),
+      1,
+      stream);
+}
+
+std::int32_t precision_;
+}
+;
 
 std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     core::AggregationNode::Step step,
