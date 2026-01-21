@@ -679,10 +679,18 @@ AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache)
     : opts_(options),
+      numShards_(opts_.numShards),
+      shardMask_(numShards_ - 1),
       allocator_(allocator),
       ssdCache_(std::move(ssdCache)),
       cachedPages_(0) {
-  for (auto i = 0; i < kNumShards; ++i) {
+  VELOX_CHECK_GT(numShards_, 0, "numShards must be positive");
+  VELOX_CHECK_EQ(
+      numShards_ & shardMask_,
+      0,
+      "numShards must be a power of 2, got {}",
+      numShards_);
+  for (auto i = 0; i < numShards_; ++i) {
     shards_.push_back(std::make_unique<CacheShard>(this, opts_.maxWriteRatio));
   }
 }
@@ -734,17 +742,17 @@ CachePin AsyncDataCache::findOrCreate(
     RawFileCacheKey key,
     uint64_t size,
     folly::SemiFuture<bool>* wait) {
-  const int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->findOrCreate(key, size, wait);
 }
 
 void AsyncDataCache::makeEvictable(RawFileCacheKey key) {
-  const int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->makeEvictable(key);
 }
 
 bool AsyncDataCache::exists(RawFileCacheKey key) const {
-  int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->exists(key);
 }
 
@@ -763,7 +771,7 @@ bool AsyncDataCache::makeSpace(
   // serialize with a mutex because memory arbitration must not be
   // called from inside a global mutex.
 
-  constexpr int32_t kMaxAttempts = kNumShards * 4;
+  const int32_t kMaxAttempts = numShards_ * 4;
   // Evict at least 1MB even for small allocations to avoid constantly hitting
   // the mutex protected evict loop.
   constexpr int32_t kMinEvictPages = 256;
@@ -827,10 +835,10 @@ bool AsyncDataCache::makeSpace(
     // Evict from next shard. If we have gone through all shards once
     // and still have not made the allocation, we go to desperate mode
     // with 'evictAllUnpinned' set to true.
-    shards_[shardCounter_ & (kShardMask)]->evict(
+    shards_[shardCounter_ & shardMask_]->evict(
         memory::AllocationTraits::pageBytes(
             std::max<uint64_t>(kMinEvictPages, numPages) * sizeMultiplier),
-        nthAttempt >= kNumShards,
+        nthAttempt >= numShards_,
         numPagesToAcquire,
         acquired);
     if (numPages < kSmallSizePages && sizeMultiplier < 4) {
@@ -855,7 +863,7 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
     MicrosecondTimer timer(&shrinkTimeUs);
     for (int shard = 0; shard < shards_.size(); ++shard) {
       memory::Allocation unused;
-      evictedBytes += shards_[shardCounter_++ & (kShardMask)]->evict(
+      evictedBytes += shards_[shardCounter_++ & shardMask_]->evict(
           std::max<uint64_t>(
               CacheShard::kMinBytesToEvict, targetBytes - evictedBytes),
           // Cache shrink is triggered when server is under low memory pressure
