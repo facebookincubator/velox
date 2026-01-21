@@ -352,7 +352,7 @@ AssertQueryBuilder::readCursor() {
         } else {
           task->addSplit(nodeId, std::move(nodeSplits[0]));
         }
-        nodeSplits.erase(nodeSplits.begin());
+        nodeSplits.erase(nodeSplits.cbegin());
       }
       if (numSplits > 0) {
         VELOX_CHECK_EQ(
