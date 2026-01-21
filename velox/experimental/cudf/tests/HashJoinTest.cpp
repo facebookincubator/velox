@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -42,6 +43,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::cudf_velox::exec::test;
 
 using facebook::velox::test::BatchMaker;
 
@@ -55,11 +57,21 @@ class HashJoinTest : public HashJoinTestBase {
 
   void SetUp() override {
     HashJoinTestBase::SetUp();
+
+    cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
+    auto cudf_hive_connector = factory.newConnector(
+        kCudfHiveConnectorId,
+        std::make_shared<facebook::velox::config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()),
+        ioExecutor_.get());
+    connector::registerConnector(cudf_hive_connector);
+
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
   void TearDown() override {
+    connector::unregisterConnector(kCudfHiveConnectorId);
     cudf_velox::unregisterCudf();
     HashJoinTestBase::TearDown();
   }
@@ -919,7 +931,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithExtraFilter) {
   }
 }
 
-TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
+TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
@@ -941,10 +953,12 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   });
 
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  CudfHiveConnectorTestBase::writeToFile(
+      probeFile->getPath(), probeVectors, "t");
 
   std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), buildVectors);
+  CudfHiveConnectorTestBase::writeToFile(
+      buildFile->getPath(), buildVectors, "u");
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -952,26 +966,37 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "",
-                      {"t0", "t1"},
-                      core::JoinType::kLeftSemiFilter)
-                  .planNode();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(asRowType(probeVectors[0]->type()))
+          .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(asRowType(buildVectors[0]->type()))
+                  .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                  .endTableScan()
+                  .capturePlanNodeId(buildScanId)
+                  .planNode(),
+              "",
+              {"t0", "t1"},
+              core::JoinType::kLeftSemiFilter)
+          .planNode();
 
   SplitInput splitInput = {
       {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+       {exec::Split(
+           CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
+               probeFile->getPath()))}},
       {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+       {exec::Split(
+           CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
+               buildFile->getPath()))}},
   };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -992,13 +1017,19 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_semiFilterOverLazyVectors) {
   // With extra filter.
   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   plan = PlanBuilder(planNodeIdGenerator)
-             .tableScan(asRowType(probeVectors[0]->type()))
+             .startTableScan()
+             .outputType(asRowType(probeVectors[0]->type()))
+             .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+             .endTableScan()
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"t0"},
                  {"u0"},
                  PlanBuilder(planNodeIdGenerator)
-                     .tableScan(asRowType(buildVectors[0]->type()))
+                     .startTableScan()
+                     .outputType(asRowType(buildVectors[0]->type()))
+                     .tableHandle(CudfHiveConnectorTestBase::makeTableHandle())
+                     .endTableScan()
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
                  "(t1 + u1) % 3 = 0",
