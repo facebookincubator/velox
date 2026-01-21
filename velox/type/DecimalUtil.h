@@ -336,7 +336,10 @@ class DecimalUtil {
   /// @param maxSize The estimated max size of string.
   /// @param startPosition The start position to write from.
   /// @param isScientific Whether to format small magnitude decimals using
-  /// scientific notation (Spark-compatible).
+  /// scientific notation (Spark-compatible). When true, absolute values less
+  /// than 1e-6 are formatted in scientific notation. For example:
+  /// - With scale=20 and value=1: "1E-20" (scientific) vs
+  /// "0.00000000000000000001" (normal)
   /// @return The number of characters written starting from startPosition.
   template <typename T>
   static size_t castToString(

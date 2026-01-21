@@ -67,18 +67,9 @@ class PrestoCastHooks : public CastHooks {
 
   PolicyType getPolicy() const override;
 
- protected:
-  size_t applyCastFromDecimalToString(
-      int64_t unscaledValue,
-      int32_t scale,
-      int32_t maxSize,
-      char* const startPosition) const override;
-
-  size_t applyCastFromDecimalToString(
-      int128_t unscaledValue,
-      int32_t scale,
-      int32_t maxSize,
-      char* const startPosition) const override;
+  bool isScientific() const override {
+    return false;
+  }
 
  private:
   const bool legacyCast_;

@@ -77,29 +77,10 @@ class CastHooks {
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;
 
-  /// Converts decimal to string type. Returns the number of characters
-  /// written to startPosition.
-  template <typename FromNativeType>
-  size_t castFromDecimalToString(
-      FromNativeType unscaledValue,
-      int32_t scale,
-      int32_t maxSize,
-      char* const startPosition) const {
-    return applyCastFromDecimalToString(
-        unscaledValue, scale, maxSize, startPosition);
-  };
-
- protected:
-  virtual size_t applyCastFromDecimalToString(
-      int64_t unscaledValue,
-      int32_t scale,
-      int32_t maxSize,
-      char* const startPosition) const = 0;
-
-  virtual size_t applyCastFromDecimalToString(
-      int128_t unscaledValue,
-      int32_t scale,
-      int32_t maxSize,
-      char* const startPosition) const = 0;
+  /// Returns whether to format small magnitude decimals using scientific
+  /// notation. Example: with scale 20 and value 1, the output is
+  /// "1E-20" when isScientific() is true, and "0.00000000000000000001" when
+  /// false.
+  virtual bool isScientific() const = 0;
 };
 } // namespace facebook::velox::exec
