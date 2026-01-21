@@ -1218,8 +1218,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<TypePtr> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
   mutable std::atomic<NameToIndex*> nameToIndex_{nullptr};
-  mutable std::atomic_bool hashKindComputed_{false};
-  mutable std::atomic_size_t hashKind_;
+  mutable std::atomic_size_t hashKind_{0};
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
