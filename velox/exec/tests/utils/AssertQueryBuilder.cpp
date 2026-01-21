@@ -190,6 +190,13 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
   VELOX_CHECK_NOT_NULL(duckDbQueryRunner_);
 
   auto [cursor, results] = readCursor();
+  uint64_t totalRows{0};
+  for (const auto& batch : results) {
+    totalRows += batch->size();
+  }
+  LOG(INFO) << "ManuAQB resultRowCount rows=" << totalRows
+            << " batches=" << results.size();
+
   if (results.empty()) {
     test::assertResults(results, ROW({}, {}), duckDbSql, *duckDbQueryRunner_);
   } else if (sortingKeys.has_value()) {
