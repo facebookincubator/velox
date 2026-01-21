@@ -27,34 +27,32 @@ class Operator;
 
 namespace facebook::velox::exec::trace {
 
-/// The callback used to update and aggregate the trace bytes of a query. If the
-/// query trace limit is set, the callback return true if the aggregate traced
-/// bytes exceed the set limit otherwise return false.
-using UpdateAndCheckTraceLimitCB = std::function<void(uint64_t)>;
+class TraceConfig {
+ public:
+  TraceConfig(bool dryRun) : dryRun_(dryRun) {}
 
-struct TraceConfig {
-  /// Target query trace node id.
-  std::string queryNodeId;
+  virtual ~TraceConfig() = default;
 
-  /// Base dir of query trace.
-  std::string queryTraceDir;
+  virtual std::unique_ptr<trace::TraceInputWriter> createInputTracer(
+      Operator& op) const = 0;
 
-  UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB;
+  virtual std::unique_ptr<trace::TraceSplitWriter> createSplitTracer(
+      Operator& op) const = 0;
 
-  /// The trace task regexp.
-  std::string taskRegExp;
+  virtual std::unique_ptr<trace::TraceMetadataWriter> createMetadataTracer()
+      const = 0;
 
+  virtual bool shouldTrace(const Operator& op) const = 0;
+
+  bool dryRun() const {
+    return dryRun_;
+  }
+
+ private:
   /// If true, we only collect operator input trace without the actual
   /// execution. This is used by crash debugging so that we can collect the
   /// input that triggers the crash.
-  bool dryRun{false};
-
-  TraceConfig(
-      std::string queryNodeId,
-      std::string queryTraceDir,
-      UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB,
-      std::string taskRegExp,
-      bool dryRun);
+  bool dryRun_{false};
 };
 
 } // namespace facebook::velox::exec::trace

@@ -261,9 +261,9 @@ bool canTrace(const std::string& operatorType) {
 }
 
 core::PlanNodePtr getTraceNode(
-    const core::PlanNodePtr& plan,
+    const core::PlanNode& plan,
     core::PlanNodeId nodeId) {
-  const auto* traceNode = core::PlanNode::findNodeById(plan.get(), nodeId);
+  const auto* traceNode = core::PlanNode::findNodeById(&plan, nodeId);
   VELOX_CHECK_NOT_NULL(traceNode, "Failed to find node with id {}", nodeId);
   if (const auto* hashJoinNode =
           dynamic_cast<const core::HashJoinNode*>(traceNode)) {

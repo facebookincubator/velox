@@ -96,7 +96,7 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
-const std::optional<trace::TraceConfig>& DriverCtx::traceConfig() const {
+const trace::TraceConfig* DriverCtx::traceConfig() const {
   return task->traceConfig();
 }
 

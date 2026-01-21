@@ -312,16 +312,17 @@ TEST_F(OperatorTraceTest, traceMetadata) {
       executor_.get(),
       core::QueryConfig(expectedQueryConfigs),
       expectedConnectorProperties);
-  auto writer = trace::TaskTraceMetadataWriter(outputDir->getPath(), pool());
-  auto traceNode = getTraceNode(planNode, traceNodeId);
-  writer.write(queryCtx, traceNode);
+  auto writer =
+      trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool());
+  writer.write(*queryCtx, *planNode);
   const auto reader =
       trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
   const auto actualQueryConfigs = reader.queryConfigs();
   const auto actualConnectorProperties = reader.connectorProperties();
   const auto actualQueryPlan = reader.queryPlan();
 
-  ASSERT_TRUE(isSamePlan(actualQueryPlan, traceNode));
+  auto expectedTraceNode = getTraceNode(*planNode, traceNodeId);
+  ASSERT_TRUE(isSamePlan(actualQueryPlan, expectedTraceNode));
   ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
   for (const auto& [key, value] : actualQueryConfigs) {
     ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
@@ -437,7 +438,7 @@ TEST_F(OperatorTraceTest, task) {
     const auto actualQueryPlan = reader.queryPlan();
 
     ASSERT_TRUE(
-        isSamePlan(actualQueryPlan, getTraceNode(planNode, hashJoinNodeId)));
+        isSamePlan(actualQueryPlan, getTraceNode(*planNode, hashJoinNodeId)));
     ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
     for (const auto& [key, value] : actualQueryConfigs) {
       ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
