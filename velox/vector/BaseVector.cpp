@@ -23,6 +23,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/DictionaryVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SequenceVector.h"
@@ -415,7 +416,8 @@ static VectorPtr createEmpty(
 VectorPtr BaseVector::createInternal(
     const TypePtr& type,
     vector_size_t size,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    std::optional<VectorEncoding::Simple> encoding) {
   VELOX_CHECK_NOT_NULL(type, "Vector creation requires a non-null type.");
   auto kind = type->kind();
   switch (kind) {
@@ -444,6 +446,17 @@ VectorPtr BaseVector::createInternal(
           std::move(elements));
     }
     case TypeKind::MAP: {
+      // Handle FlatMapVector encoding for MAP type.
+      if (encoding == VectorEncoding::Simple::FLAT_MAP) {
+        return std::make_shared<FlatMapVector>(
+            pool,
+            type,
+            /*nulls=*/nullptr,
+            size,
+            /*distinctKeys=*/nullptr,
+            /*mapValues=*/std::vector<VectorPtr>{},
+            /*inMaps=*/std::vector<BufferPtr>{});
+      }
       BufferPtr sizes = allocateSizes(size, pool);
       BufferPtr offsets = allocateOffsets(size, pool);
       const auto& keyType = type->as<TypeKind::MAP>().keyType();
