@@ -78,7 +78,7 @@ PartitionStreamingWindowBuild::nextPartition() {
     data_->eraseRows(
         folly::Range<char**>(sortedRows_.data(), numPreviousPartitionRows));
     sortedRows_.erase(
-        sortedRows_.begin(), sortedRows_.begin() + numPreviousPartitionRows);
+        sortedRows_.cbegin(), sortedRows_.cbegin() + numPreviousPartitionRows);
     sortedRows_.shrink_to_fit();
     for (int i = currentPartition_; i < partitionStartRows_.size(); ++i) {
       partitionStartRows_[i] =

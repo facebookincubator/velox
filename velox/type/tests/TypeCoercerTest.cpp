@@ -50,6 +50,13 @@ TEST(TypeCoercerTest, basic) {
   testNoCoercion(ARRAY(TINYINT()), MAP(INTEGER(), REAL()));
 }
 
+TEST(TypeCoercerTest, date) {
+  testCoercion(DATE(), DATE());
+  testCoercion(DATE(), TIMESTAMP());
+
+  testNoCoercion(DATE(), BIGINT());
+}
+
 TEST(TypeCoercerTest, unknown) {
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BOOLEAN()));
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BIGINT()));
@@ -133,6 +140,21 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
       TypeCoercer::leastCommonSuperType(
           ROW({"", "", ""}, INTEGER()), ROW({"", "", ""}, SMALLINT())),
       ROW({"", "", ""}, INTEGER()));
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(
+          ROW({"a", "b", "c"}, INTEGER()), ROW({"a", "b", "c"}, SMALLINT())),
+      ROW({"a", "b", "c"}, INTEGER()));
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(
+          ROW({"", "", ""}, INTEGER()), ROW({"a", "b", "c"}, SMALLINT())),
+      ROW({"", "", ""}, INTEGER()));
+
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(
+          ROW({"a", "bb", ""}, INTEGER()), ROW({"a", "b", "c"}, SMALLINT())),
+      ROW({"a", "", ""}, INTEGER()));
 
   ASSERT_TRUE(
       TypeCoercer::leastCommonSuperType(VARCHAR(), TINYINT()) == nullptr);
