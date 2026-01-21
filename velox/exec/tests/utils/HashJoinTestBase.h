@@ -799,9 +799,9 @@ class HashJoinTestBase : public HiveConnectorTestBase {
       : numDrivers_(param.numDrivers),
         parallelBuildSideRowsEnabled_(param.parallelBuildSideRowsEnabled) {}
 
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
+  virtual ~HashJoinTestBase() = default;
 
+  void MemberSetUp() {
     probeType_ =
         ROW({{"t_k1", INTEGER()}, {"t_k2", VARCHAR()}, {"t_v1", VARCHAR()}});
     buildType_ =
@@ -814,6 +814,21 @@ class HashJoinTestBase : public HiveConnectorTestBase {
         .allowLazyVector = false};
   }
 
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    MemberSetUp();
+  }
+
+  virtual std::vector<exec::Split> makeSplit(
+      const std::vector<std::shared_ptr<TempFilePath>>& files) {
+    std::vector<exec::Split> splits;
+    splits.reserve(files.size());
+    for (const auto& file : files) {
+      splits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
+    }
+    return splits;
+  }
+
   // Make splits with each plan node having a number of source files.
   SplitInput makeSplitInput(
       const std::vector<core::PlanNodeId>& nodeIds,
@@ -821,17 +836,12 @@ class HashJoinTestBase : public HiveConnectorTestBase {
     VELOX_CHECK_EQ(nodeIds.size(), files.size());
     SplitInput splitInput;
     for (int i = 0; i < nodeIds.size(); ++i) {
-      std::vector<exec::Split> splits;
-      splits.reserve(files[i].size());
-      for (const auto& file : files[i]) {
-        splits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
-      }
-      splitInput.emplace(nodeIds[i], std::move(splits));
+      splitInput.emplace(nodeIds[i], makeSplit(files[i]));
     }
     return splitInput;
   }
 
-  void testLazyVectorsWithFilter(
+  virtual void testLazyVectorsWithFilter(
       const core::JoinType joinType,
       const std::string& filter,
       const std::vector<std::string>& outputLayout,
