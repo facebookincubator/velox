@@ -12,5 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_dwio_parquet_thrift ParquetThriftTypes.cpp)
-velox_link_libraries(velox_dwio_parquet_thrift arrow thrift Boost::headers fmt::fmt)
+include(FBThriftCppLibrary)
+
+add_fbthrift_cpp_library(velox_dwio_parquet_thrift_raw parquet.thrift)
+add_library(velox_dwio_parquet_thrift INTERFACE)
+target_link_libraries(velox_dwio_parquet_thrift INTERFACE velox_dwio_parquet_thrift_raw)
+if(VELOX_MONO_LIBRARY)
+  target_link_libraries(velox velox_dwio_parquet_thrift_raw)
+  # Ensure the mono velox target waits for thrift file generation to complete.
+  # This prevents race conditions where compilation starts before generated files exist.
+  add_dependencies(velox velox_dwio_parquet_thrift_raw_gen)
+endif()
+
+velox_install_library_headers()
+get_target_property(generated_headers velox_dwio_parquet_thrift_raw PUBLIC_HEADER)
+get_target_property(header_install_dir velox_dwio_parquet_thrift_raw HEADER_INSTALL_DIR)
+install(FILES ${generated_headers} DESTINATION ${header_install_dir})
