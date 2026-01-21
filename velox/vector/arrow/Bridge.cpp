@@ -1300,15 +1300,21 @@ TypePtr parseDecimalFormat(const char* format) {
     // Parse "d:".
     int precision = std::stoi(&format[2], &sz);
     int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
-    // If bitWidth is provided, only 64 and 128 are supported.
     if (secondCommaIdx != std::string::npos) {
+      // bitWidth is provided
+      // we only support 64 or 128
       int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
-      if (bitWidth != 64 && bitWidth != 128) {
-        VELOX_USER_FAIL(
-            "Conversion failed for '{}'. Only 64 and 128-bit decimals are supported.",
-            format);
+      // return type depends on bitWidth
+      if (bitWidth == 64) {
+        return std::make_shared<ShortDecimalType>(precision, scale);
+      } else if (bitWidth == 128) {
+        return std::make_shared<LongDecimalType>(precision, scale);
       }
+      VELOX_USER_FAIL(
+          "Conversion failed for '{}'. Only 64 and 128-bit decimals are supported.",
+          format);
     }
+    // otherwise return type depends on precision
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
     VELOX_USER_FAIL(invalidFormatMsg, format);
