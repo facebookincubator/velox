@@ -119,6 +119,10 @@ int32_t randDate(FuzzerGenerator& rng) {
   return rand<int32_t>(rng, min, max);
 }
 
+int32_t randTime(FuzzerGenerator& rng) {
+  return rand<int64_t>(rng, TimeType::kMin, TimeType::kMax);
+}
+
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
 /// enum values.
 ///
