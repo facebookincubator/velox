@@ -5,8 +5,11 @@ Conversion Functions
 .. spark:function:: cast(value AS type) -> type
 
     Explicitly cast a ``value`` to a specified ``type``.
-    Follows the behavior when Spark ANSI mode is disabled, and does not support
-    the behavior when ANSI is turned on:
+    
+    **Note:** String-to-boolean casts are *ANSI compliant* (subject to :doc:`spark.ansi_enabled </configs>`).
+    When ANSI is enabled, invalid strings throw errors; when disabled, they return NULL.
+    
+    For other cast types, follows the behavior when Spark ANSI mode is disabled:
 
     * If the ``value`` exceeds the range of the ``type``, no error is raised.
       Instead, the ``value`` is "wrapped" around.
@@ -155,8 +158,12 @@ Cast to Boolean
 From VARCHAR
 ^^^^^^^^^^^^
 
-The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case equivalents are allowed to be casted to boolean.
-Casting from other strings to boolean throws.
+*ANSI compliant* (subject to :doc:`spark.ansi_enabled </configs>`)
+
+The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
+equivalents are allowed to be casted to boolean.
+Casting from invalid strings throws an error when ANSI mode is enabled,
+or returns NULL when ANSI mode is disabled.
 
 Valid examples
 
@@ -177,13 +184,13 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as boolean); -- NULL // Invalid argument
-  SELECT cast('nan' as boolean); -- NULL // Invalid argument
-  SELECT cast('infinity' as boolean); -- NULL // Invalid argument
-  SELECT cast('12' as boolean); -- NULL // Invalid argument
-  SELECT cast('-1' as boolean); -- NULL // Invalid argument
-  SELECT cast('tr' as boolean); -- NULL // Invalid argument
-  SELECT cast('tru' as boolean); -- NULL // Invalid argument
+  SELECT cast('1.7E308' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('nan' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('infinity' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('12' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-1' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tr' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tru' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to String
 --------------

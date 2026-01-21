@@ -43,6 +43,18 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
       std::vector<exec::ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+ private:
+  /// Determines if ANSI mode is supported for casting from fromType to toType.
+  /// Returns true if ANSI semantics should be applied for this cast combination.
+  ///
+  /// Currently, ANSI mode is supported for:
+  /// - String to Boolean casts: ANSI mode controls error handling
+  ///
+  /// @param fromType The source type of the cast
+  /// @param toType The target type of the cast
+  /// @return true if ANSI mode is supported for this cast, false otherwise
+  static bool isAnsiSupported(const TypePtr& fromType, const TypePtr& toType);
 };
 
 class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {

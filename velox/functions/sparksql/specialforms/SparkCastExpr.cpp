@@ -18,6 +18,17 @@
 
 namespace facebook::velox::functions::sparksql {
 
+bool SparkCastCallToSpecialForm::isAnsiSupported(
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  // String to Boolean cast supports ANSI mode.
+  if (fromType->isVarchar() && toType->isBoolean()) {
+    return true;
+  }
+  
+  return false;
+}
+
 exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& compiledChildren,
@@ -28,19 +39,15 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       1,
       "CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
-  // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
-  // Velox's try_cast, so we set 'isTryCast' to true by default in CastExpr.
-  // The distinction between CAST (ANSI off) and TRY_CAST is limited to
-  // overflow handling, which is managed by the 'allowOverflow' flag in
-  // SparkCastHooks.
+  
+  const auto& fromType = compiledChildren[0]->type();
+  
+  // For ANSI-supported casts, check ANSI configuration to determine behavior.
   //
   // Exception: For string-to-boolean casts, Spark checks ANSI mode to determine
   // whether to throw on invalid input (ANSI on) or return NULL (ANSI off).
   const bool ansiEnabled = config.sparkAnsiEnabled();
-  const auto& fromType = compiledChildren[0]->type();
-  const bool isStringToBoolean =
-      fromType->isVarchar() && type->isBoolean();
-  const bool isTryCast = isStringToBoolean ? !ansiEnabled : true;
+  const bool isTryCast = isAnsiSupported(fromType, type) ? !ansiEnabled : true;
   
   return std::make_shared<SparkCastExpr>(
       type,
