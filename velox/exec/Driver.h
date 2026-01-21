@@ -248,7 +248,7 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  const std::optional<trace::TraceConfig>& traceConfig() const;
+  const trace::TraceConfig* traceConfig() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,

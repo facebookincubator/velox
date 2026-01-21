@@ -173,7 +173,7 @@ bool canTrace(const std::string& operatorType);
 /// Gets the specified the trace node from 'plan'. In the returned trace node,
 /// we replace its source nodes with DummySourceNode for replay.
 core::PlanNodePtr getTraceNode(
-    const core::PlanNodePtr& plan,
+    const core::PlanNode& plan,
     core::PlanNodeId nodeId);
 
 using TraceNodeFactory = std::function<
