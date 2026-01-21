@@ -125,7 +125,9 @@ function install_velox_deps_from_apt {
     flex \
     libfl-dev \
     tzdata \
-    libxxhash-dev
+    libxxhash-dev \
+    libsqlite3-dev \
+    sqlite3
 }
 
 function install_conda {
