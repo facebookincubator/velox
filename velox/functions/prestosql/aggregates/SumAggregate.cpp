@@ -15,7 +15,6 @@
  */
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/lib/aggregates/SumAggregateBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -25,8 +24,8 @@ template <typename TInput, typename TAccumulator, typename ResultType>
 using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, false>;
 
 template <template <typename U, typename V, typename W> class T>
-exec::AggregateRegistrationResult registerSum(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerSum(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -64,14 +63,15 @@ exec::AggregateRegistrationResult registerSum(
   }
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
@@ -123,10 +123,10 @@ exec::AggregateRegistrationResult registerSum(
 } // namespace
 
 void registerSumAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerSum<SumAggregate>(prefix + kSum, withCompanionFunctions, overwrite);
+  registerSum<SumAggregate>(names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

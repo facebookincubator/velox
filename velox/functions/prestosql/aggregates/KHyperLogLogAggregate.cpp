@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/aggregates/KHyperLogLogAggregate.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::aggregate;
 
@@ -40,8 +39,8 @@ std::unique_ptr<exec::Aggregate> dispatchOnUiiType(
 }
 
 /// Registration for khyperloglog_agg aggregate function.
-exec::AggregateRegistrationResult registerKHyperLogLogAgg(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -74,16 +73,19 @@ exec::AggregateRegistrationResult registerKHyperLogLogAgg(
   }
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
-      [name](
+      [names](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 2, "{}: unexpected number of arguments", name);
+            argTypes.size(),
+            2,
+            "{}: unexpected number of arguments",
+            names.front());
 
         auto joinKeyKind = argTypes[0]->kind();
         auto uiiKind = argTypes[1]->kind();
@@ -98,11 +100,10 @@ exec::AggregateRegistrationResult registerKHyperLogLogAgg(
 } // namespace
 
 void registerKHyperLogLogAggregates(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerKHyperLogLogAgg(
-      prefix + kKHyperLogLogAgg, withCompanionFunctions, overwrite);
+  registerKHyperLogLogAgg(names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -19,7 +19,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/noisy_aggregation/NoisyCountSumAvgAccumulator.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/NoisyHelperFunctionFactory.h"
 #include "velox/vector/FlatVector.h"
 
@@ -215,7 +214,7 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
 } // namespace
 
 void registerNoisyCountGaussianAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -251,17 +250,16 @@ void registerNoisyCountGaussianAggregate(
           .build(),
   };
 
-  auto name = prefix + kNoisyCountGaussian;
-
   exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           [[maybe_unused]] const TypePtr& resultType,
           [[maybe_unused]] const core::QueryConfig& config)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(
             argTypes.size(), 3, "{} takes at most 3 arguments", name);
         VELOX_CHECK_GE(

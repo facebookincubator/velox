@@ -17,11 +17,32 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerClassificationFunctions(
-    const std::string& prefix,
+void registerFalloutAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerPrecisionAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerRecallAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerMissRateAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerThresholdAggregation(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);
 } // namespace facebook::velox::aggregate::prestosql

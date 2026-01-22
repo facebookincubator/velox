@@ -17,11 +17,13 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
 void registerApproxDistinctAggregates(
-    const std::string& prefix,
+    const std::vector<std::string>& approxDistinctNames,
+    const std::vector<std::string>& approxSetNames,
     bool withCompanionFunctions,
     bool overwrite);
 } // namespace facebook::velox::aggregate::prestosql
