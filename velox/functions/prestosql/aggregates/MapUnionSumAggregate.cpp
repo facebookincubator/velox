@@ -18,7 +18,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -488,7 +487,7 @@ std::unique_ptr<exec::Aggregate> createMapUnionSumAggregate(
 } // namespace
 
 void registerMapUnionSumAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   const std::vector<std::string> valueTypes = {
@@ -506,15 +505,13 @@ void registerMapUnionSumAggregate(
             .build());
   }
 
-  auto name = prefix + kMapUnionSum;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step /*step*/,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step /*step*/,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
         VELOX_CHECK(argTypes[0]->isMap());

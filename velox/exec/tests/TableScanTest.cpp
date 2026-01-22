@@ -1358,6 +1358,80 @@ TEST_F(TableScanTest, batchSize) {
   }
 }
 
+DEBUG_ONLY_TEST_F(TableScanTest, batchSizeFileEstimateFallback) {
+  const auto rowSize = 1024;
+  const auto columnSize = sizeof(int64_t);
+  const auto numColumns = 2 * rowSize / columnSize;
+  const auto numRowsSplit1 = 100;
+  const auto numRowsSplit2 = 2000;
+  const auto kDefaultBatchRows = 1024;
+
+  std::vector<std::string> names;
+  names.reserve(numColumns);
+  for (size_t i = 0; i < numColumns; i++) {
+    names.push_back(fmt::format("c{}", i));
+  }
+  auto rowType =
+      ROW(std::move(names), std::vector<TypePtr>(numColumns, BIGINT()));
+
+  auto vector1 = makeVectors(1, numRowsSplit1, rowType);
+  auto vector2 = makeVectors(1, numRowsSplit2, rowType);
+
+  auto filePath1 = TempFilePath::create();
+  auto filePath2 = TempFilePath::create();
+  writeToFile(filePath1->getPath(), vector1);
+  writeToFile(filePath2->getPath(), vector2);
+
+  std::vector<RowVectorPtr> allVectors;
+  allVectors.reserve(2);
+  allVectors.push_back(vector1[0]);
+  allVectors.push_back(vector2[0]);
+  createDuckDbTable(allVectors);
+
+  auto plan = PlanBuilder().tableScan(rowType).planNode();
+
+  std::atomic_int splitCount{0};
+  std::vector<int32_t> batchSizesUsed;
+  std::mutex mutex;
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::TableScan::getOutput::gotSplit",
+      std::function<void(const TableScan*)>([&](const TableScan* tableScan) {
+        ++splitCount;
+        std::lock_guard<std::mutex> lock(mutex);
+        batchSizesUsed.push_back(tableScan->testingReadBatchSize());
+      }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::connector::hive::HiveDataSource::estimatedRowSize",
+      std::function<void(int64_t*)>([&](int64_t* estimatedRowSize) {
+        if (splitCount.load() >= 2) {
+          *estimatedRowSize = connector::DataSource::kUnknownRowSize;
+        }
+      }));
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .splits(makeHiveConnectorSplits({filePath1, filePath2}))
+                  .config(
+                      QueryConfig::kPreferredOutputBatchBytes,
+                      folly::to<std::string>(rowSize * 100))
+                  .config(
+                      QueryConfig::kPreferredOutputBatchRows,
+                      folly::to<std::string>(kDefaultBatchRows))
+                  .assertResults("SELECT * FROM tmp");
+
+  const auto opStats = task->taskStats().pipelineStats[0].operatorStats[0];
+
+  EXPECT_EQ(opStats.outputPositions, numRowsSplit1 + numRowsSplit2);
+  EXPECT_GE(splitCount.load(), 2);
+  ASSERT_GE(batchSizesUsed.size(), 2);
+
+  EXPECT_LT(batchSizesUsed[1], kDefaultBatchRows)
+      << "Second split should use the last known estimated row size, not default";
+  EXPECT_GT(opStats.outputVectors, 3);
+}
+
 // Test that adding the same split with the same sequence id does not cause
 // double read and the 2nd split is ignored.
 TEST_F(TableScanTest, sequentialSplitNoDoubleRead) {
@@ -2515,7 +2589,7 @@ TEST_F(TableScanTest, statsBasedSkippingWithoutDecompression) {
   auto assertQuery = [&](const std::string& filter) {
     auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
-        PlanBuilder(pool_.get()).tableScan(rowType, {filter}).planNode(),
+        PlanBuilder(pool_.get()).tableScan(rowType, {}, {filter}).planNode(),
         filePaths,
         "SELECT * FROM tmp WHERE " + filter);
   };
@@ -5355,6 +5429,63 @@ TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
       .split(aScanId, makeHiveConnectorSplit(files[0]->getPath()))
       .split(bScanId, makeHiveConnectorSplit(files[1]->getPath()))
       .assertResults(resVector);
+}
+
+TEST_F(TableScanTest, bloomFilterPushdown) {
+  auto build = makeRowVector(
+      {"b"},
+      {
+          makeFlatVector<int64_t>(
+              10'001 + VectorHasher::kMaxDistinct,
+              [](auto i) { return 1000 * i; }),
+      });
+  auto probe = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>(
+              2 * build->size(), [](auto i) { return 500 * i; }),
+      });
+  std::shared_ptr<TempFilePath> files[2];
+  files[0] = TempFilePath::create();
+  writeToFile(files[0]->getPath(), {probe});
+  files[1] = TempFilePath::create();
+  writeToFile(files[1]->getPath(), {build});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId, buildScanId, joinId;
+  auto plan = PlanBuilder(idGenerator)
+                  .tableScan(ROW({"a"}, {BIGINT()}))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"a"},
+                      {"b"},
+                      PlanBuilder(idGenerator)
+                          .tableScan(ROW({"b"}, {BIGINT()}))
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      /*filter=*/"",
+                      {"a"})
+                  .capturePlanNodeId(joinId)
+                  .planNode();
+  for (bool parallelBuild : {false, true}) {
+    SCOPED_TRACE(fmt::format("parallelBuild={}", parallelBuild));
+    AssertQueryBuilder builder(plan);
+    builder
+        .config(
+            core::QueryConfig::kHashProbeBloomFilterPushdownMaxSize,
+            std::to_string(4 * build->size()))
+        .split(probeScanId, makeHiveConnectorSplit(files[0]->getPath()))
+        .split(buildScanId, makeHiveConnectorSplit(files[1]->getPath()));
+    if (parallelBuild) {
+      builder.serialExecution(false).maxDrivers(2).config(
+          core::QueryConfig::kMinTableRowsForParallelJoinBuild, "1");
+    }
+    auto task = builder.assertResults(build);
+    auto planStats = toPlanStats(task->taskStats());
+    ASSERT_EQ(
+        planStats.at(joinId).customStats.at("dynamicFiltersProduced").sum,
+        parallelBuild ? 2 : 1);
+    ASSERT_GT(planStats.at(joinId).customStats.at("bloomFilterSize").sum, 0);
+  }
 }
 
 // TODO: re-enable this test once we add back driver suspension support for

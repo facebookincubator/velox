@@ -739,6 +739,17 @@ TEST_F(HiveConnectorTest, disjuncts) {
     ASSERT_EQ(filters.begin()->first, Subfield("c0"));
     VELOX_ASSERT_FILTER(exec::between(1, 12), filters.begin()->second);
   }
+
+  {
+    auto expr = parseExpr("c0 not in (1, 3) or c0 in (1, 2)", rowType);
+    SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFiltersFromRemainingFilter(
+        expr, &evaluator, filters, sampleRate);
+    ASSERT_EQ(remaining, expr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_TRUE(filters.empty());
+  }
 }
 
 #undef VELOX_ASSERT_FILTER

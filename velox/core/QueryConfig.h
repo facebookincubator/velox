@@ -205,6 +205,24 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialAggregationMinPct =
       "abandon_partial_aggregation_min_pct";
 
+  /// Memory threshold in bytes for triggering string compaction during
+  /// global aggregation. When total string storage exceeds this limit with
+  /// high unused memory ratio, compaction is triggered to reclaim dead strings.
+  /// Disabled by default (0).
+  ///
+  /// NOTE: currently only applies to approx_most_frequent aggregate with
+  /// StringView type during global aggregation. May extend to other types.
+  static constexpr const char* kAggregationCompactionBytesThreshold =
+      "aggregation_compaction_bytes_threshold";
+
+  /// Ratio of unused (evicted) bytes to total bytes that triggers compaction.
+  /// Value is between 0.0 and 1.0. Default is 0.25.
+  ///
+  /// NOTE: currently only applies to approx_most_frequent aggregate with
+  /// StringView type during global aggregation. May extend to other types.
+  static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
+      "aggregation_compaction_unused_memory_ratio";
+
   static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
       "abandon_partial_topn_row_number_min_rows";
 
@@ -276,6 +294,10 @@ class QueryConfig {
   /// taken to calculate them.
   static constexpr const char* kAdaptiveFilterReorderingEnabled =
       "adaptive_filter_reordering_enabled";
+
+  /// If true, allow hash probe drivers to generate build-side rows in parallel.
+  static constexpr const char* kParallelOutputJoinBuildRowsEnabled =
+      "parallel_output_join_build_rows_enabled";
 
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
@@ -478,6 +500,18 @@ class QueryConfig {
   /// of hash joins.
   static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
       "hash_probe_finish_early_on_empty_build";
+
+  /// Whether hash probe can generate any dynamic filter (including Bloom
+  /// filter) and push down to upstream operators.
+  static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
+      "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// The maximum byte size of Bloom filter that can be generated from hash
+  /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
+  /// optimal performance, this should not be too larger than the CPU cache size
+  /// on the host.
+  static constexpr const char* kHashProbeBloomFilterPushdownMaxSize =
+      "hash_probe_bloom_filter_pushdown_max_size";
 
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
@@ -719,6 +753,13 @@ class QueryConfig {
   static constexpr const char* kSkipRequestDataSizeWithSingleSourceEnabled =
       "skip_request_data_size_with_single_source_enabled";
 
+  /// If true, exchange clients defer data fetching until next() is called.
+  /// This enables waiter tasks using cached hash tables to skip I/O entirely
+  /// when the table is already cached. If false (default), exchange clients
+  /// start fetching data immediately when remote tasks are added.
+  static constexpr const char* kExchangeLazyFetchingEnabled =
+      "exchange_lazy_fetching_enabled";
+
   /// If this is true, then it allows you to get the struct field names
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
@@ -765,6 +806,11 @@ class QueryConfig {
   /// Enable (reader) row size tracker as a fallback to file level row size
   /// estimates.
   static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+
+  /// Maximum number of distinct values to keep when merging vector hashers in
+  /// join HashBuild.
+  static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
+      "join_build_vector_hasher_max_num_distinct";
 
   enum class RowSizeTrackingMode {
     DISABLED = 0,
@@ -842,6 +888,14 @@ class QueryConfig {
 
   int32_t abandonPartialAggregationMinPct() const {
     return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
+  }
+
+  uint64_t aggregationCompactionBytesThreshold() const {
+    return get<uint64_t>(kAggregationCompactionBytesThreshold, 0);
+  }
+
+  double aggregationCompactionUnusedMemoryRatio() const {
+    return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
   }
 
   int32_t abandonPartialTopNRowNumberMinRows() const {
@@ -1007,6 +1061,10 @@ class QueryConfig {
 
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool parallelOutputJoinBuildRowsEnabled() const {
+    return get<bool>(kParallelOutputJoinBuildRowsEnabled, false);
   }
 
   bool spillEnabled() const {
@@ -1233,6 +1291,14 @@ class QueryConfig {
     return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
   }
 
+  bool hashProbeDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  uint64_t hashProbeBloomFilterPushdownMaxSize() const {
+    return get<uint64_t>(kHashProbeBloomFilterPushdownMaxSize, 0);
+  }
+
   uint32_t minTableRowsForParallelJoinBuild() const {
     return get<uint32_t>(kMinTableRowsForParallelJoinBuild, 1'000);
   }
@@ -1344,6 +1410,10 @@ class QueryConfig {
     return get<bool>(kSkipRequestDataSizeWithSingleSourceEnabled, false);
   }
 
+  bool exchangeLazyFetchingEnabled() const {
+    return get<bool>(kExchangeLazyFetchingEnabled, false);
+  }
+
   bool isFieldNamesInJsonCastEnabled() const {
     return get<bool>(kFieldNamesInJsonCastEnabled, false);
   }
@@ -1375,6 +1445,10 @@ class QueryConfig {
 
   std::string clientTags() const {
     return get<std::string>(kClientTags, "");
+  }
+
+  uint32_t joinBuildVectorHasherMaxNumDistinct() const {
+    return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
   }
 
   template <typename T>

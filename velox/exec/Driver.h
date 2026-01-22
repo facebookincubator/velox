@@ -24,10 +24,10 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
-#include "velox/common/base/TraceConfig.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/BlockingReason.h"
+#include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec {
 
@@ -86,7 +86,7 @@ std::ostream& operator<<(std::ostream& out, const StopReason& reason);
 ///  Terminated - 'isTerminated' is set. The Driver cannot run after this and
 /// the state is final.
 ///
-/// CancelPool  allows terminating or pausing a set of Drivers. The Task API
+/// Task allows terminating or pausing a set of Drivers. The Task API
 /// allows starting or resuming Drivers. When terminate is requested the request
 /// is successful when all Drivers are off thread, blocked or suspended. When
 /// pause is requested, we have success when all Drivers are either enqueued,
@@ -248,7 +248,7 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  const std::optional<TraceConfig>& traceConfig() const;
+  const trace::TraceCtx* traceCtx() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,

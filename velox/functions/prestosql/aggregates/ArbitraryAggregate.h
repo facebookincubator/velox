@@ -17,17 +17,18 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
 /// Register arbitrary aggregate function.
-/// @param prefix Prefix for the aggregate functions.
+/// @param names Names to use for the aggregate function.
 /// @param withCompanionFunctions Also register companion functions, defaults
 /// to true.
 /// @param overwrite Whether to overwrite existing entry in the function
 /// registry, defaults to true.
 void registerArbitraryAggregate(
-    const std::string& prefix = "",
+    const std::vector<std::string>& names,
     bool withCompanionFunctions = true,
     bool overwrite = true);
 

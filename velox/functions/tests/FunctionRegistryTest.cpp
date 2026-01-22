@@ -707,6 +707,8 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     registerFunction<DummySimpleFunction, int64_t, int64_t, int64_t>({"foo"});
     registerFunction<DummySimpleFunction, float, float, float>({"foo"});
     registerFunction<DummySimpleFunction, double, double, double>({"foo"});
+    registerFunction<DummySimpleFunction, Timestamp, Timestamp, Timestamp>(
+        {"foo"});
 
     testCoercions(
         "foo", {TINYINT(), TINYINT()}, INTEGER(), {INTEGER(), INTEGER()});
@@ -718,6 +720,11 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
 
     testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
     testCoercions("foo", {REAL(), TINYINT()}, REAL(), {nullptr, REAL()});
+
+    testCoercions(
+        "foo", {TIMESTAMP(), DATE()}, {TIMESTAMP()}, {nullptr, TIMESTAMP()});
+    testCoercions(
+        "foo", {DATE(), DATE()}, {TIMESTAMP()}, {TIMESTAMP(), TIMESTAMP()});
 
     testNoCoercions("foo", {INTEGER(), INTEGER()}, INTEGER());
     testNoCoercions("foo", {REAL(), REAL()}, REAL());
@@ -949,8 +956,7 @@ TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
   auto result = resolveFunctionOrCallableSpecialForm(
       "row_constructor", {INTEGER(), BOOLEAN(), DOUBLE()});
-  ASSERT_EQ(
-      *result, *ROW({"c1", "c2", "c3"}, {INTEGER(), BOOLEAN(), DOUBLE()}));
+  ASSERT_EQ(*result, *ROW({"", "", ""}, {INTEGER(), BOOLEAN(), DOUBLE()}));
 }
 
 TEST_F(FunctionRegistryTest, resolveFunctionNotSpecialForm) {

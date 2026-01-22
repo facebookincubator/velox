@@ -54,7 +54,7 @@ struct StGeometryFromTextFunction {
     GEOS_TRY(
         {
           geos::io::WKTReader reader;
-          geosGeometry = reader.read(wkt);
+          geosGeometry = reader.read(std::string(wkt));
         },
         "Failed to parse WKT");
     common::geospatial::GeometrySerializer::serialize(*geosGeometry, result);
@@ -184,7 +184,7 @@ struct StPolygonFunction {
     GEOS_TRY(
         {
           geos::io::WKTReader reader;
-          geosGeometry = reader.read(wkt);
+          geosGeometry = reader.read(std::string(wkt));
         },
         "Failed to parse WKT");
     auto validate = geospatial::validateType(
@@ -214,7 +214,8 @@ struct StRelateFunction {
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
     GEOS_TRY(
-        result = leftGeosGeometry->relate(*rightGeosGeometry, relation);
+        result =
+            leftGeosGeometry->relate(*rightGeosGeometry, std::string(relation));
         , "Failed to check geometry relation");
 
     return Status::OK();
@@ -588,10 +589,15 @@ template <typename T>
 struct StCentroidFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE Status
-  call(out_type<Geometry>& result, const arg_type<Geometry>& input) {
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& input) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(input);
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
 
     auto validate = facebook::velox::functions::geospatial::validateType(
         *geosGeometry,
@@ -602,19 +608,16 @@ struct StCentroidFunction {
          geos::geom::GeometryTypeId::GEOS_POLYGON,
          geos::geom::GeometryTypeId::GEOS_MULTIPOLYGON},
         "ST_Centroid");
-
-    if (!validate.ok()) {
-      return validate;
-    }
+    VELOX_USER_CHECK(validate.ok(), validate.message());
 
     geos::geom::GeometryTypeId type = geosGeometry->getGeometryTypeId();
     if (type == geos::geom::GeometryTypeId::GEOS_POINT) {
       result = input;
-      return Status::OK();
+      return true;
     }
 
     if (geosGeometry->getNumPoints() == 0) {
-      GEOS_TRY(
+      GEOS_RETHROW(
           {
             geos::geom::GeometryFactory::Ptr factory =
                 geos::geom::GeometryFactory::create();
@@ -623,12 +626,12 @@ struct StCentroidFunction {
             factory->destroyGeometry(point.release());
           },
           "Failed to create point geometry");
-      return Status::OK();
+      return true;
     }
 
     common::geospatial::GeometrySerializer::serialize(
         *(geosGeometry->getCentroid()), result);
-    return Status::OK();
+    return true;
   }
 };
 
@@ -1788,7 +1791,7 @@ struct GeometryFromGeoJsonFunction {
       out_type<Geometry>& result,
       const arg_type<Varchar>& geometry) {
     auto reader = geos::io::GeoJSONReader();
-    auto geosGeometry = reader.read(geometry);
+    auto geosGeometry = reader.read(std::string(geometry));
     common::geospatial::GeometrySerializer::serialize(*geosGeometry, result);
   }
 };
@@ -1951,7 +1954,7 @@ struct StLineFromTextFunction {
     GEOS_TRY(
         {
           geos::io::WKTReader reader;
-          geosGeometry = reader.read(wkt);
+          geosGeometry = reader.read(std::string(wkt));
         },
         "Failed to parse WKT");
     auto validate = geospatial::validateType(

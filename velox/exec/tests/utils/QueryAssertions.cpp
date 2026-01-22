@@ -132,6 +132,13 @@ template <>
     return ::duckdb::Value::INTERVAL(0, days, microseconds);
   }
 
+  if (type->isTime()) {
+    // TIME is stored as milliseconds since midnight in Velox.
+    // DuckDB TIME is stored as microseconds since midnight.
+    const auto timeMillis = vector->as<SimpleVector<int64_t>>()->valueAt(index);
+    return ::duckdb::Value::TIME(::duckdb::dtime_t(timeMillis * 1000L));
+  }
+
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
@@ -278,7 +285,8 @@ variant variantAt<TypeKind::VARBINARY>(
     int32_t row,
     int32_t column) {
   return variant::binary(
-      StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
+      std::string(
+          ::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
 }
 
 template <>
@@ -323,7 +331,7 @@ variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
 
 template <>
 variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
-  return variant::binary(StringView(::duckdb::StringValue::Get(value)));
+  return variant::binary(std::string(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {
@@ -447,6 +455,12 @@ std::vector<MaterializedRow> materialize(
         auto value = variant(
             ::duckdb::Date::EpochDays(
                 dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
+        row.push_back(value);
+      } else if (type->isTime()) {
+        // DuckDB TIME is in microseconds, Velox TIME is in milliseconds.
+        auto value = variant(
+            dataChunk->GetValue(j, i).GetValue<::duckdb::dtime_t>().micros /
+            1000L);
         row.push_back(value);
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(

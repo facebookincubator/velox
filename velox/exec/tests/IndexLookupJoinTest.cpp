@@ -35,7 +35,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-namespace fecebook::velox::exec::test {
+namespace facebook::velox::exec::test {
 namespace {
 struct TestParam {
   bool asyncLookup;
@@ -3306,4 +3306,4 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
           info.param.serialExecution ? "serial" : "parallel",
           info.param.hasNullKeys ? "nullKeys" : "noNullKeys");
     });
-} // namespace fecebook::velox::exec::test
+} // namespace facebook::velox::exec::test

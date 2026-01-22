@@ -363,6 +363,17 @@ struct TypeTraits<TypeKind::OPAQUE> {
   static constexpr const char* name = "OPAQUE";
 };
 
+// Convenience constexpr function to check for string-like and nested type
+// kinds.
+constexpr bool is_string_kind(TypeKind kind) {
+  return kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY;
+}
+
+constexpr bool is_nested_kind(TypeKind kind) {
+  return kind == TypeKind::ARRAY || kind == TypeKind::MAP ||
+      kind == TypeKind::ROW;
+}
+
 template <TypeKind KIND>
 struct TypeFactory;
 
@@ -1207,8 +1218,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<TypePtr> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
   mutable std::atomic<NameToIndex*> nameToIndex_{nullptr};
-  mutable std::atomic_bool hashKindComputed_{false};
-  mutable std::atomic_size_t hashKind_;
+  mutable std::atomic_size_t hashKind_{0};
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
@@ -1351,6 +1361,15 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
         deserializeTypeErased);
   }
 
+  // This function is used to remove the serialization/deserialization functions
+  // for a type. It reverses the state changes made by registerSerialization
+  // function.
+  // @return true if the functions are found and removed
+  // successfully. False otherwise.
+  static bool unregisterSerialization(
+      const std::shared_ptr<const OpaqueType>& opaqueType,
+      const std::string& persistentName);
+
   static void clearSerializationRegistry();
 
  protected:
@@ -1365,6 +1384,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
       SerializeFunc<void> serialize = nullptr,
       DeserializeFunc<void> deserialize = nullptr);
 };
+
+using OpaqueTypePtr = std::shared_ptr<const OpaqueType>;
 
 using IntegerType = ScalarType<TypeKind::INTEGER>;
 using BooleanType = ScalarType<TypeKind::BOOLEAN>;
@@ -1604,6 +1625,12 @@ class TimeType final : public BigintType {
   // When casting from TIME to varchar , the resultant varchar will always
   // be 12 bytes long (HH:MM:SS.mmm).
   static const size_t kTimeToVarcharRowSize = 12;
+
+  /// Minimum valid time value (milliseconds since midnight): 00:00:00.000
+  static constexpr int64_t kMin = 0;
+
+  /// Maximum valid time value (milliseconds since midnight): 23:59:59.999
+  static constexpr int64_t kMax = kMillisInDay - 1;
 };
 
 using TimeTypePtr = std::shared_ptr<const TimeType>;
@@ -2223,6 +2250,11 @@ inline std::string to(const int128_t& value) {
   return std::to_string(value);
 }
 
+template <typename T>
+inline T to(const velox::StringView& value) {
+  return to<T>(std::string_view(value.data(), value.size()));
+}
+
 template <>
 inline std::string to(const velox::StringView& value) {
   return std::string(value.data(), value.size());
@@ -2355,6 +2387,7 @@ bool registerOpaqueType(const std::string& alias) {
 template <typename Class>
 bool unregisterOpaqueType(const std::string& alias) {
   auto typeIndex = std::type_index(typeid(Class));
+  OpaqueType::unregisterSerialization(OpaqueType::create<Class>(), alias);
   return getTypeIndexByOpaqueAlias().erase(alias) == 1 &&
       getOpaqueAliasByTypeIndex().erase(typeIndex) == 1;
 }

@@ -17,7 +17,6 @@
 #include "velox/functions/prestosql/aggregates/CentralMomentsAggregates.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/lib/aggregates/CentralMomentsAggregatesBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -50,8 +49,8 @@ struct KurtosisResultAccessor {
 };
 
 template <typename TResultAccessor>
-exec::AggregateRegistrationResult registerCentralMoments(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerCentralMoments(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -67,14 +66,15 @@ exec::AggregateRegistrationResult registerCentralMoments(
   }
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         const auto& inputType = argTypes[0];
@@ -120,14 +120,20 @@ exec::AggregateRegistrationResult registerCentralMoments(
       overwrite);
 }
 
-void registerCentralMomentsAggregates(
-    const std::string& prefix,
+void registerKurtosisAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   registerCentralMoments<KurtosisResultAccessor>(
-      prefix + kKurtosis, withCompanionFunctions, overwrite);
+      names, withCompanionFunctions, overwrite);
+}
+
+void registerSkewnessAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerCentralMoments<SkewnessResultAccessor>(
-      prefix + kSkewness, withCompanionFunctions, overwrite);
+      names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -570,11 +570,12 @@ bool RowType::equals(const Type& other) const {
 }
 
 size_t RowType::hashKind() const {
-  if (!hashKindComputed_.load(std::memory_order_relaxed)) {
-    hashKind_ = TypeBase<TypeKind::ROW>::hashKind();
-    hashKindComputed_ = true;
+  auto hashKind = hashKind_.load(std::memory_order_relaxed);
+  if (hashKind == 0) {
+    hashKind = TypeBase<TypeKind::ROW>::hashKind();
+    hashKind_.store(hashKind, std::memory_order_relaxed);
   }
-  return hashKind_;
+  return hashKind;
 }
 
 void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
@@ -905,6 +906,15 @@ OpaqueType::DeserializeFunc<void> OpaqueType::getDeserializeFunc() const {
 std::shared_ptr<const OpaqueType> OpaqueType::deserializeExtra(
     const folly::dynamic&) const {
   return nullptr;
+}
+
+bool OpaqueType::unregisterSerialization(
+    const OpaqueTypePtr& opaqueType,
+    const std::string& persistentName) {
+  VELOX_CHECK_NOT_NULL(opaqueType);
+  auto& registry = OpaqueSerdeRegistry::get();
+  registry.reverse.erase(persistentName);
+  return registry.mapping.erase(opaqueType->typeIndex_);
 }
 
 void OpaqueType::clearSerializationRegistry() {

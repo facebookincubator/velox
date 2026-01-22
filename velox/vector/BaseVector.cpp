@@ -32,7 +32,6 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox {
-
 namespace {
 
 Variant nullVariant(const TypePtr& type) {
@@ -56,7 +55,8 @@ template <>
 Variant variantAtTyped<TypeKind::VARBINARY>(
     const BaseVector* vector,
     vector_size_t row) {
-  return Variant::binary(vector->as<SimpleVector<StringView>>()->valueAt(row));
+  return Variant::binary(
+      std::string(vector->as<SimpleVector<StringView>>()->valueAt(row)));
 }
 
 Variant variantAtImpl(const BaseVector* vector, vector_size_t row);
@@ -140,6 +140,15 @@ Variant variantAtImpl(const BaseVector* vector, vector_size_t row) {
 
 Variant BaseVector::variantAt(vector_size_t index) const {
   return variantAtImpl(this, index);
+}
+
+std::vector<Variant> BaseVector::toVariants() const {
+  std::vector<Variant> result;
+  result.reserve(size());
+  for (auto i = 0; i < size(); ++i) {
+    result.push_back(variantAt(i));
+  }
+  return result;
 }
 
 BaseVector::BaseVector(
@@ -1020,6 +1029,14 @@ VectorPtr BaseVector::createConstant(
 
   auto variantVector = callMakeVector(type, {value}, pool);
   return BaseVector::wrapInConstant(size, 0, std::move(variantVector));
+}
+
+// static
+VectorPtr BaseVector::createFromVariants(
+    const TypePtr& type,
+    const std::vector<Variant>& values,
+    velox::memory::MemoryPool* pool) {
+  return callMakeVector(type, values, pool);
 }
 
 // static

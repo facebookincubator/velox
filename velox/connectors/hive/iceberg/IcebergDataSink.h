@@ -16,13 +16,49 @@
 
 #pragma once
 
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
 #include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+namespace {
+
+IcebergColumnHandlePtr convertToIcebergColumnHandle(
+    const HiveColumnHandlePtr& hiveColumn) {
+  static int32_t fieldIdCounter = 1;
+
+  std::function<parquet::ParquetFieldId(const TypePtr&, int32_t&)> makeField =
+      [&makeField](
+          const TypePtr& type, int32_t& fieldId) -> parquet::ParquetFieldId {
+    const int32_t currentId = fieldId++;
+    std::vector<parquet::ParquetFieldId> children;
+    children.reserve(type->size());
+    for (auto i = 0; i < type->size(); ++i) {
+      children.push_back(makeField(type->childAt(i), fieldId));
+    }
+    return parquet::ParquetFieldId{currentId, children};
+  };
+
+  auto field = makeField(hiveColumn->dataType(), fieldIdCounter);
+
+  return std::make_shared<const IcebergColumnHandle>(
+      hiveColumn->name(),
+      hiveColumn->columnType(),
+      hiveColumn->dataType(),
+      field);
+}
+
+} // namespace
 
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -44,7 +80,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
   IcebergInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
+      std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
       IcebergPartitionSpecPtr partitionSpec,
@@ -56,13 +92,21 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::vector<HiveColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
+      IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {})
       : IcebergInsertTableHandle(
-            inputColumns,
+            [&inputColumns]() {
+              std::vector<IcebergColumnHandlePtr> icebergColumns;
+              icebergColumns.reserve(inputColumns.size());
+              for (const auto& col : inputColumns) {
+                icebergColumns.push_back(convertToIcebergColumnHandle(col));
+              }
+              return icebergColumns;
+            }(),
             locationHandle,
             tableStorageFormat,
-            nullptr,
+            partitionSpec,
             compressionKind,
             serdeParameters) {}
 #endif

@@ -23,7 +23,6 @@
 #include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::dwrf {
-
 namespace {
 
 template <typename T>
@@ -41,7 +40,7 @@ inline dwio::common::flatmap::KeyValue<StringView> extractKey<StringView>(
 template <typename T>
 std::string toString(const T& x) {
   if constexpr (std::is_same_v<T, StringView>) {
-    return x;
+    return std::string(x);
   } else {
     return std::to_string(x);
   }

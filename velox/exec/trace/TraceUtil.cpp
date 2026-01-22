@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 #include <folly/json.h>
-
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/TableWriter.h"
-#include "velox/exec/Trace.h"
+#include "velox/core/TableWriteTraits.h"
+#include "velox/exec/trace/Trace.h"
 
 namespace facebook::velox::exec::trace {
 namespace {
+
 std::string findLastPathNode(const std::string& path) {
   std::vector<std::string> pathNodes;
   folly::split("/", path, pathNodes);
@@ -42,6 +42,7 @@ std::unordered_map<std::string, TraceNodeFactory>& traceNodeRegistry() {
   static std::unordered_map<std::string, TraceNodeFactory> registry;
   return registry;
 }
+
 } // namespace
 
 void createTraceDirectory(
@@ -80,13 +81,6 @@ std::string getQueryTraceDirectory(
   }
 
   return fmt::format("{}/{}", normalizedTraceDir, queryId);
-}
-
-std::string getTaskTraceDirectory(
-    const std::string& traceDir,
-    const Task& task) {
-  return getTaskTraceDirectory(
-      traceDir, task.queryCtx()->queryId(), task.taskId());
 }
 
 std::string getTaskTraceDirectory(
@@ -267,9 +261,9 @@ bool canTrace(const std::string& operatorType) {
 }
 
 core::PlanNodePtr getTraceNode(
-    const core::PlanNodePtr& plan,
+    const core::PlanNode& plan,
     core::PlanNodeId nodeId) {
-  const auto* traceNode = core::PlanNode::findNodeById(plan.get(), nodeId);
+  const auto* traceNode = core::PlanNode::findNodeById(&plan, nodeId);
   VELOX_CHECK_NOT_NULL(traceNode, "Failed to find node with id {}", nodeId);
   if (const auto* hashJoinNode =
           dynamic_cast<const core::HashJoinNode*>(traceNode)) {
@@ -410,7 +404,7 @@ core::PlanNodePtr getTraceNode(
         tableWriteNode->columnStatsSpec(),
         tableWriteNode->insertTableHandle(),
         tableWriteNode->hasPartitioningScheme(),
-        TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()),
+        core::TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()),
         tableWriteNode->commitStrategy(),
         std::make_shared<DummySourceNode>(
             tableWriteNode->sources().front()->outputType()));

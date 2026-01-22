@@ -20,7 +20,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -287,11 +286,12 @@ void ReservoirSampleAccumulator::mergeSamples(
 
 BufferPtr makeShuffledIndex(
     vector_size_t size,
+    vector_size_t offset,
     folly::ThreadLocalPRNG& randGen,
     memory::MemoryPool* pool) {
   BufferPtr index = allocateIndices(size, pool);
   vector_size_t* rawIndex = index->asMutable<vector_size_t>();
-  std::iota(rawIndex, rawIndex + size, 0);
+  std::iota(rawIndex, rawIndex + size, offset);
   std::shuffle(rawIndex, rawIndex + size, randGen);
   return index;
 }
@@ -361,7 +361,7 @@ void ReservoirSampleAccumulator::mergeSamples(
     rows.setValidRange(0, oneSelected, true);
     rows.updateBounds();
 
-    const BufferPtr oneIndex = makeShuffledIndex(sampleCount(), rng, pool);
+    const BufferPtr oneIndex = makeShuffledIndex(sampleCount(), 0, rng, pool);
     mergedSamples->copy(samples.get(), rows, oneIndex->as<vector_size_t>());
   }
 
@@ -371,8 +371,8 @@ void ReservoirSampleAccumulator::mergeSamples(
     rows.setValidRange(oneSelected, maxSampleSize.value(), true);
     rows.updateBounds();
 
-    BufferPtr otherIndex = makeShuffledIndex(otherSize, rng, pool);
-    // Shift the source indices of the mapping forward by oneCount.
+    BufferPtr otherIndex = makeShuffledIndex(otherSize, otherOffset, rng, pool);
+    // Shift the source indices of the mapping forward by oneSelected.
     auto* otherRawIndex = otherIndex->asMutable<vector_size_t>();
     for (vector_size_t i = 0; i < otherSelected; ++i) {
       otherRawIndex[maxSampleSize.value() - 1 - i] =
@@ -833,7 +833,7 @@ ReservoirSampleAggregate::computeTotalSamples(char** groups, int32_t numGroups)
 } // namespace
 
 void registerReservoirSampleAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -869,18 +869,17 @@ void registerReservoirSampleAggregate(
             .build());
   }
 
-  auto name = prefix + kReservoirSample;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step /* step */,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /* config */)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 4, "reservoir_sample requires 4 arguments");
+            argTypes.size(), 4, "{} requires 4 arguments", names.front());
 
         return std::make_unique<ReservoirSampleAggregate>(resultType);
       },

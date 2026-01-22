@@ -54,30 +54,9 @@ void ColumnStatsCollector::initialize() {
   VELOX_CHECK_NOT_NULL(groupingSet_);
 }
 
-// static
-RowTypePtr ColumnStatsCollector::outputType(
-    const core::ColumnStatsSpec& statsSpec) {
-  // Create output type based on the column stats collection specs.
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  const auto numAggregates = statsSpec.aggregates.size();
-  const auto outputTypeSize = statsSpec.groupingKeys.size() + numAggregates;
-  names.reserve(outputTypeSize);
-  types.reserve(outputTypeSize);
-  for (const auto& key : statsSpec.groupingKeys) {
-    names.push_back(key->name());
-    types.push_back(key->type());
-  }
-  for (auto i = 0; i < numAggregates; ++i) {
-    names.push_back(statsSpec.aggregateNames[i]);
-    types.push_back(statsSpec.aggregates[i].call->type());
-  }
-  return ROW(std::move(names), std::move(types));
-}
-
 void ColumnStatsCollector::setOutputType() {
   VELOX_CHECK_NULL(outputType_);
-  outputType_ = outputType(statsSpec_);
+  outputType_ = statsSpec_.outputType();
 }
 
 std::pair<std::vector<column_index_t>, std::vector<column_index_t>>

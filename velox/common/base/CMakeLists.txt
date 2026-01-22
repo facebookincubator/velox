@@ -34,7 +34,6 @@ velox_add_library(
   SplitBlockBloomFilter.cpp
   StatsReporter.cpp
   SuccinctPrinter.cpp
-  TraceConfig.cpp
 )
 
 velox_link_libraries(

@@ -182,14 +182,14 @@ std::string stringifyFloatingPointerValue(T val) {
 }
 
 void Variant::throwCheckIsKindError(TypeKind kind) const {
-  throw std::invalid_argument{fmt::format(
+  VELOX_USER_FAIL(
       "wrong kind! {} != {}",
       TypeKindName::toName(kind_),
-      TypeKindName::toName(kind))};
+      TypeKindName::toName(kind));
 }
 
 void Variant::throwCheckPtrError() const {
-  throw std::invalid_argument{"missing Variant value"};
+  VELOX_USER_FAIL("missing Variant value");
 }
 
 std::string Variant::toString(const TypePtr& type) const {
@@ -973,7 +973,7 @@ bool equalsFloatingPointWithEpsilonTyped(const Variant& a, const Variant& b) {
 
   // Check if the numbers are really close -- needed
   // when comparing numbers near zero.
-  if (fabs(f1 - f2) < kEpsilon) {
+  if (fabs(f1 - f2) < Variant::kEpsilon) {
     return true;
   }
 
@@ -1059,7 +1059,7 @@ bool compareComplexTypeWithEpsilon<TypeKind::MAP>(
 }
 } // namespace
 
-// Uses kEpsilon to compare floating point types (REAL and DOUBLE).
+// Uses Variant::kEpsilon to compare floating point types (REAL and DOUBLE).
 // For testing purposes.
 bool Variant::equalsWithEpsilon(const Variant& other) const {
   if (other.kind_ != this->kind_) {

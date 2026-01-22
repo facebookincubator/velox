@@ -52,7 +52,7 @@ class ExprToSubfieldFilterTest : public testing::Test {
       const std::string& expr,
       const RowTypePtr& type) {
     return core::Expressions::inferTypes(
-        parse::parseExpr(expr, {}), type, pool_.get());
+        parse::DuckSqlExpressionsParser().parseExpr(expr), type, pool_.get());
   }
 
   core::CallTypedExprPtr parseCallExpr(
@@ -69,10 +69,12 @@ class ExprToSubfieldFilterTest : public testing::Test {
   }
 
   std::pair<common::Subfield, std::unique_ptr<common::Filter>>
-  leafCallToSubfieldFilter(const core::CallTypedExprPtr& call) {
+  leafCallToSubfieldFilter(
+      const core::CallTypedExprPtr& call,
+      bool negated = false) {
     if (auto result =
             ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-                *call, evaluator())) {
+                *call, evaluator(), negated)) {
       return std::move(result.value());
     }
 
@@ -178,13 +180,48 @@ TEST_F(ExprToSubfieldFilterTest, between) {
 }
 
 TEST_F(ExprToSubfieldFilterTest, in) {
-  auto call = parseCallExpr("a in (40, 42)", ROW("a", BIGINT()));
-  auto [subfield, filter] = leafCallToSubfieldFilter(call);
+  {
+    auto call = parseCallExpr("a in (40, 42)", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
 
-  ASSERT_TRUE(filter);
-  validateSubfield(subfield, {"a"});
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
 
-  VELOX_ASSERT_FILTER(in({40, 42}), filter);
+    VELOX_ASSERT_FILTER(in({40, 42}), filter);
+  }
+
+  {
+    auto call = parseCallExpr("a in (40, 42, null)", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(in({40, 42}), filter);
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, notIn) {
+  {
+    auto call = parseCallExpr("a in (40, 42)", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call, true);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(notIn({40, 42}), filter);
+  }
+
+  {
+    auto call = parseCallExpr("a in (40, 42, null)", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call, true);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    auto expected = std::make_unique<common::AlwaysFalse>();
+    VELOX_ASSERT_FILTER(expected, filter);
+  }
 }
 
 TEST_F(ExprToSubfieldFilterTest, isNull) {

@@ -1137,26 +1137,6 @@ class AggregationNode : public PlanNode {
       bool noGroupsSpanBatches,
       PlanNodePtr source);
 
-  AggregationNode(
-      const PlanNodeId& id,
-      Step step,
-      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
-      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
-      const std::vector<std::string>& aggregateNames,
-      const std::vector<Aggregate>& aggregates,
-      bool ignoreNullKeys,
-      PlanNodePtr source)
-      : AggregationNode(
-            id,
-            step,
-            groupingKeys,
-            preGroupedKeys,
-            aggregateNames,
-            aggregates,
-            ignoreNullKeys,
-            /*noGroupsSpanBatches=*/false,
-            source) {}
-
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
   /// by the preceding GroupId node
   /// @param groupId Group ID key produced by the preceding GroupId node. Must
@@ -1178,30 +1158,6 @@ class AggregationNode : public PlanNode {
       bool ignoreNullKeys,
       bool noGroupsSpanBatches,
       PlanNodePtr source);
-
-  AggregationNode(
-      const PlanNodeId& id,
-      Step step,
-      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
-      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
-      const std::vector<std::string>& aggregateNames,
-      const std::vector<Aggregate>& aggregates,
-      const std::vector<vector_size_t>& globalGroupingSets,
-      const std::optional<FieldAccessTypedExprPtr>& groupId,
-      bool ignoreNullKeys,
-      PlanNodePtr source)
-      : AggregationNode(
-            id,
-            step,
-            groupingKeys,
-            preGroupedKeys,
-            aggregateNames,
-            aggregates,
-            globalGroupingSets,
-            groupId,
-            ignoreNullKeys,
-            /*noGroupsSpanBatches=*/false,
-            source) {}
 
   class Builder {
    public:
@@ -1507,6 +1463,11 @@ struct ColumnStatsSpec : public ISerializable {
     VELOX_CHECK(!aggregates.empty());
     VELOX_CHECK_EQ(aggregates.size(), aggregateNames.size());
   }
+
+  /// Returns the output row type that will be produced by this column stats
+  /// spec. The output type is determined by the grouping keys and aggregate
+  /// functions specified in the object.
+  RowTypePtr outputType() const;
 
   folly::dynamic serialize() const override;
 
@@ -3186,7 +3147,8 @@ class HashJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      RowTypePtr outputType)
+      RowTypePtr outputType,
+      bool useHashTableCache = false)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3196,7 +3158,8 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(left),
             std::move(right),
             std::move(outputType)),
-        nullAware_{nullAware} {
+        nullAware_{nullAware},
+        useHashTableCache_{useHashTableCache} {
     validate();
 
     if (nullAware) {
@@ -3221,10 +3184,16 @@ class HashJoinNode : public AbstractJoinNode {
     explicit Builder(const HashJoinNode& other)
         : AbstractJoinNode::Builder<HashJoinNode, Builder>(other) {
       nullAware_ = other.isNullAware();
+      useHashTableCache_ = other.useHashTableCache();
     }
 
     Builder& nullAware(bool value) {
       nullAware_ = value;
+      return *this;
+    }
+
+    Builder& useHashTableCache(bool value) {
+      useHashTableCache_ = value;
       return *this;
     }
 
@@ -3254,11 +3223,13 @@ class HashJoinNode : public AbstractJoinNode {
           filter_.value_or(nullptr),
           left_.value(),
           right_.value(),
-          outputType_.value());
+          outputType_.value(),
+          useHashTableCache_.value_or(false));
     }
 
    private:
     std::optional<bool> nullAware_;
+    std::optional<bool> useHashTableCache_;
   };
 
   std::string_view name() const override {
@@ -3281,6 +3252,12 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  /// Returns whether hash table caching is enabled for broadcast joins.
+  /// Only used by Presto-on-Spark.
+  bool useHashTableCache() const {
+    return useHashTableCache_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3289,6 +3266,7 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+  const bool useHashTableCache_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;

@@ -17,9 +17,13 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerGeometryAggregate(const std::string& prefix, bool overwrite);
+void registerGeometryAggregate(
+    const std::vector<std::string>& convexHullNames,
+    const std::vector<std::string>& geometryUnionNames,
+    bool overwrite);
 
 } // namespace facebook::velox::aggregate::prestosql

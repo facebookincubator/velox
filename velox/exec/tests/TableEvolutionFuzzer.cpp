@@ -296,7 +296,7 @@ void buildScanSplitFromTableWriteResult(
   auto* fragments =
       writeResult[0]->childAt(1)->asChecked<SimpleVector<StringView>>();
   for (int i = 1; i < writeResult[0]->size(); ++i) {
-    auto fragment = folly::parseJson(fragments->valueAt(i));
+    auto fragment = folly::parseJson(std::string_view(fragments->valueAt(i)));
     auto fileName = fragment["fileWriteInfos"][0]["writeFileName"].asString();
     auto hiveSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         TableEvolutionFuzzer::connectorId(),

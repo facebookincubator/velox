@@ -98,15 +98,15 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t>& groupingKeyOutputChannels) const;
 
   CudfVectorPtr doGroupByAggregation(
-      std::unique_ptr<cudf::table> tbl,
+      cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<Aggregator>>& aggregators,
       rmm::cuda_stream_view stream);
   CudfVectorPtr doGlobalAggregation(
-      std::unique_ptr<cudf::table> tbl,
+      cudf::table_view tableView,
       rmm::cuda_stream_view stream);
   CudfVectorPtr getDistinctKeys(
-      std::unique_ptr<cudf::table> tbl,
+      cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       rmm::cuda_stream_view stream);
 

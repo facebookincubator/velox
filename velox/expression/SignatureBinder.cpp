@@ -192,7 +192,7 @@ bool SignatureBinder::tryBind(
             if (auto cost =
                     TypeCoercer::coercible(actualTypes_[i], firstType)) {
               if (cost.value() > 0) {
-                coercions[i] = Coercion(firstType, cost.value());
+                coercions[i] = Coercion{firstType, cost.value()};
               }
             } else {
               return false;

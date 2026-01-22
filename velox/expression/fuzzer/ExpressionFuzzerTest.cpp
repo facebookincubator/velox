@@ -63,6 +63,7 @@ using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::QDigestArgValuesGenerator;
+using facebook::velox::fuzzer::SetDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
 using facebook::velox::fuzzer::URLArgValuesGenerator;
@@ -119,7 +120,16 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
         {"destructure_tdigest",
          std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
         {"trimmed_mean",
-         std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")}};
+         std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")},
+        {"hash_counts",
+         std::make_shared<SetDigestArgValuesGenerator>("hash_counts")},
+        {"cardinality",
+         std::make_shared<SetDigestArgValuesGenerator>("cardinality")},
+        {"jaccard_index",
+         std::make_shared<SetDigestArgValuesGenerator>("jaccard_index")},
+        {"intersection_cardinality",
+         std::make_shared<SetDigestArgValuesGenerator>(
+             "intersection_cardinality")}};
 
 // TODO: List of the functions that at some point crash or fail and need to
 // be fixed before we can enable.
@@ -128,6 +138,9 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
 // testing. Use function signature to exclude only a specific signature.
 std::unordered_set<std::string> skipFunctions = {
     "noisy_empty_approx_set_sfm", // Non-deterministic because of privacy.
+    "current_timestamp", // Non-deterministic: returns the current timestamp at
+                         // query execution time, so results differ across runs
+    "now", // alias for current_timestamp
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
@@ -146,14 +159,11 @@ std::unordered_set<std::string> skipFunctions = {
     "destructure_tdigest",
     "trimmed_mean",
     // Fuzzer and the underlying engine are confused about SetDigest functions
-    // (since SetDigest is a user defined type), and tries to pass a
-    // VARBINARY (since SetDigest's implementation uses an
+    // (since KHLL is a user defined type), and tries to pass a
+    // VARBINARY (since KHLL's implementation uses an
     // alias to VARBINARY).
-    "cardinality(setdigest) -> bigint",
-    "intersection_cardinality(setdigest,setdigest) -> bigint",
-    "jaccard_index(setdigest,setdigest) -> double",
-    "hash_counts(setdigest) -> map(bigint,smallint)",
-    // Same with KHyperLogLog functions
+    "cardinality(hyperloglog) -> bigint", // Skip HLL version, only test
+                                          // setdigest
     "cardinality(khyperloglog) -> bigint",
     "intersection_cardinality(khyperloglog,khyperloglog) -> bigint",
     "jaccard_index(khyperloglog,khyperloglog) -> double",
@@ -444,13 +454,11 @@ std::unordered_set<std::string> skipFunctionsSOT = {
                  // https://github.com/facebookincubator/velox/issues/14937,
     "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
     // Fuzzer and the underlying engine are confused about SetDigest functions
-    // (since SetDigest is a user defined type), and tries to pass a
-    // VARBINARY (since SetDigest's implementation uses an
+    // (since KHLL is a user defined type), and tries to pass a
+    // VARBINARY (since KHLL's implementation uses an
     // alias to VARBINARY).
-    "cardinality(setdigest) -> bigint",
-    "intersection_cardinality(setdigest,setdigest) -> bigint",
-    "jaccard_index(setdigest,setdigest) -> double",
-    "hash_counts(setdigest) -> map(bigint,smallint)",
+    "cardinality(hyperloglog) -> bigint", // Skip HLL version, only test
+                                          // setdigest
     // Same with KHyperLogLog functions
     "cardinality(khyperloglog) -> bigint",
     "intersection_cardinality(khyperloglog,khyperloglog) -> bigint",

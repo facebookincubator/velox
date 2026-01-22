@@ -16,14 +16,15 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/SfmSketchAggregate.h"
 #include "velox/functions/prestosql/types/SfmSketchRegistration.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
 void registerNoisyApproxSfmAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& noisyApproxSetSfmNames,
+    const std::vector<std::string>& noisyApproxDistinctSfmNames,
+    const std::vector<std::string>& noisyApproxSetSfmFromIndexAndZerosNames,
     bool withCompanionFunctions,
     bool overwrite) {
   // Register the SfmSketch type.
@@ -105,13 +106,12 @@ void registerNoisyApproxSfmAggregate(
           .build());
 
   exec::registerAggregateFunction(
-      prefix + kNoisyApproxSetSfm,
+      noisyApproxSetSfmNames,
       setSignatures,
-      [prefix](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& /*argTypes*/,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& /*argTypes*/,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         if (exec::isPartialOutput(step)) {
           return std::make_unique<SfmSketchAggregate<true, false, false>>(
@@ -124,13 +124,12 @@ void registerNoisyApproxSfmAggregate(
       overwrite);
 
   exec::registerAggregateFunction(
-      prefix + kNoisyApproxDistinctSfm,
+      noisyApproxDistinctSfmNames,
       countSignatures,
-      [prefix](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& /*argTypes*/,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& /*argTypes*/,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         if (exec::isPartialOutput(step)) {
           return std::make_unique<SfmSketchAggregate<false, false, false>>(
@@ -143,13 +142,12 @@ void registerNoisyApproxSfmAggregate(
       overwrite);
 
   exec::registerAggregateFunction(
-      prefix + kNoisyApproxSetSfmFromIndexAndZeros,
+      noisyApproxSetSfmFromIndexAndZerosNames,
       setFromIndexAndZerosSignatures,
-      [prefix](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& /*argTypes*/,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& /*argTypes*/,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         if (exec::isPartialOutput(step)) {
           return std::make_unique<SfmSketchAggregate<true, true, false>>(
