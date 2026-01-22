@@ -36,81 +36,71 @@
 
 namespace facebook::velox::cudf_velox {
 
-cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
+cudf::data_type veloxToCudfDataType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
-      return cudf::type_id::BOOL8;
+      return cudf::data_type{cudf::type_id::BOOL8};
     case TypeKind::TINYINT:
-      return cudf::type_id::INT8;
+      return cudf::data_type{cudf::type_id::INT8};
     case TypeKind::SMALLINT:
-      return cudf::type_id::INT16;
+      return cudf::data_type{cudf::type_id::INT16};
     case TypeKind::INTEGER:
       // TODO: handle interval types (durations?)
       // if (type->isIntervalYearMonth()) {
       //   return cudf::type_id::...;
       // }
       if (type->isDate()) {
-        return cudf::type_id::TIMESTAMP_DAYS;
+        return cudf::data_type{cudf::type_id::TIMESTAMP_DAYS};
       }
-      return cudf::type_id::INT32;
+      return cudf::data_type{cudf::type_id::INT32};
     case TypeKind::BIGINT:
       // BIGINT is used for both INT64 and DECIMAL64
-      return type->isDecimal() ? cudf::type_id::DECIMAL64 : cudf::type_id::INT64;
-    case TypeKind::HUGEINT:
+      if (type->isDecimal()) {
+        auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
+        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
+        return cudf::data_type{cudf::type_id::DECIMAL64, cudfScale};
+      }
+      return cudf::data_type{cudf::type_id::INT64};
+    case TypeKind::HUGEINT: {
       // HUGEINT is used only for DECIMAL128
       // per facebookincubator/velox PR 4434 (May 2, 2023)
       // although see commented-out HUGEINT -> DURATION_DAYS below
       VELOX_CHECK(type->isDecimal(), "HUGEINT should only be used for DECIMAL128");
-      return cudf::type_id::DECIMAL128;
+      auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
+      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+      auto const cudfScale = numeric::scale_type{-decimalType->scale()};
+      return cudf::data_type{cudf::type_id::DECIMAL128, cudfScale};
+    }
     case TypeKind::REAL:
-      return cudf::type_id::FLOAT32;
+      return cudf::data_type{cudf::type_id::FLOAT32};
     case TypeKind::DOUBLE:
-      return cudf::type_id::FLOAT64;
+      return cudf::data_type{cudf::type_id::FLOAT64};
     case TypeKind::VARCHAR:
-      return cudf::type_id::STRING;
+      return cudf::data_type{cudf::type_id::STRING};
     case TypeKind::VARBINARY:
-      return cudf::type_id::STRING;
+      return cudf::data_type{cudf::type_id::STRING};
     case TypeKind::TIMESTAMP:
-      return cudf::type_id::TIMESTAMP_NANOSECONDS;
+      return cudf::data_type{cudf::type_id::TIMESTAMP_NANOSECONDS};
     // case TypeKind::HUGEINT: return cudf::type_id::DURATION_DAYS;
     // TODO: DATE was converted to a logical type:
     // https://github.com/facebookincubator/velox/commit/e480f5c03a6c47897ef4488bd56918a89719f908
     // case TypeKind::DATE: return cudf::type_id::DURATION_DAYS;
     // case TypeKind::INTERVAL_DAY_TIME: return cudf::type_id::EMPTY;
     case TypeKind::ARRAY:
-      return cudf::type_id::LIST;
-    // case TypeKind::MAP: return cudf::type_id::EMPTY;
+      return cudf::data_type{cudf::type_id::LIST};
     case TypeKind::ROW:
-      return cudf::type_id::STRUCT;
+      return cudf::data_type{cudf::type_id::STRUCT};
+    // case TypeKind::MAP: return cudf::type_id::EMPTY;
     // case TypeKind::UNKNOWN: return cudf::type_id::EMPTY;
     // case TypeKind::FUNCTION: return cudf::type_id::EMPTY;
     // case TypeKind::OPAQUE: return cudf::type_id::EMPTY;
     // case TypeKind::INVALID: return cudf::type_id::EMPTY;
     default:
-      CUDF_FAIL(
-          "Unsupported Velox type: " +
-          std::string(TypeKindName::toName(type->kind())));
-      return cudf::type_id::EMPTY;
+      break;
   }
-}
-
-cudf::data_type veloxToCudfDataType(const TypePtr& type) {
-  auto typeId = veloxToCudfTypeId(type);
-  if (type->isDecimal()) {
-    if (type->kind() == TypeKind::BIGINT) {
-      auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
-      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
-      auto const cudfScale = numeric::scale_type{-decimalType->scale()};
-      return cudf::data_type{typeId, cudfScale};
-    } else if (type->kind() == TypeKind::HUGEINT) {
-      auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
-      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
-      auto const cudfScale = numeric::scale_type{-decimalType->scale()};
-      return cudf::data_type{typeId, cudfScale};
-    }
-    VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
-  }
-  return cudf::data_type(typeId);
+  CUDF_FAIL("Unsupported Velox type: " + std::string(TypeKindName::toName(type->kind())));
+  return cudf::data_type{cudf::type_id::EMPTY};
 }
 
 namespace with_arrow {
