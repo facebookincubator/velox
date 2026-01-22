@@ -26,7 +26,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-cudf::type_id veloxToCudfTypeId(const TypePtr& type);
 cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
 namespace with_arrow {
