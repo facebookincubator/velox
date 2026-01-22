@@ -234,6 +234,34 @@ TEST_F(SparkCastExprTest, invalidDate) {
       "date", {"- 1111-1-1"}, {std::nullopt}, VARCHAR(), DATE());
 }
 
+TEST_F(SparkCastExprTest, stringToDate) {
+  // Valid dates.
+  testCast<std::string, int32_t>(
+      "date",
+      {"1970-01-01",
+       "2015-03-18",
+       "2015-03-18T", /*Trailing T*/
+       "2015-03-18 123", /*Trailing content*/
+       "  1970-01-01  ", /*Whitespace*/
+       "2015", /*Year only*/
+       "2015-03", /*Year-month*/
+       "1970-1-1"}, /*Single digit month/day*/
+      {0, 16512, 16512, 16512, 0, 16436, 16495, 0},
+      VARCHAR(),
+      DATE());
+
+  // Invalid dates return null.
+  testCast<std::string, int32_t>(
+      "date",
+      {"2012-Oct-23", /*Invalid format*/
+       "2015/03/18", /*Wrong separator*/
+       "2015-13-01", /*Invalid month*/
+       "2015-02-30"}, /*Invalid day*/
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      VARCHAR(),
+      DATE());
+}
+
 TEST_F(SparkCastExprTest, stringToTimestamp) {
   std::vector<std::optional<std::string>> input{
       "1970-01-01",
