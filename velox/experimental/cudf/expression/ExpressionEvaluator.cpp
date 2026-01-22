@@ -140,16 +140,6 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
-cudf::data_type makeOutputCudfType(const TypePtr& type) {
-  auto typeId = cudf_velox::veloxToCudfTypeId(type);
-  if (type->isDecimal()) {
-    // Velox scale is positive for fractional digits; cuDF expects negative.
-    auto scale = getDecimalPrecisionScale(*type).second;
-    return cudf::data_type(typeId, -static_cast<int32_t>(scale));
-  }
-  return cudf::data_type(typeId);
-}
-
 } // namespace
 
 class SplitFunction : public CudfFunction {
@@ -310,7 +300,7 @@ class BinaryFunction : public CudfFunction {
   BinaryFunction(
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
-      : op_(op), type_(makeOutputCudfType(expr->type())) {
+      : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
     if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
@@ -1147,7 +1137,7 @@ ColumnOrView FunctionExpression::eval(
 
     auto result = function_->eval(inputColumns, stream, mr);
     if (finalize) {
-      auto requestedType = makeOutputCudfType(expr_->type());
+      auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
       if (resultView.type() != requestedType) {
         return cudf::cast(resultView, requestedType, stream, mr);
