@@ -17,11 +17,18 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerBitwiseAggregates(
-    const std::string& prefix,
+void registerBitwiseAndAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite);
+
+void registerBitwiseOrAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite);
