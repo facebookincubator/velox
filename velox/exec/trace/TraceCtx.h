@@ -27,11 +27,11 @@ class Operator;
 
 namespace facebook::velox::exec::trace {
 
-class TraceConfig {
+class TraceCtx {
  public:
-  TraceConfig(bool dryRun) : dryRun_(dryRun) {}
+  TraceCtx(bool dryRun) : dryRun_(dryRun) {}
 
-  virtual ~TraceConfig() = default;
+  virtual ~TraceCtx() = default;
 
   virtual std::unique_ptr<trace::TraceInputWriter> createInputTracer(
       Operator& op) const = 0;

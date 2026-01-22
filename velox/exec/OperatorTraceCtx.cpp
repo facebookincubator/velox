@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/OperatorTraceConfig.h"
+#include "velox/exec/OperatorTraceCtx.h"
 
 #include <re2/re2.h>
 #include "velox/common/base/Exceptions.h"
@@ -49,13 +49,13 @@ std::string setupTraceDirectory(
 
 } // namespace
 
-OperatorTraceConfig::OperatorTraceConfig(
+OperatorTraceCtx::OperatorTraceCtx(
     std::string queryNodeId,
     std::string queryTraceDir,
     UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB,
     std::string taskRegExp,
     bool dryRun)
-    : TraceConfig(dryRun),
+    : TraceCtx(dryRun),
       queryNodeId_(std::move(queryNodeId)),
       queryTraceDir_(std::move(queryTraceDir)),
       taskRegExp_(std::move(taskRegExp)),
@@ -64,7 +64,7 @@ OperatorTraceConfig::OperatorTraceConfig(
 }
 
 // static
-std::unique_ptr<OperatorTraceConfig> OperatorTraceConfig::maybeCreate(
+std::unique_ptr<OperatorTraceCtx> OperatorTraceCtx::maybeCreate(
     core::QueryCtx& queryCtx,
     const core::PlanFragment& planFragment,
     const std::string& taskId) {
@@ -105,7 +105,7 @@ std::unique_ptr<OperatorTraceConfig> OperatorTraceConfig::maybeCreate(
     queryCtx.updateTracedBytesAndCheckLimit(bytes);
   };
 
-  return std::make_unique<OperatorTraceConfig>(
+  return std::make_unique<OperatorTraceCtx>(
       traceNodeId,
       traceDir,
       std::move(updateAndCheckTraceLimitCB),
@@ -113,7 +113,7 @@ std::unique_ptr<OperatorTraceConfig> OperatorTraceConfig::maybeCreate(
       queryConfig.queryTraceDryRun());
 }
 
-bool OperatorTraceConfig::shouldTrace(const Operator& op) const {
+bool OperatorTraceCtx::shouldTrace(const Operator& op) const {
   const auto& nodeId = op.planNodeId();
 
   if (queryNodeId_.empty() || queryNodeId_ != nodeId) {
@@ -137,7 +137,7 @@ bool OperatorTraceConfig::shouldTrace(const Operator& op) const {
   return true;
 }
 
-std::unique_ptr<TraceInputWriter> OperatorTraceConfig::createInputTracer(
+std::unique_ptr<TraceInputWriter> OperatorTraceCtx::createInputTracer(
     Operator& op) const {
   return std::make_unique<OperatorTraceInputWriter>(
       &op,
@@ -146,13 +146,13 @@ std::unique_ptr<TraceInputWriter> OperatorTraceConfig::createInputTracer(
       updateAndCheckTraceLimitCB_);
 }
 
-std::unique_ptr<TraceSplitWriter> OperatorTraceConfig::createSplitTracer(
+std::unique_ptr<TraceSplitWriter> OperatorTraceCtx::createSplitTracer(
     Operator& op) const {
   return std::make_unique<OperatorTraceSplitWriter>(
       &op, setupTraceDirectory(op, queryTraceDir_));
 }
 
-std::unique_ptr<TraceMetadataWriter> OperatorTraceConfig::createMetadataTracer()
+std::unique_ptr<TraceMetadataWriter> OperatorTraceCtx::createMetadataTracer()
     const {
   createTraceDirectory(queryTraceDir_);
   return std::make_unique<TaskTraceMetadataWriter>(

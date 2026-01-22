@@ -18,7 +18,7 @@
 
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/trace/TraceConfig.h"
+#include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec::trace {
 
@@ -30,16 +30,16 @@ class TraceSplitWriter;
 /// bytes exceed the set limit otherwise return false.
 using UpdateAndCheckTraceLimitCB = std::function<void(uint64_t)>;
 
-class OperatorTraceConfig : public TraceConfig {
+class OperatorTraceCtx : public TraceCtx {
  public:
-  OperatorTraceConfig(
+  OperatorTraceCtx(
       std::string queryNodeId,
       std::string queryTraceDir,
       UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB,
       std::string taskRegExp,
       bool dryRun);
 
-  static std::unique_ptr<OperatorTraceConfig> maybeCreate(
+  static std::unique_ptr<OperatorTraceCtx> maybeCreate(
       core::QueryCtx& queryCtx,
       const core::PlanFragment& planFragment,
       const std::string& taskId);
