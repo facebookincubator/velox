@@ -986,6 +986,7 @@ RowTypePtr GroupingSet::makeSpillType() const {
   }
 
   std::vector<std::string> names;
+  names.reserve(types.size());
   for (auto i = 0; i < types.size(); ++i) {
     names.push_back(fmt::format("s{}", i));
   }
@@ -1353,12 +1354,17 @@ void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
     mergeRows_->store(stream.decoded(i), stream.currentIndex(), mergeState_, i);
   }
   vector_size_t zero = 0;
-  for (auto& aggregate : aggregates_) {
-    if (!aggregate.sortingKeys.empty()) {
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    if (!aggregates_[i].sortingKeys.empty()) {
       continue;
     }
-    aggregate.function->initializeNewGroups(
-        &row, folly::Range<const vector_size_t*>(&zero, 1));
+    if (!aggregates_[i].distinct) {
+      aggregates_[i].function->initializeNewGroups(
+          &row, folly::Range<const vector_size_t*>(&zero, 1));
+    } else {
+      distinctAggregations_[i]->initializeNewGroups(
+          &row, folly::Range<const vector_size_t*>(&zero, 1));
+    }
   }
 
   if (sortedAggregations_ != nullptr) {
@@ -1411,11 +1417,22 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 
+  auto sortOrDistinctAggIndex = aggregates_.size() + keyChannels_.size();
   if (sortedAggregations_ != nullptr) {
-    const auto& vector =
-        input.current().childAt(aggregates_.size() + keyChannels_.size());
+    const auto& vector = input.current().childAt(sortOrDistinctAggIndex);
     sortedAggregations_->addSingleGroupSpillInput(
         row, vector, input.currentIndex());
+    ++sortOrDistinctAggIndex;
+  }
+
+  for (const auto& distinctAgg : distinctAggregations_) {
+    if (distinctAgg != nullptr) {
+      distinctAgg->addSingleGroupSpillInput(
+          row,
+          input.current().childAt(sortOrDistinctAggIndex),
+          input.currentIndex());
+      ++sortOrDistinctAggIndex;
+    }
   }
 }
 

@@ -91,6 +91,15 @@ class DistinctAggregations {
       folly::Range<char**> groups,
       const RowVectorPtr& result) = 0;
 
+  /// Update the single accumulator using previously spilled data.
+  /// @param group Pointer to the start of the group row.
+  /// @param input Restored spill data to be added to the accumulator.
+  /// @param index The index indicating which row in `input` is being added.
+  virtual void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index) = 0;
+
  protected:
   // Initializes null flags and accumulators for newly encountered groups.  This
   // function should be called only once for each group.
