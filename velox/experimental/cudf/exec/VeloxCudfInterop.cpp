@@ -94,6 +94,25 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
   }
 }
 
+cudf::data_type veloxToCudfDataType(const TypePtr& type) {
+  auto typeId = veloxToCudfTypeId(type);
+  if (type->isDecimal()) {
+    if (type->kind() == TypeKind::BIGINT) {
+      auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
+      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+      auto const cudfScale = numeric::scale_type{-decimalType->scale()};
+      return cudf::data_type{typeId, cudfScale};
+    } else if (type->kind() == TypeKind::HUGEINT) {
+      auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
+      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+      auto const cudfScale = numeric::scale_type{-decimalType->scale()};
+      return cudf::data_type{typeId, cudfScale};
+    }
+    VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
+  }
+  return cudf::data_type(typeId);
+}
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(
