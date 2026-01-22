@@ -195,10 +195,8 @@ class CastFunction : public CudfFunction {
   CastFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
-    targetCudfType_ =
-        cudf::data_type(cudf_velox::veloxToCudfTypeId(expr->type()));
-    auto sourceType = cudf::data_type(
-        cudf_velox::veloxToCudfTypeId(expr->inputs()[0]->type()));
+    targetCudfType_ = cudf_velox::veloxToCudfDataType(expr->type());
+    auto sourceType = cudf_velox::veloxToCudfDataType(expr->inputs()[0]->type());
     VELOX_CHECK(
         cudf::is_supported_cast(sourceType, targetCudfType_),
         "Cast from {} to {} is not supported",
@@ -1182,8 +1180,8 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     if (srcType == nullptr || dstType == nullptr) {
       return false;
     }
-    auto src = cudf::data_type(cudf_velox::veloxToCudfTypeId(srcType));
-    auto dst = cudf::data_type(cudf_velox::veloxToCudfTypeId(dstType));
+    auto src = cudf_velox::veloxToCudfDataType(srcType);
+    auto dst = cudf_velox::veloxToCudfDataType(dstType);
     return cudf::is_supported_cast(src, dst);
   }
 

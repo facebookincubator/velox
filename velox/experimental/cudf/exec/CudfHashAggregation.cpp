@@ -72,10 +72,9 @@ using namespace facebook::velox;
         std::vector<cudf::groupby::aggregation_result>& results,              \
         rmm::cuda_stream_view stream) override {                              \
       auto col = std::move(results[output_idx].results[0]);                   \
-      const auto cudfType =                                                   \
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));         \
-      if (col->type() != cudfType) {                                          \
-        col = cudf::cast(*col, cudfType, stream);                             \
+      auto const cudfResType = cudf_velox::veloxToCudfDataType(resultType);   \
+      if (col->type() != cudfResType) {                                       \
+        col = cudf::cast(*col, cudfResType, stream);                          \
       }                                                                       \
       return col;                                                             \
     }                                                                         \
@@ -86,10 +85,9 @@ using namespace facebook::velox;
         rmm::cuda_stream_view stream) override {                              \
       auto const aggRequest =                                                 \
           cudf::make_##name##_aggregation<cudf::reduce_aggregation>();        \
-      auto const cudfOutputType =                                             \
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType));         \
+      auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);   \
       auto const resultScalar = cudf::reduce(                                 \
-          input.column(inputIndex), *aggRequest, cudfOutputType, stream);     \
+          input.column(inputIndex), *aggRequest, cudfOutType, stream);        \
       return cudf::make_column_from_scalar(*resultScalar, 1, stream);         \
     }                                                                         \
                                                                               \
@@ -165,8 +163,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       rmm::cuda_stream_view stream) override {
     // cudf produces int32 for count(0) but velox expects int64
     auto col = std::move(results[outputIdx_].results[0]);
-    const auto cudfOutputType =
-        cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));
+    const auto cudfOutputType = cudf_velox::veloxToCudfDataType(resultType);
     if (col->type() != cudfOutputType) {
       col = cudf::cast(*col, cudfOutputType, stream);
     }
@@ -252,12 +249,10 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto count = std::move(results[sumIdx_].results[1]);
 
         auto const size = sum->size();
-        auto const cudfSumType = cudf::data_type(
-            cudf_velox::veloxToCudfTypeId(outputType->childAt(0)));
-        auto const cudfCountType = cudf::data_type(
-            cudf_velox::veloxToCudfTypeId(outputType->childAt(1)));
-        if (sum->type() != cudf::data_type(cudfSumType)) {
-          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream);
+        auto const cudfSumType = cudf_velox::veloxToCudfDataType(outputType->childAt(0));
+        auto const cudfCountType = cudf_velox::veloxToCudfDataType(outputType->childAt(1));
+        if (sum->type() != cudfSumType) {
+          sum = cudf::cast(*sum, cudfSumType, stream);
         }
         if (count->type() != cudf::data_type(cudfCountType)) {
           count = cudf::cast(*count, cudf::data_type(cudfCountType), stream);
@@ -288,12 +283,10 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto count = std::move(results[countIdx_].results[0]);
 
         auto size = sum->size();
-        auto const cudfSumType = cudf::data_type(
-            cudf_velox::veloxToCudfTypeId(outputType->childAt(0)));
-        auto const cudfCountType = cudf::data_type(
-            cudf_velox::veloxToCudfTypeId(outputType->childAt(1)));
-        if (sum->type() != cudf::data_type(cudfSumType)) {
-          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream);
+        auto const cudfSumType = cudf_velox::veloxToCudfDataType(outputType->childAt(0));
+        auto const cudfCountType = cudf_velox::veloxToCudfDataType(outputType->childAt(1));
+        if (sum->type() != cudfSumType) {
+          sum = cudf::cast(*sum, cudfSumType, stream);
         }
         if (count->type() != cudf::data_type(cudfCountType)) {
           count = cudf::cast(*count, cudf::data_type(cudfCountType), stream);
@@ -318,7 +311,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             *sum,
             *count,
             cudf::binary_operator::DIV,
-            cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType)),
+            cudf_velox::veloxToCudfDataType(resultType),
             stream);
         return avg;
       }
@@ -335,8 +328,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
             cudf::make_mean_aggregation<cudf::reduce_aggregation>();
-        auto const cudfOutputType =
-            cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType));
+        auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         auto const resultScalar = cudf::reduce(
             input.column(inputIndex), *aggRequest, cudfOutputType, stream);
         return cudf::make_column_from_scalar(*resultScalar, 1, stream);
@@ -346,10 +338,8 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto const& rowType = outputType->asRow();
         auto const sumType = rowType.childAt(0);
         auto const countType = rowType.childAt(1);
-        auto const cudfSumType =
-            cudf::data_type(cudf_velox::veloxToCudfTypeId(sumType));
-        auto const cudfCountType =
-            cudf::data_type(cudf_velox::veloxToCudfTypeId(countType));
+        auto const cudfSumType = cudf_velox::veloxToCudfDataType(sumType);
+        auto const cudfCountType = cudf_velox::veloxToCudfDataType(countType);
 
         // sum
         auto const aggRequest =
@@ -400,8 +390,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             cudf::reduce(countCol, *countAggRequest, countCol.type(), stream);
 
         // divide the sums by the counts
-        auto const cudfOutputType =
-            cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType));
+        auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         return cudf::binary_operation(
             *sumResultCol,
             *countResultScalar,
