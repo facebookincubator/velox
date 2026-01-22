@@ -111,12 +111,13 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
 }
 
 Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {
-  return util::Converter<TypeKind::REAL>::tryCast(data);
+  return util::Converter<TypeKind::REAL>::tryCast(util::trimFloatSuffix(data));
 }
 
 Expected<double> SparkCastHooks::castStringToDouble(
     const StringView& data) const {
-  return util::Converter<TypeKind::DOUBLE>::tryCast(data);
+  return util::Converter<TypeKind::DOUBLE>::tryCast(
+      util::trimFloatSuffix(data));
 }
 
 StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
