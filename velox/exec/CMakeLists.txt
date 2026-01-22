@@ -62,6 +62,7 @@ velox_add_library(
   SpatialJoinBuild.cpp
   SpatialJoinProbe.cpp
   Operator.cpp
+  OperatorTraceCtx.cpp
   OperatorTraceReader.cpp
   OperatorTraceScan.cpp
   OperatorTraceWriter.cpp

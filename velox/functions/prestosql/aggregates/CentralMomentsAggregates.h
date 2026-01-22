@@ -17,11 +17,17 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerCentralMomentsAggregates(
-    const std::string& prefix,
+void registerKurtosisAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerSkewnessAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);
 } // namespace facebook::velox::aggregate::prestosql

@@ -40,14 +40,14 @@ folly::dynamic extractPartitionValue(
     const VectorPtr& child,
     vector_size_t row) {
   using T = typename TypeTraits<Kind>::NativeType;
-  return child->as<SimpleVector<T>>()->valueAt(row);
+  return child->asChecked<SimpleVector<T>>()->valueAt(row);
 }
 
 template <>
 folly::dynamic extractPartitionValue<TypeKind::VARCHAR>(
     const VectorPtr& child,
     vector_size_t row) {
-  return child->as<SimpleVector<StringView>>()->valueAt(row).str();
+  return child->asChecked<SimpleVector<StringView>>()->valueAt(row).str();
 }
 
 template <>
@@ -55,14 +55,14 @@ folly::dynamic extractPartitionValue<TypeKind::VARBINARY>(
     const VectorPtr& child,
     vector_size_t row) {
   return encoding::Base64::encode(
-      child->as<SimpleVector<StringView>>()->valueAt(row));
+      child->asChecked<SimpleVector<StringView>>()->valueAt(row));
 }
 
 template <>
 folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
     const VectorPtr& child,
     vector_size_t row) {
-  return child->as<SimpleVector<Timestamp>>()->valueAt(row).toMicros();
+  return child->asChecked<SimpleVector<Timestamp>>()->valueAt(row).toMicros();
 }
 
 class IcebergFileNameGenerator : public FileNameGenerator {

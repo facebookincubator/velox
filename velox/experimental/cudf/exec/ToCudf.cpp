@@ -123,6 +123,13 @@ bool CompileState::compile(bool allowCpuFallback) {
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
       auto filterNode = filterProjectOp->filterNode();
+      bool canBeEvaluated = true;
+      if (projectPlanNode) {
+        if (projectPlanNode->sources()[0]->outputType()->size() == 0 ||
+            projectPlanNode->outputType()->size() == 0) {
+          return false;
+        }
+      }
 
       // Check filter separately.
       if (filterNode) {
@@ -156,6 +163,12 @@ bool CompileState::compile(bool allowCpuFallback) {
       return false;
     }
 
+    if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
+      // We cannot hande RowVectors with a length but no data.
+      // This is the case with count(*) global (without groupby)
+      return false;
+    }
+
     // Use aggregation-based canBeEvaluatedByCudf
     return canBeEvaluatedByCudf(
         *aggregationPlanNode, ctx->task->queryCtx().get());
@@ -184,8 +197,8 @@ bool CompileState::compile(bool allowCpuFallback) {
   auto isSupportedGpuOperator =
       [isFilterProjectSupported,
        isJoinSupported,
-       isTableScanSupported,
-       isAggregationSupported](const exec::Operator* op) {
+       isAggregationSupported,
+       isTableScanSupported](const exec::Operator* op) {
         return isAnyOf<
                    exec::OrderBy,
                    exec::TopN,
@@ -195,7 +208,7 @@ bool CompileState::compile(bool allowCpuFallback) {
                    exec::AssignUniqueId,
                    CudfOperator>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
-            isTableScanSupported(op) || isAggregationSupported(op);
+            isAggregationSupported(op) || isTableScanSupported(op);
       };
 
   std::vector<bool> isSupportedGpuOperators(operators.size());
@@ -219,8 +232,8 @@ bool CompileState::compile(bool allowCpuFallback) {
   };
   auto producesGpuOutput = [isFilterProjectSupported,
                             isJoinSupported,
-                            isTableScanSupported,
-                            isAggregationSupported](const exec::Operator* op) {
+                            isAggregationSupported,
+                            isTableScanSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
                exec::TopN,
@@ -230,7 +243,7 @@ bool CompileState::compile(bool allowCpuFallback) {
                CudfOperator>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
-        (isTableScanSupported(op)) || isAggregationSupported(op);
+        (isTableScanSupported(op)) || (isAggregationSupported(op));
   };
 
   int32_t operatorsOffset = 0;

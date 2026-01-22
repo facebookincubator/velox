@@ -16,13 +16,12 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
-
-namespace facebook::velox::aggregate::prestosql {
-
-void registerChecksumAggregate(
-    const std::vector<std::string>& names,
-    bool withCompanionFunctions,
-    bool overwrite);
-} // namespace facebook::velox::aggregate::prestosql
+namespace facebook::velox::parquet {
+/// Parquet field IDs during write operations. Each ID must be unique positive
+/// number, do not need to be sequential.
+/// Used to explicitly control field ID assignment in the Parquet schema.
+struct ParquetFieldId {
+  int32_t fieldId;
+  std::vector<ParquetFieldId> children;
+};
+} // namespace facebook::velox::parquet

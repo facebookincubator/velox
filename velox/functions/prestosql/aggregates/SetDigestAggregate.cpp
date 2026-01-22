@@ -17,7 +17,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/SetDigest.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -281,8 +280,8 @@ std::unique_ptr<exec::Aggregate> createSetDigestAggregate(
   return std::make_unique<SetDigestAggregate<T>>(resultType);
 }
 
-exec::AggregateRegistrationResult registerMakeSetDigest(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerMakeSetDigest(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -312,7 +311,7 @@ exec::AggregateRegistrationResult registerMakeSetDigest(
   }
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
       [](core::AggregationNode::Step /*step*/,
          const std::vector<TypePtr>& argTypes,
@@ -350,11 +349,10 @@ exec::AggregateRegistrationResult registerMakeSetDigest(
 }
 
 void registerMakeSetDigestAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerMakeSetDigest(
-      prefix + kMakeSetDigest, withCompanionFunctions, overwrite);
+  registerMakeSetDigest(names, withCompanionFunctions, overwrite);
 }
 
 class MergeSetDigestAggregate : public exec::Aggregate {
@@ -556,8 +554,8 @@ class MergeSetDigestAggregate : public exec::Aggregate {
   DecodedVector decodedIntermediate_;
 };
 
-exec::AggregateRegistrationResult registerMergeSetDigest(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerMergeSetDigest(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -570,7 +568,7 @@ exec::AggregateRegistrationResult registerMergeSetDigest(
           .build());
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
       [](core::AggregationNode::Step /*step*/,
          const std::vector<TypePtr>& /*argTypes*/,
@@ -584,11 +582,10 @@ exec::AggregateRegistrationResult registerMergeSetDigest(
 }
 
 void registerMergeSetDigestAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerMergeSetDigest(
-      prefix + kMergeSetDigest, withCompanionFunctions, overwrite);
+  registerMergeSetDigest(names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

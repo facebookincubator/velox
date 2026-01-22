@@ -1573,6 +1573,45 @@ TEST_P(AsyncDataCacheTest, checkpoint) {
 
 // TODO: add concurrent fuzzer test.
 
+TEST_P(AsyncDataCacheTest, numShardsDefault) {
+  constexpr uint64_t kRamBytes = 16UL << 20;
+
+  initializeCache(kRamBytes);
+  ASSERT_EQ(
+      asyncDataCacheHelper_->numShards(), AsyncDataCache::kDefaultNumShards);
+}
+
+TEST_P(AsyncDataCacheTest, numShardsInvalid) {
+  constexpr uint64_t kRamBytes = 16UL << 20;
+
+  // Non-power-of-2 should fail.
+  for (int32_t numShards : {3, 5, 6, 7, 9, 10}) {
+    AsyncDataCache::Options options;
+    options.numShards = numShards;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be a power of 2");
+  }
+
+  // Zero should fail.
+  {
+    AsyncDataCache::Options options;
+    options.numShards = 0;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be positive");
+  }
+
+  // Negative should fail.
+  {
+    AsyncDataCache::Options options;
+    options.numShards = -1;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be positive");
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AsyncDataCacheTest,
     AsyncDataCacheTest,
