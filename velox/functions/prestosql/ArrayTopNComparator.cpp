@@ -20,6 +20,8 @@
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 
+#include <queue>
+
 namespace facebook::velox::functions {
 namespace {
 
@@ -52,7 +54,7 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
     // Get the lambda function.
     auto* functionVector = args[2]->asUnchecked<FunctionVector>();
 
-    // Prepare the result arrays.
+    // Prepare for lambda application.
     auto pool = context.pool();
     auto elementsVector = flatArray->elements();
     auto elementType = flatArray->type()->childAt(0);
@@ -85,50 +87,122 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
           &transformedKeys);
     }
 
-    // Decode transformed keys for comparison.
-    SelectivityVector allElementRows(numElements);
-    exec::LocalDecodedVector decodedKeys(
-        context, *transformedKeys, allElementRows);
-    auto* baseKeysVector = decodedKeys->base();
-    auto* keyIndices = decodedKeys->indices();
+    // Decode the transformed keys for comparison.
+    exec::LocalDecodedVector decodedTransformedKeys(
+        context, *transformedKeys, validRowsInReusedResult);
+    auto* baseTransformedKeys = decodedTransformedKeys->base();
+    auto* decodedKeyIndices = decodedTransformedKeys->indices();
 
-    // Count total elements needed for the result.
-    vector_size_t totalResultElements = 0;
-    rows.applyToSelected([&](vector_size_t row) {
-      if (!flatArray->isNullAt(row)) {
-        auto n = decodedN.valueAt<int32_t>(row);
-        if (n > 0) {
-          auto arraySize = flatArray->sizeAt(row);
-          totalResultElements +=
-              std::min(static_cast<vector_size_t>(n), arraySize);
+    // Define comparator for min-heap: returns true if left > right.
+    // Nulls are excluded from the heap and tracked separately,
+    // so the comparator only handles non-null values.
+    struct GreaterThanComparator {
+      const BaseVector* baseElements;
+      const vector_size_t* decodedIndices;
+
+      bool operator()(vector_size_t leftIdx, vector_size_t rightIdx) const {
+        static constexpr CompareFlags kFlags = {
+            .nullHandlingMode =
+                CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+        auto result = baseElements->compare(
+            baseElements,
+            decodedIndices[leftIdx],
+            decodedIndices[rightIdx],
+            kFlags);
+
+        if (!result.has_value()) {
+          VELOX_USER_FAIL("Ordering nulls is not supported");
         }
-      }
-    });
 
-    // Create result elements and offsets/sizes.
+        return result.value() > 0;
+      }
+    };
+
+    GreaterThanComparator comparator{baseTransformedKeys, decodedKeyIndices};
+
+    // Create result arrays using priority queue to find top n per row.
     BufferPtr resultOffsets = allocateOffsets(rows.end(), pool);
     BufferPtr resultSizes = allocateSizes(rows.end(), pool);
     auto* rawResultOffsets = resultOffsets->asMutable<vector_size_t>();
     auto* rawResultSizes = resultSizes->asMutable<vector_size_t>();
 
     std::vector<vector_size_t> resultIndices;
-    resultIndices.reserve(totalResultElements);
+    resultIndices.reserve(numElements);
 
     BufferPtr resultNulls = addNullsForUnselectedRows(flatArray, rows);
 
     vector_size_t currentOffset = 0;
 
-    // Compare flags for descending order with nulls last.
-    CompareFlags flags{
-        .nullsFirst = false,
-        .ascending = false,
-        .nullHandlingMode =
-            CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      rawResultOffsets[row] = currentOffset;
 
-    // Process each row.
-    // Use applyToSelectedNoThrow to handle errors (e.g., nested nulls in
-    // complex types) gracefully - failed rows will be marked as errors while
-    // other rows continue processing.
+      if (flatArray->isNullAt(row)) {
+        rawResultSizes[row] = 0;
+        return;
+      }
+
+      auto n = decodedN.valueAt<int32_t>(row);
+      VELOX_USER_CHECK_GE(
+          n, 0, "Parameter n: {} to ARRAY_TOP_N is negative", n);
+
+      auto arraySize = flatArray->sizeAt(row);
+      auto arrayOffset = flatArray->offsetAt(row);
+
+      if (n == 0 || arraySize == 0) {
+        rawResultSizes[row] = 0;
+        return;
+      }
+
+      auto resultSize = std::min(static_cast<vector_size_t>(n), arraySize);
+
+      // Use a min-heap to maintain the top N non-null elements.
+      // Nulls are tracked separately and backfilled at the end.
+      std::priority_queue<
+          vector_size_t,
+          std::vector<vector_size_t>,
+          GreaterThanComparator>
+          minHeap(comparator);
+
+      vector_size_t numNull = 0;
+      for (vector_size_t i = 0; i < arraySize; ++i) {
+        auto idx = arrayOffset + i;
+        if (decodedTransformedKeys->isNullAt(idx) ||
+            elementsVector->isNullAt(idx)) {
+          ++numNull;
+        } else if (minHeap.size() < resultSize) {
+          minHeap.push(idx);
+        } else if (comparator(idx, minHeap.top())) {
+          minHeap.push(idx);
+          minHeap.pop();
+        }
+      }
+
+      // Reverse the min-heap to get the top n elements in descending order.
+      std::vector<vector_size_t> reversed(minHeap.size());
+      auto index = minHeap.size();
+      while (!minHeap.empty()) {
+        reversed[--index] = minHeap.top();
+        minHeap.pop();
+      }
+
+      for (const auto& idx : reversed) {
+        resultIndices.push_back(idx);
+      }
+
+      // Backfill nulls if needed.
+      auto remaining = resultSize - static_cast<vector_size_t>(reversed.size());
+      for (vector_size_t i = 0; i < arraySize && remaining > 0; ++i) {
+        auto idx = arrayOffset + i;
+        if (decodedTransformedKeys->isNullAt(idx) ||
+            elementsVector->isNullAt(idx)) {
+          resultIndices.push_back(idx);
+          --remaining;
+        }
+      }
+
+      rawResultSizes[row] = resultSize - remaining;
+      currentOffset += rawResultSizes[row];
+    });
 
     // Build the result elements vector using dictionary wrapping.
     VectorPtr resultElements;
