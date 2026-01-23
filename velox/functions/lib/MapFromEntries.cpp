@@ -198,6 +198,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     } else {
       // Dictionary.
       auto indices = allocateIndices(decodedRowVector->size(), context.pool());
+      auto rowVectorNulls =
+          allocateNulls(decodedRowVector->size(), context.pool());
+      auto* rowVectorMutableNulls = rowVectorNulls->asMutable<uint64_t>();
       memcpy(
           indices->asMutable<vector_size_t>(),
           decodedRowVector->indices(),
@@ -206,13 +209,19 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       // not guranteed to be addressable at X or Y.
       for (auto i = 0; i < decodedRowVector->size(); i++) {
         if (decodedRowVector->isNullAt(i)) {
-          bits::setNull(mutableNulls, i);
+          bits::setNull(rowVectorMutableNulls, i);
         }
       }
       wrappedKeys = BaseVector::wrapInDictionary(
-          nulls, indices, decodedRowVector->size(), rowVector->childAt(0));
+          rowVectorNulls,
+          indices,
+          decodedRowVector->size(),
+          rowVector->childAt(0));
       wrappedValues = BaseVector::wrapInDictionary(
-          nulls, indices, decodedRowVector->size(), rowVector->childAt(1));
+          rowVectorNulls,
+          indices,
+          decodedRowVector->size(),
+          rowVector->childAt(1));
     }
 
     // For Presto, need construct map vector based on input nulls for possible
