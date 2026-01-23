@@ -14,7 +14,7 @@
 
 find_package(PkgConfig REQUIRED)
 
-pkg_check_modules(Roaring QUIET IMPORTED_TARGET roaring)
+pkg_check_modules(Roaring IMPORTED_TARGET roaring)
 
 if(Roaring_FOUND)
   add_library(Roaring::roaring INTERFACE IMPORTED)
