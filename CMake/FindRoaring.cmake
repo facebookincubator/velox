@@ -25,6 +25,6 @@ endif()
 
 if(Roaring_FIND_REQUIRED)
   message(FATAL_ERROR "Failed to find Roaring.")
-elseif(NOT re2_FIND_QUIETLY)
+elseif(NOT Roaring_FIND_QUIETLY)
   message(WARNING "Failed to find Roaring.")
 endif()
