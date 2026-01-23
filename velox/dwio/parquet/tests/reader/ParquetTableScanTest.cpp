@@ -1610,6 +1610,36 @@ TEST_F(ParquetTableScanTest, inFilter) {
           "SELECT name FROM tmp where name not in ('alex', 'leo', 'mary', null, 'victor')");
 }
 
+TEST_F(ParquetTableScanTest, reusedLazyVectors) {
+  const std::vector<std::string> columnNames = {"a", "b"};
+  std::vector<RowVectorPtr> data;
+  for (auto row = 0; row < 10; ++row) {
+    data.emplace_back(makeRowVector(
+        columnNames,
+        {
+            makeFlatVector<int64_t>({static_cast<int64_t>(row % 5)}),
+            makeFlatVector<int64_t>({static_cast<int64_t>(row)}),
+        }));
+  }
+  const auto expectedRowVector = makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13})});
+
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), data, options);
+
+  const auto plan = PlanBuilder()
+                        .tableScan(ROW(columnNames, {BIGINT(), BIGINT()}))
+                        .project({"a as c1", "b as c2", "b as c3"})
+                        .singleAggregation({"c1"}, {"sum(c2)", "sum(c3)"})
+                        .planNode();
+  AssertQueryBuilder(plan)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(expectedRowVector);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
