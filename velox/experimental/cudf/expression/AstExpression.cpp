@@ -15,7 +15,10 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#pragma GCC diagnostic pop
 #include "velox/experimental/cudf/expression/AstUtils.h"
 
 #include "velox/expression/ConstantExpr.h"
