@@ -947,3 +947,275 @@ TEST_F(MergeTest, localMergeOutputSizeWithoutSpill) {
         testData.numExpectedOutputBatches);
   }
 }
+
+/// Tests that MultiThreadedTaskCursor correctly preserves FlatMapVector
+/// encoding when reading data directly without a merge step.
+TEST_F(MergeTest, preserveVectorEncoding) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}},
+          {{2, 40}, {3, 50}},
+      }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.maxDrivers = 2;
+
+  auto result = readCursor(params);
+  ASSERT_EQ(result.second.size(), 1);
+
+  auto output = result.second[0];
+  ASSERT_EQ(output->size(), 3);
+
+  auto mapColumn = output->childAt(1);
+  EXPECT_EQ(mapColumn->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  auto flatMapVector = mapColumn->as<FlatMapVector>();
+  EXPECT_EQ(flatMapVector->distinctKeys()->size(), 3);
+
+  auto verifier = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{2, 40}, {3, 50}},
+  });
+  facebook::velox::test::assertEqualVectors(mapColumn, verifier);
+}
+
+/// Tests that LocalMerge correctly preserves FlatMapVector encoding
+/// when merging data with FlatMapVector columns.
+TEST_F(MergeTest, flatMapVectorEncoding) {
+  // Create input data with FlatMapVector columns.
+  // Data is already sorted by c0.
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>({0, 2, 4}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}, {3, 40}},
+          {{2, 50}},
+      }),
+  });
+
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>({1, 3, 5}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 100}, {2, 200}},
+          {{3, 300}},
+          {{1, 400}, {2, 500}, {3, 600}},
+      }),
+  });
+
+  auto verifyResult = [this](const std::vector<RowVectorPtr>& results) {
+    ASSERT_EQ(results.size(), 1);
+
+    auto output = results[0];
+    ASSERT_EQ(output->size(), 6);
+
+    auto sortKey = output->childAt(0)->asFlatVector<int64_t>();
+    for (int i = 0; i < 6; ++i) {
+      EXPECT_EQ(sortKey->valueAt(i), i);
+    }
+
+    auto mapColumn = output->childAt(1);
+    EXPECT_EQ(mapColumn->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    auto flatMapVector = mapColumn->as<FlatMapVector>();
+    EXPECT_EQ(flatMapVector->distinctKeys()->size(), 3);
+    auto verifier = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 100}, {2, 200}},
+        {{1, 30}, {3, 40}},
+        {{3, 300}},
+        {{2, 50}},
+        {{1, 400}, {2, 500}, {3, 600}},
+    });
+    // Merge does not resize child vectors.
+    verifier->resize(mapColumn->size());
+    facebook::velox::test::assertEqualVectors(mapColumn, verifier);
+  };
+
+  // Test multi-threaded execution.
+  {
+    SCOPED_TRACE("Multi-threaded execution");
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge(
+                {"c0"},
+                {
+                    PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+                    PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
+                })
+            .planNode();
+
+    CursorParameters params;
+    params.planNode = plan;
+    params.queryCtx = core::QueryCtx::create(executor_.get());
+    params.maxDrivers = 2;
+
+    auto result = readCursor(params);
+    verifyResult(result.second);
+  }
+
+  // Test serial execution.
+  {
+    SCOPED_TRACE("Serial execution");
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge(
+                {"c0"},
+                {
+                    PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+                    PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
+                })
+            .planNode();
+
+    CursorParameters params;
+    params.planNode = plan;
+    params.queryCtx = core::QueryCtx::create();
+    params.serialExecution = true;
+
+    auto result = readCursor(params);
+    verifyResult(result.second);
+  }
+}
+
+/// Tests that LocalMerge correctly handles FlatMapVector encoding
+/// when the first source is empty but subsequent sources have data.
+TEST_F(MergeTest, flatMapVectorEncodingWithEmptyFirstSource) {
+  // Create an empty first source.
+  auto emptyData = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int64_t>({}),
+          vectorMaker_.flatMapVector<int64_t, int64_t>({}),
+      });
+
+  // Create second source with FlatMapVector data.
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}},
+          {{2, 40}, {3, 50}},
+      }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localMerge(
+              {"c0"},
+              {
+                  PlanBuilder(planNodeIdGenerator)
+                      .values({emptyData})
+                      .planNode(),
+                  PlanBuilder(planNodeIdGenerator).values({data}).planNode(),
+              })
+          .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.maxDrivers = 2;
+
+  auto result = readCursor(params);
+  ASSERT_EQ(result.second.size(), 1);
+
+  auto output = result.second[0];
+  ASSERT_EQ(output->size(), 3);
+
+  // Verify the FlatMapVector encoding is preserved even when first source is
+  // empty.
+  auto mapColumn = output->childAt(1);
+  EXPECT_EQ(mapColumn->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  auto flatMapVector = mapColumn->as<FlatMapVector>();
+  EXPECT_EQ(flatMapVector->distinctKeys()->size(), 3);
+  auto verifier = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{2, 40}, {3, 50}},
+  });
+  verifier->resize(mapColumn->size());
+  facebook::velox::test::assertEqualVectors(mapColumn, verifier);
+}
+
+/// Tests that LocalMerge correctly merges multiple sources with FlatMapVector
+/// columns and different key sets.
+TEST_F(MergeTest, flatMapVectorEncodingMultipleSources) {
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>({0, 3}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 10}},
+          {{1, 40}, {2, 50}},
+      }),
+  });
+
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>({1, 4}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{2, 20}},
+          {{3, 60}},
+      }),
+  });
+
+  auto data3 = makeRowVector({
+      makeFlatVector<int64_t>({2, 5}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 30}, {3, 35}},
+          {{1, 70}, {2, 80}, {3, 90}},
+      }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localMerge(
+              {"c0"},
+              {
+                  PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+                  PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
+                  PlanBuilder(planNodeIdGenerator).values({data3}).planNode(),
+              })
+          .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.maxDrivers = 3;
+
+  auto result = readCursor(params);
+  ASSERT_EQ(result.second.size(), 1);
+
+  auto output = result.second[0];
+  ASSERT_EQ(output->size(), 6);
+
+  // Verify the output is sorted correctly.
+  auto sortKey = output->childAt(0)->asFlatVector<int64_t>();
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_EQ(sortKey->valueAt(i), i);
+  }
+
+  // Verify the FlatMapVector encoding is preserved.
+  auto mapColumn = output->childAt(1);
+  EXPECT_EQ(mapColumn->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  auto flatMapVector = mapColumn->as<FlatMapVector>();
+  EXPECT_EQ(flatMapVector->distinctKeys()->size(), 3);
+  auto verifier = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 20}},
+      {{1, 30}, {3, 35}},
+      {{1, 40}, {2, 50}},
+      {{3, 60}},
+      {{1, 70}, {2, 80}, {3, 90}},
+  });
+  verifier->resize(mapColumn->size());
+  facebook::velox::test::assertEqualVectors(mapColumn, verifier);
+}
