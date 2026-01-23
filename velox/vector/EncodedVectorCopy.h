@@ -61,4 +61,15 @@ void encodedVectorCopy(
     const folly::Range<const BaseVector::CopyRange*>& ranges,
     VectorPtr& target);
 
+/// Overload that copies the entire source vector (full range).
+/// Equivalent to calling encodedVectorCopy with a single range
+/// {0, 0, source->size()}.
+inline void encodedVectorCopy(
+    const EncodedVectorCopyOptions& options,
+    const VectorPtr& source,
+    VectorPtr& target) {
+  BaseVector::CopyRange range{0, 0, source->size()};
+  encodedVectorCopy(options, source, {&range, 1}, target);
+}
+
 } // namespace facebook::velox
