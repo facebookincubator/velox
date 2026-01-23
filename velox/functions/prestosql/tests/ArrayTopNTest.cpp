@@ -659,15 +659,18 @@ TEST_F(ArrayTopNTest, transformComplexExpression) {
   // Descending by (0 - abs(x-3)): 3 is closest (key=0), then 4,2 (key=-1), then
   // 1,5 (key=-2)
   // Use (0 - x) since unary negation is not supported for integers.
-  // Note: order among equal keys is not guaranteed (partial_sort is not
-  // stable).
-  auto expected = makeArrayVectorFromJson<int32_t>({
-      "[3, 2, 4]",
-  });
+  // Note: order among equal keys is not guaranteed (std::sort is not stable).
   auto result = evaluate(
       "array_top_n(c0, INTEGER '3', x -> 0 - abs(x - 3))",
       makeRowVector({input}));
-  assertEqualVectors(expected, result);
+
+  // Both orderings are valid since 2 and 4 have equal keys (-1).
+  auto expected1 = makeArrayVectorFromJson<int32_t>({"[3, 2, 4]"});
+  auto expected2 = makeArrayVectorFromJson<int32_t>({"[3, 4, 2]"});
+  EXPECT_TRUE(
+      expected1->equalValueAt(result.get(), 0, 0) ||
+      expected2->equalValueAt(result.get(), 0, 0))
+      << "Result should be either [3, 2, 4] or [3, 4, 2]";
 }
 
 TEST_F(ArrayTopNTest, transformBigintArray) {

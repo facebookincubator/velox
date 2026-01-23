@@ -17,6 +17,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/ArraySort.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 
@@ -52,7 +53,7 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
     // Get the lambda function.
     auto* functionVector = args[2]->asUnchecked<FunctionVector>();
 
-    // Prepare the result arrays.
+    // Prepare for lambda application.
     auto pool = context.pool();
     auto elementsVector = flatArray->elements();
     auto elementType = flatArray->type()->childAt(0);
@@ -85,50 +86,60 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
           &transformedKeys);
     }
 
-    // Decode transformed keys for comparison.
-    SelectivityVector allElementRows(numElements);
-    exec::LocalDecodedVector decodedKeys(
-        context, *transformedKeys, allElementRows);
-    auto* baseKeysVector = decodedKeys->base();
-    auto* keyIndices = decodedKeys->indices();
+    // Sort elements by transformed keys (descending order, nulls last).
+    auto sortedIndices = sortElements(
+        rows,
+        *flatArray,
+        *transformedKeys,
+        false /* ascending */,
+        false /* nullsFirst */,
+        context,
+        true /* throwOnNestedNull */);
+    auto* rawSortedIndices = sortedIndices->as<vector_size_t>();
 
-    // Count total elements needed for the result.
-    vector_size_t totalResultElements = 0;
-    rows.applyToSelected([&](vector_size_t row) {
-      if (!flatArray->isNullAt(row)) {
-        auto n = decodedN.valueAt<int32_t>(row);
-        if (n > 0) {
-          auto arraySize = flatArray->sizeAt(row);
-          totalResultElements +=
-              std::min(static_cast<vector_size_t>(n), arraySize);
-        }
-      }
-    });
-
-    // Create result elements and offsets/sizes.
+    // Create result arrays by taking the first n elements from each sorted
+    // array.
     BufferPtr resultOffsets = allocateOffsets(rows.end(), pool);
     BufferPtr resultSizes = allocateSizes(rows.end(), pool);
     auto* rawResultOffsets = resultOffsets->asMutable<vector_size_t>();
     auto* rawResultSizes = resultSizes->asMutable<vector_size_t>();
 
     std::vector<vector_size_t> resultIndices;
-    resultIndices.reserve(totalResultElements);
+    resultIndices.reserve(numElements);
 
     BufferPtr resultNulls = addNullsForUnselectedRows(flatArray, rows);
 
     vector_size_t currentOffset = 0;
 
-    // Compare flags for descending order with nulls last.
-    CompareFlags flags{
-        .nullsFirst = false,
-        .ascending = false,
-        .nullHandlingMode =
-            CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      rawResultOffsets[row] = currentOffset;
 
-    // Process each row.
-    // Use applyToSelectedNoThrow to handle errors (e.g., nested nulls in
-    // complex types) gracefully - failed rows will be marked as errors while
-    // other rows continue processing.
+      if (flatArray->isNullAt(row)) {
+        rawResultSizes[row] = 0;
+        return;
+      }
+
+      auto n = decodedN.valueAt<int32_t>(row);
+      VELOX_USER_CHECK_GE(
+          n, 0, "Parameter n: {} to ARRAY_TOP_N is negative", n);
+
+      auto arraySize = flatArray->sizeAt(row);
+      auto arrayOffset = flatArray->offsetAt(row);
+
+      if (n == 0 || arraySize == 0) {
+        rawResultSizes[row] = 0;
+        return;
+      }
+
+      // Take the first min(n, arraySize) elements from the sorted indices.
+      auto resultSize = std::min(static_cast<vector_size_t>(n), arraySize);
+      for (vector_size_t i = 0; i < resultSize; ++i) {
+        resultIndices.push_back(rawSortedIndices[arrayOffset + i]);
+      }
+
+      rawResultSizes[row] = resultSize;
+      currentOffset += resultSize;
+    });
 
     // Build the result elements vector using dictionary wrapping.
     VectorPtr resultElements;
