@@ -947,3 +947,42 @@ TEST_F(MergeTest, localMergeOutputSizeWithoutSpill) {
         testData.numExpectedOutputBatches);
   }
 }
+
+/// Tests that MultiThreadedTaskCursor correctly preserves FlatMapVector
+/// encoding when reading data directly without a merge step.
+TEST_F(MergeTest, preserveVectorEncoding) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}},
+          {{2, 40}, {3, 50}},
+      }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.maxDrivers = 2;
+
+  auto result = readCursor(params);
+  ASSERT_EQ(result.second.size(), 1);
+
+  auto output = result.second[0];
+  ASSERT_EQ(output->size(), 3);
+
+  auto mapColumn = output->childAt(1);
+  EXPECT_EQ(mapColumn->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  auto flatMapVector = mapColumn->as<FlatMapVector>();
+  EXPECT_EQ(flatMapVector->distinctKeys()->size(), 3);
+
+  auto verifier = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{2, 40}, {3, 50}},
+  });
+  facebook::velox::test::assertEqualVectors(mapColumn, verifier);
+}

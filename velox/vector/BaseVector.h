@@ -49,7 +49,9 @@ class FlatVector;
 
 class VectorPool;
 class BaseVector;
+class RowVector;
 using VectorPtr = std::shared_ptr<BaseVector>;
+using RowVectorPtr = std::shared_ptr<RowVector>;
 
 /// Set of options that validate() accepts.
 struct VectorValidateOptions {
@@ -735,8 +737,10 @@ class BaseVector {
   static std::shared_ptr<T> create(
       const TypePtr& type,
       vector_size_t size,
-      velox::memory::MemoryPool* pool) {
-    return std::static_pointer_cast<T>(createInternal(type, size, pool));
+      velox::memory::MemoryPool* pool,
+      std::optional<VectorEncoding::Simple> encoding = std::nullopt) {
+    return std::static_pointer_cast<T>(
+        createInternal(type, size, pool, encoding));
   }
 
   static VectorPtr getOrCreateEmpty(
@@ -1026,7 +1030,8 @@ class BaseVector {
   static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      std::optional<VectorEncoding::Simple> encoding = std::nullopt);
 
   friend class LazyVector;
 
