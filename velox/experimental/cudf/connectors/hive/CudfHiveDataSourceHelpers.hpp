@@ -58,6 +58,12 @@ class BufferedInputDataSource : public cudf::io::datasource {
 
   [[nodiscard]] bool supports_device_read() const override;
 
+  std::future<size_t> device_read_async(
+      size_t offset,
+      size_t size,
+      uint8_t* dst,
+      rmm::cuda_stream_view stream) override;
+
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
