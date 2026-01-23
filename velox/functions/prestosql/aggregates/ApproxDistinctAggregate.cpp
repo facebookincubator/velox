@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/ApproxDistinctAggregates.h"
 #include "velox/functions/prestosql/aggregates/HyperLogLogAggregate.h"
 #include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
@@ -23,8 +22,8 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
-exec::AggregateRegistrationResult registerApproxDistinct(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerApproxDistinct(
+    const std::vector<std::string>& names,
     bool hllAsFinalResult,
     bool withCompanionFunctions,
     bool overwrite,
@@ -91,9 +90,9 @@ exec::AggregateRegistrationResult registerApproxDistinct(
           .argumentType("double")
           .build());
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name, hllAsFinalResult, hllAsRawInput, defaultError](
+      [hllAsFinalResult, hllAsRawInput, defaultError](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -128,12 +127,13 @@ exec::AggregateRegistrationResult registerApproxDistinct(
 } // namespace
 
 void registerApproxDistinctAggregates(
-    const std::string& prefix,
+    const std::vector<std::string>& approxDistinctNames,
+    const std::vector<std::string>& approxSetNames,
     bool withCompanionFunctions,
     bool overwrite) {
   registerHyperLogLogType();
   registerApproxDistinct(
-      prefix + kApproxDistinct,
+      approxDistinctNames,
       false,
       withCompanionFunctions,
       overwrite,
@@ -141,7 +141,7 @@ void registerApproxDistinctAggregates(
   // approx_set is companion function for approx_distinct. Don't register
   // companion functions for it.
   registerApproxDistinct(
-      prefix + kApproxSet,
+      approxSetNames,
       true,
       false,
       overwrite,

@@ -27,7 +27,7 @@
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
-#include "velox/exec/trace/TraceConfig.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -153,8 +153,8 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   /// Returns query trace config if specified.
-  const trace::TraceConfig* traceConfig() const {
-    return traceConfig_.get();
+  const trace::TraceCtx* traceCtx() const {
+    return traceCtx_.get();
   }
 
   /// Returns ConsumerSupplier passed in the constructor.
@@ -1118,7 +1118,7 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t pipelineId) const;
 
   // Builds the query trace config.
-  std::unique_ptr<trace::TraceConfig> maybeMakeTraceConfig() const;
+  std::unique_ptr<trace::TraceCtx> maybeMakeTraceCtx() const;
 
   // Create a 'QueryMetadtaWriter' to trace the query metadata if the query
   // trace enabled.
@@ -1165,7 +1165,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // and all its plan nodes support barrier processing.
   const core::PlanNode* firstNodeNotSupportingBarrier_{};
 
-  const std::unique_ptr<trace::TraceConfig> traceConfig_;
+  const std::unique_ptr<trace::TraceCtx> traceCtx_;
 
   inline static std::atomic_uint64_t numCreatedTasks_;
 

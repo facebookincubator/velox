@@ -30,7 +30,7 @@
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
-#include "velox/exec/OperatorTraceConfig.h"
+#include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -378,7 +378,7 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
-      traceConfig_(maybeMakeTraceConfig()),
+      traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
@@ -3447,21 +3447,21 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return exchangeClients_[pipelineId];
 }
 
-std::unique_ptr<trace::TraceConfig> Task::maybeMakeTraceConfig() const {
+std::unique_ptr<trace::TraceCtx> Task::maybeMakeTraceCtx() const {
   if (!queryCtx_->queryConfig().queryTraceEnabled()) {
     return nullptr;
   }
   // TODO: Make the actual trace implementation pluggable.
-  return trace::OperatorTraceConfig::maybeCreate(
+  return trace::OperatorTraceCtx::maybeCreate(
       *queryCtx_, planFragment(), taskId());
 }
 
 void Task::maybeInitTrace() {
-  if (!traceConfig_) {
+  if (!traceCtx_) {
     return;
   }
 
-  auto metadataWriter = traceConfig_->createMetadataTracer();
+  auto metadataWriter = traceCtx_->createMetadataTracer();
   metadataWriter->write(*queryCtx_, *planFragment_.planNode);
 }
 

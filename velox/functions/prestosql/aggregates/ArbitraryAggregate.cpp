@@ -19,7 +19,6 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -412,7 +411,7 @@ class NonNumericArbitrary : public exec::Aggregate {
 } // namespace
 
 void registerArbitraryAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -423,16 +422,16 @@ void registerArbitraryAggregate(
           .argumentType("T")
           .build()};
 
-  std::vector<std::string> names = {prefix + kArbitrary, prefix + kAnyValue};
   exec::registerAggregateFunction(
       names,
       std::move(signatures),
-      [name = names.front()](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {

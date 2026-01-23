@@ -20,7 +20,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -834,7 +833,7 @@ ReservoirSampleAggregate::computeTotalSamples(char** groups, int32_t numGroups)
 } // namespace
 
 void registerReservoirSampleAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -870,18 +869,17 @@ void registerReservoirSampleAggregate(
             .build());
   }
 
-  auto name = prefix + kReservoirSample;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step /* step */,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /* config */)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 4, "reservoir_sample requires 4 arguments");
+            argTypes.size(), 4, "{} requires 4 arguments", names.front());
 
         return std::make_unique<ReservoirSampleAggregate>(resultType);
       },

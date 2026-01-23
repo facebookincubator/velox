@@ -241,6 +241,15 @@ void makeProjectedNodes(
   }
 }
 
+const velox::common::ScanSpec* getChildScanSpec(
+    const velox::common::ScanSpec* scanSpec,
+    const TypeWrapper& nodeType,
+    int32_t childIdx) {
+  return scanSpec != nullptr && childIdx < nodeType.fieldNamesSize()
+      ? scanSpec->childByName(nodeType.fieldNames(childIdx))
+      : nullptr;
+}
+
 } // namespace
 
 DwrfRowReader::DwrfRowReader(
@@ -702,11 +711,14 @@ size_t DwrfRowReader::estimatedReaderMemory() const {
   return 2 * DwrfReader::getMemoryUse(getReader(), -1, *columnSelector_);
 }
 
-bool DwrfRowReader::shouldReadNode(uint32_t nodeId) const {
-  if (columnSelector_) {
-    return columnSelector_->shouldReadNode(nodeId);
-  }
-  return projectedNodes_->contains(nodeId);
+bool DwrfRowReader::shouldReadNode(
+    uint32_t nodeId,
+    const velox::common::ScanSpec* fieldScanSpec) const {
+  bool nodeIdSelected = (columnSelector_)
+      ? columnSelector_->shouldReadNode(nodeId)
+      : projectedNodes_->contains(nodeId);
+  return nodeIdSelected &&
+      !(fieldScanSpec != nullptr && !fieldScanSpec->readFromFile());
 }
 
 namespace {
@@ -729,6 +741,7 @@ std::optional<uint64_t> getStringOrBinaryColumnSize(
 std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     const FooterWrapper& fileFooter,
     const dwio::common::Statistics& stats,
+    const velox::common::ScanSpec* scanSpec,
     uint32_t nodeId) const {
   VELOX_CHECK_LT(nodeId, fileFooter.typesSize(), "Types missing in footer");
 
@@ -783,11 +796,16 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
           ? 0
           : 2 * valueCount * sizeof(vector_size_t);
       for (int32_t i = 0; i < nodeType.subtypesSize(); ++i) {
-        if (!shouldReadNode(nodeType.subtypes(i))) {
+        if (!shouldReadNode(
+                nodeType.subtypes(i),
+                getChildScanSpec(scanSpec, nodeType, i))) {
           continue;
         }
-        const auto subtypeEstimate =
-            estimatedRowSizeHelper(fileFooter, stats, nodeType.subtypes(i));
+        const auto subtypeEstimate = estimatedRowSizeHelper(
+            fileFooter,
+            stats,
+            getChildScanSpec(scanSpec, nodeType, i),
+            nodeType.subtypes(i));
         if (subtypeEstimate.has_value()) {
           totalEstimate += subtypeEstimate.value();
         } else {
@@ -824,8 +842,11 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   // Estimate with projections.
   constexpr uint32_t ROOT_NODE_ID = 0;
   const auto stats = reader.statistics();
-  const auto projectedSize =
-      estimatedRowSizeHelper(fileFooter, *stats, ROOT_NODE_ID);
+  const auto projectedSize = estimatedRowSizeHelper(
+      fileFooter,
+      *stats,
+      reader.readerOptions().scanSpec().get(),
+      ROOT_NODE_ID);
   if (projectedSize.has_value()) {
     estimatedRowSize_ = projectedSize.value() / fileFooter.numberOfRows();
     return estimatedRowSize_;

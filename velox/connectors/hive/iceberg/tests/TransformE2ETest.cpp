@@ -223,8 +223,6 @@ class TransformE2ETest : public test::IcebergTestBase {
       const std::string& partitionPath,
       const std::string& partitionFilter,
       const int32_t expectedRowCount) {
-    auto splits = createSplitsForDirectory(partitionPath);
-
     auto scanPlan = PlanBuilder()
                         .startTableScan()
                         .connectorId(test::kIcebergConnectorId)
@@ -233,7 +231,9 @@ class TransformE2ETest : public test::IcebergTestBase {
                         .planNode();
 
     const auto actualRowCount =
-        AssertQueryBuilder(scanPlan).splits(splits).countResults();
+        AssertQueryBuilder(scanPlan)
+            .splits(createSplitsForDirectory(partitionPath))
+            .countResults();
 
     ASSERT_EQ(actualRowCount, expectedRowCount);
 
@@ -245,7 +245,9 @@ class TransformE2ETest : public test::IcebergTestBase {
                                 .filter(partitionFilter)
                                 .planNode();
     const auto filteredRowCount =
-        AssertQueryBuilder(filterPlan).splits(splits).countResults();
+        AssertQueryBuilder(filterPlan)
+            .splits(createSplitsForDirectory(partitionPath))
+            .countResults();
     ASSERT_EQ(expectedRowCount, filteredRowCount);
   }
 
@@ -532,9 +534,9 @@ TEST_F(TransformE2ETest, year) {
                             .filter(yearFilter(year))
                             .planNode();
 
-        auto splits = createSplitsForDirectory(dir);
-        auto partitionRowCount =
-            AssertQueryBuilder(datePlan).splits(splits).countResults();
+        auto partitionRowCount = AssertQueryBuilder(datePlan)
+                                     .splits(createSplitsForDirectory(dir))
+                                     .countResults();
 
         auto countPlan = PlanBuilder()
                              .startTableScan()
@@ -542,8 +544,9 @@ TEST_F(TransformE2ETest, year) {
                              .outputType(rowType)
                              .endTableScan()
                              .planNode();
-        auto totalPartitionCount =
-            AssertQueryBuilder(countPlan).splits(splits).countResults();
+        auto totalPartitionCount = AssertQueryBuilder(countPlan)
+                                       .splits(createSplitsForDirectory(dir))
+                                       .countResults();
         ASSERT_EQ(partitionRowCount, totalPartitionCount);
         break;
       }

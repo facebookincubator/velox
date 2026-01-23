@@ -57,42 +57,16 @@ void SelectiveFlatMapColumnReader::getValues(
   auto* resultFlatMap = prepareResult(*result, keysVector_, rows.size());
   setComplexNulls(rows, *result);
 
-  for (const auto& childSpec : scanSpec_->children()) {
-    VELOX_TRACE_HISTORY_PUSH("getValues %s", childSpec->fieldName().c_str());
-    if (!childSpec->keepValues()) {
-      continue;
-    }
+  // Loop over column readers
+  for (int i = 0; i < children_.size(); ++i) {
+    auto& child = children_[i];
+    VectorPtr values;
+    child->getValues(rows, &values);
+    resultFlatMap->mapValuesAt(i) = values;
 
-    VELOX_CHECK(
-        childSpec->readFromFile(),
-        "Flatmap children must always be read from file.");
-
-    if (childSpec->subscript() == kConstantChildSpecSubscript) {
-      continue;
-    }
-
-    const auto channel = childSpec->channel();
-    const auto index = childSpec->subscript();
-    auto& childResult = resultFlatMap->mapValuesAt(channel);
-
-    VELOX_CHECK(
-        !childSpec->deltaUpdate(),
-        "Delta update not supported in flat map yet");
-    VELOX_CHECK(
-        !childSpec->isConstant(),
-        "Flat map values cannot be constant in scanSpec.");
-    VELOX_CHECK_EQ(
-        childSpec->columnType(),
-        velox::common::ScanSpec::ColumnType::kRegular,
-        "Flat map only supports regular column types in scan spec.");
-
-    children_[index]->getValues(rows, &childResult);
-
-    for (size_t i = 0; i < children_.size(); ++i) {
-      const auto& inMap = inMapBuffer(i);
-      if (inMap) {
-        resultFlatMap->inMapsAt(i, true) = inMap;
-      }
+    const auto& inMap = inMapBuffer(i);
+    if (inMap) {
+      resultFlatMap->inMapsAt(i, true) = inMap;
     }
   }
 }
