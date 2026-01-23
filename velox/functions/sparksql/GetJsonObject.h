@@ -16,9 +16,8 @@
 
 #pragma once
 
-#include <cstring>
-
 #include <folly/Likely.h>
+#include <cstring>
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
@@ -290,6 +289,8 @@ struct GetJsonObjectFunction {
   // Note: We only search for '\' which is ASCII (0x5C) and cannot appear
   // as a continuation byte in valid UTF-8 (continuation bytes are 0x80-0xBF).
   // So we can safely scan byte-by-byte regardless of encoding.
+  // See the valid escape sequences in Jackson's JSON parser:
+  // https://github.com/FasterXML/jackson-core/blob/jackson-core-2.19.2/src/main/java/com/fasterxml/jackson/core/json/ReaderBasedJsonParser.java#L2648
   FOLLY_ALWAYS_INLINE bool hasInvalidEscapedChar(
       const char* json,
       size_t size) {
