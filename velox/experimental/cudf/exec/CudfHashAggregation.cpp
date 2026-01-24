@@ -1121,11 +1121,11 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       core::AggregationNode::Step::kPartial,
       countSinglePartialSignatures);
 
-  auto countFinalIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
-      FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("bigint")
-          .build()};
+  auto countFinalIntermediateSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("bigint")
+                                                  .argumentType("bigint")
+                                                  .build()};
   registerAggregationFunctionForStep(
       prefix + "count",
       core::AggregationNode::Step::kFinal,

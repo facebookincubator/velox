@@ -676,10 +676,9 @@ TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
   modifiedAggregates[0].mask =
       std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
 
-  auto modifiedNode =
-      core::AggregationNode::Builder(*aggregationNode)
-          .aggregates(std::move(modifiedAggregates))
-          .build();
+  auto modifiedNode = core::AggregationNode::Builder(*aggregationNode)
+                          .aggregates(std::move(modifiedAggregates))
+                          .build();
 
   ASSERT_FALSE(canBeEvaluatedByCudf(*modifiedNode, queryCtx_.get()));
 }
