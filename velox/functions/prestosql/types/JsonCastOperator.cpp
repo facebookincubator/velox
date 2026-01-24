@@ -306,28 +306,15 @@ struct AsJson {
 
   // Appends the json string of the value at i to a string writer.
   void append(vector_size_t i, exec::StringWriter& proxy) const {
+    if (fieldName_.has_value()) {
+      proxy.append(fmt::format("\"{}\":", fieldName_.value()));
+    }
+
     if (decoded_->isNullAt(i)) {
-      appendString(proxy, fieldName_);
+      proxy.append("null");
     } else {
-      appendString(proxy, fieldName_, this->at(i));
+      proxy.append(this->at(i));
     }
-  }
-
-  // Utility function to append string to a string writer.
-  static void appendString(
-      exec::StringWriter& proxy,
-      const std::optional<std::string>& fieldName) {
-    appendString(proxy, fieldName, "null"_sv);
-  }
-
-  static void appendString(
-      exec::StringWriter& proxy,
-      const std::optional<std::string>& fieldName,
-      const StringView& str) {
-    if (fieldName.has_value()) {
-      proxy.append(fmt::format("\"{}\":", fieldName.value()));
-    }
-    proxy.append(str);
   }
 
  private:
@@ -569,11 +556,7 @@ void castToJsonFromRow(
     const SelectivityVector& rows,
     FlatVector<StringView>& flatResult,
     const std::shared_ptr<exec::CastHooks>& hooks) {
-  // NameJsonPair also stores index of the child in the row vector.
-  // since we are sorting the children based on their field names, we need
-  // to store the index of the child in the row vector.
-  using NameJsonPair =
-      std::pair<std::pair<std::string, vector_size_t>, std::optional<AsJson>>;
+  using NameJsonPair = std::pair<std::string, AsJson>;
   // input is guaranteed to be in flat encoding when passed in.
   VELOX_CHECK_EQ(input.encoding(), VectorEncoding::Simple::ROW);
   auto inputRow = input.as<RowVector>();
@@ -594,43 +577,23 @@ void castToJsonFromRow(
     std::optional<std::string> fieldName =
         fieldNamesInJsonCastEnabled ? std::optional{name} : std::nullopt;
 
-    auto inputRowChild = inputRow->childAt(i);
-
-    // Use a pointer to avoid copying SelectivityVector when there are no nulls.
-    // Only create a new SelectivityVector when the child has nulls that need
-    // to be filtered out.
-    SelectivityVector childRowsHolder;
-    const SelectivityVector* childRowsPtr = &rows;
-    if (inputRowChild->mayHaveNulls()) {
-      childRowsHolder = rows;
-      childRowsHolder.deselectNulls(
-          inputRowChild->rawNulls(), rows.begin(), rows.end());
-      childRowsPtr = &childRowsHolder;
-    }
-    const SelectivityVector& childRows = *childRowsPtr;
-
-    if (childRows.hasSelections()) {
-      jsonChildren.emplace_back(
-          std::pair{name, i},
-          AsJson{
-              context,
-              inputRowChild,
-              childRows,
-              nullptr,
-              hooks,
-              false,
-              std::move(fieldName)});
-    } else {
-      // All rows are null for this child - store nullopt.
-      jsonChildren.emplace_back(std::pair{name, i}, std::nullopt);
-    }
+    jsonChildren.emplace_back(
+        name,
+        AsJson{
+            context,
+            inputRow->childAt(i),
+            rows,
+            nullptr,
+            hooks,
+            false,
+            std::move(fieldName)});
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      if (inputRow->isNullAt(row) || inputRowChild->isNullAt(row)) {
+      if (inputRow->isNullAt(row)) {
         // "null" will be inlined in the StringView.
         return;
       }
-      childrenStringSize += jsonChildren[i].second->lengthAt(row);
+      childrenStringSize += jsonChildren[i].second.lengthAt(row);
     });
   }
 
@@ -671,17 +634,7 @@ void castToJsonFromRow(
       if (i > 0) {
         proxy.append(","_sv);
       }
-
-      auto nameIndex = jsonChildren[i].first;
-      if (!jsonChildren[i].second.has_value() ||
-          inputRow->childAt(nameIndex.second)->isNullAt(row)) {
-        AsJson::appendString(
-            proxy,
-            fieldNamesInJsonCastEnabled ? std::make_optional(nameIndex.first)
-                                        : std::nullopt);
-        continue;
-      }
-      jsonChildren[i].second->append(row, proxy);
+      jsonChildren[i].second.append(row, proxy);
     }
 
     if (fieldNamesInJsonCastEnabled) {
