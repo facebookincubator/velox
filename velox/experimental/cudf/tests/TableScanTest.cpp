@@ -281,7 +281,7 @@ TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
   // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
-TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
+TEST_F(TableScanTest, allColumnsUsingOldCudfReader) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
@@ -298,7 +298,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
       {filePath, filePath, filePath, filePath, filePath});
 
   // Helper to test scan all columns for the given splits
-  auto testScanAllColumnsUsingExperimentalReader =
+  auto testScanAllColumnsUsingOldCudfReader =
       [&](const core::PlanNodePtr& plan) {
         auto task = AssertQueryBuilder(duckDbQueryRunner_)
                         .plan(plan)
@@ -321,10 +321,10 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Reset the CudfHiveConnector config to use the experimental reader
+  // Reset the CudfHiveConnector config to use the old cudf reader
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-           kUseExperimentalCudfReader,
+           kUseOldCudfReader,
        "true"}};
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));
@@ -332,7 +332,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
   // Test scan all columns with buffered input datasource(s)
   {
     auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
+    testScanAllColumnsUsingOldCudfReader(plan);
   }
 
   // Test scan all columns with kvikIO datasource(s)
@@ -344,7 +344,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
     resetCudfHiveConnector(
         std::make_shared<config::ConfigBase>(std::move(config)));
     auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
+    testScanAllColumnsUsingOldCudfReader(plan);
   }
 }
 
@@ -395,14 +395,14 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
 
   // TableScan runtime stats not available with CudfHive connector yet
 #if 0
-  auto overreadBytes =
-  getTableScanRuntimeStats(task).at("overreadBytes").sum;
-  ASSERT_EQ(overreadBytes, 13);
-  ASSERT_EQ(
-      getTableScanRuntimeStats(task).at("storageReadBytes").sum,
-      rawInputBytes + overreadBytes);
-  ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
-  ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
+   auto overreadBytes =
+   getTableScanRuntimeStats(task).at("overreadBytes").sum;
+   ASSERT_EQ(overreadBytes, 13);
+   ASSERT_EQ(
+       getTableScanRuntimeStats(task).at("storageReadBytes").sum,
+       rawInputBytes + overreadBytes);
+   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
+   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
 #endif
 }
 
@@ -471,57 +471,57 @@ TEST_F(TableScanTest, filterPushdown) {
   EXPECT_EQ(tableScanStats.inputRows, tableScanStats.outputRows);
 
 #if 0
-  // Repeat the same but do not project out the filtered columns.
-  assignments.clear();
-  assignments["c0"] =
-      facebook::velox::exec::test::HiveConnectorTestBase::regularColumn(
-          "c0", TINYINT());
-  assertQuery(
-      PlanBuilder()
-          .startTableScan()
-          .outputType(ROW({"c0"}, {TINYINT()}))
-          .tableHandle(tableHandle)
-          .assignments(assignments)
-          .endTableScan()
-          .planNode(),
-      filePaths,
-      "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
-
-  // TODO: zero column non-empty table is not possible in cudf, need to implement.
-  // Do the same for count, no columns projected out.
-  assignments.clear();
-  assertQuery(
-      PlanBuilder()
-          .startTableScan()
-          .outputType(ROW({}, {}))
-          .tableHandle(tableHandle)
-          .assignments(assignments)
-          .endTableScan()
-          .singleAggregation({}, {"sum(1)"})
-          .planNode(),
-      filePaths,
-      "SELECT count(*) FROM tmp WHERE (c1 >= 0 ) AND c3");
-
-  // Do the same for count, no filter, no projections.
-  assignments.clear();
-  // subfieldFilters.clear(); // Explicitly clear this.
-  tableHandle = makeTableHandle(
-      "parquet_table",
-      rowType,
-      false,
-      nullptr,
-      nullptr);
-  assertQuery(
-      PlanBuilder()
-          .startTableScan()
-          .outputType(ROW({}, {}))
-          .tableHandle(tableHandle)
-          .assignments(assignments)
-          .endTableScan()
-          .singleAggregation({}, {"sum(1)"})
-          .planNode(),
-      filePaths,
-      "SELECT count(*) FROM tmp");
+   // Repeat the same but do not project out the filtered columns.
+   assignments.clear();
+   assignments["c0"] =
+       facebook::velox::exec::test::HiveConnectorTestBase::regularColumn(
+           "c0", TINYINT());
+   assertQuery(
+       PlanBuilder()
+           .startTableScan()
+           .outputType(ROW({"c0"}, {TINYINT()}))
+           .tableHandle(tableHandle)
+           .assignments(assignments)
+           .endTableScan()
+           .planNode(),
+       filePaths,
+       "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+ 
+   // TODO: zero column non-empty table is not possible in cudf, need to implement.
+   // Do the same for count, no columns projected out.
+   assignments.clear();
+   assertQuery(
+       PlanBuilder()
+           .startTableScan()
+           .outputType(ROW({}, {}))
+           .tableHandle(tableHandle)
+           .assignments(assignments)
+           .endTableScan()
+           .singleAggregation({}, {"sum(1)"})
+           .planNode(),
+       filePaths,
+       "SELECT count(*) FROM tmp WHERE (c1 >= 0 ) AND c3");
+ 
+   // Do the same for count, no filter, no projections.
+   assignments.clear();
+   // subfieldFilters.clear(); // Explicitly clear this.
+   tableHandle = makeTableHandle(
+       "parquet_table",
+       rowType,
+       false,
+       nullptr,
+       nullptr);
+   assertQuery(
+       PlanBuilder()
+           .startTableScan()
+           .outputType(ROW({}, {}))
+           .tableHandle(tableHandle)
+           .assignments(assignments)
+           .endTableScan()
+           .singleAggregation({}, {"sum(1)"})
+           .planNode(),
+       filePaths,
+       "SELECT count(*) FROM tmp");
 #endif
 }
 
