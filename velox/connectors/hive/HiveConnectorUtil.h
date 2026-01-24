@@ -104,35 +104,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool);
 
-/// Overload without indexColumns for backward compatibility.
-inline std::shared_ptr<common::ScanSpec> makeScanSpec(
-    const RowTypePtr& rowType,
-    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
-        outputSubfields,
-    const common::SubfieldFilters& subfieldFilters,
-    const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& partitionKeys,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& infoColumns,
-    const SpecialColumnNames& specialColumns,
-    bool disableStatsBasedFilterReorder,
-    memory::MemoryPool* pool) {
-  return makeScanSpec(
-      rowType,
-      outputSubfields,
-      subfieldFilters,
-      /*indexColumns=*/{},
-      dataColumns,
-      partitionKeys,
-      infoColumns,
-      specialColumns,
-      disableStatsBasedFilterReorder,
-      pool);
-}
-
 void configureReaderOptions(
     const std::shared_ptr<const HiveConfig>& config,
     const ConnectorQueryCtx* connectorQueryCtx,

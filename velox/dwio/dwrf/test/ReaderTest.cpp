@@ -889,7 +889,7 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfieldsByName = groupSubfields(subfields);
   auto scanSpec = velox::connector::hive::makeScanSpec(
-      outputType, subfieldsByName, {}, schema, {}, {}, {}, true, pool());
+      outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
   readerOpts.setScanSpec(scanSpec);
 
   auto reader = DwrfReader::create(
@@ -907,7 +907,7 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
   auto scanSpec2 = velox::connector::hive::makeScanSpec(
-      outputType, subfields2ByName, {}, schema, {}, {}, {}, true, pool());
+      outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
   readerOpts2.setScanSpec(scanSpec2);
 
   auto reader2 = DwrfReader::create(
