@@ -997,7 +997,7 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
   // Register sum function (split by aggregation step)
-  auto sumSinglePartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+  auto sumSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .returnType("bigint")
           .argumentType("tinyint")
@@ -1026,11 +1026,37 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kSingle,
-      sumSinglePartialSignatures);
+      sumSingleSignatures);
+
+  auto sumPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kPartial,
-      sumSinglePartialSignatures);
+      sumPartialSignatures);
 
   auto sumFinalIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
