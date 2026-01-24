@@ -218,32 +218,38 @@ TEST_F(StepAwareAggregationRegistryTest, sumStepConsistency) {
 }
 
 TEST_F(StepAwareAggregationRegistryTest, countStepConsistency) {
-  // Count should have the same signatures for all steps
-  auto countCall = std::make_shared<core::CallTypedExpr>(
+  // Count has raw input signatures for single/partial and bigint input for
+  // final/intermediate.
+  auto countRawCall = std::make_shared<core::CallTypedExpr>(
       BIGINT(),
       std::vector<core::TypedExprPtr>{
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
       "count");
+  auto countIntermediateCall = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "input")},
+      "count");
 
   bool countSingle = canAggregationBeEvaluatedByCudf(
-      *countCall,
+      *countRawCall,
       core::AggregationNode::Step::kSingle,
       {DOUBLE()},
       queryCtx_.get());
   bool countPartial = canAggregationBeEvaluatedByCudf(
-      *countCall,
+      *countRawCall,
       core::AggregationNode::Step::kPartial,
       {DOUBLE()},
       queryCtx_.get());
   bool countFinal = canAggregationBeEvaluatedByCudf(
-      *countCall,
+      *countIntermediateCall,
       core::AggregationNode::Step::kFinal,
-      {DOUBLE()},
+      {BIGINT()},
       queryCtx_.get());
   bool countIntermediate = canAggregationBeEvaluatedByCudf(
-      *countCall,
+      *countIntermediateCall,
       core::AggregationNode::Step::kIntermediate,
-      {DOUBLE()},
+      {BIGINT()},
       queryCtx_.get());
 
   EXPECT_TRUE(countSingle) << "Count single step should be supported";
