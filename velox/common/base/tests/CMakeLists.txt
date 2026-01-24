@@ -39,6 +39,9 @@ add_executable(
 )
 
 add_test(velox_base_test velox_base_test)
+if (${VELOX_ENABLE_ASAN_UBSAN_SANITIZERS})
+  set_tests_properties(velox_base_test PROPERTIES TIMEOUT 3000)
+endif()
 
 target_link_libraries(
   velox_base_test
