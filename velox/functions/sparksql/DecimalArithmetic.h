@@ -29,4 +29,6 @@ void registerDecimalDivide(const std::string& prefix);
 
 void registerDecimalIntegralDivide(const std::string& prefix);
 
+void registerDecimalRemainder(const std::string& prefix);
+
 } // namespace facebook::velox::functions::sparksql
