@@ -28,6 +28,24 @@
   _Pragma("GCC diagnostic pop");
 #endif
 
+#ifdef __clang__
+#if defined(__has_warning) && \
+    __has_warning("-Wmissing-designated-field-initializers")
+#define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING \
+  _Pragma("clang diagnostic push");                                  \
+  _Pragma(                                                           \
+      "clang diagnostic ignored \"-Wmissing-designated-field-initializers\"")
+#define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING \
+  _Pragma("clang diagnostic pop");
+#else
+#define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#endif
+#else
+#define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#endif
+
 #define VELOX_CONCAT(x, y) x##y
 // Need this extra layer to expand __COUNTER__.
 #define VELOX_VARNAME_IMPL(x, y) VELOX_CONCAT(x, y)

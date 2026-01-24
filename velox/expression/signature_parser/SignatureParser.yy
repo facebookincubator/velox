@@ -109,3 +109,64 @@ function_type : FUNCTION LPAREN type_list RPAREN { $$ = std::make_shared<exec::T
 void facebook::velox::exec::Parser::error(const std::string& msg) {
     VELOX_FAIL("Failed to parse type signature [{}]: {}", scanner->input(), msg);
 }
+
+#ifdef VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+// When using sanitizers (address/undefined behavior) the compiler
+// wants the typeinfo for yyFlexLexer in the mono library.
+// But in the normal compilation this is not required in the mono library.
+// Therefore, this adds a dummy implementation to force creation of the
+// typeinfo to avoid link issues.
+// There are two other parsers: The old TypeParser (to be removed) and
+// new (moved) TypeParser for prestosql.
+// The dummy class needs to be added only once and implementes the
+// virtual functions of yyFlexLexer.
+#ifdef yylex
+#undef yylex
+#endif
+yyFlexLexer::~yyFlexLexer() {}
+void yyFlexLexer::yy_switch_to_buffer(yy_buffer_state*) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yy_switch_to_buffer()");
+}
+yy_buffer_state* yyFlexLexer::yy_create_buffer( std::istream* s, int size ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yy_create_buffer()");
+}
+yy_buffer_state* yyFlexLexer::yy_create_buffer( std::istream& s, int size ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yy_create_buffer()");
+}
+void yyFlexLexer::yy_delete_buffer( yy_buffer_state* b ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yy_delete_buffer()");
+}
+void yyFlexLexer::yyrestart( std::istream* s ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yyrestart()");
+}
+void yyFlexLexer::yyrestart( std::istream& s ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yyrestart()");
+}
+void yyFlexLexer::yypush_buffer_state( yy_buffer_state* new_buffer ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::yypush_buffer_state()");
+}
+void yyFlexLexer::yypop_buffer_state() {
+  throw std::runtime_error("Bad call to yyFlexLexer::yypop_buffer_state()");
+}
+int yyFlexLexer::yylex() {
+  throw std::runtime_error("Bad call to yyFlexLexer::yylex() - dummy");
+}
+void yyFlexLexer::switch_streams( std::istream& new_in, std::ostream& new_out ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::switch_streams()");
+}
+void yyFlexLexer::switch_streams( std::istream* new_in, std::ostream* new_out ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::switch_streams()");
+}
+int yyFlexLexer::yywrap() {
+  throw std::runtime_error("Bad call to yyFlexLexer::yywrap()");
+}
+int yyFlexLexer::LexerInput( char* buf, int max_size ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::LexerInput()");
+}
+void yyFlexLexer::LexerOutput( const char* buf, int size ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::LexerOutput()");
+}
+void yyFlexLexer::LexerError( const char* msg ) {
+  throw std::runtime_error("Bad call to yyFlexLexer::LexerError()");
+}
+#endif // VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
