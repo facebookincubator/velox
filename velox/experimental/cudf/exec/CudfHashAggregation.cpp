@@ -996,8 +996,8 @@ bool registerAggregationFunctionForStep(
 bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
-  // Register sum function (same signatures for all steps)
-  auto sumSignatures = std::vector<exec::FunctionSignaturePtr>{
+  // Register sum function (split by aggregation step)
+  auto sumSinglePartialSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .returnType("bigint")
           .argumentType("tinyint")
@@ -1024,15 +1024,31 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .build()};
 
   registerAggregationFunctionForStep(
-      prefix + "sum", core::AggregationNode::Step::kSingle, sumSignatures);
+      prefix + "sum",
+      core::AggregationNode::Step::kSingle,
+      sumSinglePartialSignatures);
   registerAggregationFunctionForStep(
-      prefix + "sum", core::AggregationNode::Step::kPartial, sumSignatures);
+      prefix + "sum",
+      core::AggregationNode::Step::kPartial,
+      sumSinglePartialSignatures);
+
+  auto sumFinalIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
   registerAggregationFunctionForStep(
-      prefix + "sum", core::AggregationNode::Step::kFinal, sumSignatures);
+      prefix + "sum",
+      core::AggregationNode::Step::kFinal,
+      sumFinalIntermediateSignatures);
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kIntermediate,
-      sumSignatures);
+      sumFinalIntermediateSignatures);
 
   // Register count function (split by aggregation step)
   auto countSinglePartialSignatures = std::vector<exec::FunctionSignaturePtr>{
@@ -1160,6 +1176,10 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .argumentType("bigint")
           .build(),
       FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
           .returnType("double")
           .argumentType("double")
           .build()};
@@ -1181,6 +1201,10 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       FunctionSignatureBuilder()
           .returnType("row(double,bigint)")
           .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("real")
           .build(),
       FunctionSignatureBuilder()
           .returnType("row(double,bigint)")
