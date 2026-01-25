@@ -191,6 +191,28 @@ Invalid examples
 
 Cast to String
 --------------
+From DECIMAL
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a DECIMAL to STRING returns a plain decimal value.
+Scientific notation is not used.
+The scale is preserved and trailing zeros are kept.
+The conversion always succeeds with identical results for both ANSI ON and OFF modes.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(1.00 as decimal(10, 2)) as string); -- '1.00'
+  SELECT cast(cast(12.30 as decimal(10, 2)) as string); -- '12.30'
+  SELECT cast(cast(0.00000012 as decimal(10, 8)) as string); -- '0.00000012'
+  SELECT cast(cast(-1.00 as decimal(10, 2)) as string); -- '-1.00'
+  SELECT cast(cast(123456789.123456789 as decimal(18, 9)) as string); -- '123456789.123456789'
+  SELECT cast(cast(0.00 as decimal(5, 2)) as string); -- '0.00'
+  SELECT cast(cast(999.99 as decimal(5, 2)) as string); -- '999.99'
+  SELECT cast(cast(-0.01 as decimal(3, 2)) as string); -- '-0.01'
 
 From TIMESTAMP
 ^^^^^^^^^^^^^^
