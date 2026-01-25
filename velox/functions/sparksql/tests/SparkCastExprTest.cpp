@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/core/QueryConfig.h"
 
 using namespace facebook::velox;
 namespace facebook::velox::test {
@@ -484,7 +484,17 @@ TEST_F(SparkCastExprTest, stringToBoolean) {
     testCast<std::string, bool>(
         "boolean",
         {"f", "F", "false", "FALSE", "FaLsE", "n", "N", "no", "NO", "nO", "0"},
-        {false, false, false, false, false, false, false, false, false, false, false});
+        {false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false});
 
     // Whitespace should be trimmed.
     testCast<std::string, bool>(
@@ -527,8 +537,7 @@ TEST_F(SparkCastExprTest, stringToBoolean) {
 
   auto testInvalidString = [this](const std::string& value) {
     auto input = makeRowVector({makeFlatVector<std::string>({value})});
-    VELOX_ASSERT_THROW(
-        evaluate("cast(c0 as boolean)", input), "Cannot cast");
+    VELOX_ASSERT_THROW(evaluate("cast(c0 as boolean)", input), "Cannot cast");
   };
 
   testInvalidString("invalid");

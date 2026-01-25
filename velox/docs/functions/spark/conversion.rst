@@ -158,7 +158,7 @@ From VARCHAR
 *(ANSI compliant)*
 
 The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
-equivalents are allowed to be casted to boolean.
+equivalents are allowed to be cast to boolean.
 Casting from invalid strings throws an error when ANSI mode is enabled,
 or returns NULL when ANSI mode is disabled.
 
