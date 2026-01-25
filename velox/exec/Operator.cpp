@@ -94,8 +94,8 @@ Operator::Operator(
       outputType_(std::move(outputType)),
       spillConfig_(std::move(spillConfig)),
       dryRun_(
-          operatorCtx_->driverCtx()->traceConfig() &&
-          operatorCtx_->driverCtx()->traceConfig()->dryRun()),
+          operatorCtx_->driverCtx()->traceCtx() &&
+          operatorCtx_->driverCtx()->traceCtx()->dryRun()),
       stats_(
           OperatorStats{
               operatorId,
@@ -114,13 +114,13 @@ void Operator::maybeSetReclaimer() {
 }
 
 void Operator::maybeSetTracer() {
-  const auto* traceConfig = operatorCtx_->driverCtx()->traceConfig();
+  const auto* traceCtx = operatorCtx_->driverCtx()->traceCtx();
 
-  if (traceConfig && traceConfig->shouldTrace(*this)) {
+  if (traceCtx && traceCtx->shouldTrace(*this)) {
     if (dynamic_cast<SourceOperator*>(this) != nullptr) {
-      splitTracer_ = traceConfig->createSplitTracer(*this);
+      splitTracer_ = traceCtx->createSplitTracer(*this);
     } else {
-      inputTracer_ = traceConfig->createInputTracer(*this);
+      inputTracer_ = traceCtx->createInputTracer(*this);
     }
   }
 }

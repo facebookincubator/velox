@@ -37,7 +37,9 @@ IcebergColumnHandle::IcebergColumnHandle(
           columnType,
           dataType,
           dataType,
-          std::move(requiredSubfields)),
+          std::move(requiredSubfields),
+          ColumnParseParameters{ColumnParseParameters::
+                                    PartitionDateValueFormat::kDaysSinceEpoch}),
       field_(std::move(icebergField)) {}
 
 const parquet::ParquetFieldId& IcebergColumnHandle::field() const {
