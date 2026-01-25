@@ -755,4 +755,8 @@ if(VELOX_ENABLE_GEO)
   velox_resolve_dependency(geos)
 endif()
 
+# S2 geometry library for geospatial functions
+velox_set_source(s2geometry)
+velox_resolve_dependency(s2geometry)
+
 add_subdirectory(velox)
