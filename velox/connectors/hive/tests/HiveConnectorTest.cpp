@@ -101,11 +101,12 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {
     auto scanSpec = makeScanSpec(
         rowType,
         groupSubfields(subfields),
-        {},
-        nullptr,
-        {},
-        {},
-        {},
+        /*subfieldFilters=*/{},
+        /*indexColumns=*/{},
+        /*dataColumns=*/nullptr,
+        /*partitionKeys=*/{},
+        /*infoColumns=*/{},
+        /*specialColumns=*/{},
         statsBasedFilterReorderDisabled,
         pool_.get());
     ASSERT_EQ(
@@ -144,12 +145,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeFields) {
       rowType,
       groupSubfields(makeSubfields(
           {"c0.c0c0.c0c0c0", "c0.c0c0.c0c0c2", "c0.c0c1", "c0.c0c1.c0c1c0"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0c0 = scanSpec->childByName("c0")->childByName("c0c0");
   ASSERT_FALSE(c0c0->childByName("c0c0c0")->isConstant());
@@ -169,12 +171,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeArray) {
   auto scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[1].c0c0", "c0[2].c0c2"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->maxArrayElementsCount(), 2);
@@ -195,12 +198,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeArrayNegative) {
       makeScanSpec(
           rowType,
           groupedSubfields,
-          {},
-          nullptr,
-          {},
-          {},
-          {},
-          false,
+          /*subfieldFilters=*/{},
+          /*indexColumns=*/{},
+          /*dataColumns=*/nullptr,
+          /*partitionKeys=*/{},
+          /*infoColumns=*/{},
+          /*specialColumns=*/{},
+          /*disableStatsBasedFilterReorder=*/false,
           pool_.get()),
       "Non-positive array subscript cannot be push down");
 }
@@ -213,12 +217,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeMap) {
   auto scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[10].c0c0", "c0[20].c0c2"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(
@@ -244,12 +249,13 @@ TEST_F(
   auto scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[\"foo\"]"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->flatMapFeatureSelection(), std::vector<std::string>({"foo"}));
@@ -266,12 +272,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
     auto scanSpec = makeScanSpec(
         rowType,
         groupSubfields(makeSubfields({path})),
-        {},
-        nullptr,
-        {},
-        {},
-        {},
-        false,
+        /*subfieldFilters=*/{},
+        /*indexColumns=*/{},
+        /*dataColumns=*/nullptr,
+        /*partitionKeys=*/{},
+        /*infoColumns=*/{},
+        /*specialColumns=*/{},
+        /*disableStatsBasedFilterReorder=*/false,
         pool_.get());
     auto* c0 = scanSpec->childByName("c0");
     ASSERT_TRUE(c0->flatMapFeatureSelection().empty());
@@ -288,12 +295,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
   auto scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[*][*].c0c0"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_TRUE(mapKeyIsNotNull(*c0));
@@ -313,12 +321,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   auto scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[0]", "c1[-1]"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* keysFilter = scanSpec->childByName("c0")
                          ->childByName(ScanSpec::kMapKeysFieldName)
@@ -343,12 +352,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
       rowType,
       groupSubfields(makeSubfields(
           {"c0[-9223372036854775808]", "c1[9223372036854775807]"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -364,12 +374,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
       rowType,
       groupSubfields(makeSubfields(
           {"c0[9223372036854775807]", "c0[-9223372036854775808]"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -382,12 +393,13 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[-100000000]", "c0[100000000]"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -425,11 +437,12 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsOnlyInFilters) {
       readerOutputType,
       groupSubfields(makeSubfields({"c0.c0c1", "c0.c0c3"})),
       filters,
-      ROW({{"c0", c0Type}, {"c1", c1Type}}),
-      {},
-      {},
-      {},
-      false,
+      /*indexColumns=*/{},
+      /*dataColumns=*/ROW({{"c0", c0Type}, {"c1", c1Type}}),
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
 
   auto c0 = scanSpec->childByName("c0");
@@ -506,12 +519,13 @@ TEST_F(HiveConnectorTest, makeScanSpecDuplicateSubfields) {
       rowType,
       groupSubfields(makeSubfields(
           {"c0[10][1]", "c0[10][2]", "c1[\"foo\"][1]", "c1[\"foo\"][2]"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->children().size(), 2);
@@ -526,13 +540,14 @@ TEST_F(HiveConnectorTest, makeScanSpecFilterPartitionKey) {
   filters.emplace(Subfield("ds"), exec::equal("2023-10-13"));
   auto scanSpec = makeScanSpec(
       rowType,
-      {},
+      /*outputSubfields=*/{},
       filters,
-      rowType,
-      {{"ds", nullptr}},
-      {},
-      {},
-      false,
+      /*indexColumns=*/{},
+      /*dataColumns=*/rowType,
+      /*partitionKeys=*/{{"ds", nullptr}},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   ASSERT_TRUE(scanSpec->childByName("c0")->projectOut());
   ASSERT_FALSE(scanSpec->childByName("ds")->projectOut());
@@ -547,12 +562,13 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
   auto scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0.c0c1"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->children().size(), 2);
@@ -563,12 +579,13 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
   scanSpec = makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0.c0c0"})),
-      {},
-      nullptr,
-      {},
-      {},
-      {},
-      false,
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
       pool_.get());
   c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->children().size(), 2);
