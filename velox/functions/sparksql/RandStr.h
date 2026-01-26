@@ -23,11 +23,11 @@
 
 namespace facebook::velox::functions::sparksql {
 
-namespace {
+namespace detail {
 constexpr char kPool[] =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 constexpr int kPoolSize = 62;
-} // namespace
+} // namespace detail
 
 /// Spark SQL randstr(length) - Returns a string of the specified length
 /// with characters chosen uniformly at random from 0-9, a-z, A-Z.
@@ -43,7 +43,7 @@ struct RandStrFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const TLen* length) {
-    VELOX_CHECK_NOT_NULL(length, "length argument must be constant");
+    VELOX_USER_CHECK_NOT_NULL(length, "length argument must be constant");
     VELOX_USER_CHECK_GE(
         static_cast<int64_t>(*length), 0, "length must be non-negative");
   }
@@ -51,7 +51,8 @@ struct RandStrFunction {
   FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& out, int32_t length) {
     out.resize(length);
     for (auto i = 0; i < length; ++i) {
-      out.data()[i] = kPool[folly::Random::rand32() % kPoolSize];
+      out.data()[i] =
+          detail::kPool[folly::Random::rand32() % detail::kPoolSize];
     }
   }
 
@@ -78,7 +79,7 @@ struct RandStrSeededFunction {
       const core::QueryConfig& config,
       const TLen* length,
       const TSeed* seed) {
-    VELOX_CHECK_NOT_NULL(length, "length argument must be constant");
+    VELOX_USER_CHECK_NOT_NULL(length, "length argument must be constant");
     VELOX_USER_CHECK_GE(
         static_cast<int64_t>(*length), 0, "length must be non-negative");
     generator_.seed(
@@ -97,7 +98,7 @@ struct RandStrSeededFunction {
     for (auto i = 0; i < len; ++i) {
       // Match Spark's selection: use modulo similar to Java's approach.
       // Note: std::mt19937 produces unsigned 32-bit values, so no need for abs.
-      out.data()[i] = kPool[generator_() % kPoolSize];
+      out.data()[i] = detail::kPool[generator_() % detail::kPoolSize];
     }
     return true;
   }
