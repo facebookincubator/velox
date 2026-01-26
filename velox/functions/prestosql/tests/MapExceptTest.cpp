@@ -15,8 +15,8 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FuzzerTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::test;
 
@@ -406,222 +406,152 @@ class MapExceptFuzzerTest : public test::FunctionBaseTest {
       }
     }
   }
+
+  void runFuzzTest(
+      const TypePtr& keyType,
+      const TypePtr& valueType,
+      const test::FuzzerTestOptions& opts) {
+    test::FuzzerTestHelper helper(pool());
+    helper.runMapArrayTest(
+        keyType,
+        valueType,
+        [this](const VectorPtr& inputMap, const VectorPtr& keysArray) {
+          auto data = makeRowVector({inputMap, keysArray});
+          testEquivalence(data);
+        },
+        opts);
+  }
 };
 
 // Fuzz test with flat vectors, no nulls, fixed-size maps
 TEST_F(MapExceptFuzzerTest, fuzzFlatNoNulls) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.0;
-  options.containerHasNulls = false;
-  options.containerLength = 10;
-  options.containerVariableLength = false;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 10; ++i) {
-    // Generate random map with integer keys and values
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-
-    // Generate exclusion keys array
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .nullRatio = 0.0,
+       .containerLength = 10,
+       .iterations = 10});
 }
 
 // Fuzz test with nulls in maps and keys array
 TEST_F(MapExceptFuzzerTest, fuzzWithNulls) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  options.containerLength = 10;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 10; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .containerLength = 10,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
 }
 
 // Fuzz test with dictionary-encoded vectors
 TEST_F(MapExceptFuzzerTest, fuzzDictionaryEncoded) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  options.containerLength = 10;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
+  test::FuzzerTestHelper helper(pool());
+  test::FuzzerTestOptions opts{
+      .vectorSize = 100,
+      .containerLength = 10,
+      .containerHasNulls = true,
+      .containerVariableLength = true};
+  auto fuzzer = helper.createFuzzer(opts);
 
   for (auto i = 0; i < 10; ++i) {
-    // Generate base vectors
     auto baseInputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
     auto baseKeysArray = fuzzer.fuzz(ARRAY(INTEGER()));
 
-    // Wrap in dictionary encoding
-    auto inputMap = fuzzer.fuzzDictionary(baseInputMap, options.vectorSize);
-    auto keysArray = fuzzer.fuzzDictionary(baseKeysArray, options.vectorSize);
+    auto inputMap = fuzzer.fuzzDictionary(baseInputMap, opts.vectorSize);
+    auto keysArray = fuzzer.fuzzDictionary(baseKeysArray, opts.vectorSize);
 
     auto data = makeRowVector({inputMap, keysArray});
-
-    // Flatten for comparison
     auto flatData = makeRowVector({flatten(inputMap), flatten(keysArray)});
 
-    // Verify results match between dictionary and flat encodings
     auto result = evaluate("map_except(c0, c1)", data);
     auto expectedResult = evaluate("map_except(c0, c1)", flatData);
     assertEqualVectors(expectedResult, result);
 
-    // Also verify against the equivalent expression
     testEquivalence(flatData);
   }
 }
 
 // Fuzz test with variable-length maps and high null ratio
 TEST_F(MapExceptFuzzerTest, fuzzVariableLengthWithHighNullRatio) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.3;
-  options.containerHasNulls = true;
-  options.containerLength = 20;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 10; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .nullRatio = 0.3,
+       .containerLength = 20,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
 }
 
 // Fuzz test with string keys
 TEST_F(MapExceptFuzzerTest, fuzzStringKeys) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  options.containerLength = 10;
-  options.containerVariableLength = true;
-  options.stringLength = 20;
-  options.stringVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 10; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(VARCHAR(), INTEGER()));
-    auto keysArray = fuzzer.fuzz(ARRAY(VARCHAR()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      VARCHAR(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .containerLength = 10,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
 }
 
 // Fuzz test with bigint keys
 TEST_F(MapExceptFuzzerTest, fuzzBigintKeys) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  options.containerLength = 10;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 10; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(BIGINT(), VARCHAR()));
-    auto keysArray = fuzzer.fuzz(ARRAY(BIGINT()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      BIGINT(),
+      VARCHAR(),
+      {.vectorSize = 100,
+       .containerLength = 10,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
 }
 
 // Fuzz test with empty maps and arrays
 TEST_F(MapExceptFuzzerTest, fuzzWithEmptyContainers) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  // Use very small container length to increase likelihood of empty containers
-  options.containerLength = 2;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 10; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .containerLength = 2,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
 }
 
 // Fuzz test with various value types
 TEST_F(MapExceptFuzzerTest, fuzzVariousValueTypes) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  options.containerLength = 10;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
+  test::FuzzerTestOptions opts{
+      .vectorSize = 100,
+      .containerLength = 10,
+      .containerHasNulls = true,
+      .containerVariableLength = true,
+      .iterations = 5};
 
   // Test with DOUBLE values
-  for (auto i = 0; i < 5; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), DOUBLE()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(INTEGER(), DOUBLE(), opts);
 
   // Test with BOOLEAN values
-  for (auto i = 0; i < 5; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), BOOLEAN()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(INTEGER(), BOOLEAN(), opts);
 
   // Test with VARCHAR values
-  for (auto i = 0; i < 5; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), VARCHAR()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(INTEGER(), VARCHAR(), opts);
 }
 
 // Fuzz test with constant vectors
 TEST_F(MapExceptFuzzerTest, fuzzConstantVectors) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 100;
-  options.nullRatio = 0.0;
-  options.containerHasNulls = false;
-  options.containerLength = 5;
-  options.containerVariableLength = false;
-
-  VectorFuzzer fuzzer(options, pool());
+  test::FuzzerTestHelper helper(pool());
+  test::FuzzerTestOptions opts{
+      .vectorSize = 100, .nullRatio = 0.0, .containerLength = 5};
+  auto fuzzer = helper.createFuzzer(opts);
 
   for (auto i = 0; i < 10; ++i) {
-    // Create varying input map
     auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-
-    // Create a constant keys array
-    auto keysArray = fuzzer.fuzzConstant(ARRAY(INTEGER()), options.vectorSize);
+    auto keysArray = fuzzer.fuzzConstant(ARRAY(INTEGER()), opts.vectorSize);
 
     auto data = makeRowVector({inputMap, keysArray});
     testEquivalence(data);
@@ -630,22 +560,14 @@ TEST_F(MapExceptFuzzerTest, fuzzConstantVectors) {
 
 // Stress test with large vectors
 TEST_F(MapExceptFuzzerTest, fuzzLargeVectors) {
-  VectorFuzzer::Options options;
-  options.vectorSize = 1000;
-  options.nullRatio = 0.1;
-  options.containerHasNulls = true;
-  options.containerLength = 50;
-  options.containerVariableLength = true;
-
-  VectorFuzzer fuzzer(options, pool());
-
-  for (auto i = 0; i < 5; ++i) {
-    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-    auto keysArray = fuzzer.fuzz(ARRAY(INTEGER()));
-
-    auto data = makeRowVector({inputMap, keysArray});
-    testEquivalence(data);
-  }
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 1000,
+       .containerLength = 50,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 5});
 }
 
 } // namespace
