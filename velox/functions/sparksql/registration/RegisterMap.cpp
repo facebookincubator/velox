@@ -26,7 +26,8 @@ extern void registerElementAtFunction(
 void registerSparkMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
-  registerMapFromEntriesFunction(prefix + "map_from_entries", false);
+  registerMapFromEntriesFunction(
+      prefix + "map_from_entries", /*throwOnNull=*/false);
   // Spark and Presto map_filter function has the same definition:
   //   function expression corresponds to body, arguments to signature
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
