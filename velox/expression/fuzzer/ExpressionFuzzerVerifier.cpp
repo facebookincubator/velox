@@ -485,6 +485,8 @@ void ExpressionFuzzerVerifier::go() {
   }
   logStats();
 
+  LOG(ERROR) << "==============================> Results";
+
   LOG(ERROR) << "Total test cases: " << totalTestCases;
   LOG(ERROR) << "Total test cases verified in the reference DB: "
              << numVerified;
@@ -492,6 +494,8 @@ void ExpressionFuzzerVerifier::go() {
              << numFailed;
   LOG(ERROR) << "Total test cases unsupported in the reference DB: "
              << numReferenceUnsupported;
+  LOG(ERROR) << "Total test cases skipped due to SWITCH/IF rewrites: "
+             << verifier_.numSkippedIfSwitchMismatches();
 }
 
 } // namespace facebook::velox::fuzzer
