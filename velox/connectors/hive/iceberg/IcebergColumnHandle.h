@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/dwio/parquet/writer/ParquetFieldId.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 

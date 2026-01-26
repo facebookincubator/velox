@@ -138,6 +138,7 @@ std::vector<AggregateRegistrationResult> registerAggregateFunction(
     bool registerCompanionFunctions,
     bool overwrite) {
   auto size = names.size();
+  VELOX_CHECK_NE(size, 0, "Aggregate function registered without a name.");
   std::vector<AggregateRegistrationResult> registrationResults{size};
   for (int i = 0; i < size; ++i) {
     registrationResults[i] = registerAggregateFunction(

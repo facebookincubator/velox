@@ -789,22 +789,21 @@ bool incrementStringValue(std::string* value, bool descending) {
     // immediate next string. For any string s, s < s + '\0' < s + '\x01' < ...
     value->push_back('\0');
     return true;
-  } else {
-    // Descending order: decrement is only possible if the string ends with
-    // '\0'. This is the inverse of the increment operation - truncate the
-    // trailing null byte. This approach aligns with Apache Kudu's
-    // DecrementStringCell.
-    //
-    // For strings not ending with '\0', there is no finite immediate
-    // predecessor (e.g., predecessor of "abc" would be "ab\xFF\xFF\xFF..." with
-    // infinite 0xFF bytes). Return false to signal caller should use exclusive
-    // bounds.
-    if (value->empty() || value->back() != '\0') {
-      return false;
-    }
-    value->pop_back();
-    return true;
   }
+  // Descending order: decrement is only possible if the string ends with
+  // '\0'. This is the inverse of the increment operation - truncate the
+  // trailing null byte. This approach aligns with Apache Kudu's
+  // DecrementStringCell.
+  //
+  // For strings not ending with '\0', there is no finite immediate
+  // predecessor (e.g., predecessor of "abc" would be "ab\xFF\xFF\xFF..." with
+  // infinite 0xFF bytes). Return false to signal caller should use exclusive
+  // bounds.
+  if (value->empty() || value->back() != '\0') {
+    return false;
+  }
+  value->pop_back();
+  return true;
 }
 
 template <TypeKind KIND>
@@ -976,13 +975,11 @@ bool incrementColumnValueTyped(
     const auto value = inputVector->valueAt(row);
     std::string incrementedStr(value.data(), value.size());
     if (!incrementStringValue(&incrementedStr, descending)) {
-      if (!descending) {
-        // Ascending overflow: set to min value (empty string)
-        resultVector->set(row, StringView(""));
-      }
-      // For descending underflow: cannot represent max string value,
-      // leave value unchanged as there's no finite predecessor.
-      return false;
+      VELOX_CHECK(descending);
+      // Descending underflow: should not happen in practice as VARCHAR
+      // filter conversion is not supported for descending order.
+      VELOX_UNREACHABLE(
+          "Unexpected string underflow during descending bound increment");
     }
     resultVector->set(row, StringView(incrementedStr));
     return true;

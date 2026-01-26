@@ -244,14 +244,6 @@ bool HiveConfig::readStatsBasedFilterReorderDisabled(
       config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
 }
 
-std::string HiveConfig::hiveLocalDataPath() const {
-  return config_->get<std::string>(kLocalDataPath, "");
-}
-
-std::string HiveConfig::hiveLocalFileFormat() const {
-  return config_->get<std::string>(kLocalFileFormat, "");
-}
-
 bool HiveConfig::preserveFlatMapsInMemory(
     const config::ConfigBase* session) const {
   return session->get<bool>(

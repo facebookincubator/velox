@@ -18,10 +18,10 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
-#include "velox/common/hyperloglog/HllAccumulator.h"
 #include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/functions/lib/HllAccumulator.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 

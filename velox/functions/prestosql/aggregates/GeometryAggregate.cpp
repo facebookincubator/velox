@@ -24,7 +24,6 @@
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 
@@ -158,7 +157,9 @@ class ConvexHullAggregate {
   };
 };
 
-void registerConvexHullAggregate(const std::string& prefix, bool overwrite) {
+void registerConvexHullAggregate(
+    const std::vector<std::string>& names,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   signatures.push_back(
@@ -168,16 +169,16 @@ void registerConvexHullAggregate(const std::string& prefix, bool overwrite) {
           .argumentType("geometry")
           .build());
 
-  std::string name = prefix + kConvexHull;
   exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         const auto& inputType = argTypes[0];
@@ -296,7 +297,9 @@ class GeometryUnionAggregate {
   };
 };
 
-void registerGeometryUnionAggregate(const std::string& prefix, bool overwrite) {
+void registerGeometryUnionAggregate(
+    const std::vector<std::string>& names,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   signatures.push_back(
@@ -306,16 +309,16 @@ void registerGeometryUnionAggregate(const std::string& prefix, bool overwrite) {
           .argumentType("geometry")
           .build());
 
-  std::string name = prefix + kGeometryUnion;
   exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         const auto& inputType = argTypes[0];
@@ -335,10 +338,13 @@ void registerGeometryUnionAggregate(const std::string& prefix, bool overwrite) {
 
 } // namespace
 
-void registerGeometryAggregate(const std::string& prefix, bool overwrite) {
+void registerGeometryAggregate(
+    const std::vector<std::string>& convexHullNames,
+    const std::vector<std::string>& geometryUnionNames,
+    bool overwrite) {
   registerGeometryType();
-  registerConvexHullAggregate(prefix, overwrite);
-  registerGeometryUnionAggregate(prefix, overwrite);
+  registerConvexHullAggregate(convexHullNames, overwrite);
+  registerGeometryUnionAggregate(geometryUnionNames, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

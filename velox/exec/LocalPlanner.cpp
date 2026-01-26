@@ -748,7 +748,7 @@ std::vector<std::unique_ptr<Operator>> DriverFactory::replaceOperators(
   }
 
   driver.operators_.erase(
-      driver.operators_.begin() + begin, driver.operators_.begin() + end);
+      driver.operators_.cbegin() + begin, driver.operators_.cbegin() + end);
 
   // Insert the replacement at the place of the erase. Do manually because
   // insert() is not good with unique pointers.
