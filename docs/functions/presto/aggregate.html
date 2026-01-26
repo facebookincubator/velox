@@ -531,43 +531,6 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
 </div></blockquote>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="numeric_histogram">
-<span class="sig-name descname"><span class="pre">numeric_histogram</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;double,</span> <span class="pre">double&gt;</span></span></span><a class="headerlink" href="#numeric_histogram" title="Link to this definition">¶</a></dt>
-<dd><p>Computes an approximate histogram with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets
-for all <code class="docutils literal notranslate"><span class="pre">value</span></code>s with a per-item weight of <code class="docutils literal notranslate"><span class="pre">weight</span></code>.  The keys of the
-returned map are roughly the center of the bin, and the entry is the total
-weight of the bin.  The algorithm is based loosely on <span id="id2">[BenHaimTomTov2010]</span>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> must be a <code class="docutils literal notranslate"><span class="pre">bigint</span></code>. <code class="docutils literal notranslate"><span class="pre">value</span></code> and <code class="docutils literal notranslate"><span class="pre">weight</span></code> must be numeric.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">numeric_histogram</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
-<span class="n">FROM</span> <span class="p">(</span>
- <span class="n">VALUES</span> <span class="p">(</span><span class="mi">10</span><span class="p">),</span>
-        <span class="p">(</span><span class="mi">15</span><span class="p">),</span>
-        <span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-        <span class="p">(</span><span class="mi">25</span><span class="p">),</span>
-        <span class="p">(</span><span class="mi">30</span><span class="p">)</span>
-<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
-<span class="o">--</span><span class="p">{</span><span class="mf">30.0</span><span class="o">-&gt;</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">22.5</span><span class="o">-&gt;</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">12.5</span><span class="o">-&gt;</span><span class="mf">2.0</span><span class="p">}</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">numeric_histogram</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;double,</span> <span class="pre">double&gt;</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
-<dd><p>Computes an approximate histogram with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets
-for all <code class="docutils literal notranslate"><span class="pre">value</span></code>s. This function is equivalent to the variant of
-<code class="xref py py-func docutils literal notranslate"><span class="pre">numeric_histogram()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.
-In this case, the total weight in the returned map is the count of items in the bin.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">numeric_histogram</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
-<span class="n">FROM</span> <span class="p">(</span>
-<span class="n">VALUES</span> <span class="p">(</span><span class="mf">10.0</span><span class="p">),</span> <span class="p">(</span><span class="mf">15.0</span><span class="p">),</span> <span class="p">(</span><span class="mf">20.0</span><span class="p">),</span> <span class="p">(</span><span class="mf">25.0</span><span class="p">),</span> <span class="p">(</span><span class="mf">30.0</span><span class="p">)</span>
-<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
-<span class="o">--</span><span class="p">{</span><span class="mf">30.0</span><span class="o">-&gt;</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">22.5</span><span class="o">-&gt;</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">12.5</span><span class="o">-&gt;</span><span class="mf">2.0</span><span class="p">}</span>
-</pre></div>
-</div>
-</dd></dl>
-
 </section>
 <section id="classification-metrics-aggregate-functions">
 <h2>Classification Metrics Aggregate Functions<a class="headerlink" href="#classification-metrics-aggregate-functions" title="Link to this heading">¶</a></h2>
@@ -657,8 +620,8 @@ entries of <code class="docutils literal notranslate"><span class="pre">y</span>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id3">
-<span class="sig-name descname"><span class="pre">classification_miss_rate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">classification_miss_rate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
 <dd><p>This function is equivalent to the variant of
 <code class="xref py py-func docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
 </dd></dl>
@@ -685,8 +648,8 @@ entries of <code class="docutils literal notranslate"><span class="pre">y</span>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id4">
-<span class="sig-name descname"><span class="pre">classification_fall_out</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id4" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">classification_fall_out</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
 <dd><p>This function is equivalent to the variant of
 <code class="xref py py-func docutils literal notranslate"><span class="pre">classification_fall_out()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
 </dd></dl>
@@ -713,8 +676,8 @@ entries of <code class="docutils literal notranslate"><span class="pre">y</span>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id5">
-<span class="sig-name descname"><span class="pre">classification_precision</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id5" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">classification_precision</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
 <dd><p>This function is equivalent to the variant of
 <code class="xref py py-func docutils literal notranslate"><span class="pre">classification_precision()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
 </dd></dl>
@@ -741,8 +704,8 @@ entries of <code class="docutils literal notranslate"><span class="pre">y</span>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id6">
-<span class="sig-name descname"><span class="pre">classification_recall</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id4">
+<span class="sig-name descname"><span class="pre">classification_recall</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id4" title="Link to this definition">¶</a></dt>
 <dd><p>This function is equivalent to the variant of
 <code class="xref py py-func docutils literal notranslate"><span class="pre">classification_recall()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
 </dd></dl>
@@ -962,8 +925,8 @@ Otherwise, noise is drawn from a secure random.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id7">
-<span class="sig-name descname"><span class="pre">noisy_sum_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id7" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id5">
+<span class="sig-name descname"><span class="pre">noisy_sum_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id5" title="Link to this definition">¶</a></dt>
 <dd><p>Calculates the sum over the input values in <code class="docutils literal notranslate"><span class="pre">col</span></code> and then adds a normally distributed
 random double value with 0 mean and standard deviation of <code class="docutils literal notranslate"><span class="pre">noise_scale</span></code>.
 Each value is clipped to the range of [<code class="docutils literal notranslate"><span class="pre">lower</span></code>, <code class="docutils literal notranslate"><span class="pre">upper</span></code>] before adding to the sum.</p>
@@ -981,8 +944,8 @@ Otherwise, noise is drawn from a secure random.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id8">
-<span class="sig-name descname"><span class="pre">noisy_avg_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id6">
+<span class="sig-name descname"><span class="pre">noisy_avg_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
 <dd><p>Calculates the average (arithmetic mean) of all the input values in <code class="docutils literal notranslate"><span class="pre">col</span></code> and then adds a
 normally distributed random double value with 0 mean and standard deviation of <code class="docutils literal notranslate"><span class="pre">noise_scale</span></code>.
 Each value is clipped to the range of [<code class="docutils literal notranslate"><span class="pre">lower</span></code>, <code class="docutils literal notranslate"><span class="pre">upper</span></code>] before averaging.</p>
@@ -997,7 +960,7 @@ Otherwise, noise is drawn from a secure random.</p>
 which returns a (deterministic) HyperLogLog sketch.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">col</span></code> currently supports types: “bigint”, “double”, “string”, “varbinary”.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in the sketch, as described in <a class="reference internal" href="#hehir2023" id="id9"><span>[Hehir2023]</span></a>.
+<li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in the sketch, as described in <a class="reference internal" href="#hehir2023" id="id7"><span>[Hehir2023]</span></a>.
 Smaller values of epsilon correspond to noisier sketches.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> (int) defaults to 4096.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">precision</span></code> (int) defaults to 24.</p></li>
@@ -1027,7 +990,7 @@ This is analogous to the (deterministic) <a class="reference internal" href="#ap
 <dd><p>Returns an SFM sketch with no items in it. This is analogous to the <code class="docutils literal notranslate"><span class="pre">empty_approx_set()</span></code> function,
 which returns an empty (deterministic) <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch.</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in the sketch, as described in <a class="reference internal" href="#hehir2023" id="id10"><span>[Hehir2023]</span></a>. Smaller values of epsilon correspond to noisier sketches.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in the sketch, as described in <a class="reference internal" href="#hehir2023" id="id8"><span>[Hehir2023]</span></a>. Smaller values of epsilon correspond to noisier sketches.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> (int) defaults to 4096.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">precision</span></code> (int) defaults to 24.</p></li>
 </ul>
@@ -1039,16 +1002,16 @@ which returns an empty (deterministic) <code class="docutils literal notranslate
 <dd><p>Returns an SFM sketch of the input values in <code class="docutils literal notranslate"><span class="pre">col_index</span></code> and <code class="docutils literal notranslate"><span class="pre">col_zeros</span></code>.</p>
 <p>This is similar to <a class="reference internal" href="#noisy_approx_set_sfm" title="noisy_approx_set_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_set_sfm()</span></code></a> except that function calculates a <code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code> of <code class="docutils literal notranslate"><span class="pre">col</span></code>,
 and calculates the SFM PCSA bucket index and number of trailing zeros as described in
-<a class="reference internal" href="#flajoletmartin1985" id="id11"><span>[FlajoletMartin1985]</span></a>. In this function, the caller must explicitly calculate the hash bucket index
+<a class="reference internal" href="#flajoletmartin1985" id="id9"><span>[FlajoletMartin1985]</span></a>. In this function, the caller must explicitly calculate the hash bucket index
 and zeros themselves and pass them as arguments <code class="docutils literal notranslate"><span class="pre">col_index</span></code> and <code class="docutils literal notranslate"><span class="pre">col_zeros</span></code>.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">col_index</span></code> (bigint) must be in the range <code class="docutils literal notranslate"><span class="pre">0..buckets-1</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">col_zeros</span></code> (bigint) must be in the range <code class="docutils literal notranslate"><span class="pre">0..64</span></code>. If it exceeds <code class="docutils literal notranslate"><span class="pre">precision</span></code>, it
 is cropped to <code class="docutils literal notranslate"><span class="pre">precision-1</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in
-the sketch, as described in <a class="reference internal" href="#hehir2023" id="id12"><span>[Hehir2023]</span></a>. Smaller values of epsilon correspond
+the sketch, as described in <a class="reference internal" href="#hehir2023" id="id10"><span>[Hehir2023]</span></a>. Smaller values of epsilon correspond
 to noisier sketches.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> (int) is the number of buckets in the SFM PCSA sketch as described in <a class="reference internal" href="#hehir2023" id="id13"><span>[Hehir2023]</span></a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> (int) is the number of buckets in the SFM PCSA sketch as described in <a class="reference internal" href="#hehir2023" id="id11"><span>[Hehir2023]</span></a>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">precision</span></code> (int) defaults to 24.</p></li>
 </ul>
 <div class="admonition note">
@@ -1102,41 +1065,41 @@ to keep in mind if using these functions for privacy-preserving purposes, includ
 return value noiselessly indicates the absence of data.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> clauses used in combination with noisy aggregation functions reveal non-noisy
 information: the presence or absence of a group noiselessly indicates the presence or
-absence of data. See, e.g., <a class="reference internal" href="#wilkins2024" id="id14"><span>[Wilkins2024]</span></a>.</p></li>
+absence of data. See, e.g., <a class="reference internal" href="#wilkins2024" id="id12"><span>[Wilkins2024]</span></a>.</p></li>
 <li><p>Functions relying on floating-point noise may be susceptible to inference attacks such as
-those identified in <a class="reference internal" href="#mironov2012" id="id15"><span>[Mironov2012]</span></a> and <a class="reference internal" href="#casacuberta2022" id="id16"><span>[Casacuberta2022]</span></a>.</p></li>
+those identified in <a class="reference internal" href="#mironov2012" id="id13"><span>[Mironov2012]</span></a> and <a class="reference internal" href="#casacuberta2022" id="id14"><span>[Casacuberta2022]</span></a>.</p></li>
 </ul>
 </section>
 <section id="references">
 <h3>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h3>
 <div role="list" class="citation-list">
 <div class="citation" id="casacuberta2022" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id16">Casacuberta2022</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id14">Casacuberta2022</a><span class="fn-bracket">]</span></span>
 <p>Casacuberta, S., Shoemate, M., Vadhan, S., &amp; Wagaman, C. (2022).
 <a class="reference external" href="https://arxiv.org/pdf/2207.10635">Widespread Underestimation of Sensitivity in Differentially Private Libraries and How to Fix It</a>.
 In Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security (pp. 471-484).</p>
 </div>
 <div class="citation" id="hehir2023" role="doc-biblioentry">
 <span class="label"><span class="fn-bracket">[</span>Hehir2023<span class="fn-bracket">]</span></span>
-<span class="backrefs">(<a role="doc-backlink" href="#id9">1</a>,<a role="doc-backlink" href="#id10">2</a>,<a role="doc-backlink" href="#id12">3</a>,<a role="doc-backlink" href="#id13">4</a>)</span>
+<span class="backrefs">(<a role="doc-backlink" href="#id7">1</a>,<a role="doc-backlink" href="#id8">2</a>,<a role="doc-backlink" href="#id10">3</a>,<a role="doc-backlink" href="#id11">4</a>)</span>
 <p>Hehir, J., Ting, D., &amp; Cormode, G. (2023).
 <a class="reference external" href="https://proceedings.mlr.press/v202/hehir23a/hehir23a.pdf">Sketch-Flip-Merge: Mergeable Sketches for Private Distinct Counting</a>.
 In Proceedings of the 40th International Conference on Machine Learning (Vol. 202).</p>
 </div>
 <div class="citation" id="mironov2012" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id15">Mironov2012</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id13">Mironov2012</a><span class="fn-bracket">]</span></span>
 <p>Mironov, I. (2012).
 <a class="reference external" href="https://www.microsoft.com/en-us/research/wp-content/uploads/2012/10/lsbs.pdf">On significance of the least significant bits for differential privacy</a>.
 In Proceedings of the 2012 ACM Conference on Computer and Communications Security (pp. 650-661).</p>
 </div>
 <div class="citation" id="wilkins2024" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id14">Wilkins2024</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id12">Wilkins2024</a><span class="fn-bracket">]</span></span>
 <p>Wilkins, A., Kifer, D., Zhang, D., &amp; Karrer, B. (2024).
 <a class="reference external" href="https://journalprivacyconfidentiality.org/index.php/jpc/article/view/823/755">Exact Privacy Analysis of the Gaussian Sparse Histogram Mechanism</a>.
 Journal of Privacy and Confidentiality, 14 (1).</p>
 </div>
 <div class="citation" id="flajoletmartin1985" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id11">FlajoletMartin1985</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id9">FlajoletMartin1985</a><span class="fn-bracket">]</span></span>
 <p>Flajolet, P, Martin, G. N. (1985).
 <a class="reference external" href="https://algo.inria.fr/flajolet/Publications/src/FlMa85.pdf">Probabilistic Counting Algorithms for Data Base Applications</a>.
 In Journal of Computer and System Sciences, 31:182-209, 1985</p>
@@ -1213,19 +1176,17 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#approx_distinct"><code class="docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></li>
 <li><a class="reference internal" href="#approx_most_frequent"><code class="docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a></li>
 <li><a class="reference internal" href="#approx_percentile"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#numeric_histogram"><code class="docutils literal notranslate"><span class="pre">numeric_histogram()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">numeric_histogram()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#classification-metrics-aggregate-functions">Classification Metrics Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#classification_miss_rate"><code class="docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></li>
-<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></li>
 <li><a class="reference internal" href="#classification_fall_out"><code class="docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></li>
-<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></li>
+<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></li>
 <li><a class="reference internal" href="#classification_precision"><code class="docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></li>
-<li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></li>
+<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></li>
 <li><a class="reference internal" href="#classification_recall"><code class="docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></li>
-<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></li>
+<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></li>
 <li><a class="reference internal" href="#classification_thresholds"><code class="docutils literal notranslate"><span class="pre">classification_thresholds()</span></code></a></li>
 </ul>
 </li>
@@ -1258,9 +1219,9 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#noisy_count_if_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_count_if_gaussian()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_count_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_count_gaussian()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_sum_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a></li>
-<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a></li>
+<li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_avg_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_avg_gaussian()</span></code></a></li>
-<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">noisy_avg_gaussian()</span></code></a></li>
+<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">noisy_avg_gaussian()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_approx_set_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_approx_set_sfm()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_approx_distinct_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_approx_distinct_sfm()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_empty_approx_set_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_empty_approx_set_sfm()</span></code></a></li>
