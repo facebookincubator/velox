@@ -55,8 +55,8 @@ add_executable(
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
-  MapTest.cpp
   MapFromEntriesTest.cpp
+  MapTest.cpp
   MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
