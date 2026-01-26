@@ -232,6 +232,7 @@ void TestIndexSource::checkNotFailed() {
 std::shared_ptr<connector::IndexSource::LookupResultIterator>
 TestIndexSource::lookup(const LookupRequest& request) {
   checkNotFailed();
+  VELOX_CHECK(!tableHandle_->needsIndexSplit() || !splits_.empty());
   const auto numInputRows = request.input->size();
   auto& hashTable = tableHandle_->indexTable()->table;
   auto lookup = std::make_unique<HashLookup>(hashTable->hashers(), pool_.get());
