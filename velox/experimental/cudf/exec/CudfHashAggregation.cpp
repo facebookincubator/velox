@@ -514,8 +514,10 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         stream);
   }
 
-  cudf::approx_distinct_count mergeSketches(
+  template <typename Func>
+  auto mergeSketchesAndApply(
       cudf::column_view const& sketch_column,
+      Func&& func,
       rmm::cuda_stream_view stream) {
     auto lists_col = cudf::lists_column_view(sketch_column);
     auto child_col = lists_col.get_sliced_child(stream);
@@ -550,7 +552,7 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       }
     }
 
-    return merged_sketch;
+    return func(merged_sketch);
   }
 
   std::unique_ptr<cudf::column> doPartialReduce(
@@ -577,8 +579,12 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       return makeSketchColumn({}, stream);
     }
 
-    auto merged_sketch = mergeSketches(sketch_column, stream);
-    return makeSketchColumn(merged_sketch.sketch(), stream);
+    return mergeSketchesAndApply(
+        sketch_column,
+        [this, stream](cudf::approx_distinct_count& sketch) {
+          return makeSketchColumn(sketch.sketch(), stream);
+        },
+        stream);
   }
 
   std::unique_ptr<cudf::column> doFinalReduce(
@@ -591,13 +597,16 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
           cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
     }
 
-    auto merged_sketch = mergeSketches(sketch_column, stream);
-    std::size_t estimate = merged_sketch.estimate(stream);
-
-    return cudf::make_column_from_scalar(
-        cudf::numeric_scalar<int64_t>(
-            static_cast<int64_t>(estimate), true, stream),
-        1,
+    return mergeSketchesAndApply(
+        sketch_column,
+        [stream](cudf::approx_distinct_count& sketch) {
+          std::size_t estimate = sketch.estimate(stream);
+          return cudf::make_column_from_scalar(
+              cudf::numeric_scalar<int64_t>(
+                  static_cast<int64_t>(estimate), true, stream),
+              1,
+              stream);
+        },
         stream);
   }
 
