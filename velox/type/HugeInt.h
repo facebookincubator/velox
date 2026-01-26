@@ -55,7 +55,7 @@ class HugeInt {
     memcpy(serializedData, &value, sizeof(int128_t));
   }
 
-  static int128_t parse(const std::string& str);
+  static int128_t parse(std::string_view str);
 };
 
 } // namespace facebook::velox
