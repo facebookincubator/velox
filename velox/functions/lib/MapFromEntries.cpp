@@ -30,7 +30,8 @@ static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
-  MapFromEntriesFunction(bool throwOnNull) : throwOnNull_(throwOnNull) {}
+  explicit MapFromEntriesFunction(bool throwOnNull)
+      : throwOnNull_(throwOnNull) {}
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
