@@ -350,7 +350,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {    \
       auto reporter = folly::Singleton<                        \
           facebook::velox::BaseStatsReporter>::try_get_fast(); \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                 \
+      if (reporter != nullptr) [[likely]] {                 \
         reporter->registerMetricExportType((key), (type));     \
       }                                                        \
     }                                                          \
@@ -361,7 +361,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {    \
       auto reporter = folly::Singleton<                        \
           facebook::velox::BaseStatsReporter>::try_get_fast(); \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                 \
+      if (reporter != nullptr) [[likely]] {                 \
         reporter->addMetricValue((key), ##__VA_ARGS__);        \
       }                                                        \
     }                                                          \
@@ -372,7 +372,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {    \
       auto reporter = folly::Singleton<                        \
           facebook::velox::BaseStatsReporter>::try_get_fast(); \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                 \
+      if (reporter != nullptr) [[likely]] {                 \
         reporter->registerHistogramMetricExportType(           \
             (key),                                             \
             (bucket),                                          \
@@ -388,7 +388,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {      \
       auto reporter = folly::Singleton<                          \
           facebook::velox::BaseStatsReporter>::try_get_fast();   \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                   \
+      if (reporter != nullptr) [[likely]] {                   \
         reporter->addHistogramMetricValue((key), ##__VA_ARGS__); \
       }                                                          \
     }                                                            \
@@ -399,7 +399,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {               \
       auto reporter = folly::Singleton<                                   \
           facebook::velox::BaseStatsReporter>::try_get_fast();            \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                            \
+      if (reporter != nullptr) [[likely]] {                            \
         reporter->registerQuantileMetricExportType(                       \
             (key), (statTypes), (percentiles), (slidingWindows));         \
       }                                                                   \
@@ -411,7 +411,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {     \
       auto reporter = folly::Singleton<                         \
           facebook::velox::BaseStatsReporter>::try_get_fast();  \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                  \
+      if (reporter != nullptr) [[likely]] {                  \
         reporter->addQuantileMetricValue((key), ##__VA_ARGS__); \
       }                                                         \
     }                                                           \
@@ -423,7 +423,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {              \
       auto reporter = folly::Singleton<                                  \
           facebook::velox::BaseStatsReporter>::try_get_fast();           \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                           \
+      if (reporter != nullptr) [[likely]] {                           \
         reporter->registerDynamicQuantileMetricExportType(               \
             (keyPattern), (statTypes), (percentiles), (slidingWindows)); \
       }                                                                  \
@@ -435,7 +435,7 @@ subkeys(Args&&...) -> subkeys<sizeof...(Args)>;
     if (::facebook::velox::BaseStatsReporter::registered) {          \
       auto reporter = folly::Singleton<                              \
           facebook::velox::BaseStatsReporter>::try_get_fast();       \
-      if (FOLLY_LIKELY(reporter != nullptr)) {                       \
+      if (reporter != nullptr) [[likely]] {                       \
         reporter->addDynamicQuantileMetricValue(                     \
             (keyPattern), (subkeys), ##__VA_ARGS__);                 \
       }                                                              \
