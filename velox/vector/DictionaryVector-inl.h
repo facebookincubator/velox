@@ -103,7 +103,8 @@ bool DictionaryVector<T>::isNullAt(vector_size_t idx) const {
 }
 
 template <typename T>
-SimpleVector<T>::ValueAtType DictionaryVector<T>::valueAtFast(vector_size_t idx) const {
+SimpleVector<T>::TValueAt DictionaryVector<T>::valueAtFast(
+    vector_size_t idx) const {
   VELOX_DCHECK(initialized_);
   if (rawDictionaryValues_) {
     return rawDictionaryValues_[getDictionaryIndex(idx)];
@@ -112,7 +113,8 @@ SimpleVector<T>::ValueAtType DictionaryVector<T>::valueAtFast(vector_size_t idx)
 }
 
 template <>
-inline SimpleVector<bool>::ValueAtType DictionaryVector<bool>::valueAtFast(vector_size_t idx) const {
+inline SimpleVector<bool>::TValueAt DictionaryVector<bool>::valueAtFast(
+    vector_size_t idx) const {
   VELOX_DCHECK(initialized_);
   auto innerIndex = getDictionaryIndex(idx);
   return scalarDictionaryValues_->valueAt(innerIndex);

@@ -109,9 +109,9 @@ class FlatVector final : public SimpleVector<T> {
 
   virtual ~FlatVector() override = default;
 
-  SimpleVector<T>::ValueAtType valueAtFast(vector_size_t idx) const;
+  SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
-  SimpleVector<T>::ValueAtType valueAt(vector_size_t idx) const override {
+  SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
   }
 
@@ -619,7 +619,7 @@ class FlatVector final : public SimpleVector<T> {
 };
 
 template <>
-SimpleVector<bool>::ValueAtType FlatVector<bool>::valueAtFast(
+SimpleVector<bool>::TValueAt FlatVector<bool>::valueAtFast(
     vector_size_t idx) const;
 
 template <>
