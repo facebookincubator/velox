@@ -17,8 +17,10 @@ add_executable(
   ArrayRemoveNullsTest.cpp
   CheckNestedNullsTest.cpp
   DateTimeFormatterTest.cpp
+  HllAccumulatorTest.cpp
   IsNullTest.cpp
   IsNotNullTest.cpp
+  KHyperLogLogTest.cpp
   KllSketchTest.cpp
   LambdaFunctionUtilTest.cpp
   MakeRowFromMapTest.cpp
@@ -26,6 +28,7 @@ add_executable(
   QuantileDigestTest.cpp
   Re2FunctionsTest.cpp
   RepeatTest.cpp
+  SetDigestTest.cpp
   TDigestTest.cpp
   TimeUtilsTest.cpp
   Utf8Test.cpp

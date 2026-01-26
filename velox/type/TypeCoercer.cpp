@@ -39,7 +39,7 @@ allowedCoercions() {
     for (const auto& toType : to) {
       coercions.emplace(
           std::make_pair<std::string, std::string>(
-              from->kindName(), toType->kindName()),
+              from->name(), toType->name()),
           Coercion{.type = toType, .cost = ++cost});
     }
   };
@@ -49,6 +49,7 @@ allowedCoercions() {
   add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
+  add(DATE(), {TIMESTAMP()});
 
   return coercions;
 }

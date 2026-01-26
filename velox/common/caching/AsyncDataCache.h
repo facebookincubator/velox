@@ -703,14 +703,18 @@ class CacheShard {
 
 class AsyncDataCache : public memory::Cache {
  public:
+  static constexpr int32_t kDefaultNumShards = 4;
+
   struct Options {
     Options(
         double _maxWriteRatio = 0.7,
         double _ssdSavableRatio = 0.125,
-        int32_t _minSsdSavableBytes = 1 << 24)
+        int32_t _minSsdSavableBytes = 1 << 24,
+        int32_t _numShards = kDefaultNumShards)
         : maxWriteRatio(_maxWriteRatio),
           ssdSavableRatio(_ssdSavableRatio),
-          minSsdSavableBytes(_minSsdSavableBytes) {}
+          minSsdSavableBytes(_minSsdSavableBytes),
+          numShards(_numShards) {}
 
     /// The max ratio of the number of in-memory cache entries being written to
     /// SSD cache over the total number of cache entries. This is to control SSD
@@ -729,6 +733,11 @@ class AsyncDataCache : public memory::Cache {
     /// NOTE: we only write to SSD cache when both above conditions satisfy. The
     /// default is 16MB.
     int32_t minSsdSavableBytes;
+
+    /// The number of shards for the cache. The cache population is divided into
+    /// shards to decrease contention on the mutex for the key to entry mapping
+    /// and other housekeeping. Must be a power of 2.
+    int32_t numShards;
   };
 
   AsyncDataCache(
@@ -882,12 +891,6 @@ class AsyncDataCache : public memory::Cache {
   void clear();
 
  private:
-  // Must be power of 2.
-  static constexpr int32_t kNumShards = 4;
-  static constexpr int32_t kShardMask = kNumShards - 1;
-
-  static_assert((kNumShards & kShardMask) == 0);
-
   // True if 'acquired' has more pages than 'numPages' or allocator has space
   // for numPages - acquired pages of more allocation.
   bool canTryAllocate(
@@ -900,6 +903,10 @@ class AsyncDataCache : public memory::Cache {
   void backoff(int32_t counter);
 
   const Options opts_;
+  // Number of shards. Must be a power of 2.
+  const int32_t numShards_;
+  // Bitmask for efficient shard index calculation (numShards_ - 1).
+  const int32_t shardMask_;
   memory::MemoryAllocator* const allocator_;
   std::unique_ptr<SsdCache> ssdCache_;
   std::vector<std::unique_ptr<CacheShard>> shards_;

@@ -50,6 +50,13 @@ TEST(TypeCoercerTest, basic) {
   testNoCoercion(ARRAY(TINYINT()), MAP(INTEGER(), REAL()));
 }
 
+TEST(TypeCoercerTest, date) {
+  testCoercion(DATE(), DATE());
+  testCoercion(DATE(), TIMESTAMP());
+
+  testNoCoercion(DATE(), BIGINT());
+}
+
 TEST(TypeCoercerTest, unknown) {
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BOOLEAN()));
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BIGINT()));

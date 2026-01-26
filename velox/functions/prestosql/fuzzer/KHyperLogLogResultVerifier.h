@@ -15,12 +15,12 @@
  */
 #pragma once
 
-#include "velox/common/hyperloglog/KHyperLogLog.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/ResultVerifier.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 
 namespace facebook::velox::exec::test {
 

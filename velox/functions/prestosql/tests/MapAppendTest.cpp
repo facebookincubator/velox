@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::test;
 
@@ -363,4 +364,168 @@ TEST_F(MapAppendTest, preserveMapOrder) {
 }
 
 } // namespace
+
+class MapAppendFuzzerTest : public test::FunctionBaseTest {
+ protected:
+  static SelectivityVector getNonNullRows(const RowVectorPtr& data) {
+    SelectivityVector nonNullRows(data->size());
+    for (vector_size_t i = 0; i < data->size(); ++i) {
+      bool hasNull = false;
+      for (vector_size_t j = 0; j < data->childrenSize(); ++j) {
+        if (data->childAt(j)->isNullAt(i)) {
+          hasNull = true;
+          break;
+        }
+      }
+      if (hasNull) {
+        nonNullRows.setValid(i, false);
+      }
+    }
+    nonNullRows.updateBounds();
+    return nonNullRows;
+  }
+
+  void testMapAppendProperties(const RowVectorPtr& data) {
+    auto nonNullRows = getNonNullRows(data);
+    if (nonNullRows.countSelected() == 0) {
+      return;
+    }
+
+    VectorPtr result;
+    try {
+      result = evaluate("try(map_append(c0, c1, c2))", data);
+    } catch (...) {
+      return;
+    }
+
+    if (!result) {
+      return;
+    }
+
+    auto inputMap = data->childAt(0);
+    auto inputMapVector = inputMap->as<MapVector>();
+    if (!inputMapVector) {
+      return;
+    }
+
+    for (auto i = 0; i < data->size(); ++i) {
+      if (!nonNullRows.isValid(i) || result->isNullAt(i)) {
+        continue;
+      }
+
+      if (inputMap->isNullAt(i)) {
+        continue;
+      }
+
+      auto resultMap = result->as<MapVector>();
+      if (!resultMap) {
+        continue;
+      }
+
+      auto origSize = inputMapVector->sizeAt(i);
+      auto resultSize = resultMap->sizeAt(i);
+      ASSERT_GE(resultSize, origSize)
+          << "Result map should be at least as large as input map at row " << i;
+    }
+  }
+};
+
+TEST_F(MapAppendFuzzerTest, fuzzInteger) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.1;
+  opts.containerLength = 5;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
+  auto keys = fuzzer.fuzz(ARRAY(INTEGER()));
+  auto values = fuzzer.fuzz(ARRAY(INTEGER()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzBigint) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.1;
+  opts.containerLength = 5;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(BIGINT(), BIGINT()));
+  auto keys = fuzzer.fuzz(ARRAY(BIGINT()));
+  auto values = fuzzer.fuzz(ARRAY(BIGINT()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzVarchar) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.1;
+  opts.containerLength = 5;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(VARCHAR(), VARCHAR()));
+  auto keys = fuzzer.fuzz(ARRAY(VARCHAR()));
+  auto values = fuzzer.fuzz(ARRAY(VARCHAR()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzDouble) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.1;
+  opts.containerLength = 5;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(DOUBLE(), DOUBLE()));
+  auto keys = fuzzer.fuzz(ARRAY(DOUBLE()));
+  auto values = fuzzer.fuzz(ARRAY(DOUBLE()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzHighNullRatio) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.5;
+  opts.containerLength = 5;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
+  auto keys = fuzzer.fuzz(ARRAY(INTEGER()));
+  auto values = fuzzer.fuzz(ARRAY(INTEGER()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzSmallint) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.1;
+  opts.containerLength = 5;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(SMALLINT(), SMALLINT()));
+  auto keys = fuzzer.fuzz(ARRAY(SMALLINT()));
+  auto values = fuzzer.fuzz(ARRAY(SMALLINT()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzLargeVectors) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 200;
+  opts.nullRatio = 0.1;
+  opts.containerLength = 3;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
+  auto keys = fuzzer.fuzz(ARRAY(INTEGER()));
+  auto values = fuzzer.fuzz(ARRAY(INTEGER()));
+  auto data = makeRowVector({inputMap, keys, values});
+  testMapAppendProperties(data);
+}
+
 } // namespace facebook::velox::functions
