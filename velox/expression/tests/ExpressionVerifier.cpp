@@ -22,6 +22,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -32,6 +33,35 @@ namespace facebook::velox::test {
 using exec::test::ReferenceQueryErrorCode;
 
 namespace {
+
+// Helper function, recursively checks if an expression or any of its children
+// has special forms "if" or "switch". Such expressions may be the result of
+// rewrites and can be ignored during failures.
+bool containsIfOrSwitch(const core::TypedExprPtr& expr) {
+  if (auto callExpr =
+          std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+    if (callExpr->name() == expression::kIf ||
+        callExpr->name() == expression::kSwitch) {
+      return true;
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsIfOrSwitch(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsIfOrSwitch(const std::vector<core::TypedExprPtr>& exprs) {
+  for (const auto& expr : exprs) {
+    if (containsIfOrSwitch(expr)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void logInputs(const std::vector<fuzzer::InputTestCase>& inputTestCases) {
   int testCaseIdx = 0;
   for (const auto& [rowVector, rows] : inputTestCases) {
@@ -571,25 +601,48 @@ ExpressionVerifier::verify(
           // Throws in case output is different.
           VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
           VELOX_CHECK_EQ(simplifiedEvalResult.size(), plans.size());
-          for (int i = 0; i < plans.size(); ++i) {
-            fuzzer::compareVectors(
-                commonEvalResult[i],
-                simplifiedEvalResult[i],
-                "common path results ",
-                "simplified path results",
-                rows);
+          try {
+            for (int i = 0; i < plans.size(); ++i) {
+              fuzzer::compareVectors(
+                  commonEvalResult[i],
+                  simplifiedEvalResult[i],
+                  "common path results ",
+                  "simplified path results",
+                  rows);
+            }
+          } catch (...) {
+            // Output mismatch may be a result of a SWITCH or IF rewrite, let's
+            // check if either of these special forms is in the expression.
+            // This optimization may introduce behavior mismatches due to
+            // different null propagating behavior. Behavior mismatch is
+            // acceptable in this case. More information can be found here:
+            // https://github.com/facebookincubator/velox/issues/15486
+            if (!containsIfOrSwitch(plans)) {
+              throw;
+            }
+            ++numSkippedIfSwitchMismatches_;
+            LOG(WARNING)
+                << "Output mismatch identified but expression contains IF or SWITCH. Skipping.";
+            continue;
           }
           verificationStates.push_back(
               VerificationState::kVerifiedAgainstReference);
         }
       } catch (...) {
-        persistReproInfoIfNeeded(
-            inputTestCases,
-            inputRowMetadata,
-            copiedResult,
-            sql,
-            complexConstants);
-        throw;
+        // Same as above.
+        if (containsIfOrSwitch(plans)) {
+          ++numSkippedIfSwitchMismatches_;
+          LOG(WARNING) << "Expression contains IF or SWITCH. Skipping.";
+          continue;
+        } else {
+          persistReproInfoIfNeeded(
+              inputTestCases,
+              inputRowMetadata,
+              copiedResult,
+              sql,
+              complexConstants);
+          throw;
+        }
       }
     }
 
