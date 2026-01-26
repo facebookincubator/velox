@@ -147,7 +147,9 @@ class SimpleVector : public BaseVector {
   // Concrete Vector types need to implement this themselves.
   // This method does not do bounds checking. When the value is null the return
   // value is technically undefined (currently implemented as default of T)
-  virtual const T valueAt(vector_size_t idx) const = 0;
+  using ValueAtType =
+      std::conditional_t<sizeof(T) <= sizeof(void*), T, const T&>;
+  virtual ValueAtType valueAt(vector_size_t idx) const = 0;
 
   std::optional<int32_t> compare(
       const BaseVector* other,

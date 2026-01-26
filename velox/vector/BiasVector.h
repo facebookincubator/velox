@@ -118,9 +118,9 @@ class BiasVector : public SimpleVector<T> {
     return BaseVector::isNullAt(idx);
   }
 
-  const T valueAtFast(vector_size_t idx) const;
+  SimpleVector<T>::ValueAtType valueAtFast(vector_size_t idx) const;
 
-  const T valueAt(vector_size_t idx) const override {
+  SimpleVector<T>::ValueAtType valueAt(vector_size_t idx) const override {
     SimpleVector<T>::checkElementSize();
     return valueAtFast(idx);
   }
