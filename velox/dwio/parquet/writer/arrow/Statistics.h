@@ -227,10 +227,12 @@ class PARQUET_EXPORT Statistics {
   /// \param[in] num_values total number of values
   /// \param[in] null_count number of null values
   /// \param[in] distinct_count number of distinct values
+  /// \param[in] nan_count number of nan values
   /// \param[in] has_min_max whether the min/max statistics are set
   /// \param[in] has_null_count whether the null_count statistics are set
   /// \param[in] has_distinct_count whether the distinct_count statistics are
-  /// set \param[in] pool a memory pool to use for any memory allocations,
+  /// set \param[in] has_nan_count whether the nan_count statistics are set
+  /// \param[in] pool a memory pool to use for any memory allocations,
   /// optional
   static std::shared_ptr<Statistics> Make(
       const ColumnDescriptor* descr,
@@ -239,9 +241,11 @@ class PARQUET_EXPORT Statistics {
       int64_t num_values,
       int64_t null_count,
       int64_t distinct_count,
+      int64_t nan_count,
       bool has_min_max,
       bool has_null_count,
       bool has_distinct_count,
+      bool has_nan_count,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
 
   // Helper function to convert EncodedStatistics to Statistics.
@@ -267,6 +271,12 @@ class PARQUET_EXPORT Statistics {
 
   /// \brief The number of non-null values in the column
   virtual int64_t num_values() const = 0;
+
+  /// \brief Return true if the count of nan values is set
+  virtual bool HasNaNCount() const = 0;
+
+  /// \brief The number of NaN values, may not be set
+  virtual int64_t nan_count() const = 0;
 
   /// \brief Return true if the min and max statistics are set. Obtain
   /// with TypedStatistics<T>::min and max
@@ -369,6 +379,9 @@ class TypedStatistics : public Statistics {
   /// \brief Increments the number of values directly
   /// The same note on IncrementNullCount applies here
   virtual void IncrementNumValues(int64_t n) = 0;
+
+  /// \brief Increments the NaN count directly
+  virtual void IncrementNaNValues(int64_t n) = 0;
 };
 
 using BoolStatistics = TypedStatistics<BooleanType>;
@@ -414,9 +427,11 @@ std::shared_ptr<TypedStatistics<DType>> MakeStatistics(
     int64_t num_values,
     int64_t null_count,
     int64_t distinct_count,
+    int64_t nan_count,
     bool has_min_max,
     bool has_null_count,
     bool has_distinct_count,
+    bool has_nan_count,
     ::arrow::MemoryPool* pool = ::arrow::default_memory_pool()) {
   return std::static_pointer_cast<TypedStatistics<DType>>(Statistics::Make(
       descr,
@@ -425,9 +440,11 @@ std::shared_ptr<TypedStatistics<DType>> MakeStatistics(
       num_values,
       null_count,
       distinct_count,
+      nan_count,
       has_min_max,
       has_null_count,
       has_distinct_count,
+      has_nan_count,
       pool));
 }
 
