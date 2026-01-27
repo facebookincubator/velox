@@ -91,7 +91,6 @@ class AsyncSource {
   std::unique_ptr<Item> move() {
     common::testutil::TestValue::adjust(
         "facebook::velox::AsyncSource::move", this);
-    auto currentState = state();
     std::function<std::unique_ptr<Item>()> itemMaker{nullptr};
     ContinueFuture wait;
     {
@@ -134,7 +133,7 @@ class AsyncSource {
     makeWait(std::move(wait));
 
     std::lock_guard<std::mutex> l(mutex_);
-    currentState = state();
+    const auto currentState = state();
     if (exception_ != nullptr) {
       checkState(currentState, State::kFailed);
       std::rethrow_exception(exception_);
