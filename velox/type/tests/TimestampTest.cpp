@@ -40,23 +40,23 @@ std::string timestampToString(
 TEST(TimestampTest, fromDaysAndNanos) {
   EXPECT_EQ(
       Timestamp(Timestamp::kSecondsInDay + 2, 1),
-      Timestamp::fromDaysAndNanos(
+      Timestamp::fromDaysAndNanos<int64_t>(
           Timestamp::kJulianToUnixEpochDays + 1,
           2 * Timestamp::kNanosInSecond + 1));
   EXPECT_EQ(
       Timestamp(Timestamp::kSecondsInDay + 2, 0),
-      Timestamp::fromDaysAndNanos(
+      Timestamp::fromDaysAndNanos<int64_t>(
           Timestamp::kJulianToUnixEpochDays + 1,
           2 * Timestamp::kNanosInSecond));
   EXPECT_EQ(
       Timestamp(
           Timestamp::kSecondsInDay * 5 - 3, Timestamp::kNanosInSecond - 6),
-      Timestamp::fromDaysAndNanos(
+      Timestamp::fromDaysAndNanos<int64_t>(
           Timestamp::kJulianToUnixEpochDays + 5,
           -2 * Timestamp::kNanosInSecond - 6));
   EXPECT_EQ(
       Timestamp(Timestamp::kSecondsInDay * 5 - 2, 0),
-      Timestamp::fromDaysAndNanos(
+      Timestamp::fromDaysAndNanos<int64_t>(
           Timestamp::kJulianToUnixEpochDays + 5,
           -2 * Timestamp::kNanosInSecond));
 }
