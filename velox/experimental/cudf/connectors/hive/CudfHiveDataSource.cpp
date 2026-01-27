@@ -206,12 +206,30 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 
       // Fetch column chunk byte ranges
       nvtxRangePush("fetchByteRanges");
-      const auto [columnChunkBuffers, columnChunkData, readTaskFuture] =
-          fetchByteRanges(
+
+      // TODO(mh): Using `alternateFetchByteRanges` if buffered input is used
+      // for now. We should only use one of fetch functions
+      const auto [columnChunkBuffers, columnChunkData, readTaskFuture] = [&]() {
+        if (cudfHiveConfig_->useBufferedInputSession(
+                connectorQueryCtx_->sessionProperties())) {
+          auto [columnChunkBuffers, readTaskFuture] = alternateFetchByteRanges(
               dataSource_,
               columnChunkByteRanges,
               stream_,
               cudf::get_current_device_resource_ref());
+          auto deviceSpans = makeDeviceSpans<uint8_t>(columnChunkBuffers);
+          return std::tuple{
+              std::move(columnChunkBuffers),
+              std::move(deviceSpans),
+              std::move(readTaskFuture)};
+        } else {
+          return fetchByteRanges(
+              dataSource_,
+              columnChunkByteRanges,
+              stream_,
+              cudf::get_current_device_resource_ref());
+        }
+      }();
 
       // Wait for all pending reads to complete
       readTaskFuture.wait();
@@ -524,8 +542,9 @@ CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
   if (not pageIndexByteRange.is_empty()) {
     auto const pageIndexBytes = dataSource_->host_read(
         pageIndexByteRange.offset(), pageIndexByteRange.size());
-    exptSplitReader->setup_page_index(cudf::host_span<uint8_t const>{
-        pageIndexBytes->data(), pageIndexBytes->size()});
+    exptSplitReader->setup_page_index(
+        cudf::host_span<uint8_t const>{
+            pageIndexBytes->data(), pageIndexBytes->size()});
   }
 
   return exptSplitReader;

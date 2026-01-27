@@ -202,4 +202,64 @@ fetchByteRanges(
       std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
 }
 
+std::pair<std::vector<rmm::device_buffer>, std::future<void>>
+alternateFetchByteRanges(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  static std::mutex mutex;
+  std::vector<rmm::device_buffer> columnChunkBuffers(byteRanges.size());
+  std::vector<std::future<size_t>> readTasks{};
+  readTasks.reserve(byteRanges.size());
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::transform(
+        byteRanges.begin(),
+        byteRanges.end(),
+        columnChunkBuffers.begin(),
+        [&](const auto& byteRange) {
+          // Pad the buffer size to be a multiple of 8 bytes
+          constexpr size_t bufferPaddingMultiple = 8;
+          auto buffer = rmm::device_buffer(
+              cudf::util::round_up_safe<size_t>(
+                  byteRange.size(), bufferPaddingMultiple),
+              stream,
+              mr);
+          // Directly read the column chunk data to the device buffer if
+          // supported
+          if (dataSource->supports_device_read() and
+              dataSource->is_device_read_preferred(byteRange.size())) {
+            readTasks.emplace_back(dataSource->device_read_async(
+                byteRange.offset(),
+                byteRange.size(),
+                static_cast<uint8_t*>(buffer.data()),
+                stream));
+          } else {
+            // Read the column chunk data to the host buffer and copy it to
+            // the device buffer
+            auto hostBuffer =
+                dataSource->host_read(byteRange.offset(), byteRange.size());
+            CUDF_CUDA_TRY(cudaMemcpyAsync(
+                buffer.data(),
+                hostBuffer->data(),
+                byteRange.size(),
+                cudaMemcpyHostToDevice,
+                stream.value()));
+          }
+          return buffer;
+        });
+  }
+
+  auto syncFunction = [](decltype(readTasks) readTasks) {
+    for (auto& task : readTasks) {
+      task.get();
+    }
+  };
+
+  return {
+      std::move(columnChunkBuffers),
+      std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
+}
+
 } // namespace facebook::velox::cudf_velox::connector::hive
