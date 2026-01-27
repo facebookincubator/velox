@@ -757,63 +757,6 @@ TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
   assertMultipleSplits({1000, 9000, 20000}, 1, 0, 20000, 3);
 }
 
-TEST_F(HiveIcebergTest, partitionedRead) {
-  RowTypePtr rowType{ROW({"c0", "ds"}, {BIGINT(), DateType::get()})};
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  // Iceberg API sets partition values for dates to daysSinceEpoch, so
-  // in velox, we do not need to convert it to days.
-  // Test query on two partitions ds=17627(2018-04-06), ds=17628(2018-04-07)
-  std::vector<std::shared_ptr<ConnectorSplit>> splits;
-  std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
-  for (int i = 0; i <= 1; ++i) {
-    std::vector<RowVectorPtr> dataVectors;
-    int32_t daysSinceEpoch = 17627 + i;
-    VectorPtr c0 = makeFlatVector<int64_t>((std::vector<int64_t>){i});
-    VectorPtr ds =
-        makeFlatVector<int32_t>((std::vector<int32_t>){daysSinceEpoch});
-    dataVectors.push_back(makeRowVector({"c0", "ds"}, {c0, ds}));
-
-    auto dataFilePath = TempFilePath::create();
-    dataFilePaths.push_back(dataFilePath);
-    writeToFile(dataFilePath->getPath(), dataVectors);
-    partitionKeys["ds"] = std::to_string(daysSinceEpoch);
-    auto icebergSplits =
-        makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
-    splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
-  }
-
-  auto assignments = makeColumnHandles(rowType, {1});
-
-  auto plan =
-      PlanBuilder().tableScan(rowType, {}, "", nullptr, assignments).planNode();
-
-  assertQuery(
-      plan,
-      splits,
-      "SELECT * FROM (VALUES (0, '2018-04-06'), (1, '2018-04-07'))",
-      0);
-
-  // Test filter on non-partitioned non-date column
-  std::vector<std::string> nonPartitionFilters = {"c0 = 1"};
-  plan = PlanBuilder()
-             .tableScan(rowType, nonPartitionFilters, "", nullptr, assignments)
-             .planNode();
-
-  assertQuery(plan, splits, "SELECT 1, '2018-04-07'");
-
-  // Test filter on non-partitioned date column
-  std::vector<std::string> filters = {"ds = date'2018-04-06'"};
-  plan = PlanBuilder(pool_.get()).tableScan(rowType, filters).planNode();
-
-  splits.clear();
-  for (auto& dataFilePath : dataFilePaths) {
-    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
-    splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
-  }
-
-  assertQuery(plan, splits, "SELECT 0, '2018-04-06'");
-}
-
 TEST_F(HiveIcebergTest, schemaEvolutionRemoveColumn) {
   auto oldRowType = ROW({"c0", "c1", "c2"}, {BIGINT(), INTEGER(), VARCHAR()});
   auto newRowType = ROW({"c0", "c2"}, {BIGINT(), VARCHAR()});

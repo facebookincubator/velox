@@ -252,3 +252,17 @@ class HiveTableHandle : public ConnectorTableHandle {
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
 
 } // namespace facebook::velox::connector::hive
+
+template <>
+struct fmt::formatter<
+    facebook::velox::connector::hive::HiveColumnHandle::ColumnType>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::connector::hive::HiveColumnHandle::ColumnType type,
+      format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::connector::hive::HiveColumnHandle::columnTypeName(
+            type),
+        ctx);
+  }
+};

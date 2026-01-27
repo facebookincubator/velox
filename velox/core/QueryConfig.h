@@ -819,7 +819,7 @@ class QueryConfig {
   };
 
   bool selectiveNimbleReaderEnabled() const {
-    return get<bool>(kSelectiveNimbleReaderEnabled, false);
+    return get<bool>(kSelectiveNimbleReaderEnabled, true);
   }
 
   RowSizeTrackingMode rowSizeTrackingMode() const {

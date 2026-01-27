@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FuzzerTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox::test;
@@ -343,6 +344,230 @@ TEST_F(MapExceptTest, timestampWithTimeZone) {
       "map_except(c0, c1)",
       makeRowVector({mapsWithRowKeys, lookupWithRowKeys}));
   assertEqualVectors(expectedWithRowKeys, result);
+}
+
+// Custom fuzzer tests to compare map_except with equivalent expression
+// using existing UDFs. The equivalent expression is:
+// map_filter(map, (k, v) -> NOT contains(keys_array, k))
+//
+// Note: We already have explicit tests for NULL handling in MapExceptTest.
+// These fuzzer tests focus on comparing behavior with non-null inputs.
+class MapExceptFuzzerTest : public test::FunctionBaseTest {
+ protected:
+  // Helper to flatten vectors for consistent comparison across encodings
+  template <typename T>
+  static VectorPtr flatten(const std::shared_ptr<T>& vector) {
+    SelectivityVector allRows(vector->size());
+    auto result =
+        BaseVector::create(vector->type(), vector->size(), vector->pool());
+    result->copy(vector.get(), allRows, nullptr);
+    return result;
+  }
+
+  // The equivalent SQL expression for map_except using existing UDFs.
+  // map_except(map, keys_array) is equivalent to:
+  // map_filter(map, (k, v) -> NOT coalesce(contains(keys_array, k), false))
+  //
+  // Note: We use coalesce to handle the case where contains returns null
+  // (when comparing with null elements). map_except ignores null keys in
+  // the exclusion array, so we treat null as "not found" (false).
+  static constexpr const char* kEquivalentExpression =
+      "map_filter(c0, (k, v) -> NOT coalesce(contains(c1, k), false))";
+
+  // Get a SelectivityVector that excludes rows where either input is null.
+  // This is because map_except returns NULL when either input is NULL.
+  static SelectivityVector getNonNullRows(const RowVectorPtr& data) {
+    auto inputMap = data->childAt(0);
+    auto keysArray = data->childAt(1);
+    SelectivityVector nonNullRows(data->size());
+
+    for (vector_size_t i = 0; i < data->size(); ++i) {
+      if (inputMap->isNullAt(i) || keysArray->isNullAt(i)) {
+        nonNullRows.setValid(i, false);
+      }
+    }
+    nonNullRows.updateBounds();
+    return nonNullRows;
+  }
+
+  void testEquivalence(const RowVectorPtr& data) {
+    auto result = evaluate("map_except(c0, c1)", data);
+    auto expected = evaluate(kEquivalentExpression, data);
+
+    // Get rows where neither input is null
+    auto nonNullRows = getNonNullRows(data);
+
+    // Compare only non-null rows (null propagation is tested separately)
+    for (auto i = 0; i < data->size(); ++i) {
+      if (nonNullRows.isValid(i)) {
+        ASSERT_TRUE(expected->equalValueAt(result.get(), i, i))
+            << "Mismatch at row " << i << ": expected " << expected->toString(i)
+            << ", got " << result->toString(i);
+      }
+    }
+  }
+
+  void runFuzzTest(
+      const TypePtr& keyType,
+      const TypePtr& valueType,
+      const test::FuzzerTestOptions& opts) {
+    test::FuzzerTestHelper helper(pool());
+    helper.runMapArrayTest(
+        keyType,
+        valueType,
+        [this](const VectorPtr& inputMap, const VectorPtr& keysArray) {
+          auto data = makeRowVector({inputMap, keysArray});
+          testEquivalence(data);
+        },
+        opts);
+  }
+};
+
+// Fuzz test with flat vectors, no nulls, fixed-size maps
+TEST_F(MapExceptFuzzerTest, fuzzFlatNoNulls) {
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .nullRatio = 0.0,
+       .containerLength = 10,
+       .iterations = 10});
+}
+
+// Fuzz test with nulls in maps and keys array
+TEST_F(MapExceptFuzzerTest, fuzzWithNulls) {
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .containerLength = 10,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
+}
+
+// Fuzz test with dictionary-encoded vectors
+TEST_F(MapExceptFuzzerTest, fuzzDictionaryEncoded) {
+  test::FuzzerTestHelper helper(pool());
+  test::FuzzerTestOptions opts{
+      .vectorSize = 100,
+      .containerLength = 10,
+      .containerHasNulls = true,
+      .containerVariableLength = true};
+  auto fuzzer = helper.createFuzzer(opts);
+
+  for (auto i = 0; i < 10; ++i) {
+    auto baseInputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
+    auto baseKeysArray = fuzzer.fuzz(ARRAY(INTEGER()));
+
+    auto inputMap = fuzzer.fuzzDictionary(baseInputMap, opts.vectorSize);
+    auto keysArray = fuzzer.fuzzDictionary(baseKeysArray, opts.vectorSize);
+
+    auto data = makeRowVector({inputMap, keysArray});
+    auto flatData = makeRowVector({flatten(inputMap), flatten(keysArray)});
+
+    auto result = evaluate("map_except(c0, c1)", data);
+    auto expectedResult = evaluate("map_except(c0, c1)", flatData);
+    assertEqualVectors(expectedResult, result);
+
+    testEquivalence(flatData);
+  }
+}
+
+// Fuzz test with variable-length maps and high null ratio
+TEST_F(MapExceptFuzzerTest, fuzzVariableLengthWithHighNullRatio) {
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .nullRatio = 0.3,
+       .containerLength = 20,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
+}
+
+// Fuzz test with string keys
+TEST_F(MapExceptFuzzerTest, fuzzStringKeys) {
+  runFuzzTest(
+      VARCHAR(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .containerLength = 10,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
+}
+
+// Fuzz test with bigint keys
+TEST_F(MapExceptFuzzerTest, fuzzBigintKeys) {
+  runFuzzTest(
+      BIGINT(),
+      VARCHAR(),
+      {.vectorSize = 100,
+       .containerLength = 10,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
+}
+
+// Fuzz test with empty maps and arrays
+TEST_F(MapExceptFuzzerTest, fuzzWithEmptyContainers) {
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 100,
+       .containerLength = 2,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 10});
+}
+
+// Fuzz test with various value types
+TEST_F(MapExceptFuzzerTest, fuzzVariousValueTypes) {
+  test::FuzzerTestOptions opts{
+      .vectorSize = 100,
+      .containerLength = 10,
+      .containerHasNulls = true,
+      .containerVariableLength = true,
+      .iterations = 5};
+
+  // Test with DOUBLE values
+  runFuzzTest(INTEGER(), DOUBLE(), opts);
+
+  // Test with BOOLEAN values
+  runFuzzTest(INTEGER(), BOOLEAN(), opts);
+
+  // Test with VARCHAR values
+  runFuzzTest(INTEGER(), VARCHAR(), opts);
+}
+
+// Fuzz test with constant vectors
+TEST_F(MapExceptFuzzerTest, fuzzConstantVectors) {
+  test::FuzzerTestHelper helper(pool());
+  test::FuzzerTestOptions opts{
+      .vectorSize = 100, .nullRatio = 0.0, .containerLength = 5};
+  auto fuzzer = helper.createFuzzer(opts);
+
+  for (auto i = 0; i < 10; ++i) {
+    auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
+    auto keysArray = fuzzer.fuzzConstant(ARRAY(INTEGER()), opts.vectorSize);
+
+    auto data = makeRowVector({inputMap, keysArray});
+    testEquivalence(data);
+  }
+}
+
+// Stress test with large vectors
+TEST_F(MapExceptFuzzerTest, fuzzLargeVectors) {
+  runFuzzTest(
+      INTEGER(),
+      INTEGER(),
+      {.vectorSize = 1000,
+       .containerLength = 50,
+       .containerHasNulls = true,
+       .containerVariableLength = true,
+       .iterations = 5});
 }
 
 } // namespace

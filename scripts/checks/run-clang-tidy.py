@@ -47,12 +47,17 @@ def git_changed_lines(commit):
             file = match.group(1)
 
         match = re.match(r"^@@", line)
-        if match and file != "":
+        if match and file != "" and len(fields) >= 3:
             lspan = fields[2].split(",")
             if len(lspan) <= 1:
-                lspan.append(0)
+                lspan.append("0")
 
-            changed_lines[file] = [int(lspan[0]), int(lspan[0]) + int(lspan[1])]
+            start_line = int(lspan[0])
+            line_count = int(lspan[1])
+
+            # Skip invalid line ranges (e.g., +0,0 from deleted files)
+            if start_line > 0 or line_count > 0:
+                changed_lines[file] = [start_line, start_line + line_count]
 
     return changed_lines
 
