@@ -468,8 +468,8 @@ core::AggregationNode::Step getCompanionStep(
     return core::AggregationNode::Step::kPartial;
   }
 
-  // The format is count_merge_extract_BIGINT.
-  if (kind.find("_merge_extract_") != std::string::npos) {
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (kind.find("_merge_extract") != std::string::npos) {
     return core::AggregationNode::Step::kFinal;
   }
 
@@ -484,8 +484,8 @@ std::string getOriginalName(const std::string& kind) {
   if (kind.ends_with("_partial")) {
     return kind.substr(0, kind.size() - std::string("_partial").size());
   }
-  // The format is count_merge_extract_BIGINT.
-  if (auto pos = kind.find("_merge_extract_"); pos != std::string::npos) {
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (auto pos = kind.find("_merge_extract"); pos != std::string::npos) {
     return kind.substr(0, pos);
   }
 
