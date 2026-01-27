@@ -73,6 +73,13 @@ struct Coercion {
 
 class TypeCoercer {
  public:
+  /// Registers a coercion for custom types that cannot be added to the static
+  /// coercion map due to circular dependencies.
+  static void registerCoercion(
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      int32_t cost);
+
   /// Checks if the base of 'fromType' can be implicitly converted to a type
   /// with the given name.
   ///

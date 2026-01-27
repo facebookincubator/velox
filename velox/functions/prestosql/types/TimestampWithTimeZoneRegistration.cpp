@@ -20,6 +20,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
+#include "velox/type/TypeCoercer.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -402,5 +403,7 @@ void registerTimestampWithTimeZoneType() {
   registerCustomType(
       "timestamp with time zone",
       std::make_unique<const TimestampWithTimeZoneTypeFactory>());
+
+  TypeCoercer::registerCoercion(TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE(), 1);
 }
 } // namespace facebook::velox
