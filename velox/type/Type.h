@@ -48,6 +48,10 @@
 
 namespace facebook::velox {
 
+namespace detail {
+class NameToIndex;
+} // namespace detail
+
 using int128_t = __int128_t;
 
 using column_index_t = uint32_t;
@@ -1093,34 +1097,6 @@ class MapType : public TypeBase<TypeKind::MAP> {
 using MapTypePtr = std::shared_ptr<const MapType>;
 
 class RowType : public TypeBase<TypeKind::ROW> {
-  // This Set<NameIndex> written only to decrease memory footprint.
-  // In general it can be replaced with Map<string_view, size_t>
-  struct NameIndex {
-    explicit NameIndex(std::string_view name, uint32_t index)
-        : data{name.data()},
-          size{static_cast<uint32_t>(name.size())},
-          index{index} {}
-
-    const char* data = nullptr;
-    uint32_t size = 0;
-
-    bool operator==(const NameIndex& other) const {
-      return size == other.size && std::memcmp(data, other.data, size) == 0;
-    }
-
-    uint32_t index = 0;
-  };
-
-  struct NameIndexHasher {
-    size_t operator()(const NameIndex& nameIndex) const {
-      folly::f14::DefaultHasher<std::string_view> hasher;
-      return hasher(std::string_view{nameIndex.data, nameIndex.size});
-    }
-  };
-
-  // TODO: Consider using absl::flat_hash_set instead.
-  using NameToIndex = folly::F14ValueSet<NameIndex, NameIndexHasher>;
-
  public:
   /// @param names Child names. Case sensitive. Can be empty. May contain
   /// duplicates.
@@ -1197,7 +1173,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return *ensureParameters();
   }
 
-  const NameToIndex& nameToIndex() const {
+  const detail::NameToIndex& nameToIndex() const {
     const auto* nameToIndex = nameToIndex_.load(std::memory_order_acquire);
     if (nameToIndex) [[likely]] {
       return *nameToIndex;
@@ -1212,12 +1188,12 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
  private:
   const std::vector<TypeParameter>* ensureParameters() const;
-  const NameToIndex* ensureNameToIndex() const;
+  const detail::NameToIndex* ensureNameToIndex() const;
 
   const std::vector<std::string> names_;
   const std::vector<TypePtr> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
-  mutable std::atomic<NameToIndex*> nameToIndex_{nullptr};
+  mutable std::atomic<detail::NameToIndex*> nameToIndex_{nullptr};
   mutable std::atomic_size_t hashKind_{0};
 };
 
