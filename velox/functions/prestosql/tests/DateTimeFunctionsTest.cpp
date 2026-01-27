@@ -6663,6 +6663,37 @@ TEST_F(DateTimeFunctionsTest, localtime) {
   EXPECT_EQ(localVal, 32400000); // 9 AM UTC
 }
 
+TEST_F(DateTimeFunctionsTest, localTimestamp) {
+  const auto localTimestamp = [&](int64_t sessionStartTime,
+                                  const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    auto rowVector = makeRowVector({});
+    rowVector->resize(1);
+
+    auto result = evaluate("localtimestamp()", rowVector);
+    DecodedVector decoded(*result);
+
+    Timestamp ts = decoded.valueAt<Timestamp>(0);
+
+    return ts;
+  };
+  // Without timezone
+  Timestamp tsUtc = localTimestamp(0, std::nullopt);
+
+  EXPECT_EQ(tsUtc.getSeconds(), 0);
+  EXPECT_EQ(tsUtc.getNanos(), 0);
+  // With timezone : America/Los_Angeles
+  Timestamp tsLocal = localTimestamp(1758499200000, "America/Los_Angeles");
+
+  EXPECT_EQ(tsLocal.getSeconds(), 1758499200);
+  EXPECT_EQ(tsLocal.getNanos(), (1758499200000 % 1000) * 1'000'000);
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffTime) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int64_t> time1,
