@@ -155,6 +155,11 @@ class IndexLookupJoin : public Operator {
   void initOutputProjections();
   void initFilter();
 
+  // Collects splits for the index source until no more splits signal is
+  // received. Returns true if all splits have been collected and the index
+  // source is ready. Returns false if we are still waiting for splits.
+  bool collectIndexSplits(ContinueFuture* future);
+
   // Applies the join filter directly on the lookup result, updating the
   // lookup result to only include rows that pass the filter. Returns true if
   // some rows passed the filter, otherwise false.
@@ -245,6 +250,12 @@ class IndexLookupJoin : public Operator {
     return maxNumInputBatches_ > 1;
   }
 
+  // Returns true if the index source needs splits and we haven't received the
+  // no-more-splits signal yet.
+  bool needsIndexSplits() const {
+    return lookupTableHandle_->needsIndexSplit() && !noMoreIndexSplits_;
+  }
+
   // Returns the number of input batches to process.
   size_t numInputBatches() const {
     VELOX_CHECK_LE(startBatchIndex_, endBatchIndex_);
@@ -279,6 +290,8 @@ class IndexLookupJoin : public Operator {
   const size_t numKeys_;
   const RowTypePtr probeType_;
   const RowTypePtr lookupType_;
+  // The plan node id of the lookup source (index source).
+  const core::PlanNodeId indexSourceNodeId_;
   const connector::ConnectorTableHandlePtr lookupTableHandle_;
   const std::vector<core::IndexLookupConditionPtr> joinConditions_;
   const connector::ColumnHandleMap lookupColumnHandles_;
@@ -369,5 +382,15 @@ class IndexLookupJoin : public Operator {
   // The start time of the current lookup driver block wait, and reset after the
   // driver wait completes.
   std::optional<size_t> blockWaitStartNs_;
+
+  // Split collection state for index sources that require splits.
+  // True if we have received the no-more-splits signal for the index source.
+  bool noMoreIndexSplits_{false};
+  // The future to wait for the next index split.
+  ContinueFuture indexSplitFuture_;
+  // The collected splits for the index source. It is passed to index source
+  // after the no-more-splits signal is received (i.e., 'noMoreIndexSplits_' is
+  // true).
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> indexSplits_;
 };
 } // namespace facebook::velox::exec
