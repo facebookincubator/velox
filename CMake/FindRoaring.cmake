@@ -12,12 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Check if target already exists to ensure idempotence
+if(TARGET Roaring::roaring)
+  message(STATUS "Found Roaring target already exists.")
+  return()
+endif()
+
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(Roaring IMPORTED_TARGET roaring)
 
 if(Roaring_FOUND)
-  add_library(Roaring::roaring INTERFACE IMPORTED)
+  add_library(Roaring::roaring INTERFACE IMPORTED GLOBAL)
   set_target_properties(Roaring::roaring PROPERTIES INTERFACE_LINK_LIBRARIES PkgConfig::Roaring)
   message(STATUS "Found Roaring via pkg-config.")
   return()
