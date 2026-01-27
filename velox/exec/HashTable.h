@@ -16,9 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Portability.h"
-#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/exec/OneWayStatusFlag.h"
-#include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
 
@@ -302,7 +300,7 @@ class BaseHashTable {
   /// Same as above, but only return rows from the row container of
   /// 'rowContainerId'.
   virtual int32_t listNotProbedRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -318,7 +316,7 @@ class BaseHashTable {
   /// Same as above, but only return rows from the row container of
   /// 'rowContainerId'.
   virtual int32_t listProbedRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -334,7 +332,7 @@ class BaseHashTable {
   /// Same as above, but only return rows from the row container of
   /// 'rowContainerId'.
   virtual int32_t listAllRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -618,21 +616,21 @@ class HashTable : public BaseHashTable {
       char** rows) override;
 
   int32_t listNotProbedRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
       char** rows) override;
 
   int32_t listProbedRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
       char** rows) override;
 
   int32_t listAllRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -864,7 +862,7 @@ class HashTable : public BaseHashTable {
 
   template <RowContainer::ProbeType probeType>
   int32_t listRows(
-      RowContainerIterator& rowContainerIterator,
+      RowContainerIterator& rowContainerIt,
       int rowContainerId,
       int32_t maxRows,
       uint64_t maxBytes,

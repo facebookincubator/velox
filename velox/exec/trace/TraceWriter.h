@@ -22,6 +22,11 @@ namespace facebook::velox::exec {
 struct Split;
 }
 
+namespace facebook::velox::core {
+class PlanNode;
+class QueryCtx;
+} // namespace facebook::velox::core
+
 namespace facebook::velox::exec::trace {
 
 /// Abstract interface for capturing traced input. Implementations are
@@ -49,6 +54,16 @@ class TraceSplitWriter {
   virtual void write(const exec::Split& split) const = 0;
 
   virtual void finish() = 0;
+};
+
+/// Abstract interface for capturing task metadata.
+class TraceMetadataWriter {
+ public:
+  virtual ~TraceMetadataWriter() = default;
+
+  virtual void write(
+      const core::QueryCtx& queryCtx,
+      const core::PlanNode& planNode) = 0;
 };
 
 } // namespace facebook::velox::exec::trace

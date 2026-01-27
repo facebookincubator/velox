@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <folly/Likely.h>
+#include <cstring>
+
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -49,6 +53,10 @@ struct GetJsonObjectFunction {
       const arg_type<Varchar>& jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
     if (!checkJsonPath(jsonPath)) {
+      return false;
+    }
+    // Check if json has invalid escape sequence.
+    if (hasInvalidEscapedChar(json.data(), json.size())) {
       return false;
     }
     const auto formattedJsonPath =
@@ -275,6 +283,64 @@ struct GetJsonObjectFunction {
       return isValidEndingCharacter(++currentPos);
     }
     return false;
+  }
+
+  // Checks for invalid escape sequences in JSON string.
+  // Note: We only search for '\' which is ASCII (0x5C) and cannot appear
+  // as a continuation byte in valid UTF-8 (continuation bytes are 0x80-0xBF).
+  // So we can safely scan byte-by-byte regardless of encoding.
+  // See the valid escape sequences in Jackson's JSON parser:
+  // https://github.com/FasterXML/jackson-core/blob/jackson-core-2.19.2/src/main/java/com/fasterxml/jackson/core/json/ReaderBasedJsonParser.java#L2648
+  FOLLY_ALWAYS_INLINE bool hasInvalidEscapedChar(
+      const char* json,
+      size_t size) {
+    const char* end = json + size;
+    const char* pos = json;
+
+    while ((pos = static_cast<const char*>(std::memchr(
+                pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
+      const auto remaining = static_cast<size_t>(end - pos);
+      if (FOLLY_UNLIKELY(remaining < 2)) {
+        return false; // Incomplete escape at end, let parser handle it.
+      }
+
+      switch (pos[1]) {
+        case '"':
+          [[fallthrough]];
+        case '\\':
+          [[fallthrough]];
+        case '/':
+          [[fallthrough]];
+        case 'b':
+          [[fallthrough]];
+        case 'f':
+          [[fallthrough]];
+        case 'n':
+          [[fallthrough]];
+        case 'r':
+          [[fallthrough]];
+        case 't':
+          pos += 2;
+          break;
+        case 'u':
+          // Validate \uXXXX.
+          if (FOLLY_UNLIKELY(remaining < 6) || !isHexDigit(pos[2]) ||
+              !isHexDigit(pos[3]) || !isHexDigit(pos[4]) ||
+              !isHexDigit(pos[5])) {
+            return true;
+          }
+          pos += 6;
+          break;
+        default:
+          return true; // Invalid escape character.
+      }
+    }
+    return false;
+  }
+
+  static FOLLY_ALWAYS_INLINE bool isHexDigit(char c) {
+    auto uc = static_cast<unsigned char>(c);
+    return (uc - '0' < 10U) || ((uc | 0x20) - 'a' < 6U);
   }
 
   // Used for constant json path.

@@ -17,8 +17,8 @@
 #pragma once
 
 #include "velox/common/base/Status.h"
-#include "velox/common/hyperloglog/HllAccumulator.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/functions/lib/HllAccumulator.h"
 #include "velox/type/StringView.h"
 
 #include <cstdint>

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/Random.h>
 #include <memory>
 
@@ -48,6 +49,17 @@ struct FilterSpec {
         filterKind(filterKind),
         isForRowGroupSkip(isForRowGroupSkip),
         allowNulls_(allowNulls) {}
+
+  std::string toString() const {
+    return fmt::format(
+        "FilterSpec(field={}, startPct={}, selectPct={}, filterKind={}, isForRowGroupSkip={}, allowNulls={})",
+        field,
+        startPct,
+        selectPct,
+        filterKind,
+        isForRowGroupSkip,
+        allowNulls_);
+  }
 
   std::string field;
   float startPct = 50;

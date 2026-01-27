@@ -1467,15 +1467,14 @@ TEST_F(GeometryFunctionsTest, testStCentroid) {
             "ST_AsText(ST_Centroid(ST_GeometryFromText(c0)))", wkt);
 
         if (wkt.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_TRUE(expected.has_value());
-          ASSERT_EQ(result.value(), expected.value());
+          ASSERT_EQ(result, expected);
         } else {
+          ASSERT_FALSE(expected.has_value());
           ASSERT_FALSE(result.has_value());
         }
       };
 
-  testStCentroidFunc("LINESTRING EMPTY", "POINT EMPTY");
+  testStCentroidFunc("LINESTRING EMPTY", std::nullopt);
   testStCentroidFunc("POINT (3 5)", "POINT (3 5)");
   testStCentroidFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POINT (2.5 5)");
   testStCentroidFunc("LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)");

@@ -96,8 +96,8 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
-const std::optional<trace::TraceConfig>& DriverCtx::traceConfig() const {
-  return task->traceConfig();
+const trace::TraceCtx* DriverCtx::traceCtx() const {
+  return task->traceCtx();
 }
 
 velox::memory::MemoryPool* DriverCtx::addOperatorPool(

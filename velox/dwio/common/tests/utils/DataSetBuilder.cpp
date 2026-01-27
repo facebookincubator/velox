@@ -202,7 +202,7 @@ DataSetBuilder& DataSetBuilder::withStringDistributionForField(
 DataSetBuilder& DataSetBuilder::withUniqueStringsForField(
     const Subfield& field) {
   for (RowVectorPtr batch : *batches_) {
-    auto strings =
+    auto* strings =
         getChildBySubfield(batch.get(), field)->as<FlatVector<StringView>>();
     for (auto row = 0; row < strings->size(); ++row) {
       if (strings->isNullAt(row)) {

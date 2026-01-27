@@ -658,6 +658,24 @@ TEST_F(DateTimeFunctionsTest, weekdayDate) {
   EXPECT_EQ(4, weekday(parseDate("1582-10-15")));
 }
 
+TEST_F(DateTimeFunctionsTest, dayNameDate) {
+  const auto dayName = [&](std::optional<int32_t> date) {
+    return evaluateOnce<std::string>("dayname(c0)", DATE(), date);
+  };
+
+  EXPECT_EQ(std::nullopt, dayName(std::nullopt));
+  EXPECT_EQ("Thu", dayName(0)); // 1970-01-01
+  EXPECT_EQ("Sun", dayName(parseDate("2023-08-20")));
+  EXPECT_EQ("Mon", dayName(parseDate("2023-08-21")));
+  EXPECT_EQ("Tue", dayName(parseDate("2023-08-22")));
+  EXPECT_EQ("Wed", dayName(parseDate("2023-08-23")));
+  EXPECT_EQ("Thu", dayName(parseDate("2023-08-24")));
+  EXPECT_EQ("Fri", dayName(parseDate("2023-08-25")));
+  EXPECT_EQ("Sat", dayName(parseDate("2023-08-26")));
+  EXPECT_EQ(
+      "Fri", dayName(parseDate("1582-10-15"))); // Gregorian calendar start.
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](std::optional<int32_t> endDate,
                             std::optional<int32_t> startDate) {

@@ -127,13 +127,14 @@ HashProbe::HashProbe(
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
       probeType_(joinNode_->sources()[0]->outputType()),
+      canOutputBuildRowsInParallel_(
+          driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled() &&
+          !canSpill()),
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
       filterResult_(1),
-      outputTableRowsCapacity_(outputBatchSize_),
-      parallelJoinBuildRowsEnabled_(
-          driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled()) {
+      outputTableRowsCapacity_(outputBatchSize_) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
 }
 
@@ -1068,7 +1069,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       return nullptr;
     }
 
-    if (needLastProbe() && (outputBuildRowsInParallel_ || lastProber_)) {
+    if (needLastProbe() && (canOutputBuildRowsInParallel_ || lastProber_)) {
       auto output = getBuildSideOutput();
       if (output != nullptr) {
         return output;
@@ -1745,24 +1746,23 @@ void HashProbe::noMoreInputInternal() {
     VELOX_CHECK_EQ(spillStats_->rlock()->spillSortTimeNanos, 0);
   }
 
-  const bool hasSpillEnabled = canSpill();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
 
   // Reset flags about outputing build-side rows in parallel.
   buildSideOutputRowContainerId_ = -1;
-  outputBuildRowsInParallel_ =
-      parallelJoinBuildRowsEnabled_ && needLastProbe() && !hasSpillEnabled;
 
-  // NOTE: if 'hasSpillEnabled' is false and 'outputBuildRowsInParallel_' is
+  // NOTE: if 'canSpill()' is false and 'outputBuildRowsInParallel' is
   // false too, then a hash probe operator doesn't need to wait for all the
-  // other peers to finish probe processing. If 'hasSpillEnabled' is true, it
+  // other peers to finish probe processing. If 'canSpill()' is true, it
   // needs to wait and might expect spill gets triggered by the other probe
   // operators, or there is previously spilled table partition(s) that needs to
-  // restore. If 'outputBuildRowsInParallel_', it needs to wait to all drivers
+  // restore. If 'outputBuildRowsInParallel', it needs to wait to all drivers
   // start outputing build-side rows in parallel only after all drivers finish
   // probe processing.
-  const bool shouldBlock = hasSpillEnabled || outputBuildRowsInParallel_;
+  const bool outputBuildRowsInParallel =
+      canOutputBuildRowsInParallel_ && needLastProbe();
+  const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(),
           operatorCtx_->driver(),
@@ -1782,10 +1782,10 @@ void HashProbe::noMoreInputInternal() {
   VELOX_CHECK(promises.empty());
   lastProber_ = true;
   joinBridge_->resetUnclaimedRowContainerId();
-  // If 'outputBuildRowsInParallel_' is true, wake up all peers to start
+  // If 'outputBuildRowsInParallel' is true, wake up all peers to start
   // outputing build-side rows in parallel. Otherwise, only let the last prober
   // proceed.
-  if (outputBuildRowsInParallel_) {
+  if (outputBuildRowsInParallel) {
     wakeupPeerOperators();
   }
 }
@@ -1832,7 +1832,7 @@ void HashProbe::ensureOutputFits() {
 
   // We only need to reserve memory for output if need.
   bool outputBuildSideRows =
-      outputBuildRowsInParallel_ || (needLastProbe() && lastProber_);
+      needLastProbe() && (canOutputBuildRowsInParallel_ || lastProber_);
   if (input_ == nullptr && (hasMoreInput() || !outputBuildSideRows)) {
     return;
   }

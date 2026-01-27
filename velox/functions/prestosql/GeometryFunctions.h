@@ -589,10 +589,15 @@ template <typename T>
 struct StCentroidFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE Status
-  call(out_type<Geometry>& result, const arg_type<Geometry>& input) {
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& input) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(input);
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
 
     auto validate = facebook::velox::functions::geospatial::validateType(
         *geosGeometry,
@@ -603,19 +608,16 @@ struct StCentroidFunction {
          geos::geom::GeometryTypeId::GEOS_POLYGON,
          geos::geom::GeometryTypeId::GEOS_MULTIPOLYGON},
         "ST_Centroid");
-
-    if (!validate.ok()) {
-      return validate;
-    }
+    VELOX_USER_CHECK(validate.ok(), validate.message());
 
     geos::geom::GeometryTypeId type = geosGeometry->getGeometryTypeId();
     if (type == geos::geom::GeometryTypeId::GEOS_POINT) {
       result = input;
-      return Status::OK();
+      return true;
     }
 
     if (geosGeometry->getNumPoints() == 0) {
-      GEOS_TRY(
+      GEOS_RETHROW(
           {
             geos::geom::GeometryFactory::Ptr factory =
                 geos::geom::GeometryFactory::create();
@@ -624,12 +626,12 @@ struct StCentroidFunction {
             factory->destroyGeometry(point.release());
           },
           "Failed to create point geometry");
-      return Status::OK();
+      return true;
     }
 
     common::geospatial::GeometrySerializer::serialize(
         *(geosGeometry->getCentroid()), result);
-    return Status::OK();
+    return true;
   }
 };
 

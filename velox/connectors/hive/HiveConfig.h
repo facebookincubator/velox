@@ -194,9 +194,6 @@ class HiveConfig {
   static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
       "stats_based_filter_reorder_disabled";
 
-  static constexpr const char* kLocalDataPath = "hive_local_data_path";
-  static constexpr const char* kLocalFileFormat = "hive_local_file_format";
-
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   static constexpr const char* kPreserveFlatMapsInMemory =
@@ -282,15 +279,6 @@ class HiveConfig {
   /// Returns true if the stats based filter reorder for read is disabled.
   bool readStatsBasedFilterReorderDisabled(
       const config::ConfigBase* session) const;
-
-  /// Returns the file system path containing local data. If non-empty,
-  /// initializes LocalHiveConnectorMetadata to provide metadata for the tables
-  /// in the directory.
-  std::string hiveLocalDataPath() const;
-
-  /// Returns the name of the file format to use in interpreting the contents of
-  /// hiveLocalDataPath().
-  std::string hiveLocalFileFormat() const;
 
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.

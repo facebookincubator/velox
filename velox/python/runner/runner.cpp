@@ -35,8 +35,19 @@ PYBIND11_MODULE(runner, m) {
   static auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(
       folly::hardware_concurrency());
 
-  // execute() returns an iterator to Vectors.
+  // TaskIterator iterates over Vectors.
   py::module::import("pyvelox.vector");
+
+  /// Iterator class that exposes vectors being created by a Runner in
+  /// execution.
+  py::class_<velox::py::PyTaskIterator>(m, "TaskIterator")
+      .def("__next__", &velox::py::PyTaskIterator::next)
+      .def("next", &velox::py::PyTaskIterator::next)
+      .def("current", &velox::py::PyTaskIterator::current)
+      .def(
+          "__iter__",
+          &velox::py::PyTaskIterator::iter,
+          py::return_value_policy::reference_internal);
 
   py::class_<velox::py::PyLocalRunner>(m, "LocalRunner")
       // Only expose the plan node through the Python API.
@@ -47,6 +58,8 @@ PYBIND11_MODULE(runner, m) {
           "execute",
           &velox::py::PyLocalRunner::execute,
           py::arg("max_drivers") = 1,
+          // Keep 'self' alive while iterator is used.
+          py::keep_alive<0, 1>(),
           py::doc(R"(
         Executes a given plan returning an iterator to the output produced
         by the root plan node.

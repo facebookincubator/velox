@@ -51,18 +51,4 @@ class DuckSqlExpressionsParser : public SqlExpressionsParser {
   const facebook::velox::duckdb::ParseOptions options_;
 };
 
-/// Legacy APIs kepts for backward compatibility.
-/// TODO Remove after updating callsites in Axiom.
-[[deprecated("Use DuckSqlExpressionsParser instead")]]
-inline core::ExprPtr parseExpr(
-    const std::string& expr,
-    const ParseOptions& options) {
-  return DuckSqlExpressionsParser(options).parseExpr(expr);
-}
-
-[[deprecated("Use DuckSqlExpressionsParser instead")]]
-inline OrderByClause parseOrderByExpr(const std::string& expr) {
-  return DuckSqlExpressionsParser().parseOrderByExpr(expr);
-}
-
 } // namespace facebook::velox::parse

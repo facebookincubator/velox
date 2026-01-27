@@ -175,7 +175,7 @@ void E2EFilterTestBase::readWithFilter(
       if (++clearCnt % 17 == 0) {
         rowReader->resetFilterCaches();
       }
-      auto nextRowNumber = rowReader->nextRowNumber();
+      const auto nextRowNumber = rowReader->nextRowNumber();
       if (nextRowNumber == RowReader::kAtEnd) {
         break;
       }
@@ -295,11 +295,13 @@ void E2EFilterTestBase::testReadWithFilterLazy(
 void E2EFilterTestBase::testFilterSpecs(
     const std::vector<RowVectorPtr>& batches,
     const std::vector<FilterSpec>& filterSpecs) {
+  SCOPED_TRACE(FilterGenerator::specsToString(filterSpecs));
   MutationSpec mutations;
   std::vector<uint64_t> hitRows;
   auto filters = filterGenerator_->makeSubfieldFilters(
       filterSpecs, batches, &mutations, hitRows);
   auto spec = filterGenerator_->makeScanSpec(std::move(filters));
+  SCOPED_TRACE(spec->toString());
   uint64_t timeWithFilter = 0;
   readWithFilter(spec, mutations, batches, hitRows, timeWithFilter, false);
 

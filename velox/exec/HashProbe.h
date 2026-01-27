@@ -378,6 +378,14 @@ class HashProbe : public Operator {
 
   const RowTypePtr probeType_;
 
+  // Flag to indicate whether this hash probe operator can output build-side
+  // rows in parallel with the peer operators for the current hash table.
+  // Outputing build-side rows in parallel is currently not allowed in either of
+  // the following cases:
+  // 1. QueryConfig::kParallelOutputJoinBuildRowsEnabled is false.
+  // 2. Spill is enabled.
+  const bool canOutputBuildRowsInParallel_;
+
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
@@ -728,19 +736,6 @@ class HashProbe : public Operator {
 
   // Input vector used for listing rows with null keys.
   VectorPtr nullKeyProbeInput_;
-
-  // Flag to indicate whether the query config allows hash probe drivers to
-  // output build-side rows in parallel.
-  const bool parallelJoinBuildRowsEnabled_;
-
-  // Flag to indicate whether this hash probe operator is outputing build-side
-  // rows in parallel with the peer operators for the current hash table.
-  // Outputing build-side rows in parallel is not enabled in either of the
-  // following cases:
-  // 1. parallelJoinBuildRowsEnabled_ is false.
-  // 2. This join type does not need build-side rows.
-  // 3. There are more spilled data to restore.
-  bool outputBuildRowsInParallel_{false};
 
   // The index of the row container in the current hash table that this hash
   // probe oprator is processing to output build-side rows.

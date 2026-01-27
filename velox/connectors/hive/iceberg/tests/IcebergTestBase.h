@@ -17,6 +17,9 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"

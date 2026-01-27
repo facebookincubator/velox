@@ -1218,8 +1218,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<TypePtr> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
   mutable std::atomic<NameToIndex*> nameToIndex_{nullptr};
-  mutable std::atomic_bool hashKindComputed_{false};
-  mutable std::atomic_size_t hashKind_;
+  mutable std::atomic_size_t hashKind_{0};
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
@@ -1626,6 +1625,12 @@ class TimeType final : public BigintType {
   // When casting from TIME to varchar , the resultant varchar will always
   // be 12 bytes long (HH:MM:SS.mmm).
   static const size_t kTimeToVarcharRowSize = 12;
+
+  /// Minimum valid time value (milliseconds since midnight): 00:00:00.000
+  static constexpr int64_t kMin = 0;
+
+  /// Maximum valid time value (milliseconds since midnight): 23:59:59.999
+  static constexpr int64_t kMax = kMillisInDay - 1;
 };
 
 using TimeTypePtr = std::shared_ptr<const TimeType>;

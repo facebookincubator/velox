@@ -454,6 +454,19 @@ class RowReaderOptions {
     trackRowSize_ = trackRowSize;
   }
 
+  bool indexEnabled() const {
+    return indexEnabled_;
+  }
+
+  /// Sets whether to use the cluster index for filter-based row pruning.
+  /// When enabled, filters from ScanSpec are converted to index bounds for
+  /// efficient row skipping based on the file's cluster index.
+  ///
+  /// NOTE: currently only supported by Nimble format.
+  void setIndexEnabled(bool enabled) {
+    indexEnabled_ = enabled;
+  }
+
   bool passStringBuffersFromDecoder() const {
     return passStringBuffersFromDecoder_;
   }
@@ -522,7 +535,10 @@ class RowReaderOptions {
 
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
-  bool passStringBuffersFromDecoder_{true};
+  bool indexEnabled_{false};
+  // NOTE: we will control this option with a session property
+  // for prod. Tests are parameterized on both branches.
+  bool passStringBuffersFromDecoder_{false};
 };
 
 /// Options for creating a Reader.

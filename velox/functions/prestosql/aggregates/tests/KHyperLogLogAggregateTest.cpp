@@ -16,7 +16,7 @@
 
 #include <map>
 
-#include "velox/common/hyperloglog/KHyperLogLog.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"

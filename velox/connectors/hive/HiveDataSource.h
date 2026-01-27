@@ -161,6 +161,9 @@ class HiveDataSource : public DataSource {
   std::vector<common::Subfield> remainingFilterSubfields_;
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
+  // Optional post-processors for each output column, collected from
+  // HiveColumnHandle::postProcessor(). Applied after reading and filtering to
+  // transform column values. Indexed by output column position.
   std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
   common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
