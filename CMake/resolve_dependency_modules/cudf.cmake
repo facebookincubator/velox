@@ -23,7 +23,7 @@ set(VELOX_cudf_VERSION 26.04 CACHE STRING "cudf version")
 
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  d94d87d6dadcd7fc4cbde97a8ebe0a54e1d10229db0a00193e9823abed6a7d6d
+  8071f6c020af57b864d237adb3da602bb93f6593c57555d472b7a9ef46eb0498
 )
 set(
   VELOX_cudf_SOURCE_URL
