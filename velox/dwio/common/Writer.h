@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include "velox/dwio/common/DataFileStatistics.h"
+#include "velox/dwio/common/DataFileStatsCollector.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::dwio::common {
@@ -79,6 +81,11 @@ class Writer {
   /// Data can no longer be written.
   virtual void abort() = 0;
 
+  /// Return data file's statistics.
+  std::shared_ptr<DataFileStatistics> dataFileStats() const {
+    return dataFileStats_;
+  };
+
  protected:
   bool isRunning() const;
   bool isFinishing() const;
@@ -92,6 +99,8 @@ class Writer {
   static void checkStateTransition(State oldState, State newState);
 
   State state_{State::kInit};
+  std::shared_ptr<DataFileStatistics> dataFileStats_;
+  std::shared_ptr<DataFileStatsCollector> dataFileStatsCollector_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
