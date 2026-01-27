@@ -15,7 +15,9 @@
 velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
 velox_link_libraries(velox_hive_config velox_core velox_exception)
 
-add_subdirectory(iceberg)
+if(VELOX_ENABLE_PARQUET)
+  add_subdirectory(iceberg)
+endif()
 
 velox_add_library(
   velox_hive_connector
@@ -36,9 +38,12 @@ velox_add_library(
 
 velox_link_libraries(
   velox_hive_connector
-  PUBLIC velox_hive_iceberg_splitreader
   PRIVATE velox_common_io velox_connector velox_dwio_catalog_fbhive velox_hive_partition_function
 )
+
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_connector PUBLIC velox_hive_iceberg_splitreader)
+endif()
 
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
