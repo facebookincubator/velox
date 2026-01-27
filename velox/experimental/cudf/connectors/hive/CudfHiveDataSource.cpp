@@ -47,6 +47,7 @@
 #include <cudf/transform.hpp>
 
 #include <cuda_runtime.h>
+#include <nvtx3/nvtx3.hpp>
 
 #include <filesystem>
 #include <memory>
@@ -204,14 +205,17 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
               rowGroupIndices, readerOptions_);
 
       // Fetch column chunk byte ranges
-      const auto columnChunkBuffers = fetchByteRanges(
-          dataSource_,
-          columnChunkByteRanges,
-          stream_,
-          cudf::get_current_device_resource_ref());
+      nvtxRangePush("fetchByteRanges");
+      const auto [columnChunkBuffers, columnChunkData, readTaskFuture] =
+          fetchByteRanges(
+              dataSource_,
+              columnChunkByteRanges,
+              stream_,
+              cudf::get_current_device_resource_ref());
 
-      // Convert buffers to device spans
-      const auto columnChunkData = makeDeviceSpans<uint8_t>(columnChunkBuffers);
+      // Wait for all pending reads to complete
+      readTaskFuture.wait();
+      nvtxRangePop();
 
       // Read table
       auto tableWithMetadata = exptSplitReader_->materialize_all_columns(
@@ -508,7 +512,9 @@ CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
   stream_ = cudfGlobalStreamPool().get_stream();
 
   // Create a hybrid scan reader
+  nvtxRangePush("fetchFooterBytes");
   auto const footerBytes = fetchFooterBytes(dataSource_);
+  nvtxRangePop();
   auto exptSplitReader = std::make_unique<CudfHybridScanReader>(
       cudf::host_span<uint8_t const>{footerBytes->data(), footerBytes->size()},
       readerOptions_);
@@ -518,9 +524,8 @@ CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
   if (not pageIndexByteRange.is_empty()) {
     auto const pageIndexBytes = dataSource_->host_read(
         pageIndexByteRange.offset(), pageIndexByteRange.size());
-    exptSplitReader->setup_page_index(
-        cudf::host_span<uint8_t const>{
-            pageIndexBytes->data(), pageIndexBytes->size()});
+    exptSplitReader->setup_page_index(cudf::host_span<uint8_t const>{
+        pageIndexBytes->data(), pageIndexBytes->size()});
   }
 
   return exptSplitReader;
