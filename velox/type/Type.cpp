@@ -190,7 +190,7 @@ size_t VarcharEnumParameter::Hash::operator()(
 
 TypePtr Type::create(const folly::dynamic& obj) {
   if (obj.find("ref") != obj.items().end()) {
-    const auto id = obj["ref"].asInt();
+    const auto id = int32_t(obj["ref"].asInt());
     return deserializedTypeCache().get(id);
   }
 
@@ -364,7 +364,7 @@ std::vector<TypeParameter> createTypeParameters(
   std::vector<TypeParameter> parameters;
   parameters.reserve(children.size());
   for (const auto& child : children) {
-    parameters.push_back(TypeParameter(child));
+    parameters.emplace_back(child);
   }
   return parameters;
 }
@@ -540,7 +540,7 @@ bool RowType::equivalent(const Type& other) const {
   if (otherTyped.size() != size()) {
     return false;
   }
-  for (size_t i = 0; i < size(); ++i) {
+  for (uint32_t i = 0; i < size(); ++i) {
     if (!childAt(i)->equivalent(*otherTyped.childAt(i))) {
       return false;
     }
@@ -559,7 +559,7 @@ bool RowType::equals(const Type& other) const {
   if (otherTyped.size() != size()) {
     return false;
   }
-  for (size_t i = 0; i < size(); ++i) {
+  for (uint32_t i = 0; i < size(); ++i) {
     // todo: case sensitivity
     if (nameOf(i) != otherTyped.nameOf(i) ||
         *childAt(i) != *otherTyped.childAt(i)) {
@@ -624,7 +624,7 @@ std::optional<int32_t> SerializedTypeCache::get(const Type& type) const {
 }
 
 int32_t SerializedTypeCache::put(const Type& type, folly::dynamic serialized) {
-  const int32_t id = cache_.size();
+  const int32_t id = int32_t(cache_.size());
 
   std::pair<int32_t, folly::dynamic> value{id, std::move(serialized)};
   const bool ok = cache_.emplace(&type, std::move(value)).second;
@@ -743,7 +743,7 @@ bool Type::kindEquals(const TypePtr& other) const {
   if (this->size() != other->size()) {
     return false;
   }
-  for (size_t i = 0; i < this->size(); ++i) {
+  for (uint32_t i = 0; i < this->size(); ++i) {
     if (!this->childAt(i)->kindEquals(other->childAt(i))) {
       return false;
     }
@@ -942,8 +942,8 @@ void OpaqueType::registerSerializationTypeErased(
       registry.reverse.at(persistentName)->toString());
   registry.mapping[type->typeIndex_] = {
       .persistentName = persistentName,
-      .serialize = serialize,
-      .deserialize = deserialize};
+      .serialize = std::move(serialize),
+      .deserialize = std::move(deserialize)};
   registry.reverse[persistentName] = type;
 }
 
@@ -1309,8 +1309,8 @@ std::string DateType::toString(int32_t days) const {
 std::string DateType::toIso8601(int32_t days) {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
-  int64_t daySeconds = days * (int64_t)(86400);
-  std::tm tmValue;
+  const int64_t daySeconds = days * (int64_t)(86400);
+  std::tm tmValue{};
   VELOX_CHECK(
       Timestamp::epochToCalendarUtc(daySeconds, tmValue),
       "Can't convert days to dates: {}",

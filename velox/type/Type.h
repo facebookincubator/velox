@@ -2214,11 +2214,11 @@ template <>
 struct SimpleTypeTrait<UnknownValue> : public TypeTraits<TypeKind::UNKNOWN> {};
 
 template <TypeKind KIND>
-static inline int32_t sizeOfTypeKindHelper() {
+inline int32_t sizeOfTypeKindHelper() {
   return sizeof(typename TypeTraits<KIND>::NativeType);
 }
 
-static inline int32_t sizeOfTypeKind(TypeKind kind) {
+inline int32_t sizeOfTypeKind(TypeKind kind) {
   if (kind == TypeKind::BOOLEAN) {
     throw std::invalid_argument("sizeOfTypeKind dos not apply to boolean");
   }
@@ -2226,7 +2226,7 @@ static inline int32_t sizeOfTypeKind(TypeKind kind) {
 }
 
 template <typename T, typename U>
-static inline T to(const U& value) {
+inline T to(const U& value) {
   return folly::to<T>(value);
 }
 
