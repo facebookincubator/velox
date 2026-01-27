@@ -153,9 +153,9 @@ TEST_F(FlatMapVectorTest, encodedKeys) {
     EXPECT_EQ(mapValues->valueAt(0), 7);
     EXPECT_EQ(mapValues->valueAt(1), 8);
     EXPECT_EQ(mapValues->valueAt(2), 9);
-    EXPECT_EQ(flatMap->projectKey(1)->as<FlatVector<int32_t>>(), nullptr);
-    EXPECT_EQ(flatMap->projectKey(3)->as<FlatVector<int32_t>>(), nullptr);
-    EXPECT_EQ(flatMap->projectKey(5)->as<FlatVector<int32_t>>(), nullptr);
+    EXPECT_EQ(flatMap->projectKey(1), nullptr);
+    EXPECT_EQ(flatMap->projectKey(3), nullptr);
+    EXPECT_EQ(flatMap->projectKey(5), nullptr);
 
     // Repeated keys
     flatMap = constructFlatMap(
@@ -165,8 +165,7 @@ TEST_F(FlatMapVectorTest, encodedKeys) {
             3,
             makeFlatVector<int32_t>({1, 2, 3})));
 
-    mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
-    EXPECT_EQ(mapValues, nullptr);
+    EXPECT_EQ(flatMap->projectKey(1), nullptr);
     mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
     EXPECT_EQ(mapValues->size(), 3);
     EXPECT_EQ(mapValues->valueAt(0), 7); // Becomes last set vector
@@ -188,10 +187,8 @@ TEST_F(FlatMapVectorTest, encodedKeys) {
     EXPECT_EQ(mapValues->valueAt(0), 7); // Becomes last set vector
     EXPECT_EQ(mapValues->valueAt(1), 8);
     EXPECT_EQ(mapValues->valueAt(2), 9);
-    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
-    EXPECT_EQ(mapValues, nullptr);
-    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
-    EXPECT_EQ(mapValues, nullptr);
+    EXPECT_EQ(flatMap->projectKey(2), nullptr);
+    EXPECT_EQ(flatMap->projectKey(3), nullptr);
   }
 }
 

@@ -17,8 +17,8 @@
 #include "velox/functions/prestosql/types/fuzzer_utils/KHyperLogLogInputGenerator.h"
 
 #include <gtest/gtest.h>
-#include "velox/common/hyperloglog/KHyperLogLog.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
 

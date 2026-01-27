@@ -23,6 +23,7 @@
 #include "folly/synchronization/Baton.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -76,6 +77,28 @@ const std::shared_ptr<const RowType>& getFlatmapSchema() {
      map4:map<int,struct<field1:int,field2:float,field3:string>>,\
      memo:string>"));
   return schema_;
+}
+
+std::vector<common::Subfield> makeSubfields(
+    const std::vector<std::string>& paths) {
+  std::vector<common::Subfield> subfields;
+  subfields.reserve(paths.size());
+  for (auto& path : paths) {
+    subfields.emplace_back(path);
+  }
+  return subfields;
+}
+
+folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+groupSubfields(const std::vector<common::Subfield>& subfields) {
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>> grouped;
+  for (auto& subfield : subfields) {
+    auto& name =
+        static_cast<const common::Subfield::NestedField&>(*subfield.path()[0])
+            .name();
+    grouped[name].push_back(&subfield);
+  }
+  return grouped;
 }
 
 class TestReaderP
@@ -841,6 +864,60 @@ TEST_F(TestReader, testEstimatedSize) {
     auto rowReader = reader->createRowReader(rowReaderOpts);
     ASSERT_EQ(rowReader->estimatedRowSize(), 4);
   }
+}
+
+TEST_F(TestReader, testSubfieldEstimatedSize) {
+  dwio::common::ReaderOptions readerOpts{pool()};
+  std::shared_ptr<const RowType> schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+              a:int,\
+              b:struct<\
+                  a:int,\
+                  b:float,\
+                  c:string>,\
+              c:float>"));
+
+  std::shared_ptr<const RowType> outputType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+              a:int,\
+              b:struct<\
+                  a:int,\
+                  b:float,\
+                  c:string>>"));
+  // estimation with subfield filtering
+  auto subfields = makeSubfields({"a", "b.b"});
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      subfieldsByName = groupSubfields(subfields);
+  auto scanSpec = velox::connector::hive::makeScanSpec(
+      outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
+  readerOpts.setScanSpec(scanSpec);
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
+      readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  ASSERT_EQ(rowReader->estimatedRowSize(), 8);
+
+  // estimation with full struct field selection
+  dwio::common::ReaderOptions readerOpts2{pool()};
+  auto subfields2 = makeSubfields({"a", "b"});
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      subfields2ByName = groupSubfields(subfields2);
+  auto scanSpec2 = velox::connector::hive::makeScanSpec(
+      outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
+  readerOpts2.setScanSpec(scanSpec2);
+
+  auto reader2 = DwrfReader::create(
+      createFileBufferedInput(getStructFile(), readerOpts2.memoryPool()),
+      readerOpts2);
+  RowReaderOptions rowReaderOpts2;
+  rowReaderOpts2.setScanSpec(scanSpec2);
+
+  auto rowReader2 = reader2->createRowReader(rowReaderOpts2);
+  ASSERT_EQ(rowReader2->estimatedRowSize(), 15);
 }
 
 TEST_F(TestReader, testStatsCallbackFiredWithoutFiltering) {

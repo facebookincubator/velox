@@ -18,7 +18,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -179,8 +178,8 @@ class BoolOrAggregate final : public BoolAndOrAggregate {
 };
 
 template <class T>
-exec::AggregateRegistrationResult registerBool(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerBool(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   // TODO Fix signature to match Presto.
@@ -192,14 +191,15 @@ exec::AggregateRegistrationResult registerBool(
           .build()};
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         VELOX_CHECK_EQ(
@@ -217,16 +217,18 @@ exec::AggregateRegistrationResult registerBool(
 
 } // namespace
 
-void registerBoolAggregates(
-    const std::string& prefix,
+void registerBoolAndAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerBool<BoolAndAggregate>(
-      prefix + kBoolAnd, withCompanionFunctions, overwrite);
-  registerBool<BoolAndAggregate>(
-      prefix + kEvery, withCompanionFunctions, overwrite);
-  registerBool<BoolOrAggregate>(
-      prefix + kBoolOr, withCompanionFunctions, overwrite);
+  registerBool<BoolAndAggregate>(names, withCompanionFunctions, overwrite);
+}
+
+void registerBoolOrAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerBool<BoolOrAggregate>(names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

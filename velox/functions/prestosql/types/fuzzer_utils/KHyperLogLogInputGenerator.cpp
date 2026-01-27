@@ -17,7 +17,7 @@
 #include "velox/functions/prestosql/types/fuzzer_utils/KHyperLogLogInputGenerator.h"
 
 #include "velox/common/fuzzer/Utils.h"
-#include "velox/common/hyperloglog/KHyperLogLog.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/type/Variant.h"
 

@@ -162,6 +162,11 @@ class KeyEncoder {
   std::optional<EncodedKeyBounds> encodeIndexBounds(
       const IndexBounds& indexBounds);
 
+  /// Returns the sort orders for each index column.
+  const std::vector<core::SortOrder>& sortOrders() const {
+    return sortOrders_;
+  }
+
  private:
   KeyEncoder(
       std::vector<std::string> keyColumns,

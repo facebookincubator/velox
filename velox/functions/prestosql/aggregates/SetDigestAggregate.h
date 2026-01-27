@@ -17,16 +17,17 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
 void registerMakeSetDigestAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions = true,
     bool overwrite = true);
 
 void registerMergeSetDigestAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions = true,
     bool overwrite = true);
 

@@ -109,11 +109,54 @@ CudfVector::CudfVector(
           size,
           std::vector<VectorPtr>(),
           std::nullopt),
-      table_{std::move(table)},
+      tableStorage_{std::move(table)},
       stream_{stream} {
-  auto [bytes, tableOut] = getTableSize(std::move(table_));
+  auto& tablePtr = std::get<std::unique_ptr<cudf::table>>(tableStorage_);
+  auto [bytes, tableOut] = getTableSize(std::move(tablePtr));
   flatSize_ = bytes;
-  table_ = std::move(tableOut);
+  tablePtr = std::move(tableOut);
+  tabView_ = tablePtr->view();
+}
+
+CudfVector::CudfVector(
+    velox::memory::MemoryPool* pool,
+    TypePtr type,
+    vector_size_t size,
+    std::unique_ptr<cudf::packed_table>&& packedTable,
+    rmm::cuda_stream_view stream)
+    : RowVector(
+          pool,
+          std::move(type),
+          BufferPtr(nullptr),
+          size,
+          std::vector<VectorPtr>(),
+          std::nullopt),
+      tableStorage_{std::move(packedTable)},
+      stream_{stream} {
+  auto& packedPtr =
+      std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
+  tabView_ = packedPtr->table;
+  // For packed table, flatSize is the size of the GPU data buffer
+  flatSize_ = packedPtr->data.gpu_data->size();
+}
+
+std::unique_ptr<cudf::table> CudfVector::release() {
+  flatSize_ = 0;
+  if (auto* tablePtr =
+          std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
+    // Constructed from owned table - just move it out
+    return std::move(*tablePtr);
+  }
+  // Constructed from packed_table - materialize a table from the view.
+  // This copies the data since the view references the packed buffer.
+  auto& packedPtr =
+      std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
+  auto mr = cudf::get_current_device_resource_ref();
+  auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
+  stream_.synchronize();
+  // Clear the packed table since we've materialized
+  packedPtr.reset();
+  return materializedTable;
 }
 
 uint64_t CudfVector::estimateFlatSize() const {

@@ -219,54 +219,54 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> innerJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs left join between probe table and all build tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> leftJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs right join between probe table and all build tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> rightJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs left semi filter join between probe table and all build
    * tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> leftSemiFilterJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs right semi filter join between probe table and all build
    * tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> rightSemiFilterJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs anti join between probe table and all build tables.
-   * @param leftTable Probe-side table to join (moved)
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> antiJoin(
-      std::unique_ptr<cudf::table>&& leftTable,
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Constructs join output table without applying filter conditions.

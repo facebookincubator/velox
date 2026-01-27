@@ -715,6 +715,7 @@ TEST_F(SumAggregationTest, dummySum) {
       std::vector<std::string>{"c0", "c1"},
       std::move(aggregates),
       /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
       std::move(child));
 
   assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");

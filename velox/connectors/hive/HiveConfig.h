@@ -178,6 +178,13 @@ class HiveConfig {
   static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
       "sort_writer_finish_time_slice_limit_ms";
 
+  /// Maximum target file size. When a file exceeds this size during writing,
+  /// the writer will close the current file and start writing to a new file.
+  /// Accepts human-readable values like "1GB". Zero means no limit (default).
+  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
+  static constexpr const char* kMaxTargetFileSizeSession =
+      "max_target_file_size";
+
   // The unit for reading timestamps from files.
   static constexpr const char* kReadTimestampUnit =
       "hive.reader.timestamp-unit";
@@ -193,9 +200,6 @@ class HiveConfig {
       "stats-based-filter-reorder-disabled";
   static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
       "stats_based_filter_reorder_disabled";
-
-  static constexpr const char* kLocalDataPath = "hive_local_data_path";
-  static constexpr const char* kLocalFileFormat = "hive_local_file_format";
 
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
@@ -267,6 +271,8 @@ class HiveConfig {
   uint64_t sortWriterFinishTimeSliceLimitMs(
       const config::ConfigBase* session) const;
 
+  uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
+
   uint64_t footerEstimatedSize() const;
 
   uint64_t filePreloadThreshold() const;
@@ -282,15 +288,6 @@ class HiveConfig {
   /// Returns true if the stats based filter reorder for read is disabled.
   bool readStatsBasedFilterReorderDisabled(
       const config::ConfigBase* session) const;
-
-  /// Returns the file system path containing local data. If non-empty,
-  /// initializes LocalHiveConnectorMetadata to provide metadata for the tables
-  /// in the directory.
-  std::string hiveLocalDataPath() const;
-
-  /// Returns the name of the file format to use in interpreting the contents of
-  /// hiveLocalDataPath().
-  std::string hiveLocalFileFormat() const;
 
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.

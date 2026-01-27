@@ -181,7 +181,7 @@ class ReadFileInputStream final : public InputStream {
   }
 
  private:
-  FileStorageContext fileStorageContext_;
+  FileIoContext fileIoContext_;
   std::shared_ptr<velox::ReadFile> readFile_;
 };
 

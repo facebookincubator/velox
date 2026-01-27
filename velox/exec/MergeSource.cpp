@@ -120,10 +120,10 @@ class LocalMergeSource : public MergeSource {
         ContinueFuture* future,
         ScopedPromiseNotification& notification) {
       VELOX_CHECK(started_);
-      data.reset();
 
       if (data_.empty()) {
         if (atEnd_) {
+          data.reset();
           return BlockingReason::kNotBlocked;
         }
         consumerPromises_.emplace_back("LocalMergeSourceQueue::next");

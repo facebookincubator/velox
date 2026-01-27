@@ -17,11 +17,27 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerVarianceAggregates(
-    const std::string& prefix,
+void registerStdDevSampAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerStdDevPopAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerVarSampAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerVarPopAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);
 } // namespace facebook::velox::aggregate::prestosql

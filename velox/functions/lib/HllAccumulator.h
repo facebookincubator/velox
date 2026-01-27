@@ -192,6 +192,10 @@ struct HllAccumulator {
     if (isSparse_) {
       toDense();
     }
+    VELOX_USER_CHECK_EQ(
+        indexBitLength_,
+        other.indexBitLength(),
+        "Cannot merge HLLs with different number of buckets");
     denseHll_.mergeWith(other);
   }
 

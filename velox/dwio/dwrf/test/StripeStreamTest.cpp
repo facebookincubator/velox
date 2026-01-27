@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
-#include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
@@ -43,8 +43,7 @@ class RecordingInputStream : public facebook::velox::InMemoryReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      const facebook::velox::FileStorageContext& fileStorageContext = {})
-      const override {
+      const facebook::velox::FileIoContext& context = {}) const override {
     reads_.push_back({offset, length});
     return {static_cast<char*>(buf), length};
   }

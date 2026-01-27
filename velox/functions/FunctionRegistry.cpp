@@ -121,6 +121,15 @@ TypePtr resolveFunction(
   return resolveVectorFunction(functionName, argTypes);
 }
 
+namespace {
+bool hasCoercions(const std::vector<TypePtr>& coercions) {
+  return std::any_of(
+      coercions.cbegin(), coercions.cend(), [](const auto& coercion) {
+        return coercion != nullptr;
+      });
+}
+} // namespace
+
 TypePtr resolveFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
@@ -129,6 +138,18 @@ TypePtr resolveFunctionWithCoercions(
   if (auto resolvedFunction =
           exec::simpleFunctions().resolveFunctionWithCoercions(
               functionName, argTypes, coercions)) {
+    if (hasCoercions(coercions)) {
+      // Check if there is a vector function that can be invoked without
+      // coercions.
+      std::vector<TypePtr> alternativeCoersions;
+      auto otherType = exec::resolveVectorFunctionWithCoercions(
+          functionName, argTypes, alternativeCoersions);
+      if (otherType != nullptr && !hasCoercions(alternativeCoersions)) {
+        coercions.clear();
+        return otherType;
+      }
+    }
+
     return resolvedFunction->type();
   }
 

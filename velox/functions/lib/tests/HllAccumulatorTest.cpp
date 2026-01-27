@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/hyperloglog/HllAccumulator.h"
+#include "velox/functions/lib/HllAccumulator.h"
 
 #define XXH_INLINE_ALL
 #include <xxhash.h>

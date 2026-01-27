@@ -986,21 +986,6 @@ void MemoryArbitrationFuzzer::verify() {
             const auto injectedTaskAbortRequest =
                 queryTaskAbortRequestMap.find(queryId)->second;
 
-            // Debug logging to understand the failure
-            if (!injectedSpillFsFault && !injectedTaskAbortRequest) {
-              LOG(ERROR) << "============== VELOX_CHECK failure debug info:";
-              LOG(ERROR) << "  queryId: " << queryId;
-              LOG(ERROR) << "  spillFsTaskSet size: " << spillFsTaskSet.size();
-              LOG(ERROR) << "  spillFsTaskSet contents:";
-              // Iterate through spillFsTaskSet to log contents
-              for (auto it = spillFsTaskSet.cbegin();
-                   it != spillFsTaskSet.cend();
-                   ++it) {
-                LOG(ERROR) << "    key: " << it->first;
-              }
-              LOG(ERROR) << "  error message: " << e.message();
-            }
-
             VELOX_CHECK(
                 injectedSpillFsFault || injectedTaskAbortRequest,
                 "injectedSpillFsFault: {}, injectedTaskAbortRequest: {}, error message: {}",
@@ -1097,12 +1082,7 @@ void MemoryArbitrationFuzzer::go() {
   size_t iteration = 0;
 
   while (!isDone(iteration, startTime)) {
-    LOG(WARNING) << "==============================> Started iteration "
-                 << iteration << " (seed: " << currentSeed_ << ")";
     verify();
-
-    LOG(INFO) << "==============================> Done with iteration "
-              << iteration;
     stats_.rlock()->print();
 
     reSeed();
