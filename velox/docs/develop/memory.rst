@@ -122,7 +122,7 @@ Memory Manager
     :alt: Memory Manager
 
 The memory manager is created on server startup with the provided
-*MemoryManagerOption*. It creates a memory allocator instance to manage the
+*MemoryManager::Options*. It creates a memory allocator instance to manage the
 physical memory allocations for both query memory allocated through memory pool
 and cache memory allocated through the file cache. It ensures the total
 allocated memory is within the system memory limit (specified by

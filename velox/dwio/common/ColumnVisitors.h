@@ -491,7 +491,7 @@ class ColumnVisitor {
 
  protected:
   const TFilter& filter_;
-  SelectiveColumnReader* reader_;
+  SelectiveColumnReader* const reader_;
   const bool allowNulls_;
   const vector_size_t* rows_;
   vector_size_t numRows_;
@@ -1176,7 +1176,7 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::
   }
   auto result = DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>(
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
-  result.numValuesBias_ = numValuesBias_;
+  result.setNumValuesBias(numValuesBias_);
   return result;
 }
 

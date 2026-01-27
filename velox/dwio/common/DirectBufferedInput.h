@@ -71,9 +71,10 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
         pool_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
-        std::is_sorted(requests.begin(), requests.end(), [](auto* x, auto* y) {
-          return x->region.offset < y->region.offset;
-        }));
+        std::is_sorted(
+            requests.cbegin(), requests.cend(), [](auto* x, auto* y) {
+              return x->region.offset < y->region.offset;
+            }));
     requests_.reserve(requests.size());
     for (auto i = 0; i < requests.size(); ++i) {
       requests_.push_back(std::move(*requests[i]));
@@ -208,6 +209,13 @@ class DirectBufferedInput : public BufferedInput {
     VELOX_NYI();
   }
 
+ protected:
+  // Regions that are candidates for loading.
+  std::vector<LoadRequest> requests_;
+
+  // Distinct coalesced loads in 'coalescedLoads_'.
+  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
+
  private:
   /// Constructor used by clone().
   DirectBufferedInput(
@@ -273,17 +281,11 @@ class DirectBufferedInput : public BufferedInput {
   folly::Executor* const executor_;
   const uint64_t fileSize_;
 
-  // Regions that are candidates for loading.
-  std::vector<LoadRequest> requests_;
-
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
-
-  // Distinct coalesced loads in 'coalescedLoads_'.
-  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
 
   io::ReaderOptions options_;
 };

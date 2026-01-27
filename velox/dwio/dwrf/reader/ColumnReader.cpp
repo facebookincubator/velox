@@ -1311,7 +1311,7 @@ void StringDictionaryColumnReader::loadStrideDictionary() {
   if (strideDictCount_ > 0) {
     // seek stride dictionary related streams
     std::vector<uint64_t> pos(
-        positions.begin() + positionOffset_, positions.end());
+        positions.cbegin() + positionOffset_, positions.cend());
     dwio::common::PositionProvider pp(pos);
     strideDictStream_->seekToPosition(pp);
     strideDictLengthDecoder_->seekToRowGroup(pp);

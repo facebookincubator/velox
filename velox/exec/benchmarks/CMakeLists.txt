@@ -72,6 +72,17 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_hash_join_build_benchmark HashJoinBuildBenchmark.cpp)
+
+target_link_libraries(
+  velox_hash_join_build_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 add_executable(velox_hash_join_prepare_join_table_benchmark HashJoinPrepareJoinTableBenchmark.cpp)
 
 target_link_libraries(
@@ -126,6 +137,20 @@ add_executable(velox_window_prefixsort_benchmark WindowPrefixSortBenchmark.cpp)
 
 target_link_libraries(
   velox_window_prefixsort_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_hive_connector
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark
+)
+
+add_executable(velox_window_sub_partitioned_sort_benchmark WindowSubPartitionedSortBenchmark.cpp)
+
+target_link_libraries(
+  velox_window_sub_partitioned_sort_benchmark
   velox_aggregates
   velox_exec
   velox_exec_test_lib

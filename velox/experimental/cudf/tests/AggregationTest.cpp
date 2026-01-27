@@ -422,6 +422,22 @@ TEST_F(AggregationTest, avgPartialFinalGlobal) {
   assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 }
 
+TEST_F(AggregationTest, countStarGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+
+  createDuckDbTable(vectors);
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .filter("c0 > 10")
+                .project({})
+                .partialAggregation({}, {"count(*)"})
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 10");
+}
+
 TEST_F(AggregationTest, countSingleGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);

@@ -17,11 +17,17 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerMinMaxAggregates(
-    const std::string& prefix,
+void registerMinAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+void registerMaxAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);
 } // namespace facebook::velox::aggregate::prestosql

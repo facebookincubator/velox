@@ -35,6 +35,19 @@ class DecimalUtilTest : public testing::Test {
     ASSERT_EQ(overflow, expectedOverflow);
     ASSERT_EQ(r, expectedResult);
   }
+
+  template <bool allowPrecisionLoss>
+  void testComputeDivideResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale,
+      const uint8_t bPrecision,
+      const uint8_t bScale,
+      std::pair<uint8_t, uint8_t> expected) {
+    ASSERT_EQ(
+        DecimalUtil::computeDivideResultPrecisionScale<allowPrecisionLoss>(
+            aPrecision, aScale, bPrecision, bScale),
+        expected);
+  }
 };
 } // namespace
 
@@ -72,4 +85,19 @@ TEST_F(DecimalUtilTest, bounded) {
   testBounded(40, 3, {38, 3});
   testBounded(44, 42, {38, 38});
 }
+
+TEST_F(DecimalUtilTest, computeDivideResultPrecisionScale) {
+  // Test with allowPrecisionLoss = true.
+  testComputeDivideResultPrecisionScale<true>(10, 2, 5, 1, {17, 8});
+  testComputeDivideResultPrecisionScale<true>(38, 10, 10, 5, {38, 6});
+  testComputeDivideResultPrecisionScale<true>(1, 0, 1, 0, {7, 6});
+  testComputeDivideResultPrecisionScale<true>(20, 2, 20, 2, {38, 18});
+
+  // Test with allowPrecisionLoss = false.
+  testComputeDivideResultPrecisionScale<false>(10, 2, 5, 1, {17, 8});
+  testComputeDivideResultPrecisionScale<false>(38, 10, 5, 3, {38, 11});
+  testComputeDivideResultPrecisionScale<false>(1, 0, 1, 0, {7, 6});
+  testComputeDivideResultPrecisionScale<false>(30, 5, 10, 5, {38, 11});
+}
+
 } // namespace facebook::velox::functions::sparksql::test

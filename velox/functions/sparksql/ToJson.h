@@ -192,13 +192,13 @@ inline void toJson<TypeKind::VARCHAR>(
     bool isMapKey) {
   auto value = input.castTo<Varchar>();
   if (!isMapKey) {
-    folly::json::escapeString(value, result, {});
+    folly::json::escapeString(std::string_view(value), result, {});
   } else {
     // toJson<TypeKind::MAP> wraps the key with double quotes.
     // To avoid duplicate quotes, we strip the surrounding quotes after
     // escaping.
     std::string quotedString;
-    folly::json::escapeString(value, quotedString, {});
+    folly::json::escapeString(std::string_view(value), quotedString, {});
     result.append(quotedString.substr(1, quotedString.size() - 2));
   }
 }

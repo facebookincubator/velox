@@ -85,7 +85,7 @@ std::unique_ptr<exec::Aggregate> createMapUnionAggregateWithCustomCompare(
 } // namespace
 
 void registerMapUnionAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -97,16 +97,16 @@ void registerMapUnionAggregate(
           .argumentType("map(K,V)")
           .build()};
 
-  auto name = prefix + kMapUnion;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{}: unexpected number of arguments", name);
 

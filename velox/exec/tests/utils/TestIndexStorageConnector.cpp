@@ -96,7 +96,8 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
   }
 
   // Build the table index.
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable(
+      {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
   return std::make_shared<TestIndexTable>(
       std::move(keyType), std::move(valueType), std::move(table));
 }
@@ -231,6 +232,7 @@ void TestIndexSource::checkNotFailed() {
 std::shared_ptr<connector::IndexSource::LookupResultIterator>
 TestIndexSource::lookup(const LookupRequest& request) {
   checkNotFailed();
+  VELOX_CHECK(!tableHandle_->needsIndexSplit() || !splits_.empty());
   const auto numInputRows = request.input->size();
   auto& hashTable = tableHandle_->indexTable()->table;
   auto lookup = std::make_unique<HashLookup>(hashTable->hashers(), pool_.get());
@@ -342,6 +344,16 @@ TestIndexSource::ResultIterator::ResultIterator(
   lookupResultIter_ = std::make_unique<BaseHashTable::JoinResultIterator>(
       std::vector<vector_size_t>{}, 0, /*estimatedRowSize=*/1);
   lookupResultIter_->reset(*lookupResult_);
+}
+
+bool TestIndexSource::ResultIterator::hasNext() {
+  // If we have an async result ready, we have more to return.
+  if (asyncResult_.has_value()) {
+    return true;
+  }
+
+  // If the iterator is not at end, there are more results to fetch.
+  return !lookupResultIter_->atEnd();
 }
 
 std::optional<std::unique_ptr<connector::IndexSource::LookupResult>>

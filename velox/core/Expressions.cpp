@@ -142,6 +142,12 @@ TypedExprPtr ConstantTypedExpr::create(
   return std::make_shared<ConstantTypedExpr>(restoreVector(dataStream, pool));
 }
 
+// static
+TypedExprPtr ConstantTypedExpr::makeNull(const TypePtr& type) {
+  return std::make_shared<core::ConstantTypedExpr>(
+      type, Variant::null(type->kind()));
+}
+
 std::string ConstantTypedExpr::toString() const {
   if (hasValueVector()) {
     return valueVector_->toString(0);

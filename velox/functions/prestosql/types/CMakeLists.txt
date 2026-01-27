@@ -32,6 +32,7 @@ velox_add_library(
   TDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
   TimeWithTimezoneRegistration.cpp
+  TimeWithTimezoneType.cpp
   SetDigestRegistration.cpp
   UuidRegistration.cpp
   VarcharEnumRegistration.cpp
@@ -54,6 +55,7 @@ velox_link_libraries(
   velox_functions_lib_date_time_formatter
   velox_constrained_input_generators
   velox_presto_types_fuzzer_utils
+  velox_common_hyperloglog
 )
 
 if(${VELOX_BUILD_TESTING})

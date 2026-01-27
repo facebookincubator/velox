@@ -56,8 +56,10 @@ velox_add_library(
   RowConstructor.cpp
   SimpleFunctionRegistry.cpp
   SpecialFormRegistry.cpp
+  CoalesceRewrite.cpp
   ConjunctRewrite.cpp
   SwitchExpr.cpp
+  SwitchRewrite.cpp
   TryExpr.cpp
   VectorFunction.cpp
 )

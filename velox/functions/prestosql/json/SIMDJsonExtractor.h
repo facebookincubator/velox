@@ -82,7 +82,7 @@ class SIMDJsonExtractor {
   /// Use this method to get an instance of SIMDJsonExtractor given a JSON path.
   /// Uses a thread local cache, therefore the caller must ensure the returned
   /// instance is not passed between threads.
-  static SIMDJsonExtractor& getInstance(folly::StringPiece path);
+  static SIMDJsonExtractor& getInstance(std::string_view path);
 
  private:
   // Shouldn't instantiate directly - use getInstance().

@@ -185,16 +185,6 @@ class RowVector : public BaseVector {
 
   void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
-  uint64_t retainedSize() const override {
-    auto size = BaseVector::retainedSize();
-    for (auto& child : children_) {
-      if (child) {
-        size += child->retainedSize();
-      }
-    }
-    return size;
-  }
-
   uint64_t estimateFlatSize() const override;
 
   using BaseVector::toString;
@@ -293,6 +283,16 @@ class RowVector : public BaseVector {
       vector_size_t sourceIndex,
       vector_size_t count,
       vector_size_t childSize);
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    auto size = BaseVector::retainedSizeImpl();
+    for (auto& child : children_) {
+      if (child) {
+        size += child->retainedSize(totalStringBufferSize);
+      }
+    }
+    return size;
+  }
 
   const size_t childrenSize_;
   mutable std::vector<VectorPtr> children_;
@@ -527,11 +527,6 @@ class ArrayVector : public ArrayVectorBase {
 
   void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + offsets_->capacity() +
-        sizes_->capacity() + elements_->retainedSize();
-  }
-
   uint64_t estimateFlatSize() const override;
 
   using BaseVector::toString;
@@ -558,6 +553,11 @@ class ArrayVector : public ArrayVectorBase {
   void validate(const VectorValidateOptions& options) const override;
 
  private:
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return BaseVector::retainedSizeImpl() + offsets_->capacity() +
+        sizes_->capacity() + elements_->retainedSize(totalStringBufferSize);
+  }
+
   VectorPtr elements_;
 };
 
@@ -676,11 +676,6 @@ class MapVector : public ArrayVectorBase {
 
   void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + offsets_->capacity() +
-        sizes_->capacity() + keys_->retainedSize() + values_->retainedSize();
-  }
-
   uint64_t estimateFlatSize() const override;
 
   using BaseVector::toString;
@@ -750,6 +745,12 @@ class MapVector : public ArrayVectorBase {
   template <TypeKind kKeyTypeKind>
   std::shared_ptr<MapVector> updateImpl(
       const folly::Range<DecodedVector*>& others) const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return BaseVector::retainedSizeImpl() + offsets_->capacity() +
+        sizes_->capacity() + keys_->retainedSize(totalStringBufferSize) +
+        values_->retainedSize(totalStringBufferSize);
+  }
 
   VectorPtr keys_;
   VectorPtr values_;

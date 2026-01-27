@@ -21,10 +21,10 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TaskTraceReader.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 #include "velox/tool/trace/TraceReplayTaskRunner.h"
@@ -64,7 +64,7 @@ OperatorReplayerBase::OperatorReplayerBase(
   VELOX_USER_CHECK(!taskId_.empty());
   VELOX_USER_CHECK(!nodeId_.empty());
   VELOX_USER_CHECK(!nodeName_.empty());
-  if (nodeName_ == "HashJoin") {
+  if (nodeName_ == "HashJoin" || nodeName_ == "MergeJoin") {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 2);
   } else {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 1);

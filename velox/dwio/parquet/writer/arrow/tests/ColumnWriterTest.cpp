@@ -226,7 +226,7 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     ASSERT_EQ(this->values_, this->values_out_);
     std::vector<Encoding::type> encodings_vector = this->metadata_encodings();
     std::set<Encoding::type> encodings(
-        encodings_vector.begin(), encodings_vector.end());
+        encodings_vector.cbegin(), encodings_vector.cend());
 
     if (this->type_num() == Type::BOOLEAN) {
       // Dictionary encoding is not allowed for boolean type

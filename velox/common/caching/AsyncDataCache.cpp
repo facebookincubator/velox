@@ -23,7 +23,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
-#include "velox/common/caching/FileIds.h"
 
 #define VELOX_CACHE_ERROR(errorMessage)                             \
   _VELOX_THROW(                                                     \
@@ -492,7 +491,7 @@ void CacheShard::freeAllocations(std::vector<memory::Allocation>& allocations) {
 }
 
 void CacheShard::calibrateThresholdLocked() {
-  auto numSamples = std::min<int32_t>(10, entries_.size());
+  auto numSamples = std::min<int32_t>(kMaxEvictionSamples, entries_.size());
   auto now = accessTime();
   auto entryIndex = (clockHand_ % entries_.size());
   auto step = entries_.size() / numSamples;
@@ -511,22 +510,32 @@ void CacheShard::calibrateThresholdLocked() {
         return score;
       },
       numSamples,
-      80);
+      kEvictionPercentile);
 }
 
 void CacheShard::updateStats(CacheStats& stats) {
   std::lock_guard<std::mutex> l(mutex_);
   for (auto& entry : entries_) {
-    if (!entry || !entry->key_.fileNum.hasValue()) {
+    if (!entry) {
       ++stats.numEmptyEntries;
       continue;
     }
 
     if (entry->isExclusive()) {
-      stats.exclusivePinnedBytes +=
-          entry->data().byteSize() + entry->tinyData_.capacity();
+      // We cannot read data() or tinyData_ which are being allocated during
+      // initialize(). Use size_ as an approximation of the pinned bytes.
+      stats.exclusivePinnedBytes += entry->size_;
       ++stats.numExclusive;
-    } else if (entry->isShared()) {
+      // Skip rest of the field accesses while entry is being initialized.
+      continue;
+    }
+
+    if (!entry->key_.fileNum.hasValue()) {
+      ++stats.numEmptyEntries;
+      continue;
+    }
+
+    if (entry->isShared()) {
       stats.sharedPinnedBytes +=
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numShared;
@@ -670,10 +679,18 @@ AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache)
     : opts_(options),
+      numShards_(opts_.numShards),
+      shardMask_(numShards_ - 1),
       allocator_(allocator),
       ssdCache_(std::move(ssdCache)),
       cachedPages_(0) {
-  for (auto i = 0; i < kNumShards; ++i) {
+  VELOX_CHECK_GT(numShards_, 0, "numShards must be positive");
+  VELOX_CHECK_EQ(
+      numShards_ & shardMask_,
+      0,
+      "numShards must be a power of 2, got {}",
+      numShards_);
+  for (auto i = 0; i < numShards_; ++i) {
     shards_.push_back(std::make_unique<CacheShard>(this, opts_.maxWriteRatio));
   }
 }
@@ -725,17 +742,17 @@ CachePin AsyncDataCache::findOrCreate(
     RawFileCacheKey key,
     uint64_t size,
     folly::SemiFuture<bool>* wait) {
-  const int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->findOrCreate(key, size, wait);
 }
 
 void AsyncDataCache::makeEvictable(RawFileCacheKey key) {
-  const int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->makeEvictable(key);
 }
 
 bool AsyncDataCache::exists(RawFileCacheKey key) const {
-  int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->exists(key);
 }
 
@@ -754,7 +771,7 @@ bool AsyncDataCache::makeSpace(
   // serialize with a mutex because memory arbitration must not be
   // called from inside a global mutex.
 
-  constexpr int32_t kMaxAttempts = kNumShards * 4;
+  const int32_t kMaxAttempts = numShards_ * 4;
   // Evict at least 1MB even for small allocations to avoid constantly hitting
   // the mutex protected evict loop.
   constexpr int32_t kMinEvictPages = 256;
@@ -818,10 +835,10 @@ bool AsyncDataCache::makeSpace(
     // Evict from next shard. If we have gone through all shards once
     // and still have not made the allocation, we go to desperate mode
     // with 'evictAllUnpinned' set to true.
-    shards_[shardCounter_ & (kShardMask)]->evict(
+    shards_[shardCounter_ & shardMask_]->evict(
         memory::AllocationTraits::pageBytes(
             std::max<uint64_t>(kMinEvictPages, numPages) * sizeMultiplier),
-        nthAttempt >= kNumShards,
+        nthAttempt >= numShards_,
         numPagesToAcquire,
         acquired);
     if (numPages < kSmallSizePages && sizeMultiplier < 4) {
@@ -840,15 +857,15 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
   LOG(INFO) << "Try to shrink cache to free up "
             << velox::succinctBytes(targetBytes) << "  memory";
 
-  const uint64_t minBytesToEvict = 8UL << 20;
   uint64_t evictedBytes{0};
   uint64_t shrinkTimeUs{0};
   {
     MicrosecondTimer timer(&shrinkTimeUs);
     for (int shard = 0; shard < shards_.size(); ++shard) {
       memory::Allocation unused;
-      evictedBytes += shards_[shardCounter_++ & (kShardMask)]->evict(
-          std::max<uint64_t>(minBytesToEvict, targetBytes - evictedBytes),
+      evictedBytes += shards_[shardCounter_++ & shardMask_]->evict(
+          std::max<uint64_t>(
+              CacheShard::kMinBytesToEvict, targetBytes - evictedBytes),
           // Cache shrink is triggered when server is under low memory pressure
           // so need to free up memory as soon as possible. So we always avoid
           // triggering ssd save to accelerate the cache evictions.

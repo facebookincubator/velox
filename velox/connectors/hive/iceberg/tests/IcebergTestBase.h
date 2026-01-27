@@ -17,6 +17,9 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -28,6 +31,15 @@
 #endif
 
 namespace facebook::velox::connector::hive::iceberg::test {
+
+extern const std::string kIcebergConnectorId;
+
+struct PartitionField {
+  // 0-based column index.
+  int32_t id;
+  TransformType type;
+  std::optional<int32_t> parameter;
+};
 
 class IcebergTestBase : public exec::test::HiveConnectorTestBase {
  protected:
@@ -41,22 +53,42 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       vector_size_t rowsPerBatch,
       double nullRatio = 0.0);
 
-  std::shared_ptr<IcebergDataSink> createIcebergDataSink(
+  std::shared_ptr<IcebergDataSink> createDataSink(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<std::string>& partitionTransforms = {});
+      const std::vector<PartitionField>& partitionFields = {});
+
+  std::shared_ptr<IcebergDataSink> createDataSinkAndAppendData(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::string& dataPath,
+      const std::vector<PartitionField>& partitionFields = {});
 
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
+      const RowTypePtr& rowType,
+      const std::vector<PartitionField>& partitionFields);
+
+  /// Extracts partition key-value pairs from a file path.
+  /// Returns a map where keys are partition column names and values are
+  /// partition values (std::nullopt for null values).
+  /// Example: "/path/to/c1=10/c2=null/file.parquet" returns
+  /// {{"c1", "10"}, {"c2", std::nullopt}}.
+  static std::unordered_map<std::string, std::optional<std::string>>
+  extractPartitionKeys(const std::string& filePath);
+
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::PARQUET};
+  std::shared_ptr<memory::MemoryPool> opPool_;
+  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
 
  private:
-  IcebergInsertTableHandlePtr createIcebergInsertTableHandle(
+  IcebergInsertTableHandlePtr createInsertTableHandle(
       const RowTypePtr& rowType,
-      const std::string& outputDirectoryPath);
+      const std::string& outputDirectoryPath,
+      const std::vector<PartitionField>& partitionFields = {});
 
   std::vector<std::string> listPartitionDirectories(
       const std::string& dataPath);
@@ -64,13 +96,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   void setupMemoryPools();
 
   std::shared_ptr<memory::MemoryPool> root_;
-  std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;
-  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   VectorFuzzer::Options fuzzerOptions_;
   std::unique_ptr<VectorFuzzer> fuzzer_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg::test

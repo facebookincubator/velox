@@ -55,13 +55,15 @@ class HiveColumnHandle : public ColumnHandle {
       TypePtr dataType,
       TypePtr hiveType,
       std::vector<common::Subfield> requiredSubfields = {},
-      ColumnParseParameters columnParseParameters = {})
+      ColumnParseParameters columnParseParameters = {},
+      std::function<void(VectorPtr&)> postProcessor = {})
       : name_(name),
         columnType_(columnType),
         dataType_(std::move(dataType)),
         hiveType_(std::move(hiveType)),
         requiredSubfields_(std::move(requiredSubfields)),
-        columnParseParameters_(columnParseParameters) {
+        columnParseParameters_(columnParseParameters),
+        postProcessor_(std::move(postProcessor)) {
     VELOX_USER_CHECK(
         dataType_->equivalent(*hiveType_),
         "data type {} and hive type {} do not match",
@@ -112,6 +114,23 @@ class HiveColumnHandle : public ColumnHandle {
         ColumnParseParameters::kDaysSinceEpoch;
   }
 
+  /// Apply some row-wise post processing to this column when it is present in
+  /// output.
+  ///
+  /// It's not allowed to change the size of the vector in the processor.  The
+  /// top level vector is guaranteed to be safe to change.  Any inner vectors
+  /// and buffers need to check the reference count before doing any change in
+  /// place, otherwise you need to allocate new vectors and buffers.
+  ///
+  /// For lazy vector, this will be applied after the lazy vector is loaded.
+  /// This is only applied after all the filtering is done; the filters (both
+  /// subfield filters and remaining filter) still apply to values before post
+  /// processing.  ValueHook usage will be disabled if a post processor is
+  /// present.
+  const std::function<void(VectorPtr&)>& postProcessor() const {
+    return postProcessor_;
+  }
+
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -132,6 +151,7 @@ class HiveColumnHandle : public ColumnHandle {
   const TypePtr hiveType_;
   const std::vector<common::Subfield> requiredSubfields_;
   const ColumnParseParameters columnParseParameters_;
+  const std::function<void(VectorPtr&)> postProcessor_;
 };
 
 using HiveColumnHandlePtr = std::shared_ptr<const HiveColumnHandle>;
@@ -232,3 +252,17 @@ class HiveTableHandle : public ConnectorTableHandle {
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
 
 } // namespace facebook::velox::connector::hive
+
+template <>
+struct fmt::formatter<
+    facebook::velox::connector::hive::HiveColumnHandle::ColumnType>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::connector::hive::HiveColumnHandle::ColumnType type,
+      format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::connector::hive::HiveColumnHandle::columnTypeName(
+            type),
+        ctx);
+  }
+};

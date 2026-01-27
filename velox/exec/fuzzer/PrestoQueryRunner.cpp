@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#include <cpr/cpr.h> // @manual
+#include <curl/curl.h>
 #include <folly/json.h>
 #include <iostream>
+#include <string>
 #include <utility>
 
 #include "velox/common/base/Fs.h"
@@ -38,9 +39,12 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/functions/prestosql/types/parser/TypeParser.h"
@@ -50,6 +54,13 @@ using namespace facebook::velox;
 
 namespace facebook::velox::exec::test {
 namespace {
+
+static size_t
+writeFunction(char* data, size_t size, size_t nmemb, void* userdata) {
+  std::string* response = static_cast<std::string*>(userdata);
+  response->append(data, size * nmemb);
+  return size * nmemb;
+}
 
 void writeToFile(
     const std::string& path,
@@ -313,9 +324,10 @@ bool PrestoQueryRunner::isConstantExprSupported(
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
         !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
-        !isTDigestType(type) && !isQDigestType(type) && !isBingTileType(type) &&
-        !isSfmSketchType(type);
-    ;
+        !isKHyperLogLogType(type) && !isTDigestType(type) &&
+        !isQDigestType(type) && !isSetDigestType(type) &&
+        !isBingTileType(type) && !isSfmSketchType(type) &&
+        !isTimeWithTimeZone(type);
   }
   return true;
 }
@@ -392,9 +404,10 @@ std::string PrestoQueryRunner::createTable(
 
   // Query Presto to find out table's location on disk.
   auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
-
   auto filePath = extractSingleValue<StringView>(results);
-  auto tableDirectoryPath = fs::path(filePath).parent_path();
+
+  // TODO: Remove explicit std::string_view cast.
+  auto tableDirectoryPath = fs::path(std::string_view(filePath)).parent_path();
 
   // Delete the all-null row.
   execute(fmt::format("DELETE FROM {}", name));
@@ -493,38 +506,78 @@ std::vector<RowVectorPtr> PrestoQueryRunner::execute(
 std::string PrestoQueryRunner::startQuery(
     const std::string& sql,
     const std::string& sessionProperty) {
-  auto uri = fmt::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
-  cpr::Url url{uri};
-  cpr::Body body{sql};
-  cpr::Header header(
-      {{"X-Presto-User", user_},
-       {"X-Presto-Catalog", "hive"},
-       {"X-Presto-Schema", "tpch"},
-       {"Content-Type", "text/plain"},
-       {"X-Presto-Session", sessionProperty}});
-  cpr::Timeout timeout{timeout_};
-  cpr::Response response = cpr::Post(url, body, header, timeout);
+  CURL* curl = curl_easy_init();
+  VELOX_CHECK_NOT_NULL(curl, "Failed to initialize libcurl");
+
+  // Prepare curl headers
+  struct curl_slist* headers = nullptr;
+  headers = curl_slist_append(
+      headers, fmt::format("X-Presto-User: {}", user_).c_str());
+  headers = curl_slist_append(headers, "X-Presto-Catalog: hive");
+  headers = curl_slist_append(headers, "X-Presto-Schema: tpch");
+  headers = curl_slist_append(headers, "Content-Type: text/plain");
+  headers = curl_slist_append(
+      headers, fmt::format("X-Presto-Session: {}", sessionProperty).c_str());
+
+  std::string url =
+      fmt::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_POST, 1L);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, sql.c_str());
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, sql.size());
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunction);
+  curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+
+  std::string response;
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+  // Perform the request
+  CURLcode res = curl_easy_perform(curl);
   VELOX_CHECK_EQ(
-      response.status_code,
-      200,
+      CURLE_OK,
+      res,
       "POST to {} failed: {}",
-      uri,
-      response.error.message);
-  return response.text;
+      coordinatorUri_,
+      curl_easy_strerror(res));
+
+  // Cleanup
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+
+  return response;
 }
 
 std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
-  cpr::Url url(nextUri);
-  cpr::Header header({{"X-Presto-Client-Binary-Results", "true"}});
-  cpr::Timeout timeout{timeout_};
-  cpr::Response response = cpr::Get(url, header, timeout);
+  CURL* curl = curl_easy_init();
+  VELOX_CHECK_NOT_NULL(curl, "Failed to initialize libcurl");
+
+  // Set up the request URL
+  curl_easy_setopt(curl, CURLOPT_URL, nextUri.c_str());
+
+  // Set up headers
+  struct curl_slist* headers = nullptr;
+  headers = curl_slist_append(headers, "X-Presto-Client-Binary-Results: true");
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_);
+  curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+
+  // Capture the response body
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunction);
+  std::string response;
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+  // Perform GET request
+  CURLcode res = curl_easy_perform(curl);
   VELOX_CHECK_EQ(
-      response.status_code,
-      200,
-      "GET from {} failed: {}",
-      nextUri,
-      response.error.message);
-  return response.text;
+      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
+
+  // Cleanup
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+
+  return response;
 }
 
 bool PrestoQueryRunner::supportsVeloxVectorResults() const {
@@ -532,3 +585,10 @@ bool PrestoQueryRunner::supportsVeloxVectorResults() const {
 }
 
 } // namespace facebook::velox::exec::test
+
+template <>
+struct fmt::formatter<CURLcode> : formatter<int> {
+  auto format(CURLcode s, format_context& ctx) const {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

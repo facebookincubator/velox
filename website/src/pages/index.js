@@ -239,6 +239,48 @@ function LatestCommunityNews() {
 
           <div className={styles.tileScroll} ref={scrollRef}>
             {/* Each tile is boxed */}
+            <a href="https://veloxcon.io/veloxcon-china/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Event</span>
+  <h3>VeloxCon China 2025</h3>
+  <p>Join us in Beijing on December 13 for our first community event in China.</p>
+  <span className={styles.newsDate}>December 2025</span>
+</a>
+
+<a href="https://velox-lib.io/blog/multi-round-local-merge" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Multi-Round Lazy Start Merge</h3>
+  <p>The latest Velox update introduces a multi-round spill merge with lazy-start activation.</p>
+  <span className={styles.newsDate}>November 2025</span>
+</a>
+
+<a href="https://velox-lib.io/blog/shared-build" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Enabling Shared Library Builds in Velox</h3>
+  <p>Learn how we unblocked shared library builds in Velox.</p>
+  <span className={styles.newsDate}>November 2025</span>
+</a>
+
+<a href="https://velox-lib.io/blog/cpp20-standard" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Velox switches to C++20 standard</h3>
+  <p>Going forward Velox is looking to enhance the codebase by making use of newer compiler functionalities.</p>
+  <span className={styles.newsDate}>August 2025</span>
+</a>
+
+<a href="https://velox-lib.io/blog/extending-velox-with-cudf" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Extending Velox – GPU Acceleration with cuDF</h3>
+  <p>This post describes the design principles and software components for extending Velox with hardware acceleration using NVIDIA's cuDF.</p>
+  <span className={styles.newsDate}>July 2025</span>
+</a>
+
+<a href="https://velox-lib.io/blog/segfault-dependency-update" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>SEGFAULT due to Dependency Update</h3>
+  <p>How upgrading Folly and Facebook Thrift revealed a surprising issue with coroutine compile flags and vtable structures.</p>
+  <span className={styles.newsDate}>July 2025</span>
+</a>
+
             <a href="https://velox-lib.io/blog/velox-primer-part-3" className={styles.newsTile} target="_blank" rel="noopener">
               <span className={styles.newsTag}>Blog</span>
               <h3>Velox Primer: Part 3</h3>

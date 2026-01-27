@@ -290,23 +290,7 @@ class FlatVector final : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
-  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
-    BaseVector::transferOrCopyTo(pool);
-    if (values_ && !values_->transferTo(pool)) {
-      values_ = AlignedBuffer::copy<T>(values_, pool);
-      rawValues_ = const_cast<T*>(values_->as<T>());
-    }
-    for (auto& buffer : stringBuffers_) {
-      if (!buffer->transferTo(pool)) {
-        VELOX_CHECK_NE(
-            stringBufferSet_.erase(buffer.get()),
-            0,
-            "Easure of existing string buffer should always succeed.");
-        buffer = AlignedBuffer::copy<char>(buffer, pool);
-        VELOX_CHECK(stringBufferSet_.insert(buffer.get()).second);
-      }
-    }
-  }
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
@@ -433,21 +417,22 @@ class FlatVector final : public SimpleVector<T> {
     return this->typeKind() != TypeKind::UNKNOWN;
   }
 
-  uint64_t retainedSize() const override {
-    auto size =
-        BaseVector::retainedSize() + (values_ ? values_->capacity() : 0);
-    for (auto& buffer : stringBuffers_) {
-      size += buffer->capacity();
-    }
-    return size;
-  }
-
   /// Used for vectors of type VARCHAR and VARBINARY to hold data referenced
   /// by StringView's. It is safe to share these among multiple vectors. These
   /// buffers are append only. It is allowed to append data, but it is
   /// prohibited to modify already written data.
   const std::vector<BufferPtr>& stringBuffers() const {
     return stringBuffers_;
+  }
+
+  /// Used for vectors of type VARCHAR and VARBINARY. Returns the total size in
+  /// bytes of string buffers held by this vector.
+  uint64_t stringBufferSize() const {
+    uint64_t size = 0;
+    for (const auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+    }
+    return size;
   }
 
   /// Used for vectors of type VARCHAR and VARBINARY to replace the old data
@@ -574,10 +559,11 @@ class FlatVector final : public SimpleVector<T> {
       const vector_size_t* toSourceRow);
 
   // Ensures that the values buffer has space for 'newSize' elements and is
-  // mutable. Sets elements between the old and new sizes to 'initialValue' if
-  // the new size > old size.
+  // mutable. Sets elements between the previous and new sizes to 'initialValue'
+  // if the new size > previous size.
   void resizeValues(
       vector_size_t newSize,
+      vector_size_t previousSize,
       const std::optional<T>& initialValue);
 
   // Check string buffers. Keep at most one singly-referenced buffer if it is
@@ -595,6 +581,21 @@ class FlatVector final : public SimpleVector<T> {
     } else {
       clearStringBuffers();
     }
+  }
+
+  // Transfer or copy string buffers to 'pool'. Update StringViews in values_ to
+  // reference addresses in the new buffers. Non-StringView-typed FlatVector
+  // should not have string buffers.
+  void transferAndUpdateStringBuffers(velox::memory::MemoryPool* pool);
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    auto size =
+        BaseVector::retainedSizeImpl() + (values_ ? values_->capacity() : 0);
+    for (auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+      totalStringBufferSize += buffer->capacity();
+    }
+    return size;
   }
 
   // Contiguous values.

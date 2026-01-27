@@ -16,7 +16,6 @@
 
 #include "velox/exec/fuzzer/VeloxQueryRunner.h"
 
-#include <cpr/cpr.h> // @manual
 #include <fmt/format.h>
 #include <folly/Uri.h>
 #include <folly/json.h>
@@ -82,7 +81,7 @@ std::vector<RowVectorPtr> deserializeBatches(
   for (const auto& batch : resultBatches) {
     VELOX_CHECK(
         apache::thrift::is_non_optional_field_set_manually_or_by_serializer(
-            batch.serializedData_ref()));
+            batch.serializedData()));
     VELOX_CHECK(!batch.serializedData()->empty());
 
     // Deserialize binary data.

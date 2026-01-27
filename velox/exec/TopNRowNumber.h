@@ -166,6 +166,11 @@ class TopNRowNumber : public Operator {
 
   void initializeNewPartitions();
 
+  // Cleans up any newly inserted but uninitialized partitions from the hash
+  // table. This is called when groupProbe throws (e.g., due to OOM) to ensure
+  // close() doesn't crash trying to destroy uninitialized TopRows structures.
+  void cleanupNewPartitions();
+
   TopRows& partitionAt(char* group) {
     return *reinterpret_cast<TopRows*>(group + partitionOffset_);
   }

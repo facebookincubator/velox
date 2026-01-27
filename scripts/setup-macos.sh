@@ -111,11 +111,11 @@ function install_s3 {
 }
 
 function install_gcs {
-  install_gcs-sdk-cpp
+  install_gcs_sdk_cpp
 }
 
 function install_abfs {
-  install_azure-storage-sdk-cpp
+  install_azure_storage_sdk_cpp
 }
 
 function install_hdfs {

@@ -53,7 +53,7 @@ MarkDistinct::MarkDistinct(
 }
 
 void MarkDistinct::addInput(RowVectorPtr input) {
-  groupingSet_->addInput(input, false /*mayPushdown*/);
+  groupingSet_->addInput(input, /*mayPushdown=*/false);
 
   input_ = std::move(input);
 }

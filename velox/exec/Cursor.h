@@ -141,7 +141,7 @@ class TaskQueue {
   std::mutex mutex_;
   std::vector<ContinuePromise> producerUnblockPromises_;
   bool consumerBlocked_ = false;
-  ContinuePromise consumerPromise_;
+  ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
   ContinueFuture consumerFuture_;
   bool closed_ = false;
 };

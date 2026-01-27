@@ -76,13 +76,20 @@ void SortWindowBuild::addInput(RowVectorPtr input) {
 
   // Add all the rows into the RowContainer.
   for (auto row = 0; row < input->size(); ++row) {
-    char* newRow = data_->newRow();
-
-    for (auto col = 0; col < input->childrenSize(); ++col) {
-      data_->store(decodedInputVectors_[col], row, newRow, col);
-    }
+    addDecodedInputRow(decodedInputVectors_, row);
   }
-  numRows_ += input->size();
+}
+
+void SortWindowBuild::addDecodedInputRow(
+    std::vector<DecodedVector>& decodedInputVectors,
+    vector_size_t row) {
+  char* newRow = data_->newRow();
+
+  for (auto col = 0; col < inputChannels_.size(); ++col) {
+    data_->store(decodedInputVectors[col], row, newRow, col);
+  }
+
+  numRows_++;
 }
 
 void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
@@ -284,7 +291,7 @@ void SortWindowBuild::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        spillConfig_->readBufferSize, pool_, spillStats_);
+        *spillConfig_, pool_, spillStats_);
   } else {
     // At this point we have seen all the input rows. The operator is
     // being prepared to output rows now.

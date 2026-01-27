@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -29,19 +30,17 @@
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
-#include "velox/exec/TaskTraceWriter.h"
-#include "velox/exec/TraceUtil.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-
 namespace {
 
 // RAII helper class to satisfy given promises and notify listeners of an event
@@ -116,6 +115,19 @@ std::string errorMessageImpl(const std::exception_ptr& exception) {
   return message;
 }
 
+// Returns the number of source nodes to process for a given plan node.
+// For most nodes, this is the number of sources. For index lookup join,
+// only the first source (probe side) is processed as a source node.
+inline size_t numSourceNodes(const core::PlanNode* planNode) {
+  if (!isIndexLookupJoin(planNode)) {
+    return planNode->sources().size();
+  }
+  const auto* indexNode =
+      checkedPointerCast<const core::IndexLookupJoinNode>(planNode);
+  VELOX_CHECK_EQ(indexNode->sources().size(), 2);
+  return !indexNode->needsIndexSplit() ? 1 : indexNode->sources().size();
+}
+
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
@@ -150,7 +162,7 @@ void buildSplitStates(
   }
 
   const auto& sources = planNode->sources();
-  const auto numSources = isIndexLookupJoin(planNode) ? 1 : sources.size();
+  const auto numSources = numSourceNodes(planNode);
   for (auto i = 0; i < numSources; ++i) {
     buildSplitStates(sources[i].get(), allIds, splitStateMap);
   }
@@ -300,7 +312,7 @@ bool registerSplitListenerFactory(
 bool unregisterSplitListenerFactory(
     const std::shared_ptr<SplitListenerFactory>& factory) {
   return splitListenerFactories().withWLock([&](auto& factories) {
-    for (auto it = factories.begin(); it != factories.end(); ++it) {
+    for (auto it = factories.cbegin(); it != factories.cend(); ++it) {
       if ((*it) == factory) {
         factories.erase(it);
         return true;
@@ -379,7 +391,7 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
-      traceConfig_(maybeMakeTraceConfig()),
+      traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
@@ -1641,7 +1653,7 @@ void Task::addSplitToStoreLocked(
     return;
   }
   auto* queueSplitsStore =
-      checked_pointer_cast<QueueSplitsStore>(splitsStore.get());
+      checkedPointerCast<QueueSplitsStore>(splitsStore.get());
   queueSplitsStore->addSplit(split, promises);
 }
 
@@ -1892,8 +1904,8 @@ void Task::dropInputLocked(
     VELOX_CHECK(!drivers.empty());
     const auto dropNodeId = *dropNodeIds.begin();
     bool foundDriver{false};
-    auto it = drivers.begin();
-    while (it != drivers.end()) {
+    auto it = drivers.cbegin();
+    while (it != drivers.cend()) {
       Driver* driver = *it;
       VELOX_CHECK_NOT_NULL(driver);
       if (auto* dropOp = driver->findOperator(dropNodeId)) {
@@ -2452,9 +2464,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       cancellationSource_.requestCancellation();
     }
 
-    LOG(INFO) << "Terminating task " << taskId() << " with state "
-              << taskStateString(state_) << " after running for "
-              << succinctMillis(timeSinceStartMsLocked());
+    VLOG(1) << "Terminating task " << taskId() << " with state "
+            << taskStateString(state_) << " after running for "
+            << succinctMillis(timeSinceStartMsLocked());
 
     taskCompletionNotifier.activate(
         std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
@@ -3169,7 +3181,7 @@ std::string Task::errorMessage() const {
 }
 
 StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
-  TestValue::adjust("facebook::velox::exec::Task::enter", &state);
+  TestValue::adjust("facebook::velox::exec::Task::enter", this);
   std::lock_guard<std::timed_mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
   state.isEnqueued = false;
@@ -3427,7 +3439,9 @@ void Task::createExchangeClientLocked(
       queryCtx()->queryConfig().minExchangeOutputBatchBytes(),
       addExchangeClientPool(planNodeId, pipelineId),
       queryCtx()->executor(),
-      queryCtx()->queryConfig().requestDataSizesMaxWaitSec());
+      queryCtx()->queryConfig().requestDataSizesMaxWaitSec(),
+      queryCtx()->queryConfig().singleSourceExchangeOptimizationEnabled(),
+      queryCtx()->queryConfig().exchangeLazyFetchingEnabled());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 
@@ -3446,66 +3460,22 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return exchangeClients_[pipelineId];
 }
 
-std::optional<TraceConfig> Task::maybeMakeTraceConfig() const {
-  const auto& queryConfig = queryCtx_->queryConfig();
-  if (!queryConfig.queryTraceEnabled()) {
-    return std::nullopt;
+std::unique_ptr<trace::TraceCtx> Task::maybeMakeTraceCtx() const {
+  if (!queryCtx_->queryConfig().queryTraceEnabled()) {
+    return nullptr;
   }
-
-  VELOX_USER_CHECK(
-      !queryConfig.queryTraceDir().empty(),
-      "Query trace enabled but the trace dir is not set");
-
-  VELOX_USER_CHECK(
-      !queryConfig.queryTraceTaskRegExp().empty(),
-      "Query trace enabled but the trace task regexp is not set");
-
-  if (!RE2::FullMatch(taskId_, queryConfig.queryTraceTaskRegExp())) {
-    return std::nullopt;
-  }
-
-  const auto traceNodeId = queryConfig.queryTraceNodeId();
-  VELOX_USER_CHECK(!traceNodeId.empty(), "Query trace node ID are not set");
-
-  const auto traceDir = trace::getTaskTraceDirectory(
-      queryConfig.queryTraceDir(), queryCtx_->queryId(), taskId_);
-
-  VELOX_USER_CHECK_NOT_NULL(
-      core::PlanNode::findFirstNode(
-          planFragment_.planNode.get(),
-          [traceNodeId](const core::PlanNode* node) -> bool {
-            return node->id() == traceNodeId;
-          }),
-      "Trace plan node ID = {} not found from task {}",
-      traceNodeId,
-      taskId_);
-
-  LOG(INFO) << "Trace input for plan nodes " << traceNodeId << " from task "
-            << taskId_;
-
-  UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB =
-      [this](uint64_t bytes) {
-        queryCtx_->updateTracedBytesAndCheckLimit(bytes);
-      };
-  return TraceConfig(
-      traceNodeId,
-      traceDir,
-      std::move(updateAndCheckTraceLimitCB),
-      queryConfig.queryTraceTaskRegExp(),
-      queryConfig.queryTraceDryRun());
+  // TODO: Make the actual trace implementation pluggable.
+  return trace::OperatorTraceCtx::maybeCreate(
+      *queryCtx_, planFragment(), taskId());
 }
 
 void Task::maybeInitTrace() {
-  if (!traceConfig_) {
+  if (!traceCtx_) {
     return;
   }
 
-  trace::createTraceDirectory(traceConfig_->queryTraceDir);
-  const auto metadataWriter = std::make_unique<trace::TaskTraceMetadataWriter>(
-      traceConfig_->queryTraceDir, memory::traceMemoryPool());
-  auto traceNode =
-      trace::getTraceNode(planFragment_.planNode, traceConfig_->queryNodeId);
-  metadataWriter->write(queryCtx_, traceNode);
+  auto metadataWriter = traceCtx_->createMetadataTracer();
+  metadataWriter->write(*queryCtx_, *planFragment_.planNode);
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

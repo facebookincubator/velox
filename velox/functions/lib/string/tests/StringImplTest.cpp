@@ -466,15 +466,11 @@ TEST_F(StringImplTest, badUnicodeLength) {
 TEST_F(StringImplTest, codePointToString) {
   auto testValidInput = [](const int64_t codePoint,
                            const std::string& expectedString) {
-    core::StringWriter output;
-    codePointToString(output, codePoint);
-    ASSERT_EQ(
-        StringView(expectedString), StringView(output.data(), output.size()));
+    ASSERT_EQ(StringView(expectedString), codePointToString(codePoint));
   };
 
   auto testInvalidCodePoint = [](const int64_t codePoint) {
-    core::StringWriter output;
-    EXPECT_THROW(codePointToString(output, codePoint), VeloxUserError)
+    EXPECT_THROW(codePointToString(codePoint), VeloxUserError)
         << "codePoint " << codePoint;
   };
 
@@ -494,9 +490,8 @@ TEST_F(StringImplTest, charToCodePoint) {
   };
 
   auto testValidInputRoundTrip = [](const int64_t codePoint) {
-    core::StringWriter string;
-    codePointToString(string, codePoint);
-    ASSERT_EQ(charToCodePoint(string), codePoint) << "codePoint " << codePoint;
+    ASSERT_EQ(charToCodePoint(codePointToString(codePoint)), codePoint)
+        << "codePoint " << codePoint;
   };
 
   auto testExpectDeath = [](const std::string& charString) {

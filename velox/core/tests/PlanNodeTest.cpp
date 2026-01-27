@@ -458,4 +458,91 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
           source),
       "partitioning doesn't allow for partitioning keys");
 }
+
+TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
+  auto values = std::make_shared<ValuesNode>("values", rowData_);
+
+  const std::vector<FieldAccessTypedExprPtr> groupingKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<std::string> aggregateNames{"sum"};
+  const std::vector<AggregationNode::Aggregate> aggregates{
+      {.call = std::make_shared<CallTypedExpr>(BIGINT(), "sum"),
+       .rawInputTypes = {BIGINT()}}};
+
+  // noGroupsSpanBatches=true with preGroupedKeys (streaming aggregation) should
+  // succeed and the accessor should return true.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/true,
+        values);
+    ASSERT_TRUE(aggNode->noGroupsSpanBatches());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum() noGroupsSpanBatches] -> c0:BIGINT, sum:BIGINT\n");
+  }
+
+  // noGroupsSpanBatches=false with preGroupedKeys should succeed and the
+  // accessor should return false.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        values);
+    ASSERT_FALSE(aggNode->noGroupsSpanBatches());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
+
+  // noGroupsSpanBatches=true without preGroupedKeys (non-streaming aggregation)
+  // should fail.
+  VELOX_ASSERT_THROW(
+      std::make_shared<AggregationNode>(
+          "agg",
+          AggregationNode::Step::kSingle,
+          groupingKeys,
+          /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+          aggregateNames,
+          aggregates,
+          /*ignoreNullKeys=*/false,
+          /*noGroupsSpanBatches=*/true,
+          values),
+      "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
+
+  // noGroupsSpanBatches=false without preGroupedKeys should succeed.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        values);
+    ASSERT_FALSE(aggNode->noGroupsSpanBatches());
+    ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
+}
 } // namespace

@@ -35,7 +35,7 @@ class IndexBuilderTest : public testing::Test {
       IndexBuilder& builder,
       size_t index) {
     auto& positions = builder.getEntry(index).positions();
-    return std::vector<uint64_t>{positions.begin(), positions.end()};
+    return std::vector<uint64_t>{positions.cbegin(), positions.cend()};
   }
 
   StatisticsBuilderOptions options_{16};

@@ -112,6 +112,27 @@ encounters a row with a different values in pre-grouped keys. This helps reduce
 the total amount of memory used and allows to unblock downstream operators
 faster.
 
+noGroupsSpanBatches Optimization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+AggregationNode supports an optional ``noGroupsSpanBatches`` flag that can be set
+to true for streaming aggregations. When enabled, this flag indicates that no
+sort group spans across input batches - each input batch contains complete data
+for its groups, and no group will appear in any subsequent input batch.
+
+This optimization allows the StreamingAggregation operator to immediately produce
+aggregation results for all groups in each input batch without waiting to see if
+more data for those groups will arrive in subsequent batches. This can
+significantly improve output latency and reduce memory usage since the operator
+doesn't need to hold onto partial aggregation state across batches.
+
+The ``noGroupsSpanBatches`` flag can only be set when the aggregation is
+pre-grouped (streaming). Setting it on a non-streaming aggregation will result
+in an error.
+
+This optimization is typically set automatically by query optimizers when they can
+guarantee that the input data meets the required properties.
+
 Push-Down into Table Scan
 -------------------------
 

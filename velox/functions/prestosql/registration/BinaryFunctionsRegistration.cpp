@@ -44,9 +44,15 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "spooky_hash_v2_32"});
   registerFunction<SpookyHashV264Function, Varbinary, Varbinary>(
       {prefix + "spooky_hash_v2_64"});
+  registerFunction<Fnv1_32Function, int32_t, Varbinary>({prefix + "fnv1_32"});
+  registerFunction<Fnv1_64Function, int64_t, Varbinary>({prefix + "fnv1_64"});
+  registerFunction<Fnv1a_32Function, int32_t, Varbinary>({prefix + "fnv1a_32"});
+  registerFunction<Fnv1a_64Function, int64_t, Varbinary>({prefix + "fnv1a_64"});
 
   registerFunction<ToHexFunction, Varchar, Varbinary>({prefix + "to_hex"});
   registerFunction<FromHexFunction, Varbinary, Varchar>({prefix + "from_hex"});
+  registerFunction<FromHexFunction, Varbinary, Varbinary>(
+      {prefix + "from_hex"});
   registerFunction<ToBase64Function, Varchar, Varbinary>(
       {prefix + "to_base64"});
 
@@ -55,9 +61,16 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<FromBase64Function, Varbinary, Varbinary>(
       {prefix + "from_base64"});
 
+  registerFunction<FromBase32Function, Varbinary, Varchar>(
+      {prefix + "from_base32"});
+  registerFunction<FromBase32Function, Varbinary, Varbinary>(
+      {prefix + "from_base32"});
+
   registerFunction<ToBase64UrlFunction, Varchar, Varbinary>(
       {prefix + "to_base64url"});
   registerFunction<FromBase64UrlFunction, Varbinary, Varchar>(
+      {prefix + "from_base64url"});
+  registerFunction<FromBase64UrlFunction, Varbinary, Varbinary>(
       {prefix + "from_base64url"});
 
   registerFunction<FromBigEndian32, int32_t, Varbinary>(

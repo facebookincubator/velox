@@ -25,12 +25,48 @@
 #     Use "n" to never wipe directories.
 # * VELOX_CUDA_VERSION="12.8": Which version of CUDA to install, will pick up
 #   CUDA_VERSION from the env
+# * VELOX_UCX_VERSION="1.19.0": Which version of ucx to install, will pick up
+#   UCX_VERSION from the env
 
 set -efx -o pipefail
 
 VELOX_CUDA_VERSION=${CUDA_VERSION:-"12.8"}
+VELOX_UCX_VERSION=${UCX_VERSION:-"1.19.0"}
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-centos9.sh
+
+function install_ucx {
+  dnf_install rdma-core-devel
+  local UCX_REPO_NAME="openucx/ucx"
+  local NEEDS_AUTOGEN=false
+
+  if [ "${VELOX_UCX_VERSION}" == "master" ]; then
+    github_checkout "${UCX_REPO_NAME}" "${VELOX_UCX_VERSION}"
+    NEEDS_AUTOGEN=true
+  else
+    wget_and_untar https://github.com/openucx/ucx/releases/download/v"${VELOX_UCX_VERSION}"/ucx-"${VELOX_UCX_VERSION}".tar.gz ucx
+  fi
+
+  (
+    cd "${DEPENDENCY_DIR}"/ucx || exit
+    if [ "${NEEDS_AUTOGEN}" = true ]; then
+      ./autogen.sh
+    fi
+
+    local CUDA_FLAG=""
+    if [ -d "/usr/local/cuda" ]; then
+      CUDA_FLAG="--with-cuda=/usr/local/cuda"
+    fi
+
+    mkdir build-linux && cd build-linux
+
+    ../contrib/configure-release --prefix="${INSTALL_PREFIX}" --with-sysroot --enable-cma \
+      --enable-mt --with-gnu-ld --with-rdmacm --with-verbs \
+      --without-go --without-java ${CUDA_FLAG}
+    make "-j${NPROC}"
+    make install
+  )
+}
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
@@ -59,7 +95,8 @@ function install_cuda {
     cuda-nvrtc-devel-"$dashed" \
     libcufile-devel-"$dashed" \
     libnvjitlink-devel-"$dashed" \
-    numactl-libs
+    cuda-nvml-devel-"$dashed" \
+    numactl-devel
 }
 
 function install_adapters_deps_from_dnf {
@@ -79,8 +116,8 @@ function install_s3 {
 function install_adapters {
   run_and_time install_adapters_deps_from_dnf
   run_and_time install_s3
-  run_and_time install_gcs-sdk-cpp
-  run_and_time install_azure-storage-sdk-cpp
+  run_and_time install_gcs_sdk_cpp
+  run_and_time install_azure_storage_sdk_cpp
   run_and_time install_hdfs_deps
 }
 

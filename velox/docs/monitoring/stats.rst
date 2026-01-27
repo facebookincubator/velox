@@ -345,3 +345,9 @@ These stats are reported only by connector data or index sources.
    * - totalRemainingFilterWallNanos
      - nanos
      - The total walltime in nanoseconds that the data or index connector do the remaining filtering.
+   * - numIndexFilterConversions
+     -
+     - The number of index columns that were converted from ScanSpec filters to
+       index bounds for index-based filtering (e.g., cluster index pruning in
+       Nimble). A value greater than zero indicates filters were successfully
+       converted to leverage file index structures for row pruning.

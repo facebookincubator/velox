@@ -49,18 +49,16 @@ concurrency:
 jobs:
   macos-build:
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: ${{ matrix.os }}
+    name: macos-15-${{ matrix.type }}
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 = x86_64 Mac
-        # macos-15 = arm64 Mac and cmake 4.0
-        os: [macos-13, macos-15]
-    runs-on: ${{ matrix.os }}
+        # macos-15 = arm64 Mac and cmake 4.0 with 7GB RAM
+        type: [debug, release]
+    runs-on: macos-15
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
-      # The arm runners have only 7GB RAM
-      BUILD_TYPE: ${{ matrix.os == 'macos-15' && 'Release' || 'Debug' }}
+      BUILD_TYPE: ${{ matrix.type }}
       INSTALL_PREFIX: /tmp/deps-install
     steps:
       - name: Checkout
@@ -92,7 +90,7 @@ jobs:
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-macos-1-${{ matrix.os }}
+          key: ccache-macos-1-macos-15-${{ matrix.type }}
 
       - name: Configure Build
         env:
@@ -120,7 +118,7 @@ jobs:
       - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-macos-1-${{ matrix.os }}
+          key: ccache-macos-1-macos-15-${{ matrix.type }}
 
       - name: Run Tests
         if: false

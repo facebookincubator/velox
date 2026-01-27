@@ -22,7 +22,7 @@
 #include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/device_memory_resource.hpp>
 
 #include <memory>
 #include <string_view>

@@ -20,6 +20,7 @@ add_subdirectory(iceberg)
 velox_add_library(
   velox_hive_connector
   OBJECT
+  BufferedInputBuilder.cpp
   FileHandle.cpp
   HiveConfig.cpp
   HiveConnector.cpp
@@ -27,7 +28,7 @@ velox_add_library(
   HiveConnectorSplit.cpp
   HiveDataSink.cpp
   HiveDataSource.cpp
-  HivePartitionUtil.cpp
+  HivePartitionName.cpp
   PartitionIdGenerator.cpp
   SplitReader.cpp
   TableHandle.cpp

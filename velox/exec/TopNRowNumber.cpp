@@ -225,7 +225,17 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     SelectivityVector rows(numInput);
     table_->prepareForGroupProbe(
         *lookup_, input, rows, BaseHashTable::kNoSpillInputStartPartitionBit);
-    table_->groupProbe(*lookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
+    try {
+      table_->groupProbe(
+          *lookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
+    } catch (...) {
+      // If groupProbe throws (e.g., due to OOM), we need to clean up the new
+      // groups that were inserted but not yet initialized by
+      // initializeNewPartitions(). Otherwise, close() will crash when trying to
+      // destroy uninitialized TopRows structures.
+      cleanupNewPartitions();
+      throw;
+    }
 
     // Initialize new partitions.
     initializeNewPartitions();
@@ -271,6 +281,15 @@ void TopNRowNumber::initializeNewPartitions() {
     new (lookup_->hits[index] + partitionOffset_)
         TopRows(table_->stringAllocator(), comparator_);
   }
+}
+
+void TopNRowNumber::cleanupNewPartitions() {
+  std::vector<char*> newRows(lookup_->newGroups.size());
+  for (auto i = 0; i < lookup_->newGroups.size(); ++i) {
+    newRows[i] = lookup_->hits[lookup_->newGroups[i]];
+  }
+  table_->erase(folly::Range(newRows.data(), newRows.size()));
+  lookup_->newGroups.clear();
 }
 
 template <>
@@ -463,7 +482,7 @@ void TopNRowNumber::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        spillConfig_->readBufferSize, pool(), spillStats_.get());
+        *spillConfig_, pool(), spillStats_.get());
   } else {
     outputRows_.resize(outputBatchSize_);
   }

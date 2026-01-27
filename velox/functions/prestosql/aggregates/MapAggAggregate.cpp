@@ -48,7 +48,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
       const auto* indices = decodedKeys.indices();
       rows.applyToSelected([&](vector_size_t i) {
         velox::functions::checkNestedNulls(
-            decodedKeys, indices, i, throwOnNestedNulls_);
+            decodedKeys, i, indices[i], throwOnNestedNulls_);
       });
     }
 
@@ -105,7 +105,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
 
     rows.applyToSelected([&](vector_size_t row) {
       if (velox::functions::checkNestedNulls(
-              Base::decodedKeys_, indices, row, throwOnNestedNulls_)) {
+              Base::decodedKeys_, row, indices[row], throwOnNestedNulls_)) {
         return;
       }
 
@@ -131,7 +131,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
     auto tracker = Base::trackRowSize(group);
     rows.applyToSelected([&](vector_size_t row) {
       if (velox::functions::checkNestedNulls(
-              Base::decodedKeys_, indices, row, throwOnNestedNulls_)) {
+              Base::decodedKeys_, row, indices[row], throwOnNestedNulls_)) {
         return;
       }
 
@@ -156,7 +156,7 @@ std::unique_ptr<exec::Aggregate> createMapAggAggregateWithCustomCompare(
 } // namespace
 
 void registerMapAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -169,16 +169,16 @@ void registerMapAggAggregate(
           .argumentType("V")
           .build()};
 
-  auto name = prefix + kMapAgg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         auto rawInput = exec::isRawInput(step);
         VELOX_CHECK_EQ(
             argTypes.size(),

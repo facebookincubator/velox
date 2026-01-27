@@ -16,61 +16,15 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/expression/ExprRewriteRegistry.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/expression/tests/SpecialFormRewriteTestBase.h"
 
 namespace facebook::velox::expression {
 namespace {
 
-class ConjunctRewriteTest : public functions::test::FunctionBaseTest {
- protected:
-  static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
-
-  void SetUp() override {
-    functions::prestosql::registerAllScalarFunctions("");
-    parse::registerTypeResolver();
-  }
-
-  void TearDown() override {
-    expression::ExprRewriteRegistry::instance().clear();
-  }
-
-  /// Validates special form expression rewrites that can short circuit
-  /// expression evaluation.
-  /// @param expr Input SQL expression to be rewritten.
-  /// @param expected Expected SQL expression after rewriting `expr`.
-  /// @param type Row type containing input fields referenced by `expr`.
-  void testRewrite(
-      const std::string& expr,
-      const std::string& expected,
-      const RowTypePtr& type = ROW({})) {
-    const auto typedExpr = makeTypedExpr(expr, type);
-    const auto rewritten =
-        expression::ExprRewriteRegistry::instance().rewrite(typedExpr);
-    const auto expectedExpr = makeTypedExpr(expected, type);
-    SCOPED_TRACE(fmt::format("Input: {}", typedExpr->toString()));
-    SCOPED_TRACE(fmt::format("Rewritten: {}", rewritten->toString()));
-    SCOPED_TRACE(fmt::format("Expected: {}", expectedExpr->toString()));
-
-    ASSERT_TRUE(*rewritten == *expectedExpr);
-  }
-};
+class ConjunctRewriteTest
+    : public expression::test::SpecialFormRewriteTestBase {};
 
 TEST_F(ConjunctRewriteTest, basic) {
-  testRewrite("true and true", "true");
-  testRewrite("false or false", "false");
-  testRewrite("null::boolean and false", "false");
-  testRewrite("true or null::boolean", "true");
-  testRewrite(
-      "null::boolean and null::boolean and null::boolean", "null::boolean");
-  testRewrite(
-      "null::boolean or null::boolean or null::boolean", "null::boolean");
-  testRewrite("null::boolean and true", "null::boolean");
-  testRewrite("false or null::boolean", "null::boolean");
-
   const auto type = ROW({"a", "b"}, {VARCHAR(), BIGINT()});
   testRewrite(
       "null::boolean and a = 'z' and true", "null::boolean and a = 'z'", type);

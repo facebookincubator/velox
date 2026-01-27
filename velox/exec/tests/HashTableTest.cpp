@@ -159,6 +159,8 @@ class HashTableTest : public testing::TestWithParam<bool>,
     topTable_->prepareJoinTable(
         std::move(otherTables),
         BaseHashTable::kNoSpillInputStartPartitionBit,
+        1'000'000,
+        false,
         executor_.get());
     ASSERT_GE(
         estimatedTableSize,
@@ -544,7 +546,11 @@ class HashTableTest : public testing::TestWithParam<bool>,
         std::move(hashers), {BIGINT()}, true, false, 1'000, pool());
     copyVectorsToTable({batch}, 0, table.get());
     table->prepareJoinTable(
-        {}, BaseHashTable::kNoSpillInputStartPartitionBit, executor_.get());
+        {},
+        BaseHashTable::kNoSpillInputStartPartitionBit,
+        1'000'000,
+        false,
+        executor_.get());
     ASSERT_EQ(table->hashMode(), mode);
     std::vector<char*> rows(nullValues.size());
     BaseHashTable::NullKeyRowsIterator iter;
@@ -842,7 +848,11 @@ TEST_P(HashTableTest, regularHashingTableSize) {
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());
     table->prepareJoinTable(
-        {}, BaseHashTable::kNoSpillInputStartPartitionBit, executor_.get());
+        {},
+        BaseHashTable::kNoSpillInputStartPartitionBit,
+        1'000'000,
+        false,
+        executor_.get());
     ASSERT_EQ(table->hashMode(), mode);
     EXPECT_GE(table->testingRehashSize(), table->numDistinct());
   };
@@ -1148,6 +1158,8 @@ DEBUG_ONLY_TEST_P(HashTableTest, failureInCreateRowPartitions) {
   topTable->prepareJoinTable(
       std::move(otherTables),
       BaseHashTable::kNoSpillInputStartPartitionBit,
+      1'000'000,
+      false,
       executor_.get());
   auto topTabletestHelper = HashTableTestHelper<false>::create(topTable.get());
 
@@ -1236,7 +1248,8 @@ TEST_P(HashTableTest, toStringSingleKey) {
 
   store(*table->rows(), data);
 
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable(
+      {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
 
   ASSERT_NO_THROW(table->toString());
   ASSERT_NO_THROW(table->toString(0));
@@ -1267,7 +1280,8 @@ TEST_P(HashTableTest, toStringMultipleKeys) {
 
   store(*table->rows(), data);
 
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable(
+      {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
 
   ASSERT_NO_THROW(table->toString());
 }

@@ -148,10 +148,6 @@ class SequenceVector : public SimpleVector<T> {
     return sequenceLengths_;
   }
 
-  uint64_t retainedSize() const override {
-    return sequenceValues_->retainedSize() + sequenceLengths_->capacity();
-  }
-
   bool isScalar() const override {
     return sequenceValues_->isScalar();
   }
@@ -215,7 +211,7 @@ class SequenceVector : public SimpleVector<T> {
   }
 
   void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
-    VELOX_UNSUPPORTED("transferTo not defined for SequenceVector");
+    VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
  private:
@@ -223,6 +219,11 @@ class SequenceVector : public SimpleVector<T> {
   void setInternalState();
 
   bool checkLoadRange(size_t idx, size_t count) const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return sequenceValues_->retainedSize(totalStringBufferSize) +
+        sequenceLengths_->capacity();
+  }
 
   VectorPtr sequenceValues_;
   SimpleVector<T>* scalarSequenceValues_ = nullptr;

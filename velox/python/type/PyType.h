@@ -17,6 +17,7 @@
 #pragma once
 
 #include <pybind11/embed.h>
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::py {
@@ -104,6 +105,10 @@ class PyType {
 
   static PyType createVarbinary() {
     return PyType{VARBINARY()};
+  }
+
+  static PyType createJson() {
+    return PyType{JSON()};
   }
 
  private:

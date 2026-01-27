@@ -24,7 +24,9 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -560,6 +562,29 @@ struct TimeMinusInterval {
       const arg_type<Time>& time,
       const arg_type<IntervalDayTime>& interval) {
     result = addToTime(time, -interval);
+  }
+};
+
+template <typename T>
+struct TimeMinusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<Time>& a,
+      const arg_type<Time>& b) {
+    // Validate inputs are in valid TIME range [0, 86400000)
+    VELOX_USER_CHECK(
+        a >= 0 && a < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        a);
+    VELOX_USER_CHECK(
+        b >= 0 && b < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        b);
+
+    // Simple subtraction returns interval in milliseconds
+    result = a - b;
   }
 };
 
@@ -1782,6 +1807,44 @@ struct CurrentDateFunction {
 };
 
 template <typename T>
+struct CurrentTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  std::string tzName_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>&,
+      const core::QueryConfig& config) {
+    tzName_ = config.sessionTimezone();
+  }
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
+    result = std::string_view(tzName_);
+  }
+};
+
+template <typename T>
+struct CurrentTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int64_t result_{0};
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+    result_ = pack(ts, timeZone_->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
+    result = result_;
+  }
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1902,6 +1965,40 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+template <typename T>
+struct AtTimezoneTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& timeWithTz,
+      const arg_type<Varchar>& targetTimezone) {
+    // Extract milliseconds UTC from the input
+    auto millisUtc = util::unpackMillisUtc(*timeWithTz);
+
+    // Parse the target timezone offset from the VARCHAR string
+    auto offsetResult = util::parseTimezoneOffset(
+        targetTimezone.data(),
+        targetTimezone.size(),
+        /*allowCompactFormat*/ false);
+    if (offsetResult.hasError()) {
+      if (offsetResult.error().isUserError()) {
+        VELOX_USER_FAIL(offsetResult.error().message());
+      } else {
+        VELOX_FAIL(offsetResult.error().message());
+      }
+    }
+
+    auto targetOffsetMinutes = offsetResult.value();
+
+    // Encode the timezone offset using bias encoding
+    auto encodedOffset = util::biasEncode(targetOffsetMinutes);
+
+    // Pack and return the result with the same UTC time but new timezone
+    result = util::pack(millisUtc, encodedOffset);
+  }
+};
+
 template <typename TExec>
 struct ToMillisecondFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -1938,6 +2035,21 @@ struct XxHash64TimestampFunction {
     // Use the milliseconds representation of the timestamp
     auto timestamp_millis = input.toMillis();
     result = XXH64(&timestamp_millis, sizeof(timestamp_millis), 0);
+  }
+};
+
+/// xxhash64(Time) → bigint
+/// Return a xxhash64 of input Time
+template <typename T>
+struct XxHash64TimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Time>& input) {
+    // TIME is represented as milliseconds since midnight
+    // Convert to big-endian to match Presto's xxhash64 behavior
+    auto bigEndianValue = folly::Endian::big(input);
+    result = XXH64(&bigEndianValue, sizeof(bigEndianValue), 0);
   }
 };
 

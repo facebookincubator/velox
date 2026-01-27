@@ -30,6 +30,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ArbitraryResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/KHyperLogLogResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MapUnionSumInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
@@ -44,6 +45,7 @@
 #include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/SetDigestResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -154,10 +156,25 @@ int main(int argc, char** argv) {
       "noisy_approx_set_sfm",
       "noisy_approx_distinct_sfm",
       "noisy_approx_set_sfm_from_index_and_zeros",
+      "reservoir_sample",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
       "numeric_histogram",
+      "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
+      // verifier is added.
+      // The list below also contains their companion functions.
+      "convex_hull_agg",
+      "geometry_union_agg",
+      "geometry_union_agg_partial",
+      "geometry_union_agg_merge",
+      "geometry_union_agg_extract",
+      "geometry_union_agg_merge_extract",
+      "convex_hull_agg_partial",
+      "convex_hull_agg_merge",
+      "convex_hull_agg_extract",
+      "convex_hull_agg_merge_extract",
+
   };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
@@ -169,12 +186,14 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::ArbitraryResultVerifier;
   using facebook::velox::exec::test::AverageResultVerifier;
+  using facebook::velox::exec::test::KHyperLogLogResultVerifier;
   using facebook::velox::exec::test::MinMaxByResultVerifier;
   using facebook::velox::exec::test::NoisyAvgResultVerifier;
   using facebook::velox::exec::test::NoisyCountIfResultVerifier;
   using facebook::velox::exec::test::NoisyCountResultVerifier;
   using facebook::velox::exec::test::NoisySumResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
+  using facebook::velox::exec::test::SetDigestResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
   using facebook::velox::exec::test::TDigestAggregateResultVerifier;
   using facebook::velox::exec::test::TransformResultVerifier;
@@ -206,6 +225,7 @@ int main(int argc, char** argv) {
            std::make_shared<ApproxPercentileResultVerifier>()},
           {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
+          {"khyperloglog_agg", std::make_shared<KHyperLogLogResultVerifier>()},
           {"arbitrary", std::make_shared<ArbitraryResultVerifier>()},
           {"any_value", nullptr},
           {"array_agg", makeArrayVerifier()},
@@ -233,6 +253,18 @@ int main(int argc, char** argv) {
           {"noisy_count_gaussian",
            std::make_shared<NoisyCountResultVerifier>()},
           {"noisy_sum_gaussian", std::make_shared<NoisySumResultVerifier>()},
+          {"convex_hull_agg", nullptr},
+          {"geometry_union_agg", nullptr},
+          {"geometry_union_agg_partial", nullptr},
+          {"geometry_union_agg_merge", nullptr},
+          {"geometry_union_agg_extract", nullptr},
+          {"geometry_union_agg_merge_extract", nullptr},
+          {"convex_hull_agg_partial", nullptr},
+          {"convex_hull_agg_merge", nullptr},
+          {"convex_hull_agg_extract", nullptr},
+          {"convex_hull_agg_merge_extract", nullptr},
+          {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
+          {"merge_set_digest", std::make_shared<SetDigestResultVerifier>()},
       };
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;

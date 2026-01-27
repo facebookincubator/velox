@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -97,7 +98,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
-  auto deleteFileInput = createBufferedInput(
+  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,

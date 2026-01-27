@@ -17,6 +17,8 @@
 
 #include <limits>
 #include <vector>
+#include "velox/functions/Macros.h"
+#include "velox/functions/Registerer.h"
 
 #ifdef VELOX_ENABLE_FAISS
 #include "faiss/utils/distances.h"

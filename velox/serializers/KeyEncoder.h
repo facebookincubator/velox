@@ -1,0 +1,261 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <functional>
+
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/Scratch.h"
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+
+namespace facebook::velox::serializer {
+
+/// A single index bound (lower or upper) with a single row and inclusive flag.
+/// Used to represent either a lower or upper bound for index filtering.
+struct IndexBound {
+  /// Single row containing the bound values. Must have exactly 1 row.
+  RowVectorPtr bound;
+  /// Whether this bound is inclusive. If true, the bound value is included
+  /// in the range; if false, it's excluded.
+  bool inclusive{true};
+};
+
+/// Represents bounds for index-based filtering with optional lower and upper
+/// bounds. Used to define a range of values for index columns that can be
+/// encoded into byte-comparable keys for efficient filtering.
+struct IndexBounds {
+  /// The top-level column names that form the index. These columns must exist
+  /// in the input data and define the order of columns in the encoded key.
+  std::vector<std::string> indexColumns;
+  /// Optional lower bound for the index range.
+  std::optional<IndexBound> lowerBound;
+  /// Optional upper bound for the index range.
+  std::optional<IndexBound> upperBound;
+
+  /// Validates that the bounds are well-formed:
+  /// - At least one bound (lower or upper) must be present
+  /// - Each bound must have exactly 1 row
+  /// Returns true if valid, false otherwise.
+  bool validate() const;
+
+  /// Returns the type from the bound vectors.
+  /// Extracts the type from lowerBound if available, otherwise from upperBound.
+  /// At least one bound must be present.
+  TypePtr type() const;
+
+  /// Returns a human-readable string representation of the bounds.
+  std::string toString() const;
+};
+
+/// Encoded representation of index bounds as byte-comparable strings.
+/// These keys can be compared lexicographically to perform range filtering.
+struct EncodedKeyBounds {
+  /// Encoded lower bound key. If present, represents the minimum key value
+  /// (inclusive or exclusive based on IndexBound.inclusive).
+  std::optional<std::string> lowerKey;
+  /// Encoded upper bound key. If present, represents the maximum key value
+  /// (inclusive or exclusive based on IndexBound.inclusive).
+  std::optional<std::string> upperKey;
+};
+
+/// KeyEncoder encodes multi-column keys into byte-comparable strings that
+/// preserve the sort order defined by the column types and sort orders.
+/// This enables efficient range-based filtering and comparison of composite
+/// keys.
+///
+/// The encoding is designed such that:
+/// - Lexicographic comparison of encoded keys matches the logical comparison
+///   of the original values
+/// - Null values are sorted according to the specified sort order (nulls
+///   first/last)
+/// - Ascending/descending sort orders are respected
+/// - Only scalar types are supported (e.g., integers, floats, strings,
+///   booleans, dates). Complex types (arrays, maps, rows) are not supported.
+///
+/// Example usage:
+///   auto keyEncoder = KeyEncoder::create(
+///       {"col1", "col2"}, rowType, sortOrders, pool);
+///   std::vector<std::string_view> encodedKeys;
+///   HashStringAllocator allocator(pool);
+///   keyEncoder->encode(inputVector, encodedKeys,
+///       [&allocator](size_t size) { return allocator.allocate(size); });
+class KeyEncoder {
+ public:
+  /// Factory method to create a KeyEncoder instance.
+  ///
+  /// @param keyColumns Names of columns to include in the encoded key, in order
+  /// @param inputType Row type of the input data containing these columns
+  /// @param sortOrders Sort order for each key column (ascending/descending,
+  ///                   nulls first/last)
+  /// @param pool Memory pool for allocations
+  /// @return Unique pointer to a new KeyEncoder instance
+  static std::unique_ptr<KeyEncoder> create(
+      std::vector<std::string> keyColumns,
+      RowTypePtr inputType,
+      std::vector<core::SortOrder> sortOrders,
+      memory::MemoryPool* pool);
+
+  /// Type alias for buffer allocator function.
+  /// Takes estimated size in bytes and returns a pointer to the allocated
+  /// buffer.
+  using BufferAllocator = std::function<void*(size_t)>;
+
+  /// Encodes the key columns from the input vector into byte-comparable keys.
+  ///
+  /// Each row in the input produces one encoded key string. The keys can be
+  /// compared lexicographically, and the comparison result will match the
+  /// logical comparison based on the specified sort orders.
+  ///
+  /// @tparam Container A container type for std::string_view that supports
+  ///                   reserve(), size(), and emplace_back() operations.
+  /// @param input Input vector containing rows to encode
+  /// @param encodedKeys Output container to store the encoded key strings
+  ///                    (views into allocated buffer)
+  /// @param bufferAllocator Allocator function that takes estimated size and
+  ///                        returns pointer to allocated buffer
+  template <typename Container>
+  void encode(
+      const VectorPtr& input,
+      Container& encodedKeys,
+      const BufferAllocator& bufferAllocator);
+
+  /// Encodes index bounds into byte-comparable boundary keys.
+  ///
+  /// The implementation normalizes all bounds to half-open interval format
+  /// [lower_bound, upper_bound) to ease range scan processing:
+  /// - Lower bounds: Always converted to inclusive
+  ///   - Exclusive lower bound (x > 5) → incremented to inclusive (x >= 6)
+  ///   - Inclusive lower bound (x >= 5) → stays as is
+  /// - Upper bounds: Always converted to exclusive
+  ///   - Inclusive upper bound (x <= 10) → incremented to exclusive (x < 11)
+  ///   - Exclusive upper bound (x < 10) → stays as is
+  ///
+  /// Increment failure handling (asymmetric behavior):
+  /// - Lower bound increment fails → returns std::nullopt (cannot establish
+  ///   valid range start)
+  /// - Upper bound increment fails → upperKey set to std::nullopt (treated as
+  ///   unbounded upper range)
+  ///
+  /// Increment fails when values are at their maximum (e.g., INT_MAX, strings
+  /// with all \xFF characters, or nulls in NULLS_LAST ordering).
+  ///
+  /// @param indexBounds Index bounds containing lower/upper bounds with
+  ///                    inclusive flags
+  /// @return std::nullopt if lower bound increment fails; otherwise
+  ///         EncodedKeyBounds with encoded keys in [lower, upper) format
+  std::optional<EncodedKeyBounds> encodeIndexBounds(
+      const IndexBounds& indexBounds);
+
+  /// Returns the sort orders for each index column.
+  const std::vector<core::SortOrder>& sortOrders() const {
+    return sortOrders_;
+  }
+
+ private:
+  KeyEncoder(
+      std::vector<std::string> keyColumns,
+      RowTypePtr inputType,
+      std::vector<core::SortOrder> sortOrders,
+      memory::MemoryPool* pool);
+
+  uint64_t estimateEncodedSize();
+
+  // Encodes a RowVector and returns encoded keys as strings.
+  // Each row in the input vector produces one encoded key string.
+  std::vector<std::string> encode(const RowVectorPtr& input);
+
+  // Creates a new row vector with the key columns incremented by 1.
+  // Similar to Apache Kudu's IncrementKey, this increments from the
+  // rightmost (least significant) column. Returns std::nullopt if all columns
+  // overflow (key is at maximum value).
+  std::optional<RowVectorPtr> createIncrementedBound(
+      const RowVectorPtr& bound) const;
+
+  // Encodes a single column for all rows.
+  void encodeColumn(
+      const DecodedVector& decodedVector,
+      vector_size_t numRows,
+      bool descending,
+      bool nullLast,
+      std::vector<char*>& rowOffsets);
+
+  const RowTypePtr inputType_;
+  const std::vector<core::SortOrder> sortOrders_;
+  const std::vector<vector_size_t> keyChannels_;
+  const RowTypePtr keyType_;
+  memory::MemoryPool* const pool_;
+
+  // Reusable buffers.
+  DecodedVector decodedVector_;
+  std::vector<DecodedVector> childDecodedVectors_;
+  std::vector<vector_size_t> encodedSizes_;
+  Scratch scratch_;
+};
+
+// Template implementation
+template <typename Container>
+void KeyEncoder::encode(
+    const VectorPtr& input,
+    Container& encodedKeys,
+    const BufferAllocator& bufferAllocator) {
+  VELOX_CHECK_GT(input->size(), 0);
+  SCOPE_EXIT {
+    encodedSizes_.clear();
+  };
+  decodedVector_.decode(*input, /*loadLazy=*/true);
+  const auto* rowBase = decodedVector_.base()->asChecked<RowVector>();
+  const auto& children = rowBase->children();
+  for (auto i = 0; i < keyChannels_.size(); ++i) {
+    childDecodedVectors_[i].decode(*children[keyChannels_[i]]);
+  }
+  const auto totalBytes = estimateEncodedSize();
+  auto* const allocated = static_cast<char*>(bufferAllocator(totalBytes));
+
+  const auto numRows = input->size();
+  const auto numKeys = keyChannels_.size();
+
+  // Compute buffer start offsets for each row
+  std::vector<char*> rowOffsets(numRows);
+  rowOffsets[0] = allocated;
+  for (auto row = 1; row < numRows; ++row) {
+    rowOffsets[row] = rowOffsets[row - 1] + encodedSizes_[row - 1];
+  }
+
+  // Encode column-by-column for better cache locality
+  for (auto i = 0; i < numKeys; ++i) {
+    const bool nullLast = !sortOrders_[i].isNullsFirst();
+    const bool descending = !sortOrders_[i].isAscending();
+    const auto& decodedVector = childDecodedVectors_[i];
+
+    // Encode column data for all rows (null indicator is encoded within each
+    // type's encoding function)
+    encodeColumn(decodedVector, numRows, descending, nullLast, rowOffsets);
+  }
+
+  // Build encoded keys string views
+  encodedKeys.reserve(encodedKeys.size() + numRows);
+  size_t offset{0};
+  for (auto row = 0; row < numRows; ++row) {
+    encodedKeys.emplace_back(allocated + offset, encodedSizes_[row]);
+    offset += encodedSizes_[row];
+    VELOX_CHECK_EQ(rowOffsets[row], allocated + offset);
+  }
+}
+
+} // namespace facebook::velox::serializer

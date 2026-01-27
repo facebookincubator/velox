@@ -20,50 +20,15 @@
 #include <string>
 #include <unordered_map>
 
+#include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
+
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive {
-
-namespace {
-
-bool isMember(
-    const std::vector<exec::FieldReference*>& fields,
-    const exec::FieldReference& field) {
-  return std::find(fields.begin(), fields.end(), &field) != fields.end();
-}
-
-bool shouldEagerlyMaterialize(
-    const exec::Expr& remainingFilter,
-    const exec::FieldReference& field) {
-  if (!remainingFilter.evaluatesArgumentsOnNonIncreasingSelection()) {
-    return true;
-  }
-  for (auto& input : remainingFilter.inputs()) {
-    if (isMember(input->distinctFields(), field) && input->hasConditionals()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void checkColumnHandleConsistent(
-    const HiveColumnHandle& x,
-    const HiveColumnHandle& y) {
-  VELOX_CHECK(
-      x.columnType() == y.columnType(),
-      "Inconsistent column handle: {}",
-      x.name());
-  VELOX_CHECK_EQ(
-      *x.dataType(), *y.dataType(), "Inconsistent column handle: {}", x.name());
-  VELOX_CHECK_EQ(
-      *x.hiveType(), *y.hiveType(), "Inconsistent column handle: {}", x.name());
-}
-
-} // namespace
 
 void HiveDataSource::processColumnHandle(const HiveColumnHandlePtr& handle) {
   switch (handle->columnType()) {
@@ -99,20 +64,12 @@ HiveDataSource::HiveDataSource(
       pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
-  hiveTableHandle_ =
-      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
-  VELOX_CHECK_NOT_NULL(
-      hiveTableHandle_, "TableHandle must be an instance of HiveTableHandle");
+  hiveTableHandle_ = checkedPointerCast<const HiveTableHandle>(tableHandle);
 
   folly::F14FastMap<std::string_view, const HiveColumnHandle*> columnHandles;
   // Column handled keyed on the column alias, the name used in the query.
-  for (const auto& [canonicalizedName, columnHandle] : assignments) {
-    auto handle =
-        std::dynamic_pointer_cast<const HiveColumnHandle>(columnHandle);
-    VELOX_CHECK_NOT_NULL(
-        handle,
-        "ColumnHandle must be an instance of HiveColumnHandle for {}",
-        canonicalizedName);
+  for (const auto& [_, columnHandle] : assignments) {
+    auto handle = checkedPointerCast<const HiveColumnHandle>(columnHandle);
     const auto [it, unique] =
         columnHandles.emplace(handle->name(), handle.get());
     if (!unique) {
@@ -120,8 +77,9 @@ HiveDataSource::HiveDataSource(
       // queries that sometimes we do get duplicate assignments for partitioning
       // columns.
       checkColumnHandleConsistent(*handle, *it->second);
-      VELOX_CHECK(
-          handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey,
+      VELOX_CHECK_EQ(
+          handle->columnType(),
+          HiveColumnHandle::ColumnType::kPartitionKey,
           "Cannot map from same table column to different outputs in table scan; a project node should be used instead: {}",
           handle->name());
       continue;
@@ -155,6 +113,7 @@ HiveDataSource::HiveDataSource(
           "Required subfield does not match column name");
       subfields_[handle->name()].push_back(&subfield);
     }
+    columnPostProcessors_.push_back(handle->postProcessor());
   }
 
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
@@ -225,6 +184,7 @@ HiveDataSource::HiveDataSource(
       readerOutputType_,
       subfields_,
       filters_,
+      /*indexColumns=*/{},
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,
@@ -294,6 +254,7 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
         readerOutputType_,
         subfields_,
         filters_,
+        /*indexColumns=*/{},
         hiveTableHandle_->dataColumns(),
         partitionKeys_,
         infoColumns_,
@@ -335,8 +296,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK_NULL(
       split_,
       "Previous split has not been processed yet. Call next to process the split.");
-  split_ = std::dynamic_pointer_cast<HiveConnectorSplit>(split);
-  VELOX_CHECK_NOT_NULL(split_, "Wrong type of split");
+  split_ = checkedPointerCast<HiveConnectorSplit>(split);
 
   VLOG(1) << "Adding split " << split_->toString();
 
@@ -438,8 +398,11 @@ std::optional<RowVectorPtr> HiveDataSource::next(
       // don't need to reallocate the result for every batch.
       child->disableMemo();
     }
-    outputColumns.emplace_back(
-        exec::wrapChild(rowsRemaining, remainingIndices, child));
+    auto column = exec::wrapChild(rowsRemaining, remainingIndices, child);
+    if (columnPostProcessors_[i]) {
+      columnPostProcessors_[i](column);
+    }
+    outputColumns.push_back(std::move(column));
   }
 
   return std::make_shared<RowVector>(
@@ -554,10 +517,14 @@ void HiveDataSource::setFromDataSource(
 }
 
 int64_t HiveDataSource::estimatedRowSize() {
-  if (!splitReader_) {
+  if (splitReader_ == nullptr) {
     return kUnknownRowSize;
   }
-  return splitReader_->estimatedRowSize();
+  auto rowSize = splitReader_->estimatedRowSize();
+  TestValue::adjust(
+      "facebook::velox::connector::hive::HiveDataSource::estimatedRowSize",
+      &rowSize);
+  return rowSize;
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {

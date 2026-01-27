@@ -203,13 +203,13 @@ function install_s3 {
 function install_gcs {
   # Dependencies of GCS, probably a workaround until the docker image is rebuilt
   ${SUDO} apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
-  install_gcs-sdk-cpp
+  install_gcs_sdk_cpp
 }
 
 function install_abfs {
   # Dependencies of Azure Storage Blob cpp
   ${SUDO} apt install -y openssl libxml2-dev
-  install_azure-storage-sdk-cpp
+  install_azure_storage_sdk_cpp
 }
 
 function install_hdfs {

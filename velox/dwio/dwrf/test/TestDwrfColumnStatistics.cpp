@@ -195,12 +195,12 @@ void checkEntries(
   for (const auto& entry : entries) {
     EXPECT_NE(
         std::find_if(
-            expectedEntries.begin(),
-            expectedEntries.end(),
+            expectedEntries.cbegin(),
+            expectedEntries.cend(),
             [&](const ColumnStatistics& expectedStats) {
               return expectedStats == entry;
             }),
-        expectedEntries.end());
+        expectedEntries.cend());
   }
 }
 

@@ -39,6 +39,7 @@ namespace {
 
 using fuzzer::rand;
 using fuzzer::randDate;
+using fuzzer::randTime;
 
 // Structure to help temporary changes to Options. This objects saves the
 // current state of the Options object, and restores it when it's destructed.
@@ -139,6 +140,9 @@ VectorPtr fuzzConstantPrimitiveImpl(
   } else if (type->isLongDecimal()) {
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
+  } else if (type->isTime()) {
+    return std::make_shared<ConstantVector<int64_t>>(
+        pool, size, false, type, randTime(rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
@@ -172,6 +176,8 @@ void fuzzFlatPrimitiveImpl(
                 VectorFuzzer::kMaxAllowedIntervalDayTime));
       } else if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
+      } else if (vector->type()->isTime()) {
+        flatVector->set(i, randTime(rng));
       } else {
         flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
@@ -200,6 +206,51 @@ void fuzzFlatPrimitiveImpl(
       flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
     }
   }
+}
+
+bool containsFlatMapVector(const BaseVector* vector) {
+  if (!vector) {
+    return false;
+  }
+
+  // Unwrap any dictionary/constant encoding to get to the base.
+  while (VectorEncoding::isDictionary(vector->encoding()) ||
+         vector->encoding() == VectorEncoding::Simple::CONSTANT) {
+    vector = vector->valueVector().get();
+    if (!vector) {
+      return false;
+    }
+  }
+
+  if (vector->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return true;
+  }
+
+  // Check children for complex types.
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::ROW: {
+      auto* row = vector->asUnchecked<RowVector>();
+      for (const auto& child : row->children()) {
+        if (containsFlatMapVector(child.get())) {
+          return true;
+        }
+      }
+      break;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* array = vector->asUnchecked<ArrayVector>();
+      return containsFlatMapVector(array->elements().get());
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* map = vector->asUnchecked<MapVector>();
+      return containsFlatMapVector(map->mapKeys().get()) ||
+          containsFlatMapVector(map->mapValues().get());
+    }
+    default:
+      break;
+  }
+
+  return false;
 }
 
 // Servers as a wrapper around a vector that will be used to load a lazyVector.
@@ -537,11 +588,10 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
 
-    // Second, generate a random null vector.
-    for (size_t i = 0; i < vector->size(); ++i) {
-      if (coinToss(opts_.nullRatio)) {
-        vector->setNull(i, true);
-      }
+    // Second, generate nulls using the configured null pattern.
+    auto nulls = fuzzNulls(size);
+    if (nulls) {
+      vector->setNulls(nulls);
     }
   }
   return vector;
@@ -870,11 +920,71 @@ RowVectorPtr VectorFuzzer::fuzzRow(
 
 BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
   NullsBuilder builder{size, pool_};
-  for (size_t i = 0; i < size; ++i) {
-    if (coinToss(opts_.nullRatio)) {
-      builder.setNull(i);
+
+  // Randomly select a pattern with weighted distribution:
+  // 70% kRandom, 30% split equally among kHeadOnly, kTailOnly, kHeadAndTail
+  // (each gets 10%)
+
+  // default to kRandom pattern
+  int patternChoice = 0;
+
+  if (opts_.useRandomNullPattern) {
+    auto randValue = fuzzer::rand<uint32_t>(rng_) % 100;
+    if (randValue < 70) {
+      patternChoice = 0; // kRandom - 70%
+    } else if (randValue < 80) {
+      patternChoice = 1; // kHeadOnly - 10%
+    } else if (randValue < 90) {
+      patternChoice = 2; // kTailOnly - 10%
+    } else {
+      patternChoice = 3; // kHeadAndTail - 10%
     }
   }
+
+  switch (patternChoice) {
+    case 0: // kRandom pattern
+      for (size_t i = 0; i < size; ++i) {
+        if (coinToss(opts_.nullRatio)) {
+          builder.setNull(i);
+        }
+      }
+      break;
+
+    case 1: { // kHeadOnly pattern
+      auto headNulls =
+          std::min<size_t>(static_cast<size_t>(size * opts_.nullRatio), size);
+      for (size_t i = 0; i < headNulls; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+
+    case 2: { // kTailOnly pattern
+      auto tailNulls =
+          std::min<size_t>(static_cast<size_t>(size * opts_.nullRatio), size);
+      auto startIdx = size > tailNulls ? size - tailNulls : 0;
+      for (size_t i = startIdx; i < size; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+
+    case 3: { // kHeadAndTail pattern
+      // Split nullRatio between head and tail to match total nulls of other
+      // patterns
+      auto edgeNulls = std::min<size_t>(
+          static_cast<size_t>(size * opts_.nullRatio / 2.0), size / 2);
+      for (size_t i = 0; i < edgeNulls; ++i) {
+        builder.setNull(i);
+      }
+      auto tailStart = size > edgeNulls ? size - edgeNulls : 0;
+      for (size_t i = tailStart; i < size; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+  }
+
   return builder.build();
 }
 
@@ -1098,6 +1208,12 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
   DecodedVector decoded;
   decoded.decode(*vector_, rows, false);
 
+  // FlatMapVector copy into MapVector vector is not supported. Let's preserve
+  // encodings to avoid runtime checks.
+  if (containsFlatMapVector(decoded.base())) {
+    return vector_->testingCopyPreserveEncodings(vector_->pool());
+  }
+
   if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
     VectorPtr result;
     BaseVector::ensureWritable(rows, vector_->type(), vector_->pool(), result);
@@ -1165,6 +1281,7 @@ const std::vector<TypePtr>& defaultScalarTypes() {
       VARBINARY(),
       TIMESTAMP(),
       DATE(),
+      TIME(),
       INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;

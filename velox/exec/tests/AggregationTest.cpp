@@ -384,6 +384,7 @@ class AggregationTest : public OperatorTestBase {
         false,
         true,
         true,
+        false,
         pool_.get());
   }
 
@@ -482,7 +483,8 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<std::string>{"agg"},
               aggregates,
-              false,
+              /*ignoreNullKeys=*/false,
+              /*noGroupsSpanBatches=*/false,
               std::move(source));
         })
         .planNode();
@@ -543,7 +545,8 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<std::string>{"agg"},
                         aggregates,
-                        false,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/false,
                         std::move(source));
                   })
                   .planNode();
@@ -1003,6 +1006,7 @@ TEST_F(AggregationTest, distinctWithGroupingKeysReordered) {
   options.vectorSize = vectorSize;
   options.stringVariableLength = false;
   options.stringLength = 128;
+  options.nullRatio = 0.1;
   VectorFuzzer fuzzer(options, pool());
   const int numVectors{5};
   std::vector<RowVectorPtr> vectors;
@@ -2040,31 +2044,102 @@ TEST_F(AggregationTest, distinctWithSpilling) {
   }
 }
 
-TEST_F(AggregationTest, spillingForAggrsWithDistinct) {
-  auto vectors = makeVectors(rowType_, 100, 10);
+class DistinctAggregationTest : public AggregationTest,
+                                public testing::WithParamInterface<double> {
+ protected:
+  std::vector<RowVectorPtr> makeVectors(
+      const RowTypePtr& rowType,
+      size_t size,
+      int numVectors,
+      column_index_t keyChannel) {
+    std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numVectors);
+    VectorFuzzer aggVectorfuzzer(
+        {.vectorSize = size, .nullRatio = GetParam()}, pool());
+    // Key column is always non-null.
+    VectorFuzzer keyVectorFuzzer({.vectorSize = size, .nullRatio = 0}, pool());
+
+    for (int32_t i = 0; i < numVectors; ++i) {
+      std::vector<VectorPtr> children;
+      children.reserve(rowType->children().size());
+
+      for (auto idx = 0; idx < rowType->children().size(); idx++) {
+        auto& vectorFuzzer =
+            idx == keyChannel ? keyVectorFuzzer : aggVectorfuzzer;
+        children.push_back(vectorFuzzer.fuzzFlat(rowType->childAt(idx)));
+      }
+
+      vectors.push_back(
+          std::make_shared<RowVector>(
+              pool(), rowType, nullptr, size, children));
+    }
+    return vectors;
+  }
+};
+
+TEST_P(DistinctAggregationTest, spillingForAggrsWithDistinct) {
+  auto vectors = makeVectors(rowType_, 100, 10, 1);
   createDuckDbTable(vectors);
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   core::PlanNodeId aggrNodeId;
-  TestScopedSpillInjection scopedSpillInjection(100);
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .spillDirectory(spillDirectory->getPath())
-          .config(QueryConfig::kSpillEnabled, true)
-          .config(QueryConfig::kAggregationSpillEnabled, true)
-          .plan(
-              PlanBuilder()
+
+  auto testPlan = [&](const core::PlanNodePtr& plan, const std::string& sql) {
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(QueryConfig::kSpillEnabled, "true")
+                    .config(QueryConfig::kAggregationSpillEnabled, "true")
+                    .plan(plan)
+                    .assertResults(sql);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    auto& stats = taskStats.at(aggrNodeId);
+    checkSpillStats(stats, true);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  };
+
+  // Single aggregate with single input scenario.
+  auto plan = PlanBuilder()
                   .values(vectors)
                   .singleAggregation({"c1"}, {"count(DISTINCT c0)"}, {})
                   .capturePlanNodeId(aggrNodeId)
-                  .planNode())
-          .assertResults("SELECT c1, count(DISTINCT c0) FROM tmp GROUP BY c1");
-  // Verify that spilling is not triggered.
-  const auto& queryConfig = task->queryCtx()->queryConfig();
-  ASSERT_TRUE(queryConfig.spillEnabled());
-  ASSERT_TRUE(queryConfig.aggregationSpillEnabled());
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
-  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+                  .planNode();
+  testPlan(plan, "SELECT c1, count(DISTINCT c0) FROM tmp GROUP BY c1");
+
+  // Single aggregate with multiple input scenario.
+  plan = PlanBuilder()
+             .values(vectors)
+             .singleAggregation({"c1"}, {"covar_pop(DISTINCT c5, c5)"}, {})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(plan, "SELECT c1, covar_pop(DISTINCT c5, c5) FROM tmp GROUP BY c1");
+
+  // Mixed test including multiple types of distinct aggregate functions.
+  plan = PlanBuilder()
+             .values(vectors)
+             .singleAggregation(
+                 {"c1"},
+                 {"min(c0)",
+                  "count(c2)",
+                  "count(DISTINCT c0)",
+                  "covar_pop(DISTINCT c5, c5)",
+                  "array_agg(c0 ORDER BY c0)"},
+                 {})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(
+      plan,
+      "SELECT c1, min(c0), count(c2), count(DISTINCT c0), covar_pop(DISTINCT c5, c5), array_agg(c0 ORDER BY c0) FROM tmp GROUP BY c1");
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    DistinctAggregationTest,
+    DistinctAggregationTest,
+    ::testing::Values(0, 0.5, 1),
+    [](const testing::TestParamInfo<double>& info) {
+      int ratio = static_cast<int>(info.param * 100);
+      return fmt::format("nullRatio_{}", ratio);
+    });
 
 TEST_F(AggregationTest, spillingForAggrsWithSorting) {
   auto vectors = makeVectors(rowType_, 100, 10);
@@ -4025,6 +4100,7 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       false, // isJoinBuild
       false, // hasProbedFlag
       false, // hasNormalizedKeys
+      false, // useListRowIndex
       pool());
   const auto rowColumn = rows.columnAt(0);
   agg.setOffsets(

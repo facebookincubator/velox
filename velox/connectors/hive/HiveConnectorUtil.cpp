@@ -23,6 +23,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -119,7 +120,7 @@ void addSubfields(
             element->toString());
         required[nestedField->name()].push_back(subfield);
       }
-      auto& rowType = type.asRow();
+      const auto& rowType = type.asRow();
       for (int i = 0; i < rowType.size(); ++i) {
         auto& childName = rowType.nameOf(i);
         auto& childType = rowType.childAt(i);
@@ -335,9 +336,10 @@ void processFieldSpec(
     }
   });
   if (dataColumns) {
-    auto i = dataColumns->getChildIdxIfExists(fieldSpec.fieldName());
-    if (i.has_value()) {
-      if (dataColumns->childAt(*i)->isMap() && outputType->isRow()) {
+    const auto childIdxOpt =
+        dataColumns->getChildIdxIfExists(fieldSpec.fieldName());
+    if (childIdxOpt.has_value()) {
+      if (dataColumns->childAt(*childIdxOpt)->isMap() && outputType->isRow()) {
         fieldSpec.setFlatMapAsStruct(true);
       }
     }
@@ -346,11 +348,36 @@ void processFieldSpec(
 
 } // namespace
 
+void checkColumnHandleConsistent(
+    const HiveColumnHandle& x,
+    const HiveColumnHandle& y) {
+  VELOX_CHECK_EQ(
+      x.columnType(),
+      y.columnType(),
+      "Inconsistent column handle type: {}, expected {}, got {}",
+      x.name(),
+      HiveColumnHandle::columnTypeName(x.columnType()),
+      HiveColumnHandle::columnTypeName(y.columnType()));
+  VELOX_CHECK(
+      x.dataType()->equivalent(*y.dataType()),
+      "Inconsistent column handle data type: {}, expected {}, got {}",
+      x.name(),
+      x.dataType()->toString(),
+      y.dataType()->toString());
+  VELOX_CHECK(
+      x.hiveType()->equivalent(*y.hiveType()),
+      "Inconsistent column handle hive type: {}, expected {}, got {}",
+      x.name(),
+      x.hiveType()->toString(),
+      y.hiveType()->toString());
+}
+
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
         outputSubfields,
-    const common::SubfieldFilters& filters,
+    const common::SubfieldFilters& subfieldFilters,
+    const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
     const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns,
@@ -361,7 +388,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       filterSubfields;
   std::vector<SubfieldSpec> subfieldSpecs;
-  for (auto& [subfield, _] : filters) {
+  for (const auto& [subfield, _] : subfieldFilters) {
     if (auto name = subfield.toString();
         !isSynthesizedColumn(name, infoColumns) &&
         partitionKeys.count(name) == 0) {
@@ -428,7 +455,18 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     }
   }
 
-  for (auto& pair : filters) {
+  // Process index columns from join conditions to ensure they are read.
+  // These columns are not projected out, only used for index lookup.
+  for (const auto& keyName : indexColumns) {
+    VELOX_CHECK_NOT_NULL(dataColumns);
+    if (spec->childByName(keyName) == nullptr) {
+      // This is required so that we can set filter on the index column in the
+      // selective reader later.
+      spec->getOrCreateChild(keyName);
+    }
+  }
+
+  for (auto& pair : subfieldFilters) {
     const auto name = pair.first.toString();
     // SelectiveColumnReader doesn't support constant columns with filters,
     // hence, we can't have a filter for a $path or $bucket column.
@@ -634,11 +672,6 @@ void configureRowReaderOptions(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
-    // When parallel unit loader is enabled, all units would be loaded by
-    // ParallelUnitLoader, thus disable eagerFirstStripeLoad.
-    if (hiveConfig->parallelUnitLoadCount(sessionProperties) > 0) {
-      rowReaderOptions.setEagerFirstStripeLoad(false);
-    }
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
@@ -890,10 +923,10 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
   }
   common::Filter* oldFilter = nullptr;
   try {
-    common::Subfield subfield;
-    if (auto filter = exec::ExprToSubfieldFilterParser::getInstance()
-                          ->leafCallToSubfieldFilter(
-                              *call, subfield, evaluator, negated)) {
+    if (auto subfieldAndFilter =
+            exec::ExprToSubfieldFilterParser::getInstance()
+                ->leafCallToSubfieldFilter(*call, evaluator, negated)) {
+      auto& [subfield, filter] = subfieldAndFilter.value();
       if (auto it = filters.find(subfield); it != filters.end()) {
         oldFilter = it->second.get();
         filter = filter->mergeWith(oldFilter);
@@ -935,6 +968,53 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     }
     return replaceInputs(call, std::move(args));
   }
+
+  if ((call->name() == expression::kAnd && negated) ||
+      (call->name() == expression::kOr && !negated)) {
+    std::vector<std::unique_ptr<common::Filter>> disjuncts;
+    common::Subfield subfield;
+
+    for (const auto& input : call->inputs()) {
+      common::SubfieldFilters tmpFilters;
+      double tmpSampleRate = 1;
+      auto tmpRemaining = extractFiltersFromRemainingFilter(
+          input, evaluator, negated, tmpFilters, tmpSampleRate);
+
+      if (tmpRemaining != nullptr || tmpSampleRate != 1 ||
+          tmpFilters.size() != 1) {
+        disjuncts.clear();
+        break;
+      }
+
+      if (disjuncts.empty()) {
+        subfield = tmpFilters.begin()->first.clone();
+      } else if (!(subfield == tmpFilters.begin()->first)) {
+        disjuncts.clear();
+        break;
+      }
+
+      disjuncts.push_back(tmpFilters.begin()->second->clone());
+    }
+
+    if (!disjuncts.empty()) {
+      auto filter =
+          exec::ExprToSubfieldFilterParser::makeOrFilter(std::move(disjuncts));
+
+      if (filter == nullptr) {
+        return expr;
+      }
+
+      auto it = filters.find(subfield);
+      if (it != filters.end()) {
+        filter = filter->mergeWith(it->second.get());
+      }
+
+      filters.insert_or_assign(std::move(subfield), std::move(filter));
+
+      return nullptr;
+    }
+  }
+
   if (!negated) {
     double rate = getPrestoSampleRate(expr, call, evaluator);
     if (rate != -1) {
@@ -942,6 +1022,7 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
       return nullptr;
     }
   }
+
   return expr;
 }
 } // namespace
@@ -953,6 +1034,106 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     double& sampleRate) {
   return extractFiltersFromRemainingFilter(
       expr, evaluator, /*negated=*/false, filters, sampleRate);
+}
+
+bool shouldEagerlyMaterialize(
+    const exec::Expr& remainingFilter,
+    const exec::FieldReference& field) {
+  const auto isMember = [](const std::vector<exec::FieldReference*>& fields,
+                           const exec::FieldReference& field) {
+    return std::find(fields.begin(), fields.end(), &field) != fields.end();
+  };
+
+  if (!remainingFilter.evaluatesArgumentsOnNonIncreasingSelection()) {
+    return true;
+  }
+  for (auto& input : remainingFilter.inputs()) {
+    if (isMember(input->distinctFields(), field) && input->hasConditionals()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+namespace {
+template <TypeKind kind>
+std::unique_ptr<common::Filter> createRangeFilterInternal(
+    const variant& lower,
+    const variant& upper) {
+  using T = typename TypeTraits<kind>::NativeType;
+  const bool lowerUnbounded = lower.isNull();
+  const bool upperUnbounded = upper.isNull();
+
+  if constexpr (
+      kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
+    return std::make_unique<common::BigintRange>(
+        lowerUnbounded ? std::numeric_limits<int64_t>::min() : lower.value<T>(),
+        upperUnbounded ? std::numeric_limits<int64_t>::max() : upper.value<T>(),
+        /*nullAllowed=*/false);
+  } else if constexpr (kind == TypeKind::REAL) {
+    return std::make_unique<common::FloatRange>(
+        lowerUnbounded ? std::numeric_limits<float>::lowest()
+                       : lower.value<T>(),
+        lowerUnbounded,
+        /*lowerExclusive=*/false,
+        upperUnbounded ? std::numeric_limits<float>::max() : upper.value<T>(),
+        upperUnbounded,
+        /*upperExclusive=*/false,
+        /*nullAllowed=*/false);
+  } else if constexpr (kind == TypeKind::DOUBLE) {
+    return std::make_unique<common::DoubleRange>(
+        lowerUnbounded ? std::numeric_limits<double>::lowest()
+                       : lower.value<T>(),
+        lowerUnbounded,
+        /*lowerExclusive=*/false,
+        upperUnbounded ? std::numeric_limits<double>::max() : upper.value<T>(),
+        upperUnbounded,
+        /*upperExclusive=*/false,
+        /*nullAllowed=*/false);
+  } else if constexpr (
+      kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY) {
+    return std::make_unique<common::BytesRange>(
+        lowerUnbounded ? "" : std::string(lower.value<StringView>()),
+        lowerUnbounded,
+        /*lowerExclusive=*/false,
+        upperUnbounded ? "" : std::string(upper.value<StringView>()),
+        upperUnbounded,
+        /*upperExclusive=*/false,
+        /*nullAllowed=*/false);
+  } else if constexpr (kind == TypeKind::BOOLEAN) {
+    VELOX_CHECK(
+        !lowerUnbounded && !upperUnbounded,
+        "Boolean range filter requires both bounds");
+    return std::make_unique<common::BoolValue>(
+        lower.value<T>(), /*nullAllowed=*/false);
+  } else {
+    VELOX_UNSUPPORTED(
+        "Unsupported type kind for filter creation: {}",
+        TypeKindName::toName(kind));
+  }
+}
+} // namespace
+
+std::unique_ptr<common::Filter> createPointFilter(
+    const TypePtr& type,
+    const variant& value) {
+  VELOX_CHECK(!value.isNull(), "Value cannot be null");
+
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      createRangeFilterInternal, type->kind(), value, value);
+}
+
+std::unique_ptr<common::Filter> createRangeFilter(
+    const TypePtr& type,
+    const variant& lower,
+    const variant& upper) {
+  VELOX_CHECK(
+      !lower.isNull() || !upper.isNull(),
+      "At least one of lower or upper bound must be set");
+
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      createRangeFilterInternal, type->kind(), lower, upper);
 }
 
 } // namespace facebook::velox::connector::hive

@@ -456,7 +456,20 @@ class MockFileSink : public dwio::common::FileSink {
 
   MOCK_METHOD(uint64_t, size, (), (const override));
   MOCK_METHOD(bool, isBuffered, (), (const override));
+// On Centos9 the gtest mock header doesn't initialize the
+// buffer_ member in MatcherBase correctly - the default constructor only
+// initializes one: /usr/include/gtest/gtest-matchers.h:302:33 resulting in
+// error:
+// '<unnamed>.testing::Matcher<const
+// facebook::velox::FileIoContext&>::<unnamed>.testing::internal::MatcherBase<const
+// facebook::velox::FileIoContext&>::buffer_' is used uninitialized
+// [-Werror=uninitialized]
+//  302 |       : vtable_(other.vtable_), buffer_(other.buffer_) {
+// Fix: https://github.com/google/googletest/pull/3797
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
   MOCK_METHOD(void, write, (std::vector<DataBuffer<char>>&));
+#pragma GCC diagnostic pop
 };
 
 TEST_F(WriterTest, FlushWriterSinkUponClose) {

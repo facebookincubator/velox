@@ -94,10 +94,16 @@ struct CompareHelper {
       "T is an unsigned numeric");
 
   constexpr static T DefaultMin() {
+    if constexpr (std::is_floating_point_v<T>) {
+      return std::numeric_limits<T>::infinity();
+    }
     return std::numeric_limits<T>::max();
   }
   constexpr static T DefaultMax() {
-    return std::numeric_limits<T>::lowest();
+    if constexpr (std::is_floating_point_v<T>) {
+      return -std::numeric_limits<T>::infinity();
+    }
+    return std::numeric_limits<T>::min();
   }
 
   // MSVC17 fix, isnan is not overloaded for IntegralType as per C++11
@@ -361,6 +367,7 @@ CleanStatistic(std::pair<T, T> min_max) {
 // In case of floating point types, the following rules are applied (as per
 // upstream parquet-mr):
 // - If any of min/max is NaN, return nothing.
+// - If min is infinity and max is -infinity, return nothing.
 // - If min is 0.0f, replace with -0.0f
 // - If max is -0.0f, replace with 0.0f
 template <typename T>
@@ -375,8 +382,8 @@ template <typename T>
     return ::std::nullopt;
   }
 
-  if (min == std::numeric_limits<T>::max() &&
-      max == std::numeric_limits<T>::lowest()) {
+  if (min == std::numeric_limits<T>::infinity() &&
+      max == -std::numeric_limits<T>::infinity()) {
     return ::std::nullopt;
   }
 

@@ -90,7 +90,9 @@ class Exchange : public SourceOperator {
 
   void recordInputStats(uint64_t rawInputBytes);
 
-  RowVectorPtr getOutputFromRows(VectorSerde* serde);
+  RowVectorPtr getOutputFromColumnarPages(VectorSerde* serde);
+
+  RowVectorPtr getOutputFromRowPages(VectorSerde* serde);
 
   const uint64_t preferredOutputBatchBytes_;
 
@@ -115,15 +117,21 @@ class Exchange : public SourceOperator {
   // Reusable result vector.
   RowVectorPtr result_;
 
-  std::vector<std::unique_ptr<SerializedPage>> currentPages_;
+  std::vector<std::unique_ptr<SerializedPageBase>> currentPages_;
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
 
-  // Memory holders needed by row serde to perform cursor like reads
-  // across 'getOutputFromRows' calls.
-  std::unique_ptr<SerializedPage> rowPages_;
-  std::unique_ptr<ByteInputStream> rowInputStream_;
+  // Memory holders for deserialization across 'getOutput' calls.
+  // The merged pages for row serialization.
+  std::unique_ptr<SerializedPageBase> mergedRowPage_;
   std::unique_ptr<RowIterator> rowIterator_;
+
+  // State for columnar page deserialization.
+  // Index of the current page in 'currentPages_' being processed.
+  size_t columnarPageIdx_{0};
+
+  // Stream for deserialization used by both row and columnar.
+  std::unique_ptr<ByteInputStream> inputStream_;
 
   // The estimated bytes per row of the output of this exchange operator
   // computed from the last processed output.

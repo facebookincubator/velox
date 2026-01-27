@@ -16,9 +16,6 @@
 #include "velox/exec/tests/utils/FilterToExpression.h"
 #include <gtest/gtest.h>
 #include "velox/core/Expressions.h"
-#include "velox/core/QueryCtx.h"
-#include "velox/expression/Expr.h"
-#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::core::test {
@@ -30,14 +27,6 @@ class FilterToExpressionTest : public testing::Test,
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  // Helper method to create a row type for testing
-  RowTypePtr createTestRowType() {
-    return ROW(
-        {"a", "b", "c", "d", "e", "f"},
-        {BIGINT(), DOUBLE(), VARCHAR(), BOOLEAN(), REAL(), TIMESTAMP()});
-  }
-
-  // Helper method to verify expression type and structure
   void verifyExpr(
       const TypedExprPtr& expr,
       const std::string& expectedType,
@@ -50,28 +39,15 @@ class FilterToExpressionTest : public testing::Test,
     ASSERT_EQ(callExpr->name(), expectedName);
   }
 
-  // Helper method for round trip testing
-  void testRoundTrip(
-      const std::string& fieldName,
-      std::unique_ptr<common::Filter> filter);
-
-  core::ExpressionEvaluator* evaluator() {
-    return &evaluator_;
+  TypedExprPtr toExpr(const common::Filter* filter, const TypePtr& type) {
+    common::Subfield subfield("a");
+    return filterToExpr(subfield, filter, ROW({"a"}, {type}), pool());
   }
-
- private:
-  std::shared_ptr<memory::MemoryPool> pool_ =
-      memory::memoryManager()->addLeafPool();
-  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
-  exec::SimpleExpressionEvaluator evaluator_{queryCtx_.get(), pool_.get()};
 };
 
-TEST_F(FilterToExpressionTest, AlwaysTrue) {
+TEST_F(FilterToExpressionTest, alwaysTrue) {
   auto filter = std::make_unique<common::AlwaysTrue>();
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   ASSERT_TRUE(expr != nullptr);
   ASSERT_EQ(expr->type()->toString(), "BOOLEAN");
@@ -81,12 +57,9 @@ TEST_F(FilterToExpressionTest, AlwaysTrue) {
   ASSERT_TRUE(constantExpr->value().value<TypeKind::BOOLEAN>());
 }
 
-TEST_F(FilterToExpressionTest, AlwaysFalse) {
+TEST_F(FilterToExpressionTest, alwaysFalse) {
   auto filter = std::make_unique<common::AlwaysFalse>();
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   ASSERT_TRUE(expr != nullptr);
   ASSERT_EQ(expr->type()->toString(), "BOOLEAN");
@@ -96,24 +69,18 @@ TEST_F(FilterToExpressionTest, AlwaysFalse) {
   ASSERT_FALSE(constantExpr->value().value<TypeKind::BOOLEAN>());
 }
 
-TEST_F(FilterToExpressionTest, IsNull) {
+TEST_F(FilterToExpressionTest, isNull) {
   auto filter = std::make_unique<common::IsNull>();
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   verifyExpr(expr, "BOOLEAN", "is_null");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
   ASSERT_EQ(callExpr->inputs().size(), 1);
 }
 
-TEST_F(FilterToExpressionTest, IsNotNull) {
+TEST_F(FilterToExpressionTest, isNotNull) {
   auto filter = std::make_unique<common::IsNotNull>();
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   verifyExpr(expr, "BOOLEAN", "not");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -126,12 +93,9 @@ TEST_F(FilterToExpressionTest, IsNotNull) {
   ASSERT_EQ(isNullExpr->name(), "is_null");
 }
 
-TEST_F(FilterToExpressionTest, BoolValue) {
+TEST_F(FilterToExpressionTest, boolValue) {
   auto filter = std::make_unique<common::BoolValue>(true, false);
-  common::Subfield subfield("d");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BOOLEAN());
 
   verifyExpr(expr, "BOOLEAN", "eq");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -148,12 +112,9 @@ TEST_F(FilterToExpressionTest, BoolValue) {
   ASSERT_EQ(constantExpr->value().value<TypeKind::BOOLEAN>(), true);
 }
 
-TEST_F(FilterToExpressionTest, BigintRangeSingleValue) {
+TEST_F(FilterToExpressionTest, bigintRangeSingleValue) {
   auto filter = std::make_unique<common::BigintRange>(42, 42, false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   verifyExpr(expr, "BOOLEAN", "eq");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -165,12 +126,9 @@ TEST_F(FilterToExpressionTest, BigintRangeSingleValue) {
   ASSERT_EQ(constantExpr->value().value<TypeKind::BIGINT>(), 42);
 }
 
-TEST_F(FilterToExpressionTest, BigintRangeWithRange) {
+TEST_F(FilterToExpressionTest, bigintRangeWithRange) {
   auto filter = std::make_unique<common::BigintRange>(10, 20, false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   verifyExpr(expr, "BOOLEAN", "and");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -187,12 +145,9 @@ TEST_F(FilterToExpressionTest, BigintRangeWithRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, NegatedBigintRangeSingleValue) {
+TEST_F(FilterToExpressionTest, negatedBigintRangeSingleValue) {
   auto filter = std::make_unique<common::NegatedBigintRange>(42, 42, false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   // The implementation now uses getNonNegated() which creates a NOT expression
   // even for single values, so we expect "not" instead of "neq"
@@ -234,13 +189,10 @@ TEST_F(FilterToExpressionTest, NegatedBigintRangeSingleValue) {
   }
 }
 
-TEST_F(FilterToExpressionTest, DoubleRange) {
+TEST_F(FilterToExpressionTest, doubleRange) {
   auto filter = std::make_unique<common::DoubleRange>(
       1.5, false, false, 3.5, false, false, false);
-  common::Subfield subfield("b");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), DOUBLE());
 
   verifyExpr(expr, "BOOLEAN", "and");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -257,13 +209,10 @@ TEST_F(FilterToExpressionTest, DoubleRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, FloatRange) {
+TEST_F(FilterToExpressionTest, floatRange) {
   auto filter = std::make_unique<common::FloatRange>(
       1.5f, false, true, 3.5f, false, true, false);
-  common::Subfield subfield("e");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), REAL());
 
   verifyExpr(expr, "BOOLEAN", "and");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -280,13 +229,10 @@ TEST_F(FilterToExpressionTest, FloatRange) {
   ASSERT_EQ(lessThan->name(), "lt");
 }
 
-TEST_F(FilterToExpressionTest, BytesRange) {
+TEST_F(FilterToExpressionTest, bytesRange) {
   auto filter = std::make_unique<common::BytesRange>(
       "apple", false, false, "orange", false, false, false);
-  common::Subfield subfield("c");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), VARCHAR());
 
   verifyExpr(expr, "BOOLEAN", "and");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -303,13 +249,10 @@ TEST_F(FilterToExpressionTest, BytesRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, BigintValuesUsingHashTable) {
+TEST_F(FilterToExpressionTest, bigintValuesUsingHashTable) {
   std::vector<int64_t> values = {10, 20, 30};
   auto filter = common::createBigintValues(values, false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   // The implementation creates an optimized expression: (range check) AND (in
   // check)
@@ -337,13 +280,10 @@ TEST_F(FilterToExpressionTest, BigintValuesUsingHashTable) {
   ASSERT_EQ(arrayExpr->inputs().size(), 3);
 }
 
-TEST_F(FilterToExpressionTest, BytesValues) {
+TEST_F(FilterToExpressionTest, bytesValues) {
   std::vector<std::string> values = {"apple", "banana", "orange"};
   auto filter = std::make_unique<common::BytesValues>(values, false);
-  common::Subfield subfield("c");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), VARCHAR());
 
   verifyExpr(expr, "BOOLEAN", "in");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -356,13 +296,10 @@ TEST_F(FilterToExpressionTest, BytesValues) {
   ASSERT_EQ(arrayExpr->inputs().size(), 3);
 }
 
-TEST_F(FilterToExpressionTest, NegatedBytesValues) {
+TEST_F(FilterToExpressionTest, negatedBytesValues) {
   std::vector<std::string> values = {"apple", "banana", "orange"};
   auto filter = std::make_unique<common::NegatedBytesValues>(values, false);
-  common::Subfield subfield("c");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), VARCHAR());
 
   verifyExpr(expr, "BOOLEAN", "not");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -375,14 +312,11 @@ TEST_F(FilterToExpressionTest, NegatedBytesValues) {
   ASSERT_TRUE(containsExpr->name() == "in" || containsExpr->name() == "or");
 }
 
-TEST_F(FilterToExpressionTest, NegatedBigintValuesUsingHashTable) {
+TEST_F(FilterToExpressionTest, negatedBigintValuesUsingHashTable) {
   std::vector<int64_t> values = {10, 20, 30};
   auto filter = std::make_unique<common::NegatedBigintValuesUsingHashTable>(
       10, 30, values, false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   // The implementation creates a NOT expression for the optimized IN check
   verifyExpr(expr, "BOOLEAN", "not");
@@ -409,15 +343,12 @@ TEST_F(FilterToExpressionTest, NegatedBigintValuesUsingHashTable) {
   ASSERT_EQ(isNullExpr->name(), "is_null");
 }
 
-TEST_F(FilterToExpressionTest, TimestampRange) {
+TEST_F(FilterToExpressionTest, timestampRange) {
   auto timestamp1 = Timestamp::fromMillis(1609459200000); // 2021-01-01
   auto timestamp2 = Timestamp::fromMillis(1640995200000); // 2022-01-01
   auto filter =
       std::make_unique<common::TimestampRange>(timestamp1, timestamp2, false);
-  common::Subfield subfield("f");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), TIMESTAMP());
 
   verifyExpr(expr, "BOOLEAN", "and");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
@@ -434,23 +365,20 @@ TEST_F(FilterToExpressionTest, TimestampRange) {
   ASSERT_EQ(lessOrEqual->name(), "lte");
 }
 
-TEST_F(FilterToExpressionTest, BigintMultiRange) {
+TEST_F(FilterToExpressionTest, bigintMultiRange) {
   std::vector<std::unique_ptr<common::BigintRange>> ranges;
   ranges.push_back(std::make_unique<common::BigintRange>(10, 20, false));
   ranges.push_back(std::make_unique<common::BigintRange>(30, 40, false));
   auto filter =
       std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   verifyExpr(expr, "BOOLEAN", "or");
   auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
   ASSERT_EQ(callExpr->inputs().size(), 2);
 }
 
-TEST_F(FilterToExpressionTest, MultiRange) {
+TEST_F(FilterToExpressionTest, multiRange) {
   // Create a MultiRange filter with compatible filters for BIGINT field
   std::vector<std::unique_ptr<common::Filter>> filters;
 
@@ -464,10 +392,7 @@ TEST_F(FilterToExpressionTest, MultiRange) {
   filters.push_back(std::make_unique<common::BigintRange>(30, 40, false));
 
   auto filter = std::make_unique<common::MultiRange>(std::move(filters), false);
-  common::Subfield subfield("a");
-  auto rowType = createTestRowType();
-
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
+  auto expr = toExpr(filter.get(), BIGINT());
 
   // Verify the top-level expression is an OR
   verifyExpr(expr, "BOOLEAN", "or");
@@ -495,135 +420,6 @@ TEST_F(FilterToExpressionTest, MultiRange) {
   ASSERT_TRUE(thirdInput != nullptr);
   ASSERT_EQ(thirdInput->name(), "and");
   ASSERT_EQ(thirdInput->inputs().size(), 2);
-}
-
-// Helper method for round trip testing
-void FilterToExpressionTest::testRoundTrip(
-    const std::string& fieldName,
-    std::unique_ptr<common::Filter> filter) {
-  // Step 1: Convert filter to expression
-  common::Subfield subfield(fieldName);
-  auto rowType = createTestRowType();
-  auto expr = filterToExpr(subfield, filter.get(), rowType, pool());
-  ASSERT_TRUE(expr != nullptr);
-
-  // Step 2: Convert expression back to filter
-  auto callExpr = std::dynamic_pointer_cast<const CallTypedExpr>(expr);
-  if (!callExpr) {
-    // Some filters like AlwaysTrue/AlwaysFalse convert to ConstantTypedExpr
-    // which can't be converted back to a filter
-    return;
-  }
-
-  // Special handling for BoolValue filter
-  if (filter->kind() == common::FilterKind::kBoolValue) {
-    // For BoolValue, we need to extract the eq expression from the and
-    // expression
-    if (callExpr->name() == "and" && callExpr->inputs().size() == 2) {
-      auto eqExpr =
-          std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[0]);
-      if (eqExpr && eqExpr->name() == "eq") {
-        callExpr = eqExpr;
-      }
-    }
-  }
-
-  // Special handling for "in" with array_constructor
-  if (callExpr->name() == "in" && callExpr->inputs().size() == 2) {
-    auto arrayExpr =
-        std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[1]);
-    if (arrayExpr && arrayExpr->name() == "array_constructor") {
-      // Use toSubfieldFilter for array_constructor expressions
-      auto [roundTripSubfield, roundTripFilter] =
-          exec::ExprToSubfieldFilterParser::getInstance()->toSubfieldFilter(
-              expr, evaluator());
-
-      // Step 3: Verify the round-tripped filter and subfield
-      ASSERT_TRUE(roundTripFilter != nullptr);
-      ASSERT_EQ(roundTripSubfield.toString(), subfield.toString());
-
-      // Compare filter properties - this will vary based on filter type
-      // For this test we'll just verify the filter kind is the same
-      ASSERT_EQ(roundTripFilter->kind(), filter->kind());
-      return;
-    }
-  }
-
-  // Special handling for range filters (and expressions)
-  if (callExpr->name() == "and" && callExpr->inputs().size() == 2) {
-    auto firstInput =
-        std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[0]);
-    auto secondInput =
-        std::dynamic_pointer_cast<const CallTypedExpr>(callExpr->inputs()[1]);
-
-    if (firstInput && secondInput && firstInput->name() == "gte" &&
-        secondInput->name() == "lte") {
-      // Extract the field and bounds
-      auto field = firstInput->inputs()[0];
-      auto lowerBound = firstInput->inputs()[1];
-      auto upperBound = secondInput->inputs()[1];
-
-      // Create a between expression
-      auto betweenExpr = std::make_shared<CallTypedExpr>(
-          callExpr->type(), "between", field, lowerBound, upperBound);
-
-      common::Subfield roundTripSubfield;
-      auto roundTripFilter =
-          exec::ExprToSubfieldFilterParser::getInstance()
-              ->leafCallToSubfieldFilter(
-                  *betweenExpr, roundTripSubfield, evaluator(), false);
-
-      // Step 3: Verify the round-tripped filter and subfield
-      ASSERT_TRUE(roundTripFilter != nullptr);
-      ASSERT_EQ(roundTripSubfield.toString(), subfield.toString());
-
-      // Compare filter properties - this will vary based on filter type
-      // For this test we'll just verify the filter kind is the same
-      ASSERT_EQ(roundTripFilter->kind(), filter->kind());
-      return;
-    }
-  }
-
-  // For all other expressions, use leafCallToSubfieldFilter directly
-  common::Subfield roundTripSubfield;
-  auto roundTripFilter =
-      exec::ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(
-          *callExpr, roundTripSubfield, evaluator(), false);
-
-  // Step 3: Verify the round-tripped filter and subfield
-  ASSERT_TRUE(roundTripFilter != nullptr);
-  ASSERT_EQ(roundTripSubfield.toString(), subfield.toString());
-
-  // Compare filter properties - this will vary based on filter type
-  // For this test we'll just verify the filter kind is the same
-  ASSERT_EQ(roundTripFilter->kind(), filter->kind());
-}
-
-// Round trip tests for various filter types
-TEST_F(FilterToExpressionTest, RoundTripBigintRangeSingleValue) {
-  auto filter = std::make_unique<common::BigintRange>(42, 42, false);
-  testRoundTrip("a", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripBigintRangeWithRange) {
-  auto filter = std::make_unique<common::BigintRange>(10, 20, false);
-  testRoundTrip("a", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripIsNull) {
-  auto filter = std::make_unique<common::IsNull>();
-  testRoundTrip("a", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripBoolValue) {
-  auto filter = std::make_unique<common::BoolValue>(true, false);
-  testRoundTrip("d", std::move(filter));
-}
-
-TEST_F(FilterToExpressionTest, RoundTripBytesRange) {
-  auto filter = std::make_unique<common::BytesRange>(
-      "apple", false, false, "orange", false, false, false);
-  testRoundTrip("c", std::move(filter));
 }
 
 } // namespace facebook::velox::core::test

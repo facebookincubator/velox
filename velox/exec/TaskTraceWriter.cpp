@@ -18,15 +18,17 @@
 #include "velox/common/file/File.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 namespace facebook::velox::exec::trace {
 
 TaskTraceMetadataWriter::TaskTraceMetadataWriter(
     std::string traceDir,
+    std::string traceNodeId,
     memory::MemoryPool* /* pool */)
     : traceDir_(std::move(traceDir)),
+      traceNodeId_(std::move(traceNodeId)),
       fs_(filesystems::getFileSystem(traceDir_, nullptr)),
       traceFilePath_(getTaskTraceMetaFilePath(traceDir_)) {
   VELOX_CHECK_NOT_NULL(fs_);
@@ -34,19 +36,22 @@ TaskTraceMetadataWriter::TaskTraceMetadataWriter(
 }
 
 void TaskTraceMetadataWriter::write(
-    const std::shared_ptr<core::QueryCtx>& queryCtx,
-    const core::PlanNodePtr& planNode) {
+    const core::QueryCtx& queryCtx,
+    const core::PlanNode& planNode) {
   VELOX_CHECK(!finished_, "Query metadata can only be written once");
   finished_ = true;
+
+  auto traceNode = trace::getTraceNode(planNode, traceNodeId_);
+
   folly::dynamic queryConfigObj = folly::dynamic::object;
-  const auto configValues = queryCtx->queryConfig().rawConfigsCopy();
+  const auto configValues = queryCtx.queryConfig().rawConfigsCopy();
   for (const auto& [key, value] : configValues) {
     queryConfigObj[key] = value;
   }
 
   folly::dynamic connectorPropertiesObj = folly::dynamic::object;
   for (const auto& [connectorId, configs] :
-       queryCtx->connectorSessionProperties()) {
+       queryCtx.connectorSessionProperties()) {
     folly::dynamic obj = folly::dynamic::object;
     for (const auto& [key, value] : configs->rawConfigsCopy()) {
       obj[key] = value;
@@ -57,7 +62,7 @@ void TaskTraceMetadataWriter::write(
   folly::dynamic metaObj = folly::dynamic::object;
   metaObj[TraceTraits::kQueryConfigKey] = queryConfigObj;
   metaObj[TraceTraits::kConnectorPropertiesKey] = connectorPropertiesObj;
-  metaObj[TraceTraits::kPlanNodeKey] = planNode->serialize();
+  metaObj[TraceTraits::kPlanNodeKey] = traceNode->serialize();
 
   const auto metaStr = folly::toJson(metaObj);
   const auto file = fs_->openFileForWrite(traceFilePath_);

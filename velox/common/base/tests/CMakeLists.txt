@@ -32,6 +32,7 @@ add_executable(
   SkewedPartitionBalancerTest.cpp
   SpillConfigTest.cpp
   SpillStatsTest.cpp
+  SplitBlockBloomFilterTest.cpp
   StatsReporterTest.cpp
   StatusTest.cpp
   SuccinctPrinterTest.cpp

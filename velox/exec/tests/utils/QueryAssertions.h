@@ -22,6 +22,9 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
+#ifdef BLOCK_SIZE
+#undef BLOCK_SIZE
+#endif
 #include <duckdb.hpp> // @manual
 
 namespace facebook::velox::exec::test {
@@ -311,6 +314,13 @@ bool assertEqualResults(
 bool assertEqualResults(
     const core::PlanNodePtr& plan1,
     const core::PlanNodePtr& plan2);
+
+bool assertEqualResults(
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedType,
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& actualType,
+    const std::string& message);
 
 /// Ensure both datasets have the same type and number of rows.
 void assertEqualTypeAndNumRows(

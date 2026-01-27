@@ -73,11 +73,11 @@ class ValueTypes {
   }
 
   auto begin() const {
-    return values_.begin();
+    return values_.cbegin();
   }
 
   auto end() const {
-    return values_.end();
+    return values_.cend();
   }
 
   const std::shared_ptr<folly::Executor>& decodingExecutor() const {

@@ -171,6 +171,7 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
+    checkPreload();
     if (needNewSplit_) {
       const auto hasNewSplit = getSplit();
       if (!hasNewSplit) {
@@ -185,17 +186,8 @@ RowVectorPtr TableScan::getOutput() {
     VELOX_CHECK(!hasDrained());
 
     const auto estimatedRowSize = dataSource_->estimatedRowSize();
-    // TODO: Expose this to operator stats.
-    VLOG(1) << "estimatedRowSize = " << estimatedRowSize;
-    readBatchSize_ = estimatedRowSize == connector::DataSource::kUnknownRowSize
-        ? outputBatchRows()
-        : outputBatchRows(estimatedRowSize);
-    int32_t readBatchSize = readBatchSize_;
-    if (maxFilteringRatio_ > 0) {
-      readBatchSize = std::min(
-          maxReadBatchSize_,
-          static_cast<int32_t>(readBatchSize / maxFilteringRatio_));
-    }
+    const int32_t readBatchSize = calculateBatchSize(estimatedRowSize);
+
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
@@ -204,7 +196,6 @@ RowVectorPtr TableScan::getOutput() {
       dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     }
 
-    checkPreload();
     {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
@@ -371,16 +362,16 @@ bool TableScan::getSplit() {
     stats_.wlock()->addRuntimeStat(
         "waitForPreloadSplitNanos",
         RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+    if (preparedDataSource == nullptr) {
+      // There must be a cancellation.
+      VELOX_CHECK(operatorCtx_->task()->isCancelled());
+      return false;
+    }
     stats_.wlock()->addRuntimeStat(
         "preloadSplitPrepareTimeNanos",
         RuntimeCounter(
             connectorSplit->dataSource->prepareTiming().wallNanos,
             RuntimeCounter::Unit::kNanos));
-    if (!preparedDataSource) {
-      // There must be a cancellation.
-      VELOX_CHECK(operatorCtx_->task()->isCancelled());
-      return false;
-    }
     dataSource_->setFromDataSource(std::move(preparedDataSource));
   } else {
     uint64_t addSplitTimeUs{0};
@@ -472,21 +463,19 @@ void TableScan::checkPreload() {
       !connector_->supportsSplitPreload()) {
     return;
   }
-  if (dataSource_->allPrefetchIssued()) {
-    maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
-        maxSplitPreloadPerDriver_;
-    if (!splitPreloader_) {
-      splitPreloader_ =
-          [ioExecutor,
-           this](const std::shared_ptr<connector::ConnectorSplit>& split) {
-            preload(split);
+  maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
+      maxSplitPreloadPerDriver_;
+  if (!splitPreloader_) {
+    splitPreloader_ =
+        [ioExecutor,
+         this](const std::shared_ptr<connector::ConnectorSplit>& split) {
+          preload(split);
 
-            ioExecutor->add([connectorSplit = split]() mutable {
-              connectorSplit->dataSource->prepare();
-              connectorSplit.reset();
-            });
-          };
-    }
+          ioExecutor->add([connectorSplit = split]() mutable {
+            connectorSplit->dataSource->prepare();
+            connectorSplit.reset();
+          });
+        };
   }
 }
 
@@ -503,6 +492,32 @@ void TableScan::addDynamicFilterLocked(
     }
   }
   stats_.wlock()->dynamicFilterStats.producerNodeIds.emplace(producer);
+}
+
+int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
+  int64_t estimatedRowSize = connector::DataSource::kUnknownRowSize;
+  if (currentEstimatedRowSize != connector::DataSource::kUnknownRowSize) {
+    // Use current file estimate.
+    fileEstimatedRowSize_ = currentEstimatedRowSize;
+    estimatedRowSize = currentEstimatedRowSize;
+  } else if (fileEstimatedRowSize_ != connector::DataSource::kUnknownRowSize) {
+    // Fallback to previous file estimate.
+    estimatedRowSize = fileEstimatedRowSize_;
+  }
+  // Otherwise, no estimate available: use preferredOutputBatchRows()
+  // (readBatchSize_ default).
+
+  if (estimatedRowSize != connector::DataSource::kUnknownRowSize) {
+    readBatchSize_ = outputBatchRows(estimatedRowSize);
+  }
+
+  int32_t batchSize = readBatchSize_;
+  if (maxFilteringRatio_ > 0) {
+    batchSize = std::min(
+        maxReadBatchSize_,
+        static_cast<int32_t>(batchSize / maxFilteringRatio_));
+  }
+  return batchSize;
 }
 
 void TableScan::close() {

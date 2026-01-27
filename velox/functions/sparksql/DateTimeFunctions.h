@@ -780,6 +780,40 @@ struct WeekdayFunction {
 };
 
 template <typename T>
+struct DayNameFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    const auto tm = getDateTime(date);
+    switch (tm.tm_wday) {
+      case 0:
+        result.append("Sun");
+        break;
+      case 1:
+        result.append("Mon");
+        break;
+      case 2:
+        result.append("Tue");
+        break;
+      case 3:
+        result.append("Wed");
+        break;
+      case 4:
+        result.append("Thu");
+        break;
+      case 5:
+        result.append("Fri");
+        break;
+      default:
+        result.append("Sat");
+        break;
+    }
+  }
+};
+
+template <typename T>
 struct NextDayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1053,11 +1087,12 @@ template <typename T>
 struct TimestampAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* unitString,
-      const int32_t* /*value*/,
+      const TInput* /*value*/,
       const arg_type<Timestamp>* /*timestamp*/) {
     VELOX_USER_CHECK_NOT_NULL(unitString);
     std::string unitStr(*unitString);
@@ -1071,10 +1106,11 @@ struct TimestampAddFunction {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& /*unitString*/,
-      const int32_t value,
+      const TInput value,
       const arg_type<Timestamp>& timestamp) {
     const auto unit = unit_.value();
     result = addToTimestamp(unit, value, timestamp, sessionTimeZone_);
@@ -1139,6 +1175,71 @@ struct MonthsBetweenFunction {
   static constexpr int64_t kRoundingPrecision = 1e8;
   static constexpr int64_t kSecondsInMonth = kSecondsInDay * 31;
   const tz::TimeZone* sessionTimeZone_ = nullptr;
+};
+
+template <typename T>
+struct DateFormatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if (formatString != nullptr) {
+      auto formatter = detail::initializeFormatter(
+          std::string_view(*formatString), legacyFormatter_);
+      if (formatter) {
+        formatter_ = formatter;
+        maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
+      } else {
+        invalidFormat_ = true;
+      }
+      isConstFormat_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& formatString) {
+    if (invalidFormat_) {
+      return false;
+    }
+    if (!isConstFormat_) {
+      auto formatter = detail::initializeFormatter(
+          std::string_view(formatString), legacyFormatter_);
+      if (!formatter) {
+        return false;
+      }
+      formatter_ = formatter;
+      maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
+    }
+
+    format(timestamp, sessionTimeZone_, maxResultSize_, result);
+    return true;
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE void format(
+      const Timestamp& timestamp,
+      const tz::TimeZone* timeZone,
+      uint32_t maxResultSize,
+      out_type<Varchar>& result) const {
+    result.reserve(maxResultSize);
+    const auto resultSize =
+        formatter_->format(timestamp, timeZone, maxResultSize, result.data());
+    result.resize(resultSize);
+  }
+
+  const tz::TimeZone* sessionTimeZone_{nullptr};
+  std::shared_ptr<DateTimeFormatter> formatter_;
+  bool isConstFormat_{false};
+  bool legacyFormatter_{false};
+  bool invalidFormat_{false};
+  uint32_t maxResultSize_;
 };
 
 } // namespace facebook::velox::functions::sparksql

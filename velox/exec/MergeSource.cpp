@@ -120,10 +120,10 @@ class LocalMergeSource : public MergeSource {
         ContinueFuture* future,
         ScopedPromiseNotification& notification) {
       VELOX_CHECK(started_);
-      data.reset();
 
       if (data_.empty()) {
         if (atEnd_) {
+          data.reset();
           return BlockingReason::kNotBlocked;
         }
         consumerPromises_.emplace_back("LocalMergeSourceQueue::next");
@@ -287,7 +287,7 @@ class MergeExchangeSource : public MergeSource {
 
   std::shared_ptr<ExchangeClient> client_;
   std::unique_ptr<ByteInputStream> inputStream_;
-  std::unique_ptr<SerializedPage> currentPage_;
+  std::unique_ptr<SerializedPageBase> currentPage_;
   bool atEnd_ = false;
 };
 } // namespace

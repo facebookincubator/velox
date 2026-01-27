@@ -74,7 +74,7 @@ class SpatialJoinTest : public OperatorTestBase {
       const std::vector<std::optional<std::string_view>>& expectedLeftWkts,
       const std::vector<std::optional<std::string_view>>& expectedRightWkts) {
     for (bool separateProbeBatches : {false, true}) {
-      for (size_t maxBatchSize : {1024, 1}) {
+      for (size_t maxBatchSize : {128, 3, 2, 1}) {
         for (int32_t maxDrivers : {1, 4}) {
           runTestWithConfig(
               probeWkts,
@@ -383,6 +383,46 @@ TEST_F(SpatialJoinTest, testSimpleNullRowsJoin) {
       {"POINT (1 1)"});
 }
 
+TEST_F(SpatialJoinTest, testGeometryCollection) {
+  runTest(
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 1)"},
+      std::nullopt,
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)",
+       "GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)"});
+
+  runTest(
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 2))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 2)"},
+      std::vector<std::optional<double>>{1.0, 1.0, 1.0},
+      "ST_Distance(left_g, right_g) <= radius",
+      core::JoinType::kInner,
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 2))",
+       "POINT (1 2)",
+       "GEOMETRYCOLLECTION (POINT (1 2))",
+       "POINT (1 2)"});
+}
+
 TEST_F(SpatialJoinTest, testDistanceJoin) {
   runTest(
       {"POINT (1 2)", "POLYGON ((1 2, 2 2, 2 3, 1 3, 1 2))", std::nullopt},
@@ -669,6 +709,59 @@ TEST_F(SpatialJoinTest, failOnGroupedExecution) {
 
   VELOX_ASSERT_THROW(
       task->start(1), "Spatial joins do not support grouped execution.");
+}
+
+TEST_F(SpatialJoinTest, testLargeJoinSize) {
+  size_t numRows = 64;
+  size_t maxCoord = 17;
+  std::vector<std::string> buildWkts;
+  buildWkts.reserve(numRows);
+  std::vector<std::string> probeWkts;
+  probeWkts.reserve(numRows);
+  for (size_t i = 0; i < numRows; ++i) {
+    buildWkts.push_back(
+        fmt::format("POINT ({} {})", (i + 1) % maxCoord, (i + 2) % maxCoord));
+    probeWkts.push_back(
+        fmt::format("POINT ({} {})", i % maxCoord, (i + 1) % maxCoord));
+  }
+
+  std::vector<std::optional<std::string_view>> buildWktsView;
+  buildWktsView.reserve(numRows);
+  std::vector<std::optional<std::string_view>> probeWktsView;
+  probeWktsView.reserve(numRows);
+  for (size_t i = 0; i < numRows; ++i) {
+    buildWktsView.push_back(buildWkts[i]);
+    probeWktsView.push_back(probeWkts[i]);
+  }
+
+  std::vector<std::optional<std::string_view>> expectedLeftWkts;
+  expectedLeftWkts.reserve(numRows * numRows / maxCoord);
+  std::vector<std::optional<std::string_view>> expectedRightWkts;
+  expectedRightWkts.reserve(numRows * numRows / maxCoord);
+  for (size_t innerIdx = 0; innerIdx < numRows; ++innerIdx) {
+    for (size_t outerIdx = 0; outerIdx < numRows; ++outerIdx) {
+      if (probeWkts[outerIdx] == buildWkts[innerIdx]) {
+        expectedLeftWkts.push_back(probeWkts[outerIdx]);
+        expectedRightWkts.push_back(buildWkts[innerIdx]);
+      }
+    }
+  }
+
+  for (bool separateProbeBatches : {false, true}) {
+    for (size_t maxBatchSize : {64, 13, 7, 5, 3, 2, 1}) {
+      runTestWithConfig(
+          buildWktsView,
+          probeWktsView,
+          std::nullopt,
+          "ST_Equals(left_g, right_g)",
+          core::JoinType::kInner,
+          expectedLeftWkts,
+          expectedRightWkts,
+          1,
+          maxBatchSize,
+          separateProbeBatches);
+    }
+  }
 }
 
 } // namespace facebook::velox::exec::test

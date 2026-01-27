@@ -389,6 +389,10 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
     return std::nullopt;
   }
 
+  inline int32_t field_id() const {
+    return descr_->schema_node()->field_id();
+  }
+
  private:
   mutable std::shared_ptr<Statistics> possible_stats_;
   std::vector<Encoding::type> encodings_;
@@ -533,6 +537,10 @@ int64_t ColumnChunkMetaData::total_uncompressed_size() const {
 
 int64_t ColumnChunkMetaData::total_compressed_size() const {
   return impl_->total_compressed_size();
+}
+
+int32_t ColumnChunkMetaData::field_id() const {
+  return impl_->field_id();
 }
 
 std::unique_ptr<ColumnCryptoMetaData> ColumnChunkMetaData::crypto_metadata()
@@ -1746,8 +1754,8 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
         [&thrift_encodings](
             facebook::velox::parquet::thrift::Encoding::type value) {
           auto it = std::find(
-              thrift_encodings.begin(), thrift_encodings.end(), value);
-          if (it == thrift_encodings.end()) {
+              thrift_encodings.cbegin(), thrift_encodings.cend(), value);
+          if (it == thrift_encodings.cend()) {
             thrift_encodings.push_back(value);
           }
         };

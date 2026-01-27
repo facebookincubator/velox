@@ -44,6 +44,13 @@ class RowReader {
  public:
   static constexpr int64_t kAtEnd = -1;
 
+  /// Runtime stat names.
+  /// Tracks the number of index columns that were converted from ScanSpec
+  /// filters to index bounds for index-based filtering (e.g., cluster index
+  /// pruning in Nimble).
+  static inline const std::string kNumIndexFilterConversions =
+      "numIndexFilterConversions";
+
   virtual ~RowReader() = default;
 
   /**

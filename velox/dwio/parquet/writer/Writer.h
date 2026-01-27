@@ -25,6 +25,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/ParquetFieldId.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -116,6 +117,12 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
 
+  /// Optional field IDs to assign to columns in the Parquet schema.
+  /// If provided, the writer will use these IDs for the schema fields.
+  /// If not provided, the field_id will be -1.
+  /// The structure should match the schema hierarchy with nested children.
+  std::vector<ParquetFieldId> parquetFieldIds;
+
   // Parsing session and hive configs.
 
   // This isn't a typo; session and hive connector config names are different
@@ -146,6 +153,15 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch-size";
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
+
+  // Serde parameter keys for timestamp settings. These can be set via
+  // serdeParameters map to override the default timestamp behavior.
+  // The timezone key accepts a timezone string or empty string to disable
+  // timezone conversion.
+  static constexpr const char* kParquetSerdeTimestampUnit =
+      "parquet.writer.timestamp.unit";
+  static constexpr const char* kParquetSerdeTimestampTimezone =
+      "parquet.writer.timestamp.timezone";
 
   // Process hive connector and session configs.
   void processConfigs(
@@ -213,6 +229,8 @@ class Writer : public dwio::common::Writer {
   std::shared_ptr<ArrowDataBufferSink> stream_;
 
   std::shared_ptr<ArrowContext> arrowContext_;
+
+  std::vector<ParquetFieldId> parquetFieldIds_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
 

@@ -46,6 +46,18 @@ Map Functions
 
     See also :func:`map_agg` for creating a map as an aggregation.
 
+.. function:: map_append(map(K,V), array(K), array(V)) -> map(K,V)
+
+    Returns a map with new key-value pairs appended to the input map. The new keys are provided in the first array parameter and corresponding values in the second array parameter.
+    Keys and values arrays must have the same length. New keys must not already exist in the input map. Duplicate keys in the new keys array are not allowed.
+    Null keys are ignored. Null values are preserved in the output map. For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal. ::
+
+        SELECT map_append(MAP(ARRAY[1, 2], ARRAY[10, 20]), ARRAY[3, 4], ARRAY[30, 40]); -- {1 -> 10, 2 -> 20, 3 -> 30, 4 -> 40}
+        SELECT map_append(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), ARRAY['c'], ARRAY[3]); -- {'a' -> 1, 'b' -> 2, 'c' -> 3}
+        SELECT map_append(MAP(ARRAY[1], ARRAY[10]), ARRAY[2, null, 3], ARRAY[20, 30, 40]); -- {1 -> 10, 2 -> 20, 3 -> 40}
+        SELECT map_append(MAP(ARRAY[1], ARRAY[10]), ARRAY[2, 3], ARRAY[null, 30]); -- {1 -> 10, 2 -> null, 3 -> 30}
+        SELECT map_append(MAP(ARRAY[1], ARRAY[10]), ARRAY[], ARRAY[]); -- {1 -> 10}
+
 .. function:: map_concat(map1(K,V), map2(K,V), ..., mapN(K,V)) -> map(K,V)
 
    Returns the union of all the given maps. If a key is found in multiple given maps,
@@ -112,8 +124,40 @@ Map Functions
         SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {}
         SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {1->'a'}
         SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {1->'a'}
-        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {}
         SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+        SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[]); -- {}
+
+.. function:: map_intersect(map(K,V), array(K)) -> map(K,V)
+
+    Returns a map containing only the entries from the input map whose keys are present in the given array.
+    This function is equivalent to map_subset. Null keys in the array are ignored.
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT map_intersect(MAP(ARRAY[1,2,3], ARRAY['a','b','c']), ARRAY[1,3]); -- {1->'a', 3->'c'}
+        SELECT map_intersect(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {}
+        SELECT map_intersect(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {}
+        SELECT map_intersect(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+
+.. function:: map_except(map(K,V), array(k)) -> map(K,V)
+
+    Constructs a map from those entries of ``map`` for which the key is not in the array given.
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {1->'a', 2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {2->'b'}
+        SELECT map_except(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {1->'a', 2->'b'}
+        SELECT map_except(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+
+.. function:: map_keys_overlap(map(K,V), array(K)) -> boolean
+
+    Returns true if any key in the map matches any element in the given array, false otherwise.
+    Returns false if either the map or array is empty. Null keys in the array are ignored. ::
+
+        SELECT map_keys_overlap(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[1, 5]); -- true
+        SELECT map_keys_overlap(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[4, 5]); -- false
+        SELECT map_keys_overlap(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), ARRAY['a']); -- true
+        SELECT map_keys_overlap(MAP(ARRAY[], ARRAY[]), ARRAY[1]); -- false
 
 .. function:: map_top_n(map(K,V), n) -> map(K, V)
 

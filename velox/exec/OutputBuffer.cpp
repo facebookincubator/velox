@@ -30,10 +30,10 @@ void ArbitraryBuffer::noMoreData() {
   pages_.push_back(nullptr);
 }
 
-void ArbitraryBuffer::enqueue(std::unique_ptr<SerializedPage> page) {
+void ArbitraryBuffer::enqueue(std::unique_ptr<SerializedPageBase> page) {
   VELOX_CHECK_NOT_NULL(page, "Unexpected null page");
   VELOX_CHECK(!hasNoMoreData(), "Arbitrary buffer has set no more data marker");
-  pages_.push_back(std::shared_ptr<SerializedPage>(page.release()));
+  pages_.push_back(std::shared_ptr<SerializedPageBase>(page.release()));
 }
 
 void ArbitraryBuffer::getAvailablePageSizes(std::vector<int64_t>& out) const {
@@ -45,7 +45,7 @@ void ArbitraryBuffer::getAvailablePageSizes(std::vector<int64_t>& out) const {
   }
 }
 
-std::vector<std::shared_ptr<SerializedPage>> ArbitraryBuffer::getPages(
+std::vector<std::shared_ptr<SerializedPageBase>> ArbitraryBuffer::getPages(
     uint64_t maxBytes) {
   if (maxBytes == 0 && !pages_.empty() && pages_.front() == nullptr) {
     // Always give out an end marker when this buffer is finished and fully
@@ -57,7 +57,7 @@ std::vector<std::shared_ptr<SerializedPage>> ArbitraryBuffer::getPages(
     VELOX_CHECK_EQ(pages_.size(), 1);
     return {nullptr};
   }
-  std::vector<std::shared_ptr<SerializedPage>> pages;
+  std::vector<std::shared_ptr<SerializedPageBase>> pages;
   uint64_t bytesRemoved{0};
   while (bytesRemoved < maxBytes && !pages_.empty()) {
     if (pages_.front() == nullptr) {
@@ -81,7 +81,7 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
-void DestinationBuffer::Stats::recordEnqueue(const SerializedPage& data) {
+void DestinationBuffer::Stats::recordEnqueue(const SerializedPageBase& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
   bytesBuffered += data.size();
@@ -89,7 +89,8 @@ void DestinationBuffer::Stats::recordEnqueue(const SerializedPage& data) {
   ++pagesBuffered;
 }
 
-void DestinationBuffer::Stats::recordAcknowledge(const SerializedPage& data) {
+void DestinationBuffer::Stats::recordAcknowledge(
+    const SerializedPageBase& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
   const int64_t size = data.size();
@@ -104,7 +105,7 @@ void DestinationBuffer::Stats::recordAcknowledge(const SerializedPage& data) {
   ++pagesSent;
 }
 
-void DestinationBuffer::Stats::recordDelete(const SerializedPage& data) {
+void DestinationBuffer::Stats::recordDelete(const SerializedPageBase& data) {
   recordAcknowledge(data);
 }
 
@@ -185,7 +186,7 @@ DestinationBuffer::Data DestinationBuffer::getData(
   return {std::move(data), std::move(remainingBytes), true};
 }
 
-void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
+void DestinationBuffer::enqueue(std::shared_ptr<SerializedPageBase> data) {
   // Drop duplicate end markers.
   if (data == nullptr && !data_.empty() && data_.back() == nullptr) {
     return;
@@ -245,7 +246,7 @@ void DestinationBuffer::loadData(ArbitraryBuffer* buffer, uint64_t maxBytes) {
   }
 }
 
-std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
+std::vector<std::shared_ptr<SerializedPageBase>> DestinationBuffer::acknowledge(
     int64_t sequence,
     bool fromGetData) {
   const int64_t numDeleted = sequence - sequence_;
@@ -268,7 +269,7 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
 
   VELOX_CHECK_LE(
       numDeleted, data_.size(), "Ack received for a not yet produced item");
-  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<std::shared_ptr<SerializedPageBase>> freed;
   for (auto i = 0; i < numDeleted; ++i) {
     if (data_[i] == nullptr) {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
@@ -277,14 +278,14 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
     stats_.recordAcknowledge(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
-  data_.erase(data_.begin(), data_.begin() + numDeleted);
+  data_.erase(data_.cbegin(), data_.cbegin() + numDeleted);
   sequence_ += numDeleted;
   return freed;
 }
 
-std::vector<std::shared_ptr<SerializedPage>>
+std::vector<std::shared_ptr<SerializedPageBase>>
 DestinationBuffer::deleteResults() {
-  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<std::shared_ptr<SerializedPageBase>> freed;
   for (auto i = 0; i < data_.size(); ++i) {
     if (data_[i] == nullptr) {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
@@ -314,7 +315,7 @@ namespace {
 // that we do the expensive free outside and only then continue the
 // producers which will allocate more memory.
 void releaseAfterAcknowledge(
-    std::vector<std::shared_ptr<SerializedPage>>& freed,
+    std::vector<std::shared_ptr<SerializedPageBase>>& freed,
     std::vector<ContinuePromise>& promises) {
   freed.clear();
   for (auto& promise : promises) {
@@ -445,7 +446,7 @@ void OutputBuffer::updateTotalBufferedBytesMsLocked() {
 
 bool OutputBuffer::enqueue(
     int destination,
-    std::unique_ptr<SerializedPage> data,
+    std::unique_ptr<SerializedPageBase> data,
     ContinueFuture* future) {
   VELOX_CHECK_NOT_NULL(data);
   VELOX_CHECK(
@@ -492,13 +493,13 @@ bool OutputBuffer::enqueue(
 }
 
 void OutputBuffer::enqueueBroadcastOutputLocked(
-    std::unique_ptr<SerializedPage> data,
+    std::unique_ptr<SerializedPageBase> data,
     std::vector<DataAvailable>& dataAvailableCbs) {
   VELOX_DCHECK(isBroadcast());
   VELOX_CHECK_NULL(arbitraryBuffer_);
   VELOX_DCHECK(dataAvailableCbs.empty());
 
-  std::shared_ptr<SerializedPage> sharedData(data.release());
+  std::shared_ptr<SerializedPageBase> sharedData(data.release());
   for (auto& buffer : buffers_) {
     if (buffer != nullptr) {
       buffer->enqueue(sharedData);
@@ -514,7 +515,7 @@ void OutputBuffer::enqueueBroadcastOutputLocked(
 }
 
 void OutputBuffer::enqueueArbitraryOutputLocked(
-    std::unique_ptr<SerializedPage> data,
+    std::unique_ptr<SerializedPageBase> data,
     std::vector<DataAvailable>& dataAvailableCbs) {
   VELOX_DCHECK(isArbitrary());
   VELOX_DCHECK_NOT_NULL(arbitraryBuffer_);
@@ -541,7 +542,7 @@ void OutputBuffer::enqueueArbitraryOutputLocked(
 
 void OutputBuffer::enqueuePartitionedOutputLocked(
     int destination,
-    std::unique_ptr<SerializedPage> data,
+    std::unique_ptr<SerializedPageBase> data,
     std::vector<DataAvailable>& dataAvailableCbs) {
   VELOX_DCHECK(isPartitioned());
   VELOX_CHECK_NULL(arbitraryBuffer_);
@@ -631,7 +632,7 @@ bool OutputBuffer::isFinishedLocked() {
 }
 
 void OutputBuffer::acknowledge(int destination, int64_t sequence) {
-  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<std::shared_ptr<SerializedPageBase>> freed;
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -649,7 +650,7 @@ void OutputBuffer::acknowledge(int destination, int64_t sequence) {
 }
 
 void OutputBuffer::updateAfterAcknowledgeLocked(
-    const std::vector<std::shared_ptr<SerializedPage>>& freed,
+    const std::vector<std::shared_ptr<SerializedPageBase>>& freed,
     std::vector<ContinuePromise>& promises) {
   uint64_t freedBytes{0};
   int freedPages{0};
@@ -673,7 +674,7 @@ void OutputBuffer::updateAfterAcknowledgeLocked(
 }
 
 bool OutputBuffer::deleteResults(int destination) {
-  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<std::shared_ptr<SerializedPageBase>> freed;
   std::vector<ContinuePromise> promises;
   bool isFinished;
   DataAvailable dataAvailable;
@@ -717,7 +718,7 @@ void OutputBuffer::getData(
     DataAvailableCallback notify,
     DataConsumerActiveCheckCallback activeCheck) {
   DestinationBuffer::Data data;
-  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<std::shared_ptr<SerializedPageBase>> freed;
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);

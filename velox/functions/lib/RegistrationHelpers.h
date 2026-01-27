@@ -28,6 +28,15 @@ void registerBinaryIntegral(const std::vector<std::string>& aliases) {
   registerFunction<T, int64_t, int64_t, int64_t>(aliases);
 }
 
+template <template <class> class T, typename TReturn>
+void registerBinaryIntegralWithTReturn(
+    const std::vector<std::string>& aliases) {
+  registerFunction<T, TReturn, int8_t, int8_t>(aliases);
+  registerFunction<T, TReturn, int16_t, int16_t>(aliases);
+  registerFunction<T, TReturn, int32_t, int32_t>(aliases);
+  registerFunction<T, TReturn, int64_t, int64_t>(aliases);
+}
+
 template <template <class> typename T>
 void registerBinaryFloatingPoint(const std::vector<std::string>& aliases) {
   registerFunction<T, double, double, double>(aliases);
@@ -42,10 +51,7 @@ void registerBinaryNumeric(const std::vector<std::string>& aliases) {
 
 template <template <class> class T, typename TReturn>
 void registerBinaryScalar(const std::vector<std::string>& aliases) {
-  registerFunction<T, TReturn, int8_t, int8_t>(aliases);
-  registerFunction<T, TReturn, int16_t, int16_t>(aliases);
-  registerFunction<T, TReturn, int32_t, int32_t>(aliases);
-  registerFunction<T, TReturn, int64_t, int64_t>(aliases);
+  registerBinaryIntegralWithTReturn<T, TReturn>(aliases);
   registerFunction<T, TReturn, double, double>(aliases);
   registerFunction<T, TReturn, float, float>(aliases);
   registerFunction<T, TReturn, Varchar, Varchar>(aliases);

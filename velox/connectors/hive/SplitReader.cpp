@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/SplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -330,7 +331,7 @@ void SplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
-  auto baseFileInput = createBufferedInput(
+  auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,
       connectorQueryCtx_,

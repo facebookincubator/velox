@@ -151,6 +151,9 @@ class ConstantTypedExpr : public ITypedExpr {
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
+  /// Returns a NULL constant expression of given type.
+  static TypedExprPtr makeNull(const TypePtr& type);
+
  private:
   const Variant value_;
   const VectorPtr valueVector_;
@@ -247,10 +250,10 @@ class CallTypedExpr : public ITypedExpr {
       return false;
     }
     return std::equal(
-        this->inputs().begin(),
-        this->inputs().end(),
-        other.inputs().begin(),
-        other.inputs().end(),
+        this->inputs().cbegin(),
+        this->inputs().cend(),
+        other.inputs().cbegin(),
+        other.inputs().cend(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -316,10 +319,10 @@ class FieldAccessTypedExpr : public ITypedExpr {
       return false;
     }
     return std::equal(
-        this->inputs().begin(),
-        this->inputs().end(),
-        other.inputs().begin(),
-        other.inputs().end(),
+        this->inputs().cbegin(),
+        this->inputs().cend(),
+        other.inputs().cbegin(),
+        other.inputs().cend(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -396,10 +399,10 @@ class DereferenceTypedExpr : public ITypedExpr {
       return false;
     }
     return std::equal(
-        this->inputs().begin(),
-        this->inputs().end(),
-        other.inputs().begin(),
-        other.inputs().end(),
+        this->inputs().cbegin(),
+        this->inputs().cend(),
+        other.inputs().cbegin(),
+        other.inputs().cend(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -451,10 +454,10 @@ class ConcatTypedExpr : public ITypedExpr {
       return false;
     }
     return std::equal(
-        this->inputs().begin(),
-        this->inputs().end(),
-        other.inputs().begin(),
-        other.inputs().end(),
+        this->inputs().cbegin(),
+        this->inputs().cend(),
+        other.inputs().cbegin(),
+        other.inputs().cend(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 

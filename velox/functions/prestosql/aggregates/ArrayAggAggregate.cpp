@@ -18,7 +18,6 @@
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ValueList.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
@@ -128,46 +127,94 @@ class ArrayAggAggregate : public exec::Aggregate {
     if (clusteredInput_) {
       bool singleSource{true};
       VectorPtr* currentSource{nullptr};
-      std::vector<BaseVector::CopyRange> ranges;
+      bool contiguousElementsPerGroup = true;
+      // check if we can get a contiguous range for each group
+      std::vector<BaseVector::CopyRange> rangeMap;
+      rangeMap.resize(numGroups, {0, 0, 0});
       for (int32_t i = 0; i < numGroups; ++i) {
         auto* accumulator = value<ClusteredAccumulator>(groups[i]);
-        resultOffsets[i] = arrayOffset;
-        vector_size_t arraySize = 0;
-        for (auto& source : accumulator->sources) {
-          if (currentSource && currentSource->get() != source.vector.get()) {
-            elements->copyRanges(currentSource->get(), ranges);
-            ranges.clear();
-          }
-          if (!currentSource || currentSource->get() != source.vector.get()) {
-            singleSource = currentSource == nullptr;
-            currentSource = &source.vector;
-            ranges.push_back({source.offset, arrayOffset, source.size});
-          } else if (
-              ranges.back().sourceIndex + ranges.back().count ==
-              source.offset) {
-            ranges.back().count += source.size;
-          } else {
-            VELOX_DCHECK_LT(
-                ranges.back().sourceIndex + ranges.back().count, source.offset);
-            ranges.push_back({source.offset, arrayOffset, source.size});
-          }
-          arrayOffset += source.size;
-          arraySize += source.size;
+        if (accumulator->sources.empty()) {
+          continue;
         }
-        resultSizes[i] = arraySize;
-        if (arraySize == 0) {
-          vector->setNull(i, true);
+        for (auto& source : accumulator->sources) {
+          if (!currentSource) {
+            currentSource = &source.vector;
+          } else {
+            singleSource =
+                singleSource && (currentSource->get() == source.vector.get());
+          }
+        }
+        if (singleSource) {
+          vector_size_t offset = accumulator->sources[0].offset;
+          vector_size_t size = accumulator->sources[0].size;
+          for (auto j = 1; j < accumulator->sources.size(); ++j) {
+            if (accumulator->sources[j].offset !=
+                accumulator->sources[j - 1].offset +
+                    accumulator->sources[j - 1].size) {
+              contiguousElementsPerGroup = false;
+              break;
+            } else {
+              size += accumulator->sources[j].size;
+            }
+          }
+          if (contiguousElementsPerGroup) {
+            rangeMap[i] = {offset, 0, size};
+          }
         } else {
-          clearNull(rawNulls, i);
+          contiguousElementsPerGroup = false;
+          break;
+        }
+      }
+      // fallback to copy if we can't get a contiguous range for each group
+      std::vector<BaseVector::CopyRange> ranges;
+      if (currentSource != nullptr && !contiguousElementsPerGroup) {
+        currentSource = nullptr;
+        for (int32_t i = 0; i < numGroups; ++i) {
+          auto* accumulator = value<ClusteredAccumulator>(groups[i]);
+          resultOffsets[i] = arrayOffset;
+          vector_size_t arraySize = 0;
+          for (auto& source : accumulator->sources) {
+            if (currentSource && currentSource->get() != source.vector.get()) {
+              elements->copyRanges(currentSource->get(), ranges);
+              ranges.clear();
+            }
+            if (!currentSource || currentSource->get() != source.vector.get()) {
+              currentSource = &source.vector;
+              ranges.push_back({source.offset, arrayOffset, source.size});
+            } else if (
+                ranges.back().sourceIndex + ranges.back().count ==
+                source.offset) {
+              ranges.back().count += source.size;
+            } else {
+              VELOX_DCHECK_LT(
+                  ranges.back().sourceIndex + ranges.back().count,
+                  source.offset);
+              ranges.push_back({source.offset, arrayOffset, source.size});
+            }
+            arrayOffset += source.size;
+            arraySize += source.size;
+          }
+          resultSizes[i] = arraySize;
+          if (arraySize == 0) {
+            vector->setNull(i, true);
+          } else {
+            clearNull(rawNulls, i);
+          }
         }
       }
       if (currentSource != nullptr) {
-        VELOX_DCHECK(!ranges.empty());
-        if (singleSource && ranges.size() == 1) {
-          VELOX_CHECK_GE(currentSource->get()->size(), numElements);
-          VELOX_CHECK_EQ(ranges[0].count, numElements);
-          elements = currentSource->get()->slice(
-              ranges[0].sourceIndex, ranges[0].count);
+        VELOX_DCHECK(contiguousElementsPerGroup || !ranges.empty());
+        if (singleSource && contiguousElementsPerGroup) {
+          elements = BaseVector::loadedVectorShared(*currentSource);
+          for (int32_t i = 0; i < numGroups; ++i) {
+            if (rangeMap[i].count > 0) {
+              resultOffsets[i] = rangeMap[i].sourceIndex;
+              resultSizes[i] = rangeMap[i].count;
+              clearNull(rawNulls, i);
+            } else {
+              vector->setNull(i, true);
+            }
+          }
         } else {
           elements->copyRanges(currentSource->get(), ranges);
         }
@@ -380,7 +427,7 @@ class ArrayAggAggregate : public exec::Aggregate {
 } // namespace
 
 void registerArrayAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -391,17 +438,16 @@ void registerArrayAggAggregate(
           .argumentType("E")
           .build()};
 
-  auto name = prefix + kArrayAgg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+            argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<ArrayAggAggregate>(
             resultType, config.prestoArrayAggIgnoreNulls());
       },
@@ -410,7 +456,7 @@ void registerArrayAggAggregate(
 }
 
 void registerInternalArrayAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -421,18 +467,17 @@ void registerInternalArrayAggAggregate(
           .argumentType("E")
           .build()};
 
-  auto name = prefix + "$internal$array_agg";
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+            argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<ArrayAggAggregate>(
             resultType, /*ignoreNulls*/ false);
       },

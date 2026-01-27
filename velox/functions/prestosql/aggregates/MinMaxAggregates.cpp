@@ -17,12 +17,11 @@
 #include "velox/functions/prestosql/aggregates/MinMaxAggregates.h"
 #include <limits>
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/AggregationHook.h"
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/ValueSet.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/vector/AggregationHook.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -491,8 +490,8 @@ class MaxNAggregate : public MinMaxNAggregateBase<T, GreaterThanComparator<T>> {
 };
 
 template <template <typename T> typename AggregateN>
-exec::AggregateRegistrationResult registerMinMax(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerMinMax(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite,
     bool registerMin) {
@@ -535,13 +534,14 @@ exec::AggregateRegistrationResult registerMinMax(
           .build());
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name, registerMin](
+      [names, registerMin](
           core::AggregationNode::Step step,
           std::vector<TypePtr> argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         const bool nAgg = !resultType->equivalent(*argTypes[0]);
         if (nAgg) {
           // We have either 2 arguments: T, bigint (partial aggregation)
@@ -602,14 +602,19 @@ exec::AggregateRegistrationResult registerMinMax(
 
 } // namespace
 
-void registerMinMaxAggregates(
-    const std::string& prefix,
+void registerMinAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerMinMax<MinNAggregate>(
-      prefix + kMin, withCompanionFunctions, overwrite, true);
+  registerMinMax<MinNAggregate>(names, withCompanionFunctions, overwrite, true);
+}
+
+void registerMaxAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerMinMax<MaxNAggregate>(
-      prefix + kMax, withCompanionFunctions, overwrite, false);
+      names, withCompanionFunctions, overwrite, false);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
