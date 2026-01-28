@@ -31,10 +31,10 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
-#include <cudf/lists/lists_column_view.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/reduction/approx_distinct_count.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/unary.hpp>
 
 namespace {
@@ -425,6 +425,9 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 };
 
 struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
+  static constexpr cudf::null_policy kNullPolicy = cudf::null_policy::EXCLUDE;
+  static constexpr cudf::nan_policy kNanPolicy = cudf::nan_policy::NAN_IS_VALID;
+
   ApproxDistinctAggregator(
       core::AggregationNode::Step step,
       uint32_t inputIndex,
@@ -487,23 +490,27 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         rmm::device_buffer{},
         0);
 
-    rmm::device_buffer sketch_device{
+    rmm::device_buffer chars_device{
         sketch_bytes.data(), sketch_bytes.size(), stream};
 
-    auto child_column = std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::UINT8},
+    auto chars_column = std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT8},
         sketch_bytes.size(),
-        std::move(sketch_device),
+        std::move(chars_device),
         rmm::device_buffer{},
         0);
 
-    return cudf::make_lists_column(
+    std::vector<std::unique_ptr<cudf::column>> children;
+    children.push_back(std::move(offsets_column));
+    children.push_back(std::move(chars_column));
+
+    return std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::STRING},
         1,
-        std::move(offsets_column),
-        std::move(child_column),
-        0,
         rmm::device_buffer{},
-        stream);
+        rmm::device_buffer{},
+        0,
+        std::move(children));
   }
 
   template <typename Func>
@@ -511,9 +518,11 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::column_view const& sketch_column,
       Func&& func,
       rmm::cuda_stream_view stream) {
-    auto lists_col = cudf::lists_column_view(sketch_column);
-    auto child_col = lists_col.get_sliced_child(stream);
-    auto offsets_iter = lists_col.offsets_begin();
+    auto strings_col = cudf::strings_column_view(sketch_column);
+    auto offsets_col = strings_col.offsets();
+    auto chars_ptr = strings_col.chars_begin(stream);
+
+    auto offsets_iter = offsets_col.begin<cudf::size_type>();
 
     cudf::size_type first_offset = offsets_iter[0];
     cudf::size_type second_offset = offsets_iter[1];
@@ -521,14 +530,14 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
     auto sketch_data_ptr =
         const_cast<cuda::std::byte*>(static_cast<cuda::std::byte const*>(
-            static_cast<void const*>(child_col.template data<uint8_t>())));
+            static_cast<void const*>(chars_ptr)));
 
     cudf::approx_distinct_count merged_sketch(
         cuda::std::span<cuda::std::byte>(
             sketch_data_ptr + first_offset, first_size),
         precision_,
-        cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_VALID,
+        kNullPolicy,
+        kNanPolicy,
         stream);
 
     for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
@@ -553,11 +562,7 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     auto inputTable = cudf::table_view({input.column(inputIndex)});
 
     cudf::approx_distinct_count sketch{
-        inputTable,
-        precision_,
-        cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_VALID,
-        stream};
+        inputTable, precision_, kNullPolicy, kNanPolicy, stream};
 
     return makeSketchColumn(sketch.sketch(), stream);
   }
