@@ -469,6 +469,11 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
 }
 
 TEST_F(SparkCastExprTest, stringToBoolean) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   // Test common valid cases for both ANSI modes.
   for (const auto& ansiEnabled : {"false", "true"}) {
     queryCtx_->testingOverrideConfigUnsafe(
@@ -549,10 +554,6 @@ TEST_F(SparkCastExprTest, stringToBoolean) {
   testInvalidString("");
   testInvalidString(" ");
   testInvalidString("nan");
-
-  // Restore default ANSI config value.
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
 }
 
 TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
