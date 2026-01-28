@@ -377,6 +377,33 @@ std::optional<std::string> getParquetCreatedBy(
   return std::nullopt;
 }
 
+// Recursively parses a folly::dynamic object to a ParquetFieldId.
+ParquetFieldId toParquetFieldId(const folly::dynamic& obj) {
+  ParquetFieldId fieldId;
+  fieldId.fieldId = obj["fieldId"].asInt();
+  if (obj.count("children") && obj["children"].isArray()) {
+    for (const auto& child : obj["children"]) {
+      fieldId.children.push_back(toParquetFieldId(child));
+    }
+  }
+  return fieldId;
+}
+
+// Deserializes a JSON string to a vector of ParquetFieldId.
+// The JSON format is: [{"fieldId":1,"children":[...]},{"fieldId":2}].
+std::vector<ParquetFieldId> deserializeFieldIds(const std::string& json) {
+  std::vector<ParquetFieldId> result;
+  if (json.empty()) {
+    return result;
+  }
+  auto parsed = folly::parseJson(json);
+  VELOX_CHECK(parsed.isArray(), "Field IDs JSON must be an array");
+  for (const auto& item : parsed) {
+    result.push_back(toParquetFieldId(item));
+  }
+  return result;
+}
+
 } // namespace
 
 Writer::Writer(
@@ -644,6 +671,12 @@ void WriterOptions::processConfigs(
     } else {
       parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second;
     }
+  }
+
+  // Check serdeParameters for field IDs.
+  if (const auto serdeFieldIdsIt = serdeParameters.find(kParquetSerdeFieldIds);
+      serdeFieldIdsIt != serdeParameters.end()) {
+    parquetFieldIds = deserializeFieldIds(serdeFieldIdsIt->second);
   }
 
   if (!parquetWriteTimestampUnit) {
