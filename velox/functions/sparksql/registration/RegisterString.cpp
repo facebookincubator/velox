@@ -46,24 +46,24 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "randstr"});
   registerFunction<RandStrFunction, Varchar, Constant<int32_t>>(
       {prefix + "randstr"});
-  // randstr(length, seed) - deterministic
+  // randstr(length, seed) - seeded variant
   registerFunction<
-      RandStrSeededFunction,
+      RandStrFunction,
       Varchar,
       Constant<int16_t>,
       Constant<int32_t>>({prefix + "randstr"});
   registerFunction<
-      RandStrSeededFunction,
+      RandStrFunction,
       Varchar,
       Constant<int16_t>,
       Constant<int64_t>>({prefix + "randstr"});
   registerFunction<
-      RandStrSeededFunction,
+      RandStrFunction,
       Varchar,
       Constant<int32_t>,
       Constant<int32_t>>({prefix + "randstr"});
   registerFunction<
-      RandStrSeededFunction,
+      RandStrFunction,
       Varchar,
       Constant<int32_t>,
       Constant<int64_t>>({prefix + "randstr"});
