@@ -4279,6 +4279,8 @@ class LimitNode : public PlanNode {
   // @param isPartial Boolean indicating whether Limit node generates partial
   // results on local workers or finalizes the partial results from `PARTIAL`
   // nodes.
+  // @param count Maximum number of rows to keep. Must be >= 0. If count is 0,
+  // the node produces an empty result set.
   LimitNode(
       const PlanNodeId& id,
       int64_t offset,
@@ -4290,10 +4292,7 @@ class LimitNode : public PlanNode {
         count_(count),
         isPartial_(isPartial),
         sources_{source} {
-    VELOX_CHECK_GT(
-        count,
-        0,
-        "Limit must specify greater than zero number of rows to keep");
+    VELOX_CHECK_GE(count, 0, "Limit count must be non-negative");
   }
 
   class Builder {

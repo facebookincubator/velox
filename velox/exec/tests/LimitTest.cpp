@@ -78,6 +78,21 @@ TEST_F(LimitTest, basic) {
   assertQueryReturnsEmptyResult(makePlan(12'345, 10));
 }
 
+TEST_F(LimitTest, limitZero) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+  });
+
+  auto plan = PlanBuilder().values({data}).limit(0, 0, false).planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 0);
+
+  plan = PlanBuilder().values({data}).limit(10, 0, false).planNode();
+  result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 0);
+}
+
 TEST_F(LimitTest, limitOverLocalExchange) {
   auto data = makeRowVector(
       {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
