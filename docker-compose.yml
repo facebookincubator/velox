@@ -79,6 +79,7 @@ services:
     environment:
       CC: /opt/rh/gcc-toolset-14/root/bin/gcc # Default to gcc-14
       CXX: /opt/rh/gcc-toolset-14/root/bin/g++ # Default to gcc-14
+      CUDAHOSTCXX: /opt/rh/gcc-toolset-14/root/bin/g++ # Default to gcc-14
 
   presto-java:
     extends: base-block
