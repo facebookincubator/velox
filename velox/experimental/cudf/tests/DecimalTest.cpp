@@ -349,5 +349,33 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
   facebook::velox::test::assertEqualVectors(expected, gpuResult);
 }
 
+TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300},
+              DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"sum(d) AS s"})
+                  .finalAggregation()
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT k, sum(d) AS s FROM tmp GROUP BY k");
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox

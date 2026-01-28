@@ -28,16 +28,132 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
 
+#include "velox/type/HugeInt.h"
+
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/span.hpp>
+#include <cudf/detail/utilities/vector_factories.hpp>
+#include <cudf/strings/strings_column_view.hpp>
+
+#include <cstring>
 
 namespace {
 
 using namespace facebook::velox;
+
+std::unique_ptr<cudf::column> serializeDecimalSumState(
+    const cudf::column_view& sumCol,
+    const cudf::column_view& countCol,
+    rmm::cuda_stream_view stream) {
+  auto numRows = sumCol.size();
+  std::vector<int128_t> sums(numRows);
+  if (sumCol.type().id() == cudf::type_id::DECIMAL64) {
+    auto deviceValues = cudf::device_span<int64_t const>{
+        sumCol.data<int64_t>(), static_cast<size_t>(numRows)};
+    auto hostValues = cudf::detail::make_host_vector(deviceValues, stream);
+    for (int64_t i = 0; i < numRows; ++i) {
+      sums[i] = static_cast<int128_t>(hostValues[i]);
+    }
+  } else {
+    auto deviceValues = cudf::device_span<__int128_t const>{
+        sumCol.data<__int128_t>(), static_cast<size_t>(numRows)};
+    auto hostValues = cudf::detail::make_host_vector(deviceValues, stream);
+    for (int64_t i = 0; i < numRows; ++i) {
+      sums[i] = static_cast<int128_t>(hostValues[i]);
+    }
+  }
+
+  auto deviceCounts = cudf::device_span<int64_t const>{
+      countCol.data<int64_t>(), static_cast<size_t>(numRows)};
+  auto hostCounts = cudf::detail::make_host_vector(deviceCounts, stream);
+  std::vector<char> bytes(numRows * 32);
+  for (int64_t i = 0; i < numRows; ++i) {
+    auto offset = static_cast<size_t>(i) * 32;
+    int64_t count = hostCounts[i];
+    int64_t overflow = 0;
+    uint64_t lower = HugeInt::lower(sums[i]);
+    int64_t upper = HugeInt::upper(sums[i]);
+    std::memcpy(bytes.data() + offset + 0, &count, sizeof(int64_t));
+    std::memcpy(bytes.data() + offset + 8, &overflow, sizeof(int64_t));
+    std::memcpy(bytes.data() + offset + 16, &lower, sizeof(uint64_t));
+    std::memcpy(bytes.data() + offset + 24, &upper, sizeof(int64_t));
+  }
+
+  std::vector<int32_t> offsets(numRows + 1);
+  for (int64_t i = 0; i <= numRows; ++i) {
+    offsets[i] = static_cast<int32_t>(i * 32);
+  }
+
+  rmm::device_buffer offsetsBuf(
+      offsets.data(), offsets.size() * sizeof(int32_t), stream);
+  rmm::device_buffer charsBuf(bytes.data(), bytes.size(), stream);
+
+  auto offsetsCol = std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::INT32},
+      static_cast<cudf::size_type>(offsets.size()),
+      std::move(offsetsBuf),
+      rmm::device_buffer{},
+      0);
+
+  return cudf::make_strings_column(
+      static_cast<cudf::size_type>(numRows),
+      std::move(offsetsCol),
+      std::move(charsBuf),
+      0,
+      rmm::device_buffer{});
+}
+
+std::unique_ptr<cudf::column> deserializeDecimalSumState(
+    const cudf::column_view& stateCol,
+    int32_t scale,
+    rmm::cuda_stream_view stream) {
+  cudf::strings_column_view strings(stateCol);
+  auto numRows = strings.size();
+  auto offsetsView = strings.offsets();
+  auto offsetsHost = cudf::detail::make_host_vector(
+      cudf::device_span<int32_t const>{
+          offsetsView.data<int32_t>(),
+          static_cast<size_t>(offsetsView.size())},
+      stream);
+  auto charsBytes = strings.chars_size(stream);
+  auto charsHost = cudf::detail::make_std_vector(
+      cudf::device_span<char const>{
+          strings.chars_begin(stream), static_cast<size_t>(charsBytes)},
+      stream);
+
+  std::vector<int128_t> sums(numRows);
+  for (int64_t i = 0; i < numRows; ++i) {
+    auto begin = offsetsHost[i];
+    auto end = offsetsHost[i + 1];
+    VELOX_CHECK(end - begin == 32, "Unexpected state size");
+    int64_t count;
+    int64_t overflow;
+    uint64_t lower;
+    int64_t upper;
+    std::memcpy(&count, charsHost.data() + begin + 0, sizeof(int64_t));
+    std::memcpy(&overflow, charsHost.data() + begin + 8, sizeof(int64_t));
+    std::memcpy(&lower, charsHost.data() + begin + 16, sizeof(uint64_t));
+    std::memcpy(&upper, charsHost.data() + begin + 24, sizeof(int64_t));
+    sums[i] = HugeInt::build(upper, lower);
+    (void)count;
+    (void)overflow;
+  }
+
+  rmm::device_buffer sumsBuf(
+      sums.data(), sums.size() * sizeof(int128_t), stream);
+  return std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::DECIMAL128, -scale},
+      static_cast<cudf::size_type>(numRows),
+      std::move(sumsBuf),
+      rmm::device_buffer{},
+      0);
+}
 
 #define DEFINE_SIMPLE_AGGREGATOR(Name, name, KIND)                            \
   struct Name##Aggregator : cudf_velox::CudfHashAggregation::Aggregator {     \
@@ -98,6 +214,86 @@ using namespace facebook::velox;
 DEFINE_SIMPLE_AGGREGATOR(Sum, sum, SUM)
 DEFINE_SIMPLE_AGGREGATOR(Min, min, MIN)
 DEFINE_SIMPLE_AGGREGATOR(Max, max, MAX)
+
+struct DecimalSumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
+  DecimalSumAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      VectorPtr constant,
+      bool isGlobal,
+      const TypePtr& resultType)
+      : Aggregator(
+            step,
+            cudf::aggregation::SUM,
+            inputIndex,
+            constant,
+            isGlobal,
+            resultType) {}
+
+  void addGroupbyRequest(
+      cudf::table_view const& tbl,
+      std::vector<cudf::groupby::aggregation_request>& requests) override {
+    auto& request = requests.emplace_back();
+    sumIdx_ = requests.size() - 1;
+    if (step == core::AggregationNode::Step::kFinal &&
+        tbl.column(inputIndex).type().id() == cudf::type_id::STRING) {
+      auto scale = getDecimalPrecisionScale(*resultType).second;
+      decodedSum_ = deserializeDecimalSumState(
+          tbl.column(inputIndex), scale, cudf::get_default_stream());
+      request.values = decodedSum_->view();
+    } else {
+      request.values = tbl.column(inputIndex);
+    }
+    request.aggregations.push_back(
+        cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+    if (step == core::AggregationNode::Step::kPartial) {
+      request.aggregations.push_back(
+          cudf::make_count_aggregation<cudf::groupby_aggregation>(
+              cudf::null_policy::EXCLUDE));
+    }
+  }
+
+  std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      rmm::cuda_stream_view stream) override {
+    auto col = std::move(results[sumIdx_].results[0]);
+    if (step == core::AggregationNode::Step::kPartial) {
+      auto count = std::move(results[sumIdx_].results[1]);
+      if (count->type().id() != cudf::type_id::INT64) {
+        count = cudf::cast(*count, cudf::data_type{cudf::type_id::INT64}, stream);
+      }
+      return serializeDecimalSumState(col->view(), count->view(), stream);
+    }
+    auto const cudfResType = cudf_velox::veloxToCudfDataType(resultType);
+    if (col->type() != cudfResType) {
+      col = cudf::cast(*col, cudfResType, stream);
+    }
+    return col;
+  }
+
+  std::unique_ptr<cudf::column> doReduce(
+      cudf::table_view const& input,
+      TypePtr const& outputType,
+      rmm::cuda_stream_view stream) override {
+    auto const aggRequest =
+        cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+    cudf::column_view inputCol = input.column(inputIndex);
+    if (step == core::AggregationNode::Step::kFinal &&
+        inputCol.type().id() == cudf::type_id::STRING) {
+      auto scale = getDecimalPrecisionScale(*outputType).second;
+      decodedSum_ = deserializeDecimalSumState(inputCol, scale, stream);
+      inputCol = decodedSum_->view();
+    }
+    auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
+    auto const resultScalar =
+        cudf::reduce(inputCol, *aggRequest, cudfOutType, stream);
+    return cudf::make_column_from_scalar(*resultScalar, 1, stream);
+  }
+
+ private:
+  uint32_t sumIdx_{0};
+  std::unique_ptr<cudf::column> decodedSum_;
+};
 
 struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   CountAggregator(
@@ -420,6 +616,11 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     const TypePtr& resultType) {
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
+    if (step != core::AggregationNode::Step::kSingle &&
+        (resultType->kind() == TypeKind::VARBINARY || resultType->isDecimal())) {
+      return std::make_unique<DecimalSumAggregator>(
+          step, inputIndex, constant, isGlobal, resultType);
+    }
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
@@ -1022,6 +1223,34 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .argumentType("double")
           .build()};
 
+  // Decimal sum signatures.
+  auto decimalSumSingle = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType("decimal(38, a_scale)")
+          .argumentType("decimal(a_precision, a_scale)")
+          .build()};
+  auto decimalSumPartial = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType("varbinary")
+          .argumentType("decimal(a_precision, a_scale)")
+          .build()};
+  auto decimalSumFinal = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .integerVariable("a_scale")
+          .returnType("decimal(38, a_scale)")
+          .argumentType("varbinary")
+          .build()};
+
+  sumSingleSignatures.insert(
+      sumSingleSignatures.end(),
+      decimalSumSingle.begin(),
+      decimalSumSingle.end());
+
+
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kSingle,
@@ -1052,6 +1281,12 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("double")
           .argumentType("double")
           .build()};
+
+  sumPartialSignatures.insert(
+      sumPartialSignatures.end(),
+      decimalSumPartial.begin(),
+      decimalSumPartial.end());
+
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kPartial,
@@ -1066,10 +1301,17 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("double")
           .argumentType("double")
           .build()};
+
+  auto sumFinalSignatures = sumFinalIntermediateSignatures;
+  sumFinalSignatures.insert(
+      sumFinalSignatures.end(),
+      decimalSumFinal.begin(),
+      decimalSumFinal.end());
+
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kFinal,
-      sumFinalIntermediateSignatures);
+      sumFinalSignatures);
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kIntermediate,
