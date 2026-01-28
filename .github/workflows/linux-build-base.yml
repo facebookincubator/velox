@@ -92,6 +92,8 @@ jobs:
       CUDA_VERSION: '12.9'
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
+    outputs:
+      cudf-changes: ${{ steps.changes.outputs.cudf }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -221,6 +223,63 @@ jobs:
           sed -i 's/-Wno-maybe-uninitialized//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-fcoroutines//g' $BUILD_PATH/compile_commands.json
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
+
+      - name: Check cuDF Changes
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        if: ${{ ! inputs.use-clang && always() }}
+        with:
+          filters: |
+            cudf:
+              - 'velox/experimental/cudf/**'
+              - 'CMake/resolve_dependency_modules/cudf.cmake'
+
+      - name: Upload cuDF Test Binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        with:
+          name: cudftestbinaries
+          path: |
+            velox/dwio/parquet/tests/examples/int.parquet
+            velox/experimental/cudf/tests/CMakeLists.txt
+            _build/release/velox/experimental/cudf/tests/velox_cudf*
+            _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
+            _build/release/_deps/cudf-build/libcudf.so
+            _build/release/_deps/rmm-build/librmm.so
+            _build/release/_deps/rapids_logger-build/librapids_logger.so
+            _build/release/_deps/kvikio-build/libkvikio.so
+            _build/release/_deps/nvcomp_proprietary_binary-src/lib64/libnvcomp.so.4
+            _build/release/_deps/curl-build/lib/libcurl.so.4
+          retention-days: ${{ env.RETENTION }}
+
+  cudf-tests:
+    runs-on: 4-core-ubuntu-gpu-t4
+    needs: adapters
+    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes && always() }}
+    timeout-minutes: 30
+    steps:
+      - name: Download cuDF Test Binaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: cudftestbinaries
+
+      - name: Check NVIDIA Driver Version
+        run: |
+          nvidia-smi
+
+      - name: Install Packages
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Run cuDF Tests
+        run: |
+          ls -R .
+          cd _build/release/velox/experimental/cudf/tests/
+          chmod +x velox_cudf*
+          export DEPS_PATH=../../../../_deps/
+          export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$DEPS_PATH/kvikio-build:$DEPS_PATH/curl-build:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$DEPS_PATH/rapids_logger-build:$DEPS_PATH/nvcomp_proprietary_binary-src/lib64:$LD_LIBRARY_PATH
+          ctest --output-on-failure
 
   ubuntu-debug:
     runs-on: 8-core-ubuntu-22.04
