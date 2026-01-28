@@ -161,16 +161,16 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("setNull not supported on ConstantVector");
   }
 
-  const T value() const {
+  SimpleVector<T>::TValueAt value() const {
     VELOX_DCHECK(initialized_);
     return value_;
   }
 
-  const T valueAtFast(vector_size_t /*idx*/) const {
+  SimpleVector<T>::TValueAt valueAtFast(vector_size_t /*idx*/) const {
     return value();
   }
 
-  virtual const T valueAt(vector_size_t /*idx*/) const override {
+  SimpleVector<T>::TValueAt valueAt(vector_size_t /*idx*/) const override {
     VELOX_DCHECK(initialized_);
     SimpleVector<T>::checkElementSize();
     return value();

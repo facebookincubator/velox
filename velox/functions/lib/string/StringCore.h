@@ -22,6 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/external/utf8proc/utf8procImpl.h"
+#include "velox/functions/lib/string/GreekFinalSigma.h"
 
 #if (ENABLE_VECTORIZATION > 0) && !defined(_DEBUG) && !defined(DEBUG)
 #if defined(__clang__) && (__clang_major__ > 7)
@@ -43,30 +44,6 @@
 #endif
 
 namespace facebook::velox::functions {
-namespace detail {
-
-// Helper function to check if a character is cased. Compatible with the
-// 'isCased' implementation in 'ConditionalSpecialCasting.java' of JDK, which is
-// used by 'toLowerCase' function in Spark SQL.
-FOLLY_ALWAYS_INLINE bool isCased(utf8proc_int32_t ch) {
-  auto type = utf8proc_category(ch);
-  // Lowercase letter, uppercase letter or titlecase letter.
-  if (type == UTF8PROC_CATEGORY_LL || type == UTF8PROC_CATEGORY_LU ||
-      type == UTF8PROC_CATEGORY_LT) {
-    return true;
-  }
-  // Modifier letters and special cases.
-  if ((ch >= 0x02B0 && ch <= 0x02B8) || (ch >= 0x02C0 && ch <= 0x02C1) ||
-      (ch >= 0x02E0 && ch <= 0x02E4) || ch == 0x0345 || ch == 0x037A ||
-      (ch >= 0x1D2C && ch <= 0x1D61) || (ch >= 0x2160 && ch <= 0x217F) ||
-      (ch >= 0x24B6 && ch <= 0x24E9)) {
-    return true;
-  }
-  return false;
-}
-
-} // namespace detail
-
 namespace stringCore {
 
 /// Check if a given string is ascii
@@ -239,23 +216,12 @@ FOLLY_ALWAYS_INLINE size_t lowerUnicode(
 
     if constexpr (greekFinalSigma) {
       // Handle Greek final sigma for Σ (U+03A3).
+      // See isFinalSigma() for the Final_Sigma rule reference.
       if (nextCodePoint == 0x03A3) {
-        // Look ahead to see if this is the end of a word.
-        bool isFinal = true;
-        if (inputIdx < inputLength) {
-          int lookaheadSize;
-          utf8proc_int32_t lookaheadCodePoint = utf8proc_codepoint(
-              &input[inputIdx], input + inputLength, lookaheadSize);
-          if (lookaheadCodePoint != -1 && detail::isCased(lookaheadCodePoint)) {
-            // If the next code point is cased, not the final.
-            isFinal = false;
-          }
-        }
-        // Convert to ς or σ.
-        utf8proc_int32_t lowerSigma = isFinal ? 0x03C2 : 0x03C3;
-        auto newSize = utf8proc_encode_char(
-            lowerSigma, reinterpret_cast<unsigned char*>(&output[outputIdx]));
-        outputIdx += newSize;
+        size_t sigmaStartPos = inputIdx - size;
+        bool isFinal =
+            isFinalSigma(input, inputLength, sigmaStartPos, inputIdx);
+        outputIdx += writeLowerSigma(&output[outputIdx], isFinal);
         continue;
       }
     }

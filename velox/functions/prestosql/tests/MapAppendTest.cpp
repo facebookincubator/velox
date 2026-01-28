@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FuzzerTestUtils.h"
 
 using namespace facebook::velox::test;
 
@@ -363,4 +364,113 @@ TEST_F(MapAppendTest, preserveMapOrder) {
 }
 
 } // namespace
+
+class MapAppendFuzzerTest : public test::FunctionBaseTest {
+ protected:
+  static SelectivityVector getNonNullRows(const RowVectorPtr& data) {
+    SelectivityVector nonNullRows(data->size());
+    for (vector_size_t i = 0; i < data->size(); ++i) {
+      bool hasNull = false;
+      for (vector_size_t j = 0; j < data->childrenSize(); ++j) {
+        if (data->childAt(j)->isNullAt(i)) {
+          hasNull = true;
+          break;
+        }
+      }
+      if (hasNull) {
+        nonNullRows.setValid(i, false);
+      }
+    }
+    nonNullRows.updateBounds();
+    return nonNullRows;
+  }
+
+  void testMapAppendProperties(const RowVectorPtr& data) {
+    auto nonNullRows = getNonNullRows(data);
+    if (nonNullRows.countSelected() == 0) {
+      return;
+    }
+
+    VectorPtr result;
+    try {
+      result = evaluate("try(map_append(c0, c1, c2))", data);
+    } catch (...) {
+      return;
+    }
+
+    if (!result) {
+      return;
+    }
+
+    auto inputMap = data->childAt(0);
+    auto inputMapVector = inputMap->as<MapVector>();
+    if (!inputMapVector) {
+      return;
+    }
+
+    for (auto i = 0; i < data->size(); ++i) {
+      if (!nonNullRows.isValid(i) || result->isNullAt(i)) {
+        continue;
+      }
+
+      if (inputMap->isNullAt(i)) {
+        continue;
+      }
+
+      auto resultMap = result->as<MapVector>();
+      if (!resultMap) {
+        continue;
+      }
+
+      auto origSize = inputMapVector->sizeAt(i);
+      auto resultSize = resultMap->sizeAt(i);
+      ASSERT_GE(resultSize, origSize)
+          << "Result map should be at least as large as input map at row " << i;
+    }
+  }
+
+  void runFuzzTest(const TypePtr& type, const test::FuzzerTestOptions& opts) {
+    test::FuzzerTestHelper helper(pool());
+    helper.runMapArrayArrayTestSameType(
+        type,
+        [this](
+            const VectorPtr& inputMap,
+            const VectorPtr& keys,
+            const VectorPtr& values) {
+          auto data = makeRowVector({inputMap, keys, values});
+          testMapAppendProperties(data);
+        },
+        opts);
+  }
+};
+
+TEST_F(MapAppendFuzzerTest, fuzzInteger) {
+  runFuzzTest(INTEGER(), {.vectorSize = 50, .containerLength = 5});
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzBigint) {
+  runFuzzTest(BIGINT(), {.vectorSize = 50, .containerLength = 5});
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzVarchar) {
+  runFuzzTest(VARCHAR(), {.vectorSize = 50, .containerLength = 5});
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzDouble) {
+  runFuzzTest(DOUBLE(), {.vectorSize = 50, .containerLength = 5});
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzHighNullRatio) {
+  runFuzzTest(
+      INTEGER(), {.vectorSize = 50, .nullRatio = 0.5, .containerLength = 5});
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzSmallint) {
+  runFuzzTest(SMALLINT(), {.vectorSize = 50, .containerLength = 5});
+}
+
+TEST_F(MapAppendFuzzerTest, fuzzLargeVectors) {
+  runFuzzTest(INTEGER(), {.vectorSize = 200, .containerLength = 3});
+}
+
 } // namespace facebook::velox::functions

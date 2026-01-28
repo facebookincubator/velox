@@ -98,7 +98,7 @@ std::unique_ptr<SimpleVector<uint64_t>> BiasVector<T>::hashAll() const {
 }
 
 template <typename T>
-const T BiasVector<T>::valueAtFast(vector_size_t idx) const {
+SimpleVector<T>::TValueAt BiasVector<T>::valueAtFast(vector_size_t idx) const {
   switch (valueType_) {
     case TypeKind::INTEGER:
       return bias_ + reinterpret_cast<const int32_t*>(rawValues_)[idx];

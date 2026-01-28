@@ -20,7 +20,7 @@
 
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
-#include "velox/dwio/parquet/writer/ParquetFieldId.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
