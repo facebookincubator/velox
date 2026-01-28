@@ -16,11 +16,14 @@
 #include "velox/exec/IndexLookupJoin.h"
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 namespace {
@@ -152,6 +155,7 @@ IndexLookupJoin::IndexLookupJoin(
       numKeys_{joinNode->leftKeys().size()},
       probeType_{joinNode->sources()[0]->outputType()},
       lookupType_{joinNode->lookupSource()->outputType()},
+      indexSourceNodeId_(joinNode->lookupSource()->id()),
       lookupTableHandle_{joinNode->lookupSource()->tableHandle()},
       joinConditions_{joinNode->joinConditions()},
       lookupColumnHandles_(joinNode->lookupSource()->assignments()),
@@ -431,12 +435,48 @@ void IndexLookupJoin::initFilter() {
   filterInputType_ = ROW(std::move(names), std::move(types));
 }
 
+bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
+  VELOX_CHECK(needsIndexSplits());
+
+  TestValue::adjust(
+      "facebook::velox::exec::IndexLookupJoin::collectIndexSplits", this);
+
+  auto* driverCtx = operatorCtx_->driverCtx();
+  while (true) {
+    exec::Split split;
+    const auto reason = driverCtx->task->getSplitOrFuture(
+        driverCtx->splitGroupId,
+        indexSourceNodeId_,
+        split,
+        indexSplitFuture_,
+        /*maxPreloadSplits=*/0,
+        /*preload=*/nullptr);
+    if (reason != BlockingReason::kNotBlocked) {
+      *future = std::move(indexSplitFuture_);
+      return false;
+    }
+
+    if (!split.hasConnectorSplit()) {
+      noMoreIndexSplits_ = true;
+      VELOX_CHECK(!indexSplits_.empty());
+      indexSource_->addSplits(std::move(indexSplits_));
+      return true;
+    }
+
+    indexSplits_.push_back(std::move(split.connectorSplit));
+  }
+}
+
 bool IndexLookupJoin::startDrain() {
   return numInputBatches() != 0;
 }
 
 bool IndexLookupJoin::needsInput() const {
   if (noMoreInput_ || isDraining()) {
+    return false;
+  }
+  // Don't accept input until we have collected all splits for index source.
+  if (needsIndexSplits()) {
     return false;
   }
   if (numInputBatches() >= maxNumInputBatches_) {
@@ -453,6 +493,14 @@ bool IndexLookupJoin::needsInput() const {
 }
 
 BlockingReason IndexLookupJoin::isBlocked(ContinueFuture* future) {
+  // Handle split collection for index sources that require splits.
+  if (needsIndexSplits()) {
+    if (!collectIndexSplits(future)) {
+      VELOX_CHECK(future->valid());
+      return BlockingReason::kWaitForSplit;
+    }
+  }
+
   auto& batch = currentInputBatch();
   if (!batch.lookupFuture.valid()) {
     endLookupBlockWait();
@@ -644,8 +692,7 @@ bool IndexLookupJoin::getLookupResults(InputBatchState& batch) {
     VELOX_CHECK(!batch.lookupFuture.valid());
 
     // Either splitOutput_ is true, or no more results, or first result is null.
-    if (splitOutput_ || !lookupResultOr.has_value() ||
-        !batch.lookupResultIter->hasNext()) {
+    if (splitOutput_ || !batch.lookupResultIter->hasNext()) {
       batch.lookupResult = std::move(lookupResultOr).value();
       return true;
     }

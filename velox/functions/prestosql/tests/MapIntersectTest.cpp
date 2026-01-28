@@ -15,7 +15,7 @@
  */
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/functions/prestosql/tests/utils/FuzzerTestUtils.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -385,90 +385,46 @@ class MapIntersectFuzzerTest : public test::FunctionBaseTest {
       }
     }
   }
+
+  void runFuzzTest(const TypePtr& type, const test::FuzzerTestOptions& opts) {
+    test::FuzzerTestHelper helper(pool());
+    helper.runMapArrayTest(
+        type,
+        type,
+        [this](const VectorPtr& inputMap, const VectorPtr& keys) {
+          auto data = makeRowVector({inputMap, keys});
+          testEquivalence(data);
+        },
+        opts);
+  }
 };
 
 TEST_F(MapIntersectFuzzerTest, fuzzInteger) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-  auto keys = fuzzer.fuzz(ARRAY(INTEGER()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(INTEGER(), {.vectorSize = 100});
 }
 
 TEST_F(MapIntersectFuzzerTest, fuzzBigint) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(BIGINT(), BIGINT()));
-  auto keys = fuzzer.fuzz(ARRAY(BIGINT()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(BIGINT(), {.vectorSize = 100});
 }
 
 TEST_F(MapIntersectFuzzerTest, fuzzVarchar) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(VARCHAR(), VARCHAR()));
-  auto keys = fuzzer.fuzz(ARRAY(VARCHAR()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(VARCHAR(), {.vectorSize = 100});
 }
 
 TEST_F(MapIntersectFuzzerTest, fuzzDouble) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(DOUBLE(), DOUBLE()));
-  auto keys = fuzzer.fuzz(ARRAY(DOUBLE()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(DOUBLE(), {.vectorSize = 100});
 }
 
 TEST_F(MapIntersectFuzzerTest, fuzzHighNullRatio) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.5;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-  auto keys = fuzzer.fuzz(ARRAY(INTEGER()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(INTEGER(), {.vectorSize = 100, .nullRatio = 0.5});
 }
 
 TEST_F(MapIntersectFuzzerTest, fuzzSmallint) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(SMALLINT(), SMALLINT()));
-  auto keys = fuzzer.fuzz(ARRAY(SMALLINT()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(SMALLINT(), {.vectorSize = 100});
 }
 
 TEST_F(MapIntersectFuzzerTest, fuzzLargeVectors) {
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 500;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto inputMap = fuzzer.fuzz(MAP(INTEGER(), INTEGER()));
-  auto keys = fuzzer.fuzz(ARRAY(INTEGER()));
-  auto data = makeRowVector({inputMap, keys});
-  testEquivalence(data);
+  runFuzzTest(INTEGER(), {.vectorSize = 500});
 }
 
 } // namespace facebook::velox::functions

@@ -644,12 +644,6 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
   }
 }
 
-static const std::unordered_map<std::string, core::AggregationNode::Step>
-    companionStep = {
-        {"_partial", core::AggregationNode::Step::kPartial},
-        {"_merge", core::AggregationNode::Step::kIntermediate},
-        {"_merge_extract", core::AggregationNode::Step::kFinal}};
-
 /// \brief Convert companion function to step for the aggregation function
 ///
 /// Companion functions are functions that are registered in velox along with
@@ -658,24 +652,40 @@ static const std::unordered_map<std::string, core::AggregationNode::Step>
 /// the property of the aggregation function rather than the planNode.
 /// Companion functions allow us to override the planNode's step and use
 /// aggregations of different steps in the same planNode
+/// If an agg function name contains companionStep keyword, may cause error, now
+/// it does not exist.
 core::AggregationNode::Step getCompanionStep(
     std::string const& kind,
     core::AggregationNode::Step step) {
-  for (const auto& [k, v] : companionStep) {
-    if (kind.ends_with(k)) {
-      step = v;
-      break;
-    }
+  if (kind.ends_with("_merge")) {
+    return core::AggregationNode::Step::kIntermediate;
   }
+
+  if (kind.ends_with("_partial")) {
+    return core::AggregationNode::Step::kPartial;
+  }
+
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (kind.find("_merge_extract") != std::string::npos) {
+    return core::AggregationNode::Step::kFinal;
+  }
+
   return step;
 }
 
-std::string getOriginalName(std::string const& kind) {
-  for (const auto& [k, v] : companionStep) {
-    if (kind.ends_with(k)) {
-      return kind.substr(0, kind.length() - k.length());
-    }
+std::string getOriginalName(const std::string& kind) {
+  if (kind.ends_with("_merge")) {
+    return kind.substr(0, kind.size() - std::string("_merge").size());
   }
+
+  if (kind.ends_with("_partial")) {
+    return kind.substr(0, kind.size() - std::string("_partial").size());
+  }
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (auto pos = kind.find("_merge_extract"); pos != std::string::npos) {
+    return kind.substr(0, pos);
+  }
+
   return kind;
 }
 

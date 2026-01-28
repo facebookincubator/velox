@@ -139,6 +139,16 @@ class ConnectorTableHandle : public ISerializable {
     return false;
   }
 
+  /// Returns true if this table handle requires splits for index lookup.
+  /// Default implementation returns false. Subclasses can override this to
+  /// indicate that splits need to be provided to the index source before
+  /// performing lookups.
+  ///
+  /// NOTE: this only applies if supportsIndexLookup() returns true.
+  virtual bool needsIndexSplit() const {
+    return false;
+  }
+
   virtual std::string toString() const {
     return name();
   }
@@ -320,6 +330,16 @@ class DataSource {
 class IndexSource {
  public:
   virtual ~IndexSource() = default;
+
+  /// Adds splits to the index source for lookup. This is called when
+  /// the table handle's needsIndexSplit() returns true. This method must be
+  /// called before the first call to lookup(). This method is expected to be
+  /// called only once. Default implementation throws as most index sources
+  /// don't require splits.
+  virtual void addSplits(
+      std::vector<std::shared_ptr<ConnectorSplit>> /*splits*/) {
+    VELOX_UNSUPPORTED("This IndexSource does not support splits");
+  }
 
   /// Represents a lookup request for a given input.
   struct LookupRequest {

@@ -1884,6 +1884,10 @@ folly::dynamic IndexLookupJoinNode::serialize() const {
   return obj;
 }
 
+bool IndexLookupJoinNode::needsIndexSplit() const {
+  return lookupSourceNode_->tableHandle()->needsIndexSplit();
+}
+
 void IndexLookupJoinNode::addDetails(std::stringstream& stream) const {
   AbstractJoinNode::addDetails(stream);
   if (joinConditions_.empty()) {
@@ -3802,9 +3806,15 @@ IndexLookupConditionPtr EqualIndexLookupCondition::create(
 void EqualIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(key);
   VELOX_CHECK_NOT_NULL(value);
-  VELOX_CHECK_NOT_NULL(
-      checkedPointerCast<const ConstantTypedExpr>(value),
-      "Equal condition value must be a constant expression: {}",
+  // Value can be either a constant expression or a field access expression
+  // (probe side column).
+  const bool isConstant =
+      std::dynamic_pointer_cast<const ConstantTypedExpr>(value) != nullptr;
+  const bool isFieldAccess =
+      std::dynamic_pointer_cast<const FieldAccessTypedExpr>(value) != nullptr;
+  VELOX_CHECK(
+      isConstant || isFieldAccess,
+      "Equal condition value must be a constant or field access expression: {}",
       value->toString());
 
   VELOX_CHECK_EQ(

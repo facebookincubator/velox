@@ -178,6 +178,13 @@ class HiveConfig {
   static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
       "sort_writer_finish_time_slice_limit_ms";
 
+  /// Maximum target file size. When a file exceeds this size during writing,
+  /// the writer will close the current file and start writing to a new file.
+  /// Accepts human-readable values like "1GB". Zero means no limit (default).
+  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
+  static constexpr const char* kMaxTargetFileSizeSession =
+      "max_target_file_size";
+
   // The unit for reading timestamps from files.
   static constexpr const char* kReadTimestampUnit =
       "hive.reader.timestamp-unit";
@@ -263,6 +270,8 @@ class HiveConfig {
 
   uint64_t sortWriterFinishTimeSliceLimitMs(
       const config::ConfigBase* session) const;
+
+  uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
 
   uint64_t footerEstimatedSize() const;
 

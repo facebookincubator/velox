@@ -211,6 +211,14 @@ uint64_t HiveConfig::sortWriterFinishTimeSliceLimitMs(
       kSortWriterFinishTimeSliceLimitMsSession,
       config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
 }
+uint64_t HiveConfig::maxTargetFileSizeBytes(
+    const config::ConfigBase* session) const {
+  return config::toCapacity(
+      session->get<std::string>(
+          kMaxTargetFileSizeSession,
+          config_->get<std::string>(kMaxTargetFileSize, "0B")),
+      config::CapacityUnit::BYTE);
+}
 
 uint64_t HiveConfig::footerEstimatedSize() const {
   return config_->get<uint64_t>(kFooterEstimatedSize, 256UL << 10);

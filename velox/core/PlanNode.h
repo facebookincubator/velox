@@ -3430,8 +3430,9 @@ struct BetweenIndexLookupCondition : public IndexLookupCondition {
 using BetweenIndexLookupConditionPtr =
     std::shared_ptr<BetweenIndexLookupCondition>;
 
-/// Represents EQUAL index lookup condition: 'key' = 'value'. 'value' must be a
-/// constant value with the same type as 'key'.
+/// Represents EQUAL index lookup condition: 'key' = 'value'. 'value' can be
+/// either a constant value or a field access expression (probe side column)
+/// with the same type as 'key'.
 struct EqualIndexLookupCondition : public IndexLookupCondition {
   /// The value to compare against.
   TypedExprPtr value;
@@ -3588,6 +3589,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   const TableScanNodePtr& lookupSource() const {
     return lookupSourceNode_;
   }
+
+  /// Returns true if the lookup source requires splits for index lookup.
+  /// This delegates to the table handle's needsIndexSplit() method.
+  bool needsIndexSplit() const;
 
   /// Returns the join conditions for index lookup that can't be converted into
   /// simple equality join conditions.
