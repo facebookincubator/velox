@@ -54,20 +54,20 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
 
 HiveConfig::InsertExistingPartitionsBehavior
 HiveConfig::insertExistingPartitionsBehavior(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
       kInsertExistingPartitionsBehaviorSession,
       config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
 }
 
 uint32_t HiveConfig::maxPartitionsPerWriters(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<uint32_t>(
       kMaxPartitionsPerWritersSession,
       config_->get<uint32_t>(kMaxPartitionsPerWriters, 128));
 }
 
-uint32_t HiveConfig::maxBucketCount(const config::ConfigBase* session) const {
+uint32_t HiveConfig::maxBucketCount(const config::IConfig* session) const {
   return session->get<uint32_t>(
       kMaxBucketCountSession, config_->get<uint32_t>(kMaxBucketCount, 100'000));
 }
@@ -98,49 +98,47 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
       config_->get<std::string>(kGcsAuthAccessTokenProvider));
 }
 
-bool HiveConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
+bool HiveConfig::isOrcUseColumnNames(const config::IConfig* session) const {
   return session->get<bool>(
       kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
 }
 
-bool HiveConfig::isParquetUseColumnNames(
-    const config::ConfigBase* session) const {
+bool HiveConfig::isParquetUseColumnNames(const config::IConfig* session) const {
   return session->get<bool>(
       kParquetUseColumnNamesSession,
       config_->get<bool>(kParquetUseColumnNames, false));
 }
 
 bool HiveConfig::isFileColumnNamesReadAsLowerCase(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kFileColumnNamesReadAsLowerCaseSession,
       config_->get<bool>(kFileColumnNamesReadAsLowerCase, false));
 }
 
 bool HiveConfig::isPartitionPathAsLowerCase(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(kPartitionPathAsLowerCaseSession, true);
 }
 
-bool HiveConfig::allowNullPartitionKeys(
-    const config::ConfigBase* session) const {
+bool HiveConfig::allowNullPartitionKeys(const config::IConfig* session) const {
   return session->get<bool>(
       kAllowNullPartitionKeysSession,
       config_->get<bool>(kAllowNullPartitionKeys, true));
 }
 
-bool HiveConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
+bool HiveConfig::ignoreMissingFiles(const config::IConfig* session) const {
   return session->get<bool>(kIgnoreMissingFilesSession, false);
 }
 
-int64_t HiveConfig::maxCoalescedBytes(const config::ConfigBase* session) const {
+int64_t HiveConfig::maxCoalescedBytes(const config::IConfig* session) const {
   return session->get<int64_t>(
       kMaxCoalescedBytesSession,
       config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20)); // 128MB
 }
 
 int32_t HiveConfig::maxCoalescedDistanceBytes(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   const auto distance = config::toCapacity(
       session->get<std::string>(
           kMaxCoalescedDistanceSession,
@@ -159,8 +157,7 @@ int32_t HiveConfig::prefetchRowGroups() const {
   return config_->get<int32_t>(kPrefetchRowGroups, 1);
 }
 
-size_t HiveConfig::parallelUnitLoadCount(
-    const config::ConfigBase* session) const {
+size_t HiveConfig::parallelUnitLoadCount(const config::IConfig* session) const {
   auto count = session->get<size_t>(
       kParallelUnitLoadCountSession,
       config_->get<size_t>(kParallelUnitLoadCount, 0));
@@ -168,7 +165,7 @@ size_t HiveConfig::parallelUnitLoadCount(
   return count;
 }
 
-int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
+int32_t HiveConfig::loadQuantum(const config::IConfig* session) const {
   return session->get<int32_t>(
       kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
 }
@@ -190,14 +187,14 @@ std::string HiveConfig::writeFileCreateConfig() const {
 }
 
 uint32_t HiveConfig::sortWriterMaxOutputRows(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<uint32_t>(
       kSortWriterMaxOutputRowsSession,
       config_->get<uint32_t>(kSortWriterMaxOutputRows, 1024));
 }
 
 uint64_t HiveConfig::sortWriterMaxOutputBytes(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return config::toCapacity(
       session->get<std::string>(
           kSortWriterMaxOutputBytesSession,
@@ -206,13 +203,13 @@ uint64_t HiveConfig::sortWriterMaxOutputBytes(
 }
 
 uint64_t HiveConfig::sortWriterFinishTimeSliceLimitMs(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<uint64_t>(
       kSortWriterFinishTimeSliceLimitMsSession,
       config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
 }
 uint64_t HiveConfig::maxTargetFileSizeBytes(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return config::toCapacity(
       session->get<std::string>(
           kMaxTargetFileSizeSession,
@@ -228,7 +225,7 @@ uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
 
-uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
+uint8_t HiveConfig::readTimestampUnit(const config::IConfig* session) const {
   const auto unit = session->get<uint8_t>(
       kReadTimestampUnitSession,
       config_->get<uint8_t>(kReadTimestampUnit, 3 /*milli*/));
@@ -239,36 +236,36 @@ uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
 }
 
 bool HiveConfig::readTimestampPartitionValueAsLocalTime(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kReadTimestampPartitionValueAsLocalTimeSession,
       config_->get<bool>(kReadTimestampPartitionValueAsLocalTime, true));
 }
 
 bool HiveConfig::readStatsBasedFilterReorderDisabled(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kReadStatsBasedFilterReorderDisabledSession,
       config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
 }
 
 bool HiveConfig::preserveFlatMapsInMemory(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kPreserveFlatMapsInMemorySession,
       config_->get<bool>(kPreserveFlatMapsInMemory, false));
 }
 
-std::string HiveConfig::user(const config::ConfigBase* session) const {
+std::string HiveConfig::user(const config::IConfig* session) const {
   return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
 }
 
-std::string HiveConfig::source(const config::ConfigBase* session) const {
+std::string HiveConfig::source(const config::IConfig* session) const {
   return session->get<std::string>(
       kSource, config_->get<std::string>(kSource, ""));
 }
 
-std::string HiveConfig::schema(const config::ConfigBase* session) const {
+std::string HiveConfig::schema(const config::IConfig* session) const {
   return session->get<std::string>(
       kSchema, config_->get<std::string>(kSchema, ""));
 }

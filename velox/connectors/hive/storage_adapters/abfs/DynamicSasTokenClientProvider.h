@@ -57,14 +57,14 @@ class DynamicSasTokenClientProvider : public AzureClientProvider {
 
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
  private:
-  void init(const config::ConfigBase& config);
+  void init(const config::IConfig& config);
 
   std::shared_ptr<SasTokenProvider> sasTokenProvider_;
   int64_t sasTokenRenewPeriod_;

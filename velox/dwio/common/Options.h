@@ -776,8 +776,8 @@ struct WriterOptions {
   // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.
   virtual void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) {}
+      const config::OldConfig& connectorConfig,
+      const config::OldConfig& session) {}
 
   virtual ~WriterOptions() = default;
 };

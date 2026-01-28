@@ -29,21 +29,21 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   // Test only.
   std::string connectionString(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
  private:
   void init(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
   std::string connectionString_;
 };
@@ -53,21 +53,21 @@ class OAuthAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   // Test only.
   std::pair<std::string, std::string> tenantIdAndAuthorityHost(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
  private:
   void init(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
   std::string tenentId_;
   std::string authorityHost_;
@@ -79,21 +79,21 @@ class FixedSasAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config) override;
+      const config::IConfig& config) override;
 
   // Test only.
   std::string sas(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
  private:
   void init(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
   std::string sas_;
 };

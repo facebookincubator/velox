@@ -55,13 +55,13 @@ class TestAzureClientProvider final : public AzureClientProvider {
 
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& path,
-      const config::ConfigBase& config) override {
+      const config::IConfig& config) override {
     return delegated_->getReadFileClient(path, config);
   }
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& path,
-      const config::ConfigBase& config) override {
+      const config::IConfig& config) override {
     return std::make_unique<MockDataLakeFileClient>();
   }
 

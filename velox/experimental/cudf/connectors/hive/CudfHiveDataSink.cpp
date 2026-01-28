@@ -60,7 +60,7 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
 
 uint64_t getFinishTimeSliceLimitMsFromCudfHiveConfig(
     const std::shared_ptr<const CudfHiveConfig>& config,
-    const config::ConfigBase* sessions) {
+    const config::IConfig* sessions) {
   const uint64_t flushTimeSliceLimitMsFromConfig =
       config->sortWriterFinishTimeSliceLimitMs(sessions);
   // NOTE: if the flush time slice limit is set to 0, then we treat it as no

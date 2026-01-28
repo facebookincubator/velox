@@ -30,13 +30,13 @@ class DummyAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& path,
-      const config::ConfigBase& config) override {
+      const config::IConfig& config) override {
     VELOX_FAIL("DummyAzureClientProvider: Not implemented.");
   }
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& path,
-      const config::ConfigBase& config) override {
+      const config::IConfig& config) override {
     VELOX_FAIL("DummyAzureClientProvider: Not implemented.");
   }
 };
