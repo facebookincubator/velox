@@ -431,17 +431,9 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       VectorPtr constant,
       bool isGlobal,
       const TypePtr& resultType,
-      std::int32_t precision = 11)  // Default 11 matches Velox's 2.3% standard
-                                    // error (2^11 = 2048 buckets)
-      : Aggregator{
-            step,
-            cudf::aggregation::NUNIQUE, // a dummy value, we don't use the
-                                        // standard aggregation path TODO:
-                                        // change this to a real value
-            inputIndex,
-            constant,
-            isGlobal,
-            resultType},
+      std::int32_t precision = 11) // Default 11 matches Velox's 2.3% standard
+                                   // error (2^11 = 2048 buckets)
+      : Aggregator{step, cudf::aggregation::INVALID, inputIndex, constant, isGlobal, resultType},
         precision_{precision} {
     VELOX_CHECK(
         constant == nullptr,
