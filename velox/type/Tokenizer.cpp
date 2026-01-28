@@ -61,6 +61,18 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::computeNext() {
   }
 
   if (tryMatchSeparator(separators_->openBracket)) {
+    // check for [$] pattern (cardinality-only subscript)
+    if (hasNextCharacter() && peekCharacter() == separators_->dollar) {
+      nextCharacter(); // consume $
+      if (hasNextCharacter() && peekCharacter() == separators_->closeBracket) {
+        nextCharacter(); // consume ]
+        firstSegment_ = false;
+        return matchCardinalityOnlySubscript();
+      } else {
+        invalidSubfieldPath(); // $ must be followed by ]
+      }
+    }
+
     // These empty comments only needs to make clang-format happy.
     auto token = //
         tryMatchSeparator(separators_->quote) //
@@ -202,6 +214,11 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
 
 std::unique_ptr<Subfield::PathElement> Tokenizer::matchWildcardSubscript() {
   return std::make_unique<Subfield::AllSubscripts>();
+}
+
+std::unique_ptr<Subfield::PathElement>
+Tokenizer::matchCardinalityOnlySubscript() {
+  return std::make_unique<Subfield::ArrayOrMapSubscript>(false, false, nullptr);
 }
 
 void Tokenizer::invalidSubfieldPath() {
