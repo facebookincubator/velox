@@ -14,8 +14,6 @@
 
 add_subdirectory(arrow)
 
-velox_add_library(velox_dwio_parquet_field_id INTERFACE ParquetFieldId.h)
-
 velox_add_library(velox_dwio_arrow_parquet_writer Writer.cpp)
 
 velox_link_libraries(
@@ -23,7 +21,6 @@ velox_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_arrow_parquet_writer_util_lib
   velox_dwio_common
-  velox_dwio_parquet_field_id
   velox_arrow_bridge
   arrow
   fmt::fmt
