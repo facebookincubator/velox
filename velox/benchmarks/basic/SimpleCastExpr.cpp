@@ -20,10 +20,14 @@
 #include <gflags/gflags.h>
 
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
+DEFINE_bool(use_spark_cast, false, "Use SparkCastExpr instead of CastExpr");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -254,6 +258,16 @@ int main(int argc, char* argv[]) {
   folly::Init init{&argc, &argv};
   ::gflags::ParseCommandLineFlags(&argc, &argv, true);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+
+  if (FLAGS_use_spark_cast) {
+    exec::registerFunctionCallToSpecialForm(
+        expression::kCast,
+        std::make_unique<functions::sparksql::SparkCastCallToSpecialForm>());
+    exec::registerFunctionCallToSpecialForm(
+        expression::kTryCast,
+        std::make_unique<functions::sparksql::SparkTryCastCallToSpecialForm>());
+  }
+
   benchmark = std::make_unique<SimpleCastBenchmark>();
   folly::runBenchmarks();
   benchmark.reset();

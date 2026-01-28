@@ -35,7 +35,6 @@ velox_add_library(
   velox_expression
   BooleanMix.cpp
   CastExpr.cpp
-  CastHooks.cpp
   CoalesceExpr.cpp
   ConjunctExpr.cpp
   ConstantExpr.cpp
@@ -51,7 +50,7 @@ velox_add_library(
   GenericWriter.cpp
   LambdaExpr.cpp
   PeeledEncoding.cpp
-  PrestoCastHooks.cpp
+  PrestoCastKernel.cpp
   RegisterSpecialForm.cpp
   RowConstructor.cpp
   SimpleFunctionRegistry.cpp
