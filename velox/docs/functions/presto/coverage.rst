@@ -436,6 +436,7 @@ Here is a list of all scalar, aggregate, and window functions from Presto, with 
     table.coverage tr:nth-child(75) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(75) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(75) td:nth-child(7) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(76) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(76) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(76) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(76) td:nth-child(4) {background-color: #6BA81E;}
@@ -548,7 +549,7 @@ Here is a list of all scalar, aggregate, and window functions from Presto, with 
     :func:`cosine_similarity`                 :func:`inverse_laplace_cdf`               :func:`pi`                                :func:`st_isring`                         :func:`year`                                  :func:`stddev_samp`
     :func:`crc32`                             :func:`inverse_normal_cdf`                pinot_binary_decimal_to_double            :func:`st_issimple`                       :func:`year_of_week`                          :func:`sum`
     :func:`current_date`                      :func:`inverse_poisson_cdf`               :func:`poisson_cdf`                       :func:`st_isvalid`                        :func:`yow`                                   :func:`tdigest_agg`
-    current_time                              :func:`inverse_weibull_cdf`               :func:`pow`                               :func:`st_length`                         :func:`zip`                                   :func:`var_pop`
+    :func:`current_time`                      :func:`inverse_weibull_cdf`               :func:`pow`                               :func:`st_length`                         :func:`zip`                                   :func:`var_pop`
     :func:`current_timestamp`                 :func:`ip_prefix`                         :func:`power`                             :func:`st_linefromtext`                   :func:`zip_with`                              :func:`var_samp`
     :func:`current_timezone`                  :func:`ip_prefix_collapse`                :func:`quantile_at_value`                 :func:`st_linestring`                                                                   :func:`variance`
     :func:`date`                              :func:`ip_prefix_subnets`                 :func:`quarter`                           :func:`st_multipoint`

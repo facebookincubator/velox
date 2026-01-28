@@ -141,6 +141,8 @@ std::unordered_set<std::string> skipFunctions = {
     "current_timestamp", // Non-deterministic: returns the current timestamp at
                          // query execution time, so results differ across runs
     "now", // alias for current_timestamp
+    "current_time", // Non-deterministic: returns the current time at
+                    // query execution time, so results differ across runs
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
