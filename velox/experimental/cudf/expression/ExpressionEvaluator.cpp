@@ -300,7 +300,8 @@ class BinaryFunction : public CudfFunction {
   BinaryFunction(
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
-      : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
+      : op_(op),
+        type_(cudf_velox::veloxToCudfDataType(expr->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "Binary function expects exactly 2 inputs");
     if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
@@ -1212,7 +1213,7 @@ ColumnOrView FunctionExpression::eval(
 
     auto result = function_->eval(inputColumns, stream, mr);
     if (finalize) {
-      auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
+      const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
       if (resultView.type() != requestedType) {
         return cudf::cast(resultView, requestedType, stream, mr);
