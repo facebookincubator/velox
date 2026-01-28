@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/hash/Hash.h>
 #include <ostream>
 
 #include "velox/common/Enums.h"
@@ -29,6 +30,7 @@ enum class SubfieldKind {
   kNestedField,
   kStringSubscript,
   kLongSubscript,
+  kArrayOrMapSubscript,
 };
 
 VELOX_DECLARE_ENUM_NAME(SubfieldKind)
@@ -52,6 +54,7 @@ struct Separators {
   char quote = '\"';
   char wildCard = '*';
   char unicodeCaret = '^';
+  char dollar = '$';
 };
 
 class Subfield {
@@ -110,6 +113,83 @@ class Subfield {
     std::unique_ptr<PathElement> clone() override {
       return std::make_unique<AllSubscripts>();
     }
+  };
+
+  /// @brief Represents PathElement for subfield pushdown on Map and Array
+  /// types.
+  ///
+  /// ArrayOrMapSubscript enables fine-grained control over which parts of Map
+  /// or Array to read through subfield pushdown. This is useful for optimizing
+  /// read performance by skipping unnecessary data.
+  ///
+  /// The class has 3 member variables:
+  /// - `includeKeys_`: whether to read map keys
+  /// - `includeValues_`: whether to read map values
+  /// - `subscript_`: Optional filter to read only entries matching this key
+  ///
+  /// The following are different possible PathElement translations:
+  /// 1. `includeKeys_=false`, `includeValues_=false`, `subscript_=null`
+  ///   No data is needed (cardinalityOnly). Translates to PathElement [$]
+  ///   Supported types: MAP, ARRAY
+  ///
+  /// 2. `includeKeys_=true`, `includeValues_=false`, `subscript_=null`
+  ///   Read all keys, skip values. Translates to PathElement [K*, *].
+  ///   Supported types: MAP
+  ///
+  /// 3. `includeKeys_=true`, `includeValues_=false`, `subscript_=k`
+  ///   Read only keys matching subscript `k`, skip values.
+  ///   Translates to PathElement [K*, k].
+  ///   Supported types: MAP
+  ///   Example: `SELECT map_keys(map_filter(mapField, (k,v) -> k = 'foo'))`
+  ///
+  /// 4. `includeKeys_=false`, `includeValues_=true`, `subscript_=null`
+  ///   Read all values, skip keys. Translates to PathElement [V*, *].
+  ///   Supported types: MAP
+  ///
+  /// 5. `includeKeys_=false`, `includeValues_=true`, `subscript_=k`
+  ///   Read only values where key matches subscript `k`, skip keys.
+  ///   This translates to PathElement [V*, k].
+  ///   Supported types: MAP
+  ///
+  /// 6. `includeKeys_=true`, `includeValues_=true`
+  ///    Not supported. Use existing subscripts (kAllSubscript, kLongSubscript,
+  ///    kStringSubscript) when both keys and values are required.
+  class ArrayOrMapSubscript final : public PathElement {
+   public:
+    ArrayOrMapSubscript(
+        bool includeKeys,
+        bool includeValues,
+        std::unique_ptr<PathElement> subscript);
+
+    bool includeKeys() const {
+      return includeKeys_;
+    }
+
+    bool includeValues() const {
+      return includeValues_;
+    }
+
+    const PathElement* subscript() const {
+      return subscript_.get();
+    }
+
+    // Case 1 where data from column is not used in other parts of query
+    bool isCardinalityOnly() const {
+      return !includeKeys_ && !includeValues_ && !subscript_;
+    }
+
+    std::string toString() const override;
+
+    size_t hash() const override;
+
+    bool operator==(const PathElement& other) const override;
+
+    std::unique_ptr<PathElement> clone() override;
+
+   private:
+    const bool includeKeys_;
+    const bool includeValues_;
+    const std::unique_ptr<PathElement> subscript_;
   };
 
   class NestedField final : public PathElement {
