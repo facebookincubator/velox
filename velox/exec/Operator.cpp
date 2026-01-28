@@ -125,10 +125,11 @@ void Operator::maybeSetTracer() {
   }
 }
 
-void Operator::traceInput(const RowVectorPtr& input) {
+bool Operator::traceInput(const RowVectorPtr& input, ContinueFuture* future) {
   if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
-    inputTracer_->write(input);
+    return inputTracer_->write(input, future);
   }
+  return false;
 }
 
 void Operator::finishTrace() {

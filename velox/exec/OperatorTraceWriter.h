@@ -45,7 +45,7 @@ class OperatorTraceInputWriter : public TraceInputWriter {
       UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB);
 
   /// Serializes rows and writes out each batch.
-  void write(const RowVectorPtr& rows) override;
+  bool write(const RowVectorPtr& rows, ContinueFuture* future) override;
 
   /// Closes the data file and writes out the data summary.
   void finish() override;
