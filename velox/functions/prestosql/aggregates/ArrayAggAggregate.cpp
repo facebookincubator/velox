@@ -218,6 +218,12 @@ class ArrayAggAggregate : public exec::Aggregate {
         } else {
           elements->copyRanges(currentSource->get(), ranges);
         }
+      } else {
+        // Nothing to aggregate, mandatory behavior is to return nulls instead
+        // of empty array
+        for (int32_t i = 0; i < numGroups; ++i) {
+          vector->setNull(i, true);
+        }
       }
     } else {
       for (int32_t i = 0; i < numGroups; ++i) {
