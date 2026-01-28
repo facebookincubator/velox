@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <avro/DataFile.hh>
+
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 
@@ -52,4 +54,37 @@ class AvroReader : public dwio::common::Reader {
   std::shared_ptr<AvroFileContents> contents_;
 };
 
+class AvroRowReader : public dwio::common::RowReader {
+ public:
+  AvroRowReader(
+      std::shared_ptr<AvroFileContents> contents,
+      const dwio::common::RowReaderOptions& options);
+
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
+
+  uint64_t next(
+      uint64_t size,
+      VectorPtr& result,
+      const dwio::common::Mutation* mutation = nullptr) override;
+
+  void updateRuntimeStats(
+      dwio::common::RuntimeStatistics& stats) const override;
+
+  void resetFilterCaches() override;
+
+  std::optional<size_t> estimatedRowSize() const override;
+
+ private:
+  const std::shared_ptr<AvroFileContents> contents_;
+  const std::unique_ptr<::avro::DataFileReader<::avro::GenericDatum>> reader_;
+  const std::unique_ptr<::avro::GenericDatum> datum_;
+  const int64_t splitLimit_;
+  const uint64_t avroScanBatchBytes_;
+  const dwio::common::RowReaderOptions options_;
+  bool atEnd_;
+  uint64_t rowSize_;
+  uint64_t estimatedRowVectorSize_;
+};
 } // namespace facebook::velox::avro

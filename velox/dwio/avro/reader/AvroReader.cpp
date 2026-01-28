@@ -19,10 +19,12 @@
 #include <boost/algorithm/string.hpp>
 #include <avro/Compiler.hh>
 #include <avro/DataFile.hh>
+#include <avro/Generic.hh>
 #include <avro/Schema.hh>
 #include <avro/Stream.hh>
 
 #include "velox/dwio/common/Options.h"
+#include "velox/expression/VectorWriters.h"
 
 namespace facebook::velox::avro {
 
@@ -31,6 +33,42 @@ using dwio::common::BufferedInput;
 using dwio::common::LogType;
 using dwio::common::ReaderOptions;
 using dwio::common::TypeWithId;
+using exec::GenericWriter;
+
+// ::avro::DataFileReaderBase::pastSync(position) internally evaluates
+// `position + SyncSize`. To avoid signed int64 overflow (UB),
+// the maximum safe value for `position` is
+// std::numeric_limits<int64_t>::max() - SyncSize.
+constexpr int64_t kMaxSafeAvroReaderPosition =
+    std::numeric_limits<int64_t>::max() - ::avro::SyncSize;
+
+constexpr std::string_view kAvroScanBatchBytesKey = "avro.scan.batch.bytes";
+constexpr uint64_t kDefaultAvroScanBatchBytes = 100UL << 20; // 100MB
+
+uint64_t loadAvroScanBatchBytes(const dwio::common::RowReaderOptions& options) {
+  const auto& params = options.serdeParameters();
+  const auto it = params.find(std::string(kAvroScanBatchBytesKey));
+  if (it == params.end() || it->second.empty()) {
+    return kDefaultAvroScanBatchBytes;
+  }
+
+  uint64_t bytes = 0;
+  try {
+    bytes = folly::to<uint64_t>(it->second);
+  } catch (const folly::ConversionError& e) {
+    VELOX_USER_FAIL(
+        "Invalid value for '{}': '{}'. Details: {}.",
+        kAvroScanBatchBytesKey,
+        it->second,
+        e.what());
+  }
+  VELOX_USER_CHECK_GT(
+      bytes,
+      0,
+      "Invalid value for '{}': '{}'. Expected a positive integer number of bytes.",
+      kAvroScanBatchBytesKey);
+  return bytes;
+}
 
 enum class AvroLogicalType {
   kNone,
@@ -438,6 +476,309 @@ class ReadFileAvroInputStream : public ::avro::SeekableInputStream {
   std::unique_ptr<dwio::common::SeekableFileInputStream> stream_;
   size_t pushback_ = 0;
 };
+
+struct ResolvedDatum {
+  const AvroTypeInfo* info;
+  const ::avro::GenericDatum* datum;
+  std::optional<size_t> unionChildIndex;
+};
+
+void writeDecimal(
+    const AvroTypeInfo& info,
+    const uint8_t* data,
+    size_t size,
+    GenericWriter& writer) {
+  // Decode Avro decimal bytes (big-endian, two's complement) into int128.
+  int128_t unscaledValue = 0;
+  if (size != 0) {
+    VELOX_CHECK(
+        size <= sizeof(int128_t),
+        "Decimal value encoded with {} bytes exceeds supported precision.",
+        size);
+
+    uint128_t acc = 0;
+    for (size_t i = 0; i < size; ++i) {
+      acc = (acc << 8) | static_cast<uint128_t>(data[i]);
+    }
+
+    // Sign-extend negative values when encoded with fewer than 16 bytes.
+    if ((data[0] & 0x80) != 0 && size < sizeof(int128_t)) {
+      const uint32_t missingBits = static_cast<uint32_t>(128 - size * 8);
+      acc |= (~static_cast<uint128_t>(0)) << (128 - missingBits);
+    }
+
+    unscaledValue = static_cast<int128_t>(acc);
+  }
+
+  VELOX_CHECK(
+      DecimalUtil::valueInPrecisionRange<int128_t>(
+          unscaledValue, info.decimalPrecision),
+      "Decimal value {} exceeds precision {}.",
+      unscaledValue,
+      static_cast<int32_t>(info.decimalPrecision));
+
+  // Write using the physical width required by the Velox decimal type.
+  if (info.veloxType->isShortDecimal()) {
+    writer.castTo<int64_t>() = static_cast<int64_t>(unscaledValue);
+  } else {
+    writer.castTo<int128_t>() = unscaledValue;
+  }
+}
+
+std::optional<ResolvedDatum> resolveUnionAndNull(
+    const AvroTypeInfo& info,
+    const ::avro::GenericDatum& datum) {
+  // For unions, datum.type() reflects the active branch,
+  // matching both AVRO_NULL values and unions with NULL as the selected branch.
+  if (datum.type() == ::avro::Type::AVRO_NULL) {
+    VELOX_CHECK(
+        info.nullable, "Encountered null value for non-nullable Avro schema.");
+    return std::nullopt;
+  }
+
+  if (info.unionKind == AvroUnionKind::kNone) {
+    // already validated during avro->velox schema mapping.
+    VELOX_CHECK(
+        !datum.isUnion(), "Encountered union datum without union schema.");
+    return ResolvedDatum{&info, &datum, std::nullopt};
+  }
+
+  // In AvroTypeInfo, the AVRO_NULL union branch represents nullability
+  // rather than a child type, so we remap the union branch index
+  // accordingly.
+  size_t childIndex = datum.unionBranch();
+  if (info.nullable) {
+    const auto nullIndex = info.nullUnionBranchIndex.value();
+    if (childIndex > nullIndex) {
+      childIndex -= 1;
+    }
+  }
+  return ResolvedDatum{&info, &datum, childIndex};
+}
+
+void writeDatum(const ResolvedDatum& resolved, GenericWriter& writer) {
+  const auto& resolvedInfo = *resolved.info;
+  const auto& resolvedDatum = *resolved.datum;
+
+  if (resolved.unionChildIndex.has_value()) {
+    switch (resolvedInfo.unionKind) {
+      case AvroUnionKind::kNumericPromotion: {
+        const auto branchType = resolvedDatum.type();
+        switch (resolvedInfo.veloxType->kind()) {
+          case TypeKind::BIGINT: {
+            int64_t value = 0;
+            if (branchType == ::avro::Type::AVRO_INT) {
+              value = static_cast<int64_t>(resolvedDatum.value<int32_t>());
+            } else if (branchType == ::avro::Type::AVRO_LONG) {
+              value = resolvedDatum.value<int64_t>();
+            } else {
+              // Unreachable: already validated during avro->velox schema
+              // mapping.
+              VELOX_UNREACHABLE(
+                  "Unsupported Avro union branch {} for BIGINT promotion.",
+                  static_cast<int>(branchType));
+            }
+            writer.castTo<int64_t>() = value;
+            return;
+          }
+          case TypeKind::DOUBLE: {
+            double value = 0;
+            if (branchType == ::avro::Type::AVRO_FLOAT) {
+              value = static_cast<double>(resolvedDatum.value<float>());
+            } else if (branchType == ::avro::Type::AVRO_DOUBLE) {
+              value = resolvedDatum.value<double>();
+            } else {
+              // Unreachable: already validated during avro->velox schema
+              // mapping.
+              VELOX_UNREACHABLE(
+                  "Unsupported Avro union branch {} for DOUBLE promotion.",
+                  static_cast<int>(branchType));
+            }
+            writer.castTo<double>() = value;
+            return;
+          }
+          default:
+            // Unreachable: already validated during avro->velox schema mapping.
+            VELOX_UNREACHABLE(
+                "Unsupported numeric promotion target {}.",
+                resolvedInfo.veloxType->toString());
+        }
+      }
+      case AvroUnionKind::kStruct: {
+        const auto selectedIndex = resolved.unionChildIndex.value();
+        auto& rowWriter = writer.castTo<DynamicRow>();
+        for (size_t i = 0; i < resolvedInfo.children.size(); ++i) {
+          if (i == selectedIndex) {
+            continue;
+          }
+          rowWriter.set_null_at(static_cast<int32_t>(i));
+        }
+        auto& childWriter =
+            rowWriter.get_writer_at(static_cast<int32_t>(selectedIndex));
+        ResolvedDatum childResolved{
+            resolvedInfo.children[selectedIndex].get(),
+            resolved.datum,
+            std::nullopt};
+        writeDatum(childResolved, childWriter);
+        return;
+      }
+      default:
+        break;
+    }
+  }
+
+  switch (resolvedDatum.type()) {
+    case ::avro::Type::AVRO_BOOL:
+      writer.castTo<bool>() = resolvedDatum.value<bool>();
+      return;
+
+    case ::avro::Type::AVRO_INT: {
+      const auto value = resolvedDatum.value<int32_t>();
+      switch (resolvedInfo.logicalType) {
+        case AvroLogicalType::kDate:
+          writer.castTo<int32_t>() = value;
+          return;
+        case AvroLogicalType::kTimeMillis:
+          writer.castTo<int64_t>() = static_cast<int64_t>(value) * 1000;
+          return;
+        default:
+          writer.castTo<int32_t>() = value;
+          return;
+      }
+    }
+
+    case ::avro::Type::AVRO_LONG: {
+      const auto value = resolvedDatum.value<int64_t>();
+      switch (resolvedInfo.logicalType) {
+        case AvroLogicalType::kTimeMicros:
+          writer.castTo<int64_t>() = value;
+          return;
+        case AvroLogicalType::kTimestampMillis:
+          writer.castTo<Timestamp>() = Timestamp::fromMillis(value);
+          return;
+        case AvroLogicalType::kTimestampMicros:
+          writer.castTo<Timestamp>() = Timestamp::fromMicros(value);
+          return;
+        case AvroLogicalType::kTimestampNanos:
+          writer.castTo<Timestamp>() = Timestamp::fromNanos(value);
+          return;
+        default:
+          writer.castTo<int64_t>() = value;
+          return;
+      }
+    }
+
+    case ::avro::Type::AVRO_FLOAT:
+      writer.castTo<float>() = resolvedDatum.value<float>();
+      return;
+
+    case ::avro::Type::AVRO_DOUBLE:
+      writer.castTo<double>() = resolvedDatum.value<double>();
+      return;
+
+    case ::avro::Type::AVRO_STRING: {
+      auto& value = resolvedDatum.value<std::string>();
+      writer.castTo<Varchar>().copy_from(value);
+      return;
+    }
+
+    case ::avro::Type::AVRO_BYTES: {
+      auto& value = resolvedDatum.value<std::vector<uint8_t>>();
+      if (resolvedInfo.logicalType == AvroLogicalType::kDecimal) {
+        writeDecimal(resolvedInfo, value.data(), value.size(), writer);
+      } else {
+        writer.castTo<Varbinary>().copy_from(value);
+      }
+      return;
+    }
+
+    case ::avro::Type::AVRO_FIXED: {
+      const auto& fixed = resolvedDatum.value<::avro::GenericFixed>().value();
+      if (resolvedInfo.logicalType == AvroLogicalType::kDecimal) {
+        writeDecimal(resolvedInfo, fixed.data(), fixed.size(), writer);
+      } else {
+        writer.castTo<Varbinary>().copy_from(fixed);
+      }
+      return;
+    }
+
+    case ::avro::Type::AVRO_ENUM: {
+      auto& value = resolvedDatum.value<::avro::GenericEnum>().symbol();
+      writer.castTo<Varchar>().copy_from(value);
+      return;
+    }
+
+    case ::avro::Type::AVRO_ARRAY: {
+      auto& arrayWriter = writer.castTo<Array<Any>>();
+      const auto& elements =
+          resolvedDatum.value<::avro::GenericArray>().value();
+      arrayWriter.reserve(static_cast<vector_size_t>(elements.size()));
+      for (const auto& element : elements) {
+        auto resolvedElement =
+            resolveUnionAndNull(*resolvedInfo.children.front(), element);
+        if (!resolvedElement.has_value()) {
+          arrayWriter.add_null();
+          continue;
+        }
+
+        auto& elementWriter = arrayWriter.add_item();
+        writeDatum(*resolvedElement, elementWriter);
+      }
+      return;
+    }
+
+    case ::avro::Type::AVRO_MAP: {
+      VELOX_CHECK_EQ(
+          resolvedInfo.children.size(),
+          1,
+          "Avro map expects exactly one value type definition.");
+      auto& mapWriter = writer.castTo<Map<Varchar, Any>>();
+      const auto& entries = resolvedDatum.value<::avro::GenericMap>().value();
+      mapWriter.reserve(static_cast<vector_size_t>(entries.size()));
+      for (const auto& [key, valueDatum] : entries) {
+        auto resolvedValue =
+            resolveUnionAndNull(*resolvedInfo.children.front(), valueDatum);
+        if (!resolvedValue.has_value()) {
+          auto& keyWriter = mapWriter.add_null();
+          keyWriter.copy_from(key);
+          continue;
+        }
+
+        auto&& [keyWriter, valueWriter] = mapWriter.add_item();
+        keyWriter.copy_from(key);
+        writeDatum(*resolvedValue, valueWriter);
+      }
+      return;
+    }
+
+    case ::avro::Type::AVRO_RECORD: {
+      auto& rowWriter = writer.castTo<DynamicRow>();
+      const auto& record = resolvedDatum.value<::avro::GenericRecord>();
+      VELOX_CHECK_EQ(
+          resolvedInfo.children.size(),
+          record.fieldCount(),
+          "Mismatch between Avro record fields and schema information.");
+      for (size_t i = 0; i < resolvedInfo.children.size(); ++i) {
+        auto resolvedField =
+            resolveUnionAndNull(*resolvedInfo.children[i], record.fieldAt(i));
+        if (!resolvedField.has_value()) {
+          rowWriter.set_null_at(static_cast<int32_t>(i));
+          continue;
+        }
+
+        auto& childWriter = rowWriter.get_writer_at(i);
+        writeDatum(*resolvedField, childWriter);
+      }
+      return;
+    }
+
+    default:
+      // Unreachable: already validated during avro->velox schema mapping.
+      VELOX_UNREACHABLE(
+          "Unsupported Avro datum type reached at runtime (enum value = {}).",
+          static_cast<int>(resolvedDatum.type()));
+  }
+}
 } // namespace
 
 struct AvroFileContents {
@@ -530,8 +871,119 @@ const std::shared_ptr<const TypeWithId>& AvroReader::typeWithId() const {
 
 std::unique_ptr<dwio::common::RowReader> AvroReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
-  // return std::make_unique<AvroRowReader>(contents_, options);
-  VELOX_UNSUPPORTED("TODO");
+  return std::make_unique<AvroRowReader>(contents_, options);
+}
+
+AvroRowReader::AvroRowReader(
+    std::shared_ptr<AvroFileContents> contents,
+    const dwio::common::RowReaderOptions& options)
+    : contents_(std::move(contents)),
+      reader_(std::move(contents_->avroReader)),
+      datum_(std::make_unique<::avro::GenericDatum>(reader_->readerSchema())),
+      splitLimit_(
+          options.limit() >= static_cast<uint64_t>(kMaxSafeAvroReaderPosition)
+              ? kMaxSafeAvroReaderPosition
+              : static_cast<int64_t>(options.limit())),
+      avroScanBatchBytes_(loadAvroScanBatchBytes(options)),
+      options_(options),
+      atEnd_(false),
+      rowSize_(0),
+      estimatedRowVectorSize_(0) {
+  if (options.offset() > 0) {
+    reader_->sync(static_cast<int64_t>(options.offset()));
+  }
+  uint64_t skip = options.skipRows();
+  while (skip > 0) {
+    if (reader_->pastSync(splitLimit_) || !reader_->read(*datum_)) {
+      atEnd_ = true;
+      break;
+    }
+    --skip;
+  }
+  if (skip > 0) {
+    atEnd_ = true;
+  }
+}
+
+int64_t AvroRowReader::nextRowNumber() {
+  return atEnd_ ? kAtEnd : static_cast<int64_t>(rowSize_);
+}
+
+std::optional<size_t> AvroRowReader::estimatedRowSize() const {
+  if (rowSize_ == 0 || estimatedRowVectorSize_ == 0) {
+    return std::nullopt;
+  }
+  return std::max<size_t>(1, estimatedRowVectorSize_ / rowSize_);
+}
+
+int64_t AvroRowReader::nextReadSize(const uint64_t size) {
+  if (atEnd_) {
+    return kAtEnd;
+  }
+  const auto rowSize = estimatedRowSize();
+  if (!rowSize.has_value()) {
+    return static_cast<int64_t>(size);
+  }
+  const auto rowsByBytes =
+      std::max<uint64_t>(1, avroScanBatchBytes_ / rowSize.value());
+
+  return static_cast<int64_t>(std::min<uint64_t>(size, rowsByBytes));
+}
+
+void AvroRowReader::updateRuntimeStats(
+    dwio::common::RuntimeStatistics& /*stats*/) const {}
+
+void AvroRowReader::resetFilterCaches() {}
+
+uint64_t AvroRowReader::next(
+    const uint64_t size,
+    VectorPtr& result,
+    const dwio::common::Mutation* mutation) {
+  if (atEnd_ || size == 0) {
+    return 0;
+  }
+  const auto rowsToRead = nextReadSize(size);
+  SelectivityVector rows(rowsToRead);
+  if (result &&
+      (!result->type()->equivalent(*contents_->rowType) ||
+       result->size() != size)) {
+    result.reset();
+  }
+  BaseVector::ensureWritable(
+      rows, contents_->rowType, &contents_->pool, result);
+  auto rowVector = std::static_pointer_cast<RowVector>(result);
+  rowVector->resize(rowsToRead);
+  exec::VectorWriter<Any> writer;
+  writer.init(*rowVector);
+  const auto* rootInfo = contents_->typeInfo.get();
+
+  vector_size_t numRead = 0;
+  while (numRead < rowsToRead) {
+    if (reader_->pastSync(splitLimit_) || !reader_->read(*datum_)) {
+      atEnd_ = true;
+      break;
+    }
+    writer.setOffset(numRead);
+
+    const ResolvedDatum resolved{rootInfo, datum_.get(), std::nullopt};
+    writeDatum(resolved, writer.current());
+    writer.commit(true);
+    ++numRead;
+  }
+  writer.finish();
+  rowVector->resize(numRead);
+  if (numRead > 0) {
+    const auto batchBytes = rowVector->estimateFlatSize();
+    rowSize_ += numRead;
+    estimatedRowVectorSize_ += batchBytes;
+  }
+  std::shared_ptr<const common::ScanSpec> scanSpec = options_.scanSpec();
+  if (scanSpec) {
+    result = projectColumns(rowVector, *scanSpec, mutation);
+  } else {
+    result = rowVector;
+  }
+  return numRead;
 }
 
 } // namespace facebook::velox::avro
