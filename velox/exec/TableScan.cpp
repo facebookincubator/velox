@@ -362,16 +362,16 @@ bool TableScan::getSplit() {
     stats_.wlock()->addRuntimeStat(
         "waitForPreloadSplitNanos",
         RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+    if (preparedDataSource == nullptr) {
+      // There must be a cancellation.
+      VELOX_CHECK(operatorCtx_->task()->isCancelled());
+      return false;
+    }
     stats_.wlock()->addRuntimeStat(
         "preloadSplitPrepareTimeNanos",
         RuntimeCounter(
             connectorSplit->dataSource->prepareTiming().wallNanos,
             RuntimeCounter::Unit::kNanos));
-    if (!preparedDataSource) {
-      // There must be a cancellation.
-      VELOX_CHECK(operatorCtx_->task()->isCancelled());
-      return false;
-    }
     dataSource_->setFromDataSource(std::move(preparedDataSource));
   } else {
     uint64_t addSplitTimeUs{0};

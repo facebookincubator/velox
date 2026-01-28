@@ -417,6 +417,17 @@ class HiveWriterParameters {
   const std::string writeDirectory_;
 };
 
+/// Information about a single file written as part of a writer's output.
+/// When file rotation occurs, multiple HiveFileInfo entries are created.
+struct HiveFileInfo {
+  /// The temporary file name used during writing (in the staging directory).
+  std::string writeFileName;
+  /// The final file name after commit (in the target directory).
+  std::string targetFileName;
+  /// Size of the file in bytes.
+  uint64_t fileSize{0};
+};
+
 struct HiveWriterInfo {
   HiveWriterInfo(
       HiveWriterParameters parameters,
@@ -440,6 +451,27 @@ struct HiveWriterInfo {
   const std::shared_ptr<memory::MemoryPool> sortPool;
   int64_t numWrittenRows = 0;
   int64_t inputSizeInBytes = 0;
+  /// File sequence number for tracking multiple files written due to size-based
+  /// splitting. Incremented each time the writer rotates to a new file.
+  /// Used to generate sequenced file names (e.g., file_1.orc, file_2.orc).
+  /// Invariant during write: fileSequenceNumber == writtenFiles.size()
+  /// After close: fileSequenceNumber + 1 == writtenFiles.size() (final file
+  /// added)
+  uint32_t fileSequenceNumber{0};
+  /// Tracks all files written by this writer.
+  /// During write: contains only rotated (completed) files.
+  /// After close: contains all files including the final one (via
+  /// finalizeWriterFile).
+  std::vector<HiveFileInfo> writtenFiles;
+  /// Snapshot of total bytes written at the start of the current file.
+  /// Used as baseline to calculate current file size: rawBytesWritten() - this.
+  /// Updated to ioStats->rawBytesWritten() after each rotation.
+  uint64_t cumulativeWrittenBytes{0};
+  /// Current file's write filename (set when file is created/rotated).
+  /// This avoids recomputing makeSequencedFileName() in commitMessage().
+  std::string currentWriteFileName;
+  /// Current file's target filename (set when file is created/rotated).
+  std::string currentTargetFileName;
 };
 
 /// Identifies a hive writer.
@@ -642,6 +674,12 @@ class HiveDataSink : public DataSink {
       HiveWriterInfo* writerInfo,
       io::IoStatistics* ioStats);
 
+  // Returns the bytes written to the current file for the specified writer.
+  // This is calculated as total bytes minus cumulative bytes from rotated
+  // files. Use this instead of rawBytesWritten() when you need current file
+  // size.
+  uint64_t getCurrentFileBytes(size_t writerIndex) const;
+
   // Compute the partition id and bucket id for each row in 'input'.
   virtual void computePartitionAndBucketIds(const RowVectorPtr& input);
 
@@ -666,8 +704,15 @@ class HiveDataSink : public DataSink {
   // Creates and configures WriterOptions based on file format.
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
+  // The no-argument overload uses the last writer's info (for appendWriter).
   virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
       const;
+
+  // Creates WriterOptions for a specific writer index. Use this overload
+  // during writer rotation to ensure the correct writer's memory pool and
+  // nonReclaimableSection are used.
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      size_t writerIndex) const;
 
   // Returns the Hive partition directory name for the given partition ID.
   // Converts the partition values associated with the partition ID into a
@@ -710,6 +755,16 @@ class HiveDataSink : public DataSink {
   // Invoked to write 'input' to the specified file writer.
   void write(size_t index, RowVectorPtr input);
 
+  /// Rotates the writer at the given index to a new file. This is called when
+  /// the current file exceeds maxTargetFileBytes_. The old writer is closed
+  /// and a new writer is created for the same partition/bucket.
+  void rotateWriter(size_t index);
+
+  /// Finalizes the current file for the writer at the given index.
+  /// Captures file stats and adds the file info to writtenFiles.
+  /// Called by rotateWriter() and closeInternal().
+  void finalizeWriterFile(size_t index);
+
   void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. HiveDataSink
@@ -737,6 +792,7 @@ class HiveDataSink : public DataSink {
   const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
   const common::SpillConfig* const spillConfig_;
   const uint64_t sortWriterFinishTimeSliceLimitMs_{0};
+  const uint64_t maxTargetFileBytes_{0};
   const bool partitionKeyAsLowerCase_;
 
   std::vector<column_index_t> sortColumnIndices_;
