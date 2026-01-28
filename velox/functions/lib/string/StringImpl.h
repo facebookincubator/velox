@@ -788,6 +788,97 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
   return true;
 }
 
+// Increments a Unicode code point to the next valid Unicode scalar value.
+// Returns 0 if overflow (input is max code point).
+FOLLY_ALWAYS_INLINE int32_t incrementCodePoint(int32_t codePoint) {
+  static constexpr int32_t kMaxCodePoint = 0x10FFFF;
+  static constexpr int32_t kMinSurrogate = 0xD800;
+  static constexpr int32_t kMaxSurrogate = 0xDFFF;
+  if (codePoint == (kMinSurrogate - 1)) {
+    // Skip the surrogate range.
+    return kMaxSurrogate + 1;
+  } else if (codePoint == kMaxCodePoint) {
+    return 0;
+  }
+  return codePoint + 1;
+}
+
+// ASCII fast-path for roundUp.
+FOLLY_ALWAYS_INLINE std::optional<std::string> roundUpAscii(
+    std::string_view input,
+    int32_t numCodePoints) {
+  const size_t truncatedLength =
+      std::min(input.size(), static_cast<size_t>(numCodePoints));
+
+  if (truncatedLength == input.size()) {
+    return std::string(input);
+  }
+
+  if (truncatedLength == 0) {
+    return std::nullopt;
+  }
+
+  for (int32_t i = truncatedLength - 1; i >= 0; --i) {
+    const auto byte = static_cast<unsigned char>(input[i]);
+    if (byte < 0x7F) {
+      std::string result(input.data(), i);
+      result.push_back(static_cast<char>(byte + 1));
+      return result;
+    }
+  }
+
+  // All bytes are 0x7F (DEL character), no valid upper bound.
+  return std::nullopt;
+}
+
+// Unicode path for roundUp.
+FOLLY_ALWAYS_INLINE std::optional<std::string> roundUpUnicode(
+    std::string_view input,
+    int32_t numCodePoints) {
+  const auto truncatedLength = cappedByteLength<false>(input, numCodePoints);
+
+  if (truncatedLength == input.size()) {
+    return std::string(input);
+  }
+
+  if (truncatedLength == 0) {
+    return std::nullopt;
+  }
+
+  const char* data = input.data();
+  const char* truncatedEnd = data + truncatedLength;
+
+  // Collect the byte offset of each code point.
+  std::vector<size_t> codePointOffsets;
+  codePointOffsets.reserve(numCodePoints);
+  const char* current = data;
+  while (current < truncatedEnd) {
+    codePointOffsets.push_back(current - data);
+    int32_t charLength;
+    utf8proc_codepoint(current, truncatedEnd, charLength);
+    current += charLength;
+  }
+
+  // Try incrementing from the last code point backwards.
+  for (int32_t i = codePointOffsets.size() - 1; i >= 0; --i) {
+    const char* pos = data + codePointOffsets[i];
+    int32_t charLength;
+    const auto codePoint = utf8proc_codepoint(pos, truncatedEnd, charLength);
+    const auto nextCodePoint = incrementCodePoint(codePoint);
+    if (nextCodePoint != 0) {
+      std::string result(data, codePointOffsets[i]);
+      char buffer[4];
+      const auto bytesWritten = utf8proc_encode_char(
+          nextCodePoint, reinterpret_cast<utf8proc_uint8_t*>(buffer));
+      result.append(buffer, bytesWritten);
+      return result;
+    }
+  }
+
+  // No valid upper bound can be found.
+  return std::nullopt;
+}
+
 } // namespace detail
 
 /// Converts the first character of each word to uppercase and all other
@@ -812,6 +903,53 @@ FOLLY_ALWAYS_INLINE bool initcap(TOutString& output, const TInString& input) {
     return detail::initcapUtf8Impl<strictSpace, turkishCasing, greekFinalSigma>(
         output, input);
   }
+}
+
+/// Truncates a UTF-8 encoded string to at most 'numCodePoints' Unicode code
+/// points. Returns a string_view pointing to the truncated portion of the
+/// input string. This is used for computing Iceberg lower bound statistics,
+/// as the truncated string is guaranteed to be less than or equal to the
+/// original string in lexicographic order.
+///
+/// @param input The UTF-8 encoded input string.
+/// @param numCodePoints Maximum number of Unicode code points to retain.
+/// @return A string_view of the truncated string.
+FOLLY_ALWAYS_INLINE std::string_view truncateUtf8(
+    std::string_view input,
+    int32_t numCodePoints) {
+  if (isAscii(input.data(), input.size())) {
+    return std::string_view(
+        input.data(), std::min(input.size(), (size_t)numCodePoints));
+  }
+  const auto truncatedLength = cappedByteLength<false>(input, numCodePoints);
+  return std::string_view(input.data(), truncatedLength);
+}
+
+/// Rounds up a UTF-8 encoded string to produce an exclusive upper bound.
+/// The result is guaranteed to be greater than any string that shares the
+/// same prefix up to 'numCodePoints' code points. This is used for computing
+/// Iceberg upper bound statistics.
+///
+/// The function behaves as follows:
+/// - If the string has fewer than or equal to 'numCodePoints' code points,
+///   returns the original string unchanged.
+/// - Otherwise, truncates to 'numCodePoints' code points and increments
+///   code points from the last to the first, returning immediately on the
+///   first successful increment.
+/// - If no code point can be incremented (e.g., all are at max value
+///   U+10FFFF), returns std::nullopt.
+///
+/// @param input The UTF-8 encoded input string.
+/// @param numCodePoints Maximum number of Unicode code points to retain.
+/// @return A new string containing the rounded-up result, or std::nullopt if
+///         no valid upper bound can be computed.
+FOLLY_ALWAYS_INLINE std::optional<std::string> roundUpUtf8(
+    std::string_view input,
+    int32_t numCodePoints) {
+  if (isAscii(input.data(), input.size())) {
+    return detail::roundUpAscii(input, numCodePoints);
+  }
+  return detail::roundUpUnicode(input, numCodePoints);
 }
 
 } // namespace facebook::velox::functions::stringImpl
