@@ -302,7 +302,7 @@ class BinaryFunction : public CudfFunction {
       cudf::binary_operator op)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
     VELOX_CHECK_EQ(
-        expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
+        expr->inputs().size(), 2, "Binary function expects exactly 2 inputs");
     if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
             expr->inputs()[0])) {
       auto constValue = constExpr->value();
@@ -318,7 +318,7 @@ class BinaryFunction : public CudfFunction {
 
     VELOX_CHECK(
         !(left_ != nullptr && right_ != nullptr),
-        "Not support both left and right are literals");
+        "Binary function on two literals is not supported");
   }
 
   ColumnOrView eval(
@@ -363,6 +363,36 @@ class BinaryFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
 };
+
+class UnaryFunction : public CudfFunction {
+ public:
+  UnaryFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::unary_operator op) : op_(op) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "Unary function expects exactly 1 input");
+    auto constExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NULL(
+        constExpr,
+        "Unary function on literal input is not supported");
+    // @TODO (seves 1/28/26)
+    // binary functions require at least ONE input to be non-literal
+    // do we need to support unary functions with ONLY a literal input?
+    // assuming not for now
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    return cudf::unary_operation(asView(inputColumns[0]), op_, stream, mr);
+  }
+
+ private:
+  const cudf::unary_operator op_;
+};
+
 
 class SwitchFunction : public CudfFunction {
  public:
@@ -984,66 +1014,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("varchar")
            .build()});
 
-  // Our cudf binary ops can take all numeric types but instead of listing them
-  // all, we're testing if input types can be casted to double. Coersion will
-  // pass because all numerics can be casted to double.
-  // TODO (dm): This could break for decimal
-
-  auto registerBinaryOp = [&](const std::vector<std::string>& aliases, cudf::binary_operator op) {
-    registerCudfFunctions(
-        aliases,
-        [op](const std::string&,
-             const std::shared_ptr<velox::exec::Expr>& expr) {
-          return std::make_shared<BinaryFunction>(expr, op);
-        },
-        {FunctionSignatureBuilder()
-             .returnType("double")
-             .argumentType("double")
-             .argumentType("double")
-             .build(),
-         FunctionSignatureBuilder()
-             .integerVariable("p")
-             .integerVariable("s")
-             .returnType("decimal(p,s)")
-             .argumentType("decimal(p,s)")
-             .argumentType("decimal(p,s)")
-             .build()});
-  };
-  
-  registerBinaryOp({prefix + "plus", prefix + "add"}, cudf::binary_operator::ADD);
-  registerBinaryOp({prefix + "minus", prefix + "subtract"}, cudf::binary_operator::SUB);
-  registerBinaryOp({prefix + "multiply"}, cudf::binary_operator::MUL);
-  registerBinaryOp({prefix + "divide"}, cudf::binary_operator::DIV);
-  registerBinaryOp({prefix + "mod"}, cudf::binary_operator::MOD);
-
-  auto registerComparisonOp = [&](const std::vector<std::string>& aliases, cudf::binary_operator op) {
-    registerCudfFunctions(
-        aliases,
-        [op](const std::string&,
-             const std::shared_ptr<velox::exec::Expr>& expr) {
-          return std::make_shared<BinaryFunction>(expr, op);
-        },
-        {FunctionSignatureBuilder()
-             .returnType("boolean")
-             .argumentType("double")
-             .argumentType("double")
-             .build(),
-         FunctionSignatureBuilder()
-             .integerVariable("p")
-             .integerVariable("s")
-             .returnType("boolean")
-             .argumentType("decimal(p,s)")
-             .argumentType("decimal(p,s)")
-             .build()});
-  };
-
-  registerComparisonOp({prefix + "equal", prefix + "eq"}, cudf::binary_operator::EQUAL);
-  registerComparisonOp({prefix + "notequal", prefix + "neq"}, cudf::binary_operator::NOT_EQUAL);
-  registerComparisonOp({prefix + "greaterthanorequal", prefix + "gte"}, cudf::binary_operator::GREATER_EQUAL);
-  registerComparisonOp({prefix + "lessthanorequal", prefix + "lte"}, cudf::binary_operator::LESS_EQUAL);
-  registerComparisonOp({prefix + "greaterthan", prefix + "gt"}, cudf::binary_operator::GREATER);
-  registerComparisonOp({prefix + "lessthan", prefix + "lt"}, cudf::binary_operator::LESS);
-
   // No prefix because switch and if are special form
   registerCudfFunctions(
       {"switch", "if"},
@@ -1088,6 +1058,111 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("date")
            .constantArgumentType("integer")
            .build()});
+
+  //
+  // regular binary operators
+  //
+
+  auto registerBinaryOp = [&](const std::vector<std::string>& aliases, cudf::binary_operator op) {
+    registerCudfFunctions(
+        aliases,
+        [op](const std::string&,
+             const std::shared_ptr<velox::exec::Expr>& expr) {
+          return std::make_shared<BinaryFunction>(expr, op);
+        },
+        {FunctionSignatureBuilder()
+             .returnType("double")
+             .argumentType("double")
+             .argumentType("double")
+             .build(),
+         FunctionSignatureBuilder()
+             .integerVariable("p")
+             .integerVariable("s")
+             .returnType("decimal(p,s)")
+             .argumentType("decimal(p,s)")
+             .argumentType("decimal(p,s)")
+             .build()});
+  };
+  
+  registerBinaryOp({prefix + "plus", prefix + "add"}, cudf::binary_operator::ADD);
+  registerBinaryOp({prefix + "minus", prefix + "subtract"}, cudf::binary_operator::SUB);
+  registerBinaryOp({prefix + "multiply"}, cudf::binary_operator::MUL);
+  registerBinaryOp({prefix + "divide"}, cudf::binary_operator::DIV);
+  registerBinaryOp({prefix + "mod"}, cudf::binary_operator::MOD);
+
+  //
+  // regular comparison operators
+  //
+
+  auto registerComparisonOp = [&](const std::vector<std::string>& aliases, cudf::binary_operator op) {
+    registerCudfFunctions(
+        aliases,
+        [op](const std::string&,
+             const std::shared_ptr<velox::exec::Expr>& expr) {
+          return std::make_shared<BinaryFunction>(expr, op);
+        },
+        {FunctionSignatureBuilder()
+             .returnType("boolean")
+             .argumentType("double")
+             .argumentType("double")
+             .build(),
+         FunctionSignatureBuilder()
+             .integerVariable("p")
+             .integerVariable("s")
+             .returnType("boolean")
+             .argumentType("decimal(p,s)")
+             .argumentType("decimal(p,s)")
+             .build()});
+  };
+
+  registerComparisonOp({prefix + "equal", prefix + "eq"}, cudf::binary_operator::EQUAL);
+  registerComparisonOp({prefix + "notequal", prefix + "neq"}, cudf::binary_operator::NOT_EQUAL);
+  registerComparisonOp({prefix + "greaterthanorequal", prefix + "gte"}, cudf::binary_operator::GREATER_EQUAL);
+  registerComparisonOp({prefix + "lessthanorequal", prefix + "lte"}, cudf::binary_operator::LESS_EQUAL);
+  registerComparisonOp({prefix + "greaterthan", prefix + "gt"}, cudf::binary_operator::GREATER);
+  registerComparisonOp({prefix + "lessthan", prefix + "lt"}, cudf::binary_operator::LESS);
+
+  //
+  // regular unary operators
+  //
+
+  auto registerUnaryOp = [&](const std::vector<std::string>& aliases, cudf::unary_operator op) {
+    registerCudfFunctions(
+        aliases,
+        [op](const std::string&,
+             const std::shared_ptr<velox::exec::Expr>& expr) {
+          return std::make_shared<UnaryFunction>(expr, op);
+        },
+        {FunctionSignatureBuilder()
+             .returnType("double")
+             .argumentType("double")
+             .build(),
+         FunctionSignatureBuilder()
+             .integerVariable("p")
+             .integerVariable("s")
+             .returnType("decimal(p,s)")
+             .argumentType("decimal(p,s)")
+             .build()});
+  };
+
+  registerUnaryOp({prefix + "abs"}, cudf::unary_operator::ABS);
+  registerUnaryOp({prefix + "negate"}, cudf::unary_operator::NEGATE);
+  registerUnaryOp({prefix + "floor"}, cudf::unary_operator::FLOOR);
+
+  // @TODO (seves 1/28/26)
+  // add this if it's agreed that there should be a DecimalCeilFunction
+  // to match the existing DecimalFloorFunction
+  // registerUnaryOp({prefix + "ceil"}, cudf::unary_operator::CEIL);
+
+  // @TODO (seves 1/28/26)
+  // truncate
+  // no direct cudf mapping
+  // perhaps a compound operation using round/round_decimal
+
+  // @TODO (seves 1/28/26)
+  // between (3 parameters, needs custom operator above)
+  // greatest (can we handle variadic inputs?)
+  // least (ditto)
 
   return true;
 }
