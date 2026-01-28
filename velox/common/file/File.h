@@ -268,6 +268,7 @@ class InMemoryReadFile : public ReadFile {
   void setShouldCoalesce(bool shouldCoalesce) {
     shouldCoalesce_ = shouldCoalesce;
   }
+
   bool shouldCoalesce() const final {
     return shouldCoalesce_;
   }
