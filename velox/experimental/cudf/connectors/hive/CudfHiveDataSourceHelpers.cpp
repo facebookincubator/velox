@@ -135,29 +135,28 @@ fetchByteRanges(
   std::vector<rmm::device_buffer> columnChunkBuffers{};
   readTasks.reserve(byteRanges.size());
   columnChunkBuffers.reserve(byteRanges.size());
-
-  for (size_t chunk = 0; chunk < byteRanges.size();) {
-    auto const io_offset = static_cast<size_t>(byteRanges[chunk].offset());
-    auto io_size = static_cast<size_t>(byteRanges[chunk].size());
-    size_t next_chunk = chunk + 1;
-    while (next_chunk < byteRanges.size()) {
-      size_t const next_offset = byteRanges[next_chunk].offset();
-      if (next_offset != io_offset + io_size) {
-        break;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (size_t chunk = 0; chunk < byteRanges.size();) {
+      auto const io_offset = static_cast<size_t>(byteRanges[chunk].offset());
+      auto io_size = static_cast<size_t>(byteRanges[chunk].size());
+      size_t next_chunk = chunk + 1;
+      while (next_chunk < byteRanges.size()) {
+        size_t const next_offset = byteRanges[next_chunk].offset();
+        if (next_offset != io_offset + io_size) {
+          break;
+        }
+        io_size += byteRanges[next_chunk].size();
+        next_chunk++;
       }
-      io_size += byteRanges[next_chunk].size();
-      next_chunk++;
-    }
 
-    constexpr size_t bufferPaddingMultiple = 8;
+      constexpr size_t bufferPaddingMultiple = 8;
 
-    if (io_size != 0) {
-      columnChunkBuffers.emplace_back(
-          cudf::util::round_up_safe(io_size, bufferPaddingMultiple),
-          stream,
-          mr);
-      {
-        std::lock_guard<std::mutex> lock(mutex);
+      if (io_size != 0) {
+        columnChunkBuffers.emplace_back(
+            cudf::util::round_up_safe(io_size, bufferPaddingMultiple),
+            stream,
+            mr);
         // Directly read the column chunk data to the device buffer if
         // supported
         if (dataSource->supports_device_read() and
@@ -178,16 +177,16 @@ fetchByteRanges(
               cudaMemcpyHostToDevice,
               stream.value()));
         }
+        auto d_compdata =
+            static_cast<uint8_t const*>(columnChunkBuffers.back().data());
+        do {
+          columnChunkData[chunk] = cudf::device_span<uint8_t const>{
+              d_compdata, static_cast<size_t>(byteRanges[chunk].size())};
+          d_compdata += byteRanges[chunk].size();
+        } while (++chunk != next_chunk);
+      } else {
+        chunk = next_chunk;
       }
-      auto d_compdata =
-          static_cast<uint8_t const*>(columnChunkBuffers.back().data());
-      do {
-        columnChunkData[chunk] = cudf::device_span<uint8_t const>{
-            d_compdata, static_cast<size_t>(byteRanges[chunk].size())};
-        d_compdata += byteRanges[chunk].size();
-      } while (++chunk != next_chunk);
-    } else {
-      chunk = next_chunk;
     }
   }
 
