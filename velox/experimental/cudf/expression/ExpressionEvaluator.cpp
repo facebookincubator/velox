@@ -394,6 +394,88 @@ class UnaryFunction : public CudfFunction {
   const cudf::unary_operator op_;
 };
 
+class BetweenFunction : public CudfFunction {
+ public:
+  BetweenFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    // must have exactly three inputs: value, min, max
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "Between function expects exactly 3 inputs");
+    // value must not be a literal
+    auto constExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NULL(
+        constExpr,
+        "Between function with literal input is not supported");
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      // min is a literal
+      auto constValue = constExpr->value();
+      minLiteral_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[2])) {
+      // max is a literal
+      auto constValue = constExpr->value();
+      maxLiteral_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // return (value >= min) && (value <= max)
+    std::unique_ptr<cudf::column> geResultColumn, leResultColumn;
+    if (minLiteral_) {
+      geResultColumn = std::move(cudf::binary_operation(
+          asView(inputColumns[0]),
+          *minLiteral_,
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr));
+    } else {
+      geResultColumn = std::move(cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[1]),
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr));
+    }
+    if (maxLiteral_) {
+      leResultColumn = std::move(cudf::binary_operation(
+          asView(inputColumns[0]),
+          *maxLiteral_,
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr));
+    } else {
+      leResultColumn = std::move(cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[2]),
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr));
+    }
+    return cudf::binary_operation(
+        geResultColumn->view(),
+        leResultColumn->view(),
+        cudf::binary_operator::LOGICAL_AND,
+        kBoolType,
+        stream,
+        mr);
+  }
+
+ private:
+  static constexpr cudf::data_type kBoolType{cudf::type_id::BOOL8};
+  std::unique_ptr<cudf::scalar> minLiteral_;
+  std::unique_ptr<cudf::scalar> maxLiteral_;
+};
 
 class SwitchFunction : public CudfFunction {
  public:
@@ -1160,10 +1242,36 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // no direct cudf mapping
   // perhaps a compound operation using round/round_decimal
 
+  //
+  // between
+  //
+
+  registerCudfFunction(
+    prefix + "between",
+    [](const std::string&,
+       const std::shared_ptr<velox::exec::Expr>& expr) {
+      return std::make_shared<BetweenFunction>(expr);
+    },
+    {FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("double")
+          .argumentType("double")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("boolean")
+          .argumentType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .build()});
+
+  //
+  // greatest & least
+  //
+
   // @TODO (seves 1/28/26)
-  // between (3 parameters, needs custom operator above)
-  // greatest (can we handle variadic inputs?)
-  // least (ditto)
 
   return true;
 }
