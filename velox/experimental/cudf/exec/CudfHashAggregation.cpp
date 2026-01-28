@@ -528,7 +528,7 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             sketch_data_ptr + first_offset, first_size),
         precision_,
         cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_NULL,
+        cudf::nan_policy::NAN_IS_VALID,
         stream);
 
     for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
@@ -556,7 +556,7 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         inputTable,
         precision_,
         cudf::null_policy::EXCLUDE,
-        cudf::nan_policy::NAN_IS_NULL,
+        cudf::nan_policy::NAN_IS_VALID,
         stream};
 
     return makeSketchColumn(sketch.sketch(), stream);

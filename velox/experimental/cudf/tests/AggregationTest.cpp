@@ -22,6 +22,8 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <cmath>
+
 namespace facebook::velox::exec::test {
 
 using core::QueryConfig;
@@ -831,6 +833,44 @@ TEST_F(AggregationTest, globalApproxDistinctPartialIntermediateFinal) {
 
   EXPECT_GE(c1_estimate, 4);
   EXPECT_LE(c1_estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctWithNaN) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 2.0, std::nan(""), 4.0, std::nan(""), 1.0}),
+  });
+
+  auto planCudf = PlanBuilder()
+                      .values({data})
+                      .partialAggregation({}, {"approx_distinct(c0)"})
+                      .finalAggregation()
+                      .planNode();
+
+  auto cudfResult = AssertQueryBuilder(planCudf).copyResults(pool());
+  ASSERT_EQ(cudfResult->size(), 1);
+  auto cudfEstimate =
+      cudfResult->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  cudf_velox::unregisterCudf();
+  auto planVelox = PlanBuilder()
+                       .values({data})
+                       .partialAggregation({}, {"approx_distinct(c0)"})
+                       .finalAggregation()
+                       .planNode();
+
+  auto veloxResult = AssertQueryBuilder(planVelox).copyResults(pool());
+  ASSERT_EQ(veloxResult->size(), 1);
+  auto veloxEstimate =
+      veloxResult->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  cudf_velox::registerCudf();
+
+  EXPECT_EQ(cudfEstimate, veloxEstimate)
+      << "CUDF and Velox should produce the same result for NaN values. "
+      << "Expected distinct count: 3 (1.0, 2.0, 4.0) plus NaN as distinct. "
+      << "CUDF result: " << cudfEstimate << ", Velox result: " << veloxEstimate;
+
+  EXPECT_GE(cudfEstimate, 3);
+  EXPECT_LE(cudfEstimate, 5);
 }
 
 } // namespace facebook::velox::exec::test
