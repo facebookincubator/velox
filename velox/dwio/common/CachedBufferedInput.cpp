@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/CacheInputStream.h"
@@ -194,8 +195,8 @@ void CachedBufferedInput::load(const LogType /*unused*/) {
       if (ssdFile != nullptr) {
         part->ssdPin = ssdFile->find(part->key);
         if (!part->ssdPin.empty() && part->ssdPin.run().size() < part->size) {
-          LOG(INFO) << "IOERR: Ignoring SSD shorter than requested: "
-                    << part->ssdPin.run().size() << " vs " << part->size;
+          LOG(WARNING) << "Ignoring SSD shorter than requested: "
+                       << part->ssdPin.run().size() << " vs " << part->size;
           part->ssdPin.clear();
         }
         if (!part->ssdPin.empty()) {
@@ -237,7 +238,7 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
   if (requests.empty() || (requests.size() < 2 && !prefetch)) {
     return {};
   }
-  const int32_t maxDistance = kSsd ? 20000 : options_.maxCoalesceDistance();
+  const int32_t maxDistance = kSsd ? 20'000 : options_.maxCoalesceDistance();
 
   // Combine adjacent short reads.
   int64_t coalescedBytes = 0;
@@ -479,8 +480,8 @@ void CachedBufferedInput::readRegion(
         requests,
         options_.maxCoalesceDistance());
   }
-  allCoalescedLoads_.push_back(load);
-  coalescedLoads_.withWLock([&](auto& loads) {
+  coalescedLoads_.push_back(load);
+  streamToCoalescedLoad_.withWLock([&](auto& loads) {
     for (auto& request : requests) {
       loads[request->stream] = load;
     }
@@ -491,19 +492,24 @@ void CachedBufferedInput::readRegions(
     const std::vector<CacheRequest*>& requests,
     bool prefetch,
     const std::vector<int32_t>& groupEnds) {
-  int i = 0;
-  std::vector<CacheRequest*> group;
-  for (auto end : groupEnds) {
-    while (i < end) {
-      group.push_back(requests[i++]);
-    }
-    readRegion(group, prefetch);
-    group.clear();
+  if (requests.empty()) {
+    VELOX_CHECK(groupEnds.empty());
+    return;
   }
+  int32_t requestIdx{0};
+  std::vector<CacheRequest*> requestGroup;
+  for (auto groupEndIdx : groupEnds) {
+    while (requestIdx < groupEndIdx) {
+      requestGroup.push_back(requests[requestIdx++]);
+    }
+    readRegion(requestGroup, prefetch);
+    requestGroup.clear();
+  }
+
   if (prefetch && executor_) {
     std::vector<int32_t> doneIndices;
-    for (auto i = 0; i < allCoalescedLoads_.size(); ++i) {
-      auto& load = allCoalescedLoads_[i];
+    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
+      auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
             [pendingLoad = load, ssdSavable = !options_.noCacheRetention()]() {
@@ -516,32 +522,42 @@ void CachedBufferedInput::readRegions(
     }
     // Remove the loads that were complete. There can be done loads if the same
     // CachedBufferedInput has multiple cycles of enqueues and loads.
-    for (int i = 0, j = 0, k = 0; i < allCoalescedLoads_.size(); ++i) {
+    for (int i = 0, j = 0, k = 0; i < coalescedLoads_.size(); ++i) {
       if (j < doneIndices.size() && doneIndices[j] == i) {
         ++j;
       } else {
-        allCoalescedLoads_[k++] = std::move(allCoalescedLoads_[i]);
+        coalescedLoads_[k++] = std::move(coalescedLoads_[i]);
       }
     }
-    allCoalescedLoads_.resize(allCoalescedLoads_.size() - doneIndices.size());
+    coalescedLoads_.resize(coalescedLoads_.size() - doneIndices.size());
   }
 }
 
 std::shared_ptr<cache::CoalescedLoad> CachedBufferedInput::coalescedLoad(
     const SeekableInputStream* stream) {
-  return coalescedLoads_.withWLock(
+  return streamToCoalescedLoad_.withWLock(
       [&](auto& loads) -> std::shared_ptr<cache::CoalescedLoad> {
         auto it = loads.find(stream);
         if (it == loads.end()) {
           return nullptr;
         }
         auto load = std::move(it->second);
-        auto* dwioLoad = static_cast<DwioCoalescedLoadBase*>(load.get());
+        auto* dwioLoad = checkedPointerCast<DwioCoalescedLoadBase>(load.get());
         for (auto& request : dwioLoad->requests()) {
           loads.erase(request.stream);
         }
         return load;
       });
+}
+
+void CachedBufferedInput::reset() {
+  BufferedInput::reset();
+  for (auto& load : coalescedLoads_) {
+    load->cancel();
+  }
+  coalescedLoads_.clear();
+  streamToCoalescedLoad_.wlock()->clear();
+  requests_.clear();
 }
 
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
