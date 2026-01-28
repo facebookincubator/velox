@@ -16,17 +16,16 @@
 
 #include "velox/dwio/common/DirectBufferedInput.h"
 
-#include <gtest/gtest.h>
-
-#include "velox/common/caching/FileIds.h"
-#include "velox/common/io/Options.h"
-#include "velox/common/testutil/TestValue.h"
-
 #include <fmt/core.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/Baton.h>
-
+#include <gtest/gtest.h>
 #include <thread>
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/FileIds.h"
+#include "velox/common/io/Options.h"
+#include "velox/common/testutil/TestValue.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
@@ -277,7 +276,7 @@ TEST_F(DirectBufferedInputTest, readAfterReset) {
   }
 }
 
-TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
+DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;
   content.resize(kContentSize);
@@ -382,7 +381,7 @@ TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
   }
 }
 
-TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
+DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;
   content.resize(kContentSize);

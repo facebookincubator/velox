@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MallocAllocator.h"
@@ -284,7 +285,7 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
   EXPECT_EQ(stats.numEntries, 2);
 }
 
-TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
+DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;
   content.resize(kContentSize);
@@ -380,7 +381,7 @@ TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
   EXPECT_EQ(stats.numExclusive, 0);
 }
 
-TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
+DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;
   content.resize(kContentSize);
