@@ -525,8 +525,8 @@ class ThriftDeserializer {
 /// to treat it as a string.
 class ThriftSerializer {
  public:
-  explicit ThriftSerializer(int initial_buffer_size = 1024)
-      : mem_buffer_(new ThriftBuffer(initial_buffer_size)) {
+  explicit ThriftSerializer(int initial_buffer_size = 1024) {
+    mem_buffer_ = std::make_shared<ThriftBuffer>(initial_buffer_size);
     apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer> factory;
     protocol_ = factory.getProtocol(mem_buffer_);
   }
