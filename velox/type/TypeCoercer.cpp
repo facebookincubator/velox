@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/type/TypeCoercer.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox {
 
@@ -50,6 +51,7 @@ allowedCoercions() {
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
   add(DATE(), {TIMESTAMP()});
+  add(TIMESTAMP(), {TIMESTAMP_WITH_TIME_ZONE()});
 
   return coercions;
 }

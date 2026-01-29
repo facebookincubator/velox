@@ -93,6 +93,94 @@ TEST_F(TimestampWithTimeZoneCastTest, fromTimestamp) {
   testCast(tsVector, expected);
 }
 
+TEST_F(TimestampWithTimeZoneCastTest, fromTimestampWithSessionTimezone) {
+  setQueryTimeZone("America/Los_Angeles");
+  auto laTimezoneId = tz::getTimeZoneID("America/Los_Angeles");
+
+  const auto tsVector = makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0), std::nullopt, Timestamp(3600, 0)});
+
+  auto timestamps = std::vector<int64_t>{0, 0, 3600 * kMillisInSecond};
+  auto timezones =
+      std::vector<TimeZoneKey>{laTimezoneId, laTimezoneId, laTimezoneId};
+
+  const auto expected = makeTimestampWithTimeZoneVector(
+      timestamps.size(),
+      [&](int32_t index) { return timestamps[index]; },
+      [&](int32_t index) { return timezones[index]; });
+  expected->setNull(1, true);
+
+  testCast(tsVector, expected);
+
+  // Test with Asia/Shanghai.
+  setQueryTimeZone("Asia/Shanghai");
+  auto shanghaiTimezoneId = tz::getTimeZoneID("Asia/Shanghai");
+
+  auto shanghaiTimestamps = std::vector<int64_t>{0, 0, 3600 * kMillisInSecond};
+  auto shanghaiTimezones = std::vector<TimeZoneKey>{
+      shanghaiTimezoneId, shanghaiTimezoneId, shanghaiTimezoneId};
+
+  const auto shanghaiExpected = makeTimestampWithTimeZoneVector(
+      shanghaiTimestamps.size(),
+      [&](int32_t index) { return shanghaiTimestamps[index]; },
+      [&](int32_t index) { return shanghaiTimezones[index]; });
+  shanghaiExpected->setNull(1, true);
+
+  testCast(tsVector, shanghaiExpected);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, fromTimestampConvertsToUtc) {
+  auto laTimezoneId = tz::getTimeZoneID("America/Los_Angeles");
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+
+  const auto tsVector = makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0), std::nullopt, Timestamp(3600, 0)});
+
+  auto timestamps = std::vector<int64_t>{
+      8 * kMillisInHour,
+      0,
+      9 * kMillisInHour,
+  };
+  auto timezones =
+      std::vector<TimeZoneKey>{laTimezoneId, laTimezoneId, laTimezoneId};
+
+  const auto expected = makeTimestampWithTimeZoneVector(
+      timestamps.size(),
+      [&](int32_t index) { return timestamps[index]; },
+      [&](int32_t index) { return timezones[index]; });
+  expected->setNull(1, true);
+
+  testCast(tsVector, expected);
+
+  // Test with Asia/Shanghai (UTC+8).
+  auto shanghaiTimezoneId = tz::getTimeZoneID("Asia/Shanghai");
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "Asia/Shanghai"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+
+  auto shanghaiTimestamps = std::vector<int64_t>{
+      -8 * kMillisInHour,
+      0,
+      -7 * kMillisInHour,
+  };
+  auto shanghaiTimezones = std::vector<TimeZoneKey>{
+      shanghaiTimezoneId, shanghaiTimezoneId, shanghaiTimezoneId};
+
+  const auto shanghaiExpected = makeTimestampWithTimeZoneVector(
+      shanghaiTimestamps.size(),
+      [&](int32_t index) { return shanghaiTimestamps[index]; },
+      [&](int32_t index) { return shanghaiTimezones[index]; });
+  shanghaiExpected->setNull(1, true);
+
+  testCast(tsVector, shanghaiExpected);
+}
+
 TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
   const auto stringVector = makeNullableFlatVector<StringView>(
       {std::nullopt,

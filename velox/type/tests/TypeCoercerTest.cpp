@@ -17,6 +17,7 @@
 #include "velox/type/TypeCoercer.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox {
 namespace {
@@ -55,6 +56,21 @@ TEST(TypeCoercerTest, date) {
   testCoercion(DATE(), TIMESTAMP());
 
   testNoCoercion(DATE(), BIGINT());
+}
+
+TEST(TypeCoercerTest, timestamp) {
+  testCoercion(TIMESTAMP(), TIMESTAMP());
+  testCoercion(TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE());
+
+  testNoCoercion(TIMESTAMP(), DATE());
+  testNoCoercion(TIMESTAMP(), BIGINT());
+}
+
+TEST(TypeCoercerTest, timestampWithTimeZone) {
+  testCoercion(TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP_WITH_TIME_ZONE());
+
+  testNoCoercion(TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP());
+  testNoCoercion(TIMESTAMP_WITH_TIME_ZONE(), DATE());
 }
 
 TEST(TypeCoercerTest, unknown) {
