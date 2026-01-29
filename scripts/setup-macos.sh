@@ -41,8 +41,9 @@ export OS_CXXFLAGS
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz xxhash zstd"
-
+# gflags and glog are installed from source to ensure version compatibility.
+# Homebrew's glog 0.7.x has breaking API changes that are incompatible with folly.
+MACOS_VELOX_DEPS="bison flex googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz xxhash zstd"
 MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"
@@ -103,6 +104,11 @@ function install_velox_deps_from_brew {
   done
 }
 
+function install_gflags {
+  wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+}
+
 function install_s3 {
   install_aws_deps
 
@@ -151,7 +157,6 @@ function install_faiss {
     install_faiss_deps
 
     wget_and_untar "https://github.com/facebookresearch/faiss/archive/refs/tags/v${FAISS_VERSION}.tar.gz" faiss
-
     local cmake_args
     cmake_args=(
       -DFAISS_ENABLE_GPU=OFF
@@ -177,6 +182,8 @@ function install_velox_deps {
   run_and_time install_ranges_v3
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_gflags
+  run_and_time install_glog
   run_and_time install_boost
   run_and_time install_fmt
   run_and_time install_fast_float
