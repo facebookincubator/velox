@@ -1617,8 +1617,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     VELOX_ASSERT_THROW(task->next(), "Inconsistent task execution mode.");
     getOutputWaitFlag = true;
     getOutputWait.notify();
-    while (cursor->hasNext()) {
-      cursor->moveNext();
+    while (cursor->moveNext()) {
     }
     waitForTaskCompletion(task);
   }
