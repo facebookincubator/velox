@@ -64,6 +64,13 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     return Coercion{.type = fromType, .cost = 0};
   }
 
+  if (fromType->isUnKnown()) {
+    auto toType = getType(toTypeName, {});
+    if (toType) {
+      return Coercion{.type = toType, .cost = 1};
+    }
+  }
+
   auto it = kAllowedCoercions.find({fromType->name(), toTypeName});
   if (it != kAllowedCoercions.end()) {
     return it->second;
