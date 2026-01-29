@@ -99,6 +99,13 @@ for all input rows.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="scale_qdigest">
+<span class="sig-name descname"><span class="pre">scale_qdigest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">qdigest(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale_factor)</span> <span class="pre">-&gt;</span> <span class="pre">qdigest(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#scale_qdigest" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a <code class="docutils literal notranslate"><span class="pre">qdigest</span></code> whose distribution has been scaled by a factor
+specified by <code class="docutils literal notranslate"><span class="pre">scale_factor</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="value_at_quantile">
 <span class="sig-name descname"><span class="pre">value_at_quantile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">qdigest&lt;T&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#value_at_quantile" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the approximate percentile values from the quantile digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> given the <code class="docutils literal notranslate"><span class="pre">quantile</span></code>.
@@ -130,6 +137,7 @@ All quantile values must be between zero and one (inclusive).</p>
 <li><a class="reference internal" href="#functions">Functions</a><ul>
 <li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
 <li><a class="reference internal" href="#qdigest_agg"><code class="docutils literal notranslate"><span class="pre">qdigest_agg()</span></code></a></li>
+<li><a class="reference internal" href="#scale_qdigest"><code class="docutils literal notranslate"><span class="pre">scale_qdigest()</span></code></a></li>
 <li><a class="reference internal" href="#value_at_quantile"><code class="docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></li>
 <li><a class="reference internal" href="#values_at_quantiles"><code class="docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></li>
 </ul>
