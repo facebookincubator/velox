@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <azure/core/url.hpp>
+#include <azure/storage/common/crypt.hpp>
+
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
@@ -32,9 +35,12 @@ AbfsPath::AbfsPath(std::string_view path) {
   }
 
   auto firstAt = file.find_first_of("@");
-  fileSystem_ = file.substr(0, firstAt);
+  fileSystem_ = Azure::Storage::_internal::UrlEncodePath(
+      Azure::Core::Url::Decode(std::string(file.substr(0, firstAt))));
   auto firstSep = file.find_first_of("/");
-  filePath_ = file.substr(firstSep + 1);
+  filePath_ = Azure::Storage::_internal::UrlEncodePath(
+      Azure::Core::Url::Decode(std::string(file.substr(firstSep + 1))));
+
   accountNameWithSuffix_ = file.substr(firstAt + 1, firstSep - firstAt - 1);
   auto firstDot = accountNameWithSuffix_.find_first_of(".");
   accountName_ = accountNameWithSuffix_.substr(0, firstDot);
@@ -49,6 +55,7 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
       accountNameWithSuffixForUrl.replace(startPos, 3, "blob");
     }
   }
+
   return fmt::format(
       "{}{}/{}/{}",
       isHttps_ ? "https://" : "http://",
