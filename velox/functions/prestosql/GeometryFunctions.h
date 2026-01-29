@@ -298,8 +298,12 @@ struct StEqualsFunction {
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    // For empty geometeries with different types we need to return false.
     GEOS_TRY(
-        result = leftGeosGeometry->equals(&*rightGeosGeometry);
+        result = (leftGeosGeometry->isEmpty() && rightGeosGeometry->isEmpty())
+            ? (leftGeosGeometry->getGeometryType() ==
+               rightGeosGeometry->getGeometryType())
+            : leftGeosGeometry->equals(&*rightGeosGeometry);
         , "Failed to check geometry equals");
 
     return Status::OK();
