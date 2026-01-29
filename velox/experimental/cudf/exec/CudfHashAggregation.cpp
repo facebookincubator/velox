@@ -1159,6 +1159,12 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       FunctionSignatureBuilder()
           .returnType("double")
           .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
           .build()};
 
   registerAggregationFunctionForStep(
