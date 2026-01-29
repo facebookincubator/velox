@@ -334,10 +334,6 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     return noMoreSplits_;
   }
 
-  bool hasNext() override {
-    return queue_->hasNext();
-  }
-
   RowVectorPtr& current() override {
     return current_;
   }
@@ -414,7 +410,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   }
 
   ~SingleThreadedTaskCursor() override {
-    if (task_ && !SingleThreadedTaskCursor::hasNext()) {
+    if (task_) {
       task_->requestCancel().wait();
     }
   }
@@ -433,26 +429,15 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   }
 
   bool moveNext() override {
-    if (!hasNext()) {
-      return false;
-    }
-    current_ = next_;
-    next_ = nullptr;
-    return true;
-  };
-
-  bool hasNext() override {
-    if (next_) {
-      return true;
-    }
     if (!task_->isRunning()) {
       return false;
     }
+
     while (true) {
       ContinueFuture future = ContinueFuture::makeEmpty();
       RowVectorPtr next = task_->next(&future);
       if (next != nullptr) {
-        next_ = next;
+        current_ = next;
         return true;
       }
       // When next is returned from task as a null pointer.
@@ -464,7 +449,8 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
       VELOX_CHECK_NULL(next);
       future.wait();
     }
-  };
+    return false;
+  }
 
   RowVectorPtr& current() override {
     return current_;
@@ -485,7 +471,6 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   std::shared_ptr<exec::Task> task_;
   bool noMoreSplits_{false};
   RowVectorPtr current_;
-  RowVectorPtr next_;
   std::exception_ptr error_;
 };
 
@@ -521,10 +506,6 @@ bool RowCursor::next() {
     decoded_[i]->decode(*vector->childAt(i), allRows_);
   }
   return true;
-}
-
-bool RowCursor::hasNext() {
-  return currentRow_ < numRows_ || cursor_->hasNext();
 }
 
 } // namespace facebook::velox::exec

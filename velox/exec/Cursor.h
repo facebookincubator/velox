@@ -159,8 +159,6 @@ class TaskCursor {
   /// Starts the task if not started yet.
   virtual bool moveNext() = 0;
 
-  virtual bool hasNext() = 0;
-
   virtual RowVectorPtr& current() = 0;
 
   virtual void setError(std::exception_ptr error) = 0;
@@ -190,8 +188,6 @@ class RowCursor {
   }
 
   bool next();
-
-  bool hasNext();
 
   std::shared_ptr<Task> task() const {
     return cursor_->task();
