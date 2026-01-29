@@ -15,39 +15,22 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
-#include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 
 #include <cudf/ast/expressions.hpp>
 
 namespace facebook::velox::cudf_velox {
 
-const std::string kAstEvaluatorName = "ast";
+const std::string kJitEvaluatorName = "jit";
 
-cudf::ast::expression const& createAstTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    cudf::ast::tree& tree,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precomputeInstructions);
-
-cudf::ast::expression const& createAstTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    cudf::ast::tree& tree,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& leftRowSchema,
-    const RowTypePtr& rightRowSchema,
-    std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const bool allowPureAstOnly);
-
-// Evaluates the expression tree
-class ASTExpression : public CudfExpression {
+// Evaluates the JIT expression tree
+class JitExpression : public CudfExpression {
  public:
-  ASTExpression() = default;
+  JitExpression() = default;
   // Converts velox expressions to cudf::ast::tree, scalars and
   // precompute instructions and stores them
-  ASTExpression(
+  JitExpression(
       std::shared_ptr<velox::exec::Expr> expr,
       const RowTypePtr& inputRowSchema);
 
@@ -61,23 +44,13 @@ class ASTExpression : public CudfExpression {
   void close() override;
 
   // Check if this specific operation (not its children) can be evaluated by
-  // ASTExpression
+  // JitExpression
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
-  std::shared_ptr<velox::exec::Expr> expr_;
-
-  cudf::ast::tree cudfTree_;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars_;
-  // instruction on dependent column to get new column index on non-ast
-  // supported operations in expressions
-  // <dependent_column_index, "instruction", new_column_index>
-  std::vector<PrecomputeInstruction> precomputeInstructions_;
-  RowTypePtr inputRowSchema_;
-
-  friend class JitExpression;
+  ASTExpression expr_;
 };
 
-void registerAstEvaluator(int priority);
+void registerJitEvaluator(int priority);
 
 } // namespace facebook::velox::cudf_velox
