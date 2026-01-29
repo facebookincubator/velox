@@ -493,7 +493,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     // Use file data source if we don't want to use the BufferedInput source
     if (not cudfHiveConfig_->useBufferedInputSession(
             connectorQueryCtx_->sessionProperties())) {
-      LOG(INFO) << "Using file data source for CudfHiveDataSource";
+      VLOG(1) << "Using file data source for CudfHiveDataSource";
       return cudf::io::source_info{split_->filePath};
     }
 
