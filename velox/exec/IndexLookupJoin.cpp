@@ -182,7 +182,6 @@ IndexLookupJoin::IndexLookupJoin(
               : std::numeric_limits<vector_size_t>::max()},
       joinType_{joinNode->joinType()},
       hasMarker_(joinNode->hasMarker()),
-      numKeys_{joinNode->leftKeys().size()},
       probeType_{joinNode->sources()[0]->outputType()},
       lookupType_{joinNode->lookupSource()->outputType()},
       indexSourceNodeId_(joinNode->lookupSource()->id()),

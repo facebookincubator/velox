@@ -690,26 +690,6 @@ class Connector {
         "Connector {} does not support index source", connectorId());
   }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  virtual std::shared_ptr<IndexSource> createIndexSource(
-      const RowTypePtr& inputType,
-      size_t numJoinKeys,
-      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
-          joinConditions,
-      const RowTypePtr& outputType,
-      const ConnectorTableHandlePtr& tableHandle,
-      const connector::ColumnHandleMap& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) {
-    return createIndexSource(
-        inputType,
-        joinConditions,
-        outputType,
-        tableHandle,
-        columnHandles,
-        connectorQueryCtx);
-  }
-#endif
-
   virtual std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       ConnectorInsertTableHandlePtr connectorInsertTableHandle,
