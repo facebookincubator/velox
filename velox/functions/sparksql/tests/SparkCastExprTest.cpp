@@ -881,6 +881,72 @@ TEST_F(SparkCastExprTest, boolToTimestamp) {
       }));
 }
 
+TEST_F(SparkCastExprTest, decimalToString) {
+  // Test decimal to string casting preserving scale (ANSI mode)
+  // The scale is preserved, no trailing zeros are trimmed
+  testCast(
+      makeFlatVector<int64_t>(
+          {100, 1230, 12345, 0, -100, -1230, -12345},
+          DECIMAL(10, 2)),
+      makeFlatVector<std::string>(
+          {"1.00", "12.30", "123.45", "0.00", "-1.00", "-12.30", "-123.45"}));
+
+  testCast(
+      makeFlatVector<int64_t>(
+          {100000, 123000, 123450, 0, -100000, -123000, -123450},
+          DECIMAL(10, 3)),
+      makeFlatVector<std::string>(
+          {"100.000", "123.000", "123.450", "0.000", "-100.000", "-123.000", "-123.450"}));
+
+  testCast(
+      makeFlatVector<int128_t>(
+          {HugeInt::build(0, 10000000000),
+           HugeInt::build(0, 12300000000),
+           HugeInt::build(0, 12345000000),
+           HugeInt::build(0, 0),
+           -HugeInt::build(0, 10000000000),
+           -HugeInt::build(0, 12300000000),
+           -HugeInt::build(0, 12345000000)},
+          DECIMAL(20, 10)),
+      makeFlatVector<std::string>(
+          {"1.0000000000", "1.2300000000", "1.2345000000", "0.0000000000",
+           "-1.0000000000", "-1.2300000000", "-1.2345000000"}));
+
+  // Test with no fractional part
+  testCast(
+      makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 0)),
+      makeFlatVector<std::string>({"100", "200", "300"}));
+
+  // Test very small decimal values to validate no scientific notation (e.g., 1E-7)
+  // This explicitly demonstrates ANSI requirement: plain string representation
+  testCast(
+      makeFlatVector<int64_t>(
+          {12, 120, 1200, -12, -120},
+          DECIMAL(10, 8)),
+      makeFlatVector<std::string>(
+          {"0.00000012", "0.00000120", "0.00001200", "-0.00000012", "-0.00000120"}));
+}
+
+TEST_F(SparkCastExprTest, decimalToStringAnsiOnOff) {
+  // Test decimal to string casting with both ANSI ON and OFF modes
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+    testCast(
+        makeFlatVector<int64_t>(
+            {100, 1230, 0, -100},
+            DECIMAL(10, 2)),
+        makeFlatVector<std::string>(
+            {"1.00", "12.30", "0.00", "-1.00"}));
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {12, 120},
+            DECIMAL(10, 8)),
+        makeFlatVector<std::string>(
+            {"0.00000012", "0.00000120"}));
+  }
+}
 TEST_F(SparkCastExprTest, recursiveTryCast) {
   // Test array elements.
   testCast(
