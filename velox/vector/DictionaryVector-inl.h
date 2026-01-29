@@ -103,7 +103,7 @@ bool DictionaryVector<T>::isNullAt(vector_size_t idx) const {
 }
 
 template <typename T>
-SimpleVector<T>::TValueAt DictionaryVector<T>::valueAtFast(
+typename SimpleVector<T>::TValueAt DictionaryVector<T>::valueAtFast(
     vector_size_t idx) const {
   VELOX_DCHECK(initialized_);
   if (rawDictionaryValues_) {
