@@ -6980,6 +6980,54 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(DateTimeFunctionsTest, currentTime) {
+  const auto callCurrentTime = [&](int64_t sessionStartTime,
+                                   const std::optional<std::string>& timeZone)
+      -> std::optional<int64_t> {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    return evaluateOnce<int64_t>(
+        "current_time()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        TIME_WITH_TIME_ZONE());
+  };
+
+  // Test without timezone
+  VELOX_ASSERT_THROW(
+      callCurrentTime(0, std::nullopt), "Timezone cannot be null");
+
+  // Helper to test a timezone + expected UTC millis-of-day
+  auto testZone = [&](int64_t sessionStartTime,
+                      const std::string& zone,
+                      int64_t expectedMillisOfDay) {
+    auto packed = callCurrentTime(sessionStartTime, zone);
+    // Reuse TimestampWithTimezone: TIME WITH TIME ZONE uses the same
+    // packed (millis, zoneKey) format, so unpack() works.
+    auto unpacked = TimestampWithTimezone::unpack(packed);
+    ASSERT_TRUE(unpacked.has_value());
+
+    EXPECT_EQ(unpacked->timezone_->name(), zone);
+    EXPECT_EQ(unpacked->milliSeconds_, expectedMillisOfDay);
+  };
+
+  // 1) America/Los_Angeles — 1710061200000 ms → 09:00:00 UTC → 32400000
+  //    (March 10 2024 09:00:00 UTC)
+  testZone(1710061200000, "America/Los_Angeles", 32400000);
+
+  // 2) Asia/Kolkata — 1710105600000 ms → 21:20:00 UTC → 76800000
+  //    (March 10 2024 21:20:00 UTC)
+  testZone(1710105600000, "Asia/Kolkata", 76800000);
+
+  // 3) Europe/London — 1710150000000 ms → 09:40:00 UTC → 34800000
+  //    (March 11 2024 09:40:00 UTC)
+  testZone(1710150000000, "Europe/London", 34800000);
+}
+
 TEST_F(DateTimeFunctionsTest, currentTimezone) {
   {
     setQueryTimeZone("Asia/Kolkata");
