@@ -32,6 +32,7 @@ COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 
 ARG VELOX_BUILD_SHARED=ON
 # Building libvelox.so requires folly and gflags to be built shared as well for now
+# gflags is always both shared and static turned on.
 ENV VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED}
 
 RUN mkdir build
@@ -158,6 +159,9 @@ ENV HADOOP_HOME=/usr/local/hadoop \
     PATH=/usr/local/hadoop/bin:${PATH} \
     JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk \
     PATH=/usr/lib/jvm/java-1.8.0-openjdk/bin:${PATH}
+
+# thrift1 requires shared libraries copied from /deps to /usr/local.
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH"
 
 COPY --from=adapters-build /deps /usr/local
 
