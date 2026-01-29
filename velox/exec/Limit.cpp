@@ -53,7 +53,12 @@ void Limit::addInput(RowVectorPtr input) {
 RowVectorPtr Limit::getOutput() {
   VELOX_DCHECK(!isDraining());
 
-  if ((input_ == nullptr) || (remainingOffset_ == 0 && remainingLimit_ == 0)) {
+  if (remainingOffset_ == 0 && remainingLimit_ == 0) {
+    finished_ = true;
+    return nullptr;
+  }
+
+  if (input_ == nullptr) {
     return nullptr;
   }
 
