@@ -347,30 +347,23 @@ VectorPtr CastExpr::castToTime(
       context.ensureWritable(rows, TIME(), castResult);
       (*castResult).clearNulls(rows);
 
-      // Get session timezone and start time for timezone conversions
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      const auto sessionStartTimeMs =
-          context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
-
       auto* inputVector = input.as<SimpleVector<StringView>>();
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
+        const auto inputString =
+            hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+        const auto timeResult = hooks_->castStringToTime(inputString);
+        if (timeResult.hasError()) {
+          if (setNullInResultAtError()) {
+            castResult->setNull(row, true);
+          } else {
+            VELOX_USER_FAIL(
+                makeErrorMessage(input, row, TIME()) + " " +
+                timeResult.error().message());
           }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
+        } else {
+          resultFlatVector->set(row, timeResult.value());
         }
       });
 
