@@ -33,7 +33,6 @@ class ConversionsTest : public testing::Test {
   static void testConversion(
       std::vector<TFrom> input,
       std::vector<TTo> expectedResult,
-      bool truncate = false,
       bool legacyCast = false,
       bool expectError = false) {
     if (!expectError) {
@@ -43,12 +42,8 @@ class ConversionsTest : public testing::Test {
 
     auto cast = [&](TFrom input) -> TTo {
       Expected<TTo> result;
-      if (truncate & legacyCast) {
-        VELOX_NYI("No associated cast policy for truncate and legacy cast.");
-      } else if (!truncate & legacyCast) {
+      if (legacyCast) {
         result = Converter<toTypeKind, void, LegacyCastPolicy>::tryCast(input);
-      } else if (truncate & !legacyCast) {
-        result = Converter<toTypeKind, void, SparkCastPolicy>::tryCast(input);
       } else {
         result = Converter<toTypeKind, void, PrestoCastPolicy>::tryCast(input);
       }
@@ -85,7 +80,6 @@ class ConversionsTest : public testing::Test {
 TEST_F(ConversionsTest, toBoolean) {
   // From integral types.
   {
-    // When TRUNCATE = false.
     testConversion<int8_t, bool>(
         {
             1,
@@ -98,29 +92,11 @@ TEST_F(ConversionsTest, toBoolean) {
             false,
             true,
             true,
-        },
-        /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<int8_t, bool>(
-        {
-            1,
-            0,
-            12,
-            -1,
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-        },
-        /*truncate*/ true);
+        });
   }
 
   // From double.
   {
-    // When TRUNCATE = false.
     testConversion<double, bool>(
         {
             1.0,
@@ -133,29 +109,11 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
             true,
             true,
-        },
-        /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<double, bool>(
-        {
-            1.0,
-            1.1,
-            -1.0,
-            0.0000000000001,
-        },
-        {
-            true,
-            true,
-            true,
-            true,
-        },
-        /*truncate*/ true);
+        });
   }
 
   // From float.
   {
-    // When TRUNCATE = false.
     testConversion<float, bool>(
         {
             0.1,
@@ -170,26 +128,7 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
             true,
             true,
-        },
-        /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<float, bool>(
-        {
-            0.1,
-            0.0,
-            -0.1,
-            kInf,
-            kNan,
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-            false,
-        },
-        /*truncate*/ true);
+        });
   }
 
   // From boolean.
@@ -207,7 +146,6 @@ TEST_F(ConversionsTest, toBoolean) {
 
   // From string.
   {
-    // When TRUNCATE = false.
     testConversion<std::string, bool>(
         {
             "1",
@@ -224,10 +162,9 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
             false,
             false,
-        },
-        /*truncate*/ false);
+        });
 
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<std::string, bool>(
         {
             "1.7E308",
@@ -239,62 +176,16 @@ TEST_F(ConversionsTest, toBoolean) {
             "tru",
         },
         {},
-        /*truncate*/ false,
-        false,
-        /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<std::string, bool>(
-        {
-            "1",
-            "0",
-            "t",
-            "true",
-            "f",
-            "false",
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-        },
-        /*truncate*/ true);
-
-    // When TRUNCATE = true, invalid cases.
-    testConversion<std::string, bool>(
-        {
-            "1.7E308",
-            "nan",
-            "infinity",
-            "12",
-            "-1",
-            "tr",
-            "tru",
-        },
-        {},
-        /*truncate*/ true,
         false,
         /*expectError*/ true);
   }
 
   // From timestamp.
   {
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<Timestamp, bool>(
         {Timestamp(946729316, 123)},
         {},
-        /*truncate*/ false,
-        false,
-        /*expectError*/ true);
-
-    // When TRUNCATE = true, invalid cases.
-    testConversion<Timestamp, bool>(
-        {Timestamp(946729316, 123)},
-        {},
-        /*truncate*/ true,
         false,
         /*expectError*/ true);
   }
@@ -303,7 +194,6 @@ TEST_F(ConversionsTest, toBoolean) {
 TEST_F(ConversionsTest, toIntegralTypes) {
   // From double.
   {
-    // When TRUNCATE = false.
     testConversion<double, int64_t>(
         {
             12345.12,
@@ -312,8 +202,7 @@ TEST_F(ConversionsTest, toIntegralTypes) {
         {
             12345,
             12346,
-        },
-        /*truncate*/ false);
+        });
     testConversion<double, int32_t>(
         {
             1.888,
@@ -328,10 +217,9 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             4,
             100,
             -100,
-        },
-        /*truncate*/ false);
+        });
 
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<double, int8_t>(
         {
             12345.67,
@@ -339,100 +227,22 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             127.8,
         },
         {},
-        /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<double, int64_t>(
-        {
-            12345.12,
-            12345.67,
-        },
-        {
-            12345,
-            12345,
-        },
-        /*truncate*/ true);
-    testConversion<double, int32_t>(
-        {
-            1.888,
-            2.5,
-            3.6,
-            100.44,
-            -100.101,
-        },
-        {
-            1,
-            2,
-            3,
-            100,
-            -100,
-        },
-        /*truncate*/ true);
-    testConversion<double, int8_t>(
-        {
-            12345.67,
-            -12345.67,
-            127.8,
-        },
-        {
-            57,
-            -57,
-            127,
-        },
-        /*truncate*/ true);
-    testConversion<double, int8_t>(
-        {
-            1,
-            256,
-            257,
-            2147483646,
-            2147483647,
-            2147483648,
-            -2147483646,
-            -2147483647,
-            -2147483648,
-            -2147483649,
-        },
-        {
-            1,
-            0,
-            1,
-            -2,
-            -1,
-            -1,
-            2,
-            1,
-            0,
-            0,
-        },
-        /*truncate*/ true);
   }
 
   // From float.
   {
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<float, int64_t>(
-        {kInf, kNan}, {}, /*truncate*/ false, false, /*expectError*/ true);
-    testConversion<float, int32_t>(
-        {kNan}, {}, /*truncate*/ false, false, /*expectError*/ true);
-    testConversion<float, int16_t>(
-        {kNan}, {}, /*truncate*/ false, false, /*expectError*/ true);
-    testConversion<float, int8_t>(
-        {kNan}, {}, /*truncate*/ false, false, /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<float, int64_t>(
-        {kInf, kNan}, {9223372036854775807, 0}, /*truncate*/ true);
-    testConversion<float, int32_t>({kNan}, {0}, /*truncate*/ true);
-    testConversion<float, int16_t>({kNan}, {0}, /*truncate*/ true);
-    testConversion<float, int8_t>({kNan}, {0}, /*truncate*/ true);
+        {kInf, kNan}, {}, false, /*expectError*/ true);
+    testConversion<float, int32_t>({kNan}, {}, false, /*expectError*/ true);
+    testConversion<float, int16_t>({kNan}, {}, false, /*expectError*/ true);
+    testConversion<float, int8_t>({kNan}, {}, false, /*expectError*/ true);
   }
 
   // From string.
   {
-    // When TRUNCATE = false.
     testConversion<std::string, int16_t>(
         {
             "1",
@@ -446,10 +256,9 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             "\u001f101\u000e",
             " \u001f-102\u000f ",
         },
-        {1, 1, -100, 100, 100, -100, 100, 101, -102},
-        /*truncate*/ false);
+        {1, 1, -100, 100, 100, -100, 100, 101, -102});
 
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<std::string, int8_t>(
         {
             "1.2",
@@ -463,11 +272,10 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             "-.",
         },
         {},
-        /*truncate*/ false,
         false,
         /*expectError*/ true);
     testConversion<std::string, int8_t>(
-        {"1234567"}, {}, /*truncate*/ false, false, /*expectError*/ true);
+        {"1234567"}, {}, false, /*expectError*/ true);
     testConversion<std::string, int64_t>(
         {"1a",
          "",
@@ -481,55 +289,12 @@ TEST_F(ConversionsTest, toIntegralTypes) {
          // All spaces
          "   \u000f "},
         {},
-        /*truncate*/ false,
-        false,
-        /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<std::string, int8_t>(
-        {
-            "1.2",
-            "1.23444",
-            ".2355",
-            "-1.8",
-            "1.",
-            "-1.",
-            "0.",
-            ".",
-            "-.",
-            "+1",
-        },
-        {
-            1,
-            1,
-            0,
-            -1,
-            1,
-            -1,
-            0,
-            0,
-            0,
-            1,
-        },
-        /*truncate*/ true);
-    testConversion<std::string, int64_t>(
-        {
-            "1a",
-            "",
-            "1'234'567",
-            "1,234,567",
-            "infinity",
-            "nan",
-        },
-        {},
-        /*truncate*/ true,
         false,
         /*expectError*/ true);
   }
 
   // From integral types.
   {
-    // When TRUNCATE = false.
     testConversion<int32_t, int8_t>(
         {
             2,
@@ -538,10 +303,9 @@ TEST_F(ConversionsTest, toIntegralTypes) {
         {
             2,
             3,
-        },
-        /*truncate*/ false);
+        });
 
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<int32_t, int8_t>(
         {
             1234567,
@@ -551,31 +315,8 @@ TEST_F(ConversionsTest, toIntegralTypes) {
             -100101,
         },
         {},
-        /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<int32_t, int8_t>(
-        {
-            1234567,
-            -1234567,
-            1111111,
-            2,
-            3,
-            1000,
-            -100101,
-        },
-        {
-            -121,
-            121,
-            71,
-            2,
-            3,
-            -24,
-            -5,
-        },
-        /*truncate*/ true);
   }
 
   // From boolean
@@ -656,7 +397,6 @@ TEST_F(ConversionsTest, toString) {
             "NaN",
             "NaN",
         },
-        false,
         /*legacyCast*/ false);
 
     // When LEGACY_CAST = true.
@@ -701,7 +441,6 @@ TEST_F(ConversionsTest, toString) {
             "NaN",
             "NaN",
         },
-        false,
         /*legacyCast*/ true);
   }
 
@@ -749,7 +488,6 @@ TEST_F(ConversionsTest, toString) {
             "NaN",
             "NaN",
         },
-        false,
         /*legacyCast*/ false);
 
     // When LEGACY_CAST = true.
@@ -794,7 +532,6 @@ TEST_F(ConversionsTest, toString) {
             "NaN",
             "NaN",
         },
-        false,
         /*legacyCast*/ true);
   }
 
@@ -832,7 +569,6 @@ TEST_F(ConversionsTest, toString) {
             "10000-02-01 16:00:00.000",
             "-0010-02-01 10:00:00.000",
         },
-        false,
         /*legacyCast*/ false);
 
     // When LEGACY_CAST = true.
@@ -849,7 +585,6 @@ TEST_F(ConversionsTest, toString) {
             "10000-02-01T16:00:00.000",
             "-10-02-01T10:00:00.000",
         },
-        false,
         /*legacyCast*/ true);
   }
 }
@@ -857,7 +592,7 @@ TEST_F(ConversionsTest, toString) {
 TEST_F(ConversionsTest, toRealAndDouble) {
   // From integral types.
   {
-    testConversion<int8_t, float>({1}, {1.0}, /*truncate*/ false);
+    testConversion<int8_t, float>({1}, {1.0});
     testConversion<int32_t, double>(
         {
             1,
@@ -877,7 +612,6 @@ TEST_F(ConversionsTest, toRealAndDouble) {
 
   // From double.
   {
-    // When TRUNCATE = false.
     testConversion<double, float>(
         {
             1.888,
@@ -896,8 +630,7 @@ TEST_F(ConversionsTest, toRealAndDouble) {
             -100.101,
             1.0,
             -2.0,
-        },
-        /*truncate*/ false);
+        });
     testConversion<double, double>(
         {
             1.888,
@@ -916,20 +649,14 @@ TEST_F(ConversionsTest, toRealAndDouble) {
             -100.101,
             1.0,
             -2.0,
-        },
-        /*truncate*/ false);
+        });
 
-    // When TRUNCATE = false, invalid cases.
-    testConversion<double, float>(
-        {1.7E308}, {}, /*truncate*/ false, false, /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<double, float>({1.7E308}, {kInf}, /*truncate*/ true);
+    // Invalid cases.
+    testConversion<double, float>({1.7E308}, {}, false, /*expectError*/ true);
   }
 
   // From string.
   {
-    // When TRUNCATE = false.
     testConversion<std::string, float>(
         {
             "1.7E308",   "1.",           "1",
@@ -973,10 +700,9 @@ TEST_F(ConversionsTest, toRealAndDouble) {
             -kInf,
             kNan,
             kNan,
-        },
-        /*truncate*/ false);
+        });
 
-    // When TRUNCATE = false, invalid cases.
+    // Invalid cases.
     testConversion<std::string, float>(
         {
             "1.2a",
@@ -996,7 +722,6 @@ TEST_F(ConversionsTest, toRealAndDouble) {
             "-infinityx",
         },
         {},
-        /*truncate*/ false,
         false,
         /*expectError*/ true);
   }
@@ -1007,7 +732,6 @@ TEST_F(ConversionsTest, toRealAndDouble) {
     testConversion<Timestamp, float>(
         {Timestamp(946729316, 123)},
         {},
-        /*truncate*/ false,
         false,
         /*expectError*/ true);
   }
@@ -1034,27 +758,26 @@ TEST_F(ConversionsTest, toTimestamp) {
 
     // Invalid case.
     testConversion<std::string, Timestamp>(
-        {"2012-Oct-01"}, {}, false, false, /*expectError*/ true);
+        {"2012-Oct-01"}, {}, false, /*expectError*/ true);
   }
 
   // From integral types, invalid cases.
   {
-    testConversion<int8_t, Timestamp>(
-        {123}, {}, false, false, /*expectError*/ true);
+    testConversion<int8_t, Timestamp>({123}, {}, false, /*expectError*/ true);
     testConversion<int16_t, Timestamp>(
-        {12345}, {}, false, false, /*expectError*/ true);
+        {12345}, {}, false, /*expectError*/ true);
     testConversion<int32_t, Timestamp>(
-        {123456}, {}, false, false, /*expectError*/ true);
+        {123456}, {}, false, /*expectError*/ true);
     testConversion<int64_t, Timestamp>(
-        {123456}, {}, false, false, /*expectError*/ true);
+        {123456}, {}, false, /*expectError*/ true);
   }
 
   // From floating-point types, invalid cases.
   {
     testConversion<float, Timestamp>(
-        {123456.78}, {}, false, false, /*expectError*/ true);
+        {123456.78}, {}, false, /*expectError*/ true);
     testConversion<double, Timestamp>(
-        {123456.78}, {}, false, false, /*expectError*/ true);
+        {123456.78}, {}, false, /*expectError*/ true);
   }
 }
 } // namespace

@@ -40,7 +40,7 @@ class JsonCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       const TypePtr& resultType,
       VectorPtr& result,
-      const std::shared_ptr<exec::CastHooks>& hooks) const override;
+      const std::shared_ptr<exec::CastKernel>& kernel) const override;
 
   void castFrom(
       const BaseVector& input,
