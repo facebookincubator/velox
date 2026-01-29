@@ -1640,6 +1640,47 @@ TEST_F(ParquetTableScanTest, reusedLazyVectors) {
       .assertResults(expectedRowVector);
 }
 
+TEST_F(ParquetTableScanTest, legacyArrayOfStructOfArray) {
+    // Legacy format with Array of Struct of Array
+    // ARRAY<STRUCT<ads_id: BIGINT, shop_id: BIGINT, streamer_cat_ids:
+    // ARRAY<BIGINT>, items: ARRAY<BIGINT>>>.
+    auto filePath = getExampleFilePath("legacy_array_of_struct_of_array.parquet");
+  
+    auto innerStructType =
+        ROW({"ads_id", "shop_id", "streamer_cat_ids", "items"},
+            {BIGINT(), BIGINT(), ARRAY(BIGINT()), ARRAY(BIGINT())});
+    auto arrayOfStructType = ARRAY(innerStructType);
+    auto rowType = ROW({"ads"}, {arrayOfStructType});
+  
+    auto row0Struct = makeRowVector(
+        {"ads_id", "shop_id", "streamer_cat_ids", "items"},
+        {makeFlatVector<int64_t>({1001}),
+         makeFlatVector<int64_t>({501}),
+         makeArrayVector<int64_t>({{}}),
+         makeArrayVector<int64_t>({{9001, 9002}})});
+  
+    auto adsArray = makeArrayVector({0, 1, 2}, row0Struct, {0, 1, 2});
+  
+    loadData(rowType, makeRowVector({"ads"}, {adsArray}));
+  
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", rowType, {})
+                    .planNode();
+  
+    auto result =
+        AssertQueryBuilder(plan).split(makeSplit(filePath)).copyResults(pool());
+  
+    ASSERT_EQ(result->size(), 3);
+  
+    auto rows = result->as<RowVector>();
+    ASSERT_TRUE(rows);
+    ASSERT_EQ(rows->childrenSize(), 1);
+  
+    // Verify the nested structure.
+    auto adsCol = rows->childAt(0)->as<ArrayVector>();
+    ASSERT_TRUE(adsCol);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
