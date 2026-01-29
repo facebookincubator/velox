@@ -2116,7 +2116,6 @@ struct LocalTimeFunction {
 template <typename T>
 struct CurrentTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  int64_t result_{0};
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /* type */,
@@ -2127,12 +2126,15 @@ struct CurrentTimeFunction {
     if (timeZone_ == nullptr) {
       VELOX_USER_FAIL("Timezone cannot be null");
     }
-    result_ = pack(currentTimeSinceMidnight, timeZone_->id());
+    currentTime_ = pack(currentTimeSinceMidnight, timeZone_->id());
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
-    result = result_;
+    result = currentTime_;
   }
+
+ private:
+  int64_t currentTime_{0};
 };
 
 } // namespace facebook::velox::functions

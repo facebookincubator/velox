@@ -6998,16 +6998,9 @@ TEST_F(DateTimeFunctionsTest, currentTime) {
   };
 
   // Test without timezone
-  EXPECT_THROW(
-      {
-        try {
-          callCurrentTime(0, std::nullopt);
-        } catch (const VeloxException& e) {
-          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
-          throw;
-        }
-      },
-      VeloxException);
+  VELOX_ASSERT_THROW(
+      callCurrentTime(0, std::nullopt), "Timezone cannot be null");
+
   // Helper to test a timezone + expected UTC millis-of-day
   auto testZone = [&](int64_t sessionStartTime,
                       const std::string& zone,
