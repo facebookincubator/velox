@@ -412,6 +412,7 @@ Writer::Writer(
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
   arrowMemoryPool_ = options.arrowMemoryPool;
   parquetFieldIds_ = std::move(options.parquetFieldIds);
+  dataFileStatsCollector_ = options.dataFileStatsCollector;
 }
 
 Writer::Writer(
@@ -559,6 +560,11 @@ void Writer::close() {
 
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    if (dataFileStatsCollector_) {
+      auto fileMetadata = arrowContext_->writer->metadata();
+      dataFileStats_ = dataFileStatsCollector_->aggregate(
+          static_cast<const void*>(&fileMetadata));
+    }
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());

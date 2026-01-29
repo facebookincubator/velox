@@ -19,21 +19,28 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <folly/json.h>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+#include "velox/dwio/parquet/writer/Writer.h"
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
+
+#define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
+  memory::NonReclaimableSectionGuard nonReclaimableGuard( \
+      writerInfo_[(index)]->nonReclaimableSectionHolder.get())
 
 template <TypeKind Kind>
 folly::dynamic extractPartitionValue(
@@ -230,6 +237,38 @@ RowTypePtr createPartitionRowType(
   return ROW(std::move(partitionKeyNames), std::move(partitionKeyTypes));
 }
 
+// Recursively builds IcebergFieldStatsConfig from a ParquetFieldId and Type.
+// This function traverses the type hierarchy (ROW, ARRAY, MAP) and creates
+// corresponding stats config entries with field IDs for each level.
+//
+// @param field The Parquet field ID containing the field ID and child field
+// IDs.
+// @param type The Velox type corresponding to this field.
+// @param skipBounds Whether to skip bounds collection for this field and its
+// descendants.
+// @return IcebergFieldStatsConfig with field ID, skipBounds flag, and
+// recursively built children configs.
+IcebergParquetStatsConfig toIcebergFieldStatsConfig(
+    const parquet::ParquetFieldId& field,
+    const TypePtr& type,
+    bool skipBounds) {
+  VELOX_CHECK_NOT_NULL(type, "Input column type cannot be null.");
+  bool currentSkipBounds = skipBounds || type->isMap() || type->isArray();
+  IcebergParquetStatsConfig config(field.fieldId, currentSkipBounds);
+
+  if (!field.children.empty()) {
+    VELOX_CHECK_EQ(field.children.size(), type->size());
+    config.children.reserve(field.children.size());
+
+    for (auto i = 0; i < type->size(); ++i) {
+      config.children.push_back(toIcebergFieldStatsConfig(
+          field.children[i], type->childAt(i), currentSkipBounds));
+    }
+  }
+
+  return config;
+}
+
 } // namespace
 
 IcebergDataSink::IcebergDataSink(
@@ -304,6 +343,17 @@ IcebergDataSink::IcebergDataSink(
               : nullptr),
       partitionRowType_(std::move(partitionRowType)) {
   commitPartitionValue_.resize(maxOpenWriters_);
+
+#ifdef VELOX_ENABLE_PARQUET
+  for (const auto& columnHandle : insertTableHandle_->inputColumns()) {
+    auto icebergColumnHandle =
+        checkedPointerCast<const IcebergColumnHandle>(columnHandle);
+    icebergParquetStatsConfig_.push_back(toIcebergFieldStatsConfig(
+        icebergColumnHandle->field(), icebergColumnHandle->dataType(), false));
+  }
+  parquetStatsCollector_ = std::make_shared<IcebergParquetStatsCollector>(
+      icebergParquetStatsConfig_);
+#endif
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
@@ -319,17 +369,22 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
     VELOX_CHECK_NOT_NULL(info);
     // Following metadata (json format) is consumed by Presto CommitTaskData.
     // It contains the minimal subset of metadata.
-    // TODO: Complete metrics is missing now and this could lead to suboptimal
-    // query plan, will collect full iceberg metrics in following PR.
     // clang-format off
     folly::dynamic commitData = folly::dynamic::object(
     "path", (fs::path(info->writerParameters.writeDirectory()) /
                     info->writerParameters.writeFileName()).string())
       ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
+#ifdef VELOX_ENABLE_PARQUET
+      ("metrics", dataFileStats_[i]->toJson())
+      ("splitOffsets", dataFileStats_[i]->splitOffsetsAsJson())
+#else
       ("metrics",
         folly::dynamic::object("recordCount", info->numWrittenRows))
+#endif
       ("partitionSpecJson",
         icebergInsertTableHandle->partitionSpec() ? icebergInsertTableHandle->partitionSpec()->specId : 0)
+      // Sort order evolution is not supported. Set default id to 1.
+      ("sortOrderId", 1)
       ("fileFormat", "PARQUET")
       ("content", "DATA");
     // clang-format on
@@ -380,6 +435,7 @@ uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
 std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions() const {
   auto options = HiveDataSink::createWriterOptions();
+
   // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
   // - Timestamps must be stored with microsecond precision.
   // - Timestamps must NOT be adjusted to UTC timezone; they should be written
@@ -392,6 +448,17 @@ IcebergDataSink::createWriterOptions() const {
   // (TimestampPrecision::kMicroseconds).
   options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
   options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
+
+#ifdef VELOX_ENABLE_PARQUET
+  auto parquetOptions = checkedPointerCast<parquet::WriterOptions>(options);
+  std::vector<parquet::ParquetFieldId> parquetFieldIds;
+  for (const auto& config : icebergParquetStatsConfig_) {
+    parquetFieldIds.push_back(config.getFieldId());
+  }
+  parquetOptions->parquetFieldIds = std::move(parquetFieldIds);
+  options->dataFileStatsCollector = parquetStatsCollector_;
+#endif
+
   // Re-process configs to apply the serde parameters we just set.
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
@@ -412,6 +479,33 @@ folly::dynamic IcebergDataSink::makeCommitPartitionValue(
     }
   }
   return partitionValues;
+}
+
+void IcebergDataSink::closeInternal() {
+  VELOX_CHECK_NE(state_, State::kRunning);
+  VELOX_CHECK_NE(state_, State::kFinishing);
+
+  common::testutil::TestValue::adjust(
+      "facebook::velox::connector::hive::IcebergDataSink::closeInternal", this);
+
+  if (state_ == State::kClosed) {
+    for (int i = 0; i < writers_.size(); ++i) {
+      WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
+      writers_[i]->close();
+#ifdef VELOX_ENABLE_PARQUET
+      dataFileStats_.push_back(
+          writers_[i]->dataFileStats()
+              ? writers_[i]->dataFileStats()
+              : std::make_shared<dwio::common::DataFileStatistics>(
+                    dwio::common::DataFileStatistics::empty()));
+#endif
+    }
+  } else {
+    for (int i = 0; i < writers_.size(); ++i) {
+      WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
+      writers_[i]->abort();
+    }
+  }
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

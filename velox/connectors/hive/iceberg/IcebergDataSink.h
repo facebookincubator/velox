@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -134,6 +135,13 @@ class IcebergDataSink : public HiveDataSink {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const std::string& functionPrefix);
 
+#ifdef VELOX_ENABLE_PARQUET
+  const std::vector<std::shared_ptr<dwio::common::DataFileStatistics>>&
+  dataFileStats() const {
+    return dataFileStats_;
+  }
+#endif
+
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
   /// in the format expected by Presto and Spark for Iceberg tables.
@@ -217,6 +225,8 @@ class IcebergDataSink : public HiveDataSink {
   // Returns nullptr for null partition values.
   folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
 
+  void closeInternal() override;
+
   // Iceberg partition specification defining how the table is partitioned.
   // Contains partition fields with source column names, transform types
   // (e.g., identity, year, month, day, hour, bucket, truncate), transform
@@ -263,6 +273,28 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+#ifdef VELOX_ENABLE_PARQUET
+  std::vector<std::shared_ptr<dwio::common::DataFileStatistics>> dataFileStats_;
+
+  // Collector for aggregating Iceberg-specific statistics from Parquet file
+  // metadata. Passed to the Parquet writer via WriterOptions and used to
+  // collect per-column statistics (null counts, value counts, min/max bounds)
+  // keyed by Iceberg field IDs. After writing completes, the aggregated
+  // statistics are retrieved via dataFileStats() and included in the commit
+  // message.
+  std::shared_ptr<dwio::common::DataFileStatsCollector> parquetStatsCollector_;
+
+  // Configuration for Iceberg statistics collection, one entry per top-level
+  // field. Each entry contains the Iceberg field ID, whether to skip bounds
+  // collection (true for MAP/ARRAY types), and recursively nested configs for
+  // child fields. Built from IcebergColumnHandle field IDs during construction
+  // and used to:
+  // 1. Initialize icebergStatsCollector_ for statistics aggregation.
+  // 2. Serialize field IDs to JSON for the Parquet writer's serde parameters,
+  //    enabling field IDs to be written to Parquet column metadata.
+  std::vector<IcebergParquetStatsConfig> icebergParquetStatsConfig_;
+#endif
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
