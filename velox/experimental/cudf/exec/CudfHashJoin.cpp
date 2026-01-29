@@ -401,16 +401,19 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
     static constexpr bool kAllowPureAstOnly = true;
     if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
-      createAstTree(
-          exprs.exprs()[0],
-          tree_,
-          scalars_,
-          buildType,
-          probeType,
-          rightPrecomputeInstructions,
-          leftPrecomputeInstructions,
-          kAllowPureAstOnly);
-    } else {
+      if (joinNode_->isRightSemiFilterJoin()) {
+        createAstTree(
+            exprs.exprs()[0],
+            tree_,
+            scalars_,
+            buildType,
+            probeType,
+            rightPrecomputeInstructions,
+            leftPrecomputeInstructions,
+            kAllowPureAstOnly);
+      }
+
+    } else if (joinNode_->isAntiJoin() || joinNode_->isLeftSemiFilterJoin()) {
       createAstTree(
           exprs.exprs()[0],
           tree_,
@@ -423,7 +426,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     }
     if (leftPrecomputeInstructions.size() > 0 ||
         rightPrecomputeInstructions.size() > 0) {
-      VELOX_NYI("Filters that require precomputation are not yet supported");
+      VELOX_NYI("Filters that require precomputation are not yet supported, join type is {}", core::JoinTypeName::toName(joinNode_->joinType()));
     }
   }
 }
