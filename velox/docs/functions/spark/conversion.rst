@@ -293,6 +293,8 @@ Valid example
 Cast to Timestamp
 -----------------
 
+*ANSI compliant*
+
 From integral types
 ^^^^^^^^^^^^^^^^^^^
 

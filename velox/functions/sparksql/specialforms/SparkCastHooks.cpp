@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
+#include <velox/common/base/Exceptions.h>
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -38,7 +39,6 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
   if (conversionResult.hasError()) {
     return folly::makeUnexpected(conversionResult.error());
   }
-
   auto sessionTimezone = config_.sessionTimezone().empty()
       ? nullptr
       : tz::locateZone(config_.sessionTimezone());
@@ -84,6 +84,10 @@ Expected<int64_t> SparkCastHooks::castTimestampToInt(
 Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     double value) const {
   if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+    if (config_.sparkAnsiEnabled()) {
+      return folly::makeUnexpected(
+          Status::UserError("Cannot cast NaN or Infinity to Timestamp"));
+    }
     return std::nullopt;
   }
   return castNumberToTimestamp(value);
