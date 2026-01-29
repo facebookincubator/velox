@@ -59,7 +59,8 @@ class E2EFilterTest : public E2EFilterTestBase,
   void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip = false) override {
+      bool forRowGroupSkip = false,
+      const std::vector<std::string>& /*indexColumns*/ = {}) override {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();

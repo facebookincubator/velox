@@ -48,7 +48,8 @@ using velox::common::Subfield;
 std::vector<RowVectorPtr> E2EFilterTestBase::makeDataset(
     std::function<void()> customize,
     bool forRowGroupSkip,
-    bool withRecursiveNulls) {
+    bool withRecursiveNulls,
+    const std::vector<std::string>& indexColumns) {
   if (!dataSetBuilder_) {
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*leafPool_, 0);
   }
@@ -65,7 +66,129 @@ std::vector<RowVectorPtr> E2EFilterTestBase::makeDataset(
   }
 
   std::vector<RowVectorPtr> batches = *dataSetBuilder_->build();
+
+  // Sort by index columns if specified.
+  if (!indexColumns.empty()) {
+    batches = sortBatchesByIndexColumns(batches, indexColumns);
+  }
+
   return batches;
+}
+
+std::vector<RowVectorPtr> E2EFilterTestBase::sortBatchesByIndexColumns(
+    const std::vector<RowVectorPtr>& batches,
+    const std::vector<std::string>& indexColumns) {
+  if (batches.empty() || indexColumns.empty()) {
+    return batches;
+  }
+
+  // Merge all batches into a single RowVector for sorting.
+  vector_size_t totalRows = 0;
+  for (const auto& batch : batches) {
+    totalRows += batch->size();
+  }
+
+  // Create merged children vectors.
+  const auto& rowType = batches[0]->type()->asRow();
+  std::vector<VectorPtr> mergedChildren(rowType.size());
+  for (size_t col = 0; col < rowType.size(); ++col) {
+    mergedChildren[col] =
+        BaseVector::create(rowType.childAt(col), totalRows, leafPool_.get());
+  }
+
+  // Copy data from all batches.
+  vector_size_t offset = 0;
+  for (const auto& batch : batches) {
+    for (size_t col = 0; col < rowType.size(); ++col) {
+      mergedChildren[col]->copy(
+          batch->childAt(col).get(), offset, 0, batch->size());
+    }
+    offset += batch->size();
+  }
+
+  auto mergedBatch = std::make_shared<RowVector>(
+      leafPool_.get(),
+      batches[0]->type(),
+      nullptr,
+      totalRows,
+      std::move(mergedChildren));
+
+  // Build sort key indices.
+  std::vector<column_index_t> sortKeyIndices;
+  for (const auto& colName : indexColumns) {
+    auto idx = rowType.getChildIdxIfExists(colName);
+    if (idx.has_value()) {
+      sortKeyIndices.push_back(idx.value());
+    }
+  }
+
+  if (sortKeyIndices.empty()) {
+    return batches;
+  }
+
+  // Create indices for sorting.
+  std::vector<vector_size_t> indices(totalRows);
+  std::iota(indices.begin(), indices.end(), 0);
+
+  // Sort indices based on sort key columns.
+  std::sort(
+      indices.begin(), indices.end(), [&](vector_size_t a, vector_size_t b) {
+        for (auto keyIdx : sortKeyIndices) {
+          const auto& keyVector = mergedBatch->childAt(keyIdx);
+          if (keyVector->compare(keyVector.get(), a, b) < 0) {
+            return true;
+          }
+          if (keyVector->compare(keyVector.get(), a, b) > 0) {
+            return false;
+          }
+        }
+        return false;
+      });
+
+  // Create sorted children vectors.
+  std::vector<VectorPtr> sortedChildren(rowType.size());
+  auto indicesBuffer = allocateIndices(totalRows, leafPool_.get());
+  auto rawIndices = indicesBuffer->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < totalRows; ++i) {
+    rawIndices[i] = indices[i];
+  }
+
+  for (size_t col = 0; col < rowType.size(); ++col) {
+    sortedChildren[col] = BaseVector::wrapInDictionary(
+        nullptr, indicesBuffer, totalRows, mergedBatch->childAt(col));
+    // Flatten to avoid dictionary encoding issues.
+    sortedChildren[col] = BaseVector::copy(*sortedChildren[col]);
+  }
+
+  auto sortedBatch = std::make_shared<RowVector>(
+      leafPool_.get(),
+      batches[0]->type(),
+      nullptr,
+      totalRows,
+      std::move(sortedChildren));
+
+  // Split back into original batch sizes.
+  std::vector<RowVectorPtr> result;
+  offset = 0;
+  for (const auto& batch : batches) {
+    std::vector<VectorPtr> batchChildren(rowType.size());
+    for (size_t col = 0; col < rowType.size(); ++col) {
+      batchChildren[col] = BaseVector::create(
+          rowType.childAt(col), batch->size(), leafPool_.get());
+      batchChildren[col]->copy(
+          sortedBatch->childAt(col).get(), 0, offset, batch->size());
+    }
+    result.push_back(
+        std::make_shared<RowVector>(
+            leafPool_.get(),
+            batches[0]->type(),
+            nullptr,
+            batch->size(),
+            std::move(batchChildren)));
+    offset += batch->size();
+  }
+
+  return result;
 }
 
 void E2EFilterTestBase::makeAllNulls(const std::string& fieldName) {
@@ -408,18 +531,19 @@ void E2EFilterTestBase::testScenario(
     bool wrapInStruct,
     const std::vector<std::string>& filterable,
     int32_t numCombinations,
-    bool withRecursiveNulls) {
+    bool withRecursiveNulls,
+    const std::vector<std::string>& indexColumns) {
   rowType_ = DataSetBuilder::makeRowType(columns, wrapInStruct);
   filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
-
-  auto batches = makeDataset(customize, false, withRecursiveNulls);
-  writeToMemory(rowType_, batches, false);
+  auto batches =
+      makeDataset(customize, false, withRecursiveNulls, indexColumns);
+  writeToMemory(rowType_, batches, false, indexColumns);
   testNoRowGroupSkip(batches, filterable, numCombinations);
   testPruningWithFilter(batches, filterable);
 
   if (testRowGroupSkip_) {
-    batches = makeDataset(customize, true, withRecursiveNulls);
-    writeToMemory(rowType_, batches, true);
+    batches = makeDataset(customize, true, withRecursiveNulls, indexColumns);
+    writeToMemory(rowType_, batches, true, indexColumns);
     testRowGroupSkip(batches, filterable);
   }
 }
