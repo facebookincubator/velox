@@ -640,14 +640,14 @@ class Connector {
   }
 
   /// Creates index source for index join lookup.
-  /// @param inputType The list of probe-side columns that either used in
-  /// equi-clauses or join conditions.
-  /// @param numJoinKeys The number of key columns used in join equi-clauses.
-  /// The first 'numJoinKeys' columns in 'inputType' form a prefix of the
-  /// index, and the rest of the columns in inputType are expected to be used in
-  /// 'joinConditions'.
-  /// @param joinConditions The join conditions. It expects inputs columns from
-  /// the 'tail' of 'inputType' and from 'columnHandles'.
+  /// @param inputType The list of probe-side columns used in join conditions.
+  /// @param joinConditions The join conditions that specify how to perform the
+  /// index lookup. This includes:
+  /// - EqualIndexLookupCondition: For equi-join conditions.
+  /// - InIndexLookupCondition: For IN-list conditions.
+  /// - BetweenIndexLookupCondition: For range conditions.
+  /// The index source can determine which columns form the index prefix by
+  /// examining EqualIndexLookupCondition objects where !isFilter().
   /// @param outputType The lookup output type from index source.
   /// @param tableHandle The index table handle.
   /// @param columnHandles The column handles which maps from column name
@@ -665,9 +665,12 @@ class Connector {
   ///
   /// Here,
   /// - 'inputType' is ROW{t.sid, t.event_list}
-  /// - 'numJoinKeys' is 1 since only t.sid is used in join equi-clauses.
-  /// - 'joinConditions' specifies the join condition: contains(t.event_list,
-  ///   u.event_type)
+  /// - 'joinConditions' includes:
+  ///   - EqualIndexLookupCondition(u.sid, t.sid) for the equi-join
+  ///   - InIndexLookupCondition(u.event_type, t.event_list) for the IN
+  ///     condition
+  ///   - BetweenIndexLookupCondition(u.ds, '2024-01-01', '2024-01-07') for the
+  ///     BETWEEN condition
   /// - 'outputType' is ROW{u.event_value}
   /// - 'tableHandle' specifies the metadata of the index table.
   /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
@@ -677,7 +680,6 @@ class Connector {
   ///
   virtual std::shared_ptr<IndexSource> createIndexSource(
       const RowTypePtr& inputType,
-      size_t numJoinKeys,
       const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
@@ -687,6 +689,26 @@ class Connector {
     VELOX_UNSUPPORTED(
         "Connector {} does not support index source", connectorId());
   }
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  virtual std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      size_t numJoinKeys,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) {
+    return createIndexSource(
+        inputType,
+        joinConditions,
+        outputType,
+        tableHandle,
+        columnHandles,
+        connectorQueryCtx);
+  }
+#endif
 
   virtual std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,

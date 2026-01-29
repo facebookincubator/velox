@@ -303,6 +303,42 @@ TEST_F(PlanConsistencyCheckerTest, hashJoin) {
   }
 }
 
+TEST_F(PlanConsistencyCheckerTest, nestedLoopJoin) {
+  auto leftValuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto leftProjectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{Lit(1), Lit(2)},
+      leftValuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(leftValuesNode));
+
+  auto rightValuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto rightProjectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"c", "d"},
+      std::vector<TypedExprPtr>{Lit(1), Lit(2)},
+      leftValuesNode);
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(rightProjectNode));
+
+  // Invalid reference in the filter.
+
+  auto joinNode = std::make_shared<NestedLoopJoinNode>(
+      nextId(),
+      JoinType::kLeft,
+      std::make_shared<CallTypedExpr>(
+          BOOLEAN(), "lt", Col(INTEGER(), "b"), Col(INTEGER(), "blah")),
+      leftProjectNode,
+      rightProjectNode,
+      ROW({}));
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(joinNode),
+      "Field not found: blah. Available fields are: a, b, c, d.");
+}
+
 namespace {
 class TestTableHandle : public connector::ConnectorTableHandle {
  public:

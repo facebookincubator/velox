@@ -44,6 +44,14 @@ uint64_t BufferedInput::nextFetchSize() const {
       });
 }
 
+void BufferedInput::reset() {
+  regions_.clear();
+  offsets_.clear();
+  buffers_.clear();
+  enqueuedToBufferOffset_.clear();
+  allocPool_->clear();
+}
+
 void BufferedInput::load(const LogType logType) {
   // no regions to load
   if (regions_.size() == 0) {

@@ -149,6 +149,13 @@ class Checker : public PlanNodeVisitor {
 
   void visit(const NestedLoopJoinNode& node, PlanNodeVisitorContext& ctx)
       const override {
+    if (node.joinCondition() != nullptr) {
+      const auto& leftRowType = node.sources().at(0)->outputType();
+      const auto& rightRowType = node.sources().at(1)->outputType();
+      auto rowType = leftRowType->unionWith(rightRowType);
+      checkInputs(node.joinCondition(), rowType);
+    }
+
     visitSources(&node, ctx);
   }
 

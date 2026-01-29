@@ -74,6 +74,14 @@ TEST_F(GetJsonObjectTest, basic) {
   EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$.a "), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"a ": "1"})", "$.a "), "1");
   EXPECT_EQ(getJsonObject(R"({"a b": "1"})", "$.a b "), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$['a b']"), "1");
+  EXPECT_EQ(getJsonObject(R"({ "a b ": "1" })", "$['a b ']"), "1");
+  EXPECT_EQ(getJsonObject(R"({ " a b": "1" })", "$[' a b']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$[ 'a b']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$['a b' ]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a": {"a b": 1}})", "$.a['a b']"), "1");
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {" a b": 1}})", "$.a[' a b']"), std::nullopt);
   EXPECT_EQ(
       getJsonObject(R"({"two spaces": "1"})", "$.  two spaces "), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$ .a"), std::nullopt);

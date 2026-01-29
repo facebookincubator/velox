@@ -3464,7 +3464,11 @@ std::unique_ptr<trace::TraceCtx> Task::maybeMakeTraceCtx() const {
   if (!queryCtx_->queryConfig().queryTraceEnabled()) {
     return nullptr;
   }
-  // TODO: Make the actual trace implementation pluggable.
+
+  if (queryCtx_->traceCtxProvider()) {
+    return queryCtx_->traceCtxProvider()(*queryCtx_, planFragment());
+  }
+  // Fallback to default trace.
   return trace::OperatorTraceCtx::maybeCreate(
       *queryCtx_, planFragment(), taskId());
 }
@@ -3474,8 +3478,9 @@ void Task::maybeInitTrace() {
     return;
   }
 
-  auto metadataWriter = traceCtx_->createMetadataTracer();
-  metadataWriter->write(*queryCtx_, *planFragment_.planNode);
+  if (auto metadataWriter = traceCtx_->createMetadataTracer()) {
+    metadataWriter->write(*queryCtx_, *planFragment_.planNode);
+  }
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {
