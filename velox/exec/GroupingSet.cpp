@@ -39,6 +39,85 @@ bool areAllLazyNotLoaded(const std::vector<VectorPtr>& vectors) {
   });
 }
 
+// Unwraps dictionary/constant/sequence encodings to get to the underlying
+// Lazy or Base vector.
+const BaseVector* unwrapToLazyOrBase(const VectorPtr& vector) {
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::CONSTANT:
+    case VectorEncoding::Simple::DICTIONARY:
+    case VectorEncoding::Simple::SEQUENCE: {
+      return vector->valueVector() ? unwrapToLazyOrBase(vector->valueVector())
+                                   : vector.get();
+    }
+    case VectorEncoding::Simple::LAZY:
+      return vector.get();
+    default:
+      return vector.get();
+  }
+}
+
+// Returns a unique identity pointer for Lazy vectors. For other vectors,
+// returns nullptr.
+const void* lazyIdentityPtr(const VectorPtr& vec) {
+  if (!vec) {
+    return nullptr;
+  }
+  return static_cast<const void*>(unwrapToLazyOrBase(vec));
+}
+
+// Returns true if any input lazy vector of an aggregate has been reused across
+// multiple aggregates.
+bool hasReusedLazyVectors(
+    const RowVectorPtr& input,
+    const std::vector<column_index_t>& inputs,
+    const std::vector<VectorPtr>& constantInputs,
+    const std::vector<const void*>& lazyIdentities) {
+  for (auto i = 0; i < inputs.size(); ++i) {
+    const auto channel = inputs[i];
+    const VectorPtr& vec = (channel == kConstantChannel)
+        ? constantInputs[i]
+        : input->childAt(channel);
+    const void* id = lazyIdentityPtr(vec);
+    if (!id) {
+      continue;
+    }
+
+    int cnt = 0;
+    for (auto* x : lazyIdentities) {
+      if (x == id) {
+        ++cnt;
+      }
+    }
+    if (cnt > 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Collects identity pointers for all input lazy vectors of all aggregates.
+void collectLazyIdentities(
+    const RowVectorPtr& input,
+    const std::vector<AggregateInfo>& aggregates,
+    std::vector<const void*>& lazyIdentities) {
+  lazyIdentities.reserve(aggregates.size());
+
+  for (const auto& aggregate : aggregates) {
+    const auto& inputs = aggregate.inputs;
+    const auto& constantInputs = aggregate.constantInputs;
+    for (auto i = 0; i < inputs.size(); ++i) {
+      const auto channel = inputs[i];
+      const VectorPtr& vec = (channel == kConstantChannel)
+          ? constantInputs[i]
+          : input->childAt(channel);
+      const void* id = lazyIdentityPtr(vec);
+      if (id) {
+        lazyIdentities.push_back(id);
+      }
+    }
+  }
+}
+
 } // namespace
 
 GroupingSet::GroupingSet(
@@ -264,6 +343,9 @@ void GroupingSet::addInputForActiveRows(
   auto* groups = lookup_->hits.data();
   const auto& newGroups = lookup_->newGroups;
 
+  std::vector<const void*> lazyIdentities;
+  collectLazyIdentities(input, aggregates_, lazyIdentities);
+
   for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
@@ -293,6 +375,17 @@ void GroupingSet::addInputForActiveRows(
     }
 
     populateTempVectors(i, input);
+
+    // Disable pushdown if any of the aggregate input lazy vectors have been
+    // reused across multiple aggregates.
+    if (hasReusedLazyVectors(
+            input,
+            aggregates_[i].inputs,
+            aggregates_[i].constantInputs,
+            lazyIdentities)) {
+      mayPushdown_[i] = false;
+    }
+
     // TODO(spershin): We disable the pushdown at the moment if selectivity
     // vector has changed after groups generation, we might want to revisit
     // this.
