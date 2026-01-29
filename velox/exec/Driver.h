@@ -224,9 +224,11 @@ constexpr uint32_t kUngroupedGroupId{std::numeric_limits<uint32_t>::max()};
 struct DriverCtx {
   const int driverId;
   const int pipelineId;
+
   /// Id of the split group this driver should process in case of grouped
   /// execution, kUngroupedGroupId otherwise.
   const uint32_t splitGroupId;
+
   /// Id of the partition to use by this driver. For local exchange, for
   /// instance.
   const uint32_t partitionId;
@@ -234,6 +236,7 @@ struct DriverCtx {
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
+
   /// Tracks the traced operator ids. It is also used to avoid tracing the
   /// auxiliary operator such as the aggregation operator used by the table
   /// writer to generate the columns stats.
@@ -650,6 +653,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartUs_{0};
+
   // Id (index in the vector) of the current operator to run (or the 1st one if
   // we haven't started yet). Used to determine which operator's queueTime we
   // should update.
@@ -658,7 +662,13 @@ class Driver : public std::enable_shared_from_this<Driver> {
   std::vector<std::unique_ptr<Operator>> operators_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+
   size_t blockedOperatorId_{0};
+
+  // If this driver is being traced, store a pointer to the current data. Once
+  // the trace client unblocks the driver, we will feed this vector to the next
+  // operator in the pipeline.
+  RowVectorPtr traceInput_;
 
   bool trackOperatorCpuUsage_;
 
