@@ -97,7 +97,8 @@ class SplitReader {
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      const common::SubfieldFilters* subfieldFiltersForValidation = nullptr);
 
   virtual ~SplitReader() = default;
 
@@ -131,6 +132,16 @@ class SplitReader {
 
   void setBucketConversion(std::vector<column_index_t> bucketChannels);
 
+  /// Sets the info columns map for synthesized column filter validation.
+  /// Must be called before prepareSplit() if synthesized column filter
+  /// validation is needed.
+  void setInfoColumns(
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<const HiveColumnHandle>>* infoColumns) {
+    infoColumns_ = infoColumns;
+  }
+
   const RowTypePtr& readerOutputType() const {
     return readerOutputType_;
   }
@@ -151,9 +162,10 @@ class SplitReader {
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      const common::SubfieldFilters* subfieldFiltersForValidation = nullptr);
 
-  /// Create the dwio::common::Reader object baseReader_, which will be used to
+  /// Create the dwio::common::Reader object baseReader_
   /// read the data file's metadata and schema
   void createReader(
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
@@ -205,6 +217,12 @@ class SplitReader {
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
+  /// Validates synthesized column filters against the split's info column
+  /// values. This handles filter-only synthesized columns that are not in the
+  /// scanSpec by checking them early before any file I/O.
+  /// Throws if any synthesized column filter fails validation.
+  void validateSynthesizedColumnFilters() const;
+
  private:
   /// Different table formats may have different meatadata columns.
   /// This function will be used to update the scanSpec for these columns.
@@ -218,6 +236,11 @@ class SplitReader {
   const std::unordered_map<
       std::string,
       std::shared_ptr<const HiveColumnHandle>>* const partitionKeys_;
+  // Column handles for synthesized columns (e.g., $path, $file_size).
+  // Set via setInfoColumns() and used in validateSynthesizedColumnFilters().
+  const std::unordered_map<
+      std::string,
+      std::shared_ptr<const HiveColumnHandle>>* infoColumns_;
   const ConnectorQueryCtx* connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
 
@@ -229,6 +252,10 @@ class SplitReader {
   memory::MemoryPool* const pool_;
 
   std::shared_ptr<common::ScanSpec> scanSpec_;
+  // Subfield filters from HiveDataSource, includes both original
+  // subfieldFilters and filters extracted from remainingFilter. Used to
+  // validate synthesized column filters in prepareSplit() and adaptColumns().
+  const common::SubfieldFilters* subfieldFiltersForValidation_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
