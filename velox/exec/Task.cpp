@@ -115,6 +115,19 @@ std::string errorMessageImpl(const std::exception_ptr& exception) {
   return message;
 }
 
+// Returns the number of source nodes to process for a given plan node.
+// For most nodes, this is the number of sources. For index lookup join,
+// only the first source (probe side) is processed as a source node.
+inline size_t numSourceNodes(const core::PlanNode* planNode) {
+  if (!isIndexLookupJoin(planNode)) {
+    return planNode->sources().size();
+  }
+  const auto* indexNode =
+      checkedPointerCast<const core::IndexLookupJoinNode>(planNode);
+  VELOX_CHECK_EQ(indexNode->sources().size(), 2);
+  return !indexNode->needsIndexSplit() ? 1 : indexNode->sources().size();
+}
+
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
@@ -149,7 +162,7 @@ void buildSplitStates(
   }
 
   const auto& sources = planNode->sources();
-  const auto numSources = isIndexLookupJoin(planNode) ? 1 : sources.size();
+  const auto numSources = numSourceNodes(planNode);
   for (auto i = 0; i < numSources; ++i) {
     buildSplitStates(sources[i].get(), allIds, splitStateMap);
   }
@@ -3168,7 +3181,7 @@ std::string Task::errorMessage() const {
 }
 
 StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
-  TestValue::adjust("facebook::velox::exec::Task::enter", &state);
+  TestValue::adjust("facebook::velox::exec::Task::enter", this);
   std::lock_guard<std::timed_mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
   state.isEnqueued = false;
@@ -3451,7 +3464,11 @@ std::unique_ptr<trace::TraceCtx> Task::maybeMakeTraceCtx() const {
   if (!queryCtx_->queryConfig().queryTraceEnabled()) {
     return nullptr;
   }
-  // TODO: Make the actual trace implementation pluggable.
+
+  if (queryCtx_->traceCtxProvider()) {
+    return queryCtx_->traceCtxProvider()(*queryCtx_, planFragment());
+  }
+  // Fallback to default trace.
   return trace::OperatorTraceCtx::maybeCreate(
       *queryCtx_, planFragment(), taskId());
 }
@@ -3461,8 +3478,9 @@ void Task::maybeInitTrace() {
     return;
   }
 
-  auto metadataWriter = traceCtx_->createMetadataTracer();
-  metadataWriter->write(*queryCtx_, *planFragment_.planNode);
+  if (auto metadataWriter = traceCtx_->createMetadataTracer()) {
+    metadataWriter->write(*queryCtx_, *planFragment_.planNode);
+  }
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

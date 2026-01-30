@@ -22,6 +22,9 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
+#ifdef BLOCK_SIZE
+#undef BLOCK_SIZE
+#endif
 #include <duckdb.hpp> // @manual
 
 namespace facebook::velox::exec::test {

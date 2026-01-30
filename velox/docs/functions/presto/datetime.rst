@@ -338,6 +338,10 @@ Specifier Description
 
     Formats ``x`` as a string using ``format``. ``x`` is a timestamp or a timestamp with time zone.
 
+.. function:: date_parse(string, format) -> timestamp
+
+    Parses ``string`` into a timestamp using ``format``.
+
 Java Date Functions
 -------------------
 

@@ -144,10 +144,15 @@ class SimpleVector : public BaseVector {
     stats_ = std::move(stats);
   }
 
+  // Type of value returned depends on size of T. If T can fit in a machine
+  // word, return by value, otherwise return by const reference. This is an
+  // optimization to avoid copying large types.
+  using TValueAt = std::conditional_t<sizeof(T) <= sizeof(void*), T, const T&>;
+
   // Concrete Vector types need to implement this themselves.
   // This method does not do bounds checking. When the value is null the return
   // value is technically undefined (currently implemented as default of T)
-  virtual const T valueAt(vector_size_t idx) const = 0;
+  virtual TValueAt valueAt(vector_size_t idx) const = 0;
 
   std::optional<int32_t> compare(
       const BaseVector* other,

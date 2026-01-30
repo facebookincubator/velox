@@ -109,7 +109,7 @@ class CachedBufferedInput : public BufferedInput {
   }
 
   ~CachedBufferedInput() override {
-    for (auto& load : allCoalescedLoads_) {
+    for (auto& load : coalescedLoads_) {
       load->cancel();
     }
   }
@@ -177,6 +177,18 @@ class CachedBufferedInput : public BufferedInput {
     VELOX_NYI();
   }
 
+  /// Resets the buffered input for reuse across different operations.
+  void reset() override;
+
+  const std::vector<std::shared_ptr<cache::CoalescedLoad>>&
+  testingCoalescedLoads() const {
+    return coalescedLoads_;
+  }
+
+  size_t testingStreamToCoalescedLoadSize() const {
+    return streamToCoalescedLoad_.rlock()->size();
+  }
+
  private:
   template <bool kSsd>
   std::vector<int32_t> groupRequests(
@@ -224,14 +236,14 @@ class CachedBufferedInput : public BufferedInput {
   // Regions that are candidates for loading.
   std::vector<CacheRequest> requests_;
 
-  // Coalesced loads spanning multiple cache entries in one IO.
+  // Map from stream to its coalesced load.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<cache::CoalescedLoad>>>
-      coalescedLoads_;
+      streamToCoalescedLoad_;
 
-  // Distinct coalesced loads in 'coalescedLoads_'.
-  std::vector<std::shared_ptr<cache::CoalescedLoad>> allCoalescedLoads_;
+  // All distinct coalesced loads.
+  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
 };
 
 } // namespace facebook::velox::dwio::common
