@@ -17,10 +17,11 @@ cmake_minimum_required(VERSION 3.28)
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat CONFIG REQUIRED)
 
-set(VELOX_FOLLY_BUILD_VERSION v2025.04.28.00)
+set(VELOX_FOLLY_BUILD_VERSION v2025.12.15.00)
+# TODO: Update checksum after verifying the new release tarball
 set(
   VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-  ccbb7eac662023f9f5beba94e51350d527f33d8a7a036eb5e3d8a5cf1b49d3bc
+  82349f3d8766c6cd43e58560b026b0d6661a1ac67ee37d6d2a140dfe9c5bc15a
 )
 set(
   VELOX_FOLLY_SOURCE_URL
