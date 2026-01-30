@@ -102,20 +102,22 @@ DEFINE_SIMPLE_AGGREGATOR(Sum, sum, SUM)
 DEFINE_SIMPLE_AGGREGATOR(Min, min, MIN)
 DEFINE_SIMPLE_AGGREGATOR(Max, max, MAX)
 
-struct DecimalSumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
-  DecimalSumAggregator(
+struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
+  DecimalSumOrAvgAggregator(
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
       bool isGlobal,
-      const TypePtr& resultType)
+      const TypePtr& resultType,
+      const bool isAvg)
       : Aggregator(
             step,
             cudf::aggregation::SUM,
             inputIndex,
             constant,
             isGlobal,
-            resultType) {}
+            resultType),
+        isAvg_(isAvg) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -238,9 +240,47 @@ struct DecimalSumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     if (step == core::AggregationNode::Step::kFinal &&
         inputCol.type().id() == cudf::type_id::STRING) {
       auto scale = getDecimalPrecisionScale(*outputType).second;
-      decodedSum_ = cudf_velox::deserializeDecimalSumState(
-          inputCol, scale, stream);
-      inputCol = decodedSum_->view();
+      if (isAvg_) {
+        // AVG
+        // deserialize the results (sum and count)
+        auto sumAndCount = cudf_velox::deserializeDecimalSumStateWithCount(inputCol, scale, stream);
+        // reduce the two results to get final sum and count scalars
+        auto sumScalar = cudf::reduce(sumAndCount.sum->view(), *aggRequest, sumAndCount.sum->view().type(), stream);
+        auto countScalar = cudf::reduce(sumAndCount.count->view(), *aggRequest, cudf::data_type{cudf::type_id::INT64}, stream);
+        // convert to columns in order to perform division, as we cannot divide scalars directly
+        auto sumCol = cudf::make_column_from_scalar(*sumScalar, 1, stream);
+        auto countCol = cudf::make_column_from_scalar(*countScalar, 1, stream);
+        // in order for the division operator to behave correctly, we must cast count to be the
+        // same decimal size (64 or 128) as sum, but with a scale of zero (see implementation of
+        // fixed_point operator/() in cudf/fixed_point/fixed_point.hpp)
+        auto const cudfSumType = sumCol->type();
+        auto const cudfCountType = cudf::data_type{cudfSumType.id(), 0};
+        countCol = cudf::cast(countCol->view(), cudfCountType, stream);
+        // now the division (output as sum type)
+        auto avgCol = cudf::binary_operation(
+            sumCol->view(),
+            countCol->view(),
+            cudf::binary_operator::DIV,
+            cudfSumType,
+            stream);
+        // finally, cast back to the required output type if different from the sum type
+        auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
+        if (cudfOutType != cudfSumType) {
+          avgCol = cudf::cast(avgCol->view(), cudfOutType, stream);
+        }
+        // and return
+        return avgCol;
+      } else {
+        // SUM
+        decodedSum_ = cudf_velox::deserializeDecimalSumState(
+            inputCol, scale, stream);
+        inputCol = decodedSum_->view();
+        // @TODO does this need to drop through to the code below
+        // or can we just do that stuff here, and not need decodedSum_ or decodedCount_
+        // why we do have those anyway if they're only set in addGroupbyRequest() and
+        // either overwritten or not even used here?
+        // what does the final cudf::reduce() below actually do?
+      }
     }
     auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
     std::unique_ptr<cudf::column> castedInput;
@@ -256,6 +296,7 @@ struct DecimalSumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
  private:
   uint32_t sumIdx_{0};
   uint32_t countIdx_{0};
+  const bool isAvg_{false};
   std::unique_ptr<cudf::column> decodedSum_;
   std::unique_ptr<cudf::column> decodedCount_;
 };
@@ -585,8 +626,8 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     bool isDecimalInput =
         rawInputTypes.size() == 1 && rawInputTypes[0]->isDecimal();
     if (isDecimalInput) {
-      return std::make_unique<DecimalSumAggregator>(
-          step, inputIndex, constant, isGlobal, resultType);
+      return std::make_unique<DecimalSumOrAvgAggregator>(
+          step, inputIndex, constant, isGlobal, resultType, false);
     }
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
@@ -600,6 +641,12 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     return std::make_unique<MaxAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
+    bool isDecimalInput =
+        rawInputTypes.size() == 1 && rawInputTypes[0]->isDecimal();
+    if (isDecimalInput) {
+      return std::make_unique<DecimalSumOrAvgAggregator>(
+          step, inputIndex, constant, isGlobal, resultType, true);
+    }
     return std::make_unique<MeanAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
   } else {
