@@ -60,9 +60,11 @@ OperatorTraceInputWriter::OperatorTraceInputWriter(
   VELOX_CHECK_NOT_NULL(traceFile_);
 }
 
-void OperatorTraceInputWriter::write(const RowVectorPtr& rows) {
+bool OperatorTraceInputWriter::write(
+    const RowVectorPtr& rows,
+    ContinueFuture*) {
   if (FOLLY_UNLIKELY(finished_)) {
-    return;
+    return false;
   }
 
   if (batch_ == nullptr) {
@@ -82,6 +84,7 @@ void OperatorTraceInputWriter::write(const RowVectorPtr& rows) {
   auto iobuf = out.getIOBuf();
   updateAndCheckTraceLimitCB_(iobuf->computeChainDataLength());
   traceFile_->append(std::move(iobuf));
+  return false;
 }
 
 void OperatorTraceInputWriter::finish() {

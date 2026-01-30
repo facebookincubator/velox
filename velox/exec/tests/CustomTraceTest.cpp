@@ -16,8 +16,10 @@
 
 #include <gtest/gtest.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "velox/exec/TaskDebuggerCursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -57,8 +59,9 @@ class TestTraceCtx : public TraceCtx {
         TCapturedVectors& tracedVectors)
         : planId_(planId), tracedVectors_(tracedVectors) {}
 
-    void write(const RowVectorPtr& rows) override {
-      tracedVectors_[planId_] = rows;
+    bool write(const RowVectorPtr& vector, ContinueFuture*) override {
+      tracedVectors_[planId_] = vector;
+      return false;
     }
 
     void finish() override {}
@@ -133,6 +136,103 @@ TEST_F(CustomTraceTest, customTrace) {
 
   // Vectors need to be destructed before the pool in the task dies.
   tracedVectors.clear();
+}
+
+void assertCursorOutput(
+    const core::PlanFragment& plan,
+    const std::vector<core::PlanNodeId>& traceIds,
+    const std::vector<RowVectorPtr>& expectation) {
+  TaskDebuggerCursor cursor(plan, traceIds);
+  size_t i = 0;
+
+  while (auto vectorOutput = cursor.step()) {
+    if (i < expectation.size()) {
+      assertEqualVectors(vectorOutput, expectation[i++]);
+    } else {
+      ADD_FAILURE() << "Cursor output is longer than expectation: " << i;
+    }
+  }
+  EXPECT_EQ(i, expectation.size());
+}
+
+TEST_F(CustomTraceTest, taskDebuggerCursor) {
+  const size_t size = 10;
+  auto makeData = [&](std::function<int64_t(vector_size_t)> values) {
+    return makeRowVector(
+        {"a"}, {makeFlatVector<int64_t>(size, std::move(values))});
+  };
+
+  // Two input vectors.
+  auto input1 = makeData([](auto row) { return row; });
+  auto input2 = makeData([](auto row) { return row + 10; });
+
+  // Now, the expected input for a series of operators.
+  auto input1Project1 = makeData([](auto row) { return row; });
+  auto input1Project2 = makeData([](auto row) { return row * 10; });
+  auto input1Project3 = makeData([](auto row) { return row * 100; });
+  auto input1Project4 = makeData([](auto row) { return row * 1'000; });
+  auto output1 = makeData([](auto row) { return row * 10'000; });
+
+  auto input2Project1 = makeData([](auto row) { return (row + 10); });
+  auto input2Project2 = makeData([](auto row) { return (row + 10) * 10; });
+  auto input2Project3 = makeData([](auto row) { return (row + 10) * 100; });
+  auto input2Project4 = makeData([](auto row) { return (row + 10) * 1'000; });
+  auto output2 = makeData([](auto row) { return (row + 10) * 10'000; });
+
+  core::PlanNodeId project1, project2, project3, project4;
+  auto plan = PlanBuilder()
+                  .values({input1, input2})
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project1)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project2)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project3)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project4)
+                  .planFragment();
+
+  // Test a series of combinations.
+  assertCursorOutput(plan, {}, {output1, output2});
+  assertCursorOutput(
+      plan, {project1}, {input1Project1, output1, input2Project1, output2});
+  assertCursorOutput(
+      plan,
+      {project1, project2},
+      {
+          input1Project1,
+          input1Project2,
+          output1,
+          input2Project1,
+          input2Project2,
+          output2,
+      });
+  assertCursorOutput(
+      plan,
+      {project2, project4},
+      {
+          input1Project2,
+          input1Project4,
+          output1,
+          input2Project2,
+          input2Project4,
+          output2,
+      });
+  assertCursorOutput(
+      plan,
+      {project1, project2, project3, project4},
+      {
+          input1Project1,
+          input1Project2,
+          input1Project3,
+          input1Project4,
+          output1,
+          input2Project1,
+          input2Project2,
+          input2Project3,
+          input2Project4,
+          output2,
+      });
 }
 
 } // namespace
