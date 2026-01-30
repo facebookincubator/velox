@@ -13,32 +13,71 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/Cursor.h"
+
 #include <folly/system/HardwareConcurrency.h>
+#include <filesystem>
 #include "velox/common/file/FileSystems.h"
 
-#include <filesystem>
-
 namespace facebook::velox::exec {
+namespace {
 
-bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
-  VELOX_USER_CHECK(!task->isRunning());
-  uint64_t waitMicros = 0;
-  while ((task->numFinishedDrivers() != task->numTotalDrivers()) &&
-         (waitMicros < maxWaitMicros)) {
-    const uint64_t kWaitMicros = 1000;
-    std::this_thread::sleep_for(std::chrono::microseconds(kWaitMicros));
-    waitMicros += kWaitMicros;
+class TaskQueue {
+ public:
+  struct TaskQueueEntry {
+    RowVectorPtr vector;
+    uint64_t bytes;
+  };
+
+  explicit TaskQueue(
+      uint64_t maxBytes,
+      const std::shared_ptr<memory::MemoryPool>& outputPool)
+      : pool_(
+            outputPool != nullptr ? outputPool
+                                  : memory::memoryManager()->addLeafPool()),
+        maxBytes_(maxBytes) {}
+
+  void setNumProducers(int32_t n) {
+    numProducers_ = n;
   }
 
-  if (task->numFinishedDrivers() != task->numTotalDrivers()) {
-    LOG(ERROR) << "Timed out waiting for all drivers of task " << task->taskId()
-               << " to finish. Finished drivers: " << task->numFinishedDrivers()
-               << ". Total drivers: " << task->numTotalDrivers();
+  // Adds a batch of rows to the queue and returns kNotBlocked if the
+  // producer may continue. Returns kWaitForConsumer if the queue is
+  // full after the addition and sets '*future' to a future that is
+  // realized when the producer may continue.
+  exec::BlockingReason enqueue(
+      RowVectorPtr vector,
+      velox::ContinueFuture* future);
+
+  // Returns nullptr when all producers are at end. Otherwise blocks.
+  RowVectorPtr dequeue();
+
+  void close();
+
+  bool hasNext();
+
+  velox::memory::MemoryPool* pool() const {
+    return pool_.get();
   }
 
-  return task->numFinishedDrivers() == task->numTotalDrivers();
-}
+ private:
+  // Owns the vectors in 'queue_', hence must be declared first.
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
+  std::deque<TaskQueueEntry> queue_;
+  std::optional<int32_t> numProducers_;
+  int32_t producersFinished_ = 0;
+  uint64_t totalBytes_ = 0;
+  // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
+  // adding the result.
+  uint64_t maxBytes_;
+  std::mutex mutex_;
+  std::vector<ContinuePromise> producerUnblockPromises_;
+  bool consumerBlocked_ = false;
+  ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
+  ContinueFuture consumerFuture_;
+  bool closed_ = false;
+};
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
@@ -474,12 +513,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   std::exception_ptr error_;
 };
 
-std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
-  if (params.serialExecution) {
-    return std::make_unique<SingleThreadedTaskCursor>(params);
-  }
-  return std::make_unique<MultiThreadedTaskCursor>(params);
-}
+} // namespace
 
 bool RowCursor::next() {
   if (++currentRow_ < numRows_) {
@@ -506,6 +540,32 @@ bool RowCursor::next() {
     decoded_[i]->decode(*vector->childAt(i), allRows_);
   }
   return true;
+}
+
+std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
+  if (params.serialExecution) {
+    return std::make_unique<SingleThreadedTaskCursor>(params);
+  }
+  return std::make_unique<MultiThreadedTaskCursor>(params);
+}
+
+bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
+  VELOX_USER_CHECK(!task->isRunning());
+  uint64_t waitMicros = 0;
+  while ((task->numFinishedDrivers() != task->numTotalDrivers()) &&
+         (waitMicros < maxWaitMicros)) {
+    const uint64_t kWaitMicros = 1000;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitMicros));
+    waitMicros += kWaitMicros;
+  }
+
+  if (task->numFinishedDrivers() != task->numTotalDrivers()) {
+    LOG(ERROR) << "Timed out waiting for all drivers of task " << task->taskId()
+               << " to finish. Finished drivers: " << task->numFinishedDrivers()
+               << ". Total drivers: " << task->numTotalDrivers();
+  }
+
+  return task->numFinishedDrivers() == task->numTotalDrivers();
 }
 
 } // namespace facebook::velox::exec
