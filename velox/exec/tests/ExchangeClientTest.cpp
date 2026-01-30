@@ -1057,11 +1057,16 @@ TEST_P(ExchangeClientTest, skipRequestDataSizeNotTriggeredWithMultipleSources) {
   auto pages = fetchPages(1, *client, 6);
   ASSERT_EQ(pages.size(), 6);
 
-  // Cleanup
+  // Cleanup: Signal no more data first to allow faster task termination,
+  // then cancel and remove tasks.
+  for (auto& task : tasks) {
+    bufferManager_->noMoreData(task->taskId());
+  }
   for (auto& task : tasks) {
     task->requestCancel();
     bufferManager_->removeTask(task->taskId());
   }
+  tasks.clear();
 
   client->close();
 }
@@ -1105,6 +1110,7 @@ TEST_P(ExchangeClientTest, lazyFetching) {
 
     task->requestCancel();
     bufferManager_->removeTask(taskId);
+    task.reset();
     client->close();
   }
 
@@ -1139,6 +1145,7 @@ TEST_P(ExchangeClientTest, lazyFetching) {
 
     task->requestCancel();
     bufferManager_->removeTask(taskId);
+    task.reset();
     client->close();
   }
 }
