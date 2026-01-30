@@ -71,7 +71,7 @@ bool SequenceVector<T>::isNullAtFast(vector_size_t idx) const {
 }
 
 template <typename T>
-SimpleVector<T>::TValueAt SequenceVector<T>::valueAtFast(
+typename SimpleVector<T>::TValueAt SequenceVector<T>::valueAtFast(
     vector_size_t idx) const {
   size_t offset = offsetOfIndex(idx);
   return scalarSequenceValues_->valueAt(offset);
