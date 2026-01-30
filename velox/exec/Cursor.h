@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include "velox/core/PlanNode.h"
@@ -21,19 +22,13 @@
 
 namespace facebook::velox::exec {
 
-/// Wait up to maxWaitMicros for all the task drivers to finish. The function
-/// returns true if all the drivers have finished, otherwise false.
-///
-/// NOTE: user must call this on a finished or failed task.
-bool waitForTaskDriversToFinish(
-    exec::Task* task,
-    uint64_t maxWaitMicros = 1'000'000);
-
 /// Parameters for initializing a TaskCursor or RowCursor.
 struct CursorParameters {
   /// Root node of the plan tree
   std::shared_ptr<const core::PlanNode> planNode;
 
+  /// Partition number if task is expected to receive data from a remote data
+  /// shuffle. Used to initialize ExchangeClient.
   int32_t destination{0};
 
   /// Maximum number of drivers per pipeline.
@@ -90,62 +85,8 @@ struct CursorParameters {
   std::unordered_map<std::string, std::string> queryConfigs;
 };
 
-class TaskQueue {
- public:
-  struct TaskQueueEntry {
-    RowVectorPtr vector;
-    uint64_t bytes;
-  };
-
-  explicit TaskQueue(
-      uint64_t maxBytes,
-      const std::shared_ptr<memory::MemoryPool>& outputPool)
-      : pool_(
-            outputPool != nullptr ? outputPool
-                                  : memory::memoryManager()->addLeafPool()),
-        maxBytes_(maxBytes) {}
-
-  void setNumProducers(int32_t n) {
-    numProducers_ = n;
-  }
-
-  // Adds a batch of rows to the queue and returns kNotBlocked if the
-  // producer may continue. Returns kWaitForConsumer if the queue is
-  // full after the addition and sets '*future' to a future that is
-  // realized when the producer may continue.
-  exec::BlockingReason enqueue(
-      RowVectorPtr vector,
-      velox::ContinueFuture* future);
-
-  // Returns nullptr when all producers are at end. Otherwise blocks.
-  RowVectorPtr dequeue();
-
-  void close();
-
-  bool hasNext();
-
-  velox::memory::MemoryPool* pool() const {
-    return pool_.get();
-  }
-
- private:
-  // Owns the vectors in 'queue_', hence must be declared first.
-  std::shared_ptr<velox::memory::MemoryPool> pool_;
-  std::deque<TaskQueueEntry> queue_;
-  std::optional<int32_t> numProducers_;
-  int32_t producersFinished_ = 0;
-  uint64_t totalBytes_ = 0;
-  // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
-  // adding the result.
-  uint64_t maxBytes_;
-  std::mutex mutex_;
-  std::vector<ContinuePromise> producerUnblockPromises_;
-  bool consumerBlocked_ = false;
-  ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
-  ContinueFuture consumerFuture_;
-  bool closed_ = false;
-};
-
+/// Abstract interface for iterating over query results. TaskCursor manages
+/// task execution and provides batch-level access to output vectors.
 class TaskCursor {
  public:
   virtual ~TaskCursor() = default;
@@ -170,6 +111,8 @@ class TaskCursor {
   virtual const std::shared_ptr<Task>& task() = 0;
 };
 
+/// Row-level cursor that wraps a TaskCursor and provides access to individual
+/// rows and column values within the result set.
 class RowCursor {
  public:
   explicit RowCursor(CursorParameters& params) {
@@ -205,5 +148,13 @@ class RowCursor {
   vector_size_t currentRow_ = 0;
   vector_size_t numRows_ = 0;
 };
+
+/// Wait up to maxWaitMicros for all the task drivers to finish. The function
+/// returns true if all the drivers have finished, otherwise false.
+///
+/// NOTE: user must call this on a finished or failed task.
+bool waitForTaskDriversToFinish(
+    exec::Task* task,
+    uint64_t maxWaitMicros = 1'000'000);
 
 } // namespace facebook::velox::exec
