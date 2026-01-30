@@ -516,10 +516,10 @@ TEST_F(BinaryFunctionsTest, fromBase64) {
 
   VELOX_ASSERT_USER_THROW(
       fromBase64("YQ="),
-      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+      "decode() - invalid input string length.");
   VELOX_ASSERT_USER_THROW(
       fromBase64("YQ==="),
-      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+      "decode() - invalid input string length.");
   VELOX_ASSERT_USER_THROW(
       fromBase64("aG;"),
       "decode() - invalid input string: invalid character ';'");
