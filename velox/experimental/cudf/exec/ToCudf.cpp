@@ -172,7 +172,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     return true;
   };
 
-  auto isJoinSupported = [getPlanNode](const exec::Operator* op) {
+  auto isJoinSupported = [getPlanNode, ctx](const exec::Operator* op) {
     if (!isAnyOf<exec::HashBuild, exec::HashProbe>(op)) {
       return false;
     }
@@ -188,6 +188,12 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (planNode->joinType() == core::JoinType::kAnti and
         planNode->isNullAware() and planNode->filter()) {
       return false;
+    }
+    if (planNode->filter()) {
+      if (!canBeEvaluatedByCudf(
+              {planNode->filter()}, ctx->task->queryCtx().get())) {
+        return false;
+      }
     }
     return true;
   };
