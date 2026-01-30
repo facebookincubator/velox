@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 #include "velox/expression/CastExpr.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
