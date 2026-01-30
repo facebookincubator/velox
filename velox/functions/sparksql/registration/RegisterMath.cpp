@@ -80,6 +80,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<sparksql::FloorFunction, int64_t, double>(
       {prefix + "floor"});
   registerDecimalFloor(prefix);
+  registerDecimalCeil(prefix);
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
   registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
