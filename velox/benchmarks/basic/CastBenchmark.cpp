@@ -63,6 +63,11 @@ int main(int argc, char** argv) {
       [&](auto j) { return 123456789 * j; },
       nullptr,
       DECIMAL(18, 6));
+  auto smallDecimalInput = vectorMaker.flatVector<int64_t>(
+      vectorSize,
+      [&](auto j) { return 123456789 * j; },
+      nullptr,
+      DECIMAL(18, 17));
   auto longDecimalInput = vectorMaker.flatVector<int128_t>(
       vectorSize,
       [&](auto j) {
@@ -160,6 +165,7 @@ int main(int argc, char** argv) {
                "bigint",
                "decimal",
                "short_decimal",
+               "small_decimal",
                "long_decimal",
                "large_real",
                "small_real",
@@ -172,6 +178,7 @@ int main(int argc, char** argv) {
                bigintInput,
                decimalInput,
                shortDecimalInput,
+               smallDecimalInput,
                longDecimalInput,
                largeRealInput,
                smallRealInput,
@@ -189,6 +196,7 @@ int main(int argc, char** argv) {
       .addExpression(
           "cast_decimal_to_inline_string", "cast (decimal as varchar)")
       .addExpression("cast_short_decimal", "cast (short_decimal as varchar)")
+      .addExpression("cast_small_decimal", "cast (small_decimal as varchar)")
       .addExpression("cast_long_decimal", "cast (long_decimal as varchar)")
       .addExpression(
           "cast_large_real_to_scientific_notation",
