@@ -211,15 +211,15 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
       testEnableDictionaryAndDictionaryPageSizeToGetPageHeader(
           defaultConfigFromFile, defaultSessionPropertiesFromFile, true);
   // We use the default version of data page (V1)
-  EXPECT_EQ(defaultHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*defaultHeader.type(), thrift::PageType::DATA_PAGE);
   // Dictionary encoding is enabled as default
   EXPECT_EQ(
-      defaultHeader.data_page_header.encoding,
+      *defaultHeader.data_page_header()->encoding(),
       thrift::Encoding::RLE_DICTIONARY);
   // Default dictionary page size is 1MB (same as data page size), so it can
   // contain a dictionary for all values. So all data will be in the first
   // data page
-  EXPECT_EQ(defaultHeader.data_page_header.num_values, kRows);
+  EXPECT_EQ(*defaultHeader.data_page_header()->num_values(), kRows);
 
   // Test normal config
 
@@ -246,9 +246,10 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
           normalConfigFromFile, normalSessionProperties, false);
 
   // We use the default version of data page (V1)
-  EXPECT_EQ(normalHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*normalHeader.type(), thrift::PageType::DATA_PAGE);
   // The second data page will fall back to PLAIN encoding
-  EXPECT_EQ(normalHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
+  EXPECT_EQ(
+      *normalHeader.data_page_header()->encoding(), thrift::Encoding::PLAIN);
 
   // Test incorrect enable dictionary config
 
@@ -329,14 +330,15 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
           withoutPageSizeConfigFromFile, withoutPageSizeSessionProperties);
 
   // We use the default version of data page (V1)
-  EXPECT_EQ(withoutPageSizeHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*withoutPageSizeHeader.type(), thrift::PageType::DATA_PAGE);
   // Since we turn off the dictionary encoding, and the default data page size
   // is 1MB, there is only one page, and its encoding should be PLAIN, which
   // means the configuration is applied
   EXPECT_EQ(
-      withoutPageSizeHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
+      *withoutPageSizeHeader.data_page_header()->encoding(),
+      thrift::Encoding::PLAIN);
   // All rows will be on the only data page, this is a sanity check
-  EXPECT_EQ(withoutPageSizeHeader.data_page_header.num_values, kRows);
+  EXPECT_EQ(*withoutPageSizeHeader.data_page_header()->num_values(), kRows);
 
   // Test dictionary off but with dictionary page size configured
 
@@ -360,10 +362,11 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
 
   // Should be the same as without dictionary page size configured, because
   // when the dictionary is disabled, the dictionary page silze is meaningless
-  EXPECT_EQ(withPageSizeHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*withPageSizeHeader.type(), thrift::PageType::DATA_PAGE);
   EXPECT_EQ(
-      withPageSizeHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
-  EXPECT_EQ(withPageSizeHeader.data_page_header.num_values, kRows);
+      *withPageSizeHeader.data_page_header()->encoding(),
+      thrift::Encoding::PLAIN);
+  EXPECT_EQ(*withPageSizeHeader.data_page_header()->num_values(), kRows);
 }
 
 TEST_F(ParquetWriterTest, compression) {
@@ -438,16 +441,17 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   const auto defaultHeader = testPageSizeAndBatchSizeToGetPageHeader(
       defaultConfigFromFile, defaultSessionPropertiesFromFile);
   // We use the default version of data page (V1)
-  EXPECT_EQ(defaultHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*defaultHeader.type(), thrift::PageType::DATA_PAGE);
   // We don't use compressor here
   EXPECT_EQ(
-      defaultHeader.uncompressed_page_size, defaultHeader.compressed_page_size);
+      *defaultHeader.uncompressed_page_size(),
+      defaultHeader.compressed_page_size());
   // The default page size is 1MB, which can actually contains all data in one
   // page
-  EXPECT_EQ(defaultHeader.compressed_page_size, 17529);
+  EXPECT_EQ(*defaultHeader.compressed_page_size(), 17529);
   // As mentioned above, the default page size can contain all data in one page
   // so the number of values of the first page equals to the total number
-  EXPECT_EQ(defaultHeader.data_page_header.num_values, kRows);
+  EXPECT_EQ(*defaultHeader.data_page_header()->num_values(), kRows);
 
   // Test normal config
 
@@ -465,14 +469,15 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   const auto normalHeader = testPageSizeAndBatchSizeToGetPageHeader(
       normalConfigFromFile, normalSessionProperties);
   // We use the default version of data page (V1)
-  EXPECT_EQ(normalHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*normalHeader.type(), thrift::PageType::DATA_PAGE);
   // We don't use compressor here
   EXPECT_EQ(
-      normalHeader.uncompressed_page_size, normalHeader.compressed_page_size);
+      *normalHeader.uncompressed_page_size(),
+      *normalHeader.compressed_page_size());
   // 1485B < 2KB < 1MB, which means the page size is applied (default is 1MB)
-  EXPECT_EQ(normalHeader.compressed_page_size, 1485);
+  EXPECT_EQ(*normalHeader.compressed_page_size(), 1485);
   // 1067 % 97 == 0, which means the batch size is applied (default is 1024)
-  EXPECT_EQ(normalHeader.data_page_header.num_values, 1067);
+  EXPECT_EQ(*normalHeader.data_page_header()->num_values(), 1067);
 
   // Test incorrect page size config
 
@@ -529,30 +534,29 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   // (thrift::PageType::type) used.
   const auto testDataPageVersion =
       [&](std::unordered_map<std::string, std::string> configFromFile,
-          std::unordered_map<std::string, std::string> sessionProperties) {
-        auto* sinkPtr = write(
-            data, std::move(configFromFile), std::move(sessionProperties));
-        return readPageHeader(sinkPtr, 0).type;
-      };
+          std::unordered_map<std::string, std::string> sessionProperties)
+      -> thrift::PageType {
+    auto* sinkPtr =
+        write(data, std::move(configFromFile), std::move(sessionProperties));
+    return *readPageHeader(sinkPtr, 0).type_ref();
+  };
 
   // Test default behavior - DataPage should be V1.
-  ASSERT_EQ(testDataPageVersion({}, {}), thrift::PageType::type::DATA_PAGE);
+  ASSERT_EQ(testDataPageVersion({}, {}), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V2 via Hive config from file.
   std::unordered_map<std::string, std::string> configFromFile = {
       {parquet::WriterOptions::kParquetHiveConnectorDataPageVersion, "V2"}};
 
   ASSERT_EQ(
-      testDataPageVersion(configFromFile, {}),
-      thrift::PageType::type::DATA_PAGE_V2);
+      testDataPageVersion(configFromFile, {}), thrift::PageType::DATA_PAGE_V2);
 
   // Simulate setting DataPage version to V1 via Hive config from file.
   configFromFile = {
       {parquet::WriterOptions::kParquetHiveConnectorDataPageVersion, "V1"}};
 
   ASSERT_EQ(
-      testDataPageVersion(configFromFile, {}),
-      thrift::PageType::type::DATA_PAGE);
+      testDataPageVersion(configFromFile, {}), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V2 via connector session property.
   std::unordered_map<std::string, std::string> sessionProperties = {
@@ -560,15 +564,14 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
 
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE_V2);
+      thrift::PageType::DATA_PAGE_V2);
 
   // Simulate setting DataPage version to V1 via connector session property.
   sessionProperties = {
       {parquet::WriterOptions::kParquetSessionDataPageVersion, "V1"}};
 
   ASSERT_EQ(
-      testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE);
+      testDataPageVersion({}, sessionProperties), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V1 via connector session property,
   // and to V2 via Hive config from file. Session property should take
@@ -579,8 +582,7 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
       {parquet::WriterOptions::kParquetHiveConnectorDataPageVersion, "V2"}};
 
   ASSERT_EQ(
-      testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE);
+      testDataPageVersion({}, sessionProperties), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V2 via connector session property,
   // and to V1 via Hive config from file. Session property should take
@@ -592,7 +594,7 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
 
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE_V2);
+      thrift::PageType::DATA_PAGE_V2);
 }
 
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
