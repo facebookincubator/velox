@@ -477,6 +477,74 @@ class BetweenFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> maxLiteral_;
 };
 
+class GreatestLeastFunction : public CudfFunction {
+ public:
+  GreatestLeastFunction(const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::binary_operator op)
+      : op_(op),
+        type_(cudf_velox::veloxToCudfDataType(expr->type())) {
+    // must have at least three inputs
+    VELOX_CHECK_GE(
+        expr->inputs().size(), 3, "Greatest/Least function expects at least 3 inputs");
+    // scan inputs for literals
+    for (size_t i = 0; i < expr->inputs().size(); ++i) {
+      auto constExpr =
+          std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[i]);
+      if (constExpr) {
+        literals_.push_back(
+            VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+                createCudfScalar,
+                constExpr->value()->typeKind(),
+                constExpr->value()));
+      } else {
+        literals_.push_back(nullptr);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // construct a chain of NULL_MIN or NULL_MAX operations
+    std::unique_ptr<cudf::column> result;
+    // the first pair of values
+    if (literals_[0] && literals_[1]) {
+      // no variant of cudf::binary_operation that takes two scalars so we must create columns
+      auto col0 = cudf::make_column_from_scalar(*literals_[0], 1, stream);
+      auto col1 = cudf::make_column_from_scalar(*literals_[1], 1, stream);
+      result = cudf::binary_operation(col0->view(), col1->view(), op_, type_, stream, mr);
+    } else if (literals_[0]) {
+      result = cudf::binary_operation(*literals_[0], asView(inputColumns[1]), op_, type_, stream, mr);
+    } else if (literals_[1]) {
+      result = cudf::binary_operation(asView(inputColumns[0]), *literals_[1], op_, type_, stream, mr);
+    } else {
+      result = cudf::binary_operation(asView(inputColumns[0]), asView(inputColumns[1]), op_, type_, stream, mr);
+    }
+    // remaining values
+    for (size_t i = 2; i < inputColumns.size(); ++i) {
+      if (literals_[i]) {
+        result = cudf::binary_operation(
+            result->view(), *literals_[i], op_, type_, stream, mr);
+      } else {
+        result = cudf::binary_operation(
+            result->view(),
+            asView(inputColumns[i]),
+            op_,
+            type_,
+            stream,
+            mr);
+      }
+    }
+    return result;
+  }
+
+ private:
+  const cudf::binary_operator op_;
+  const cudf::data_type type_;
+  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+};
+
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1271,7 +1339,43 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // greatest & least
   //
 
-  // @TODO (seves 1/28/26)
+  registerCudfFunction(
+    prefix + "greatest",
+    [](const std::string&,
+       const std::shared_ptr<velox::exec::Expr>& expr) {
+      return std::make_shared<GreatestLeastFunction>(expr, cudf::binary_operator::NULL_MAX);
+    },
+    {FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .variableArity("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .variableArity("decimal(p,s)")
+          .build()});
+
+  registerCudfFunction(
+    prefix + "least",
+    [](const std::string&,
+       const std::shared_ptr<velox::exec::Expr>& expr) {
+      return std::make_shared<GreatestLeastFunction>(expr, cudf::binary_operator::NULL_MIN);
+    },
+    {FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .variableArity("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .variableArity("decimal(p,s)")
+          .build()});
 
   return true;
 }
