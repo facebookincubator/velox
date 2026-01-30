@@ -255,7 +255,8 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: monthname(date) -> varchar
 
-    Returns the three-letter abbreviated month name from the given date (Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec). ::
+    Returns the three-letter abbreviated month name from the given date.
+    Possible values: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec. ::
 
         SELECT monthname('2008-02-20'); -- 'Feb'
         SELECT monthname('2011-05-06'); -- 'May'
