@@ -137,6 +137,10 @@ Generic Configuration
      - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
+   * - partitioned_output_eager_flush
+     - bool
+     - false
+     - If true, the PartitionedOutput operator will flush rows eagerly, without waiting until buffers reach certain size. Default is false.
    * - max_output_buffer_size
      - integer
      - 32MB
