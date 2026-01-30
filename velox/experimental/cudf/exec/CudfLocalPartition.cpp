@@ -176,7 +176,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
     partitionOffsets.erase(partitionOffsets.begin());
 
     auto partitionedTables =
-        cudf::split(partitionedTable->view(), partitionOffsets);
+        cudf::split(partitionedTable->view(), partitionOffsets, stream);
 
     for (int i = 0; i < numPartitions_; ++i) {
       auto partitionData = partitionedTables[i];
@@ -196,7 +196,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
               pool(),
               outputType_,
               partitionData.num_rows(),
-              std::make_unique<cudf::table>(partitionData),
+              std::make_unique<cudf::table>(partitionData, stream),
               stream),
           partitionData.num_rows(),
           &future);
