@@ -520,9 +520,9 @@ Spilling
      - The distribution of the amount of time spent on serializing rows for
        spilling in range of [0, 600s] with 20 buckets. It is configured to report
        the latency at P50, P90, P99, and P100 percentiles.
-   * - spill_disk_writes_count
+   * - spill_writes_count
      - Count
-     - The number of disk writes to spill rows.
+     - The number of Velox filesystem write calls to spill rows.
    * - spill_flush_time_ms
      - Histogram
      - The distribution of the amount of time spent on copy out serialized
