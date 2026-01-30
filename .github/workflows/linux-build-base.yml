@@ -81,7 +81,7 @@ jobs:
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 8-core-ubuntu-22.04
-    container: ghcr.io/facebookincubator/velox-dev:adapters
+    container: ghcr.io/czentgr/czentgr-test:dependencies
     defaults:
       run:
         shell: bash
@@ -293,7 +293,7 @@ jobs:
 
   fedora-debug:
     runs-on: 16-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:fedora
+    container: ghcr.io/czentgr/czentgr-test:fedora-deps
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     name: Fedora debug
