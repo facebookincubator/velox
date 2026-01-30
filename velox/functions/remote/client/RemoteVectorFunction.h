@@ -26,6 +26,10 @@ struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
   /// The serialization format to be used to send batches of data to the remote
   /// process.
   remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
+
+  /// Whether to preserve the input vector encoding in the request sent to
+  /// remote service.
+  bool preserveEncoding{false};
 };
 
 /// Main vector function logic. Needs to be extended with the transport-specific
@@ -65,6 +69,8 @@ class RemoteVectorFunction : public exec::VectorFunction {
 
   remote::PageFormat serdeFormat_;
   std::unique_ptr<VectorSerde> serde_;
+  std::unique_ptr<VectorSerde::Options> serdeOptions_;
+  bool preserveEncoding_;
 
   // Structures we construct once to cache:
   RowTypePtr remoteInputType_;
