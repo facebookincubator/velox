@@ -198,6 +198,21 @@ struct DecimalSumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     auto const aggRequest =
         cudf::make_sum_aggregation<cudf::reduce_aggregation>();
     cudf::column_view inputCol = input.column(inputIndex);
+    if (step == core::AggregationNode::Step::kPartial) {
+      auto sumScalar =
+          cudf::reduce(inputCol, *aggRequest, inputCol.type(), stream);
+      auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
+          cudf::null_policy::EXCLUDE);
+      auto countScalar = cudf::reduce(
+          inputCol,
+          *countAgg,
+          cudf::data_type{cudf::type_id::INT64},
+          stream);
+      auto sumCol = cudf::make_column_from_scalar(*sumScalar, 1, stream);
+      auto countCol = cudf::make_column_from_scalar(*countScalar, 1, stream);
+      return cudf_velox::serializeDecimalSumState(
+          sumCol->view(), countCol->view(), stream);
+    }
     if (step == core::AggregationNode::Step::kIntermediate &&
         inputCol.type().id() == cudf::type_id::STRING) {
       auto scale = outputType->isDecimal()
@@ -228,6 +243,11 @@ struct DecimalSumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       inputCol = decodedSum_->view();
     }
     auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
+    std::unique_ptr<cudf::column> castedInput;
+    if (outputType->isDecimal() && inputCol.type() != cudfOutType) {
+      castedInput = cudf::cast(inputCol, cudfOutType, stream);
+      inputCol = castedInput->view();
+    }
     auto const resultScalar =
         cudf::reduce(inputCol, *aggRequest, cudfOutType, stream);
     return cudf::make_column_from_scalar(*resultScalar, 1, stream);
@@ -561,8 +581,7 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     const TypePtr& resultType) {
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
-    if (step != core::AggregationNode::Step::kSingle &&
-        (resultType->kind() == TypeKind::VARBINARY || resultType->isDecimal())) {
+    if (resultType->kind() == TypeKind::VARBINARY || resultType->isDecimal()) {
       return std::make_unique<DecimalSumAggregator>(
           step, inputIndex, constant, isGlobal, resultType);
     }

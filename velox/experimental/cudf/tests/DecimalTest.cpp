@@ -414,5 +414,79 @@ TEST_F(CudfDecimalTest, decimalSumIntermediateVarbinary) {
       .assertResults("SELECT k, sum(d) AS s FROM tmp GROUP BY k");
 }
 
+TEST_F(CudfDecimalTest, decimalSumGlobalPartialFinalVarbinary) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2))});
+  auto input2 = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(d) AS s"})
+                  .finalAggregation()
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) AS s FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalSumGlobalIntermediateVarbinary) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2))});
+  auto input2 = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(d) AS s"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) AS s FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>(
+          {12345, -2500, 10000, 200, -300},
+          DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"sum(d) AS s"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) AS s FROM tmp");
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
