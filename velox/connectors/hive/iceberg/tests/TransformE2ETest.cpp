@@ -734,8 +734,6 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
 
   auto partitionDirs = verifyPartitionCount(outputDirectory->getPath(), 2);
 
-  std::unordered_map<std::string, std::string> customSplitInfo{
-      {"table_format", "hive-iceberg"}};
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
 
   for (const auto& dir : partitionDirs) {
@@ -755,7 +753,7 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
               std::unordered_map<std::string, std::optional<std::string>>{
                   {"c_date", daysSinceEpoch}},
               std::nullopt,
-              customSplitInfo,
+              std::unordered_map<std::string, std::string>{},
               nullptr,
               /*cacheable=*/true,
               std::vector<IcebergDeleteFile>()));

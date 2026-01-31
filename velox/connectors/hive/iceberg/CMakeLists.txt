@@ -17,6 +17,7 @@ velox_add_library(
   IcebergColumnHandle.cpp
   IcebergConnector.cpp
   IcebergDataSink.cpp
+  IcebergDataSource.cpp
   IcebergPartitionName.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
