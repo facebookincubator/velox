@@ -18,6 +18,11 @@
 // Results are returned using Presto's binary serialization format for efficient
 // data transfer.
 
+include "thrift/annotation/thrift.thrift"
+
+@thrift.AllowLegacyMissingUris
+package;
+
 namespace cpp2 facebook.velox.runner
 
 // Represents a batch of rows using Presto's binary serialization format.
