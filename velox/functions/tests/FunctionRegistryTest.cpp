@@ -1033,5 +1033,83 @@ TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
   EXPECT_FALSE(result->second.supportsFlattening);
 }
 
+TEST_F(FunctionRegistryTest, resolveVectorFunctionWithMetadataWithCoercions) {
+  removeFunction("bar");
+
+  SCOPE_EXIT {
+    removeFunction("bar");
+  };
+
+  exec::registerVectorFunction(
+      "bar",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+          makeSignature("real", {"real", "real"}),
+      },
+      std::make_unique<DummyVectorFunction>());
+
+  // Test exact match - no coercions needed.
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        "bar", {INTEGER(), INTEGER()}, coercions);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(*result->first, *INTEGER());
+    EXPECT_TRUE(result->second.deterministic);
+
+    EXPECT_EQ(coercions.size(), 2);
+    EXPECT_EQ(coercions[0], nullptr);
+    EXPECT_EQ(coercions[1], nullptr);
+  }
+
+  // Test coercions are applied.
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        "bar", {TINYINT(), TINYINT()}, coercions);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(*result->first, *INTEGER());
+    EXPECT_TRUE(result->second.deterministic);
+
+    EXPECT_EQ(coercions.size(), 2);
+    EXPECT_NE(coercions[0], nullptr);
+    EXPECT_EQ(*coercions[0], *INTEGER());
+    EXPECT_NE(coercions[1], nullptr);
+    EXPECT_EQ(*coercions[1], *INTEGER());
+  }
+
+  // Test partial coercions - one arg needs coercion, the other doesn't.
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        "bar", {TINYINT(), REAL()}, coercions);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(*result->first, *REAL());
+    EXPECT_TRUE(result->second.deterministic);
+
+    EXPECT_EQ(coercions.size(), 2);
+    EXPECT_NE(coercions[0], nullptr);
+    EXPECT_EQ(*coercions[0], *REAL());
+    EXPECT_EQ(coercions[1], nullptr);
+  }
+
+  // Test function not found.
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        "non_existent_function", {INTEGER(), INTEGER()}, coercions);
+    EXPECT_FALSE(result.has_value());
+  }
+
+  // Test incompatible types - cannot resolve.
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        "bar", {TINYINT(), VARCHAR()}, coercions);
+    EXPECT_FALSE(result.has_value());
+  }
+}
+
 } // namespace
 } // namespace facebook::velox
