@@ -15,10 +15,17 @@
  */
 
 #include "velox/core/PlanConsistencyChecker.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::core {
 
 namespace {
+
+// Returns a message describing the plan node for exception context.
+std::string planNodeMessage(VeloxException::Type /*exceptionType*/, void* arg) {
+  auto* node = static_cast<const PlanNode*>(arg);
+  return fmt::format("Plan node: {}", node->toString(/*detailed=*/true));
+}
 
 class Checker : public PlanNodeVisitor {
  public:
@@ -94,15 +101,15 @@ class Checker : public PlanNodeVisitor {
       const auto& leftKey = node.leftKeys().at(i);
       const auto& rightKey = node.rightKeys().at(i);
 
-      bool unique = keyNames.emplace(leftKey->name(), rightKey->name()).second;
-      VELOX_CHECK(
-          unique,
-          "Duplicate join condition: {} = {}",
-          leftKey->toString(),
-          rightKey->toString());
+      auto [_, inserted] = keyNames.insert({leftKey->name(), rightKey->name()});
+      VELOX_USER_CHECK(
+          inserted,
+          "Duplicate join condition: \"{}\" = \"{}\"",
+          leftKey->name(),
+          rightKey->name());
     }
 
-    if (node.filter() != nullptr) {
+    if (node.filter()) {
       const auto& leftRowType = node.sources().at(0)->outputType();
       const auto& rightRowType = node.sources().at(1)->outputType();
       auto rowType = leftRowType->unionWith(rightRowType);
@@ -211,7 +218,7 @@ class Checker : public PlanNodeVisitor {
     VELOX_USER_CHECK_EQ(
         names.size(),
         node.assignments().size(),
-        "Column assignments must match output type 1:1.");
+        "Column assignments must match output type");
 
     for (const auto& name : names) {
       VELOX_USER_CHECK(
@@ -219,6 +226,8 @@ class Checker : public PlanNodeVisitor {
           "Column assignment is missing for {}",
           name);
     }
+
+    visitSources(&node, ctx);
   }
 
   void visit(const TableWriteNode& node, PlanNodeVisitorContext& ctx)
@@ -267,6 +276,8 @@ class Checker : public PlanNodeVisitor {
  private:
   void visitSources(const PlanNode* node, PlanNodeVisitorContext& ctx) const {
     for (auto& source : node->sources()) {
+      ExceptionContextSetter exceptionContext(
+          {planNodeMessage, (void*)source.get()});
       source->accept(*this, ctx);
     }
   }
@@ -314,6 +325,7 @@ class Checker : public PlanNodeVisitor {
 } // namespace
 
 void PlanConsistencyChecker::check(const core::PlanNodePtr& plan) {
+  ExceptionContextSetter exceptionContext({planNodeMessage, (void*)plan.get()});
   PlanNodeVisitorContext ctx;
   Checker checker;
   plan->accept(checker, ctx);
