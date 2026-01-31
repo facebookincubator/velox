@@ -798,6 +798,18 @@ void TextRowReader::writeArrayWithSetter(
     std::string_view value,
     char elemDelim,
     const SetterFunction& elementSetter) {
+  // Empty value represents an empty array.
+  if (value.empty()) {
+    auto* rawOffsets = arrayVec->offsets()->asMutable<vector_size_t>();
+    auto* rawSizes = arrayVec->sizes()->asMutable<vector_size_t>();
+    vector_size_t startOffset =
+        row > 0 ? rawOffsets[row - 1] + rawSizes[row - 1] : 0;
+    rawOffsets[row] = startOffset;
+    rawSizes[row] = 0;
+    arrayVec->setNull(row, false);
+    return;
+  }
+
   // Parse elements
   std::vector<std::string_view> elements;
   size_t pos = 0;
@@ -846,6 +858,18 @@ void TextRowReader::writeMapWithSetters(
     char kvDelim,
     const SetterFunction& keySetter,
     const SetterFunction& valueSetter) {
+  // Empty value represents an empty map.
+  if (value.empty()) {
+    auto* rawOffsets = mapVec->offsets()->asMutable<vector_size_t>();
+    auto* rawSizes = mapVec->sizes()->asMutable<vector_size_t>();
+    vector_size_t startOffset =
+        row > 0 ? rawOffsets[row - 1] + rawSizes[row - 1] : 0;
+    rawOffsets[row] = startOffset;
+    rawSizes[row] = 0;
+    mapVec->setNull(row, false);
+    return;
+  }
+
   // Parse key-value pairs
   std::vector<std::pair<std::string_view, std::string_view>> pairs;
   size_t pos = 0;

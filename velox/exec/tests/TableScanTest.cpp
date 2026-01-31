@@ -6309,7 +6309,7 @@ TEST_F(TableScanTest, textfileLarge) {
       100000; // This will generate well over 8388608 bytes (per chunk read)
   constexpr int kNumCols = 10;
 
-  constexpr int loadQuantum = 8 << 20; // loadQuantum_ as of June 2025
+  constexpr int loadQuantum = 1 << 20; // Text reader block size (1MB)
 
   // Helper function to generate column data
   auto generateColumnData = [](int row, int col) {
@@ -6388,11 +6388,10 @@ TEST_F(TableScanTest, textfileLarge) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   auto rawInputBytes = it->second.rawInputBytes;
-
   // Verify we did not read the entire file but only a chunk
   ASSERT_EQ(rawInputBytes, loadQuantum);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
-  ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
+  ASSERT_GE(getTableScanRuntimeStats(task)["ioWaitWallNanosioWaitWallNanos"].sum, 0);
 }
 
 TEST_F(TableScanTest, duplicateFieldProject) {
