@@ -186,6 +186,11 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
       const override {
     VELOX_NYI();
   }
+
+  void visit(const core::MixedUnionNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
 };
 
 } // namespace facebook::velox::functions::sparksql::fuzzer
