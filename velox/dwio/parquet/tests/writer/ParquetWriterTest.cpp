@@ -761,30 +761,125 @@ TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
 }
 
 TEST_F(ParquetWriterTest, allNulls) {
-  auto schema = ROW({"c0"}, {INTEGER()});
-  const int64_t kRows = 4096;
-  // Create a column with all elements being null.
-  auto nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
-  auto flatVector = std::make_shared<FlatVector<int32_t>>(
-      pool_.get(),
-      schema->childAt(0),
-      nulls,
-      kRows,
-      /*values=*/nullptr,
-      std::vector<BufferPtr>());
-  auto data = std::make_shared<RowVector>(
-      pool_.get(), schema, nullptr, kRows, std::vector<VectorPtr>{flatVector});
+  auto rowType = ROW({
+      {"bool_col", BOOLEAN()},
+      {"tinyint_col", TINYINT()},
+      {"smallint_col", SMALLINT()},
+      {"int_col", INTEGER()},
+      {"bigint_col", BIGINT()},
+      {"float_col", REAL()},
+      {"double_col", DOUBLE()},
+      {"string_col", VARCHAR()},
+      {"binary_col", VARBINARY()},
+      {"date_col", DATE()},
+      {"timestamp_col", TIMESTAMP()},
+      {"decimal_col", DECIMAL(10, 2)},
+  });
 
-  auto* sinkPtr = write(data);
+  const int64_t kRows = 100;
+
+  // Create a nulls buffer with all bits set to null (0)
+  BufferPtr nulls = AlignedBuffer::allocate<bool>(kRows, leafPool_.get());
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  bits::fillBits(rawNulls, 0, kRows, bits::kNull);
+
+  auto vector = std::make_shared<RowVector>(
+      leafPool_.get(),
+      rowType,
+      nullptr,
+      kRows,
+      std::vector<VectorPtr>{
+          std::make_shared<FlatVector<bool>>(
+              leafPool_.get(),
+              BOOLEAN(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<int8_t>>(
+              leafPool_.get(),
+              TINYINT(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<int16_t>>(
+              leafPool_.get(),
+              SMALLINT(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<int32_t>>(
+              leafPool_.get(),
+              INTEGER(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<int64_t>>(
+              leafPool_.get(),
+              BIGINT(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<float>>(
+              leafPool_.get(),
+              REAL(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<double>>(
+              leafPool_.get(),
+              DOUBLE(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<StringView>>(
+              leafPool_.get(),
+              VARCHAR(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<StringView>>(
+              leafPool_.get(),
+              VARBINARY(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<int32_t>>(
+              leafPool_.get(),
+              DATE(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          std::make_shared<FlatVector<Timestamp>>(
+              leafPool_.get(),
+              TIMESTAMP(),
+              nulls,
+              kRows,
+              nullptr,
+              std::vector<BufferPtr>{}),
+          makeFlatVector<int64_t>(
+              kRows, [](auto) { return 0; }, nullEvery(1), DECIMAL(10, 2)),
+      });
+
+  auto sinkPtr = write(vector);
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto rowReader = createRowReaderWithSchema(std::move(reader), rowType);
 
-  ASSERT_EQ(reader->numberOfRows(), kRows);
-  ASSERT_EQ(*reader->rowType(), *schema);
+  auto result = BaseVector::create(rowType, 0, leafPool_.get());
+  rowReader->next(kRows, result);
 
-  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
-  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  assertEqualVectorPart(vector, result, 0);
 }
 
 } // namespace
