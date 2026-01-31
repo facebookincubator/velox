@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
 #include "velox/functions/prestosql/MapKeysOverlap.h"
 #include "velox/functions/prestosql/MapNormalize.h"
+#include "velox/functions/prestosql/MapRemoveOutliers.h"
 #include "velox/functions/prestosql/MapSubset.h"
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
@@ -296,6 +297,77 @@ void registerMapFunctions(const std::string& prefix) {
       MapNormalizeFunction,
       Map<Varchar, double>,
       Map<Varchar, double>>({prefix + "map_normalize"});
+
+  // Register map_remove_outliers for various key/value type combinations
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, int64_t, int64_t>,
+      Map<int64_t, int64_t>,
+      Map<int64_t, int64_t>,
+      int64_t,
+      int64_t>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, int64_t, double>,
+      Map<int64_t, double>,
+      Map<int64_t, double>,
+      double,
+      double>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, int32_t, int32_t>,
+      Map<int32_t, int32_t>,
+      Map<int32_t, int32_t>,
+      int32_t,
+      int32_t>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, int32_t, double>,
+      Map<int32_t, double>,
+      Map<int32_t, double>,
+      double,
+      double>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, Varchar, int64_t>,
+      Map<Varchar, int64_t>,
+      Map<Varchar, int64_t>,
+      int64_t,
+      int64_t>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, Varchar, double>,
+      Map<Varchar, double>,
+      Map<Varchar, double>,
+      double,
+      double>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, Varchar, float>,
+      Map<Varchar, float>,
+      Map<Varchar, float>,
+      float,
+      float>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, int64_t, float>,
+      Map<int64_t, float>,
+      Map<int64_t, float>,
+      float,
+      float>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      ParameterBinder<MapRemoveOutliersFunction, int32_t, float>,
+      Map<int32_t, float>,
+      Map<int32_t, float>,
+      float,
+      float>({prefix + "map_remove_outliers"});
+
+  registerFunction<
+      MapRemoveOutliersGenericFunction,
+      Map<Generic<T1>, double>,
+      Map<Generic<T1>, double>,
+      double,
+      double>({prefix + "map_remove_outliers"});
 }
 
 void registerMapAllowingDuplicates(
