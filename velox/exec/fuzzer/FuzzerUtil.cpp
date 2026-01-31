@@ -43,7 +43,8 @@ std::pair<std::string, std::string> extractPartition(
 }
 
 std::optional<int32_t> getBucketNum(const std::string& fileName) {
-  if (RE2::FullMatch(fileName, "0[0-9]+_0_TaskCursorQuery_[0-9]+")) {
+  static const RE2 kPattern("0[0-9]+_0_TaskCursorQuery_[0-9]+");
+  if (RE2::FullMatch(fileName, kPattern)) {
     return std::optional(stoi(fileName.substr(0, fileName.find("+"))));
   }
   return std::nullopt;
