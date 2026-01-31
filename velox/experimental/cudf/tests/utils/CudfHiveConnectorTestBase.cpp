@@ -102,7 +102,7 @@ void CudfHiveConnectorTestBase::TearDown() {
 }
 
 void CudfHiveConnectorTestBase::resetCudfHiveConnector(
-    const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
+    const facebook::velox::config::ConfigPtr& config) {
   facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
 
   facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory

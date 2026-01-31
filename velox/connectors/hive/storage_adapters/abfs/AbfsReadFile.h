@@ -18,16 +18,10 @@
 
 #include "velox/common/file/File.h"
 
-namespace facebook::velox::config {
-class ConfigBase;
-}
-
 namespace facebook::velox::filesystems {
 class AbfsReadFile final : public ReadFile {
  public:
-  explicit AbfsReadFile(
-      std::string_view path,
-      const config::ConfigBase& config);
+  explicit AbfsReadFile(std::string_view path, const config::IConfig& config);
 
   void initialize(const FileOptions& options);
 

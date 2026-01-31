@@ -27,9 +27,7 @@ QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)
           ConfigTag{},
           std::make_shared<config::ConfigBase>(std::move(values))} {}
 
-QueryConfig::QueryConfig(
-    ConfigTag /*tag*/,
-    std::shared_ptr<const config::IConfig> config)
+QueryConfig::QueryConfig(ConfigTag /*tag*/, config::ConfigPtr config)
     : config_{std::move(config)} {
   validateConfig();
 }

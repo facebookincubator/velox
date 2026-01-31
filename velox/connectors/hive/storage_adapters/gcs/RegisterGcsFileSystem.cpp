@@ -37,59 +37,57 @@ FileSystemMap& gcsFileSystems() {
   return instances;
 }
 
-std::function<std::shared_ptr<
-    FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
+std::function<std::shared_ptr<FileSystem>(config::ConfigPtr, std::string_view)>
 gcsFileSystemGenerator() {
-  static auto filesystemGenerator =
-      [](std::shared_ptr<const config::ConfigBase> properties,
-         std::string_view filePath) {
-        const auto file = gcsPath(filePath);
-        std::string bucket;
-        std::string object;
-        setBucketAndKeyFromGcsPath(file, bucket, object);
-        auto cacheKey = fmt::format(
-            "{}-{}",
-            properties->get<std::string>(
-                connector::hive::HiveConfig::kGcsEndpoint,
-                kGcsDefaultCacheKeyPrefix),
-            bucket);
+  static auto filesystemGenerator = [](config::ConfigPtr properties,
+                                       std::string_view filePath) {
+    const auto file = gcsPath(filePath);
+    std::string bucket;
+    std::string object;
+    setBucketAndKeyFromGcsPath(file, bucket, object);
+    auto cacheKey = fmt::format(
+        "{}-{}",
+        properties->get<std::string>(
+            connector::hive::HiveConfig::kGcsEndpoint,
+            kGcsDefaultCacheKeyPrefix),
+        bucket);
 
-        // Check if an instance exists with a read lock (shared).
-        auto fs = gcsFileSystems().withRLock(
-            [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
-              auto iterator = instanceMap.find(cacheKey);
-              if (iterator != instanceMap.end()) {
-                return iterator->second;
-              }
-              return nullptr;
-            });
-        if (fs != nullptr) {
+    // Check if an instance exists with a read lock (shared).
+    auto fs = gcsFileSystems().withRLock(
+        [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
+          auto iterator = instanceMap.find(cacheKey);
+          if (iterator != instanceMap.end()) {
+            return iterator->second;
+          }
+          return nullptr;
+        });
+    if (fs != nullptr) {
+      return fs;
+    }
+
+    return gcsFileSystems().withWLock(
+        [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
+          // Repeat the checks with a write lock.
+          auto iterator = instanceMap.find(cacheKey);
+          if (iterator != instanceMap.end()) {
+            return iterator->second;
+          }
+
+          std::shared_ptr<GcsFileSystem> fs;
+          if (properties != nullptr) {
+            fs = std::make_shared<GcsFileSystem>(bucket, properties);
+          } else {
+            fs = std::make_shared<GcsFileSystem>(
+                bucket,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
+          }
+          fs->initializeClient();
+
+          instanceMap.insert({cacheKey, fs});
           return fs;
-        }
-
-        return gcsFileSystems().withWLock(
-            [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
-              // Repeat the checks with a write lock.
-              auto iterator = instanceMap.find(cacheKey);
-              if (iterator != instanceMap.end()) {
-                return iterator->second;
-              }
-
-              std::shared_ptr<GcsFileSystem> fs;
-              if (properties != nullptr) {
-                fs = std::make_shared<GcsFileSystem>(bucket, properties);
-              } else {
-                fs = std::make_shared<GcsFileSystem>(
-                    bucket,
-                    std::make_shared<config::ConfigBase>(
-                        std::unordered_map<std::string, std::string>()));
-              }
-              fs->initializeClient();
-
-              instanceMap.insert({cacheKey, fs});
-              return fs;
-            });
-      };
+        });
+  };
   return filesystemGenerator;
 }
 

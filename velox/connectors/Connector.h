@@ -39,9 +39,6 @@ class Config;
 namespace facebook::velox::wave {
 class WaveDataSource;
 }
-namespace facebook::velox::config {
-class ConfigBase;
-}
 
 namespace facebook::velox::core {
 class ITypedExpr;
@@ -425,7 +422,7 @@ class ConnectorQueryCtx {
   ConnectorQueryCtx(
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
-      const config::ConfigBase* sessionProperties,
+      const config::OldConfig* sessionProperties,
       const common::SpillConfig* spillConfig,
       common::PrefixSortConfig prefixSortConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
@@ -470,7 +467,7 @@ class ConnectorQueryCtx {
     return connectorPool_;
   }
 
-  const config::ConfigBase* sessionProperties() const {
+  const config::OldConfig* sessionProperties() const {
     return sessionProperties_;
   }
 
@@ -556,7 +553,7 @@ class ConnectorQueryCtx {
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
-  const config::ConfigBase* const sessionProperties_;
+  const config::OldConfig* const sessionProperties_;
   const common::SpillConfig* const spillConfig_;
   const common::PrefixSortConfig prefixSortConfig_;
   const std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
@@ -589,7 +586,7 @@ class ConnectorFactory {
 
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) = 0;
 
@@ -599,9 +596,7 @@ class ConnectorFactory {
 
 class Connector {
  public:
-  explicit Connector(
-      const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config = nullptr)
+  explicit Connector(const std::string& id, config::ConfigPtr config = nullptr)
       : id_(id), config_(std::move(config)) {}
 
   virtual ~Connector() = default;
@@ -610,7 +605,7 @@ class Connector {
     return id_;
   }
 
-  const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
+  const config::ConfigPtr& connectorConfig() const {
     return config_;
   }
 
@@ -745,7 +740,7 @@ class Connector {
   static void unregisterTracker(cache::ScanTracker* tracker);
 
   const std::string id_;
-  const std::shared_ptr<const config::ConfigBase> config_;
+  const config::ConfigPtr config_;
 
   static folly::Synchronized<
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>

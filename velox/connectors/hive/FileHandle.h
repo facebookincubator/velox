@@ -104,7 +104,7 @@ using FileHandleCache =
 class FileHandleGenerator {
  public:
   FileHandleGenerator() {}
-  FileHandleGenerator(std::shared_ptr<const config::ConfigBase> properties)
+  FileHandleGenerator(config::ConfigPtr properties)
       : properties_(std::move(properties)) {}
   std::unique_ptr<FileHandle> operator()(
       const FileHandleKey& filename,
@@ -112,7 +112,7 @@ class FileHandleGenerator {
       filesystems::File::IoStats* stats);
 
  private:
-  const std::shared_ptr<const config::ConfigBase> properties_;
+  const config::ConfigPtr properties_;
 };
 
 using FileHandleFactory = CachedFactory<

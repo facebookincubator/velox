@@ -453,7 +453,7 @@ class S3FileSystem::Impl {
 
 S3FileSystem::S3FileSystem(
     std::string_view bucketName,
-    const std::shared_ptr<const config::ConfigBase> config)
+    const config::ConfigPtr config)
     : FileSystem(config) {
   S3Config s3Config(bucketName, config);
   impl_ = std::make_shared<Impl>(s3Config);
