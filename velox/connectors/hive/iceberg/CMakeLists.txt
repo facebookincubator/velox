@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
-  velox_hive_iceberg_splitreader
+set(
+  ICEBERG_SOURCES
   IcebergColumnHandle.cpp
   IcebergConnector.cpp
   IcebergDataSink.cpp
@@ -26,16 +26,19 @@ velox_add_library(
   TransformExprBuilder.cpp
 )
 
+if(VELOX_ENABLE_PARQUET)
+  list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
+endif()
+
+velox_add_library(velox_hive_iceberg_splitreader ${ICEBERG_SOURCES})
+
 velox_link_libraries(
   velox_hive_iceberg_splitreader
   velox_connector
+  velox_dwio_parquet_field_id
   velox_functions_iceberg
   Folly::folly
 )
-
-if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_parquet_field_id)
-endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

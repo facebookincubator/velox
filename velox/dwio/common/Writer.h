@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include "velox/dwio/common/DataFileStatistics.h"
+#include "velox/dwio/common/DataFileStatsCollector.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::dwio::common {
@@ -79,6 +81,11 @@ class Writer {
   /// Data can no longer be written.
   virtual void abort() = 0;
 
+  /// Return data file's statistics.
+  std::shared_ptr<DataFileStatistics> dataFileStats() const {
+    return dataFileStats_;
+  }
+
  protected:
   bool isRunning() const;
   bool isFinishing() const;
@@ -92,6 +99,16 @@ class Writer {
   static void checkStateTransition(State oldState, State newState);
 
   State state_{State::kInit};
+
+  // Statistics collected from the written data file, including record count,
+  // column sizes, value counts, null/NaN counts, and min/max bounds.
+  // Populated when the writer is closed.
+  std::shared_ptr<DataFileStatistics> dataFileStats_;
+
+  // Collector for format-specific file statistics during write operations.
+  // Connectors (e.g., Iceberg, Hudi) provide implementations to gather
+  // table format specific metrics from the written data files.
+  std::shared_ptr<DataFileStatsCollector> dataFileStatsCollector_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

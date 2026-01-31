@@ -279,7 +279,7 @@ class TransformE2ETest : public test::IcebergTestBase {
     };
     const auto dataSink = createDataSinkAndAppendData(
         {rowVector}, outputDirectory->getPath(), partitionTransforms);
-
+    dataSink->close();
     auto commitMessages = dataSink->commitMessage();
     VELOX_CHECK_EQ(commitMessages.size(), 1);
     auto commitData = folly::parseJson(commitMessages[0]);
@@ -287,7 +287,7 @@ class TransformE2ETest : public test::IcebergTestBase {
         folly::parseJson(commitData["partitionDataJson"].asString());
     auto partitionValues = partitionDataJson["partitionValues"];
     VELOX_CHECK_EQ(partitionValues.size(), 1);
-    dataSink->close();
+
     return partitionValues[0];
   }
 };
