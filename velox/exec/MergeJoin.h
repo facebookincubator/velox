@@ -453,8 +453,8 @@ class MergeJoin : public Operator {
 
     // Called for each row that the filter was evaluated on, in order, starting
     // with the first row. Calls 'onMiss' if the filter failed on all output
-    // rows that correspond to a single left-side row. Use
-    // 'noMoreFilterResults' to make sure 'onMiss' is called for the last
+    // rows that correspond to a single left-side row.
+    // Use 'noMoreFilterResults' to make sure 'onMiss' is called for the last
     // left-side row.
     template <typename TOnMiss, typename TOnMatch>
     void processFilterResult(
@@ -463,8 +463,11 @@ class MergeJoin : public Operator {
         const TOnMiss& onMiss,
         const TOnMatch& onMatch) {
       const auto rowNumber = rawLeftRowNumbers_[outputIndex];
+
       if (currentLeftRowNumber_ != rowNumber) {
-        if (currentRow_ != -1 && !currentRowPassed_) {
+        // Starting a new outer row.
+        if (!currentRowPassed_ && currentRow_ != -1) {
+          // Previous key didn't pass and has a row in this batch.
           onMiss(currentRow_);
         }
         currentRow_ = outputIndex;
@@ -480,6 +483,24 @@ class MergeJoin : public Operator {
       }
     }
 
+    // Returns the row number for a given output index.
+    vector_size_t getRowNumber(vector_size_t outputIndex) const {
+      return rawLeftRowNumbers_[outputIndex];
+    }
+
+    // Checks if there's a pending miss from a previous batch that should be
+    // emitted. Call this at the start of processing a new batch, passing the
+    // row number of the first match row. Returns true if the pending miss
+    // should be emitted (key changed and previous key didn't pass).
+    bool shouldEmitPendingMiss(vector_size_t firstMatchRowNumber) const {
+      return currentLeftRowNumber_ != firstMatchRowNumber && !currentRowPassed_;
+    }
+
+    // Returns true if at least one row for the current key passed the filter.
+    bool currentRowPassed() const {
+      return currentRowPassed_;
+    }
+
     // Returns whether `row` corresponds to the same left key as the last
     // left match evaluated.
     bool isCurrentLeftMatch(vector_size_t row) {
@@ -492,12 +513,46 @@ class MergeJoin : public Operator {
     // filter failed for all matches of that row.
     template <typename TOnMiss>
     void noMoreFilterResults(TOnMiss onMiss) {
-      if (!currentRowPassed_) {
+      if (!currentRowPassed_ && currentRow_ != -1) {
         onMiss(currentRow_);
       }
 
       currentRow_ = -1;
       currentRowPassed_ = false;
+    }
+
+    // Called when the current batch ends but the same outer row may continue
+    // in the next batch. If no rows have passed the filter yet, we store the
+    // current row's data so we can include it in the output later if the key
+    // ends without any passes.
+    void endBatchMidRow(
+        const RowVectorPtr& output,
+        const std::vector<IdentityProjection>& nullProjections) {
+      if (currentRow_ != -1 && !currentRowPassed_ && !hasPendingMiss()) {
+        // Store a copy of the row data with nulls applied.
+        // Only store if we don't already have a pending miss for this key.
+        pendingMissOutput_ =
+            std::dynamic_pointer_cast<RowVector>(output->slice(currentRow_, 1));
+        for (const auto& projection : nullProjections) {
+          pendingMissOutput_->childAt(projection.outputChannel)
+              ->setNull(0, true);
+        }
+      }
+      // Reset currentRow_ since it's a batch-local index and would be stale
+      // in the next batch.
+      currentRow_ = -1;
+    }
+
+    // Returns true if there is a pending miss from a previous batch.
+    bool hasPendingMiss() const {
+      return pendingMissOutput_ != nullptr;
+    }
+
+    // Returns the pending miss output vector and clears the pending miss state.
+    RowVectorPtr getAndClearPendingMissOutput() {
+      auto result = std::move(pendingMissOutput_);
+      pendingMissOutput_.reset();
+      return result;
     }
 
     void reset();
@@ -534,6 +589,11 @@ class MergeJoin : public Operator {
     // True if at least one row in a block of output rows corresponding a single
     // left-side row identified by 'currentRowNumber' passed the filter.
     bool currentRowPassed_{false};
+
+    // Stored output containing a row that may need to be emitted as a miss.
+    // This is set in endBatchMidRow when the batch ends mid-key without any
+    // rows passing the filter. The row data already has nulls applied.
+    RowVectorPtr pendingMissOutput_{nullptr};
   };
 
   /// Used to record both left and right join.
@@ -638,5 +698,10 @@ class MergeJoin : public Operator {
 
   // Stats for tracking matched rows from the right side
   uint64_t matchedRightRows_{0};
+
+  // When a pending miss needs to be emitted, we store the current output here
+  // and return the pending miss as a single-row result. The stored output will
+  // be processed in the next call to getOutput().
+  RowVectorPtr pendingFilterOutput_;
 };
 } // namespace facebook::velox::exec
