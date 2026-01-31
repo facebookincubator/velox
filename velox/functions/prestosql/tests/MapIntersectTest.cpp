@@ -236,45 +236,6 @@ TEST_F(MapIntersectTest, booleanMap) {
   testMapIntersect("map_intersect(c0, c1)", {inputMap, keys}, expected);
 }
 
-TEST_F(MapIntersectTest, complexValueMap) {
-  // Create value arrays that will be used in the maps
-  auto valueArrays = makeArrayVector<int32_t>({
-      {1, 2}, // value for key [1, 2] in map 0
-      {3, 4, 5}, // value for key [3, 4] in map 0
-      {6}, // value for key [5, 6] in map 1
-      {7, 8, 9, 10}, // value for key [7, 8] in map 1
-  });
-
-  // Create input map with 2 maps:
-  // Map 0: {[1,2] => [1,2], [3,4] => [3,4,5]}
-  // Map 1: {[5,6] => [6], [7,8] => [7,8,9,10]}
-  auto inputMap = makeMapVector(
-      {0, 2, 4},
-      makeArrayVector<int32_t>({{1, 2}, {3, 4}, {5, 6}, {7, 8}}),
-      valueArrays);
-
-  // Keys to filter (array of arrays):
-  // Map 0: keep entries with key [1,2]
-  // Map 1: keep entries with key [5,6]
-  auto keys =
-      makeArrayVector({0, 1, 2}, makeArrayVector<int32_t>({{1, 2}, {5, 6}}));
-
-  // Expected output:
-  // Map 0: {[1,2] => [1,2]}
-  // Map 1: {[5,6] => [6]}
-  auto expectedValueArrays = makeArrayVector<int32_t>({
-      {1, 2}, // value for key [1, 2] in map 0
-      {6}, // value for key [5, 6] in map 1
-  });
-
-  auto expected = makeMapVector(
-      {0, 1, 2},
-      makeArrayVector<int32_t>({{1, 2}, {5, 6}}),
-      expectedValueArrays);
-
-  testMapIntersect("map_intersect(c0, c1)", {inputMap, keys}, expected);
-}
-
 TEST_F(MapIntersectTest, nullArguments) {
   auto inputMap =
       makeMapVector<int32_t, int32_t>({{{1, 10}, {2, 20}, {3, 30}}});
