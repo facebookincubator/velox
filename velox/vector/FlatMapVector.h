@@ -276,12 +276,17 @@ class FlatMapVector : public BaseVector {
   }
 
   const uint64_t* rawInMapsAt(column_index_t index) const {
-    return inMaps_.size() > index ? inMaps_[index]->as<uint64_t>() : nullptr;
+    if (inMaps_.size() > index && inMaps_[index]) {
+      return inMaps_[index]->as<uint64_t>();
+    }
+    return nullptr;
   }
 
   uint64_t* mutableRawInMapsAt(column_index_t index) {
-    return inMaps_.size() > index ? inMaps_[index]->asMutable<uint64_t>()
-                                  : nullptr;
+    if (inMaps_.size() > index && inMaps_[index]) {
+      return inMaps_[index]->asMutable<uint64_t>();
+    }
+    return nullptr;
   }
 
   using BaseVector::toString;

@@ -674,6 +674,171 @@ TEST_P(EncodedVectorCopyTest, flatMapVector) {
   }
 }
 
+/// Tests copying into an existing FlatMapVector target.
+TEST_P(EncodedVectorCopyTest, flatMapVectorCopyInto) {
+  {
+    SCOPED_TRACE("Copy into same keys");
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 100}, {2, 200}},
+        {{1, 300}, {2, 400}},
+    });
+
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}, {2, 40}},
+        {{1, 50}, {2, 60}},
+    });
+
+    // Copy source rows 0-1 to target rows 1-2.
+    BaseVector::CopyRange range = {0, 1, 2};
+    copy(source, folly::Range(&range, 1), target);
+
+    // Row 0 should be unchanged: {1: 10, 2: 20}
+    // Row 1 should be from source row 0: {1: 100, 2: 200}
+    // Row 2 should be from source row 1: {1: 300, 2: 400}
+    auto expected = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 100}, {2, 200}},
+        {{1, 300}, {2, 400}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Copy into same keys with non-mutable target");
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 100}, {2, 200}},
+        {{1, 300}, {2, 400}},
+    });
+
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 100}, {2, 200}},
+        {{1, 300}, {2, 400}},
+    });
+    auto immutableTarget = target;
+
+    // Copy source rows 0-1 to target rows 1-2.
+    BaseVector::CopyRange range = {0, 1, 2};
+    copy(source, folly::Range(&range, 1), target);
+
+    EXPECT_EQ(target->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(target->size(), 3);
+    ASSERT_NE(target.get(), immutableTarget.get());
+
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 100}, {2, 200}},
+        {{1, 300}, {2, 400}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Copy into different keys");
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{3, 300}, {4, 400}},
+        {{3, 500}},
+    });
+
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}},
+    });
+
+    // Copy source to target rows 2-3.
+    BaseVector::CopyRange range = {0, 2, 2};
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}},
+        {{3, 300}, {4, 400}},
+        {{3, 500}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Copy into different keys with non-mutable target");
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{3, 300}, {4, 400}},
+        {{3, 500}},
+    });
+
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}},
+    });
+    auto immutableTarget = target;
+
+    BaseVector::CopyRange range = {0, 2, 2};
+    copy(source, folly::Range(&range, 1), target);
+
+    EXPECT_EQ(target->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(target->size(), 4);
+    ASSERT_NE(target.get(), immutableTarget.get());
+
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}},
+        {{3, 300}, {4, 400}},
+        {{3, 500}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Overlapping keys");
+
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{2, 200}, {3, 300}},
+    });
+
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}, {2, 40}},
+    });
+
+    // Copy source to target row 1.
+    BaseVector::CopyRange range = {0, 1, 1};
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{2, 200}, {3, 300}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Overlapping keys with non-mutable target");
+
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{2, 200}, {3, 300}},
+    });
+
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{1, 30}, {2, 40}},
+    });
+    auto immutableTarget = target;
+
+    BaseVector::CopyRange range = {0, 1, 1};
+    copy(source, folly::Range(&range, 1), target);
+
+    EXPECT_EQ(target->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(target->size(), 2);
+    ASSERT_NE(target.get(), immutableTarget.get());
+
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{2, 200}, {3, 300}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+}
+
 TEST_P(EncodedVectorCopyTest, flatArray) {
   auto sourceElements = makeFlatVector<int64_t>({1, 2, 3});
   auto targetElements = makeFlatVector<int64_t>({4, 5, 6});
@@ -786,10 +951,15 @@ TEST_P(EncodedVectorCopyTest, fuzzer) {
   }
 }
 
-TEST_P(EncodedVectorCopyTest, fuzzerNewCopy) {
+TEST_P(EncodedVectorCopyTest, fuzzerFlatMapEncoded) {
   VectorFuzzer::Options fuzzerOptions;
-  fuzzerOptions.allowFlatMapVector = true;
   fuzzerOptions.allowLazyVector = reuseSource();
+  fuzzerOptions.allowConstantVector = false;
+  fuzzerOptions.allowDictionaryVector = false;
+  fuzzerOptions.allowFlatMapVector = true;
+  fuzzerOptions.allowLazyVector = false;
+  fuzzerOptions.flatMapRatio = 1.0;
+  fuzzerOptions.normalizeMapKeys = false;
   fuzzerOptions.nullRatio = 0.05;
   auto seed = common::testutil::getRandomSeed(42);
   VectorFuzzer fuzzer(fuzzerOptions, pool(), seed);
@@ -812,8 +982,42 @@ TEST_P(EncodedVectorCopyTest, fuzzerNewCopy) {
           source->slice(range.sourceIndex, range.count), target);
     }
 
-    // Copy does not support copyInto non-null for FlatMapVector. Let's avoid
-    // throwing for these particular cases until there is support.
+    {
+      SCOPED_TRACE("Immutable target");
+      auto immutableSource = fuzzer.fuzz(type);
+      auto immutableTarget = fuzzer.fuzz(type);
+      // auto immutableTarget = fuzzer.fuzzLike(immutableSource);
+      auto actual = immutableTarget;
+      BaseVector::CopyRange immutableRange;
+      immutableRange.sourceIndex =
+          folly::Random::rand32(immutableSource->size() - 1, rng);
+      immutableRange.count = folly::Random::rand32(
+          1, immutableSource->size() - immutableRange.sourceIndex, rng);
+      immutableRange.targetIndex =
+          folly::Random::rand32(0, immutableTarget->size() - 1, rng);
+      copy(immutableSource, folly::Range(&immutableRange, 1), actual);
+      test::assertEqualVectors(
+          immutableSource->slice(
+              immutableRange.sourceIndex, immutableRange.count),
+          actual->slice(immutableRange.targetIndex, immutableRange.count));
+    }
+
+    {
+      SCOPED_TRACE("Mutable target");
+      auto mutableSource = fuzzer.fuzz(type);
+      auto mutableTarget = fuzzer.fuzz(type);
+      BaseVector::CopyRange mutableRange;
+      mutableRange.sourceIndex =
+          folly::Random::rand32(mutableSource->size() - 1, rng);
+      mutableRange.count = folly::Random::rand32(
+          1, mutableSource->size() - mutableRange.sourceIndex, rng);
+      mutableRange.targetIndex =
+          folly::Random::rand32(0, mutableTarget->size() - 1, rng);
+      copy(mutableSource, folly::Range(&mutableRange, 1), mutableTarget);
+      test::assertEqualVectors(
+          mutableSource->slice(mutableRange.sourceIndex, mutableRange.count),
+          mutableTarget->slice(mutableRange.targetIndex, mutableRange.count));
+    }
   }
 }
 
