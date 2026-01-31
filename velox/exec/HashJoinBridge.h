@@ -155,6 +155,18 @@ class HashJoinBridge : public JoinBridge {
     unclaimedRowContainerId_.store(0);
   }
 
+  /// Sets whether build-side rows are being outputted in parallel by all probe
+  /// drivers. This is called by the lastProber after the barrier sync in
+  /// noMoreInputInternal() to communicate the decision to all drivers.
+  void setOutputBuildRowsInParallel(bool value) {
+    outputBuildRowsInParallel_.store(value);
+  }
+
+  /// Returns whether build-side rows are being outputted in parallel.
+  bool outputBuildRowsInParallel() const {
+    return outputBuildRowsInParallel_.load();
+  }
+
  private:
   void appendSpilledHashTablePartitionsLocked(
       SpillPartitionSet&& spillPartitionSet);
@@ -201,6 +213,11 @@ class HashJoinBridge : public JoinBridge {
   // in parallel, drivers call getAndIncrementClaimedRowContainerId() to ensure
   // the row containers they process do not overlap with each other.
   std::atomic_int unclaimedRowContainerId_{0};
+
+  // Whether build-side rows are being outputted in parallel by all probe
+  // drivers. This is set by the lastProber after the barrier sync and read by
+  // all drivers to ensure they use the same decision.
+  std::atomic<bool> outputBuildRowsInParallel_{false};
 
   friend test::HashJoinBridgeTestHelper;
 };
