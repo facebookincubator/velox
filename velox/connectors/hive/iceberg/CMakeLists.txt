@@ -13,28 +13,33 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_hive_iceberg_splitreader
-  IcebergColumnHandle.cpp
-  IcebergConnector.cpp
-  IcebergDataSink.cpp
-  IcebergPartitionName.cpp
+  velox_hive_iceberg_reader
   IcebergSplit.cpp
   IcebergSplitReader.cpp
-  PartitionSpec.cpp
   PositionalDeleteFileReader.cpp
-  TransformEvaluator.cpp
-  TransformExprBuilder.cpp
 )
 
-velox_link_libraries(
-  velox_hive_iceberg_splitreader
-  velox_connector
-  velox_functions_iceberg
-  Folly::folly
-)
+velox_link_libraries(velox_hive_iceberg_reader velox_connector velox_functions_iceberg Folly::folly)
 
 if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_parquet_field_id)
+  velox_add_library(
+    velox_hive_iceberg_writer
+    IcebergColumnHandle.cpp
+    IcebergConnector.cpp
+    IcebergDataSink.cpp
+    IcebergPartitionName.cpp
+    IcebergSplit.cpp
+    PartitionSpec.cpp
+    TransformEvaluator.cpp
+    TransformExprBuilder.cpp
+  )
+  velox_link_libraries(
+    velox_hive_iceberg_writer
+    velox_connector
+    velox_functions_iceberg
+    Folly::folly
+    velox_dwio_parquet_field_id
+  )
 endif()
 
 if(${VELOX_BUILD_TESTING})
