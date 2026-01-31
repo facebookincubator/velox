@@ -17,8 +17,32 @@
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::functions {
+
+/// Sorts elements within each array row and returns the sorted indices.
+/// The returned buffer contains indices that, when used to reorder the
+/// elements, produce a sorted array for each row.
+///
+/// @param rows The rows to process.
+/// @param inputArray The input array vector.
+/// @param inputElements The elements to sort (can be the array's elements or
+/// transformed keys).
+/// @param ascending If true, sort in ascending order; otherwise, descending.
+/// @param nullsFirst If true, nulls are placed first; otherwise, nulls are
+/// placed last.
+/// @param context The evaluation context.
+/// @param throwOnNestedNull If true, throw an exception if a nested null is
+/// encountered during comparison.
+BufferPtr sortElements(
+    const SelectivityVector& rows,
+    const ArrayVector& inputArray,
+    const BaseVector& inputElements,
+    bool ascending,
+    bool nullsFirst,
+    exec::EvalCtx& context,
+    bool throwOnNestedNull);
 
 /// Creates array_sort function.
 ///
