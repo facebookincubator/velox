@@ -87,30 +87,6 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  IcebergInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
-      LocationHandlePtr locationHandle,
-      dwio::common::FileFormat tableStorageFormat,
-      IcebergPartitionSpecPtr partitionSpec,
-      std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {})
-      : IcebergInsertTableHandle(
-            [&inputColumns]() {
-              std::vector<IcebergColumnHandlePtr> icebergColumns;
-              icebergColumns.reserve(inputColumns.size());
-              for (const auto& col : inputColumns) {
-                icebergColumns.push_back(convertToIcebergColumnHandle(col));
-              }
-              return icebergColumns;
-            }(),
-            locationHandle,
-            tableStorageFormat,
-            partitionSpec,
-            compressionKind,
-            serdeParameters) {}
-#endif
-
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
   const IcebergPartitionSpecPtr& partitionSpec() const {
