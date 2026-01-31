@@ -118,7 +118,14 @@ class E2EFilterTestBase : public testing::Test {
   std::vector<RowVectorPtr> makeDataset(
       std::function<void()> customize,
       bool forRowGroupSkip,
-      bool withRecursiveNulls);
+      bool withRecursiveNulls,
+      const std::vector<std::string>& indexColumns = {});
+
+  // Sorts all batches by the specified index columns and returns the sorted
+  // result as a single batch per original batch.
+  std::vector<RowVectorPtr> sortBatchesByIndexColumns(
+      const std::vector<RowVectorPtr>& batches,
+      const std::vector<std::string>& indexColumns);
 
   void makeAllNulls(const std::string& fieldName);
 
@@ -208,7 +215,8 @@ class E2EFilterTestBase : public testing::Test {
   virtual void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip) = 0;
+      bool forRowGroupSkip,
+      const std::vector<std::string>& indexColumns = {}) = 0;
 
   virtual std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
@@ -315,7 +323,8 @@ class E2EFilterTestBase : public testing::Test {
       bool wrapInStruct,
       const std::vector<std::string>& filterable,
       int32_t numCombinations,
-      bool withRecursiveNulls = true);
+      bool withRecursiveNulls = true,
+      const std::vector<std::string>& indexColumns = {});
 
   void testRunLengthDictionaryScenario(
       const std::string& columns,
