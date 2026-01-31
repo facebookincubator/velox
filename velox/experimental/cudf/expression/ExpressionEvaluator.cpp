@@ -506,22 +506,18 @@ class GreatestLeastFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    // construct a chain of min() or max() operations
+    // construct a chain of NULL_MIN or NULL_MAX operations
     std::unique_ptr<cudf::column> result;
     // the first pair of values
     if (literals_[0] && literals_[1]) {
-      // they cannot both be literals
-      // @TODO seves 1/29/26
-      // find a better way to handle this case
-      // maybe sort the inputs to move non-literals to the front?
-      // if ALL the inputs are literals, we can just evaluate right here? how?
-      VELOX_FAIL("Greatest/Least where the first two inputs are both literals is not supported");
+      // no variant of cudf::binary_operation that takes two scalars so we must create columns
+      auto col0 = cudf::make_column_from_scalar(*literals_[0], 1, stream);
+      auto col1 = cudf::make_column_from_scalar(*literals_[1], 1, stream);
+      result = cudf::binary_operation(col0->view(), col1->view(), op_, type_, stream, mr);
     } else if (literals_[0]) {
-      result = cudf::binary_operation(
-          *literals_[0], asView(inputColumns[1]), op_, type_, stream, mr);
+      result = cudf::binary_operation(*literals_[0], asView(inputColumns[1]), op_, type_, stream, mr);
     } else if (literals_[1]) {
-      result = cudf::binary_operation(
-          asView(inputColumns[0]), *literals_[1], op_, type_, stream, mr);
+      result = cudf::binary_operation(asView(inputColumns[0]), *literals_[1], op_, type_, stream, mr);
     } else {
       result = cudf::binary_operation(asView(inputColumns[0]), asView(inputColumns[1]), op_, type_, stream, mr);
     }
