@@ -15,109 +15,70 @@
  */
 
 #include "velox/dwio/text/reader/TextReader.h"
-
-#include <boost/algorithm/string/predicate.hpp>
-#include <string>
-
+#include <glog/logging.h>
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/type/Conversions.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::text {
-namespace {
 
 using common::CompressionKind;
-
-using dwio::common::EOFError;
 using dwio::common::RowReader;
 using dwio::common::verify;
+using folly::AsciiCaseInsensitive;
+using folly::StringPiece;
 
-static constexpr std::string_view kTextfileCompressionExtensionGzip{".gz"};
-static constexpr std::string_view kTextfileCompressionExtensionDeflate{
-    ".deflate"};
-static constexpr std::string_view kTextfileCompressionExtensionZst{".zst"};
-static constexpr std::string_view kTextfileCompressionExtensionLz4{".lz4"};
-static constexpr std::string_view kTextfileCompressionExtensionLzo{".lzo"};
-static constexpr std::string_view kTextfileCompressionExtensionSnappy{
-    ".snappy"};
+constexpr const char* kTextfileCompressionExtensionGzip = ".gz";
+constexpr const char* kTextfileCompressionExtensionDeflate = ".deflate";
+constexpr const char* kTextfileCompressionExtensionZst = ".zst";
+constexpr const char* kTextfileCompressionExtensionLz4 = ".lz4";
+constexpr const char* kTextfileCompressionExtensionLzo = ".lzo";
+constexpr const char* kTextfileCompressionExtensionSnappy = ".snappy";
 
-static std::string emptyString = std::string();
-
+namespace {
 constexpr const int32_t kDecompressionBufferFactor = 3;
 
-void resizeVector(
-    BaseVector* FOLLY_NULLABLE data,
-    const vector_size_t insertionIdx) {
-  if (data == nullptr) {
-    return;
-  }
-
-  auto dataSize = data->size();
-  if (dataSize == 0) {
-    data->resize(10);
-  } else if (dataSize <= insertionIdx) {
-    if (data->type()->kind() == TypeKind::ARRAY) {
-      auto oldSize = dataSize;
-      auto newSize = dataSize * 2;
-      data->resize(newSize);
-
-      auto arrayVector = data->asChecked<ArrayVector>();
-      auto rawOffsets = arrayVector->offsets()->asMutable<vector_size_t>();
-      auto rawSizes = arrayVector->sizes()->asMutable<vector_size_t>();
-
-      auto lastOffset = oldSize > 0 ? rawOffsets[oldSize - 1] : 0;
-      auto lastSize = oldSize > 0 ? rawSizes[oldSize - 1] : 0;
-      auto newOffset = oldSize > 0 ? lastOffset + lastSize : 0;
-
-      for (auto i = oldSize; i < newSize; ++i) {
-        rawSizes[i] = 0;
-        rawOffsets[i] = newOffset;
-      }
-    } else if (data->type()->kind() == TypeKind::MAP) {
-      auto oldSize = dataSize;
-      auto newSize = dataSize * 2;
-      data->resize(newSize);
-
-      auto mapVector = data->asChecked<MapVector>();
-      auto rawOffsets = mapVector->offsets()->asMutable<vector_size_t>();
-      auto rawSizes = mapVector->sizes()->asMutable<vector_size_t>();
-
-      auto lastOffset = oldSize > 0 ? rawOffsets[oldSize - 1] : 0;
-      auto lastSize = oldSize > 0 ? rawSizes[oldSize - 1] : 0;
-      auto newOffset = oldSize > 0 ? lastOffset + lastSize : 0;
-
-      for (auto i = oldSize; i < newSize; ++i) {
-        rawSizes[i] = 0;
-        rawOffsets[i] = newOffset;
-      }
-    } else {
-      data->resize(dataSize * 2);
-    }
-  }
+bool endsWith(const std::string& str, const std::string& suffix) {
+  return str.size() >= suffix.size() &&
+      str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 void setCompressionSettings(
     const std::string& filename,
     CompressionKind& kind,
     dwio::common::compression::CompressionOptions& compressionOptions) {
-  if (filename.ends_with(kTextfileCompressionExtensionLz4) ||
-      filename.ends_with(kTextfileCompressionExtensionLzo) ||
-      filename.ends_with(kTextfileCompressionExtensionSnappy)) {
+  if (endsWith(filename, kTextfileCompressionExtensionLz4) ||
+      endsWith(filename, kTextfileCompressionExtensionLzo) ||
+      endsWith(filename, kTextfileCompressionExtensionSnappy)) {
     VELOX_FAIL("Unsupported compression extension for file: {}", filename);
   }
-  if (filename.ends_with(kTextfileCompressionExtensionGzip)) {
+  if (endsWith(filename, kTextfileCompressionExtensionGzip)) {
     kind = CompressionKind::CompressionKind_GZIP;
-    compressionOptions.format.zlib.windowBits =
-        15; // 2^15-byte deflate window size
-  } else if (filename.ends_with(kTextfileCompressionExtensionDeflate)) {
+    compressionOptions.format.zlib.windowBits = 15;
+  } else if (endsWith(filename, kTextfileCompressionExtensionDeflate)) {
     kind = CompressionKind::CompressionKind_ZLIB;
-    compressionOptions.format.zlib.windowBits =
-        -15; // raw deflate, 2^15-byte window size
-  } else if (filename.ends_with(kTextfileCompressionExtensionZst)) {
+    compressionOptions.format.zlib.windowBits = -15;
+  } else if (endsWith(filename, kTextfileCompressionExtensionZst)) {
     kind = CompressionKind::CompressionKind_ZSTD;
   } else {
     kind = CompressionKind::CompressionKind_NONE;
   }
+}
+
+// Parse boolean using folly's case-insensitive comparison
+std::optional<bool> parseBoolean(std::string_view value) {
+  StringPiece sp(value.data(), value.size());
+  if (sp.equals("TRUE", AsciiCaseInsensitive()) ||
+      sp.equals("true", AsciiCaseInsensitive())) {
+    return true;
+  }
+  if (sp.equals("FALSE", AsciiCaseInsensitive()) ||
+      sp.equals("false", AsciiCaseInsensitive())) {
+    return false;
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -147,47 +108,26 @@ TextRowReader::TextRowReader(
       options_{opts},
       columnSelector_{
           ColumnSelector::apply(opts.selector(), contents_->schema)},
-      currentRow_{0},
       pos_{opts.offset()},
-      atEOL_{false},
-      atEOF_{false},
-      atSOL_{false},
-      atPhysicalEOF_{false},
-      depth_{0},
-      unreadIdx_{0},
       limit_{opts.limit()},
-      fileLength_{getStreamLength()},
       varBinBuf_{
           std::make_shared<dwio::common::DataBuffer<char>>(contents_->pool)} {
-  // Seek to first line at or after the specified region.
   if (contents_->compression == CompressionKind::CompressionKind_NONE) {
-    // TODO: Inconsistent row skipping behavior (kept for Presto compatibility)
-    // Issue: When reading from byte offset > 0, we skip rows inclusively at the
-    // start position, but when reading from byte 0, no rows are skipped. This
-    // creates inconsistent behavior where a row at the boundary may be skipped
-    // when it should be included.
-    //
-    // Example: If pos_ = 10 is the first byte of row 2, that entire row gets
-    // skipped, even though it should be read.
-    //
-    // Proposed fix: streamPosition_ = (pos_ == 0) ? 0 : --pos_;
-    // This would skip rows exclusively of pos_, ensuring consistent behavior.
-    const auto streamPosition_ = pos_;
-
-    contents_->inputStream = contents_->input->read(
-        streamPosition_,
-        contents_->fileLength - streamPosition_,
-        dwio::common::LogType::STREAM);
+    // Create stream with 1MB block size for better I/O efficiency
+    contents_->inputStream =
+        std::make_unique<dwio::common::SeekableFileInputStream>(
+            contents_->input->getInputStream(),
+            pos_,
+            contents_->fileLength - pos_,
+            contents_->pool,
+            dwio::common::LogType::STREAM,
+            kTextBlockSize);
 
     if (pos_ != 0) {
-      unreadData_.clear();
-      (void)skipLine();
+      skipPartialLine_ = true;
     }
-    if (opts.skipRows() > 0) {
-      (void)seekToRow(opts.skipRows());
-    }
+    rowsToSkip_ = opts.skipRows();
   } else {
-    // compressed text files, the first split reads the whole file, rest read 0
     if (pos_ != 0) {
       atEOF_ = true;
     }
@@ -198,9 +138,6 @@ TextRowReader::TextRowReader(
     contents_->decompressedInputStream = createDecompressor(
         contents_->compression,
         std::move(contents_->inputStream),
-        // An estimated value used as the output buffer size for the zlib
-        // decompressor, and as the fallback value of the decompressed length
-        // for other decompressors.
         kDecompressionBufferFactor * contents_->fileLength,
         contents_->pool,
         contents_->compressionOptions,
@@ -209,12 +146,778 @@ TextRowReader::TextRowReader(
         true,
         contents_->fileLength);
 
-    if (opts.skipRows() > 0) {
-      (void)seekToRow(opts.skipRows());
+    rowsToSkip_ = opts.skipRows();
+  }
+
+  // Cache frequently-accessed values for hot path
+  fieldDelim_ = contents_->serDeOptions.separators.at(0);
+  nullString_ = contents_->serDeOptions.nullString;
+  isEscaped_ = contents_->serDeOptions.isEscaped;
+
+  // Initialize precompiled setters for all selected columns
+  initializeColumnSetters();
+}
+
+template <typename T>
+static std::optional<T> parseIntegerWithDecimal(std::string_view str) {
+  if (str.empty()) {
+    return std::nullopt;
+  }
+
+  // Test if first char is acceptable for integer format
+  char c = str[0];
+  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+    return std::nullopt;
+  }
+
+  int64_t v = 0;
+  unsigned long long scanPos = 0;
+  errno = 0;
+
+  // Need null-terminated string for sscanf
+  std::string tmp(str);
+  auto scanCount = sscanf(tmp.c_str(), "%" SCNd64 "%lln", &v, &scanPos);
+  if (scanCount != 1 || errno == ERANGE) {
+    return std::nullopt;
+  }
+
+  // Check remaining chars: only allow decimal point followed by digits
+  if (scanPos < str.size()) {
+    for (size_t i = scanPos; i < str.size(); i++) {
+      if (i == scanPos && str[i] == '.') {
+        continue;
+      }
+      if (str[i] >= '0' && str[i] <= '9') {
+        continue;
+      }
+      // Invalid char (includes 'e' for scientific notation)
+      return std::nullopt;
+    }
+  }
+
+  // Overflow check for smaller integer types
+  if constexpr (!std::is_same_v<T, int64_t>) {
+    if (static_cast<int64_t>(static_cast<T>(v)) != v) {
+      return std::nullopt;
+    }
+  }
+
+  return static_cast<T>(v);
+}
+
+void TextRowReader::initializeColumnSetters() {
+  const auto& fileSchema = contents_->schema;
+  const size_t numColumns = fileSchema->size();
+
+  // Get requested schema for type coercion
+  auto projectSelectedType = options_.projectSelectedType();
+  auto reqSchema =
+      projectSelectedType ? getSelectedType() : TypeWithId::create(getType());
+
+  columnSetters_.resize(numColumns);
+  size_t outputCol = 0;
+
+  for (size_t col = 0; col < numColumns; ++col) {
+    auto colNode = schemaWithId_->childAt(col);
+    if (columnSelector_.shouldReadNode(colNode->id())) {
+      auto fileType = fileSchema->childAt(col);
+      auto reqType = projectSelectedType
+          ? reqSchema->type()->asRow().childAt(outputCol)
+          : reqSchema->type()->asRow().childAt(col);
+
+      // When projectSelectedType is true, output is compacted (0, 1, 2, ...)
+      // When false, output matches file column position (col)
+      size_t targetCol = projectSelectedType ? outputCol : col;
+      columnSetters_[col] =
+          ColumnSetter{targetCol, makeSetter(fileType, reqType)};
+      ++outputCol;
+    }
+    // else: columnSetters_[col] remains nullopt
+  }
+}
+
+template <typename ParseType, typename StoreType>
+static TextRowReader::SetterFunction makeNumericSetter(
+    std::function<std::optional<ParseType>(std::string_view)> parser) {
+  return [parser](BaseVector* data, vector_size_t row, std::string_view value) {
+    if (value.empty()) {
+      data->setNull(row, true);
+      return;
+    }
+    auto result = parser(value);
+    auto* vec = data->as<FlatVector<StoreType>>();
+    if (result.has_value()) {
+      vec->set(row, static_cast<StoreType>(result.value()));
+    } else {
+      vec->setNull(row, true);
+    }
+  };
+}
+
+TextRowReader::SetterFunction TextRowReader::makeSetter(
+    const TypePtr& fileType,
+    const TypePtr& reqType,
+    int depth) {
+  // Handle same-type cases first (most common, no coercion)
+  if (fileType->kind() == reqType->kind() && !reqType->isDate() &&
+      !reqType->isShortDecimal() && !reqType->isLongDecimal()) {
+    switch (fileType->kind()) {
+      case TypeKind::BOOLEAN:
+        return [](BaseVector* data, vector_size_t row, std::string_view value) {
+          if (value.empty()) {
+            data->setNull(row, true);
+            return;
+          }
+          auto result = parseBoolean(value);
+          auto* vec = data->as<FlatVector<bool>>();
+          if (result.has_value())
+            vec->set(row, result.value());
+          else
+            vec->setNull(row, true);
+        };
+
+      case TypeKind::TINYINT:
+        return makeNumericSetter<int8_t, int8_t>(
+            parseIntegerWithDecimal<int8_t>);
+      case TypeKind::SMALLINT:
+        return makeNumericSetter<int16_t, int16_t>(
+            parseIntegerWithDecimal<int16_t>);
+      case TypeKind::INTEGER:
+        return makeNumericSetter<int32_t, int32_t>(
+            parseIntegerWithDecimal<int32_t>);
+      case TypeKind::BIGINT:
+        return makeNumericSetter<int64_t, int64_t>(
+            parseIntegerWithDecimal<int64_t>);
+
+      case TypeKind::REAL:
+        return [](BaseVector* data, vector_size_t row, std::string_view value) {
+          if (value.empty()) {
+            data->setNull(row, true);
+            return;
+          }
+          auto result = folly::tryTo<float>(value);
+          auto* vec = data->as<FlatVector<float>>();
+          if (result.hasValue())
+            vec->set(row, result.value());
+          else
+            vec->setNull(row, true);
+        };
+
+      case TypeKind::DOUBLE:
+        return [](BaseVector* data, vector_size_t row, std::string_view value) {
+          if (value.empty()) {
+            data->setNull(row, true);
+            return;
+          }
+          auto result = folly::tryTo<double>(value);
+          auto* vec = data->as<FlatVector<double>>();
+          if (result.hasValue())
+            vec->set(row, result.value());
+          else
+            vec->setNull(row, true);
+        };
+
+      case TypeKind::VARCHAR:
+        if (isEscaped_) {
+          return
+              [this](
+                  BaseVector* data, vector_size_t row, std::string_view value) {
+                auto* vec = data->as<FlatVector<StringView>>();
+                std::string unescaped = unescapeValue(value);
+                vec->set(row, StringView(unescaped));
+              };
+        } else {
+          return
+              [](BaseVector* data, vector_size_t row, std::string_view value) {
+                auto* vec = data->as<FlatVector<StringView>>();
+                vec->set(row, StringView(value.data(), value.size()));
+              };
+        }
+
+      case TypeKind::VARBINARY:
+        return [this](
+                   BaseVector* data,
+                   vector_size_t row,
+                   std::string_view value) {
+          if (value.empty()) {
+            data->setNull(row, true);
+            return;
+          }
+          auto* vec = data->as<FlatVector<StringView>>();
+          size_t len = value.size();
+          auto blen = encoding::Base64::calculateDecodedSize(value.data(), len);
+          if (blen.hasValue()) {
+            varBinBuf_->resize(blen.value());
+            Status status = encoding::Base64::decode(
+                value.data(), value.size(), varBinBuf_->data(), blen.value());
+            if (status.ok()) {
+              vec->set(row, StringView(varBinBuf_->data(), blen.value()));
+              return;
+            }
+          }
+          vec->set(row, StringView(value.data(), value.size()));
+        };
+
+      case TypeKind::TIMESTAMP:
+        return [](BaseVector* data, vector_size_t row, std::string_view value) {
+          if (value.empty()) {
+            data->setNull(row, true);
+            return;
+          }
+          auto* vec = data->as<FlatVector<Timestamp>>();
+          std::string temp(value);
+          auto result = util::Converter<TypeKind::TIMESTAMP>::tryCast(temp);
+          if (result.hasValue())
+            vec->set(row, result.value());
+          else
+            vec->setNull(row, true);
+        };
+
+      default:
+        break; // Fall through to complex types / coercion
+    }
+  }
+
+  // INTEGER -> DATE
+  if (fileType->kind() == TypeKind::INTEGER && reqType->isDate()) {
+    return [](BaseVector* data, vector_size_t row, std::string_view value) {
+      if (value.empty()) {
+        data->setNull(row, true);
+        return;
+      }
+      auto* vec = data->as<FlatVector<int32_t>>();
+      auto result = util::fromDateString(
+          value.data(), value.size(), util::ParseMode::kPrestoCast);
+      if (result.hasError()) {
+        result = util::fromDateString(
+            value.data(), value.size(), util::ParseMode::kSparkCast);
+      }
+      if (!result.hasError())
+        vec->set(row, result.value());
+      else
+        vec->setNull(row, true);
+    };
+  }
+
+  // Integer widening coercions
+  if (fileType->kind() == TypeKind::TINYINT) {
+    if (reqType->kind() == TypeKind::SMALLINT)
+      return makeNumericSetter<int8_t, int16_t>(
+          parseIntegerWithDecimal<int8_t>);
+    if (reqType->kind() == TypeKind::INTEGER)
+      return makeNumericSetter<int8_t, int32_t>(
+          parseIntegerWithDecimal<int8_t>);
+    if (reqType->kind() == TypeKind::BIGINT)
+      return makeNumericSetter<int8_t, int64_t>(
+          parseIntegerWithDecimal<int8_t>);
+  }
+  if (fileType->kind() == TypeKind::SMALLINT) {
+    if (reqType->kind() == TypeKind::INTEGER)
+      return makeNumericSetter<int16_t, int32_t>(
+          parseIntegerWithDecimal<int16_t>);
+    if (reqType->kind() == TypeKind::BIGINT)
+      return makeNumericSetter<int16_t, int64_t>(
+          parseIntegerWithDecimal<int16_t>);
+  }
+  if (fileType->kind() == TypeKind::INTEGER &&
+      reqType->kind() == TypeKind::BIGINT) {
+    return makeNumericSetter<int32_t, int64_t>(
+        parseIntegerWithDecimal<int32_t>);
+  }
+
+  // REAL -> DOUBLE
+  if (fileType->kind() == TypeKind::REAL &&
+      reqType->kind() == TypeKind::DOUBLE) {
+    return [](BaseVector* data, vector_size_t row, std::string_view value) {
+      if (value.empty()) {
+        data->setNull(row, true);
+        return;
+      }
+      auto result = folly::tryTo<float>(value);
+      auto* vec = data->as<FlatVector<double>>();
+      if (result.hasValue())
+        vec->set(row, static_cast<double>(result.value()));
+      else
+        vec->setNull(row, true);
+    };
+  }
+
+  // BOOLEAN -> integer coercions
+  if (fileType->kind() == TypeKind::BOOLEAN) {
+    auto boolToInt = [](std::string_view value) -> std::optional<int64_t> {
+      auto result = parseBoolean(value);
+      return result.has_value() ? std::optional<int64_t>(result.value() ? 1 : 0)
+                                : std::nullopt;
+    };
+    if (reqType->kind() == TypeKind::TINYINT)
+      return makeNumericSetter<int64_t, int8_t>(boolToInt);
+    if (reqType->kind() == TypeKind::SMALLINT)
+      return makeNumericSetter<int64_t, int16_t>(boolToInt);
+    if (reqType->kind() == TypeKind::INTEGER)
+      return makeNumericSetter<int64_t, int32_t>(boolToInt);
+    if (reqType->kind() == TypeKind::BIGINT)
+      return makeNumericSetter<int64_t, int64_t>(boolToInt);
+  }
+
+  // BIGINT -> SHORT_DECIMAL
+  if (fileType->kind() == TypeKind::BIGINT && reqType->isShortDecimal()) {
+    auto decimalParams = getDecimalPrecisionScale(*reqType);
+    return [decimalParams](
+               BaseVector* data, vector_size_t row, std::string_view value) {
+      if (value.empty()) {
+        data->setNull(row, true);
+        return;
+      }
+      auto* vec = data->as<FlatVector<int64_t>>();
+      int64_t v = 0;
+      auto status = DecimalUtil::castFromString(
+          StringView(value.data(), static_cast<int32_t>(value.size())),
+          decimalParams.first,
+          decimalParams.second,
+          v);
+      if (status.ok())
+        vec->set(row, v);
+      else
+        vec->setNull(row, true);
+    };
+  }
+
+  // HUGEINT / LONG_DECIMAL
+  if (fileType->kind() == TypeKind::HUGEINT) {
+    if (reqType->isLongDecimal()) {
+      auto decimalParams = getDecimalPrecisionScale(*reqType);
+      return [decimalParams](
+                 BaseVector* data, vector_size_t row, std::string_view value) {
+        if (value.empty()) {
+          data->setNull(row, true);
+          return;
+        }
+        auto* vec = data->as<FlatVector<int128_t>>();
+        int128_t v = 0;
+        auto status = DecimalUtil::castFromString(
+            StringView(value.data(), static_cast<int32_t>(value.size())),
+            decimalParams.first,
+            decimalParams.second,
+            v);
+        if (status.ok())
+          vec->set(row, v);
+        else
+          vec->setNull(row, true);
+      };
+    } else {
+      return [](BaseVector* data, vector_size_t row, std::string_view value) {
+        if (value.empty()) {
+          data->setNull(row, true);
+          return;
+        }
+        auto* vec = data->as<FlatVector<int128_t>>();
+        std::string temp(value);
+        try {
+          vec->set(row, HugeInt::parse(temp));
+        } catch (...) {
+          vec->setNull(row, true);
+        }
+      };
+    }
+  }
+
+  // Complex types: ARRAY, MAP, ROW - create recursive setters with depth-based
+  // delimiters
+  if (fileType->kind() == TypeKind::ARRAY) {
+    char elemDelim = contents_->serDeOptions.separators.at(depth);
+    auto elementSetter =
+        makeSetter(fileType->childAt(0), reqType->childAt(0), depth + 1);
+    return [this, elemDelim, elementSetter](
+               BaseVector* data, vector_size_t row, std::string_view value) {
+      writeArrayWithSetter(
+          data->as<ArrayVector>(), row, value, elemDelim, elementSetter);
+    };
+  }
+
+  if (fileType->kind() == TypeKind::MAP) {
+    char pairDelim = contents_->serDeOptions.separators.at(depth);
+    char kvDelim = contents_->serDeOptions.separators.at(depth + 1);
+    auto keySetter =
+        makeSetter(fileType->childAt(0), reqType->childAt(0), depth + 2);
+    auto valueSetter =
+        makeSetter(fileType->childAt(1), reqType->childAt(1), depth + 2);
+    return [this, pairDelim, kvDelim, keySetter, valueSetter](
+               BaseVector* data, vector_size_t row, std::string_view value) {
+      writeMapWithSetters(
+          data->as<MapVector>(),
+          row,
+          value,
+          pairDelim,
+          kvDelim,
+          keySetter,
+          valueSetter);
+    };
+  }
+
+  if (fileType->kind() == TypeKind::ROW) {
+    char fieldDelim = contents_->serDeOptions.separators.at(depth);
+    const auto& fileRowType = fileType->asRow();
+    const auto& reqRowType = reqType->asRow();
+    std::vector<SetterFunction> childSetters;
+    for (size_t i = 0; i < fileRowType.size(); ++i) {
+      childSetters.push_back(
+          makeSetter(fileRowType.childAt(i), reqRowType.childAt(i), depth + 1));
+    }
+    return [this, fieldDelim, childSetters = std::move(childSetters)](
+               BaseVector* data, vector_size_t row, std::string_view value) {
+      writeRowWithSetters(
+          data->as<RowVector>(), row, value, fieldDelim, childSetters);
+    };
+  }
+
+  VELOX_FAIL(
+      "Unsupported type coercion: {} -> {}",
+      fileType->toString(),
+      reqType->toString());
+}
+
+bool TextRowReader::loadBuffer() {
+  // Get next chunk from stream - ZERO COPY, just get pointer
+  const void* data = nullptr;
+  int length = 0;
+  bool hasData = false;
+
+  if (contents_->compression != CompressionKind::CompressionKind_NONE) {
+    hasData = contents_->decompressedInputStream->Next(&data, &length);
+    atPhysicalEOF_ = !hasData;
+  } else {
+    hasData = contents_->inputStream->Next(&data, &length);
+  }
+
+  if (!hasData || length <= 0) {
+    return false; // EOF - no more data available
+  }
+
+  // Zero-copy: just point to stream's buffer
+  streamData_ = reinterpret_cast<const char*>(data);
+  streamSize_ = length;
+  streamPos_ = 0;
+  return true;
+}
+
+std::pair<size_t, std::string_view> TextRowReader::findLine() {
+  // Search for '\n' in current stream buffer
+  if (streamPos_ >= static_cast<size_t>(streamSize_)) {
+    return {std::string::npos, {}};
+  }
+
+  const char* remaining = streamData_ + streamPos_;
+  size_t remainingSize = streamSize_ - streamPos_;
+  const char* found =
+      reinterpret_cast<const char*>(memchr(remaining, '\n', remainingSize));
+
+  if (!found) {
+    return {std::string::npos, {}};
+  }
+
+  size_t lineEnd = found - streamData_;
+  size_t lineLen = lineEnd - streamPos_;
+
+  // If we have leftover from previous chunk, combine it
+  if (!leftover_.empty()) {
+    leftover_.append(remaining, lineLen);
+    return {lineEnd, std::string_view(leftover_)};
+  }
+
+  // Zero-copy: return view directly into stream buffer
+  return {lineEnd, std::string_view(remaining, lineLen)};
+}
+
+void TextRowReader::skipToNextLine() {
+  while (true) {
+    auto [lineEnd, line] = findLine();
+    if (lineEnd != std::string::npos) {
+      size_t bytesSkipped = lineEnd - streamPos_ + 1;
+      streamPos_ = lineEnd + 1;
+      pos_ += bytesSkipped;
+      leftover_.clear();
+      return;
+    }
+
+    // No '\n' found - discard and load more (we're skipping, don't need
+    // leftover)
+    pos_ += streamSize_ - streamPos_;
+    leftover_.clear();
+
+    if (!loadBuffer()) {
+      atEOF_ = true;
+      return;
     }
   }
 }
 
+size_t TextRowReader::findDelimiter(
+    std::string_view str,
+    char delim,
+    size_t start) const {
+  if (!contents_->serDeOptions.isEscaped) {
+    return str.find(delim, start);
+  }
+
+  const char escapeChar = contents_->serDeOptions.escapeChar;
+  size_t pos = start;
+
+  while (pos < str.size()) {
+    size_t found = str.find(delim, pos);
+    if (found == std::string_view::npos || found == 0) {
+      return found;
+    }
+
+    size_t escapeCount = 0;
+    size_t checkPos = found;
+    while (checkPos > start && str[checkPos - 1] == escapeChar) {
+      escapeCount++;
+      checkPos--;
+    }
+
+    if (escapeCount % 2 == 1) {
+      pos = found + 1;
+      continue;
+    }
+    return found;
+  }
+  return std::string_view::npos;
+}
+
+bool TextRowReader::isNullValue(std::string_view value) const {
+  return value == contents_->serDeOptions.nullString;
+}
+
+std::string TextRowReader::unescapeValue(std::string_view value) const {
+  if (!contents_->serDeOptions.isEscaped) {
+    return std::string(value);
+  }
+
+  std::string result;
+  result.reserve(value.size());
+  const char escapeChar = contents_->serDeOptions.escapeChar;
+
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (value[i] == escapeChar && i + 1 < value.size()) {
+      char next = value[i + 1];
+      switch (next) {
+        case 'r':
+          result.push_back('\r');
+          break;
+        case 'n':
+          result.push_back('\n');
+          break;
+        default:
+          result.push_back(next);
+          break;
+      }
+      ++i;
+    } else {
+      result.push_back(value[i]);
+    }
+  }
+  return result;
+}
+
+void TextRowReader::processLine(
+    RowVector* result,
+    vector_size_t row,
+    std::string_view line) {
+  const size_t numColumns = columnSetters_.size();
+
+  size_t fieldStart = 0;
+
+  for (size_t col = 0; col < numColumns; ++col) {
+    size_t fieldEnd = findDelimiter(line, fieldDelim_, fieldStart);
+    bool isLast = (fieldEnd == std::string_view::npos);
+
+    // Check if this column has a precompiled setter (i.e., is selected)
+    if (const auto& setterOpt = columnSetters_[col]) {
+      std::string_view fieldValue = isLast
+          ? line.substr(fieldStart)
+          : line.substr(fieldStart, fieldEnd - fieldStart);
+
+      // Check for null
+      if (fieldValue == nullString_) {
+        result->childAt(setterOpt->outputIndex)->setNull(row, true);
+      } else {
+        // Use precompiled setter - no type dispatch!
+        setterOpt->setter(
+            result->childAt(setterOpt->outputIndex).get(), row, fieldValue);
+      }
+    }
+
+    if (isLast) {
+      // Handle missing columns (set remaining selected columns to null)
+      for (size_t i = col + 1; i < numColumns; ++i) {
+        if (const auto& s = columnSetters_[i]) {
+          result->childAt(s->outputIndex)->setNull(row, true);
+        }
+      }
+      break;
+    }
+    fieldStart = fieldEnd + 1;
+  }
+}
+
+void TextRowReader::writeArrayWithSetter(
+    ArrayVector* arrayVec,
+    vector_size_t row,
+    std::string_view value,
+    char elemDelim,
+    const SetterFunction& elementSetter) {
+  // Parse elements
+  std::vector<std::string_view> elements;
+  size_t pos = 0;
+  while (pos <= value.size()) {
+    size_t end = findDelimiter(value, elemDelim, pos);
+    bool isLast = (end == std::string_view::npos);
+    elements.push_back(
+        isLast ? value.substr(pos) : value.substr(pos, end - pos));
+    if (isLast)
+      break;
+    pos = end + 1;
+  }
+
+  // Set up offsets
+  auto* rawOffsets = arrayVec->offsets()->asMutable<vector_size_t>();
+  auto* rawSizes = arrayVec->sizes()->asMutable<vector_size_t>();
+
+  vector_size_t startOffset =
+      row > 0 ? rawOffsets[row - 1] + rawSizes[row - 1] : 0;
+  rawOffsets[row] = startOffset;
+  rawSizes[row] = static_cast<vector_size_t>(elements.size());
+
+  // Resize elements vector
+  auto* elementsVec = arrayVec->elements().get();
+  if (elementsVec->size() <
+      startOffset + static_cast<vector_size_t>(elements.size())) {
+    elementsVec->resize(startOffset + elements.size());
+  }
+
+  // Use precompiled setter for each element
+  for (size_t i = 0; i < elements.size(); ++i) {
+    const auto& elem = elements[i];
+    if (elem == nullString_) {
+      elementsVec->setNull(startOffset + i, true);
+    } else {
+      elementSetter(elementsVec, startOffset + i, elem);
+    }
+  }
+}
+
+void TextRowReader::writeMapWithSetters(
+    MapVector* mapVec,
+    vector_size_t row,
+    std::string_view value,
+    char pairDelim,
+    char kvDelim,
+    const SetterFunction& keySetter,
+    const SetterFunction& valueSetter) {
+  // Parse key-value pairs
+  std::vector<std::pair<std::string_view, std::string_view>> pairs;
+  size_t pos = 0;
+  while (pos <= value.size()) {
+    size_t pairEnd = findDelimiter(value, pairDelim, pos);
+    bool isLast = (pairEnd == std::string_view::npos);
+    std::string_view pair =
+        isLast ? value.substr(pos) : value.substr(pos, pairEnd - pos);
+
+    size_t kvSep = findDelimiter(pair, kvDelim, 0);
+    if (kvSep != std::string_view::npos) {
+      pairs.emplace_back(pair.substr(0, kvSep), pair.substr(kvSep + 1));
+    } else {
+      pairs.emplace_back(pair, std::string_view{});
+    }
+
+    if (isLast)
+      break;
+    pos = pairEnd + 1;
+  }
+
+  // Set up offsets
+  auto* rawOffsets = mapVec->offsets()->asMutable<vector_size_t>();
+  auto* rawSizes = mapVec->sizes()->asMutable<vector_size_t>();
+
+  vector_size_t startOffset =
+      row > 0 ? rawOffsets[row - 1] + rawSizes[row - 1] : 0;
+  rawOffsets[row] = startOffset;
+  rawSizes[row] = static_cast<vector_size_t>(pairs.size());
+
+  // Resize key/value vectors
+  auto* keysVec = mapVec->mapKeys().get();
+  auto* valuesVec = mapVec->mapValues().get();
+  if (keysVec->size() <
+      startOffset + static_cast<vector_size_t>(pairs.size())) {
+    keysVec->resize(startOffset + pairs.size());
+    valuesVec->resize(startOffset + pairs.size());
+  }
+
+  // Use precompiled setters
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const auto& [k, v] = pairs[i];
+    if (k == nullString_) {
+      keysVec->setNull(startOffset + i, true);
+    } else {
+      keySetter(keysVec, startOffset + i, k);
+    }
+    if (v == nullString_ || v.empty()) {
+      valuesVec->setNull(startOffset + i, true);
+    } else {
+      valueSetter(valuesVec, startOffset + i, v);
+    }
+  }
+}
+
+void TextRowReader::writeRowWithSetters(
+    RowVector* rowVec,
+    vector_size_t row,
+    std::string_view value,
+    char fieldDelim,
+    const std::vector<SetterFunction>& fieldSetters) {
+  const size_t numFields = fieldSetters.size();
+
+  size_t fieldStart = 0;
+  for (size_t i = 0; i < numFields; ++i) {
+    size_t fieldEnd = findDelimiter(value, fieldDelim, fieldStart);
+    bool isLast = (fieldEnd == std::string_view::npos);
+
+    std::string_view fieldValue = isLast
+        ? value.substr(fieldStart)
+        : value.substr(fieldStart, fieldEnd - fieldStart);
+
+    auto* childVec = rowVec->childAt(i).get();
+    if (childVec) {
+      if (fieldValue == nullString_) {
+        childVec->setNull(row, true);
+      } else {
+        fieldSetters[i](childVec, row, fieldValue);
+      }
+    }
+
+    if (isLast) {
+      // Remaining fields are null
+      for (size_t j = i + 1; j < numFields; ++j) {
+        auto* remainingVec = rowVec->childAt(j).get();
+        if (remainingVec) {
+          remainingVec->setNull(row, true);
+        }
+      }
+      break;
+    }
+    fieldStart = fieldEnd + 1;
+  }
+}
+
+// TODO: Performance optimizations to consider:
+// 1. Reuse result vector directly instead of creating intermediate rowVecPtr
+//    - Use ScanSpec::channel() for direct output mapping
+//    - Avoid projectColumns() overhead when no filtering needed
+// 3. Handle constant columns (partition columns) via constantColumnVectors_
+// 4. Consider inline filtering for filter pushdown without intermediate vector
+//    - Parse all fields, apply filter, only write passing rows
+// Note: Current implementation uses intermediate vector + projectColumns()
+// to support filter pushdown on non-projected columns.
 uint64_t TextRowReader::next(
     uint64_t rows,
     VectorPtr& result,
@@ -237,78 +940,75 @@ uint64_t TextRowReader::next(
       "Top-level TypeKind of schema is not Row for file %s",
       getStreamNameData());
 
-  auto childCount = t->size();
-  auto reqChildCount = reqT->size();
-
-  // create top level RowVector
   auto rowVecPtr = BaseVector::create<RowVector>(
-      reqT->type(), (vector_size_t)rows, &contents_->pool);
+      reqT->type(), static_cast<vector_size_t>(rows), &contents_->pool);
+
+  // Handle deferred skip from constructor
+  if (skipPartialLine_) {
+    skipToNextLine();
+    skipPartialLine_ = false;
+  }
+
+  while (rowsToSkip_ > 0 && !atEOF_) {
+    skipToNextLine();
+    --rowsToSkip_;
+  }
 
   vector_size_t rowsRead = 0;
-  const auto initialPos = pos_;
-  while (!atEOF_ && rowsRead < rows) {
-    resetLine();
-    uint64_t colIndex = 0;
-    for (vector_size_t i = 0; i < childCount; i++) {
-      if (colIndex >= reqT->size()) {
+
+  while (rowsRead < static_cast<vector_size_t>(rows)) {
+    auto [lineEnd, line] = findLine();
+
+    if (lineEnd == std::string::npos) {
+      // No '\n' found - save partial line to leftover and load more
+      size_t remaining = streamSize_ - streamPos_;
+      if (remaining > 0) {
+        leftover_.append(streamData_ + streamPos_, remaining);
+      }
+      pos_ += remaining;
+
+      if (!loadBuffer()) {
+        // EOF - process remaining data as last line
+        if (!leftover_.empty()) {
+          std::string_view lastLine(leftover_);
+          if (!lastLine.empty() && lastLine.back() == '\r') {
+            lastLine.remove_suffix(1);
+          }
+          processLine(rowVecPtr.get(), rowsRead, lastLine);
+          ++rowsRead;
+          ++currentRow_;
+          leftover_.clear();
+        }
+        atEOF_ = true;
         break;
       }
-
-      DelimType delim = DelimTypeNone;
-      const auto& ct = t->childAt(i);
-      const auto& rct = reqT->childAt(i);
-      auto childVector = rowVecPtr->childAt(i).get();
-
-      if (isSelectedField(ct)) {
-        ++colIndex;
-      } else if (colIndex < reqChildCount && !projectSelectedType) {
-        // not selected and not projecting: set to null
-        if (childVector != nullptr) {
-          rowVecPtr->setNull(i, true);
-          childVector = nullptr;
-        }
-        ++colIndex;
-      } else {
-        // not selected and projecting: just discard the field
-        childVector = nullptr;
-      }
-
-      resizeVector(childVector, rowsRead);
-      readElement(ct->type(), rct->type(), childVector, rowsRead, delim);
+      // Loop back to search for '\n' in the newly loaded data.
+      // This handles very long lines that span multiple I/O chunks.
+      continue;
     }
 
-    // set null property
-    for (uint64_t i = colIndex; i < reqChildCount; i++) {
-      auto childVector = rowVecPtr->childAt(i).get();
-
-      if (childVector != nullptr) {
-        rowVecPtr->setNull(static_cast<vector_size_t>(i), true);
-      }
+    // Found '\n' - process the line
+    // Handle \r\n line endings
+    if (!line.empty() && line.back() == '\r') {
+      line.remove_suffix(1);
     }
-    (void)skipLine();
-    ++currentRow_;
+
+    size_t bytesConsumed = lineEnd - streamPos_ + 1;
+    streamPos_ = lineEnd + 1;
+    pos_ += bytesConsumed;
+    leftover_.clear(); // Clear leftover after successful line
+
+    processLine(rowVecPtr.get(), rowsRead, line);
     ++rowsRead;
+    ++currentRow_;
 
-    bool eof = false;
-    if (contents_->compression == CompressionKind::CompressionKind_NONE) {
-      eof = pos_ >= getLength();
-    } else if (atPhysicalEOF_) {
-      eof = pos_ >= contents_->decompressedInputStream->ByteCount();
-    }
-
-    if (eof) {
-      setEOF();
-    }
-
-    // handle empty file
-    if (initialPos == pos_ && atEOF_) {
-      currentRow_ = 0;
-      rowsRead = 0;
+    if (contents_->compression == CompressionKind::CompressionKind_NONE &&
+        pos_ > limit_) {
+      atEOF_ = true;
+      break;
     }
   }
 
-  // Resize the row vector to the actual number of rows read.
-  // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(rowsRead);
   result = projectColumns(rowVecPtr, *scanSpec_, mutation);
 
@@ -320,7 +1020,9 @@ int64_t TextRowReader::nextRowNumber() {
 }
 
 int64_t TextRowReader::nextReadSize(uint64_t size) {
-  return static_cast<int64_t>(std::min(fileLength_ - currentRow_, size));
+  // Text files don't have row count metadata like Parquet/DWRF,
+  // so we just return the requested size (or -1 if at EOF).
+  return atEOF_ ? -1 : static_cast<int64_t>(size);
 }
 
 void TextRowReader::updateRuntimeStats(
@@ -354,12 +1056,10 @@ uint64_t TextRowReader::getRowNumber() const {
 uint64_t TextRowReader::seekToRow(uint64_t rowNumber) {
   VELOX_CHECK_GT(
       rowNumber, currentRow_, "Text file cannot seek to earlier row");
-
-  while (currentRow_ < rowNumber && !skipLine()) {
-    currentRow_++;
-    resetLine();
+  while (currentRow_ < rowNumber && !atEOF_) {
+    skipToNextLine();
+    ++currentRow_;
   }
-
   return currentRow_;
 }
 
@@ -368,1174 +1068,21 @@ const RowReaderOptions& TextRowReader::getDefaultOpts() {
   return defaultOpts;
 }
 
+const std::shared_ptr<const RowType>& TextRowReader::getType() const {
+  return contents_->schema;
+}
+
 bool TextRowReader::isSelectedField(
     const std::shared_ptr<const TypeWithId>& type) {
-  auto ci = type->id();
-  return columnSelector_.shouldReadNode(ci);
+  return columnSelector_.shouldReadNode(type->id());
 }
 
 const char* TextRowReader::getStreamNameData() const {
   return contents_->input->getName().data();
 }
 
-uint64_t TextRowReader::getLength() {
-  if (fileLength_ == std::numeric_limits<uint64_t>::max()) {
-    fileLength_ = getStreamLength();
-  }
-  return fileLength_;
-}
-
 uint64_t TextRowReader::getStreamLength() const {
   return contents_->input->getInputStream()->getLength();
-}
-
-void TextRowReader::setEOF() {
-  atEOF_ = true;
-  atEOL_ = true;
-}
-
-/// TODO: Update maximum depth after fixing issue with deeply nested complex
-/// types
-void TextRowReader::incrementDepth() {
-  if (depth_ > 4) {
-    dwio::common::parse_error("Schema nesting too deep");
-  }
-  depth_++;
-}
-
-void TextRowReader::decrementDepth(DelimType& delim) {
-  if (depth_ == 0) {
-    dwio::common::logic_error("Attempt to decrement nesting depth of 0");
-  }
-  depth_--;
-  auto d = depth_ + DelimTypeEOR;
-  if (delim > d) {
-    setNone(delim);
-  }
-}
-
-void TextRowReader::setEOE(DelimType& delim) {
-  // Set delim if it is currently None or a more deeply
-  // delimiter, to simply the code where aggregates
-  // parse nested aggregates.
-  auto d = depth_ + DelimTypeEOE;
-  if (isNone(delim) || d < delim) {
-    delim = d;
-  }
-}
-
-void TextRowReader::resetEOE(DelimType& delim) {
-  // Reset delim it is EOE or above.
-  auto d = depth_ + DelimTypeEOE;
-  if (delim >= d) {
-    setNone(delim);
-  }
-}
-
-bool TextRowReader::isEOE(DelimType delim) {
-  // Test if delim is the EOE at the current depth.
-  return (delim == (depth_ + DelimTypeEOE));
-}
-
-void TextRowReader::setEOR(DelimType& delim) {
-  // Set delim if it is currently None or a more
-  // deeply nested delimiter.
-  auto d = depth_ + DelimTypeEOR;
-  if (isNone(delim) || delim > d) {
-    delim = d;
-  }
-}
-
-bool TextRowReader::isEOR(DelimType delim) {
-  // Return true if delim is the EOR for the current depth
-  // or a less deeply nested depth.
-  return (delim != DelimTypeNone && delim <= (depth_ + DelimTypeEOR));
-}
-
-bool TextRowReader::isOuterEOR(DelimType delim) {
-  // Return true if delim is the EOR for the enclosing object.
-  // For example, when parsing ARRAY elements, which leave delim
-  // set to the EOR for their depth on return, isOuterEOR will
-  // return true if we have reached the ARRAY EOR delimiter at
-  // the end of the latest element.
-  return (delim != DelimTypeNone && delim < (depth_ + DelimTypeEOR));
-}
-
-bool TextRowReader::isEOEorEOR(DelimType delim) {
-  return (!isNone(delim) && delim <= (depth_ + DelimTypeEOE));
-}
-
-void TextRowReader::setNone(DelimType& delim) {
-  delim = DelimTypeNone;
-}
-
-bool TextRowReader::isNone(DelimType delim) {
-  return (delim == DelimTypeNone);
-}
-
-std::string&
-TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
-  if (th.atEOL_) {
-    delim = DelimTypeEOR; // top-level EOR
-  }
-
-  if (th.isEOEorEOR(delim)) {
-    isNull = true;
-    return emptyString;
-  }
-
-  bool wasEscaped = false;
-  th.ownedString_.clear();
-
-  // Processing has to be done character by characater instad of chunk by chunk.
-  // This is to avoid edge case handling if escape character(s) are cut off at
-  // the end of the chunk.
-  while (true) {
-    auto v = th.getByteOptimized(delim);
-    if (!th.isNone(delim)) {
-      break;
-    }
-
-    if (th.contents_->serDeOptions.isEscaped &&
-        v == th.contents_->serDeOptions.escapeChar) {
-      wasEscaped = true;
-      th.ownedString_.append(1, static_cast<char>(v));
-      v = th.getByteUncheckedOptimized(delim);
-      if (!th.isNone(delim)) {
-        break;
-      }
-    }
-    th.ownedString_.append(1, static_cast<char>(v));
-  }
-
-  if (th.ownedString_ == th.contents_->serDeOptions.nullString) {
-    isNull = true;
-    return emptyString;
-  }
-
-  if (wasEscaped) {
-    // We need to copy the data byte by byte only if there is at least one
-    // escaped byte.
-    uint64_t j = 0;
-    for (uint64_t i = 0; i < th.ownedString_.length(); i++) {
-      if (th.ownedString_[i] == th.contents_->serDeOptions.escapeChar &&
-          i < th.ownedString_.length() - 1) {
-        // Check if it's '\r' or '\n'.
-        i++;
-        if (th.ownedString_[i] == 'r') {
-          th.ownedString_[j++] = '\r';
-        } else if (th.ownedString_[i] == 'n') {
-          th.ownedString_[j++] = '\n';
-        } else {
-          // Keep the next byte.
-          th.ownedString_[j++] = th.ownedString_[i];
-        }
-      } else {
-        th.ownedString_[j++] = th.ownedString_[i];
-      }
-    }
-    th.ownedString_.resize(j);
-  }
-
-  return th.ownedString_;
-}
-
-template <class T>
-void TextRowReader::setValueFromString(
-    const std::string& str,
-    BaseVector* data,
-    vector_size_t insertionRow,
-    std::function<std::optional<T>(const std::string&)> convert) {
-  if ((atEOF_ && atSOL_) || data == nullptr) {
-    return;
-  }
-  auto flatVector = data->asChecked<FlatVector<T>>();
-  auto result = str.empty() ? std::nullopt : convert(str);
-  if (result) {
-    flatVector->set(insertionRow, *result);
-  } else {
-    flatVector->setNull(insertionRow, true);
-  }
-}
-
-uint8_t TextRowReader::getByteOptimized(DelimType& delim) {
-  setNone(delim);
-  auto v = getByteUncheckedOptimized(delim);
-  if (isNone(delim)) {
-    if (v == '\r') {
-      v = getByteUncheckedOptimized<true>(
-          delim); // always returns '\n' in this case
-    }
-    delim = getDelimType(v);
-  }
-  return v;
-}
-
-DelimType TextRowReader::getDelimType(uint8_t v) {
-  DelimType delim = DelimTypeNone;
-
-  if (v == '\n') {
-    atEOL_ = true;
-    delim = DelimTypeEOR; // top level EOR
-
-    /// TODO: Logically should be >=, kept as it is to align with presto reader.
-    if (pos_ > limit_) {
-      atEOF_ = true;
-      delim = DelimTypeEOR;
-    }
-  } else if (v == contents_->serDeOptions.separators.at(depth_)) {
-    setEOE(delim);
-  } else {
-    setNone(delim);
-    uint64_t i = depth_;
-    while (i > 0) {
-      i--;
-      if (v == contents_->serDeOptions.separators.at(i)) {
-        delim = i + DelimTypeEOR; // level-based EOR
-        break;
-      }
-    }
-  }
-  return delim;
-}
-
-template <bool skipLF>
-char TextRowReader::getByteUncheckedOptimized(DelimType& delim) {
-  if (atEOL_) {
-    if (!skipLF) {
-      delim = DelimTypeEOR; // top level EOR
-    }
-    return '\n';
-  }
-
-  try {
-    char v;
-    if (contents_->compression != CompressionKind::CompressionKind_NONE &&
-        preLoadedUnreadData_.empty()) {
-      int length = 0;
-      const void* buffer = nullptr;
-      atPhysicalEOF_ =
-          !contents_->decompressedInputStream->Next(&buffer, &length);
-      if (!atPhysicalEOF_) {
-        preLoadedUnreadData_ =
-            std::string_view(reinterpret_cast<const char*>(buffer), length);
-      }
-    }
-
-    if (unreadData_.empty() || unreadIdx_ >= unreadData_.size()) {
-      bool updated = false;
-      if (contents_->compression != CompressionKind::CompressionKind_NONE) {
-        unreadData_.assign(
-            preLoadedUnreadData_.data(), preLoadedUnreadData_.size());
-        preLoadedUnreadData_ = {};
-        updated = !unreadData_.empty();
-      } else {
-        int length = 0;
-        const void* buffer = nullptr;
-        if (contents_->inputStream->Next(&buffer, &length) && length > 0) {
-          VELOX_CHECK_NOT_NULL(buffer);
-          unreadData_.assign(reinterpret_cast<const char*>(buffer), length);
-          updated = true;
-        }
-      }
-
-      if (!updated) {
-        setEOF();
-        delim = DelimTypeEOR;
-        return '\0';
-      }
-      unreadIdx_ = 0;
-    }
-
-    v = unreadData_[unreadIdx_++];
-    pos_++;
-
-    // only when previous char == '\r'
-    if (skipLF) {
-      if (v != '\n') {
-        pos_--;
-        return '\n';
-      }
-    } else {
-      atSOL_ = false;
-    }
-    return v;
-  } catch (EOFError&) {
-  } catch (std::runtime_error& e) {
-    if (std::string(e.what()).find("Short read of") != 0 && !skipLF) {
-      throw;
-    }
-  }
-  if (!skipLF) {
-    setEOF();
-    delim = DelimTypeEOR;
-  }
-  return '\n';
-}
-
-bool TextRowReader::getEOR(DelimType& delim, bool& isNull) {
-  if (isEOR(delim)) {
-    isNull = true;
-    return true;
-  }
-  if (atEOL_) {
-    delim = DelimTypeEOR; // top-level EOR
-    isNull = true;
-    return true;
-  }
-  bool wasAtSOL = atSOL_;
-  setNone(delim);
-  ownedString_.clear();
-  const auto& ns = contents_->serDeOptions.nullString;
-  uint8_t v = 0;
-  while (true) {
-    v = getByteUncheckedOptimized(delim);
-    if (isNone(delim)) {
-      if (v == '\r') {
-        // always returns '\n' in this case
-        v = getByteUncheckedOptimized<true>(delim);
-      }
-      delim = getDelimType(v);
-    }
-
-    if (isEOR(delim) || atEOL_) {
-      if (ownedString_ == ns) {
-        isNull = true;
-      } else if (!ownedString_.empty()) {
-        break;
-      }
-      setEOR(delim);
-      return true;
-    }
-    if (ownedString_.size() >= ns.size() ||
-        static_cast<char>(v) != ns[ownedString_.size()]) {
-      break;
-    }
-    ownedString_.push_back(static_cast<char>(v));
-  }
-
-  unreadData_.insert(0, 1, static_cast<char>(v));
-  pos_--;
-  if (!ownedString_.empty()) {
-    unreadData_.insert(0, ownedString_);
-    pos_ -= ownedString_.size();
-  }
-  atEOL_ = false;
-  atSOL_ = wasAtSOL;
-  setNone(delim);
-  return false;
-}
-
-bool TextRowReader::skipLine() {
-  DelimType delim = DelimTypeNone;
-  while (!atEOL_) {
-    (void)getByteOptimized(delim);
-  }
-  /// TODO: Logically should be >=, kept as it is to align with presto reader
-  if (pos_ > limit_) {
-    setEOF();
-    delim = DelimTypeEOR;
-  }
-  return atEOF_;
-}
-
-void TextRowReader::resetLine() {
-  if (!atEOF_) {
-    atEOL_ = false;
-    VELOX_CHECK_EQ(depth_, 0);
-  }
-  atSOL_ = true;
-}
-
-template <typename T>
-T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
-  const std::string& str = getString(th, isNull, delim);
-
-  if (str.empty()) {
-    isNull = true;
-  }
-  if (isNull) {
-    return 0;
-  }
-
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
-  char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
-    isNull = true;
-    return 0;
-  }
-
-  int64_t v = 0;
-  unsigned long long scanPos = 0;
-  errno = 0;
-  auto scanCount = sscanf(str.c_str(), "%" SCNd64 "%lln", &v, &scanPos);
-  if (scanCount != 1 || errno == ERANGE) {
-    isNull = true;
-    return 0;
-  }
-  if (scanPos < str.size()) {
-    // Check if the string is a valid decimal.
-    for (uint64_t i = scanPos; i < str.size(); i++) {
-      if (i == scanPos && str[i] == '.') {
-        continue;
-      }
-      if (str[i] >= '0' && str[i] <= '9') {
-        continue;
-      }
-      isNull = true;
-      return 0;
-    }
-  }
-
-  if (!std::is_same<T, int64_t>::value) {
-    if (static_cast<int64_t>(static_cast<T>(v)) != v) {
-      isNull = true;
-      return 0;
-    }
-  }
-  return static_cast<T>(v);
-}
-
-namespace {
-
-static constexpr std::string_view kTrueStringView{"TRUE"};
-static constexpr std::string_view kFalseStringView{"FALSE"};
-
-} // namespace
-
-bool TextRowReader::getBoolean(
-    TextRowReader& th,
-    bool& isNull,
-    DelimType& delim) {
-  const std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
-  if (isNull) {
-    return false;
-  }
-  if (str.compare(kTrueStringView) == 0) {
-    return true;
-  }
-  if (str.compare(kFalseStringView) == 0) {
-    return false;
-  }
-
-  switch (str.size()) {
-    case 4:
-      if (boost::algorithm::iequals(str, kTrueStringView)) {
-        return true;
-      }
-      break;
-    case 5:
-      if (boost::algorithm::iequals(str, kFalseStringView)) {
-        return false;
-      }
-      break;
-    default:
-      break;
-  }
-
-  isNull = true;
-  return false;
-}
-
-namespace {
-
-static constexpr std::string_view kNaNStringView{"NaN"};
-static constexpr std::string_view kInfinityStringView{"Infinity"};
-static constexpr std::string_view kShortInfinityStringView{"Inf"};
-static constexpr std::string_view kNegInfinityStringView{"-Infinity"};
-static constexpr std::string_view kShortNegInfinityStringView{"-Inf"};
-
-bool unacceptableFloatingPoint(std::string& s) {
-  for (int i = 0; i < s.size(); ++i) {
-    char c = s.data()[i];
-    if (!(std::isalpha(c) || c == '-')) {
-      return false;
-    }
-  }
-
-  bool isNaN = boost::algorithm::iequals(s, kNaNStringView);
-
-  bool isInf = boost::algorithm::iequals(s, kInfinityStringView);
-  bool isShortInf = boost::algorithm::iequals(s, kShortInfinityStringView);
-
-  bool isNegInf = boost::algorithm::iequals(s, kNegInfinityStringView);
-  bool isShortNegInf =
-      boost::algorithm::iequals(s, kShortNegInfinityStringView);
-
-  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
-}
-
-void trimStringInPlace(std::string& s) {
-  const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
-  size_t start = 0;
-  size_t end = s.size();
-
-  // Find first non-whitespace character
-  while (start < end && !isNotSpace(s[start])) {
-    ++start;
-  }
-
-  // If the string is all whitespace
-  if (start == end) {
-    s.clear();
-    return;
-  }
-
-  // Find last non-whitespace character
-  size_t last = end - 1;
-  while (last > start && !isNotSpace(s[last])) {
-    --last;
-  }
-
-  // Erase leading and trailing whitespace
-  s = s.substr(start, last - start + 1);
-}
-
-} // namespace
-
-float TextRowReader::getFloat(
-    TextRowReader& th,
-    bool& isNull,
-    DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
-  if (isNull) {
-    return 0;
-  }
-
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  if (unacceptableFloatingPoint(str)) {
-    isNull = true;
-    return 0.0;
-  }
-
-  float v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized floats and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
-}
-
-double
-TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
-
-  if (isNull) {
-    return 0.0;
-  }
-
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  // Filter out values from non-warehouse sources which
-  // other readers translate to null. Warehouse
-  // readers require upper-case values.
-  if (unacceptableFloatingPoint(str)) {
-    isNull = true;
-    return 0.0;
-  }
-
-  double v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized doubles and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
-}
-
-/// TODO: Reconsider error handling strategy for malformed data
-/// Currently, all read functions convert invalid/malformed data to NULL values.
-/// This approach may produce incorrect query results, particularly for
-/// aggregate operations where a high volume of NULLs can significantly skew
-/// calculations (e.g., COUNT, AVG, SUM). Consider alternative strategies such
-/// as throwing exceptions, logging warnings, or providing configurable error
-/// handling modes.
-void TextRowReader::readElement(
-    const std::shared_ptr<const Type>& t,
-    const std::shared_ptr<const Type>& reqT,
-    BaseVector* FOLLY_NULLABLE data,
-    vector_size_t insertionRow,
-    DelimType& delim) {
-  bool isNull = false;
-  switch (t->kind()) {
-    case TypeKind::INTEGER:
-      switch (reqT->kind()) {
-        case TypeKind::BIGINT:
-          putValue<int32_t, int64_t>(
-              getInteger<int32_t>, data, insertionRow, delim);
-          break;
-        case TypeKind::INTEGER:
-          if (reqT->isDate()) {
-            const std::string& str = getString(*this, isNull, delim);
-            setValueFromString<int32_t>(
-                str,
-                data,
-                insertionRow,
-                [](const std::string& s) -> std::optional<int32_t> {
-                  return DATE()->toDays(s);
-                });
-          } else {
-            putValue<int32_t, int32_t>(
-                getInteger<int32_t>, data, insertionRow, delim);
-          }
-          break;
-        default:
-          VELOX_FAIL(
-              "Requested type {} is not supported to be read as type {}",
-              reqT->toString(),
-              t->toString());
-          break;
-      }
-      break;
-
-    case TypeKind::BIGINT:
-      if (reqT->isShortDecimal()) {
-        const std::string& str = getString(*this, isNull, delim);
-        auto decimalParams = getDecimalPrecisionScale(*reqT);
-        const auto precision = decimalParams.first;
-        const auto scale = decimalParams.second;
-        setValueFromString<int64_t>(
-            str,
-            data,
-            insertionRow,
-            [precision, scale](const std::string& s) -> std::optional<int64_t> {
-              int64_t v = 0;
-              const auto status = DecimalUtil::castFromString(
-                  StringView(s.data(), static_cast<int32_t>(s.size())),
-                  precision,
-                  scale,
-                  v);
-              return status.ok() ? std::optional<int64_t>(v) : std::nullopt;
-            });
-      } else {
-        putValue<int64_t, int64_t>(
-            getInteger<int64_t>, data, insertionRow, delim);
-      }
-      break;
-
-    case TypeKind::HUGEINT: {
-      const std::string& str = getString(*this, isNull, delim);
-      if (reqT->isLongDecimal()) {
-        auto decimalParams = getDecimalPrecisionScale(*reqT);
-        const auto precision = decimalParams.first;
-        const auto scale = decimalParams.second;
-        setValueFromString<int128_t>(
-            str,
-            data,
-            insertionRow,
-            [precision,
-             scale](const std::string& s) -> std::optional<int128_t> {
-              int128_t v = 0;
-              const auto status = DecimalUtil::castFromString(
-                  StringView(s.data(), static_cast<int32_t>(s.size())),
-                  precision,
-                  scale,
-                  v);
-              return status.ok() ? std::optional<int128_t>(v) : std::nullopt;
-            });
-      } else {
-        setValueFromString<int128_t>(
-            str,
-            data,
-            insertionRow,
-            [](const std::string& s) -> std::optional<int128_t> {
-              return HugeInt::parse(s);
-            });
-      }
-      break;
-    }
-    case TypeKind::SMALLINT:
-      switch (reqT->kind()) {
-        case TypeKind::BIGINT:
-          putValue<int16_t, int64_t>(
-              getInteger<int16_t>, data, insertionRow, delim);
-          break;
-        case TypeKind::INTEGER:
-          putValue<int16_t, int32_t>(
-              getInteger<int16_t>, data, insertionRow, delim);
-          break;
-        case TypeKind::SMALLINT:
-          putValue<int16_t, int16_t>(
-              getInteger<int16_t>, data, insertionRow, delim);
-          break;
-        default:
-          VELOX_FAIL(
-              "Requested type {} is not supported to be read as type {}",
-              reqT->toString(),
-              t->toString());
-          break;
-      }
-      break;
-
-    case TypeKind::VARBINARY: {
-      const std::string& str = getString(*this, isNull, delim);
-
-      // Early return if no data vector or at EOF
-      if ((atEOF_ && atSOL_) || (data == nullptr)) {
-        return;
-      }
-
-      const auto& flatVector = data->asChecked<FlatVector<StringView>>();
-      if (!flatVector) {
-        VELOX_FAIL(
-            "Vector for column type does not match: expected FlatVector<StringView>, got {}",
-            data ? data->type()->toString() : "null");
-        return;
-      }
-
-      // Allocate a blob buffer
-      size_t len = str.size();
-      const auto blen = encoding::Base64::calculateDecodedSize(str.data(), len);
-      varBinBuf_->resize(blen.value_or(0));
-
-      // decode from base64 to the blob buffer.
-      Status status = encoding::Base64::decode(
-          str.data(), str.size(), varBinBuf_->data(), blen.value_or(0));
-
-      if (status.code() == StatusCode::kOK) {
-        flatVector->set(
-            insertionRow,
-            StringView(varBinBuf_->data(), static_cast<int32_t>(blen.value())));
-      } else {
-        // Not valid base64:  just copy as-is for compatibility.
-        //
-        // Note that some warehouse file have simply binary data
-        // in what should be a base64-encoded field, and which
-        // may result in extra rows.  Other readers behave as
-        // below, so this provides compatibility, even if  all
-        // readers should really reject these files.
-        varBinBuf_->resize(str.size());
-
-        VELOX_CHECK_NOT_NULL(str.data());
-
-        len = str.size();
-        memcpy(varBinBuf_->data(), str.data(), str.size());
-
-        // Use StringView, set(vector_size_t idx, T value) fails because
-        // strlen(varBinBuf_->data()) is undefined due to lack of null
-        // terminator
-        flatVector->set(
-            insertionRow,
-            StringView(varBinBuf_->data(), static_cast<int32_t>(str.size())));
-      }
-
-      if (isNull) {
-        flatVector->setNull(insertionRow, true);
-      }
-
-      break;
-    }
-    case TypeKind::VARCHAR: {
-      const std::string& str = getString(*this, isNull, delim);
-
-      // Early return if no data vector or at EOF
-      if ((atEOF_ && atSOL_) || (data == nullptr)) {
-        return;
-      }
-
-      const auto& flatVector = data->asChecked<FlatVector<StringView>>();
-      if (!flatVector) {
-        VELOX_FAIL(
-            "Vector for column type does not match: expected FlatVector<StringView>, got {}",
-            data ? data->type()->toString() : "null");
-        return;
-      }
-
-      flatVector->set(
-          insertionRow,
-          StringView(str.data(), static_cast<int32_t>(str.size())));
-
-      if (isNull) {
-        flatVector->setNull(insertionRow, true);
-      }
-
-      break;
-    }
-
-    case TypeKind::BOOLEAN:
-      switch (reqT->kind()) {
-        case TypeKind::BIGINT:
-          putValue<bool, int64_t>(getBoolean, data, insertionRow, delim);
-          break;
-        case TypeKind::INTEGER:
-          putValue<bool, int32_t>(getBoolean, data, insertionRow, delim);
-          break;
-        case TypeKind::SMALLINT:
-          putValue<bool, int16_t>(getBoolean, data, insertionRow, delim);
-          break;
-        case TypeKind::TINYINT:
-          putValue<bool, int8_t>(getBoolean, data, insertionRow, delim);
-          break;
-        case TypeKind::BOOLEAN:
-          putValue<bool, bool>(getBoolean, data, insertionRow, delim);
-          break;
-        default:
-          VELOX_FAIL(
-              "Requested type {} is not supported to be read as type {}",
-              reqT->toString(),
-              t->toString());
-          break;
-      }
-      break;
-
-    case TypeKind::TINYINT:
-      switch (reqT->kind()) {
-        case TypeKind::BIGINT:
-          putValue<int8_t, int64_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
-          break;
-        case TypeKind::INTEGER:
-          putValue<int8_t, int32_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
-          break;
-        case TypeKind::SMALLINT:
-          putValue<int8_t, int16_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
-          break;
-        case TypeKind::TINYINT:
-          putValue<int8_t, int8_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
-          break;
-        default:
-          VELOX_FAIL(
-              "Requested type {} is not supported to be read as type {}",
-              reqT->toString(),
-              t->toString());
-          break;
-      }
-      break;
-
-    case TypeKind::ARRAY: {
-      const auto& ct = t->childAt(0);
-      const auto& arrayVector = data ? data->asChecked<ArrayVector>() : nullptr;
-
-      incrementDepth();
-      (void)getEOR(delim, isNull);
-
-      if (arrayVector != nullptr) {
-        auto rawSizes = arrayVector->sizes()->asMutable<vector_size_t>();
-        auto rawOffsets = arrayVector->offsets()->asMutable<vector_size_t>();
-
-        rawOffsets[insertionRow] = insertionRow > 0
-            ? rawOffsets[insertionRow - 1] + rawSizes[insertionRow - 1]
-            : 0;
-        const int startElementIdx = rawOffsets[insertionRow];
-
-        vector_size_t elementCount = 0;
-        if (isNull) {
-          arrayVector->setNull(insertionRow, isNull);
-          rawSizes[insertionRow] = 0;
-        } else {
-          // Read elements until we reach the end of the array.
-          while (!isOuterEOR(delim)) {
-            setNone(delim);
-            auto elementsVector = arrayVector->elements().get();
-            resizeVector(elementsVector, startElementIdx + elementCount);
-
-            readElement(
-                ct,
-                reqT->childAt(0),
-                elementsVector,
-                startElementIdx + elementCount,
-                delim);
-
-            // Update size on every iteration to allow the right size
-            // inheritance in resizeVector.
-            rawSizes[insertionRow] = ++elementCount;
-
-            if (atEOF_ && atSOL_) {
-              decrementDepth(delim);
-              return;
-            }
-          }
-        }
-
-      } else {
-        // Skip over array data to maintain correct stream position.
-        while (!isOuterEOR(delim)) {
-          setNone(delim);
-          readElement(ct, reqT->childAt(0), nullptr, 0, delim);
-        }
-      }
-      decrementDepth(delim);
-      break;
-    }
-
-    case TypeKind::ROW: {
-      const auto& childCount = t->size();
-      const auto& rowVector = data ? data->asChecked<RowVector>() : nullptr;
-      incrementDepth();
-
-      if (rowVector != nullptr) {
-        if (isNull) {
-          rowVector->setNull(insertionRow, isNull);
-        } else {
-          for (uint64_t j = 0; j < childCount; j++) {
-            if (!isOuterEOR(delim)) {
-              setNone(delim);
-            }
-
-            // Get the child vector for this field.
-            BaseVector* childVector = nullptr;
-            if (j < reqT->size()) {
-              childVector = rowVector->childAt(j).get();
-            }
-            resizeVector(childVector, insertionRow);
-            readElement(
-                t->childAt(j),
-                j < reqT->size() ? reqT->childAt(j) : t->childAt(j),
-                childVector,
-                insertionRow,
-                delim);
-
-            if (atEOF_ && atSOL_) {
-              decrementDepth(delim);
-              return;
-            }
-          }
-        }
-      } else {
-        // Skip over row data to maintain correct stream position.
-        for (uint64_t j = 0; j < childCount; j++) {
-          if (!isOuterEOR(delim)) {
-            setNone(delim);
-          }
-          readElement(t->childAt(j), reqT->childAt(j), nullptr, 0, delim);
-        }
-      }
-
-      decrementDepth(delim);
-      setEOE(delim);
-      break;
-    }
-
-    case TypeKind::MAP: {
-      const auto& mapt = t->asMap();
-      const auto& key = mapt.keyType();
-      const auto& value = mapt.valueType();
-      const auto& mapVector = data ? data->asChecked<MapVector>() : nullptr;
-      incrementDepth();
-      (void)getEOR(delim, isNull);
-
-      if (mapVector != nullptr) {
-        auto rawOffsets = mapVector->offsets()->asMutable<vector_size_t>();
-        auto rawSizes = mapVector->sizes()->asMutable<vector_size_t>();
-
-        rawOffsets[insertionRow] = insertionRow > 0
-            ? rawOffsets[insertionRow - 1] + rawSizes[insertionRow - 1]
-            : 0;
-        const int startElementIdx = rawOffsets[insertionRow];
-
-        vector_size_t elementCount = 0;
-        if (isNull) {
-          mapVector->setNull(insertionRow, isNull);
-          rawSizes[insertionRow] = 0;
-        } else {
-          while (!isOuterEOR(delim)) {
-            // Decode another element.
-            setNone(delim);
-            incrementDepth();
-
-            // insert key
-            auto keysVector = mapVector->mapKeys().get();
-            resizeVector(keysVector, startElementIdx + elementCount);
-
-            readElement(
-                key,
-                reqT->childAt(0),
-                keysVector,
-                startElementIdx + elementCount,
-                delim);
-
-            // Case for no value key.
-            if (atEOF_ && atSOL_) {
-              rawSizes[insertionRow] = elementCount;
-              rawOffsets[insertionRow + 1] = startElementIdx + elementCount;
-              decrementDepth(delim);
-              decrementDepth(delim);
-              return;
-            }
-            resetEOE(delim);
-
-            // insert value
-            auto valsVector = mapVector->mapValues().get();
-            resizeVector(valsVector, startElementIdx + elementCount);
-
-            readElement(
-                value,
-                reqT->childAt(1),
-                valsVector,
-                startElementIdx + elementCount,
-                delim);
-
-            rawSizes[insertionRow] = ++elementCount;
-
-            decrementDepth(delim);
-          }
-        }
-
-      } else {
-        // Skip over map data to maintain correct stream position.
-        while (!isOuterEOR(delim)) {
-          setNone(delim);
-          incrementDepth();
-          readElement(key, reqT->childAt(0), nullptr, 0, delim);
-          resetEOE(delim);
-          readElement(value, reqT->childAt(1), nullptr, 0, delim);
-          decrementDepth(delim);
-        }
-      }
-      decrementDepth(delim);
-      break;
-    }
-
-    case TypeKind::REAL:
-      switch (reqT->kind()) {
-        case TypeKind::REAL:
-          putValue<float, float>(getFloat, data, insertionRow, delim);
-          break;
-        case TypeKind::DOUBLE:
-          putValue<float, double>(getDouble, data, insertionRow, delim);
-          break;
-        default:
-          VELOX_FAIL(
-              "Requested type {} is not supported to be read as type {}",
-              reqT->toString(),
-              t->toString());
-          break;
-      }
-      break;
-
-    case TypeKind::DOUBLE:
-      putValue<double, double>(getDouble, data, insertionRow, delim);
-      break;
-
-    case TypeKind::TIMESTAMP: {
-      const std::string& s = getString(*this, isNull, delim);
-
-      // Early return if no data vector or at EOF
-      if ((atEOF_ && atSOL_) || (data == nullptr)) {
-        return;
-      }
-
-      auto flatVector = data->asChecked<FlatVector<Timestamp>>();
-      if (!flatVector) {
-        VELOX_FAIL(
-            "Vector for column type does not match: expected FlatVector<Timestamp>, got {}",
-            data ? data->type()->toString() : "null");
-        return;
-      }
-
-      if (s.empty()) {
-        isNull = true;
-        flatVector->setNull(insertionRow, true);
-      } else {
-        auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            folly::identity,
-            [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
-        ts.toGMT(Timestamp::defaultTimezone());
-        flatVector->set(
-            insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
-      }
-
-      break;
-    }
-
-    default:
-      VELOX_NYI("readElement unhandled type (kind code {})", t->kind());
-  }
-
-  ownedString_.clear();
-}
-
-uint64_t maxStreamsForType(const std::shared_ptr<const Type>& type) {
-  switch (type->kind()) {
-    case TypeKind::ROW:
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE:
-    case TypeKind::BOOLEAN:
-    case TypeKind::TINYINT:
-    case TypeKind::ARRAY:
-    case TypeKind::MAP:
-    case TypeKind::VARBINARY:
-    case TypeKind::TIMESTAMP:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::VARCHAR:
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-template <class T, class reqT>
-void TextRowReader::putValue(
-    const std::function<T(TextRowReader& th, bool& isNull, DelimType& delim)>&
-        f,
-    BaseVector* FOLLY_NULLABLE data,
-    vector_size_t insertionRow,
-    DelimType& delim) {
-  bool isNull = false;
-  T v;
-  if (isEOR(delim)) {
-    isNull = true;
-    v = 0;
-  } else {
-    v = f(*this, isNull, delim);
-  }
-
-  // Early return if no data vector or at EOF
-  if ((atEOF_ && atSOL_) || (data == nullptr)) {
-    return;
-  }
-
-  // Cast to FlatVector<reqT>
-  auto flatVector = data ? data->asChecked<FlatVector<reqT>>() : nullptr;
-  if (!flatVector) {
-    VELOX_FAIL("Vector for column type does not match");
-    return;
-  }
-
-  // Handle null property.
-  if (isNull) {
-    flatVector->setNull(insertionRow, isNull);
-    return;
-  }
-
-  flatVector->set(insertionRow, v);
-}
-
-const std::shared_ptr<const RowType>& TextRowReader::getType() const {
-  return contents_->schema;
 }
 
 TextReader::TextReader(
