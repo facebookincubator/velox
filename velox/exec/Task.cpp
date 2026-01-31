@@ -137,6 +137,8 @@ void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
       RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
   op.runtimeStats["runningFinishWallNanos"] =
       RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats["runningIsBlockedWallNanos"] =
+      RuntimeMetric(op.isBlockedTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
 void buildSplitStates(
