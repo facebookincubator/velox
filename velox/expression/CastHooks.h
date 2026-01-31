@@ -50,6 +50,11 @@ class CastHooks {
   virtual Expected<int32_t> castStringToDate(
       const StringView& dateString) const = 0;
 
+  /// Casts string to TIME (microseconds since midnight as BIGINT).
+  /// Supports format: HH:mm:ss[.SSSSSS]
+  virtual Expected<int64_t> castStringToTime(
+      const StringView& timeString) const = 0;
+
   /// 'data' is guaranteed to be non-empty and has been processed by
   /// removeWhiteSpaces.
   virtual Expected<float> castStringToReal(const StringView& data) const = 0;

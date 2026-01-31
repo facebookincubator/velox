@@ -43,6 +43,12 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
       std::vector<exec::ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+ private:
+  /// Returns true if ANSI semantics should be applied for this cast
+  /// combination.
+  /// TODO: Remove this function once all cast operations support ANSI mode.
+  static bool isAnsiSupported(const TypePtr& fromType, const TypePtr& toType);
 };
 
 class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
