@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/text/reader/TextReader.h"
+#include <cctype>
+#include <fast_float/fast_float.h>
 #include <glog/logging.h>
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
@@ -79,6 +81,33 @@ std::optional<bool> parseBoolean(std::string_view value) {
     return false;
   }
   return std::nullopt;
+}
+
+template <typename T>
+std::optional<T> parseFloating(std::string_view value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+
+  T parsed{};
+  auto* begin = value.data();
+  auto* end = value.data() + value.size();
+  fast_float::parse_options options{
+      fast_float::chars_format::general |
+      fast_float::chars_format::skip_white_space};
+  auto [parseEnd, error] =
+      fast_float::from_chars_advanced(begin, end, parsed, options);
+  if (error != std::errc{}) {
+    return std::nullopt;
+  }
+  while (parseEnd != end &&
+         std::isspace(static_cast<unsigned char>(*parseEnd))) {
+    ++parseEnd;
+  }
+  if (parseEnd != end) {
+    return std::nullopt;
+  }
+  return parsed;
 }
 
 } // namespace
@@ -295,12 +324,13 @@ TextRowReader::SetterFunction TextRowReader::makeSetter(
             data->setNull(row, true);
             return;
           }
-          auto result = folly::tryTo<float>(value);
+          auto result = parseFloating<float>(value);
           auto* vec = data->as<FlatVector<float>>();
-          if (result.hasValue())
+          if (result.has_value()) {
             vec->set(row, result.value());
-          else
+          } else {
             vec->setNull(row, true);
+          }
         };
 
       case TypeKind::DOUBLE:
@@ -309,12 +339,13 @@ TextRowReader::SetterFunction TextRowReader::makeSetter(
             data->setNull(row, true);
             return;
           }
-          auto result = folly::tryTo<double>(value);
+          auto result = parseFloating<double>(value);
           auto* vec = data->as<FlatVector<double>>();
-          if (result.hasValue())
+          if (result.has_value()) {
             vec->set(row, result.value());
-          else
+          } else {
             vec->setNull(row, true);
+          }
         };
 
       case TypeKind::VARCHAR:
@@ -433,12 +464,13 @@ TextRowReader::SetterFunction TextRowReader::makeSetter(
         data->setNull(row, true);
         return;
       }
-      auto result = folly::tryTo<float>(value);
+      auto result = parseFloating<float>(value);
       auto* vec = data->as<FlatVector<double>>();
-      if (result.hasValue())
+      if (result.has_value()) {
         vec->set(row, static_cast<double>(result.value()));
-      else
+      } else {
         vec->setNull(row, true);
+      }
     };
   }
 
