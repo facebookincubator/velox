@@ -344,9 +344,11 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
         this->values_.size(),
         0,
         0,
+        0,
         true,
         true,
-        true);
+        true,
+        false);
 
     auto statistics3 = MakeStatistics<TestType>(this->schema_.Column(0));
     std::vector<uint8_t> valid_bits(
@@ -610,9 +612,11 @@ void TestStatistics<ByteArrayType>::TestMinMaxEncode() {
       this->values_.size(),
       0,
       0,
+      0,
       true,
       true,
-      true);
+      true,
+      false);
 
   ASSERT_EQ(encoded_min, statistics2->EncodeMin());
   ASSERT_EQ(encoded_max, statistics2->EncodeMax());
@@ -1533,6 +1537,7 @@ void CheckNaNs() {
   auto some_nan_stats = MakeStatistics<ParquetType>(&descr);
   // Ingesting only nans should not yield valid min max
   AssertUnsetMinMax(some_nan_stats, all_nans);
+  EXPECT_EQ(some_nan_stats->nan_count(), all_nans.size());
   // Ingesting a mix of NaNs and non-NaNs should not yield valid min max.
   AssertMinMaxAre(some_nan_stats, some_nans, min, max);
   // Ingesting only nans after a valid min/max, should have not effect
@@ -1550,6 +1555,7 @@ void CheckNaNs() {
       1.5f, max, -3.0f, -1.0f, nan, 2.0f, min, nan};
   auto other_stats = MakeStatistics<ParquetType>(&descr);
   AssertMinMaxAre(other_stats, other_nans, min, max);
+  EXPECT_EQ(other_stats->nan_count(), 2);
 }
 
 TEST(TestStatistic, NaNFloatValues) {
@@ -1574,6 +1580,7 @@ TEST(TestStatisticsSortOrderFloatNaN, NaNAndNullsInfiniteLoop) {
   uint8_t all_but_last_valid = 0x7F; // 0b01111111
   auto stats = MakeStatistics<FloatType>(&descr);
   AssertUnsetMinMax(stats, nans_but_last, &all_but_last_valid);
+  EXPECT_EQ(stats->nan_count(), kNumValues - 1);
 }
 
 template <
