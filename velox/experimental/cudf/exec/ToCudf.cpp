@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
+#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -224,6 +225,35 @@ bool CompileState::compile(bool allowCpuFallback) {
       operators.end(),
       isSupportedGpuOperators.begin(),
       isSupportedGpuOperator);
+
+  // Operators which break batch continuity and need concat before next operator
+  auto breaksBatchContinuity = [](const exec::Operator* op) {
+    return isAnyOf<
+        exec::LocalPartition,
+        exec::HashProbe,
+        exec::HashBuild,
+        exec::HashAggregation,
+        exec::StreamingAggregation,
+        exec::Limit,
+        exec::OrderBy,
+        exec::TopN,
+        CudfOperator>(op);
+  };
+
+  // Operators which are stateless and thus concat can safely be inserted before
+  auto isStatelessOperator = [](const exec::Operator* op) {
+    return isAnyOf<exec::FilterProject>(op);
+  };
+
+  // Determines if concat is needed before an operator
+  auto needsConcat = [breaksBatchContinuity, isStatelessOperator](
+                         const exec::Operator* currentOp,
+                         const exec::Operator* nextOp) {
+    // Add concat if current breaks batch and next is stateless
+    return currentOp != nullptr && nextOp != nullptr &&
+        breaksBatchContinuity(currentOp) && isStatelessOperator(nextOp);
+  };
+
   auto acceptsGpuInput = [isFilterProjectSupported,
                           isJoinSupported,
                           isAggregationSupported](const exec::Operator* op) {
@@ -380,6 +410,17 @@ bool CompileState::compile(bool allowCpuFallback) {
       keepOperator = 1;
     }
 
+    // Check if batch concat needs to be added before the next operator
+    exec::Operator* nextOper = nullptr;
+    if (operatorIndex < operators.size() - 1) {
+      nextOper = operators[operatorIndex + 1];
+    }
+    if (needsConcat(oper, nextOper) && !nextOperatorIsNotGpu) {
+      auto planNode = getPlanNode(oper->planNodeId());
+      replaceOp.push_back(
+          std::make_unique<CudfBatchConcat>(oper->operatorId(), ctx, planNode));
+    }
+
     if (producesGpuOutput(oper) and
         (nextOperatorIsNotGpu or isLastOperatorOfTask)) {
       auto planNode = getPlanNode(oper->planNodeId());
@@ -420,6 +461,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     auto condition = (GpuReplacedOperator(oper) && !replaceOp.empty() &&
                       keepOperator == 0) ||
         (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
+
     if (CudfConfig::getInstance().debugEnabled) {
       LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
                 << oper->toString() << " Replacement condition: "
@@ -511,6 +553,8 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
+  exec::Operator::registerOperator(
+      std::make_unique<CudfBatchConcatTranslator>());
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
@@ -558,6 +602,14 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfMemoryPercent) != config.end()) {
     memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
+    batchSizeMinThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+  }
+  if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
+    batchSizeMaxThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMaxThreshold]);
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];

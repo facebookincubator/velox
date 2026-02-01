@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -39,6 +40,10 @@ struct CudfConfig {
       "cudf.jit_expression_priority"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+  static constexpr const char* kCudfBatchSizeMinThreshold{
+      "cudf.batch_size_min_threshold"};
+  static constexpr const char* kCudfBatchSizeMaxThreshold{
+      "cudf.batch_size_max_threshold"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -88,6 +93,14 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  /// Minimum rows to accumulate before GPU-side concatenation in
+  /// `CudfBatchConcat` (default 100k).
+  int32_t batchSizeMinThreshold{100000};
+
+  /// Maximum rows allowed in a concatenated batch (user configurable).
+  /// When not set, cuDF's own `size_type::max()` is used.
+  std::optional<int32_t> batchSizeMaxThreshold;
 };
 
 } // namespace facebook::velox::cudf_velox
