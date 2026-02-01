@@ -2235,3 +2235,101 @@ TEST_F(MergeJoinTest, testJoinWithTwoKeysAndSecondColumnHasNulls) {
 
   testJoinTwoKeysWithNulls(left, right);
 }
+
+// Test that the dynamic output batch sizing follows the expected growth pattern
+// (1, 2, 4, 8, ...) rather than immediately producing the configured preferred
+// row count.
+TEST_F(MergeJoinTest, dynamicOutputBatchSizing) {
+  // Create simple two-column BIGINT data for both left and right sides.
+  // Each row is approximately 16 bytes (2 x 8 bytes for BIGINT).
+  // We create enough rows to see multiple output batches.
+  const vector_size_t numRows = 1000;
+
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 10; }),
+      });
+
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 100; }),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t_c0"},
+              {"u_c0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t_c0", "t_c1", "u_c1"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  // Set a very high preferred row count (10000) but a relatively small byte
+  // limit. The dynamic sizing should follow the 1, 2, 4, 8, ... pattern
+  // until it reaches the byte threshold, rather than immediately producing
+  // 10000 rows.
+  const uint32_t highPreferredRows = 10000;
+  // Set preferred bytes to allow roughly 64 rows per batch (each output row is
+  // ~24 bytes: 3 x 8 bytes for 3 BIGINT columns).
+  const uint64_t preferredBytes = 24 * 64;
+
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kPreferredOutputBatchRows,
+       std::to_string(highPreferredRows)},
+      {core::QueryConfig::kPreferredOutputBatchBytes,
+       std::to_string(preferredBytes)},
+  });
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = queryCtx;
+
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+
+  std::vector<vector_size_t> outputBatchSizes;
+  while (cursor->moveNext()) {
+    auto result = cursor->current();
+    if (result && result->size() > 0) {
+      outputBatchSizes.push_back(result->size());
+    }
+  }
+
+  // Verify that we got multiple output batches.
+  ASSERT_GT(outputBatchSizes.size(), 1);
+
+  // Verify the first batch starts small (should be 1 row due to initial
+  // outputBatchSize_ = 1).
+  EXPECT_EQ(outputBatchSizes[0], 1);
+
+  // Verify early batches follow the doubling pattern (1, 2, 4, 8, ...).
+  // Check that at least the first few batches show exponential growth.
+  if (outputBatchSizes.size() >= 4) {
+    EXPECT_EQ(outputBatchSizes[1], 2);
+    EXPECT_EQ(outputBatchSizes[2], 4);
+    EXPECT_EQ(outputBatchSizes[3], 8);
+  }
+
+  // Verify we never exceed the preferred row count.
+  for (size_t i = 0; i < outputBatchSizes.size(); ++i) {
+    EXPECT_LE(outputBatchSizes[i], highPreferredRows);
+  }
+
+  // Verify that the batch sizes are generally non-decreasing (except possibly
+  // the last batch which may be smaller due to remaining rows).
+  for (size_t i = 1; i < outputBatchSizes.size() - 1; ++i) {
+    EXPECT_GE(outputBatchSizes[i], outputBatchSizes[i - 1]);
+  }
+}
