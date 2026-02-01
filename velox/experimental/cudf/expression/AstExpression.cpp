@@ -218,6 +218,21 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
+  // reject anything with DECIMAL to force to Function Evaluator path
+  // seves 1/14/26
+  if (expr->type()->isDecimal()) {
+    std::cout << "**** DECIMAL type (output) not supported in AST: "
+              << expr->toString() << std::endl;
+    return false;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (input->type()->isDecimal()) {
+      std::cout << "**** DECIMAL type (input) not supported in AST: "
+                   << expr->toString() << std::endl;
+      return false;
+    }
+  }
+
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
@@ -225,7 +240,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
-      auto cudfType = cudf::data_type(veloxToCudfTypeId(type));
+      auto cudfType = veloxToCudfDataType(type);
       return cudf::is_fixed_width(cudfType) ||
           cudfType.id() == cudf::type_id::STRING;
     } catch (...) {
@@ -253,8 +268,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
-      inputCudfDataTypes.push_back(
-          cudf::data_type(veloxToCudfTypeId(input->type())));
+      inputCudfDataTypes.push_back(veloxToCudfDataType(input->type()));
     } catch (...) {
       return false;
     }
@@ -719,8 +733,7 @@ ColumnOrView ASTExpression::eval(
     }
   }();
   if (finalize) {
-    const auto requestedType =
-        cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_->type()));
+    const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
     auto resultView = asView(result);
     if (resultView.type() != requestedType) {
       result = cudf::cast(resultView, requestedType, stream, mr);
