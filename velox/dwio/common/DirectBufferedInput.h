@@ -102,6 +102,17 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return size;
   }
 
+  void cancel() override {
+    folly::SemiFuture<bool> waitFuture(false);
+    if (state() == State::kLoading && !loadOrFuture(&waitFuture)) {
+      waitFuture.wait();
+    }
+    for (auto& request : requests_) {
+      pool_->freeNonContiguous(request.data);
+    }
+    CoalescedLoad::cancel();
+  }
+
  private:
   const std::shared_ptr<IoStatistics> ioStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
