@@ -107,6 +107,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         common::SubfieldFilters{},
         nullptr,
         nullptr,
+        /*indexColumns=*/std::vector<std::string>{},
         tableParameters);
   };
 
@@ -333,6 +334,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         common::SubfieldFilters{},
         nullptr,
         nullptr,
+        /*indexColumns=*/std::vector<std::string>{},
         std::unordered_map<std::string, std::string>{});
 
     auto hiveSplit = std::make_shared<hive::HiveConnectorSplit>(
