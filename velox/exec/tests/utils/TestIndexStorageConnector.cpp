@@ -265,8 +265,8 @@ void TestIndexSource::checkNotFailed() {
   }
 }
 
-std::shared_ptr<connector::IndexSource::LookupResultIterator>
-TestIndexSource::lookup(const LookupRequest& request) {
+std::shared_ptr<connector::IndexSource::ResultIterator> TestIndexSource::lookup(
+    const Request& request) {
   checkNotFailed();
   VELOX_CHECK(!tableHandle_->needsIndexSplit() || !splits_.empty());
   const auto numInputRows = request.input->size();
@@ -369,7 +369,7 @@ std::unordered_map<std::string, RuntimeMetric> TestIndexSource::runtimeStats() {
 
 TestIndexSource::ResultIterator::ResultIterator(
     std::shared_ptr<TestIndexSource> source,
-    const LookupRequest& request,
+    const Request& request,
     std::unique_ptr<HashLookup> lookupResult,
     folly::Executor* executor)
     : source_(std::move(source)),
@@ -392,7 +392,7 @@ bool TestIndexSource::ResultIterator::hasNext() {
   return !lookupResultIter_->atEnd();
 }
 
-std::optional<std::unique_ptr<connector::IndexSource::LookupResult>>
+std::optional<std::unique_ptr<connector::IndexSource::Result>>
 TestIndexSource::ResultIterator::next(
     vector_size_t size,
     ContinueFuture& future) {
@@ -471,7 +471,7 @@ void TestIndexSource::ResultIterator::asyncLookup(
   });
 }
 
-std::unique_ptr<connector::IndexSource::LookupResult>
+std::unique_ptr<connector::IndexSource::Result>
 TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
   VELOX_CHECK(hasPendingRequest_);
   if (lookupResultIter_->atEnd()) {
@@ -530,7 +530,8 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
         lookupOutput_);
     VELOX_CHECK_EQ(lookupOutput_->size(), numHits);
     VELOX_CHECK_EQ(inputHitIndices_->size() / sizeof(vector_size_t), numHits);
-    return std::make_unique<LookupResult>(inputHitIndices_, lookupOutput_);
+    return std::make_unique<connector::IndexSource::Result>(
+        inputHitIndices_, lookupOutput_);
   } catch (const std::exception& e) {
     VELOX_CHECK(source_->error_.empty());
     source_->error_ = e.what();

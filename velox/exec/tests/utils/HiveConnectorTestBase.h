@@ -130,6 +130,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
+      const std::vector<std::string>& indexColumns = {},
       bool filterPushdownEnabled = true,
       const std::unordered_map<std::string, std::string>& tableParameters =
           {}) {
@@ -140,6 +141,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
         std::move(subfieldFilters),
         remainingFilter,
         dataColumns,
+        indexColumns,
         tableParameters);
   }
 
