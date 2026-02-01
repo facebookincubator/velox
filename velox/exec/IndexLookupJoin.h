@@ -287,7 +287,6 @@ class IndexLookupJoin : public Operator {
   // Type of join.
   const core::JoinType joinType_;
   const bool hasMarker_;
-  const size_t numKeys_;
   const RowTypePtr probeType_;
   const RowTypePtr lookupType_;
   // The plan node id of the lookup source (index source).
