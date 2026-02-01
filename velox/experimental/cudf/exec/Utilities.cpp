@@ -26,6 +26,7 @@
 #include <cudf/utilities/prefetch.hpp>
 
 #include <rmm/mr/arena_memory_resource.hpp>
+#include <rmm/mr/cuda_async_managed_memory_resource.hpp>
 #include <rmm/mr/cuda_async_memory_resource.hpp>
 #include <rmm/mr/cuda_memory_resource.hpp>
 #include <rmm/mr/device_memory_resource.hpp>
@@ -44,43 +45,61 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
+/// \brief Makes a cuda resource
 [[nodiscard]] auto makeCudaMr() {
   return std::make_shared<rmm::mr::cuda_memory_resource>();
 }
 
+/// \brief Makes a pool<cuda> resource
 [[nodiscard]] auto makePoolMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
       makeCudaMr(), rmm::percent_of_free_device_memory(percent));
 }
 
+/// \brief Makes an async resource
 [[nodiscard]] auto makeAsyncMr() {
   return std::make_shared<rmm::mr::cuda_async_memory_resource>();
 }
 
+/// \brief Makes a managed resource
 [[nodiscard]] auto makeManagedMr() {
   return std::make_shared<rmm::mr::managed_memory_resource>();
 }
 
-/// \brief Makes a prefetched<managed> resource
+/// \brief Makes a prefetch<managed> resource
 [[nodiscard]] auto makePrefetchManagedMr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
       makeManagedMr());
 }
 
+/// \brief Makes an arena<cuda> resource
 [[nodiscard]] auto makeArenaMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::arena_memory_resource>(
       makeCudaMr(), rmm::percent_of_free_device_memory(percent));
 }
 
+/// \brief Makes a pool<managed> resource
 [[nodiscard]] auto makeManagedPoolMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
       makeManagedMr(), rmm::percent_of_free_device_memory(percent));
 }
 
-/// \brief Makes a prefetched<pool<managed>> resource
+/// \brief Makes a prefetch<pool<managed>> resource
 [[nodiscard]] auto makePrefetchManagedPoolMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
       makeManagedPoolMr(percent));
+}
+
+/// \brief Makes a managed_async resource (experimental, requires CUDA 13+)
+[[nodiscard]] auto makeManagedAsyncMr() {
+  return std::make_shared<rmm::mr::cuda_async_managed_memory_resource>();
+}
+
+/// \brief Makes a prefetch<managed_async> resource (experimental, requires CUDA
+/// 13+)
+[[nodiscard]] auto makePrefetchManagedAsyncMr() {
+  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
+      makeManagedAsyncMr());
 }
 
 void enablePrefetching() {
@@ -104,6 +123,8 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
     return makeManagedMr();
   if (mode == "managed_pool")
     return makeManagedPoolMr(percent);
+  if (mode == "managed_async")
+    return makeManagedAsyncMr();
   if (mode == "prefetch_managed") {
     enablePrefetching();
     return makePrefetchManagedMr();
@@ -112,9 +133,14 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
     enablePrefetching();
     return makePrefetchManagedPoolMr(percent);
   }
+  if (mode == "prefetch_managed_async") {
+    enablePrefetching();
+    return makePrefetchManagedAsyncMr();
+  }
   VELOX_FAIL(
       "Unknown memory resource mode: " + std::string(mode) +
-      "\nExpecting: cuda, pool, async, arena, managed, prefetch_managed, managed_pool, prefetch_managed_pool");
+      "\nExpecting: cuda, pool, async, arena, managed, prefetch_managed, " +
+      "managed_pool, prefetch_managed_pool, managed_async, prefetch_managed_async");
 }
 
 cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
