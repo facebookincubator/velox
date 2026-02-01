@@ -37,6 +37,7 @@ add_executable(
 # Disabling writer tests until we re-add writing ability to CudfHiveConnector
 # add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
 add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
+add_executable(velox_cudf_batch_concat_test Main.cpp BatchConcatTest.cpp)
 
 add_test(
   NAME velox_cudf_aggregation_test
@@ -123,6 +124,11 @@ add_test(
   COMMAND velox_cudf_topn_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
+add_test(
+  NAME velox_cudf_batch_concat_test
+  COMMAND velox_cudf_batch_concat_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 add_test(
   NAME velox_cudf_aggregation_selection_test
@@ -172,6 +178,7 @@ set_tests_properties(
   velox_cudf_step_aware_aggregation_registry_test
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
+set_tests_properties(velox_cudf_batch_concat_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_aggregation_test
@@ -349,11 +356,24 @@ target_link_libraries(
 target_link_libraries(
   velox_cudf_step_aware_aggregation_registry_test
   velox_cudf_exec
+  velox_cudf_exec_test_lib
   velox_exec
   velox_exec_test_lib
   velox_test_util
   gtest
   gtest_main
+  fmt::fmt
+)
+
+target_link_libraries(
+  velox_cudf_batch_concat_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  fmt::fmt
 )
 
 add_subdirectory(utils)
