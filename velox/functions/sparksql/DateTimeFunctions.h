@@ -820,22 +820,24 @@ struct MonthNameFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Date>& date) {
-    static constexpr std::string_view kMonthNames[] = {
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec"};
     const auto tm = getDateTime(date);
-    result.append(kMonthNames[tm.tm_mon]);
+    result.setNoCopy(StringView(kMonthNames_[tm.tm_mon]));
   }
+
+ private:
+  static constexpr std::string_view kMonthNames_[] = {
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"};
 };
 
 template <typename T>
