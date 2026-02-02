@@ -14,14 +14,10 @@
  * limitations under the License.
  */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION.
- * SPDX-License-Identifier: Apache-2.0
- *
  * A standalone table_view schema printer for cudf::table_view.
  * Can be copied to any project that uses cudf table_view.
  *
  * Usage:
- *   #include "table_view_printer.hpp"
  *   cudf::table_view const& table = ...;
  *   cudf::print_table_schema(table);
  *   // or

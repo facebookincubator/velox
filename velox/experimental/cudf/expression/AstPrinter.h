@@ -18,7 +18,6 @@
  * Can be copied to any project that uses cudf AST expressions.
  *
  * Usage:
- *   #include "velox/experimental/cudf/expression/AstPrinter.hpp"
  *   cudf::ast::expression const& expr = ...;
  *   cudf::ast::print_expression(expr);
  *   // or

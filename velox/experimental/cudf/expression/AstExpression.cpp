@@ -16,9 +16,9 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
-#include "velox/experimental/cudf/expression/AstPrinter.hpp"
+#include "velox/experimental/cudf/expression/AstPrinter.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
-#include "velox/experimental/cudf/vector/TableViewPrinter.hpp"
+#include "velox/experimental/cudf/vector/TableViewPrinter.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
