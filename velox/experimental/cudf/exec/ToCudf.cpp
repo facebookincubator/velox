@@ -73,12 +73,12 @@ bool CompileState::compile(bool allowCpuFallback) {
 
   if (CudfConfig::getInstance().debugEnabled) {
     LOG(INFO) << "Operators before adapting for cuDF: count ["
-              << operators.size() << "]" << std::endl;
+              << operators.size() << "]";
     for (auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString() << std::endl;
+                << op->toString();
     }
-    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback << std::endl;
+    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
   }
 
   bool replacementsMade = false;
@@ -383,9 +383,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (CudfConfig::getInstance().debugEnabled) {
       LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
-                << oper->toString().c_str()
-                << ", keepOperator = " << keepOperator
-                << ", replaceOp.size() = " << replaceOp.size() << ", ";
+                << oper->toString() << ", keepOperator = " << keepOperator
+                << ", replaceOp.size() = " << replaceOp.size();
     }
     auto GpuReplacedOperator = [](const exec::Operator* op) {
       return isAnyOf<
@@ -415,20 +414,21 @@ bool CompileState::compile(bool allowCpuFallback) {
                       keepOperator == 0) ||
         (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
     if (CudfConfig::getInstance().debugEnabled) {
-      LOG(INFO) << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
+      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
+                << oper->toString() << " Replacement condition: "
+                << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
                 << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
-                << ", GPU operator condition = " << condition << std::endl;
+                << ", GPU operator condition = " << condition;
     }
     if (!allowCpuFallback) {
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
     } else if (!condition) {
       LOG(WARNING)
           << "Replacement with cuDF operator failed. Falling back to CPU execution";
-      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString()
-                   << std::endl;
+      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
       auto planNode = getPlanNode(oper->planNodeId());
       LOG(WARNING) << "Replacement Failed PlanNode: "
-                   << planNode->toString(true, false) << std::endl;
+                   << planNode->toString(true, false);
     }
 
     if (not replaceOp.empty()) {
@@ -446,10 +446,10 @@ bool CompileState::compile(bool allowCpuFallback) {
   if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
     LOG(INFO) << "Operators after adapting for cuDF: count ["
-              << operators.size() << "]" << std::endl;
+              << operators.size() << "]";
     for (auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString() << std::endl;
+                << op->toString();
     }
   }
 

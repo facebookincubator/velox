@@ -14,14 +14,11 @@
  * limitations under the License.
  */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION.
- * SPDX-License-Identifier: Apache-2.0
- *
  * A standalone AST expression tree printer for cudf::ast::expression.
  * Can be copied to any project that uses cudf AST expressions.
  *
  * Usage:
- *   #include "ast_expression_printer.hpp"
+ *   #include "velox/experimental/cudf/expression/AstPrinter.hpp"
  *   cudf::ast::expression const& expr = ...;
  *   cudf::ast::print_expression(expr);
  *   // or

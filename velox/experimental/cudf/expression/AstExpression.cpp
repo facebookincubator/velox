@@ -717,10 +717,8 @@ ColumnOrView ASTExpression::eval(
       }
     } else {
       if (CudfConfig::getInstance().debugEnabled) {
-        LOG(INFO) << cudf::ast::expression_to_string(cudfTree_.back())
-                  << std::endl;
-        LOG(INFO) << cudf::table_schema_to_string(astInputTableView)
-                  << std::endl;
+        LOG(INFO) << cudf::ast::expression_to_string(cudfTree_.back());
+        LOG(INFO) << cudf::table_schema_to_string(astInputTableView);
       }
       return cudf::compute_column(
           astInputTableView, cudfTree_.back(), stream, mr);
