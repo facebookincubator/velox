@@ -789,7 +789,7 @@ struct DayNameFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Date>& date) {
-    // Based on the fact that Unix epopch is Thursday.
+    // Based on the fact that the Unix epoch is Thursday.
     auto dayOfWeek = (4 + date) % 7;
     if (dayOfWeek < 0) {
       dayOfWeek += 7;
