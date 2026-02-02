@@ -1463,6 +1463,120 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       core::AggregationNode::Step::kIntermediate,
       avgIntermediateSignatures);
 
+  // Register approx_distinct function
+  auto approxDistinctSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("varchar")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("varbinary")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("date")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("timestamp")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kSingle,
+      approxDistinctSingleSignatures);
+
+  auto approxDistinctPartialSignatures =
+      std::vector<exec::FunctionSignaturePtr>{
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("tinyint")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("smallint")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("integer")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("bigint")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("real")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("double")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("varchar")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("varbinary")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("date")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("timestamp")
+              .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kPartial,
+      approxDistinctPartialSignatures);
+
+  auto approxDistinctIntermediateSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("varbinary")
+                                                  .argumentType("varbinary")
+                                                  .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kIntermediate,
+      approxDistinctIntermediateSignatures);
+
+  auto approxDistinctFinalSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("bigint")
+                                                  .argumentType("varbinary")
+                                                  .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kFinal,
+      approxDistinctFinalSignatures);
+
   return true;
 }
 
