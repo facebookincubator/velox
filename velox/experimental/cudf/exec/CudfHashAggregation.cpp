@@ -36,6 +36,9 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
+
+#include <vector>
 
 namespace {
 
@@ -480,8 +483,24 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
 
     cudf::size_type offsets[2] = {0, sketch_size};
-    rmm::device_buffer offsets_device{
-        offsets, 2 * sizeof(cudf::size_type), stream};
+    rmm::device_buffer offsets_device{2 * sizeof(cudf::size_type), stream};
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        offsets_device.data(),
+        offsets,
+        2 * sizeof(cudf::size_type),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    rmm::device_buffer chars_buffer{sketch_bytes.size(), stream};
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        chars_buffer.data(),
+        sketch_bytes.data(),
+        sketch_bytes.size(),
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
+
+    // Sync stream before stack-allocated offsets goes out of scope
+    stream.synchronize();
 
     auto offsets_column = std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT32},
@@ -490,27 +509,12 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         rmm::device_buffer{},
         0);
 
-    rmm::device_buffer chars_device{
-        sketch_bytes.data(), sketch_bytes.size(), stream};
-
-    auto chars_column = std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::INT8},
-        sketch_bytes.size(),
-        std::move(chars_device),
-        rmm::device_buffer{},
-        0);
-
-    std::vector<std::unique_ptr<cudf::column>> children;
-    children.push_back(std::move(offsets_column));
-    children.push_back(std::move(chars_column));
-
-    return std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::STRING},
+    return cudf::make_strings_column(
         1,
-        rmm::device_buffer{},
-        rmm::device_buffer{},
+        std::move(offsets_column),
+        std::move(chars_buffer),
         0,
-        std::move(children));
+        rmm::device_buffer{});
   }
 
   template <typename Func>
@@ -522,33 +526,55 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     auto offsets_col = strings_col.offsets();
     auto chars_ptr = strings_col.chars_begin(stream);
 
-    auto offsets_iter = offsets_col.begin<cudf::size_type>();
+    auto num_offsets = sketch_column.size() + 1;
+    std::vector<cudf::size_type> host_offsets(num_offsets);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        host_offsets.data(),
+        offsets_col.begin<cudf::size_type>(),
+        num_offsets * sizeof(cudf::size_type),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+    stream.synchronize(); // Need host_offsets before proceeding
 
-    cudf::size_type first_offset = offsets_iter[0];
-    cudf::size_type second_offset = offsets_iter[1];
-    cudf::size_type first_size = second_offset - first_offset;
+    cudf::size_type first_offset = host_offsets[0];
+    cudf::size_type first_size = host_offsets[1] - first_offset;
 
-    auto sketch_data_ptr =
-        const_cast<cuda::std::byte*>(static_cast<cuda::std::byte const*>(
-            static_cast<void const*>(chars_ptr)));
+    // Copy to mutable aligned buffer - cudf::approx_distinct_count requires
+    // non-const span and proper alignment for int32 registers
+    rmm::device_buffer aligned_sketch{
+        static_cast<std::size_t>(first_size), stream};
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        aligned_sketch.data(),
+        chars_ptr + first_offset,
+        static_cast<std::size_t>(first_size),
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
 
     cudf::approx_distinct_count merged_sketch(
         cuda::std::span<cuda::std::byte>(
-            sketch_data_ptr + first_offset, first_size),
+            static_cast<cuda::std::byte*>(aligned_sketch.data()), first_size),
         precision_,
         kNullPolicy,
         kNanPolicy,
         stream);
 
     for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
-      cudf::size_type start_offset = offsets_iter[i];
-      cudf::size_type end_offset = offsets_iter[i + 1];
+      cudf::size_type start_offset = host_offsets[i];
+      cudf::size_type end_offset = host_offsets[i + 1];
       cudf::size_type size = end_offset - start_offset;
 
       if (size > 0) {
+        rmm::device_buffer temp_sketch{static_cast<std::size_t>(size), stream};
+        CUDF_CUDA_TRY(cudaMemcpyAsync(
+            temp_sketch.data(),
+            chars_ptr + start_offset,
+            size,
+            cudaMemcpyDeviceToDevice,
+            stream.value()));
+
         merged_sketch.merge(
             cuda::std::span<cuda::std::byte>(
-                sketch_data_ptr + start_offset, size),
+                static_cast<cuda::std::byte*>(temp_sketch.data()), size),
             stream);
       }
     }
