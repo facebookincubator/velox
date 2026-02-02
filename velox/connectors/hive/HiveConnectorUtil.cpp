@@ -256,9 +256,8 @@ bool isSpecialColumn(
 
 const std::string& getColumnName(const common::Subfield& subfield) {
   VELOX_CHECK_GT(subfield.path().size(), 0);
-  auto* field = dynamic_cast<const common::Subfield::NestedField*>(
+  auto* field = checkedPointerCast<const common::Subfield::NestedField>(
       subfield.path()[0].get());
-  VELOX_CHECK_NOT_NULL(field);
   return field->name();
 }
 
