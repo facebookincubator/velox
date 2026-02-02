@@ -96,12 +96,6 @@ void registerMapIntersect(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_intersect"});
-
-  registerFunction<
-      MapIntersectFunction,
-      Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_intersect"});
 }
 
 template <typename T>
@@ -129,12 +123,6 @@ void registerMapExcept(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_except"});
-
-  registerFunction<
-      MapExceptFunction,
-      Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_except"});
 }
 
 template <typename T>
