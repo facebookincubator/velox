@@ -15,17 +15,13 @@
  */
 #pragma once
 
+#include <cstdlib>
+
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/sparksql/XORShiftRandom.h"
 
 namespace facebook::velox::functions::sparksql {
-
-namespace detail {
-constexpr char kPool[] =
-    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-constexpr int kPoolSize = 62;
-} // namespace detail
 
 /// Spark SQL randstr(length, seed) - Returns a string of the specified
 /// length with characters chosen uniformly at random from 0-9, a-z, A-Z.
@@ -60,12 +56,21 @@ struct RandStrFunction {
   }
 
   /// Uses the seeded XORShift generator for Spark-compatible reproducibility.
+  /// Matches Spark's ExpressionImplUtils.randStr implementation.
   template <typename TLen, typename TSeed>
   FOLLY_ALWAYS_INLINE void
   call(out_type<Varchar>& out, TLen /*length*/, TSeed /*seed*/) {
     out.resize(length_);
     for (auto i = 0; i < length_; ++i) {
-      out.data()[i] = detail::kPool[generator_.nextInt(detail::kPoolSize)];
+      // Spark uses Math.abs(rng.nextInt() % 62) to select characters.
+      int v = std::abs(generator_.nextInt() % 62);
+      if (v < 10) {
+        out.data()[i] = '0' + v;
+      } else if (v < 36) {
+        out.data()[i] = 'a' + (v - 10);
+      } else {
+        out.data()[i] = 'A' + (v - 36);
+      }
     }
   }
 

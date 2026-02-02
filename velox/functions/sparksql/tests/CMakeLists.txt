@@ -68,6 +68,7 @@ add_executable(
   SizeTest.cpp
   SortArrayTest.cpp
   SparkCastExprTest.cpp
+  XORShiftRandomTest.cpp
   SparkPartitionIdTest.cpp
   SplitTest.cpp
   StringTest.cpp

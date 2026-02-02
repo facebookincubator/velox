@@ -33,7 +33,12 @@ class XORShiftRandom {
     seed_ = hashSeed(seed);
   }
 
-  /// Returns a random integer in [0, bound).
+  /// Returns a random 32-bit integer (like Java's nextInt() with no argument).
+  int32_t nextInt() {
+    return next(32);
+  }
+
+  /// Returns a random integer in [0, bound) using Java's algorithm.
   int32_t nextInt(int32_t bound) {
     return static_cast<int32_t>(
         (static_cast<uint32_t>(next(31)) * static_cast<uint64_t>(bound)) >> 31);
@@ -57,8 +62,8 @@ class XORShiftRandom {
     for (int i = 0; i < 8; ++i) {
       bytes[i] = static_cast<uint8_t>((seed >> (56 - i * 8)) & 0xFF);
     }
-    // Spark uses MurmurHash3.arraySeed (0xb592f7ae) as initial seed.
-    int32_t lowBits = murmurHash3(bytes, 8, 0xb592f7ae);
+    // Spark uses MurmurHash3.arraySeed (0x3c074a61) as initial seed.
+    int32_t lowBits = murmurHash3(bytes, 8, 0x3c074a61);
     int32_t highBits = murmurHash3(bytes, 8, lowBits);
     return (static_cast<int64_t>(highBits) << 32) |
         (static_cast<int64_t>(lowBits) & 0xFFFFFFFFL);
