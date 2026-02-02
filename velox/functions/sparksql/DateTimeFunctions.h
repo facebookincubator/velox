@@ -835,7 +835,7 @@ struct MonthNameFunction {
       out_type<Varchar>& result,
       const arg_type<Date>& date) {
     const auto tm = getDateTime(date);
-    result.setNoCopy(StringView(kMonthNames[tm.tm_mon]));
+    result.append(kMonthNames[tm.tm_mon]);
   }
 };
 
