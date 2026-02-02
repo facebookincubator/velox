@@ -325,18 +325,30 @@ TEST_F(PlanConsistencyCheckerTest, nestedLoopJoin) {
   ASSERT_NO_THROW(PlanConsistencyChecker::check(rightProjectNode));
 
   // Invalid reference in the filter.
+  {
+    auto joinNode = std::make_shared<NestedLoopJoinNode>(
+        nextId(),
+        JoinType::kLeft,
+        std::make_shared<CallTypedExpr>(
+            BOOLEAN(), "lt", Col(INTEGER(), "b"), Col(INTEGER(), "blah")),
+        leftProjectNode,
+        rightProjectNode,
+        ROW({}));
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(joinNode),
+        "Field not found: blah. Available fields are: a, b, c, d.");
+  }
 
-  auto joinNode = std::make_shared<NestedLoopJoinNode>(
-      nextId(),
-      JoinType::kLeft,
-      std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "lt", Col(INTEGER(), "b"), Col(INTEGER(), "blah")),
-      leftProjectNode,
-      rightProjectNode,
-      ROW({}));
-  VELOX_ASSERT_THROW(
-      PlanConsistencyChecker::check(joinNode),
-      "Field not found: blah. Available fields are: a, b, c, d.");
+  // Duplicate output name.
+  {
+    auto joinNode = std::make_shared<NestedLoopJoinNode>(
+        nextId(),
+        leftProjectNode,
+        rightProjectNode,
+        ROW({"a", "c", "a"}, INTEGER()));
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(joinNode), "Duplicate output column: a");
+  }
 }
 
 namespace {

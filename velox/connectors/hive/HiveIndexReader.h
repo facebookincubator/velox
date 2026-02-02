@@ -100,7 +100,7 @@ class HiveIndexReader {
   // declared before rowReader_.
   std::unique_ptr<dwio::common::RowReader> createRowReader();
 
-  // Initializes indexColumnSpecs_ and requestColumnIndices_ from join
+  // Initializes joinIndexColumnSpecs_ and requestColumnIndices_ from join
   // conditions.
   void initJoinConditions();
 
@@ -139,7 +139,7 @@ class HiveIndexReader {
   const std::vector<core::IndexLookupConditionPtr> joinConditions_;
 
   // Cached ScanSpec children for index columns used in join conditions.
-  std::vector<common::ScanSpec*> indexColumnSpecs_;
+  std::vector<common::ScanSpec*> joinIndexColumnSpecs_;
   // Request column indices for each join condition (for probe side columns).
   // For EqualIndexLookupCondition, stores {valueIndex}.
   // For BetweenIndexLookupCondition, stores {lowerIndex, upperIndex}.
@@ -154,7 +154,7 @@ class HiveIndexReader {
   // Indexed by join condition index and then by column index within that
   // condition (0 for equal condition value, 0/1 for between condition
   // lower/upper).
-  std::vector<std::vector<DecodedVector>> decodedVectors_;
+  std::vector<std::vector<DecodedVector>> decodedRequestVectors_;
 };
 
 } // namespace facebook::velox::connector::hive
