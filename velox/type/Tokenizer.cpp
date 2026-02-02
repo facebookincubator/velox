@@ -61,13 +61,37 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::computeNext() {
   }
 
   if (tryMatchSeparator(separators_->openBracket)) {
-    // These empty comments only needs to make clang-format happy.
-    auto token = //
-        tryMatchSeparator(separators_->quote) //
-        ? matchQuotedSubscript()
-        : tryMatchSeparator(separators_->wildCard) //
-            ? matchWildcardSubscript()
-            : matchUnquotedSubscript();
+    std::unique_ptr<Subfield::PathElement> token;
+
+    if (hasNextCharacter()) {
+      switch (peekCharacter()) {
+        case '$':
+          // [$] pattern (cardinality-only subscript)
+          nextCharacter(); // consume $
+          match(separators_->closeBracket);
+          firstSegment_ = false;
+          return matchCardinalityOnlySubscript();
+
+        case 'K':
+        case 'V': {
+          // [K*,...] or [V*,...] pattern (keys-only or values-only subscript)
+          bool includeKeys = peekCharacter() == 'K';
+          nextCharacter(); // consume 'K' or 'V'
+          token = matchMapSubscript(includeKeys);
+          break;
+        }
+
+        default:
+          // Standard subscripts: ["..."], [*], or [123]
+          token = tryMatchSeparator(separators_->quote) ? matchQuotedSubscript()
+              : tryMatchSeparator(separators_->wildCard)
+              ? matchWildcardSubscript()
+              : matchUnquotedSubscript();
+          break;
+      }
+    } else {
+      invalidSubfieldPath();
+    }
 
     match(separators_->closeBracket);
     firstSegment_ = false;
@@ -202,6 +226,104 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
 
 std::unique_ptr<Subfield::PathElement> Tokenizer::matchWildcardSubscript() {
   return std::make_unique<Subfield::AllSubscripts>();
+}
+
+std::unique_ptr<Subfield::PathElement> Tokenizer::matchMapSubscript(
+    bool includeKeys) {
+  // We've consumed 'K' or 'V', now expect '*'
+  if (!hasNextCharacter() || peekCharacter() != separators_->wildCard) {
+    invalidSubfieldPath();
+  }
+  nextCharacter(); // consume '*'
+
+  // Expect comma
+  if (!hasNextCharacter() || peekCharacter() != ',') {
+    invalidSubfieldPath();
+  }
+  nextCharacter(); // consume ','
+
+  // Skip optional whitespace
+  while (hasNextCharacter() && peekCharacter() == ' ') {
+    nextCharacter();
+  }
+
+  // Now parse the subscript part: either *, a number, or a quoted string
+  std::unique_ptr<Subfield::PathElement> subscript;
+
+  if (!hasNextCharacter()) {
+    invalidSubfieldPath();
+  }
+
+  if (peekCharacter() == separators_->wildCard) {
+    // [K*, *] or [V*, *] pattern - all subscripts
+    nextCharacter(); // consume '*'
+    subscript = nullptr;
+  } else if (peekCharacter() == separators_->quote) {
+    // [K*, "key"] or [V*, "key"] pattern - string subscript
+    nextCharacter(); // consume '"'
+    subscript = matchQuotedSubscript();
+  } else if (peekCharacter() == '\'') {
+    // [K*, 'key'] or [V*, 'key'] pattern - single quoted string subscript
+    subscript = matchSingleQuotedSubscript();
+  } else if (isdigit(peekCharacter()) || peekCharacter() == '-') {
+    // [K*, 42] or [V*, 42] pattern - long subscript
+    subscript = matchUnquotedSubscript();
+  } else {
+    invalidSubfieldPath();
+  }
+
+  return std::make_unique<Subfield::ArrayOrMapSubscript>(
+      includeKeys, !includeKeys, std::move(subscript));
+}
+
+std::unique_ptr<Subfield::PathElement> Tokenizer::matchSingleQuotedSubscript() {
+  // Consume opening single quote
+  if (!hasNextCharacter() || peekCharacter() != '\'') {
+    invalidSubfieldPath();
+  }
+  nextCharacter(); // consume opening '
+
+  // Parse the string content
+  std::string token;
+  bool escaped = false;
+
+  while (hasNextCharacter() && (escaped || peekCharacter() != '\'')) {
+    if (escaped) {
+      switch (peekCharacter()) {
+        case '\'':
+        case '\\':
+          token += peekCharacter();
+          break;
+        default:
+          invalidSubfieldPath();
+      }
+      escaped = false;
+    } else {
+      if (peekCharacter() == separators_->backSlash) {
+        escaped = true;
+      } else {
+        token += peekCharacter();
+      }
+    }
+    nextCharacter();
+  }
+
+  if (escaped) {
+    invalidSubfieldPath();
+  }
+
+  // Consume closing single quote
+  if (!hasNextCharacter() || peekCharacter() != '\'') {
+    invalidSubfieldPath();
+  }
+  nextCharacter(); // consume closing '
+
+  return std::make_unique<Subfield::StringSubscript>(token);
+}
+
+std::unique_ptr<Subfield::PathElement>
+Tokenizer::matchCardinalityOnlySubscript() {
+  return std::make_unique<Subfield::ArrayOrMapSubscript>(false, false, nullptr);
 }
 
 void Tokenizer::invalidSubfieldPath() {

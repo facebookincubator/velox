@@ -27,9 +27,30 @@ const auto& subfieldKindNames() {
       {SubfieldKind::kNestedField, "NestedField"},
       {SubfieldKind::kStringSubscript, "StringSubscript"},
       {SubfieldKind::kLongSubscript, "LongSubscript"},
+      {SubfieldKind::kArrayOrMapSubscript, "ArrayOrMapSubscript"},
   };
 
   return kNames;
+}
+
+std::string subscriptToValueString(const Subfield::PathElement* subscript) {
+  if (!subscript) {
+    return "*";
+  }
+
+  switch (subscript->kind()) {
+    case SubfieldKind::kAllSubscripts:
+      return "*";
+    case SubfieldKind::kLongSubscript:
+      return std::to_string(subscript->as<Subfield::LongSubscript>()->index());
+    case SubfieldKind::kStringSubscript:
+      // Use single quotes for consistency with the [K*, 'foo'] pattern
+      return "'" + subscript->as<Subfield::StringSubscript>()->index() + "'";
+    default:
+      VELOX_FAIL(
+          "Unexpected subscript kind: {}",
+          SubfieldKindName::toName(subscript->kind()));
+  }
 }
 } // namespace
 
@@ -126,4 +147,80 @@ std::string Subfield::StringSubscript::toString() const {
   return "[\"" + boost::replace_all_copy(index_, "\"", "\\\"") + "\"]";
 }
 
+// ArrayOrMapSubscript Implementation
+Subfield::ArrayOrMapSubscript::ArrayOrMapSubscript(
+    bool includeKeys,
+    bool includeValues,
+    std::unique_ptr<PathElement> subscript)
+    : PathElement(SubfieldKind::kArrayOrMapSubscript),
+      includeKeys_(includeKeys),
+      includeValues_(includeValues),
+      subscript_(std::move(subscript)) {
+  if (subscript_) {
+    VELOX_USER_CHECK(
+        subscript_->kind() == SubfieldKind::kAllSubscripts ||
+            subscript_->kind() == SubfieldKind::kLongSubscript ||
+            subscript_->kind() == SubfieldKind::kStringSubscript,
+        "ArrayOrMapSubscript filter must be AllSubscripts, LongSubscript, or StringSubscript");
+  }
+}
+
+std::string Subfield::ArrayOrMapSubscript::toString() const {
+  // no data needed: translates to [$]
+  if (isCardinalityOnly()) {
+    return "[$]";
+  }
+
+  if (includeKeys_ && includeValues_) {
+    VELOX_UNSUPPORTED(
+        "Invalid subfield pushdown, should use kAllSubscripts, LongSubscript or StringSubscript directly");
+  }
+
+  // Future patterns (not yet implemented in parser)
+  // [K*, *], [K*, 42], [K*, 'foo'], [V*, *], [V*, 42], [V*, 'foo']
+  std::string prefix = includeKeys_ ? "K*" : "V*";
+  std::string subscriptStr = subscriptToValueString(subscript_.get());
+  return "[" + prefix + ", " + subscriptStr + "]";
+}
+
+size_t Subfield::ArrayOrMapSubscript::hash() const {
+  return folly::hash::hash_combine(
+      includeKeys_, includeValues_, subscript_ ? subscript_->hash() : 0);
+}
+
+bool Subfield::ArrayOrMapSubscript::operator==(const PathElement& other) const {
+  if (this == &other) {
+    return true;
+  }
+
+  if (other.kind() != SubfieldKind::kArrayOrMapSubscript) {
+    return false;
+  }
+
+  const auto* otherSub = other.as<Subfield::ArrayOrMapSubscript>();
+  if (includeKeys_ != otherSub->includeKeys_ ||
+      includeValues_ != otherSub->includeValues_) {
+    return false;
+  }
+
+  if (subscript_ == nullptr && otherSub->subscript_ == nullptr) {
+    return true;
+  }
+
+  if (subscript_ == nullptr || otherSub->subscript_ == nullptr) {
+    return false;
+  }
+
+  return *subscript_ == *otherSub->subscript_;
+}
+
+std::unique_ptr<Subfield::PathElement> Subfield::ArrayOrMapSubscript::clone() {
+  if (isCardinalityOnly()) {
+    return std::make_unique<Subfield::ArrayOrMapSubscript>(
+        false, false, nullptr);
+  }
+
+  return std::make_unique<Subfield::ArrayOrMapSubscript>(
+      includeKeys_, includeValues_, subscript_ ? subscript_->clone() : nullptr);
+}
 } // namespace facebook::velox::common
