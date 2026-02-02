@@ -55,6 +55,13 @@ struct VectorWriter : public VectorWriterBase {
     }
   }
 
+  // Resizes the vector to exactly the specified size, updating the data_
+  // pointer to ensure it remains valid after potential reallocation.
+  void resizeTo(vector_size_t size) override {
+    vector_->resize(size, /*setNotNull*/ false);
+    data_ = vector_->mutableRawValues();
+  }
+
   VectorWriter() {}
 
   FOLLY_ALWAYS_INLINE exec_out_t& current() {
@@ -104,7 +111,8 @@ struct VectorWriter<Array<V>> : public VectorWriterBase {
 
   // This should be called once all rows are processed.
   void finish() override {
-    writer_.elementsVector()->resize(writer_.valuesOffset_);
+    // Use resizeTo() to transparently update data_ pointer after resize.
+    childWriter_.resizeTo(writer_.valuesOffset_);
     arrayVector_ = nullptr;
     childWriter_.finish();
   }
@@ -124,6 +132,11 @@ struct VectorWriter<Array<V>> : public VectorWriterBase {
     if (size > arrayVector_->size()) {
       arrayVector_->resize(size);
     }
+  }
+
+  void resizeTo(vector_size_t size) override {
+    writer_.elementsVector()->resize(size);
+    childWriter_.resizeTo(size);
   }
 
   // Commit a not null value.
@@ -182,9 +195,9 @@ struct VectorWriter<Map<K, V>> : public VectorWriterBase {
 
   // This should be called once all rows are processed.
   void finish() override {
-    // Downsize to actual used size.
-    writer_.keysVector_->resize(writer_.innerOffset_);
-    writer_.valuesVector_->resize(writer_.innerOffset_);
+    // Use resizeTo() to transparently update data_ pointers after resize.
+    keyWriter_.resizeTo(writer_.innerOffset_);
+    valWriter_.resizeTo(writer_.innerOffset_);
     mapVector_ = nullptr;
     keyWriter_.finish();
     valWriter_.finish();
@@ -205,6 +218,13 @@ struct VectorWriter<Map<K, V>> : public VectorWriterBase {
     if (size > mapVector_->size()) {
       mapVector_->resize(size);
     }
+  }
+
+  void resizeTo(vector_size_t size) override {
+    writer_.keysVector_->resize(size);
+    writer_.valuesVector_->resize(size);
+    keyWriter_.resizeTo(size);
+    valWriter_.resizeTo(size);
   }
 
   // Commit a not null value.
@@ -288,6 +308,11 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     }
   }
 
+  void resizeTo(vector_size_t size) override {
+    resizeVectorWritersTo<0>(size);
+    rowVector_->resize(size, /*setNotNull*/ false);
+  }
+
   void finalizeNull() override {
     // TODO: we could pull the logic out to here also.
     writer_.finalizeNullOnChildren();
@@ -334,6 +359,16 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
   }
 
   template <size_t I>
+  void resizeVectorWritersTo(size_t size) {
+    if constexpr (I == sizeof...(T)) {
+      return;
+    } else {
+      std::get<I>(writer_.childrenWriters_).resizeTo(size);
+      resizeVectorWritersTo<I + 1>(size);
+    }
+  }
+
+  template <size_t I>
   void initVectorWriters() {
     if constexpr (I == sizeof...(T)) {
       return;
@@ -369,6 +404,10 @@ struct VectorWriter<
     if (size > proxy_.vector_->size()) {
       proxy_.vector_->resize(size, /*setNotNull=*/false);
     }
+  }
+
+  void resizeTo(vector_size_t size) override {
+    proxy_.vector_->resize(size, /*setNotNull=*/false);
   }
 
   VectorWriter() {}
@@ -423,6 +462,10 @@ struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>>
     }
   }
 
+  void resizeTo(vector_size_t size) override {
+    vector_->resize(size, /*setNotNull*/ false);
+  }
+
   VectorWriter() {}
 
   bool& current() {
@@ -469,6 +512,10 @@ struct VectorWriter<std::shared_ptr<T>> : public VectorWriterBase {
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
     }
+  }
+
+  void resizeTo(vector_size_t size) override {
+    vector_->resize(size, /*setNotNull*/ false);
   }
 
   vector_t& vector() {
@@ -562,6 +609,14 @@ struct VectorWriter<Generic<T, comparable, orderable>>
       if (vector_->size() < size) {
         vector_->resize(size, false);
       }
+    }
+  }
+
+  void resizeTo(vector_size_t size) override {
+    if (castType_) {
+      castWriter_->resizeTo(size);
+    } else {
+      vector_->resize(size, false);
     }
   }
 
@@ -740,6 +795,13 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
       }
       rowVector_->resize(size, /*setNotNull*/ false);
     }
+  }
+
+  void resizeTo(vector_size_t size) override {
+    for (int i = 0; i < writer_.childrenCount_; ++i) {
+      writer_.childrenWriters_[i]->resizeTo(size);
+    }
+    rowVector_->resize(size, /*setNotNull*/ false);
   }
 
   void finalizeNull() override {
