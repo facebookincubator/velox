@@ -46,6 +46,49 @@ variant extractValue(const DecodedVector& decoded, vector_size_t row) {
   using T = typename TypeTraits<kind>::NativeType;
   return variant(decoded.valueAt<T>(row));
 }
+
+// Checks if a filter is a point lookup (single value equality filter).
+// Returns true if the filter represents a point lookup, false if it's a range
+// filter or unsupported filter type.
+// This is used to determine if we can continue processing join conditions after
+// an index column has a filter. Only point lookup filters allow subsequent
+// index columns to be used for join conditions.
+bool isPointLookupFilter(const common::Filter* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+
+  switch (filter->kind()) {
+    case common::FilterKind::kBigintRange: {
+      const auto* range = filter->as<common::BigintRange>();
+      return range->isSingleValue();
+    }
+    case common::FilterKind::kDoubleRange: {
+      const auto* range = filter->as<common::DoubleRange>();
+      return !range->lowerUnbounded() && !range->upperUnbounded() &&
+          range->lower() == range->upper() && !range->lowerExclusive() &&
+          !range->upperExclusive();
+    }
+    case common::FilterKind::kFloatRange: {
+      const auto* range = filter->as<common::FloatRange>();
+      return !range->lowerUnbounded() && !range->upperUnbounded() &&
+          range->lower() == range->upper() && !range->lowerExclusive() &&
+          !range->upperExclusive();
+    }
+    case common::FilterKind::kBytesRange: {
+      const auto* range = filter->as<common::BytesRange>();
+      return range->isSingleValue();
+    }
+    case common::FilterKind::kBytesValues: {
+      const auto* values = filter->as<common::BytesValues>();
+      return values->values().size() == 1;
+    }
+    case common::FilterKind::kBoolValue:
+      // These are always point lookups or not convertible.
+      return true;
+    default:
+      // Unsupported filter types are not point lookups.
+      return false;
+  }
+}
 } // namespace
 
 HiveIndexReader::HiveIndexReader(
@@ -84,12 +127,17 @@ void HiveIndexReader::initJoinConditions() {
   VELOX_CHECK(
       !tableHandle_->indexColumns().empty(),
       "Index columns not set in hive table handle");
-  VELOX_CHECK(indexColumnSpecs_.empty());
+  VELOX_CHECK(joinIndexColumnSpecs_.empty());
   VELOX_CHECK(requestColumnIndices_.empty());
 
-  indexColumnSpecs_.reserve(joinConditions_.size());
+  const auto& tableIndexColumns = tableHandle_->indexColumns();
+  VELOX_CHECK_LE(
+      joinConditions_.size(),
+      tableIndexColumns.size(),
+      "Too many join conditions");
+  joinIndexColumnSpecs_.reserve(joinConditions_.size());
   requestColumnIndices_.reserve(joinConditions_.size());
-  decodedVectors_.resize(joinConditions_.size());
+  decodedRequestVectors_.resize(joinConditions_.size());
 
   auto getRequestColumnIndex = [&](const std::string& name) {
     const auto idxOpt = requestType_->getChildIdxIfExists(name);
@@ -100,51 +148,49 @@ void HiveIndexReader::initJoinConditions() {
     return idxOpt.value();
   };
 
-  // Validate join conditions:
-  // 1. Index columns must follow the order of table index columns (prefix).
-  // 2. Equal conditions must come before between conditions.
-  const auto& tableIndexColumns = tableHandle_->indexColumns();
-  bool seenBetweenCondition = false;
-  for (size_t i = 0; i < joinConditions_.size(); ++i) {
-    const auto& condition = joinConditions_[i];
-    VELOX_CHECK(!condition->isFilter());
-
-    const auto& keyName = condition->key->name();
-    VELOX_CHECK_LT(
-        i,
-        tableIndexColumns.size(),
-        "Join condition index column '{}' exceeds the number of table index columns {}",
-        keyName,
-        tableIndexColumns.size());
-    VELOX_CHECK_EQ(
-        keyName,
-        tableIndexColumns[i],
-        "Join condition index column '{}' at position {} does not match table index column '{}'. "
-        "Join conditions must use index columns in order as a prefix.",
-        keyName,
-        i,
-        tableIndexColumns[i]);
-
-    const bool isBetweenCondition =
-        std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
-            condition) != nullptr;
-    if (isBetweenCondition) {
-      seenBetweenCondition = true;
-    } else {
-      VELOX_CHECK(
-          !seenBetweenCondition,
-          "Equal join condition on index column '{}' cannot come after a between condition. "
-          "Equal conditions must precede between conditions.",
-          keyName);
+  // Validate and process join conditions:
+  // - Join conditions combined with index filters must cover all table index
+  //   columns in order.
+  // - For each index column, it must have either a join condition OR a filter
+  //   in the scan spec, but not both.
+  // - Processing stops when we encounter a range filter or between condition.
+  size_t conditionIdx = 0;
+  for (size_t i = 0; i < tableIndexColumns.size(); ++i) {
+    const auto& indexColumn = tableIndexColumns[i];
+    auto* spec = scanSpec_->childByName(indexColumn);
+    if (spec == nullptr) {
+      break;
     }
-    auto* spec = scanSpec_->childByName(keyName);
-    VELOX_CHECK_NOT_NULL(
-        spec, "Index column {} not found in scan spec", keyName);
+
+    // Check if this index column has a filter in scanSpec.
+    const bool hasFilter = spec->hasFilter();
+
+    // Check if there's a join condition for this index column.
+    const bool hasJoinCondition =
+        (conditionIdx < joinConditions_.size() &&
+         joinConditions_[conditionIdx]->key->name() == indexColumn);
+
+    if (!hasFilter && !hasJoinCondition) {
+      break;
+    }
     VELOX_CHECK(
-        !spec->hasFilter(),
-        "Index column '{}' used in join condition cannot have a pushdown filter",
-        keyName);
-    indexColumnSpecs_.push_back(spec);
+        !(hasFilter && hasJoinCondition),
+        "Index column '{}' cannot have both a join condition and a pushdown filter",
+        indexColumn);
+
+    if (hasFilter) {
+      // If the filter is not a point lookup (range filter), we cannot continue
+      // processing join conditions after this point.
+      if (!isPointLookupFilter(spec->filter())) {
+        break;
+      }
+      continue;
+    }
+
+    joinIndexColumnSpecs_.push_back(spec);
+    // Process the join condition for this index column.
+    const auto& condition = joinConditions_[conditionIdx];
+    VELOX_CHECK(!condition->isFilter());
 
     // Determine the request column index for the condition value.
     if (auto equalCondition =
@@ -155,7 +201,8 @@ void HiveIndexReader::initJoinConditions() {
               equalCondition->value);
       requestColumnIndices_.push_back(
           {getRequestColumnIndex(requestFieldAccess->name())});
-      decodedVectors_[i].resize(1);
+      decodedRequestVectors_[conditionIdx].resize(1);
+      ++conditionIdx;
       continue;
     }
 
@@ -171,12 +218,19 @@ void HiveIndexReader::initJoinConditions() {
       requestColumnIndices_.push_back(
           {getRequestColumnIndex(lowerFieldAccess->name()),
            getRequestColumnIndex(upperFieldAccess->name())});
-      decodedVectors_[i].resize(2);
-      continue;
+      decodedRequestVectors_[conditionIdx].resize(2);
+      ++conditionIdx;
+      // Between condition is a range condition, stop processing further.
+      break;
     }
 
     VELOX_FAIL("Unsupported join condition type: {}", condition->toString());
   }
+
+  VELOX_CHECK_EQ(
+      conditionIdx,
+      joinConditions_.size(),
+      "Not all join conditions were processed.");
 }
 
 std::unique_ptr<dwio::common::Reader> HiveIndexReader::createFileReader() {
@@ -322,7 +376,8 @@ void HiveIndexReader::setRequest(const Request& request) {
   for (size_t i = 0; i < joinConditions_.size(); ++i) {
     const auto& indices = requestColumnIndices_[i];
     for (size_t j = 0; j < indices.size(); ++j) {
-      decodedVectors_[i][j].decode(*request_->childAt(indices[j]), allRows);
+      decodedRequestVectors_[i][j].decode(
+          *request_->childAt(indices[j]), allRows);
     }
   }
 }
@@ -338,18 +393,18 @@ void HiveIndexReader::reset() {
 
 void HiveIndexReader::applyFiltersFromRequest(vector_size_t row) {
   VELOX_CHECK_NOT_NULL(request_);
-  VELOX_CHECK_EQ(decodedVectors_.size(), joinConditions_.size());
+  VELOX_CHECK_EQ(decodedRequestVectors_.size(), joinConditions_.size());
   VELOX_CHECK_LT(row, request_->size());
 
   for (size_t i = 0; i < joinConditions_.size(); ++i) {
-    auto* spec = indexColumnSpecs_[i];
+    auto* spec = joinIndexColumnSpecs_[i];
     const auto& condition = joinConditions_[i];
 
     if (auto equalCondition =
             std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
                 condition)) {
-      VELOX_CHECK_EQ(decodedVectors_[i].size(), 1);
-      const auto& decoded = decodedVectors_[i][0];
+      VELOX_CHECK_EQ(decodedRequestVectors_[i].size(), 1);
+      const auto& decoded = decodedRequestVectors_[i][0];
       VELOX_CHECK(
           !decoded.isNullAt(row), "Null value not allowed for equal condition");
       const auto& type = requestType_->childAt(requestColumnIndices_[i][0]);
@@ -360,11 +415,11 @@ void HiveIndexReader::applyFiltersFromRequest(vector_size_t row) {
         auto betweenCondition =
             std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
                 condition)) {
-      const auto& lowerDecoded = decodedVectors_[i][0];
+      const auto& lowerDecoded = decodedRequestVectors_[i][0];
       VELOX_CHECK(
           !lowerDecoded.isNullAt(row),
           "Null value not allowed for lower bound");
-      const auto& upperDecoded = decodedVectors_[i][1];
+      const auto& upperDecoded = decodedRequestVectors_[i][1];
       VELOX_CHECK(
           !upperDecoded.isNullAt(row),
           "Null value not allowed for upper bound");
@@ -385,7 +440,7 @@ void HiveIndexReader::applyFiltersFromRequest(vector_size_t row) {
 }
 
 void HiveIndexReader::clearKeyFilters() {
-  for (auto* spec : indexColumnSpecs_) {
+  for (auto* spec : joinIndexColumnSpecs_) {
     spec->setFilter(nullptr);
   }
 }
