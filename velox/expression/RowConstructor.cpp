@@ -22,14 +22,8 @@ namespace facebook::velox::exec {
 
 TypePtr RowConstructorCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& argTypes) {
-  auto numInput = argTypes.size();
-  std::vector<std::string> names(numInput);
-  std::vector<TypePtr> types(numInput);
-  for (auto i = 0; i < numInput; i++) {
-    types[i] = argTypes[i];
-    names[i] = fmt::format("c{}", i + 1);
-  }
-  return ROW(std::move(names), std::move(types));
+  std::vector<std::string> names(argTypes.size(), "");
+  return ROW(std::move(names), folly::copy(argTypes));
 }
 
 ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(

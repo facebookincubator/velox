@@ -27,7 +27,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/BlockingReason.h"
-#include "velox/exec/trace/TraceConfig.h"
+#include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec {
 
@@ -224,9 +224,11 @@ constexpr uint32_t kUngroupedGroupId{std::numeric_limits<uint32_t>::max()};
 struct DriverCtx {
   const int driverId;
   const int pipelineId;
+
   /// Id of the split group this driver should process in case of grouped
   /// execution, kUngroupedGroupId otherwise.
   const uint32_t splitGroupId;
+
   /// Id of the partition to use by this driver. For local exchange, for
   /// instance.
   const uint32_t partitionId;
@@ -234,6 +236,7 @@ struct DriverCtx {
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
+
   /// Tracks the traced operator ids. It is also used to avoid tracing the
   /// auxiliary operator such as the aggregation operator used by the table
   /// writer to generate the columns stats.
@@ -248,7 +251,7 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  const std::optional<trace::TraceConfig>& traceConfig() const;
+  const trace::TraceCtx* traceCtx() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
@@ -627,6 +630,15 @@ class Driver : public std::enable_shared_from_this<Driver> {
       std::shared_ptr<BlockingState>& blockingState,
       CancelGuard& guard);
 
+  // Returns the operator to start from. The Driver always start the driver
+  // pipeline from the consumer (leaf), then walk backwards to the root based on
+  // whether they are ready to consume data, and the previous is ready to
+  // produce data.
+  //
+  // The only exception is when resuming from a trace, in which case the Driver
+  // must resume at the operator where it was blocked.
+  int32_t getStartingOperator() const;
+
   std::unique_ptr<DriverCtx> ctx_;
 
   // If set, the operator output batch size stats will be collected during
@@ -650,6 +662,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartUs_{0};
+
   // Id (index in the vector) of the current operator to run (or the 1st one if
   // we haven't started yet). Used to determine which operator's queueTime we
   // should update.
@@ -658,7 +671,16 @@ class Driver : public std::enable_shared_from_this<Driver> {
   std::vector<std::unique_ptr<Operator>> operators_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+
+  // Stores the operator where the driver was last blocked. Note that the driver
+  // always resumes at the leaf (consumer) to prioritize getting data out of the
+  // task. The only exception is when resuming from a trace.
   size_t blockedOperatorId_{0};
+
+  // If this driver is being traced, store a pointer to the current data. Once
+  // the trace client unblocks the driver, we will feed this vector to the next
+  // operator in the pipeline.
+  RowVectorPtr traceInput_;
 
   bool trackOperatorCpuUsage_;
 

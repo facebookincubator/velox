@@ -171,6 +171,7 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
+    checkPreload();
     if (needNewSplit_) {
       const auto hasNewSplit = getSplit();
       if (!hasNewSplit) {
@@ -195,7 +196,6 @@ RowVectorPtr TableScan::getOutput() {
       dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     }
 
-    checkPreload();
     {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
@@ -362,16 +362,16 @@ bool TableScan::getSplit() {
     stats_.wlock()->addRuntimeStat(
         "waitForPreloadSplitNanos",
         RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+    if (preparedDataSource == nullptr) {
+      // There must be a cancellation.
+      VELOX_CHECK(operatorCtx_->task()->isCancelled());
+      return false;
+    }
     stats_.wlock()->addRuntimeStat(
         "preloadSplitPrepareTimeNanos",
         RuntimeCounter(
             connectorSplit->dataSource->prepareTiming().wallNanos,
             RuntimeCounter::Unit::kNanos));
-    if (!preparedDataSource) {
-      // There must be a cancellation.
-      VELOX_CHECK(operatorCtx_->task()->isCancelled());
-      return false;
-    }
     dataSource_->setFromDataSource(std::move(preparedDataSource));
   } else {
     uint64_t addSplitTimeUs{0};
@@ -463,21 +463,19 @@ void TableScan::checkPreload() {
       !connector_->supportsSplitPreload()) {
     return;
   }
-  if (dataSource_->allPrefetchIssued()) {
-    maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
-        maxSplitPreloadPerDriver_;
-    if (!splitPreloader_) {
-      splitPreloader_ =
-          [ioExecutor,
-           this](const std::shared_ptr<connector::ConnectorSplit>& split) {
-            preload(split);
+  maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
+      maxSplitPreloadPerDriver_;
+  if (!splitPreloader_) {
+    splitPreloader_ =
+        [ioExecutor,
+         this](const std::shared_ptr<connector::ConnectorSplit>& split) {
+          preload(split);
 
-            ioExecutor->add([connectorSplit = split]() mutable {
-              connectorSplit->dataSource->prepare();
-              connectorSplit.reset();
-            });
-          };
-    }
+          ioExecutor->add([connectorSplit = split]() mutable {
+            connectorSplit->dataSource->prepare();
+            connectorSplit.reset();
+          });
+        };
   }
 }
 

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/hyperloglog/KHyperLogLog.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/common/memory/Memory.h"
 
 #include <folly/Random.h>
@@ -35,8 +35,11 @@ const double kDefaultStandardError = 1.04 / std::sqrt(kDefaultNumBuckets);
 
 class KHyperLogLogTest : public ::testing::Test {
  public:
+  static void SetUpTestSuite() {
+    facebook::velox::memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    facebook::velox::memory::MemoryManager::initialize({});
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
     hsa_ = std::make_unique<HashStringAllocator>(pool_.get());
     allocator_ = hsa_.get();

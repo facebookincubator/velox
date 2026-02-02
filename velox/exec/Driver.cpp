@@ -96,8 +96,8 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
-const std::optional<trace::TraceConfig>& DriverCtx::traceConfig() const {
-  return task->traceConfig();
+const trace::TraceCtx* DriverCtx::traceCtx() const {
+  return task->traceCtx();
 }
 
 velox::memory::MemoryPool* DriverCtx::addOperatorPool(
@@ -498,14 +498,27 @@ StopReason Driver::runInternal(
   try {
     // Invoked to initialize the operators once before driver starts execution.
     initializeOperators();
+    int32_t startingOperator = getStartingOperator();
 
     TestValue::adjust("facebook::velox::exec::Driver::runInternal", this);
 
-    const int32_t numOperators = operators_.size();
+    // If the driver is coming back from a trace interruption, feed the
+    // intermediate result into the next operator, then resume execution at the
+    // exact operator where the trace was interrupted.
+    if (traceInput_ != nullptr) {
+      Operator* tracedOp = operators_[startingOperator].get();
+      CALL_OPERATOR(
+          addInput(tracedOp, traceInput_),
+          tracedOp,
+          startingOperator,
+          kOpMethodAddInput);
+      traceInput_ = nullptr;
+    }
+
     ContinueFuture future = ContinueFuture::makeEmpty();
 
     for (;;) {
-      for (int32_t i = numOperators - 1; i >= 0; --i) {
+      for (int32_t i = startingOperator; i >= 0; --i) {
         stop = task()->shouldStop();
         if (stop != StopReason::kNone) {
           guard.notThrown();
@@ -550,7 +563,7 @@ StopReason Driver::runInternal(
           return blockDriver(self, i, std::move(future), blockingState, guard);
         }
 
-        if (i < numOperators - 1) {
+        if (i < operators_.size() - 1) {
           Operator* nextOp = operators_[i + 1].get();
 
           withDeltaCpuWallTimer(nextOp, &OperatorStats::isBlockedTiming, [&]() {
@@ -595,6 +608,16 @@ StopReason Driver::runInternal(
               }
             });
             if (intermediateResult) {
+              const bool block =
+                  nextOp->traceInput(intermediateResult, &future);
+
+              if (block) {
+                blockingReason_ = BlockingReason::kWaitForConsumer;
+                traceInput_ = intermediateResult;
+                return blockDriver(
+                    self, i + 1, std::move(future), blockingState, guard);
+              }
+
               withDeltaCpuWallTimer(
                   nextOp, &OperatorStats::addInputTiming, [&]() {
                     {
@@ -603,7 +626,6 @@ StopReason Driver::runInternal(
                           resultBytes, intermediateResult->size());
                     }
 
-                    nextOp->traceInput(intermediateResult);
                     TestValue::adjust(
                         "facebook::velox::exec::Driver::runInternal::addInput",
                         nextOp);
@@ -1244,6 +1266,14 @@ StopReason Driver::blockDriver(
       self, std::move(future), op, blockingReason_);
   guard.notThrown();
   return StopReason::kBlock;
+}
+
+int32_t Driver::getStartingOperator() const {
+  if (traceInput_ != nullptr) {
+    return blockedOperatorId_;
+  }
+  // By default, start at the last (the consumer).
+  return operators_.size() - 1;
 }
 
 std::string Driver::label() const {

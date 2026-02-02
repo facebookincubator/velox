@@ -39,6 +39,7 @@ namespace {
 
 using fuzzer::rand;
 using fuzzer::randDate;
+using fuzzer::randTime;
 
 // Structure to help temporary changes to Options. This objects saves the
 // current state of the Options object, and restores it when it's destructed.
@@ -139,6 +140,9 @@ VectorPtr fuzzConstantPrimitiveImpl(
   } else if (type->isLongDecimal()) {
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
+  } else if (type->isTime()) {
+    return std::make_shared<ConstantVector<int64_t>>(
+        pool, size, false, type, randTime(rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
@@ -172,6 +176,8 @@ void fuzzFlatPrimitiveImpl(
                 VectorFuzzer::kMaxAllowedIntervalDayTime));
       } else if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
+      } else if (vector->type()->isTime()) {
+        flatVector->set(i, randTime(rng));
       } else {
         flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
@@ -200,6 +206,51 @@ void fuzzFlatPrimitiveImpl(
       flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
     }
   }
+}
+
+bool containsFlatMapVector(const BaseVector* vector) {
+  if (!vector) {
+    return false;
+  }
+
+  // Unwrap any dictionary/constant encoding to get to the base.
+  while (VectorEncoding::isDictionary(vector->encoding()) ||
+         vector->encoding() == VectorEncoding::Simple::CONSTANT) {
+    vector = vector->valueVector().get();
+    if (!vector) {
+      return false;
+    }
+  }
+
+  if (vector->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return true;
+  }
+
+  // Check children for complex types.
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::ROW: {
+      auto* row = vector->asUnchecked<RowVector>();
+      for (const auto& child : row->children()) {
+        if (containsFlatMapVector(child.get())) {
+          return true;
+        }
+      }
+      break;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* array = vector->asUnchecked<ArrayVector>();
+      return containsFlatMapVector(array->elements().get());
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* map = vector->asUnchecked<MapVector>();
+      return containsFlatMapVector(map->mapKeys().get()) ||
+          containsFlatMapVector(map->mapValues().get());
+    }
+    default:
+      break;
+  }
+
+  return false;
 }
 
 // Servers as a wrapper around a vector that will be used to load a lazyVector.
@@ -1157,6 +1208,12 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
   DecodedVector decoded;
   decoded.decode(*vector_, rows, false);
 
+  // FlatMapVector copy into MapVector vector is not supported. Let's preserve
+  // encodings to avoid runtime checks.
+  if (containsFlatMapVector(decoded.base())) {
+    return vector_->testingCopyPreserveEncodings(vector_->pool());
+  }
+
   if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
     VectorPtr result;
     BaseVector::ensureWritable(rows, vector_->type(), vector_->pool(), result);
@@ -1224,6 +1281,7 @@ const std::vector<TypePtr>& defaultScalarTypes() {
       VARBINARY(),
       TIMESTAMP(),
       DATE(),
+      TIME(),
       INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;

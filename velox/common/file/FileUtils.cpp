@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/file/Utils.h"
+#include "velox/common/file/FileUtils.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::file::utils {

@@ -22,6 +22,11 @@ namespace facebook::velox::exec {
 struct Split;
 }
 
+namespace facebook::velox::core {
+class PlanNode;
+class QueryCtx;
+} // namespace facebook::velox::core
+
 namespace facebook::velox::exec::trace {
 
 /// Abstract interface for capturing traced input. Implementations are
@@ -31,8 +36,10 @@ class TraceInputWriter {
  public:
   virtual ~TraceInputWriter() = default;
 
-  /// Serializes rows and writes out each batch.
-  virtual void write(const RowVectorPtr& rows) = 0;
+  /// Serializes rows and writes out each batch. Return whether the driver
+  /// should block the pipeline. If it returns true, a future needs to be set
+  /// (returned) to signal the driver when it can resume execution.
+  virtual bool write(const RowVectorPtr& rows, ContinueFuture* future) = 0;
 
   /// Closes the data file and writes out the data summary.
   virtual void finish() = 0;
@@ -49,6 +56,16 @@ class TraceSplitWriter {
   virtual void write(const exec::Split& split) const = 0;
 
   virtual void finish() = 0;
+};
+
+/// Abstract interface for capturing task metadata.
+class TraceMetadataWriter {
+ public:
+  virtual ~TraceMetadataWriter() = default;
+
+  virtual void write(
+      const core::QueryCtx& queryCtx,
+      const core::PlanNode& planNode) = 0;
 };
 
 } // namespace facebook::velox::exec::trace

@@ -295,7 +295,7 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Traces input batch of the operator.
-  virtual void traceInput(const RowVectorPtr&);
+  virtual bool traceInput(const RowVectorPtr& input, ContinueFuture* future);
 
   /// Finishes tracing of the operator.
   virtual void finishTrace();
@@ -671,13 +671,6 @@ class Operator : public BaseRuntimeStatWriter {
   bool shouldYield() const {
     return operatorCtx_->driverCtx()->driver->shouldYield();
   }
-
- private:
-  // Setup 'inputTracer_' to record the processed input vectors.
-  void setupInputTracer(const std::string& traceDir);
-
-  // Setup 'splitTracer_' for table scan to record the processed split.
-  void setupSplitTracer(const std::string& traceDir);
 };
 
 /// Given a row type returns indices for the specified subset of columns.

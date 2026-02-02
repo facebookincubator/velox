@@ -17,9 +17,12 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-void registerQDigestAggAggregate(const std::string& prefix, bool overwrite);
+void registerQDigestAggAggregate(
+    const std::vector<std::string>& names,
+    bool overwrite);
 
 } // namespace facebook::velox::aggregate::prestosql

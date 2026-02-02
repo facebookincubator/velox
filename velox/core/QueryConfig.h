@@ -244,6 +244,11 @@ class QueryConfig {
   static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
       "max_elements_size_in_repeat_and_sequence";
 
+  /// If true, the PartitionedOutput operator will flush rows eagerly, without
+  /// waiting until buffers reach certain size. Default is false.
+  static constexpr const char* kPartitionedOutputEagerFlush =
+      "partitioned_output_eager_flush";
+
   /// The maximum number of bytes to buffer in PartitionedOutput operator to
   /// avoid creating tiny SerializedPages.
   ///
@@ -819,7 +824,7 @@ class QueryConfig {
   };
 
   bool selectiveNimbleReaderEnabled() const {
-    return get<bool>(kSelectiveNimbleReaderEnabled, false);
+    return get<bool>(kSelectiveNimbleReaderEnabled, true);
   }
 
   RowSizeTrackingMode rowSizeTrackingMode() const {
@@ -926,6 +931,10 @@ class QueryConfig {
   uint64_t maxSpillBytes() const {
     static constexpr uint64_t kDefault = 100UL << 30;
     return get<uint64_t>(kMaxSpillBytes, kDefault);
+  }
+
+  bool partitionedOutputEagerFlush() const {
+    return get<bool>(kPartitionedOutputEagerFlush, false);
   }
 
   uint64_t maxPartitionedOutputBufferSize() const {

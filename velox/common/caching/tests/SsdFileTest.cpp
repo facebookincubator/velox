@@ -276,7 +276,7 @@ class SsdFileTest : public testing::Test {
     EXPECT_FALSE(
         ssdFile_->find(RawFileCacheKey{fileName_.id(), ssdSize}).empty());
 
-    pins.erase(pins.begin(), pins.begin() + numWritten);
+    pins.erase(pins.cbegin(), pins.cbegin() + numWritten);
     ssdFile_->write(pins);
     for (auto& pin : pins) {
       if (pin.entry()->ssdFile()) {

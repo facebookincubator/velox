@@ -92,7 +92,17 @@ struct StringView {
       // small string: inlined. Zero the last 8 bytes first to allow for whole
       // word comparison.
       value_.data = nullptr;
+#ifdef __GNUC__
+      // Use asm volatile to prevent GCC's interprocedural analysis from
+      // incorrectly concluding that size could exceed kInlineSize. This is a
+      // workaround for a false positive -Wstringop-overflow warning when GCC
+      // cannot prove the size constraint through deep template inlining.
+      auto sz = static_cast<size_t>(size_);
+      asm volatile("" : "+r"(sz));
+      memcpy(prefix_, data, sz);
+#else
       memcpy(prefix_, data, size_);
+#endif
     } else {
       // large string: store pointer
       memcpy(prefix_, data, kPrefixSize);
@@ -107,8 +117,9 @@ struct StringView {
   /// >  StringView sv = "literal";
   /// >  std::optional<StringView> osv = "literal";
   ///
-  /* implicit */ StringView(const char* data)
+  /* implicit */ StringView(const char* FOLLY_NONNULL data)
       : StringView(data, strlen(data)) {}
+  /* implicit */ StringView(std::nullptr_t) = delete;
 
   explicit StringView(const folly::fbstring& value)
       : StringView(value.data(), value.size()) {}
@@ -141,7 +152,7 @@ struct StringView {
     return StringView{input};
   }
 
-  const char* data() && = delete;
+  const char* data() const&& = delete;
   const char* data() const& {
     return isInline() ? prefix_ : value_.data;
   }
@@ -226,7 +237,7 @@ struct StringView {
   ///
   /// > folly::StringPiece sp(StringView()); // unsafe, won't compile.
   ///
-  explicit operator folly::StringPiece() && = delete;
+  explicit operator folly::StringPiece() const&& = delete;
   explicit operator folly::StringPiece() const& {
     return folly::StringPiece(data(), size());
   }
@@ -246,23 +257,28 @@ struct StringView {
   /// Conversion to std::string_view are allowed to be implicit, as long as they
   /// are not from a temporary (rvalue) StringView, for the same reasons
   /// described above.
-  /* implicit */ operator std::string_view() && = delete;
+  /* implicit */ operator std::string_view() const&& = delete;
   /* implicit */ operator std::string_view() const& {
     return std::string_view(data(), size());
   }
 
-  // TODO: Should make this explicit-only.
-  /* implicit */ operator folly::dynamic() && = delete;
-  /* implicit */ operator folly::dynamic() const& {
+  /// TODO: Should make this explicit-only.
+  ///
+  /// Note that in this case it is ok to enable conversion from a temporary
+  /// (rvalue) StringView since its contents will be copied into the
+  /// folly::dynamic.
+  ///
+  /// > folly::dynamic str(StringView()); // ok
+  /* implicit */ operator folly::dynamic() const {
     return folly::dynamic(folly::StringPiece(data(), size()));
   }
 
-  const char* begin() && = delete;
+  const char* begin() const&& = delete;
   const char* begin() const& {
     return data();
   }
 
-  const char* end() && = delete;
+  const char* end() const&& = delete;
   const char* end() const& {
     return data() + size();
   }
@@ -300,11 +316,11 @@ struct StringView {
       int32_t numStrings);
 
  private:
-  inline int64_t sizeAndPrefixAsInt64() const {
+  int64_t sizeAndPrefixAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[0];
   }
 
-  inline int64_t inlinedAsInt64() const {
+  int64_t inlinedAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[1];
   }
 

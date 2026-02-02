@@ -25,6 +25,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -86,14 +87,6 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
 
  private:
   std::function<bool()> lambda_;
-};
-
-/// Parquet field IDs during write operations. Each ID must be unique positive
-/// number, do not need to be sequential.
-/// Used to explicitly control field ID assignment in the Parquet schema.
-struct ParquetFieldId {
-  int32_t fieldId;
-  std::vector<ParquetFieldId> children;
 };
 
 struct WriterOptions : public dwio::common::WriterOptions {

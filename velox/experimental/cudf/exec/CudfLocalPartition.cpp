@@ -169,11 +169,16 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
       VELOX_FAIL("Unsupported partition function");
     }();
 
-    VELOX_CHECK(partitionOffsets.size() == numPartitions_);
+    // cuDF partitioning APIs return num_partitions + 1 offsets where:
+    // - offsets[i] is the starting row index for partition i
+    // - offsets[num_partitions] is the total row count
+    VELOX_CHECK(partitionOffsets.size() == numPartitions_ + 1);
     VELOX_CHECK(partitionOffsets[0] == 0);
 
-    // Erase first element since it's always 0 and we don't need it.
+    // cudf::split expects split points (excluding first 0 and last totalRows).
+    // Erase first element (always 0) and last element (total row count).
     partitionOffsets.erase(partitionOffsets.begin());
+    partitionOffsets.pop_back();
 
     auto partitionedTables =
         cudf::split(partitionedTable->view(), partitionOffsets);

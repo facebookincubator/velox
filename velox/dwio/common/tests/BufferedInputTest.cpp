@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/dwio/common/BufferedInput.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/dwio/common/BufferedInput.h"
 
 using namespace facebook::velox::dwio::common;
 using facebook::velox::common::Region;
@@ -36,8 +38,8 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
 // initializes one: /usr/include/gtest/gtest-matchers.h:302:33 resulting in
 // error:
 // '<unnamed>.testing::Matcher<const
-// facebook::velox::FileStorageContext&>::<unnamed>.testing::internal::MatcherBase<const
-// facebook::velox::FileStorageContext&>::buffer_' is used uninitialized
+// facebook::velox::FileIoContext&>::<unnamed>.testing::internal::MatcherBase<const
+// facebook::velox::FileIoContext&>::buffer_' is used uninitialized
 // [-Werror=uninitialized]
 //  302 |       : vtable_(other.vtable_), buffer_(other.buffer_) {
 // Fix: https://github.com/google/googletest/pull/3797
@@ -49,7 +51,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
       (uint64_t offset,
        uint64_t length,
        void* buf,
-       (const facebook::velox::FileStorageContext&)fileStorageContext),
+       (const facebook::velox::FileIoContext&)context),
       (const, override));
 
   MOCK_METHOD(bool, shouldCoalesce, (), (const, override));
@@ -62,7 +64,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
       preadv,
       (folly::Range<const Region*> regions,
        folly::Range<folly::IOBuf*> iobufs,
-       (const facebook::velox::FileStorageContext&)fileStorageContext),
+       (const facebook::velox::FileIoContext&)context),
       (const, override));
 };
 
@@ -81,7 +83,7 @@ void expectPreads(
                 uint64_t offset,
                 uint64_t length,
                 void* buf,
-                const facebook::velox::FileStorageContext& fileStorageContext)
+                const facebook::velox::FileIoContext& context)
                 -> std::string_view {
               memcpy(buf, content.data() + offset, length);
               return {content.data() + offset, length};
@@ -101,8 +103,7 @@ void expectPreadvs(
           [content, reads](
               folly::Range<const Region*> regions,
               folly::Range<folly::IOBuf*> iobufs,
-              const facebook::velox::FileStorageContext& fileStorageContext)
-              -> uint64_t {
+              const facebook::velox::FileIoContext& context) -> uint64_t {
             EXPECT_EQ(regions.size(), reads.size());
             uint64_t length = 0;
             for (size_t i = 0; i < reads.size(); ++i) {
@@ -138,7 +139,7 @@ std::optional<std::string> getNext(SeekableInputStream& input) {
   }
 }
 
-class TestBufferedInput : public testing::Test {
+class BufferedInputTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
@@ -147,7 +148,7 @@ class TestBufferedInput : public testing::Test {
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 
-TEST_F(TestBufferedInput, ZeroLengthStream) {
+TEST_F(BufferedInputTest, zeroLengthStream) {
   auto readFile =
       std::make_shared<facebook::velox::InMemoryReadFile>(std::string());
   BufferedInput input(readFile, *pool_);
@@ -160,7 +161,7 @@ TEST_F(TestBufferedInput, ZeroLengthStream) {
   EXPECT_EQ(size, 0);
 }
 
-TEST_F(TestBufferedInput, UseRead) {
+TEST_F(BufferedInputTest, useRead) {
   std::string content = "hello";
   auto readFileMock = std::make_shared<ReadFileMock>();
   expectPreads(*readFileMock, content, {{0, 5}});
@@ -184,7 +185,7 @@ TEST_F(TestBufferedInput, UseRead) {
   EXPECT_EQ(next.value(), content);
 }
 
-TEST_F(TestBufferedInput, UseVRead) {
+TEST_F(BufferedInputTest, useVRead) {
   std::string content = "hello";
   auto readFileMock = std::make_shared<ReadFileMock>();
   expectPreadvs(*readFileMock, content, {{0, 5}});
@@ -208,7 +209,7 @@ TEST_F(TestBufferedInput, UseVRead) {
   EXPECT_EQ(next.value(), content);
 }
 
-TEST_F(TestBufferedInput, WillMerge) {
+TEST_F(BufferedInputTest, willMerge) {
   std::string content = "hello world";
   auto readFileMock = std::make_shared<ReadFileMock>();
 
@@ -242,7 +243,7 @@ TEST_F(TestBufferedInput, WillMerge) {
   EXPECT_EQ(next2.value(), "world");
 }
 
-TEST_F(TestBufferedInput, WontMerge) {
+TEST_F(BufferedInputTest, wontMerge) {
   std::string content = "hello  world"; // two spaces
   auto readFileMock = std::make_shared<ReadFileMock>();
 
@@ -276,7 +277,7 @@ TEST_F(TestBufferedInput, WontMerge) {
   EXPECT_EQ(next2.value(), "world");
 }
 
-TEST_F(TestBufferedInput, ReadSorting) {
+TEST_F(BufferedInputTest, readSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
@@ -313,7 +314,7 @@ TEST_F(TestBufferedInput, ReadSorting) {
   }
 }
 
-TEST_F(TestBufferedInput, VReadSorting) {
+TEST_F(BufferedInputTest, VreadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
@@ -351,7 +352,7 @@ TEST_F(TestBufferedInput, VReadSorting) {
   }
 }
 
-TEST_F(TestBufferedInput, VReadSortingWithLabels) {
+TEST_F(BufferedInputTest, VreadSortingWithLabels) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<std::string> l = {"a", "b", "c", "d", "e"};
   std::vector<Region> regions = {
@@ -391,6 +392,110 @@ TEST_F(TestBufferedInput, VReadSortingWithLabels) {
     ASSERT_TRUE(next.has_value());
     EXPECT_EQ(next.value(), r.second);
   }
+}
+
+TEST_F(BufferedInputTest, resetAfterAllStreamsConsumed) {
+  const std::string content = "aaabbbcccdddeee";
+  auto readFileMock = std::make_shared<ReadFileMock>();
+
+  // First round: enqueue and consume all streams.
+  expectPreads(*readFileMock, content, {{0, 6}});
+
+  BufferedInput input(
+      readFileMock,
+      *pool_,
+      MetricsLog::voidLog(),
+      nullptr,
+      nullptr,
+      10,
+      /* wsVRLoad = */ false);
+
+  const auto ret1 = input.enqueue({0, 3});
+  const auto ret2 = input.enqueue({3, 3});
+  ASSERT_NE(ret1, nullptr);
+  ASSERT_NE(ret2, nullptr);
+
+  input.load(LogType::TEST);
+
+  // Consume all streams.
+  auto next1 = getNext(*ret1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), "aaa");
+
+  const auto next2 = getNext(*ret2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), "bbb");
+
+  // Reset and enqueue new streams.
+  input.reset();
+  EXPECT_EQ(input.nextFetchSize(), 0);
+
+  // Second round: enqueue different regions after reset.
+  expectPreads(*readFileMock, content, {{6, 9}});
+
+  const auto ret3 = input.enqueue({6, 3});
+  const auto ret4 = input.enqueue({9, 6});
+  ASSERT_NE(ret3, nullptr);
+  ASSERT_NE(ret4, nullptr);
+
+  EXPECT_EQ(input.nextFetchSize(), 9);
+  input.load(LogType::TEST);
+
+  const auto next3 = getNext(*ret3);
+  ASSERT_TRUE(next3.has_value());
+  EXPECT_EQ(next3.value(), "ccc");
+
+  const auto next4 = getNext(*ret4);
+  ASSERT_TRUE(next4.has_value());
+  EXPECT_EQ(next4.value(), "dddeee");
+}
+
+TEST_F(BufferedInputTest, resetAfterPartialStreamsConsumed) {
+  const std::string content = "aaabbbcccdddeee";
+  auto readFileMock = std::make_shared<ReadFileMock>();
+
+  // First round: enqueue streams but only consume some.
+  expectPreads(*readFileMock, content, {{0, 9}});
+
+  BufferedInput input(
+      readFileMock,
+      *pool_,
+      MetricsLog::voidLog(),
+      nullptr,
+      nullptr,
+      10,
+      /*wsVRLoad=*/false);
+
+  const auto ret1 = input.enqueue({0, 3});
+  const auto ret2 = input.enqueue({3, 3});
+  const auto ret3 = input.enqueue({6, 3});
+  ASSERT_NE(ret1, nullptr);
+  ASSERT_NE(ret2, nullptr);
+  ASSERT_NE(ret3, nullptr);
+
+  input.load(LogType::TEST);
+
+  // Only consume the first stream, leave ret2 and ret3 unconsumed.
+  auto next1 = getNext(*ret1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), "aaa");
+
+  // Reset without consuming all streams.
+  input.reset();
+  EXPECT_EQ(input.nextFetchSize(), 0);
+
+  // Second round: enqueue different regions after reset.
+  expectPreads(*readFileMock, content, {{9, 6}});
+
+  const auto ret4 = input.enqueue({9, 6});
+  ASSERT_NE(ret4, nullptr);
+
+  EXPECT_EQ(input.nextFetchSize(), 6);
+  input.load(LogType::TEST);
+
+  const auto next4 = getNext(*ret4);
+  ASSERT_TRUE(next4.has_value());
+  EXPECT_EQ(next4.value(), "dddeee");
 }
 
 class CustomBufferedInputBuilder

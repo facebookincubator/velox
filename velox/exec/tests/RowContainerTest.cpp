@@ -835,8 +835,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
         kNumRows, rawValues, rawExpected);
     // Remove nulls in data because keys cannot be null.
     auto numNulls = countLeadingNulls(rawValues);
-    rawValues.erase(rawValues.begin(), rawValues.begin() + numNulls);
-    rawExpected.erase(rawExpected.begin(), rawExpected.begin() + numNulls);
+    rawValues.erase(rawValues.cbegin(), rawValues.cbegin() + numNulls);
+    rawExpected.erase(rawExpected.cbegin(), rawExpected.cbegin() + numNulls);
     std::optional<int32_t> second = 0;
     for (auto value : rawValues) {
       std::vector<std::pair<T, std::optional<int32_t>>> temp{

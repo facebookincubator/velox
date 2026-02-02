@@ -149,11 +149,14 @@ class DwrfRowReader : public StrideIndexProvider,
   }
 
  private:
-  bool shouldReadNode(uint32_t nodeId) const;
+  bool shouldReadNode(
+      uint32_t nodeId,
+      const velox::common::ScanSpec* fieldScanSpec) const;
 
   std::optional<size_t> estimatedRowSizeHelper(
       const FooterWrapper& fileFooter,
       const dwio::common::Statistics& stats,
+      const velox::common::ScanSpec* scanSpec,
       uint32_t nodeId) const;
 
   bool emptyFile() const {

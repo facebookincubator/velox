@@ -115,26 +115,45 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
   auto rowType =
       ROW({"c0c0", "c1", "c2", "c3", "c4", "c5"},
           {INTEGER(), BIGINT(), DOUBLE(), BOOLEAN(), BIGINT(), VARCHAR()});
-  auto tableHandle = makeTableHandle(
-      common::test::SubfieldFiltersBuilder()
-          .add("c0.c0", isNotNull())
-          .add(
-              "c1",
-              lessThanOrEqualHugeint(std::numeric_limits<int128_t>::max()))
-          .add("c2", greaterThanOrEqualDouble(3.1415))
-          .add("c3", boolEqual(true))
-          .add("c4", in({0xdeadbeaf, 0xcafecafe}))
-          .add("c2", notIn({0xdeadbeaf, 0xcafecafe}))
-          .add(
-              "c5",
-              orFilter(between("abc", "efg"), greaterThanOrEqual("dragon")))
-          .build(),
-      parseExpr("c1 > c4 and c3 = true", rowType),
-      "hive_table",
-      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
-      true,
-      {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
-  testSerde(*tableHandle);
+
+  for (bool withIndexColumns : {false, true}) {
+    SCOPED_TRACE(fmt::format("withIndexColumns: {}", withIndexColumns));
+
+    std::vector<std::string> indexColumns = withIndexColumns
+        ? std::vector<std::string>{"c0c0", "c1"}
+        : std::vector<std::string>{};
+
+    auto tableHandle = makeTableHandle(
+        common::test::SubfieldFiltersBuilder()
+            .add("c0.c0", isNotNull())
+            .add(
+                "c1",
+                lessThanOrEqualHugeint(std::numeric_limits<int128_t>::max()))
+            .add("c2", greaterThanOrEqualDouble(3.1415))
+            .add("c3", boolEqual(true))
+            .add("c4", in({0xdeadbeaf, 0xcafecafe}))
+            .add("c2", notIn({0xdeadbeaf, 0xcafecafe}))
+            .add(
+                "c5",
+                orFilter(between("abc", "efg"), greaterThanOrEqual("dragon")))
+            .build(),
+        parseExpr("c1 > c4 and c3 = true", rowType),
+        "hive_table",
+        ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
+        indexColumns,
+        /*filterPushdownEnabled=*/true,
+        {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
+
+    EXPECT_EQ(tableHandle->supportsIndexLookup(), withIndexColumns);
+    EXPECT_TRUE(tableHandle->needsIndexSplit());
+    EXPECT_EQ(tableHandle->indexColumns().empty(), !withIndexColumns);
+    if (withIndexColumns) {
+      EXPECT_EQ(tableHandle->indexColumns().size(), 2);
+      EXPECT_EQ(tableHandle->indexColumns()[0], "c0c0");
+      EXPECT_EQ(tableHandle->indexColumns()[1], "c1");
+    }
+    testSerde(*tableHandle);
+  }
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {

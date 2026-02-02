@@ -21,7 +21,6 @@
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/ApproxMostFrequentStreamSummary.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -587,7 +586,7 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
 } // namespace
 
 void registerApproxMostFrequentAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -610,11 +609,10 @@ void registerApproxMostFrequentAggregate(
             .argumentType("bigint")
             .build());
   }
-  auto name = prefix + kApproxMostFrequent;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -625,7 +623,7 @@ void registerApproxMostFrequentAggregate(
         return VELOX_DYNAMIC_TYPE_DISPATCH(
             makeApproxMostFrequentAggregate,
             valueType->kind(),
-            name,
+            names.front(),
             step,
             argTypes,
             resultType,

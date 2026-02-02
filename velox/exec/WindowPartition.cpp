@@ -74,7 +74,7 @@ void WindowPartition::removeProcessedRows(vector_size_t numRows) {
     previousRow_ = rows_[numRows - 1];
   }
 
-  rows_.erase(rows_.begin(), rows_.begin() + numRows);
+  rows_.erase(rows_.cbegin(), rows_.cbegin() + numRows);
   partition_ = folly::Range(rows_.data(), rows_.size());
   startRow_ += numRows;
 }
