@@ -393,8 +393,14 @@ uint64_t FlatMapColumnWriter<K>::writeMap(
                         const auto& keysVector) {
     auto begin = offsets[offsetIndex];
     auto end = begin + lengths[offsetIndex];
-    DWIO_ENSURE_LE(end, mapSlice->mapKeys()->size());
-    DWIO_ENSURE_LE(end, mapSlice->mapValues()->size());
+    DWIO_ENSURE_LE(
+        end,
+        mapSlice->mapKeys()->size(),
+        "Malformed input vector. Size of map keys vector is less than the expected size.");
+    DWIO_ENSURE_LE(
+        end,
+        mapSlice->mapValues()->size(),
+        "Malformed input vector. Size of map values vector is less than the expected size.");
 
     for (auto i = begin; i < end; ++i) {
       auto key = keysVector.valueAt(i);

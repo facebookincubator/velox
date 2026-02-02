@@ -2032,8 +2032,14 @@ uint64_t MapColumnWriter::write(
     auto begin = offsets[pos];
     auto end = begin + lengths[pos];
     if (end > begin) {
-      VELOX_CHECK_LE(end, mapSlice->mapKeys()->size());
-      VELOX_CHECK_LE(end, mapSlice->mapValues()->size());
+      VELOX_CHECK_LE(
+          end,
+          mapSlice->mapKeys()->size(),
+          "Malformed input vector. Size of map keys vector is less than the expected size.");
+      VELOX_CHECK_LE(
+          end,
+          mapSlice->mapValues()->size(),
+          "Malformed input vector. Size of map values vector is less than the expected size.");
       childRanges.add(begin, end);
     }
     nonNullLengths.unsafeAppend(end - begin);
