@@ -74,6 +74,8 @@ jobs:
           source scripts/setup-macos.sh
           install_build_prerequisites
           install_velox_deps_from_brew
+          install_gflags
+          install_glog
           # Needed for faiss to find BLAS
           install_faiss_deps
           install_double_conversion

@@ -198,8 +198,7 @@ class TestIndexSource : public connector::IndexSource,
     splits_ = std::move(splits);
   }
 
-  std::shared_ptr<LookupResultIterator> lookup(
-      const LookupRequest& request) override;
+  std::shared_ptr<ResultIterator> lookup(const Request& request) override;
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
@@ -219,17 +218,17 @@ class TestIndexSource : public connector::IndexSource,
     return lookupOutputProjections_;
   }
 
-  class ResultIterator : public LookupResultIterator {
+  class ResultIterator : public connector::IndexSource::ResultIterator {
    public:
     ResultIterator(
         std::shared_ptr<TestIndexSource> source,
-        const LookupRequest& request,
+        const Request& request,
         std::unique_ptr<HashLookup> lookupResult,
         folly::Executor* executor);
 
     bool hasNext() override;
 
-    std::optional<std::unique_ptr<LookupResult>> next(
+    std::optional<std::unique_ptr<connector::IndexSource::Result>> next(
         vector_size_t size,
         ContinueFuture& future) override;
 
@@ -271,16 +270,17 @@ class TestIndexSource : public connector::IndexSource,
 
     // Synchronously lookup the index table and return up to 'size' number of
     // output rows in result.
-    std::unique_ptr<LookupResult> syncLookup(vector_size_t size);
+    std::unique_ptr<connector::IndexSource::Result> syncLookup(
+        vector_size_t size);
 
     const std::shared_ptr<TestIndexSource> source_;
-    const LookupRequest request_;
+    const Request request_;
     const std::unique_ptr<HashLookup> lookupResult_;
     folly::Executor* const executor_{nullptr};
 
     std::atomic_bool hasPendingRequest_{false};
     std::unique_ptr<BaseHashTable::JoinResultIterator> lookupResultIter_;
-    std::optional<std::unique_ptr<LookupResult>> asyncResult_;
+    std::optional<std::unique_ptr<connector::IndexSource::Result>> asyncResult_;
 
     // The reusable buffers for lookup result processing.
     // The input row number in lookup request for each matched result which is
@@ -374,7 +374,6 @@ class TestIndexConnector : public connector::Connector {
 
   std::shared_ptr<connector::IndexSource> createIndexSource(
       const RowTypePtr& inputType,
-      size_t numJoinKeys,
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,

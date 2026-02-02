@@ -256,9 +256,8 @@ bool isSpecialColumn(
 
 const std::string& getColumnName(const common::Subfield& subfield) {
   VELOX_CHECK_GT(subfield.path().size(), 0);
-  auto* field = dynamic_cast<const common::Subfield::NestedField*>(
+  auto* field = checkedPointerCast<const common::Subfield::NestedField>(
       subfield.path()[0].get());
-  VELOX_CHECK_NOT_NULL(field);
   return field->name();
 }
 
@@ -468,14 +467,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
 
   for (auto& pair : subfieldFilters) {
     const auto name = pair.first.toString();
-    // SelectiveColumnReader doesn't support constant columns with filters,
-    // hence, we can't have a filter for a $path or $bucket column.
-    //
-    // Unfortunately, Presto happens to specify a filter for $path, $file_size,
-    // $file_modified_time or $bucket column. This filter is redundant and needs
-    // to be removed.
-    // TODO Remove this check when Presto is fixed to not specify a filter
-    // on $path and $bucket column.
     if (isSynthesizedColumn(name, infoColumns)) {
       continue;
     }

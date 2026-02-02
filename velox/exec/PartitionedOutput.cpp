@@ -187,7 +187,9 @@ PartitionedOutput::PartitionedOutput(
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
                             .maxPartitionedOutputBufferSize()),
-      eagerFlush_(eagerFlush),
+      eagerFlush_(
+          eagerFlush ||
+          ctx->task->queryCtx()->queryConfig().partitionedOutputEagerFlush()),
       serde_(getNamedVectorSerde(planNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()

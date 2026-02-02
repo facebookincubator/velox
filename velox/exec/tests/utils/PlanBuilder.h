@@ -340,6 +340,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param indexColumns Names of columns that form the index key for the
+    /// table. When set, enables index-based lookups.
+    TableScanBuilder& indexColumns(std::vector<std::string> indexColumns) {
+      indexColumns_ = std::move(indexColumns);
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -357,6 +364,7 @@ class PlanBuilder {
     core::ExprPtr remainingFilter_;
     double sampleRate_{1.0};
     RowTypePtr dataColumns_;
+    std::vector<std::string> indexColumns_;
     std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;

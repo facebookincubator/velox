@@ -1592,23 +1592,44 @@ const auto& joinTypeNames() {
 }
 
 // Check that each output of the join is in exactly one of the inputs.
-void checkJoinColumnNames(
+void checkJoinOutput(
     const RowTypePtr& leftType,
     const RowTypePtr& rightType,
     const RowTypePtr& outputType,
     uint32_t numColumnsToCheck) {
   for (auto i = 0; i < numColumnsToCheck; ++i) {
-    const auto name = outputType->nameOf(i);
-    const bool leftContains = leftType->containsChild(name);
-    const bool rightContains = rightType->containsChild(name);
+    const auto& name = outputType->nameOf(i);
+    const auto& type = outputType->childAt(i);
+
+    const auto leftIndex = leftType->getChildIdxIfExists(name);
+    const auto rightIndex = rightType->getChildIdxIfExists(name);
+
     VELOX_USER_CHECK(
-        !(leftContains && rightContains),
+        !(leftIndex.has_value() && rightIndex.has_value()),
         "Duplicate column name found on join's left and right sides: {}",
         name);
     VELOX_USER_CHECK(
-        leftContains || rightContains,
+        leftIndex.has_value() || rightIndex.has_value(),
         "Join's output column not found in either left or right sides: {}",
         name);
+
+    if (leftIndex.has_value()) {
+      const auto& expectedType = leftType->childAt(leftIndex.value());
+      VELOX_USER_CHECK(
+          expectedType->equivalent(*type),
+          "Join output column type must match the input type: {} vs. {}",
+          type->toString(),
+          expectedType->toString());
+    }
+
+    if (rightIndex.has_value()) {
+      const auto& expectedType = rightType->childAt(rightIndex.value());
+      VELOX_USER_CHECK(
+          expectedType->equivalent(*type),
+          "Join output column type must match the input type: {} vs. {}",
+          type->toString(),
+          expectedType->toString());
+    }
   }
 }
 
@@ -1830,7 +1851,7 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     VELOX_USER_CHECK(!rightType->containsChild(name));
   }
 
-  checkJoinColumnNames(leftType, rightType, outputType_, numOutputColumns);
+  checkJoinOutput(leftType, rightType, outputType_, numOutputColumns);
 }
 
 PlanNodePtr IndexLookupJoinNode::create(
@@ -1966,7 +1987,7 @@ NestedLoopJoinNode::NestedLoopJoinNode(
         name);
   }
 
-  checkJoinColumnNames(leftType, rightType, outputType_, numOutputColumns);
+  checkJoinOutput(leftType, rightType, outputType_, numOutputColumns);
 }
 
 NestedLoopJoinNode::NestedLoopJoinNode(
@@ -3149,7 +3170,7 @@ SpatialJoinNode::SpatialJoinNode(
       sources_[1] != nullptr,
       "Right source must not be null for spatial joins");
 
-  checkJoinColumnNames(
+  checkJoinOutput(
       sources_[0]->outputType(),
       sources_[1]->outputType(),
       outputType_,

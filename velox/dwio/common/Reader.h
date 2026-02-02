@@ -51,6 +51,9 @@ class RowReader {
   static inline const std::string kNumIndexFilterConversions =
       "numIndexFilterConversions";
 
+  /// Tracks the number of times a stripe has been loaded during index lookup.
+  static inline const std::string kNumStripeLoads = "numStripeLoads";
+
   virtual ~RowReader() = default;
 
   /**
@@ -144,6 +147,25 @@ class RowReader {
    */
   virtual std::optional<std::vector<PrefetchUnit>> prefetchUnits() {
     return std::nullopt;
+  }
+
+  /// Resets the row reader for a new query. This allows reusing the same
+  /// reader instance for different queries on the same data split.
+  ///
+  /// This is primarily used for index reader use cases where the same row
+  /// reader needs to be reused for multiple index lookups with different
+  /// index bounds/filters on the same data split.
+  ///
+  /// After reset:
+  /// - The split boundaries remain the same (data range doesn't change)
+  /// - The actual read range may change based on new index bounds from the
+  ///   scan spec
+  /// - All internal state (row positions, statistics, etc.) is reset
+  /// - Index bounds are re-evaluated based on the current scan spec
+  ///
+  /// @throws if reset is not supported by the implementation
+  virtual void reset() {
+    VELOX_UNSUPPORTED("RowReader::reset() is not supported");
   }
 
   /**
