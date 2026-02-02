@@ -87,5 +87,11 @@ class Tokenizer {
   char peekCharacter();
 
   std::unique_ptr<Subfield::PathElement> matchWildcardSubscript();
+
+  std::unique_ptr<Subfield::PathElement> matchCardinalityOnlySubscript();
+
+  std::unique_ptr<Subfield::PathElement> matchMapSubscript(bool includeKeys);
+
+  std::unique_ptr<Subfield::PathElement> matchSingleQuotedSubscript();
 };
 } // namespace facebook::velox::common
