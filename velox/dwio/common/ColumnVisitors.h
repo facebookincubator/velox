@@ -1176,7 +1176,7 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::
   }
   auto result = DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>(
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
-  result.numValuesBias_ = numValuesBias_;
+  result.setNumValuesBias(numValuesBias_);
   return result;
 }
 

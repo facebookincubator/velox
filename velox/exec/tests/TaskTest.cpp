@@ -256,7 +256,8 @@ class ExternalBlocker {
  public:
   folly::SemiFuture<folly::Unit> continueFuture() {
     if (isBlocked_) {
-      auto [promise, future] = makeVeloxContinuePromiseContract();
+      auto [promise, future] =
+          makeVeloxContinuePromiseContract("ExternalBlocker::continueFuture");
       continuePromise_ = std::move(promise);
       return std::move(future);
     }
@@ -1616,8 +1617,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     VELOX_ASSERT_THROW(task->next(), "Inconsistent task execution mode.");
     getOutputWaitFlag = true;
     getOutputWait.notify();
-    while (cursor->hasNext()) {
-      cursor->moveNext();
+    while (cursor->moveNext()) {
     }
     waitForTaskCompletion(task);
   }
@@ -2563,8 +2563,8 @@ DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
   folly::EventCount driverWait;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::enter",
-      std::function<void(const velox::exec::ThreadState*)>(
-          ([&](const velox::exec::ThreadState* /*unused*/) {
+      std::function<void(const velox::exec::Task*)>(
+          ([&](const velox::exec::Task* /*unused*/) {
             driverWait.await([&]() { return !driverWaitFlag.load(); });
           })));
 
@@ -2686,8 +2686,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
   folly::EventCount driverWait;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::enter",
-      std::function<void(const velox::exec::ThreadState*)>(
-          ([&](const velox::exec::ThreadState* /*unused*/) {
+      std::function<void(const velox::exec::Task*)>(
+          ([&](const velox::exec::Task* /*unused*/) {
             driverWait.await([&]() { return !driverWaitFlag.load(); });
           })));
 
@@ -3007,7 +3007,7 @@ class TestBarrierOperator : public exec::Operator {
       return nullptr;
     }
     auto output = inputs_.front();
-    inputs_.erase(inputs_.begin());
+    inputs_.erase(inputs_.cbegin());
     return output;
   }
 

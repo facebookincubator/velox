@@ -670,7 +670,7 @@ TEST_P(AsyncDataCacheTest, pin) {
   EXPECT_LT(0, cache_->incrementPrefetchPages(0));
   auto stats = cache_->refreshStats();
   EXPECT_EQ(1, stats.numExclusive);
-  EXPECT_LE(kSize, stats.largeSize);
+  EXPECT_EQ(0, stats.largeSize);
 
   CachePin otherPin;
   EXPECT_THROW(otherPin = pin, VeloxException);
@@ -1138,13 +1138,13 @@ TEST_P(AsyncDataCacheTest, shrinkCache) {
       pins.push_back(std::move(largePin));
     }
     auto stats = cache_->refreshStats();
-    ASSERT_EQ(stats.numEntries, numEntries * 2);
+    ASSERT_EQ(stats.numEntries, 0);
     ASSERT_EQ(stats.numEmptyEntries, 0);
     ASSERT_EQ(stats.numExclusive, numEntries * 2);
     ASSERT_EQ(stats.numEvict, 0);
     ASSERT_EQ(stats.numHit, 0);
-    ASSERT_EQ(stats.tinySize, kTinyDataSize * numEntries);
-    ASSERT_EQ(stats.largeSize, kLargeDataSize * numEntries);
+    ASSERT_EQ(stats.tinySize, 0);
+    ASSERT_EQ(stats.largeSize, 0);
     ASSERT_EQ(stats.sharedPinnedBytes, 0);
     ASSERT_GE(
         stats.exclusivePinnedBytes,
@@ -1572,6 +1572,45 @@ TEST_P(AsyncDataCacheTest, checkpoint) {
 }
 
 // TODO: add concurrent fuzzer test.
+
+TEST_P(AsyncDataCacheTest, numShardsDefault) {
+  constexpr uint64_t kRamBytes = 16UL << 20;
+
+  initializeCache(kRamBytes);
+  ASSERT_EQ(
+      asyncDataCacheHelper_->numShards(), AsyncDataCache::kDefaultNumShards);
+}
+
+TEST_P(AsyncDataCacheTest, numShardsInvalid) {
+  constexpr uint64_t kRamBytes = 16UL << 20;
+
+  // Non-power-of-2 should fail.
+  for (int32_t numShards : {3, 5, 6, 7, 9, 10}) {
+    AsyncDataCache::Options options;
+    options.numShards = numShards;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be a power of 2");
+  }
+
+  // Zero should fail.
+  {
+    AsyncDataCache::Options options;
+    options.numShards = 0;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be positive");
+  }
+
+  // Negative should fail.
+  {
+    AsyncDataCache::Options options;
+    options.numShards = -1;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be positive");
+  }
+}
 
 INSTANTIATE_TEST_SUITE_P(
     AsyncDataCacheTest,

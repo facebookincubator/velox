@@ -23,6 +23,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Spill.h"
+#include "velox/exec/tests/utils/MergeTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/Timestamp.h"
@@ -394,6 +395,31 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(numFinishedFiles, expectedFiles);
   }
 
+  void hybridSpillStateTest(
+      int64_t targetFileSize,
+      int numPartitions,
+      int numBatches,
+      int numDuplicates,
+      const std::vector<CompareFlags>& compareFlags,
+      uint64_t expectedNumSpilledFiles) {
+    int mergeWayThresholdBegin = 0;
+    int mergeWayThresholdEnd = 4;
+    for (int i = mergeWayThresholdBegin; i < mergeWayThresholdEnd; i++) {
+      if (i == 1) {
+        // Skip invalid value.
+        continue;
+      }
+      spillStateTest(
+          targetFileSize,
+          numPartitions,
+          numBatches,
+          numDuplicates,
+          compareFlags,
+          expectedNumSpilledFiles,
+          i);
+    }
+  }
+
   // 'numDuplicates' specifies the number of duplicates generated for each
   // distinct sort key value in test.
   void spillStateTest(
@@ -402,7 +428,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       int numBatches,
       int numDuplicates,
       const std::vector<CompareFlags>& compareFlags,
-      uint64_t expectedNumSpilledFiles) {
+      uint64_t expectedNumSpilledFiles,
+      int mergeWayThreshold) {
     const int numRowsPerBatch = 1'000;
     SCOPED_TRACE(
         fmt::format(
@@ -489,13 +516,20 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(stats.spilledBytes, totalFileBytes);
     ASSERT_EQ(prevGStats.spilledBytes + totalFileBytes, newGStats.spilledBytes);
 
+    bool usePreMerge = mergeWayThreshold >= 2;
     for (const auto& partitionId : partitionIds) {
       auto spillFiles = state_->finish(partitionId);
       ASSERT_EQ(state_->numFinishedFiles(partitionId), 0);
       auto spillPartition =
           SpillPartition(SpillPartitionId(partitionId), std::move(spillFiles));
-      auto merge =
-          spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
+      auto spillConfig = common::SpillConfig();
+      spillConfig.numMaxMergeFiles = mergeWayThreshold;
+      spillConfig.readBufferSize = 1 << 20;
+      spillConfig.writeBufferSize = 1 << 20;
+      spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+      spillConfig.fileCreateConfig = "";
+      std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
+          spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -528,8 +562,10 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
         }
       }
       ASSERT_EQ(nullptr, merge->next());
-      // We do two append writes per each input batch.
-      ASSERT_EQ(numBatches, numReadBatches);
+      if (!usePreMerge) {
+        // We do two append writes per each input batch.
+        ASSERT_EQ(numBatches, numReadBatches);
+      }
     }
 
     const auto finalStats = spillStats_.copy();
@@ -568,7 +604,67 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       ASSERT_TRUE(fs->exists(spilledFile));
     }
     // Verify stats.
-    ASSERT_EQ(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+    if (!usePreMerge) {
+      ASSERT_EQ(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+    } else {
+      ASSERT_GE(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+    }
+  }
+
+  void gatherMergeTest(
+      int32_t numValues,
+      int numMergeWays,
+      int targetSize,
+      bool useRandom) {
+    auto goldenVector = makeRowVector({
+        makeFlatVector<int32_t>(numValues, [&](auto row) { return row; }),
+    });
+    std::vector<std::vector<int32_t>> mergeWays(numMergeWays);
+    for (int32_t value = 0; value < numValues; value++) {
+      int way = useRandom ? folly::Random::rand32() % numMergeWays
+                          : value % numMergeWays;
+      mergeWays[way].push_back(value);
+    }
+    std::vector<RowVectorPtr> sources;
+    std::vector<std::unique_ptr<SpillMergeStream>> streams;
+    std::vector<SpillSortKey> sortKeys = {{0, {true, true}}};
+    for (int way = 0; way < numMergeWays; way++) {
+      auto source = makeRowVector({
+          makeFlatVector<int32_t>(
+              mergeWays[way].size(),
+              [&](auto row) { return mergeWays[way][row]; }),
+      });
+      sources.push_back(source);
+      streams.push_back(
+          std::make_unique<exec::test::TestingSpillMergeStream>(
+              way, sortKeys, source));
+    }
+    auto mergeTree =
+        std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+    RowVectorPtr targetVector = std::static_pointer_cast<RowVector>(
+        BaseVector::create(sources[0]->type(), targetSize, pool_.get()));
+    std::vector<const RowVector*> bufferSources(targetSize);
+    std::vector<vector_size_t> bufferSourceIndices(targetSize);
+    for (int32_t batch = 0; batch * targetSize < numValues; batch++) {
+      int32_t valueBegin = batch * targetSize;
+      int32_t valueEnd = valueBegin + targetSize;
+      valueEnd = std::min(valueEnd, numValues);
+      VectorPtr tmp = std::move(targetVector);
+      BaseVector::prepareForReuse(tmp, targetSize);
+      targetVector = std::static_pointer_cast<RowVector>(tmp);
+      for (auto& child : targetVector->children()) {
+        child->resize(targetSize);
+      }
+      int count = 0;
+      testingGatherMerge(
+          targetVector, *mergeTree, count, bufferSources, bufferSourceIndices);
+      EXPECT_EQ(count, valueEnd - valueBegin);
+      auto result = targetVector->childAt(0).get();
+      auto golden = goldenVector->childAt(0).get();
+      for (int32_t row = 0; row < valueEnd - valueBegin; row++) {
+        EXPECT_TRUE(result->equalValueAt(golden, row, valueBegin + row));
+      }
+    }
   }
 
   folly::Random::DefaultGenerator rng_;
@@ -592,18 +688,18 @@ TEST_P(SpillTest, spillState) {
   // triggered by batch write.
 
   // Test with distinct sort keys.
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{true, true}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{true, false}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{false, true}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{false, false}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{true, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{true, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{false, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{false, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {}, 8);
 
   // Test with duplicate sort keys.
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{true, true}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{true, false}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{false, true}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{false, false}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{true, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{true, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{false, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{false, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {}, 8);
 }
 
 TEST_P(SpillTest, spillTimestamp) {
@@ -647,11 +743,17 @@ TEST_P(SpillTest, spillTimestamp) {
       state.testingNonEmptySpilledPartitionIdSet().contains(partitionId));
 
   SpillPartition spillPartition(SpillPartitionId{0}, state.finish(partitionId));
+  auto spillConfig = common::SpillConfig();
+  spillConfig.numMaxMergeFiles = 2;
+  spillConfig.readBufferSize = 1 << 20;
+  spillConfig.writeBufferSize = 1 << 20;
+  spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+  spillConfig.fileCreateConfig = "";
   auto merge =
-      spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(
-      spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_) ==
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_) ==
       nullptr);
   for (auto i = 0; i < timeValues.size(); ++i) {
     auto* stream = merge->next();
@@ -669,18 +771,18 @@ TEST_P(SpillTest, spillStateWithSmallTargetFileSize) {
   // write.
 
   // Test with distinct sort keys.
-  spillStateTest(1, 2, 8, 1, {CompareFlags{true, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {CompareFlags{true, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {CompareFlags{false, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {CompareFlags{false, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{true, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{true, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{false, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{false, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {}, 8 * 2);
 
   // Test with duplicated sort keys.
-  spillStateTest(1, 2, 8, 8, {CompareFlags{true, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {CompareFlags{true, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{true, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{true, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {}, 8 * 2);
 }
 
 TEST_P(SpillTest, spillPartitionId) {
@@ -1524,6 +1626,17 @@ TEST(SpillTest, scopedSpillInjectionRegex) {
     ASSERT_TRUE(testingTriggerSpill("op.1.0.0.Aggregation"));
     ASSERT_TRUE(testingTriggerSpill());
   }
+}
+
+TEST_P(SpillTest, gatherMerge) {
+  gatherMergeTest(1234, 2, 10, false);
+  gatherMergeTest(1234, 2, 100, false);
+  gatherMergeTest(1234, 10, 10, false);
+  gatherMergeTest(1234, 10, 100, false);
+  gatherMergeTest(1234, 2, 10, true);
+  gatherMergeTest(1234, 2, 100, true);
+  gatherMergeTest(1234, 10, 10, true);
+  gatherMergeTest(1234, 10, 100, true);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

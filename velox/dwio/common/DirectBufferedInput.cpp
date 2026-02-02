@@ -235,13 +235,23 @@ std::shared_ptr<DirectCoalescedLoad> DirectBufferedInput::coalescedLoad(
   return streamToCoalescedLoad_.withWLock(
       [&](auto& loads) -> std::shared_ptr<DirectCoalescedLoad> {
         auto it = loads.find(stream);
-        if (it == loads.end()) {
+        if (it == loads.cend()) {
           return nullptr;
         }
         auto load = std::move(it->second);
         loads.erase(it);
         return load;
       });
+}
+
+void DirectBufferedInput::reset() {
+  BufferedInput::reset();
+  for (auto& load : coalescedLoads_) {
+    load->cancel();
+  }
+  coalescedLoads_.clear();
+  streamToCoalescedLoad_.wlock()->clear();
+  requests_.clear();
 }
 
 std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
@@ -343,7 +353,7 @@ int32_t DirectCoalescedLoad::getData(
       requests_.begin(), requests_.end(), offset, [](auto& x, auto offset) {
         return x.region.offset < offset;
       });
-  if (it == requests_.end() || it->region.offset != offset) {
+  if (it == requests_.cend() || it->region.offset != offset) {
     return 0;
   }
   data = std::move(it->data);

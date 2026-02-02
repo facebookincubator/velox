@@ -115,7 +115,7 @@ struct ConstantVectorReader {
 
   std::optional<exec_in_t> value;
 
-  explicit ConstantVectorReader<T>(ConstantVector<exec_in_t>& vector) {
+  explicit ConstantVectorReader(ConstantVector<exec_in_t>& vector) {
     if (!vector.isNullAt(0)) {
       value = *vector.rawValues();
     }
@@ -160,7 +160,7 @@ struct FlatVectorReader {
   const exec_in_t* values;
   FlatVector<exec_in_t>* vector;
 
-  explicit FlatVectorReader<T>(FlatVector<exec_in_t>& baseVector)
+  explicit FlatVectorReader(FlatVector<exec_in_t>& baseVector)
       : values(baseVector.rawValues()), vector(&baseVector) {}
 
   exec_in_t operator[](vector_size_t offset) const {

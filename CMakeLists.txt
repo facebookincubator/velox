@@ -156,7 +156,7 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
-option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
+option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
@@ -213,6 +213,11 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
 endif()
 
 if(VELOX_ENABLE_CUDF)
+  if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    message(FATAL_ERROR "cuDF requires GCC. Found ${CMAKE_CXX_COMPILER_ID}.")
+  elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.3)
+    message(FATAL_ERROR "cuDF requires GCC >= 13.3. Found GCC ${CMAKE_CXX_COMPILER_VERSION}.")
+  endif()
   message(STATUS "Building curl from source to satisfy cuDF curl version requirement")
   set(CURL_SOURCE BUNDLED)
   velox_resolve_dependency(CURL)
@@ -310,7 +315,7 @@ if(VELOX_ENABLE_S3)
   if(AWSSDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
   endif()
-  find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
+  find_package(AWSSDK 1.11.654 REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
 endif()
 
@@ -406,13 +411,6 @@ if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
-# Ensure that we don't bring in headers that might have coroutines enabled. The
-# dependencies turn off coroutines in folly and the other FBOS dependencies. If
-# not explicitly turned off differences in the build using GCC cause libray
-# incompatibilities of the thrift server and the remote functions library
-# causing SEGVs in the tests.
-string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_CFG_NO_COROUTINES")
-
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -484,6 +482,13 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
+  # Suppress deprecated GPU targets warning for CUDA 12.8.x
+  if(
+    CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8.0
+    AND CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 13.0.0
+  )
+    string(APPEND CMAKE_CUDA_FLAGS " -Wno-deprecated-gpu-targets")
+  endif()
   if(VELOX_ENABLE_CUDF)
     foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
       if(arch LESS 70)
@@ -603,13 +608,16 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   find_package(ZLIB REQUIRED)
   find_package(zstd REQUIRED)
   find_package(Snappy REQUIRED)
+  # Ensure zstd::zstd target exists - handle different zstd package configurations
   if(NOT TARGET zstd::zstd)
     if(TARGET zstd::libzstd_static)
-      set(ZSTD_TYPE static)
+      add_library(zstd::zstd ALIAS zstd::libzstd_static)
+    elseif(TARGET zstd::libzstd_shared)
+      add_library(zstd::zstd ALIAS zstd::libzstd_shared)
     else()
-      set(ZSTD_TYPE shared)
+      # Fallback: use Findzstd.cmake to create the target
+      include(Findzstd)
     endif()
-    add_library(zstd::zstd ALIAS zstd::libzstd_${ZSTD_TYPE})
   endif()
 endif()
 
@@ -668,9 +676,12 @@ if(VELOX_ENABLE_GCS)
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
+# GCC needs to enable co-routines. We only support compiler that
+# support coroutines.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Find Threads library
   find_package(Threads REQUIRED)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)

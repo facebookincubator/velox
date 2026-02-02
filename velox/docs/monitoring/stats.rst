@@ -345,3 +345,14 @@ These stats are reported only by connector data or index sources.
    * - totalRemainingFilterWallNanos
      - nanos
      - The total walltime in nanoseconds that the data or index connector do the remaining filtering.
+   * - numIndexFilterConversions
+     -
+     - The number of index columns that were converted from ScanSpec filters to
+       index bounds for index-based filtering (e.g., cluster index pruning in
+       Nimble). A value greater than zero indicates filters were successfully
+       converted to leverage file index structures for row pruning.
+   * - numStripeLoads
+     -
+     - The number of times a stripe has been loaded during index lookup. This
+       metric helps track the I/O efficiency of index-based reads, where lower
+       values indicate better stripe reuse across lookups.

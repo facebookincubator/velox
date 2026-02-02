@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -96,6 +97,30 @@ std::vector<exec::OperatorStats> splitStats(
 }
 
 } // namespace
+
+bool canBeEvaluatedByCudf(
+    const std::vector<core::TypedExprPtr>& exprs,
+    core::QueryCtx* queryCtx) {
+  if (exprs.empty()) {
+    return true;
+  }
+
+  auto precompilePool =
+      memory::memoryManager()->addLeafPool("", /*threadSafe*/ false);
+  core::ExecCtx precompileCtx(precompilePool.get(), queryCtx);
+
+  bool lazyDereference = false;
+  std::vector<core::TypedExprPtr> exprsCopy = exprs;
+  std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
+      std::move(exprsCopy), &precompileCtx, lazyDereference);
+
+  for (const auto& e : exprSet->exprs()) {
+    if (!canBeEvaluatedByCudf(e)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,
@@ -227,8 +252,8 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "cudfProject Output: " << size << " rows, " << numColumns
-              << " columns " << std::endl;
+    VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
+            << " columns " << std::endl;
   }
 
   auto cudfOutput = std::make_shared<CudfVector>(

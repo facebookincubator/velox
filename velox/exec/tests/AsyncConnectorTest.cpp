@@ -60,7 +60,8 @@ class TestSplit : public connector::ConnectorSplit {
       return ContinueFuture::makeEmpty();
     }
 
-    auto [promise, future] = makeVeloxContinuePromiseContract();
+    auto [promise, future] =
+        makeVeloxContinuePromiseContract("TestSplit::touch");
 
     promise_ = std::move(promise);
     scheduler_.addFunction(

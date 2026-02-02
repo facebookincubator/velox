@@ -19,10 +19,11 @@
 #include "velox/common/file/FileInputStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Split.h"
-#include "velox/exec/Trace.h"
+#include "velox/exec/trace/Trace.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::velox::exec::trace {
+
 /// Used to read an operator trace input.
 class OperatorTraceInputReader {
  public:
@@ -95,4 +96,5 @@ class OperatorTraceSplitReader {
   const std::shared_ptr<filesystems::FileSystem> fs_;
   memory::MemoryPool* const pool_;
 };
+
 } // namespace facebook::velox::exec::trace

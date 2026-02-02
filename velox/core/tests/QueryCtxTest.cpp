@@ -51,4 +51,90 @@ TEST_F(QueryCtxTest, withSysRootPool) {
   ASSERT_FALSE(
       queryPool->reclaimer()->reclaimableBytes(*queryPool, reclaimableBytes));
 }
+
+TEST_F(QueryCtxTest, releaseCallbacks) {
+  int callbackCount = 0;
+  std::string capturedQueryId;
+
+  {
+    auto queryCtx = QueryCtx::create(
+        nullptr,
+        QueryConfig{{}},
+        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+        nullptr,
+        nullptr,
+        nullptr,
+        "test_query_id");
+
+    // Add multiple callbacks.
+    queryCtx->addReleaseCallback([&callbackCount]() { ++callbackCount; });
+
+    queryCtx->addReleaseCallback(
+        [&callbackCount, &capturedQueryId, id = queryCtx->queryId()]() {
+          ++callbackCount;
+          capturedQueryId = id;
+        });
+
+    // Callbacks should not be invoked yet.
+    ASSERT_EQ(callbackCount, 0);
+  }
+
+  // After QueryCtx destruction, all callbacks should have been invoked.
+  ASSERT_EQ(callbackCount, 2);
+  ASSERT_EQ(capturedQueryId, "test_query_id");
+}
+
+TEST_F(QueryCtxTest, releaseCallbackException) {
+  int callbackCount = 0;
+
+  {
+    auto queryCtx = QueryCtx::create(
+        nullptr,
+        QueryConfig{{}},
+        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+        nullptr,
+        nullptr,
+        nullptr,
+        "test_query_id");
+
+    // First callback succeeds.
+    queryCtx->addReleaseCallback([&callbackCount]() { ++callbackCount; });
+
+    // Second callback throws an exception.
+    queryCtx->addReleaseCallback(
+        []() { throw std::runtime_error("Test exception"); });
+
+    // Third callback should still execute despite the previous exception.
+    queryCtx->addReleaseCallback([&callbackCount]() { ++callbackCount; });
+  }
+
+  // All callbacks should have been attempted, with exception caught and logged.
+  // First and third callbacks should have incremented the counter.
+  ASSERT_EQ(callbackCount, 2);
+}
+
+TEST_F(QueryCtxTest, builderReleaseCallbacks) {
+  int callbackCount = 0;
+  std::string capturedQueryId;
+
+  {
+    // Use builder to add release callbacks during construction.
+    auto queryCtx =
+        QueryCtx::Builder()
+            .queryId("builder_test_query_id")
+            .releaseCallback([&callbackCount]() { ++callbackCount; })
+            .releaseCallback([&callbackCount, &capturedQueryId]() {
+              ++callbackCount;
+              capturedQueryId = "builder_test_query_id";
+            })
+            .build();
+
+    // Callbacks should not be invoked yet.
+    ASSERT_EQ(callbackCount, 0);
+  }
+
+  // After QueryCtx destruction, all callbacks should have been invoked.
+  ASSERT_EQ(callbackCount, 2);
+  ASSERT_EQ(capturedQueryId, "builder_test_query_id");
+}
 } // namespace facebook::velox::core::test

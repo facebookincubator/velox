@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/SplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -98,7 +99,8 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec) {
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const common::SubfieldFilters* subfieldFiltersForValidation) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
       hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
@@ -126,7 +128,8 @@ std::unique_ptr<SplitReader> SplitReader::create(
         fsStats,
         fileHandleFactory,
         ioExecutor,
-        scanSpec));
+        scanSpec,
+        subfieldFiltersForValidation));
   }
 }
 
@@ -141,10 +144,12 @@ SplitReader::SplitReader(
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec)
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const common::SubfieldFilters* subfieldFiltersForValidation)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
       partitionKeys_(partitionKeys),
+      infoColumns_(nullptr),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       readerOutputType_(readerOutputType),
@@ -154,6 +159,7 @@ SplitReader::SplitReader(
       ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
       scanSpec_(scanSpec),
+      subfieldFiltersForValidation_(subfieldFiltersForValidation),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
       emptySplit_(false) {}
 
@@ -174,6 +180,10 @@ void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  // Validate synthesized column filters early, before creating the reader.
+  // This handles filter-only synthesized columns that are not in the scanSpec.
+  validateSynthesizedColumnFilters();
+
   createReader(fileReadOps);
   if (emptySplit_) {
     return;
@@ -186,6 +196,50 @@ void SplitReader::prepareSplit(
   }
 
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
+}
+
+void SplitReader::validateSynthesizedColumnFilters() const {
+  if (!subfieldFiltersForValidation_ || !infoColumns_) {
+    return;
+  }
+  for (const auto& [subfield, filter] : *subfieldFiltersForValidation_) {
+    const auto& fieldName = subfield.toString();
+    // Check if this is a synthesized column filter.
+    auto infoColIter = hiveSplit_->infoColumns.find(fieldName);
+    if (infoColIter == hiveSplit_->infoColumns.end()) {
+      // Not a synthesized column, skip.
+      continue;
+    }
+    // Validate the filter against the split's value.
+    bool passed = false;
+    const auto& value = infoColIter->second;
+    // Look up the type from the column handles in infoColumns_.
+    auto handleIter = infoColumns_->find(fieldName);
+    VELOX_CHECK(
+        handleIter != infoColumns_->end(),
+        "Column handle for synthesized column '{}' not found in infoColumns",
+        fieldName);
+    TypeKind typeKind = handleIter->second->dataType()->kind();
+    switch (typeKind) {
+      case TypeKind::BIGINT:
+      case TypeKind::INTEGER:
+        passed = common::applyFilter(*filter, folly::to<int64_t>(value));
+        break;
+      case TypeKind::VARCHAR:
+        passed = common::applyFilter(*filter, value);
+        break;
+      default:
+        VELOX_FAIL("Unexpected type for synthesized column '{}'.", fieldName);
+    }
+    VELOX_CHECK(
+        passed,
+        "Synthesized column '{}' failed filter validation. "
+        "Filter: {}, Value: '{}'. Split: {}",
+        fieldName,
+        filter->toString(),
+        value,
+        hiveSplit_->toString());
+  }
 }
 
 void SplitReader::setBucketConversion(
@@ -330,7 +384,7 @@ void SplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
-  auto baseFileInput = createBufferedInput(
+  auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,
       connectorQueryCtx_,
@@ -424,6 +478,9 @@ std::vector<TypePtr> SplitReader::adaptColumns(
       setPartitionValue(childSpec, fieldName, it->second);
     } else if (auto iter = hiveSplit_->infoColumns.find(fieldName);
                iter != hiveSplit_->infoColumns.end()) {
+      // Synthesized column filter validation is done in prepareSplit() for
+      // fail-fast behavior before any file I/O. Here we only need to set the
+      // constant value for the column.
       auto infoColumnType =
           readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
       auto constant = newConstantFromString(

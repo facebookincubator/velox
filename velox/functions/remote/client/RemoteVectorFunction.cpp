@@ -36,7 +36,12 @@ RemoteVectorFunction::RemoteVectorFunction(
     const RemoteVectorFunctionMetadata& metadata)
     : functionName_(functionName),
       serdeFormat_(metadata.serdeFormat),
-      serde_(getSerde(serdeFormat_)) {
+      serde_(getSerde(serdeFormat_)),
+      serdeOptions_(
+          metadata.preserveEncoding
+              ? getSerdeOptions(serdeFormat_, metadata.preserveEncoding)
+              : nullptr),
+      preserveEncoding_(metadata.preserveEncoding) {
   std::vector<TypePtr> types;
   types.reserve(inputArgs.size());
   serializedInputTypes_.reserve(inputArgs.size());
@@ -79,20 +84,29 @@ void RemoteVectorFunction::applyRemote(
 
   // Create the thrift payload.
   remote::RemoteFunctionRequest request;
-  request.throwOnError_ref() = context.throwOnError();
+  request.throwOnError() = context.throwOnError();
 
-  auto functionHandle = request.remoteFunctionHandle_ref();
-  functionHandle->name_ref() = functionName_;
-  functionHandle->returnType_ref() = serializeType(outputType);
-  functionHandle->argumentTypes_ref() = serializedInputTypes_;
+  auto functionHandle = request.remoteFunctionHandle();
+  functionHandle->name() = functionName_;
+  functionHandle->returnType() = serializeType(outputType);
+  functionHandle->argumentTypes() = serializedInputTypes_;
 
-  auto requestInputs = request.inputs_ref();
-  requestInputs->rowCount_ref() = remoteRowVector->size();
-  requestInputs->pageFormat_ref() = serdeFormat_;
+  auto requestInputs = request.inputs();
+  requestInputs->rowCount() = remoteRowVector->size();
+  requestInputs->pageFormat() = serdeFormat_;
 
   // TODO: serialize only active rows.
-  requestInputs->payload_ref() = rowVectorToIOBuf(
-      remoteRowVector, rows.end(), *context.pool(), serde_.get());
+  if (preserveEncoding_) {
+    requestInputs->payload_ref() = rowVectorToIOBufBatch(
+        remoteRowVector,
+        rows.end(),
+        *context.pool(),
+        serde_.get(),
+        serdeOptions_.get());
+  } else {
+    requestInputs->payload_ref() = rowVectorToIOBuf(
+        remoteRowVector, rows.end(), *context.pool(), serde_.get());
+  }
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
 
@@ -129,7 +143,7 @@ void RemoteVectorFunction::applyRemote(
         return;
       }
       try {
-        throw std::runtime_error(errorsVector->valueAt(i));
+        throw std::runtime_error(std::string(errorsVector->valueAt(i)));
       } catch (const std::exception&) {
         context.setError(i, std::current_exception());
       }

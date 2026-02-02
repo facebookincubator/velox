@@ -246,12 +246,12 @@ static inline EncryptionAlgorithm FromThrift(
     facebook::velox::parquet::thrift::EncryptionAlgorithm encryption) {
   using Type = facebook::velox::parquet::thrift::EncryptionAlgorithm;
   EncryptionAlgorithm encryption_algorithm;
-  if (encryption.AES_GCM_V1()) {
+  if (encryption.getType() == Type::Type::AES_GCM_V1) {
     encryption_algorithm.algorithm = ParquetCipher::AES_GCM_V1;
-    encryption_algorithm.aad = FromThrift(*encryption.AES_GCM_V1());
-  } else if (encryption.AES_GCM_CTR_V1()) {
+    encryption_algorithm.aad = FromThrift(encryption.get_AES_GCM_V1());
+  } else if (encryption.getType() == Type::Type::AES_GCM_CTR_V1) {
     encryption_algorithm.algorithm = ParquetCipher::AES_GCM_CTR_V1;
-    encryption_algorithm.aad = FromThrift(*encryption.AES_GCM_CTR_V1());
+    encryption_algorithm.aad = FromThrift(encryption.get_AES_GCM_CTR_V1());
   } else {
     throw ParquetException("Unsupported algorithm");
   }
@@ -406,9 +406,10 @@ static inline facebook::velox::parquet::thrift::EncryptionAlgorithm ToThrift(
     EncryptionAlgorithm encryption) {
   facebook::velox::parquet::thrift::EncryptionAlgorithm encryption_algorithm;
   if (encryption.algorithm == ParquetCipher::AES_GCM_V1) {
-    encryption_algorithm.AES_GCM_V1() = ToAesGcmV1Thrift(encryption.aad);
+    encryption_algorithm.set_AES_GCM_V1(ToAesGcmV1Thrift(encryption.aad));
   } else {
-    encryption_algorithm.AES_GCM_CTR_V1() = ToAesGcmCtrV1Thrift(encryption.aad);
+    encryption_algorithm.set_AES_GCM_CTR_V1(
+        ToAesGcmCtrV1Thrift(encryption.aad));
   }
   return encryption_algorithm;
 }

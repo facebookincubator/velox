@@ -22,9 +22,12 @@
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
@@ -50,6 +53,9 @@ intermediateTypeTransforms() {
           {HYPERLOGLOG(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                HYPERLOGLOG(), VARBINARY())},
+          {KHYPERLOGLOG(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               KHYPERLOGLOG(), VARBINARY())},
           {TDIGEST(DOUBLE()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                TDIGEST(DOUBLE()), VARBINARY())},
@@ -62,6 +68,9 @@ intermediateTypeTransforms() {
           {QDIGEST(REAL()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                QDIGEST(REAL()), VARBINARY())},
+          {SETDIGEST(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               SETDIGEST(), VARBINARY())},
           {SFMSKETCH(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                SFMSKETCH(), VARBINARY())},
@@ -69,6 +78,9 @@ intermediateTypeTransforms() {
           {TIME(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                TIME(), VARCHAR())},
+          {TIME_WITH_TIME_ZONE(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               TIME_WITH_TIME_ZONE(), VARCHAR())},
           {BINGTILE(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                BINGTILE(), BIGINT())},

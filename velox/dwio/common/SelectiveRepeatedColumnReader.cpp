@@ -277,15 +277,7 @@ void SelectiveListColumnReader::getValues(
   }
 }
 
-SelectiveMapColumnReader::SelectiveMapColumnReader(
-    const TypePtr& requestedType,
-    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
-    FormatParams& params,
-    velox::common::ScanSpec& scanSpec)
-    : SelectiveRepeatedColumnReader(requestedType, params, scanSpec, fileType) {
-}
-
-uint64_t SelectiveMapColumnReader::skip(uint64_t numValues) {
+uint64_t SelectiveMapColumnReaderBase::skip(uint64_t numValues) {
   numValues = formatData_->skipNulls(numValues);
   if (keyReader_ || elementReader_) {
     std::array<int32_t, kBufferSize> buffer;
@@ -315,7 +307,7 @@ uint64_t SelectiveMapColumnReader::skip(uint64_t numValues) {
   return numValues;
 }
 
-void SelectiveMapColumnReader::read(
+void SelectiveMapColumnReaderBase::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
@@ -350,6 +342,25 @@ void SelectiveMapColumnReader::read(
   readOffset_ = offset + rows.back() + 1;
 }
 
+SelectiveMapColumnReader::SelectiveMapColumnReader(
+    const TypePtr& requestedType,
+    const TypeWithIdPtr& fileType,
+    FormatParams& params,
+    ScanSpec& scanSpec)
+    : SelectiveMapColumnReaderBase(requestedType, params, scanSpec, fileType) {
+  VELOX_CHECK(!scanSpec_->isFlatMapAsStruct());
+  // We should not need this anymore.  Is there a safe way to find out if there
+  // is any prod usages that forget to set up the map children in scan spec?
+  // This should be only possible when user bypasses the connector interface and
+  // create file readers directly.
+  if (scanSpec_->children().empty()) {
+    scanSpec_->getOrCreateChild(ScanSpec::kMapKeysFieldName);
+    scanSpec_->getOrCreateChild(ScanSpec::kMapValuesFieldName);
+  }
+  scanSpec_->children()[0]->setProjectOut(true);
+  scanSpec_->children()[1]->setProjectOut(true);
+}
+
 void SelectiveMapColumnReader::getValues(
     const RowSet& rows,
     VectorPtr* result) {
@@ -371,6 +382,112 @@ void SelectiveMapColumnReader::getValues(
     auto& values = resultMap->mapValues();
     prepareStructResult(requestedType_->childAt(1), &values);
     elementReader_->getValues(nestedRows_, &values);
+  }
+}
+
+SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
+    const TypePtr& requestedType,
+    const TypeWithIdPtr& fileType,
+    FormatParams& params,
+    ScanSpec& scanSpec)
+    : SelectiveMapColumnReaderBase(requestedType, params, scanSpec, fileType) {
+  VELOX_CHECK(scanSpec_->isFlatMapAsStruct() && requestedType_->isMap());
+  mapScanSpec_.addMapKeyFieldRecursively(*requestedType_->childAt(0));
+  mapScanSpec_.addMapValueFieldRecursively(*requestedType_->childAt(1));
+  column_index_t maxChannel = 0;
+  for (auto& childSpec : scanSpec_->children()) {
+    auto field = folly::tryTo<int64_t>(childSpec->fieldName());
+    VELOX_CHECK(
+        field.hasValue(),
+        "Fail to parse field name: {}",
+        childSpec->fieldName());
+    keyToIndex_[*field] = childSpec->channel();
+    maxChannel = std::max(maxChannel, childSpec->channel());
+  }
+  copyRanges_.resize(maxChannel + 1);
+}
+
+void SelectiveMapAsStructColumnReader::getValues(
+    const RowSet& rows,
+    VectorPtr* result) {
+  VELOX_CHECK_NOT_NULL(*result);
+  VELOX_CHECK(
+      result->get()->type()->isRow(),
+      "Expect ROW, got {}",
+      result->get()->type()->toString());
+  BaseVector::prepareForReuse(*result, rows.size());
+  auto* resultRow = result->get()->asChecked<RowVector>();
+  setComplexNulls(rows, *result);
+  for (auto& child : resultRow->children()) {
+    bits::fillBits(child->mutableRawNulls(), 0, rows.size(), bits::kNull);
+  }
+  numValues_ = rows.size();
+  if (nestedRows_.empty()) {
+    return;
+  }
+  keyReader_->getValues(nestedRows_, &mapKeys_);
+  prepareStructResult(requestedType_->childAt(1), &mapValues_);
+  elementReader_->getValues(nestedRows_, &mapValues_);
+  decodedKeys_.decode(*mapKeys_);
+  for (auto& ranges : copyRanges_) {
+    ranges.clear();
+  }
+  switch (mapKeys_->type()->kind()) {
+    case TypeKind::TINYINT:
+      makeCopyRanges<int8_t>(rows);
+      break;
+    case TypeKind::SMALLINT:
+      makeCopyRanges<int16_t>(rows);
+      break;
+    case TypeKind::INTEGER:
+      makeCopyRanges<int32_t>(rows);
+      break;
+    case TypeKind::BIGINT:
+      makeCopyRanges<int64_t>(rows);
+      break;
+    default:
+      VELOX_UNSUPPORTED(
+          "Unsupported key type: {}", mapKeys_->type()->toString());
+  }
+  for (column_index_t i = 0; i < resultRow->childrenSize(); ++i) {
+    resultRow->childAt(i)->copyRanges(mapValues_.get(), copyRanges_[i]);
+  }
+}
+
+template <typename T>
+void SelectiveMapAsStructColumnReader::makeCopyRanges(const RowSet& rows) {
+  auto* nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  for (vector_size_t i = 0,
+                     currentOffset = 0,
+                     currentRow = 0,
+                     nestedRowIndex = 0;
+       i < rows.size();
+       ++i) {
+    const auto row = rows[i];
+    if (nulls && bits::isBitNull(nulls, row)) {
+      anyNulls_ = true;
+      continue;
+    }
+    currentOffset += sumLengths(allLengths_, nulls, currentRow, row);
+    currentRow = row + 1;
+    nestedRowIndex =
+        advanceNestedRows(nestedRows_, nestedRowIndex, currentOffset);
+    currentOffset += allLengths_[row];
+    const auto newNestedRowIndex =
+        advanceNestedRows(nestedRows_, nestedRowIndex, currentOffset);
+    for (auto j = nestedRowIndex; j < newNestedRowIndex; ++j) {
+      VELOX_CHECK(!decodedKeys_.isNullAt(j));
+      auto it = keyToIndex_.find(decodedKeys_.valueAt<T>(j));
+      if (it == keyToIndex_.end()) {
+        continue;
+      }
+      copyRanges_[it->second].push_back({
+          .sourceIndex = j,
+          .targetIndex = i,
+          .count = 1,
+      });
+    }
+    nestedRowIndex = newNestedRowIndex;
   }
 }
 

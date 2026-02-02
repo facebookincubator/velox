@@ -48,6 +48,7 @@ add_executable(
   SimpleFunctionTest.cpp
   SpecialFormRewriteTestBase.cpp
   SwitchRewriteTest.cpp
+  CoalesceRewriteTest.cpp
   ConjunctRewriteTest.cpp
   StringWriterTest.cpp
   TryExprTest.cpp

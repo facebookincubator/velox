@@ -99,6 +99,10 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
         return createSelectiveFlatMapColumnReader(
             columnReaderOptions, requestedType, fileType, params, scanSpec);
       }
+      if (scanSpec.isFlatMapAsStruct()) {
+        return std::make_unique<SelectiveMapAsStructColumnReader>(
+            columnReaderOptions, requestedType, fileType, params, scanSpec);
+      }
       return std::make_unique<SelectiveMapColumnReader>(
           columnReaderOptions, requestedType, fileType, params, scanSpec);
     case TypeKind::REAL:

@@ -15,10 +15,10 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/AggregationHook.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/SumTestBase.h"
+#include "velox/vector/AggregationHook.h"
 
 using facebook::velox::exec::test::PlanBuilder;
 using namespace facebook::velox::exec::test;

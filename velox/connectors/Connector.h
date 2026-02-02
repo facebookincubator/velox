@@ -139,6 +139,16 @@ class ConnectorTableHandle : public ISerializable {
     return false;
   }
 
+  /// Returns true if this table handle requires splits for index lookup.
+  /// Default implementation returns false. Subclasses can override this to
+  /// indicate that splits need to be provided to the index source before
+  /// performing lookups.
+  ///
+  /// NOTE: this only applies if supportsIndexLookup() returns true.
+  virtual bool needsIndexSplit() const {
+    return false;
+  }
+
   virtual std::string toString() const {
     return name();
   }
@@ -321,27 +331,37 @@ class IndexSource {
  public:
   virtual ~IndexSource() = default;
 
+  /// Adds splits to the index source for lookup. This is called when
+  /// the table handle's needsIndexSplit() returns true. This method must be
+  /// called before the first call to lookup(). This method is expected to be
+  /// called only once. Default implementation throws as most index sources
+  /// don't require splits.
+  virtual void addSplits(
+      std::vector<std::shared_ptr<ConnectorSplit>> /*splits*/) {
+    VELOX_UNSUPPORTED("This IndexSource does not support splits");
+  }
+
   /// Represents a lookup request for a given input.
-  struct LookupRequest {
+  struct Request {
     /// Contains the input column vectors used by lookup join and range
     /// conditions.
     RowVectorPtr input;
 
-    explicit LookupRequest(RowVectorPtr input) : input(std::move(input)) {}
+    explicit Request(RowVectorPtr input) : input(std::move(input)) {}
   };
 
   /// Represents the lookup result for a subset of input produced by the
-  /// 'LookupResultIterator'.
-  struct LookupResult {
+  /// 'ResultIterator'.
+  struct Result {
     /// Specifies the indices of input row in the lookup request that have
     /// matches in 'output'. It contains the input indices in the order
     /// of the input rows in the lookup request. Any gap in the indices means
     /// the input rows that has no matches in output.
     ///
     /// Example:
-    ///   LookupRequest: input = [0, 1, 2, 3, 4]
-    ///   LookupResult:  inputHits = [0, 0, 2, 2, 3, 4, 4, 4]
-    ///                  output    = [0, 1, 2, 3, 4, 5, 6, 7]
+    ///   Request: input = [0, 1, 2, 3, 4]
+    ///   Result:  inputHits = [0, 0, 2, 2, 3, 4, 4, 4]
+    ///            output    = [0, 1, 2, 3, 4, 5, 6, 7]
     ///
     ///   Here is match results for each input row:
     ///   input row #0: match with output rows #0 and #1.
@@ -350,7 +370,7 @@ class IndexSource {
     ///   input row #3: match with output row #4.
     ///   input row #4: match with output rows #5, #6 and #7.
     ///
-    /// 'LookupResultIterator' must also produce the output result in order of
+    /// 'ResultIterator' must also produce the output result in order of
     /// input rows.
     BufferPtr inputHits;
 
@@ -361,7 +381,7 @@ class IndexSource {
       return output->size();
     }
 
-    LookupResult(BufferPtr _inputHits, RowVectorPtr _output)
+    Result(BufferPtr _inputHits, RowVectorPtr _output)
         : inputHits(std::move(_inputHits)), output(std::move(_output)) {
       VELOX_CHECK_EQ(inputHits->size() / sizeof(vector_size_t), output->size());
     }
@@ -369,24 +389,28 @@ class IndexSource {
 
   /// The lookup result iterator used to fetch the lookup result in batch for a
   /// given lookup request.
-  class LookupResultIterator {
+  class ResultIterator {
    public:
-    virtual ~LookupResultIterator() = default;
+    virtual ~ResultIterator() = default;
+
+    /// Invoked to check if there are more lookup results available to fetch.
+    /// Returns true if there are more results, false otherwise. This allows
+    /// the caller to determine whether to continue calling 'next()'.
+    virtual bool hasNext() = 0;
 
     /// Invoked to fetch up to 'size' number of output rows. Returns nullptr if
     /// all the lookup results have been fetched. Returns std::nullopt and sets
     /// the 'future' if started asynchronous work and needs to wait for it to
     /// complete to continue processing. The caller will wait for the 'future'
     /// to complete before calling 'next' again.
-    virtual std::optional<std::unique_ptr<LookupResult>> next(
+    virtual std::optional<std::unique_ptr<Result>> next(
         vector_size_t size,
         velox::ContinueFuture& future) {
       VELOX_UNSUPPORTED();
     }
   };
 
-  virtual std::shared_ptr<LookupResultIterator> lookup(
-      const LookupRequest& request) = 0;
+  virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
 };
@@ -615,14 +639,14 @@ class Connector {
   }
 
   /// Creates index source for index join lookup.
-  /// @param inputType The list of probe-side columns that either used in
-  /// equi-clauses or join conditions.
-  /// @param numJoinKeys The number of key columns used in join equi-clauses.
-  /// The first 'numJoinKeys' columns in 'inputType' form a prefix of the
-  /// index, and the rest of the columns in inputType are expected to be used in
-  /// 'joinConditions'.
-  /// @param joinConditions The join conditions. It expects inputs columns from
-  /// the 'tail' of 'inputType' and from 'columnHandles'.
+  /// @param inputType The list of probe-side columns used in join conditions.
+  /// @param joinConditions The join conditions that specify how to perform the
+  /// index lookup. This includes:
+  /// - EqualIndexLookupCondition: For equi-join conditions.
+  /// - InIndexLookupCondition: For IN-list conditions.
+  /// - BetweenIndexLookupCondition: For range conditions.
+  /// The index source can determine which columns form the index prefix by
+  /// examining EqualIndexLookupCondition objects where !isFilter().
   /// @param outputType The lookup output type from index source.
   /// @param tableHandle The index table handle.
   /// @param columnHandles The column handles which maps from column name
@@ -640,9 +664,12 @@ class Connector {
   ///
   /// Here,
   /// - 'inputType' is ROW{t.sid, t.event_list}
-  /// - 'numJoinKeys' is 1 since only t.sid is used in join equi-clauses.
-  /// - 'joinConditions' specifies the join condition: contains(t.event_list,
-  ///   u.event_type)
+  /// - 'joinConditions' includes:
+  ///   - EqualIndexLookupCondition(u.sid, t.sid) for the equi-join
+  ///   - InIndexLookupCondition(u.event_type, t.event_list) for the IN
+  ///     condition
+  ///   - BetweenIndexLookupCondition(u.ds, '2024-01-01', '2024-01-07') for the
+  ///     BETWEEN condition
   /// - 'outputType' is ROW{u.event_value}
   /// - 'tableHandle' specifies the metadata of the index table.
   /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
@@ -652,7 +679,6 @@ class Connector {
   ///
   virtual std::shared_ptr<IndexSource> createIndexSource(
       const RowTypePtr& inputType,
-      size_t numJoinKeys,
       const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
@@ -662,6 +688,26 @@ class Connector {
     VELOX_UNSUPPORTED(
         "Connector {} does not support index source", connectorId());
   }
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  virtual std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      size_t numJoinKeys,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) {
+    return createIndexSource(
+        inputType,
+        joinConditions,
+        outputType,
+        tableHandle,
+        columnHandles,
+        connectorQueryCtx);
+  }
+#endif
 
   virtual std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,

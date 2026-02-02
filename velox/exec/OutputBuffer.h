@@ -75,11 +75,11 @@ class ArbitraryBuffer {
   /// appends a null page at the end of 'pages_' as end marker.
   void noMoreData();
 
-  void enqueue(std::unique_ptr<SerializedPage> page);
+  void enqueue(std::unique_ptr<SerializedPageBase> page);
 
   /// Returns a number of pages with total bytes no less than 'maxBytes' if
   /// there are sufficient buffered pages.
-  std::vector<std::shared_ptr<SerializedPage>> getPages(uint64_t maxBytes);
+  std::vector<std::shared_ptr<SerializedPageBase>> getPages(uint64_t maxBytes);
 
   /// Append the available page sizes to `out'.
   void getAvailablePageSizes(std::vector<int64_t>& out) const;
@@ -87,7 +87,7 @@ class ArbitraryBuffer {
   std::string toString() const;
 
  private:
-  std::deque<std::shared_ptr<SerializedPage>> pages_;
+  std::deque<std::shared_ptr<SerializedPageBase>> pages_;
 };
 
 class DestinationBuffer {
@@ -98,11 +98,11 @@ class DestinationBuffer {
   /// 2. Sent: the data is removed from the buffer after it is acked or
   ///          deleted.
   struct Stats {
-    void recordEnqueue(const SerializedPage& data);
+    void recordEnqueue(const SerializedPageBase& data);
 
-    void recordAcknowledge(const SerializedPage& data);
+    void recordAcknowledge(const SerializedPageBase& data);
 
-    void recordDelete(const SerializedPage& data);
+    void recordDelete(const SerializedPageBase& data);
 
     bool finished{false};
 
@@ -117,7 +117,7 @@ class DestinationBuffer {
     int64_t pagesSent{0};
   };
 
-  void enqueue(std::shared_ptr<SerializedPage> data);
+  void enqueue(std::shared_ptr<SerializedPageBase> data);
 
   /// Invoked to load data with up to 'notifyMaxBytes_' bytes from arbitrary
   /// 'buffer' if there is pending fetch from this destination in which case
@@ -165,12 +165,12 @@ class DestinationBuffer {
   /// do not give a warning for the case where no data is removed, otherwise we
   /// expect that data does get freed. We cannot assert that data gets deleted
   /// because acknowledge messages can arrive out of order.
-  std::vector<std::shared_ptr<SerializedPage>> acknowledge(
+  std::vector<std::shared_ptr<SerializedPageBase>> acknowledge(
       int64_t sequence,
       bool fromGetData);
 
   /// Removes all remaining data from the queue and returns the removed data.
-  std::vector<std::shared_ptr<SerializedPage>> deleteResults();
+  std::vector<std::shared_ptr<SerializedPageBase>> deleteResults();
 
   /// Returns and clears the notify callback, if any, along with arguments for
   /// the callback.
@@ -187,7 +187,7 @@ class DestinationBuffer {
  private:
   void clearNotify();
 
-  std::vector<std::shared_ptr<SerializedPage>> data_;
+  std::vector<std::shared_ptr<SerializedPageBase>> data_;
   // The sequence number of the first in 'data_'.
   int64_t sequence_ = 0;
   DataAvailableCallback notify_{nullptr};
@@ -280,7 +280,7 @@ class OutputBuffer {
 
   bool enqueue(
       int destination,
-      std::unique_ptr<SerializedPage> data,
+      std::unique_ptr<SerializedPageBase> data,
       ContinueFuture* future);
 
   void noMoreData();
@@ -345,7 +345,7 @@ class OutputBuffer {
   // Updates buffered size and returns possibly continuable producer promises
   // in 'promises'.
   void updateAfterAcknowledgeLocked(
-      const std::vector<std::shared_ptr<SerializedPage>>& freed,
+      const std::vector<std::shared_ptr<SerializedPageBase>>& freed,
       std::vector<ContinuePromise>& promises);
 
   /// Given an updated total number of broadcast buffers, add any missing ones
@@ -353,16 +353,16 @@ class OutputBuffer {
   void addOutputBuffersLocked(int numBuffers);
 
   void enqueueBroadcastOutputLocked(
-      std::unique_ptr<SerializedPage> data,
+      std::unique_ptr<SerializedPageBase> data,
       std::vector<DataAvailable>& dataAvailableCbs);
 
   void enqueueArbitraryOutputLocked(
-      std::unique_ptr<SerializedPage> data,
+      std::unique_ptr<SerializedPageBase> data,
       std::vector<DataAvailable>& dataAvailableCbs);
 
   void enqueuePartitionedOutputLocked(
       int destination,
-      std::unique_ptr<SerializedPage> data,
+      std::unique_ptr<SerializedPageBase> data,
       std::vector<DataAvailable>& dataAvailableCbs);
 
   std::string toStringLocked() const;
@@ -401,7 +401,7 @@ class OutputBuffer {
   // While noMoreBuffers_ is false, stores the enqueued data to
   // broadcast to destinations that have not yet been initialized. Cleared
   // after receiving no-more-broadcast-buffers signal.
-  std::vector<std::shared_ptr<SerializedPage>> dataToBroadcast_;
+  std::vector<std::shared_ptr<SerializedPageBase>> dataToBroadcast_;
 
   std::mutex mutex_;
   // Actual data size in 'buffers_'.

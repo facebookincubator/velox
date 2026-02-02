@@ -593,6 +593,53 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, doubleClose) {
   VELOX_ASSERT_THROW(assertQuery(plan, sql), errorMessage);
 }
 
+// This test verifies that TopNRowNumber operator handles OOM that occurs in the
+// middle of groupProbe, after inserting some new rows into the row container.
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {
+  const std::string errorMessage("Simulated OOM in groupProbe");
+  std::atomic_int insertCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashTable::insertEntry",
+      std::function<void(memory::MemoryPool*)>(
+          ([&](memory::MemoryPool* /*pool*/) {
+            // Trigger OOM after inserting some rows to simulate failure in the
+            // middle of groupProbe insertion.
+            if (++insertCount == 100) {
+              VELOX_FAIL(errorMessage);
+            }
+          })));
+
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row; }, nullEvery(11)),
+              // Sorting key.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (size - row) * 10; },
+                  [](auto row) { return row == 123; }),
+              // Partitioning key. Make sure to spread rows from the same
+              // partition across multiple batches.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5'000; }, nullEvery(7)),
+          }),
+      10);
+
+  core::PlanNodeId topNRowNumberId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1'000, true)
+                  .capturePlanNodeId(topNRowNumberId)
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool_.get()), errorMessage);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TopNRowNumberTest,
     MultiTopNRowNumberTest,

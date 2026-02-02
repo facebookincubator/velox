@@ -128,13 +128,9 @@ class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
   std::unique_ptr<SelectiveColumnReader> child_;
 };
 
-class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
+class SelectiveMapColumnReaderBase : public SelectiveRepeatedColumnReader {
  public:
-  SelectiveMapColumnReader(
-      const TypePtr& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
-      FormatParams& params,
-      velox::common::ScanSpec& scanSpec);
+  using SelectiveRepeatedColumnReader::SelectiveRepeatedColumnReader;
 
   void resetFilterCaches() override {
     keyReader_->resetFilterCaches();
@@ -146,11 +142,53 @@ class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void getValues(const RowSet& rows, VectorPtr* result) override;
+  void seekToRowGroup(int64_t index) override {
+    SelectiveRepeatedColumnReader::seekToRowGroup(index);
+    keyReader_->seekToRowGroup(index);
+    keyReader_->setReadOffsetRecursive(0);
+    elementReader_->seekToRowGroup(index);
+    elementReader_->setReadOffsetRecursive(0);
+    childTargetReadOffset_ = 0;
+  }
 
  protected:
   std::unique_ptr<SelectiveColumnReader> keyReader_;
   std::unique_ptr<SelectiveColumnReader> elementReader_;
+};
+
+class SelectiveMapColumnReader : public SelectiveMapColumnReaderBase {
+ public:
+  SelectiveMapColumnReader(
+      const TypePtr& requestedType,
+      const TypeWithIdPtr& fileType,
+      FormatParams& params,
+      ScanSpec& scanSpec);
+
+  void getValues(const RowSet& rows, VectorPtr* result) override;
+};
+
+class SelectiveMapAsStructColumnReader : public SelectiveMapColumnReaderBase {
+ public:
+  SelectiveMapAsStructColumnReader(
+      const TypePtr& requestedType,
+      const TypeWithIdPtr& fileType,
+      FormatParams& params,
+      ScanSpec& scanSpec);
+
+  void getValues(const RowSet& rows, VectorPtr* result) override;
+
+ protected:
+  ScanSpec mapScanSpec_{"<mapScanSpec>"};
+
+ private:
+  template <typename T>
+  void makeCopyRanges(const RowSet& rows);
+
+  folly::F14FastMap<int64_t, column_index_t> keyToIndex_;
+  std::vector<std::vector<BaseVector::CopyRange>> copyRanges_;
+  VectorPtr mapKeys_;
+  VectorPtr mapValues_;
+  DecodedVector decodedKeys_;
 };
 
 } // namespace facebook::velox::dwio::common

@@ -210,6 +210,33 @@ class DecimalUtil {
     }
   }
 
+  /// When allowing precision loss, computes the result precision and scale
+  /// following Hive's formulas. When denying precision loss, calculates the
+  /// number of whole digits and fraction digits. If the total number of digits
+  /// exceed 38, we reduce both the number of fraction digits and whole digits
+  /// to fit within this limit.
+  template <bool allowPrecisionLoss>
+  static std::pair<uint8_t, uint8_t> computeDivideResultPrecisionScale(
+      uint8_t aPrecision,
+      uint8_t aScale,
+      uint8_t bPrecision,
+      uint8_t bScale) {
+    if constexpr (allowPrecisionLoss) {
+      auto scale = std::max(6, aScale + bPrecision + 1);
+      auto precision = aPrecision - aScale + bScale + scale;
+      return adjustPrecisionScale(precision, scale);
+    } else {
+      auto wholeDigits = std::min(38, aPrecision - aScale + bScale);
+      auto fractionDigits = std::min(38, std::max(6, aScale + bPrecision + 1));
+      auto diff = (wholeDigits + fractionDigits) - 38;
+      if (diff > 0) {
+        fractionDigits -= diff / 2 + 1;
+        wholeDigits = 38 - fractionDigits;
+      }
+      return bounded(wholeDigits + fractionDigits, fractionDigits);
+    }
+  }
+
   /// This method is used when the function is registered with
   /// ``allowPrecisionLoss`` being false. Caps precision and scale at 38.
   static std::pair<uint8_t, uint8_t> bounded(

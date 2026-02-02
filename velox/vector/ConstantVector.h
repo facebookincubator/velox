@@ -161,16 +161,17 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("setNull not supported on ConstantVector");
   }
 
-  const T value() const {
+  typename SimpleVector<T>::TValueAt value() const {
     VELOX_DCHECK(initialized_);
     return value_;
   }
 
-  const T valueAtFast(vector_size_t /*idx*/) const {
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t /*idx*/) const {
     return value();
   }
 
-  virtual const T valueAt(vector_size_t /*idx*/) const override {
+  typename SimpleVector<T>::TValueAt valueAt(
+      vector_size_t /*idx*/) const override {
     VELOX_DCHECK(initialized_);
     SimpleVector<T>::checkElementSize();
     return value();
@@ -202,17 +203,6 @@ class ConstantVector final : public SimpleVector<T> {
 #endif
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  uint64_t retainedSize() const override {
-    VELOX_DCHECK(initialized_);
-    if (valueVector_) {
-      return valueVector_->retainedSize();
-    }
-    if (stringBuffer_) {
-      return stringBuffer_->capacity();
-    }
-    return sizeof(T);
-  }
 
   BaseVector* loadedVector() override {
     if (!valueVector_) {
@@ -408,8 +398,14 @@ class ConstantVector final : public SimpleVector<T> {
     if (valueVector_) {
       valueVector_->transferOrCopyTo(pool);
     }
-    if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
-      stringBuffer_ = AlignedBuffer::copy<char>(stringBuffer_, pool);
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
+        auto newBuffer = AlignedBuffer::copy<char>(stringBuffer_, pool);
+        auto offset = value_.data() - stringBuffer_->template as<char>();
+        value_ =
+            StringView(newBuffer->template as<char>() + offset, value_.size());
+        stringBuffer_ = std::move(newBuffer);
+      }
     }
   }
 
@@ -481,6 +477,18 @@ class ConstantVector final : public SimpleVector<T> {
     BaseVector::nulls_->setSize(1);
     BaseVector::rawNulls_ = BaseVector::nulls_->as<uint64_t>();
     *BaseVector::nulls_->asMutable<uint64_t>() = bits::kNull64;
+  }
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    VELOX_DCHECK(initialized_);
+    if (valueVector_) {
+      return valueVector_->retainedSize(totalStringBufferSize);
+    }
+    if (stringBuffer_) {
+      totalStringBufferSize += stringBuffer_->capacity();
+      return stringBuffer_->capacity();
+    }
+    return sizeof(T);
   }
 
   // 'valueVector_' element 'index_' represents a complex constant

@@ -340,6 +340,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param indexColumns Names of columns that form the index key for the
+    /// table. When set, enables index-based lookups.
+    TableScanBuilder& indexColumns(std::vector<std::string> indexColumns) {
+      indexColumns_ = std::move(indexColumns);
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -357,6 +364,7 @@ class PlanBuilder {
     core::ExprPtr remainingFilter_;
     double sampleRate_{1.0};
     RowTypePtr dataColumns_;
+    std::vector<std::string> indexColumns_;
     std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
@@ -751,7 +759,10 @@ class PlanBuilder {
   /// Add a FilterNode using specified SQL expression.
   ///
   /// @param filter SQL expression of type boolean.
-  PlanBuilder& filter(const std::string& filter);
+  PlanBuilder& filter(const std::string& filterExpr);
+
+  /// Same as above, but takes an untyped expression.
+  PlanBuilder& filter(const core::ExprPtr& filterExpr);
 
   /// Similar to filter() except 'optionalFilter' could be empty and the
   /// function will skip creating a FilterNode in that case.
@@ -1046,7 +1057,8 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys);
+      bool ignoreNullKeys,
+      bool noGroupsSpanBatches = false);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
   /// aggregation inputs and a groupId column name.

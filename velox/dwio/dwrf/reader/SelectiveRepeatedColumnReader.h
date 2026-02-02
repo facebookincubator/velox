@@ -34,10 +34,6 @@ class SelectiveListColumnReader
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void resetFilterCaches() override {
-    child_->resetFilterCaches();
-  }
-
   void seekToRowGroup(int64_t index) override {
     dwio::common::SelectiveListColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
@@ -68,24 +64,37 @@ class SelectiveMapColumnReader : public dwio::common::SelectiveMapColumnReader {
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void resetFilterCaches() override {
-    keyReader_->resetFilterCaches();
-    elementReader_->resetFilterCaches();
-  }
-
   void seekToRowGroup(int64_t index) override {
     dwio::common::SelectiveMapColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
-
     length_->seekToRowGroup(positionsProvider);
-
     VELOX_CHECK(!positionsProvider.hasNext());
+  }
 
-    keyReader_->seekToRowGroup(index);
-    keyReader_->setReadOffsetRecursive(0);
-    elementReader_->seekToRowGroup(index);
-    elementReader_->setReadOffsetRecursive(0);
-    childTargetReadOffset_ = 0;
+  void readLengths(int32_t* lengths, int32_t numLengths, const uint64_t* nulls)
+      override {
+    length_->next(lengths, numLengths, nulls);
+  }
+
+ private:
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned=*/false>> length_;
+};
+
+class SelectiveMapAsStructColumnReader
+    : public dwio::common::SelectiveMapAsStructColumnReader {
+ public:
+  SelectiveMapAsStructColumnReader(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+      DwrfParams& params,
+      common::ScanSpec& scanSpec);
+
+  void seekToRowGroup(int64_t index) override {
+    dwio::common::SelectiveMapAsStructColumnReader::seekToRowGroup(index);
+    auto positionsProvider = formatData_->seekToRowGroup(index);
+    length_->seekToRowGroup(positionsProvider);
+    VELOX_CHECK(!positionsProvider.hasNext());
   }
 
   void readLengths(int32_t* lengths, int32_t numLengths, const uint64_t* nulls)

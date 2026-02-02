@@ -26,6 +26,7 @@ from pyvelox.type import (
     DOUBLE,
     VARCHAR,
     VARBINARY,
+    JSON,
     ARRAY,
     MAP,
     ROW,
@@ -43,6 +44,7 @@ class TestPyVeloxTypes(unittest.TestCase):
         self.assertTrue(isinstance(DOUBLE(), Type))
         self.assertTrue(isinstance(VARCHAR(), Type))
         self.assertTrue(isinstance(VARBINARY(), Type))
+        self.assertTrue(isinstance(JSON(), Type))
 
     def test_complex_types(self):
         self.assertTrue(isinstance(ARRAY(VARCHAR()), Type))
@@ -86,3 +88,5 @@ class TestPyVeloxTypes(unittest.TestCase):
 
         self.assertNotEqual(BIGINT(), INTEGER())
         self.assertNotEqual(ARRAY(BIGINT()), REAL())
+        self.assertNotEqual(VARBINARY(), VARCHAR())
+        self.assertNotEqual(JSON(), VARCHAR())

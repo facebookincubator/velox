@@ -599,7 +599,7 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
     return false;
   }
   VELOX_CHECK_NOT_NULL(dest);
-  auto* destImpl = checked_pointer_cast<MemoryPoolImpl, MemoryPool>(dest);
+  auto* destImpl = checkedPointerCast<MemoryPoolImpl, MemoryPool>(dest);
   if (allocator_ != destImpl->allocator_) {
     return false;
   }
@@ -910,9 +910,16 @@ void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
   VELOX_CHECK(requestor->isLeaf());
   ++numCapacityGrowths_;
 
-  {
+  try {
     MemoryPoolArbitrationSection arbitrationSection(requestor);
     arbitrator_->growCapacity(this, size);
+  } catch (const VeloxRuntimeError& veloxError) {
+    if (FOLLY_UNLIKELY(
+            debugEnabled() &&
+            veloxError.errorCode() == error_code::kMemCapExceeded)) {
+      std::rethrow_exception(wrapExceptionDbg(veloxError));
+    }
+    throw;
   }
   // The memory pool might have been aborted during the time it leaves the
   // arbitration no matter the arbitration succeed or not.
@@ -1252,10 +1259,7 @@ void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
       debugWarnThresholdExceeded_) {
     return;
   }
-  const auto usedBytes = [this]() -> int64_t {
-    std::lock_guard<std::mutex> l(mutex_);
-    return reservedBytes();
-  }();
+  const auto usedBytes = reservedBytes();
   if (usedBytes >= debugOptions_->debugPoolWarnThresholdBytes) {
     debugWarnThresholdExceeded_ = true;
     VELOX_MEM_LOG(WARNING) << fmt::format(
@@ -1360,10 +1364,72 @@ void MemoryPoolImpl::leakCheckDbg() {
           dumpRecordsDbg()));
 }
 
+void MemoryPoolImpl::treeAllocationRecordsDbg(
+    std::vector<MemoryPoolDump>& poolDumps) const {
+  VELOX_CHECK(debugEnabled());
+  {
+    std::lock_guard<std::mutex> debugAllocLock(debugAllocMutex_);
+    if (!debugAllocRecords_.empty()) {
+      MemoryPoolDump dump{
+          .dumpedRecords = fmt::format(
+              "Memory pool '{}' - {}", name(), dumpRecordsDbgLocked()),
+          .bytes = reservedBytes(),
+      };
+      poolDumps.emplace_back(std::move(dump));
+    }
+  }
+  if (isLeaf()) {
+    return;
+  }
+  visitChildren([&poolDumps](MemoryPool* pool) {
+    toImpl(pool)->treeAllocationRecordsDbg(poolDumps);
+    return true;
+  });
+}
+
+std::exception_ptr MemoryPoolImpl::wrapExceptionDbg(
+    const VeloxRuntimeError& veloxError) const {
+  VELOX_CHECK(debugEnabled());
+  VELOX_CHECK(isRoot());
+  std::vector<MemoryPoolDump> poolAllocationsSorted;
+  treeAllocationRecordsDbg(poolAllocationsSorted);
+  std::stringstream oss;
+  if (poolAllocationsSorted.empty()) {
+    oss << "No allocation records found.";
+  } else {
+    std::sort(
+        poolAllocationsSorted.begin(),
+        poolAllocationsSorted.end(),
+        [](const auto& a, const auto& b) { return a.bytes > b.bytes; });
+    for (const auto& record : poolAllocationsSorted) {
+      oss << record.dumpedRecords << "\n\n";
+    }
+  }
+  const auto wrappedMessage = fmt::format(
+      "{}\n\n"
+      "======= Current Allocations ======\n"
+      "{}",
+      veloxError.message(),
+      oss.str());
+  return std::make_exception_ptr(VeloxRuntimeError(
+      veloxError.file(),
+      veloxError.line(),
+      veloxError.function(),
+      veloxError.failingExpression(),
+      wrappedMessage,
+      veloxError.errorSource(),
+      veloxError.errorCode(),
+      veloxError.isRetriable(),
+      veloxError.exceptionName()));
+}
+
 std::string MemoryPoolImpl::dumpRecordsDbgLocked() const {
   VELOX_CHECK(debugEnabled());
   std::stringstream oss;
-  oss << fmt::format("Found {} allocations:\n", debugAllocRecords_.size());
+  oss << fmt::format(
+      "Found {} allocations with {} total size:\n",
+      debugAllocRecords_.size(),
+      succinctBytes(reservedBytes()));
   struct AllocationStats {
     uint64_t size{0};
     uint64_t numAllocations{0};

@@ -35,9 +35,11 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
             params,
             scanSpec) {}
 
-  // Offers fast path only if data and result widths match.
+  // Offers a fast path only if data and result widths match.
+  static constexpr bool kHasBulkPath = std::is_same_v<TData, TRequested>;
+
   bool hasBulkPath() const override {
-    return std::is_same_v<TData, TRequested>;
+    return kHasBulkPath;
   }
 
   template <typename Reader, bool kEncodingHasNulls>
@@ -90,7 +92,7 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::readHelper(
           TFilter,
           ExtractValues,
           isDense,
-          std::is_same_v<TData, TRequested>>(
+          Reader::kHasBulkPath>(
           *static_cast<const TFilter*>(filter), this, rows, extractValues));
 }
 

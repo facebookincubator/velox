@@ -132,7 +132,7 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
+      std::make_unique<PrestoSerializedPage>(
           stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
 
@@ -187,7 +187,9 @@ PartitionedOutput::PartitionedOutput(
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
                             .maxPartitionedOutputBufferSize()),
-      eagerFlush_(eagerFlush),
+      eagerFlush_(
+          eagerFlush ||
+          ctx->task->queryCtx()->queryConfig().partitionedOutputEagerFlush()),
       serde_(getNamedVectorSerde(planNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()

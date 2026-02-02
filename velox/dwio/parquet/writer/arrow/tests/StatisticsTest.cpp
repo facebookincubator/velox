@@ -464,7 +464,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
       std::vector<int16_t> definitionLevels(batchNullCount, 0);
       definitionLevels.insert(
           definitionLevels.end(), batchNumValues - batchNullCount, 1);
-      auto beg = this->values_.begin() + i * numValues / 2;
+      auto beg = this->values_.cbegin() + i * numValues / 2;
       auto end = beg + batchNumValues;
       std::vector<c_type> batch = GetDeepCopy(std::vector<c_type>(beg, end));
       c_type* batchValuesPtr = GetValuesPointer(batch);
@@ -1636,6 +1636,172 @@ TEST(TestStatistics, DoubleNegativeZero) {
   CheckNegativeZeroStats<DoubleType>();
 }
 
+// Test infinity handling in statistics.
+template <typename ParquetType>
+void CheckInfinityStats() {
+  using T = typename ParquetType::c_type;
+
+  constexpr int32_t kNumValues = 8;
+  NodePtr node = PrimitiveNode::Make(
+      "infinity_test", Repetition::OPTIONAL, ParquetType::type_num);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr T posInf = std::numeric_limits<T>::infinity();
+  constexpr T negInf = -std::numeric_limits<T>::infinity();
+  constexpr T min = -1.0f;
+  constexpr T max = 1.0f;
+
+  {
+    std::array<T, kNumValues> allPosInf{
+        posInf, posInf, posInf, posInf, posInf, posInf, posInf, posInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, allPosInf, posInf, posInf);
+  }
+
+  {
+    std::array<T, kNumValues> allNegInf{
+        negInf, negInf, negInf, negInf, negInf, negInf, negInf, negInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, allNegInf, negInf, negInf);
+  }
+
+  {
+    std::array<T, kNumValues> mixedInf{
+        posInf, negInf, posInf, negInf, posInf, negInf, posInf, negInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, mixedInf, negInf, posInf);
+  }
+
+  {
+    std::array<T, kNumValues> mixedValues{
+        posInf, max, min, min, negInf, max, min, posInf};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, mixedValues, negInf, posInf);
+  }
+
+  {
+    constexpr T nan = std::numeric_limits<T>::quiet_NaN();
+    std::array<T, kNumValues> mixedWithNan{
+        posInf, nan, max, negInf, nan, min, posInf, nan};
+    auto stats = MakeStatistics<ParquetType>(&descr);
+    AssertMinMaxAre(stats, mixedWithNan, negInf, posInf);
+  }
+}
+
+TEST(TestStatistics, FloatInfinityValues) {
+  CheckInfinityStats<FloatType>();
+}
+
+TEST(TestStatistics, DoubleInfinityValues) {
+  CheckInfinityStats<DoubleType>();
+}
+
+// Test infinity values with validity bitmap.
+TEST(TestStatistics, InfinityWithNullBitmap) {
+  constexpr int kNumValues = 8;
+  NodePtr node = PrimitiveNode::Make(
+      "infinity_null_test", Repetition::OPTIONAL, Type::FLOAT);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr float posInf = std::numeric_limits<float>::infinity();
+  constexpr float negInf = -std::numeric_limits<float>::infinity();
+
+  // Test with some infinity values marked as null.
+  std::array<float, kNumValues> valuesWithNulls{
+      posInf, negInf, 1.0f, 2.0f, posInf, -1.0f, 3.0f, negInf};
+
+  // Bitmap: exclude first posInf and last negInf (01111110 = 0x7E).
+  uint8_t validBitmap = 0x7E;
+
+  auto stats = MakeStatistics<FloatType>(&descr);
+  AssertMinMaxAre(stats, valuesWithNulls, &validBitmap, negInf, posInf);
+  valuesWithNulls = {posInf, 0.0f, 1.0f, 2.0f, -2.0f, -1.0f, 3.0f, negInf};
+
+  stats = MakeStatistics<FloatType>(&descr);
+  AssertMinMaxAre(stats, valuesWithNulls, &validBitmap, -2.0f, 3.0f);
+}
+
+// Test merging statistics with infinity values.
+TEST(TestStatistics, MergeInfinityStatistics) {
+  NodePtr node =
+      PrimitiveNode::Make("merge_infinity", Repetition::OPTIONAL, Type::DOUBLE);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr double posInf = std::numeric_limits<double>::infinity();
+  constexpr double negInf = -std::numeric_limits<double>::infinity();
+
+  auto stats1 = MakeStatistics<DoubleType>(&descr);
+  std::array<double, 3> normalValues{-1.0f, 0.0f, 1.0f};
+  AssertMinMaxAre(stats1, normalValues, -1.0f, 1.0f);
+
+  auto stats2 = MakeStatistics<DoubleType>(&descr);
+  std::array<double, 2> infinityValues{negInf, posInf};
+  AssertMinMaxAre(stats2, infinityValues, negInf, posInf);
+
+  auto mergedStats = MakeStatistics<DoubleType>(&descr);
+  mergedStats->Merge(*stats1);
+  mergedStats->Merge(*stats2);
+
+  // Result should have infinity bounds.
+  ASSERT_TRUE(mergedStats->HasMinMax());
+  ASSERT_EQ(negInf, mergedStats->min());
+  ASSERT_EQ(posInf, mergedStats->max());
+}
+
+TEST(TestStatistics, CleanInfinityStatistics) {
+  constexpr int kNumValues = 4;
+  NodePtr node = PrimitiveNode::Make(
+      "clean_stat_nullopt", Repetition::OPTIONAL, Type::FLOAT);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+
+  {
+    std::array<float, kNumValues> allNans{nan, nan, nan, nan};
+    auto stats = MakeStatistics<FloatType>(&descr);
+    AssertUnsetMinMax(stats, allNans);
+  }
+
+  {
+    std::array<float, kNumValues> values{1.0f, 2.0f, 3.0f, 4.0f};
+    uint8_t allNullBitmap = 0x00;
+
+    auto stats = MakeStatistics<FloatType>(&descr);
+    AssertUnsetMinMax(stats, values, &allNullBitmap);
+  }
+
+  {
+    std::array<float, kNumValues> mixedNans{nan, 1.0f, nan, 2.0f};
+    uint8_t partialNullBitmap = 0x05;
+
+    auto stats = MakeStatistics<FloatType>(&descr);
+    AssertUnsetMinMax(stats, mixedNans, &partialNullBitmap);
+  }
+}
+
+TEST(TestStatistics, InfinityCleanStatisticValid) {
+  constexpr int kNumValues = 4;
+  NodePtr node = PrimitiveNode::Make(
+      "clean_stat_valid", Repetition::OPTIONAL, Type::DOUBLE);
+  ColumnDescriptor descr(node, 1, 1);
+
+  constexpr double posInf = std::numeric_limits<double>::infinity();
+  constexpr double negInf = -std::numeric_limits<double>::infinity();
+  constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+
+  {
+    std::array<double, kNumValues> mixedValues{posInf, nan, negInf, nan};
+    auto stats = MakeStatistics<DoubleType>(&descr);
+    AssertMinMaxAre(stats, mixedValues, negInf, posInf);
+  }
+
+  {
+    std::array<double, 1> singleInf{negInf};
+    auto stats = MakeStatistics<DoubleType>(&descr);
+    AssertMinMaxAre(stats, singleInf, negInf, negInf);
+  }
+}
+
 // TODO: disabled as it requires Arrow parquet data dir.
 // Test statistics for binary column with UNSIGNED sort order
 /*
@@ -1682,6 +1848,363 @@ TEST(TestEncodedStatistics, CopySafe) {
   EXPECT_EQ("abc", encoded_statistics.max());
 }
 */
+
+namespace {
+
+constexpr int32_t kTruncLen = 16;
+
+template <typename ParquetType, typename T>
+std::shared_ptr<TypedStatistics<ParquetType>> makeStats(
+    const ColumnDescriptor* descr,
+    std::initializer_list<T> values) {
+  auto stats = MakeStatistics<ParquetType>(descr);
+  std::vector<T> v(values);
+  stats->Update(v.data(), v.size(), 0);
+  return stats;
+}
+
+std::shared_ptr<TypedStatistics<ByteArrayType>> makeStats(
+    const ColumnDescriptor* descr,
+    std::initializer_list<std::string> values) {
+  auto stats = MakeStatistics<ByteArrayType>(descr);
+  std::vector<std::string> strings(values);
+  std::vector<ByteArray> byteArrays;
+  byteArrays.reserve(strings.size());
+  for (const auto& s : strings) {
+    byteArrays.push_back(ByteArrayFromString(s));
+  }
+  stats->Update(byteArrays.data(), byteArrays.size(), 0);
+  return stats;
+}
+
+} // namespace
+
+TEST(IcebergStatistics, decimalMinMaxValue) {
+  const NodePtr node = PrimitiveNode::Make(
+      "decimal_col",
+      Repetition::REQUIRED,
+      LogicalType::Decimal(10, 2),
+      Type::INT64);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats =
+      makeStats<Int64Type, int64_t>(&descr, {12345, -67890, 100, 50000});
+
+  ASSERT_TRUE(stats->HasMinMax());
+  EXPECT_EQ(stats->min(), -67890);
+  EXPECT_EQ(stats->max(), 50000);
+
+  const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+
+  ASSERT_TRUE(upperBound.has_value());
+
+  // Verify the encoding is big-endian.
+  int64_t decodedMin = ::arrow::bit_util::FromBigEndian(
+      *reinterpret_cast<const int64_t*>(lowerBound.data()));
+  int64_t decodedMax = ::arrow::bit_util::FromBigEndian(
+      *reinterpret_cast<const int64_t*>(upperBound->data()));
+
+  EXPECT_EQ(decodedMin, -67890);
+  EXPECT_EQ(decodedMax, 50000);
+}
+
+TEST(IcebergStatistics, nonDecimalBounds) {
+  const NodePtr node =
+      PrimitiveNode::Make("int_col", Repetition::REQUIRED, Type::INT64);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats = makeStats<Int64Type, int64_t>(&descr, {100, -200, 300, 50});
+
+  ASSERT_TRUE(stats->HasMinMax());
+
+  // For non-decimal INT64, IcebergLowerBound should equal EncodeMin (plain
+  // encoding).
+  EXPECT_EQ(stats->IcebergLowerBoundInclusive(kTruncLen), stats->EncodeMin());
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  EXPECT_EQ(*upperBound, stats->EncodeMax());
+}
+
+TEST(IcebergStatistics, byteArrayBounds) {
+  NodePtr node = PrimitiveNode::Make(
+      "string_col",
+      Repetition::REQUIRED,
+      Type::BYTE_ARRAY,
+      ConvertedType::UTF8);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats = makeStats(
+      &descr,
+      {"AAAAAAAAAAAAAAAAAAAAAAAAA", "ZZZZZZZZZZZZZZZZZZZZZZZZZ", "Hello"});
+
+  ASSERT_TRUE(stats->HasMinMax());
+
+  // IcebergLowerBound should be truncated to 16 characters.
+  const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+  EXPECT_EQ(lowerBound, "AAAAAAAAAAAAAAAA");
+
+  // IcebergUpperBound should be truncated and incremented.
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  // 'Z' (0x5A) incremented becomes '[' (0x5B).
+  EXPECT_EQ(*upperBound, "ZZZZZZZZZZZZZZZ[");
+}
+
+TEST(IcebergStatistics, byteArrayBoundsNoTruncation) {
+  NodePtr node = PrimitiveNode::Make(
+      "string_col",
+      Repetition::REQUIRED,
+      Type::BYTE_ARRAY,
+      ConvertedType::UTF8);
+  ColumnDescriptor descr(node, 0, 0);
+
+  // Create strings shorter than 16 characters.
+  auto stats = makeStats(&descr, {"apple", "zebra", "banana"});
+
+  ASSERT_TRUE(stats->HasMinMax());
+
+  // For short strings, IcebergLowerBound/IcebergUpperBound should be the same
+  // as EncodeMin/EncodeMax.
+  EXPECT_EQ(stats->IcebergLowerBoundInclusive(kTruncLen), stats->EncodeMin());
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  EXPECT_EQ(*upperBound, stats->EncodeMax());
+}
+
+TEST(IcebergStatistics, byteArrayBoundsUnicode) {
+  NodePtr node = PrimitiveNode::Make(
+      "string_col",
+      Repetition::REQUIRED,
+      Type::BYTE_ARRAY,
+      ConvertedType::UTF8);
+  ColumnDescriptor descr(node, 0, 0);
+
+  // Create Unicode strings longer than 16 characters to trigger truncation.
+  // Truncation is based on character count (16 chars), not byte count.
+  // "世" is U+4E16 (3 bytes in UTF-8: E4 B8 96)
+  // "界" is U+754C (3 bytes in UTF-8: E7 95 8C)
+  // "你" is U+4F60 (3 bytes in UTF-8: E4 BD A0)
+  // "好" is U+597D (3 bytes in UTF-8: E5 A5 BD)
+  auto stats = makeStats(
+      &descr,
+      {"AAAA世界世界世界世界世界世界世",
+       "ZZZZ你好你好你好你好你好你好你",
+       "Hello, 世界!"});
+
+  ASSERT_TRUE(stats->HasMinMax());
+
+  const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+
+  ASSERT_TRUE(upperBound.has_value());
+
+  // str1 has 18 characters (4 ASCII + 14 Chinese).
+  // Truncated to 16 chars: "AAAA" (4) + "世界世界世界世界世界世界 (12)".
+  const std::string expectedLower = "AAAA世界世界世界世界世界世界";
+  EXPECT_EQ(lowerBound, expectedLower);
+
+  // str2 has 18 characters (4 ASCII + 14 Chinese).
+  // For upperBound, the last character is incremented after truncation.
+  // "好" (U+597D) incremented becomes U+597E "奾".
+  const std::string expectedUpper = "ZZZZ你好你好你好你好你好你奾";
+  EXPECT_EQ(*upperBound, expectedUpper);
+}
+
+TEST(IcebergStatistics, floatBounds) {
+  NodePtr node =
+      PrimitiveNode::Make("float_col", Repetition::REQUIRED, Type::FLOAT);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats = makeStats<FloatType, float>(&descr, {1.5f, -2.5f, 3.5f, 0.5f});
+
+  ASSERT_TRUE(stats->HasMinMax());
+  EXPECT_EQ(stats->IcebergLowerBoundInclusive(kTruncLen), stats->EncodeMin());
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  EXPECT_EQ(*upperBound, stats->EncodeMax());
+}
+
+TEST(IcebergStatistics, doubleBounds) {
+  NodePtr node =
+      PrimitiveNode::Make("double_col", Repetition::REQUIRED, Type::DOUBLE);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats = makeStats<DoubleType, double>(&descr, {1.5, -2.5, 3.5, 0.5});
+
+  ASSERT_TRUE(stats->HasMinMax());
+  EXPECT_EQ(stats->IcebergLowerBoundInclusive(kTruncLen), stats->EncodeMin());
+  const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  EXPECT_EQ(*upperBound, stats->EncodeMax());
+}
+
+TEST(IcebergStatistics, emptyStringBounds) {
+  NodePtr node = PrimitiveNode::Make(
+      "string_col",
+      Repetition::REQUIRED,
+      Type::BYTE_ARRAY,
+      ConvertedType::UTF8);
+  ColumnDescriptor descr(node, 0, 0);
+
+  {
+    auto stats = makeStats(&descr, {"", "hello", ""});
+
+    ASSERT_TRUE(stats->HasMinMax());
+    EXPECT_EQ(stats->IcebergLowerBoundInclusive(kTruncLen), "");
+
+    const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+    ASSERT_TRUE(upperBound.has_value());
+    EXPECT_EQ(*upperBound, "hello");
+  }
+
+  {
+    auto stats = makeStats(&descr, {"", ""});
+
+    ASSERT_TRUE(stats->HasMinMax());
+    EXPECT_EQ(stats->min(), ByteArray(""));
+    EXPECT_EQ(stats->max(), ByteArray(""));
+
+    EXPECT_EQ(stats->IcebergLowerBoundInclusive(kTruncLen), "");
+
+    const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+    ASSERT_TRUE(upperBound.has_value());
+    EXPECT_EQ(*upperBound, "");
+  }
+}
+
+TEST(IcebergStatistics, unboundedUpperBound) {
+  NodePtr node = PrimitiveNode::Make(
+      "string_col",
+      Repetition::REQUIRED,
+      Type::BYTE_ARRAY,
+      ConvertedType::UTF8);
+  ColumnDescriptor descr(node, 0, 0);
+
+  {
+    std::string allMaxAscii(20, '\x7F');
+    auto stats = makeStats(&descr, {"hello", allMaxAscii});
+
+    ASSERT_TRUE(stats->HasMinMax());
+
+    const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+    const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+
+    EXPECT_EQ(lowerBound, stats->EncodeMin());
+    EXPECT_FALSE(upperBound.has_value());
+  }
+
+  {
+    std::string allMaxUnicode;
+    allMaxUnicode.reserve(17 * 4);
+    for (int i = 0; i < 17; ++i) {
+      allMaxUnicode += "\U0010FFFF";
+    }
+    auto stats = makeStats(&descr, {"hello", allMaxUnicode});
+
+    ASSERT_TRUE(stats->HasMinMax());
+
+    const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+    const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+    EXPECT_EQ(lowerBound, stats->EncodeMin());
+    EXPECT_FALSE(upperBound.has_value());
+  }
+
+  {
+    std::string allMaxAscii(20, '\x7F');
+    auto stats = makeStats(&descr, {allMaxAscii, allMaxAscii});
+
+    ASSERT_TRUE(stats->HasMinMax());
+    EXPECT_EQ(stats->min(), ByteArray(allMaxAscii));
+    EXPECT_EQ(stats->max(), ByteArray(allMaxAscii));
+
+    const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+    const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+    EXPECT_TRUE(stats->EncodeMin().starts_with(lowerBound));
+    EXPECT_FALSE(upperBound.has_value());
+  }
+
+  {
+    std::string allMaxUnicode;
+    allMaxUnicode.reserve(17 * 4);
+    for (int i = 0; i < 17; ++i) {
+      allMaxUnicode += "\U0010FFFF";
+    }
+    auto stats = makeStats(&descr, {allMaxUnicode, allMaxUnicode});
+
+    ASSERT_TRUE(stats->HasMinMax());
+    EXPECT_EQ(stats->min(), ByteArray(allMaxUnicode));
+    EXPECT_EQ(stats->max(), ByteArray(allMaxUnicode));
+
+    const auto lowerBound = stats->IcebergLowerBoundInclusive(kTruncLen);
+    const auto upperBound = stats->IcebergUpperBoundExclusive(kTruncLen);
+    EXPECT_TRUE(stats->EncodeMin().starts_with(lowerBound));
+    EXPECT_FALSE(upperBound.has_value());
+  }
+}
+
+TEST(StatisticsComparison, withInt64) {
+  NodePtr node =
+      PrimitiveNode::Make("int_col", Repetition::REQUIRED, Type::INT64);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats1 = makeStats<Int64Type, int64_t>(&descr, {10, 20, 30});
+  auto stats2 = makeStats<Int64Type, int64_t>(&descr, {5, 15, 25});
+  auto stats3 = makeStats<Int64Type, int64_t>(&descr, {10, 20, 30});
+
+  ASSERT_TRUE(stats1->HasMinMax());
+  ASSERT_TRUE(stats2->HasMinMax());
+  ASSERT_TRUE(stats3->HasMinMax());
+
+  EXPECT_TRUE(stats1->MaxGreaterThan(*stats2));
+  EXPECT_FALSE(stats2->MaxGreaterThan(*stats1));
+  EXPECT_TRUE(stats1->MaxGreaterThan(*stats3));
+  EXPECT_TRUE(stats3->MaxGreaterThan(*stats1));
+
+  EXPECT_FALSE(stats1->MinLessThan(*stats2));
+  EXPECT_TRUE(stats2->MinLessThan(*stats1));
+  EXPECT_FALSE(stats1->MinLessThan(*stats3));
+  EXPECT_FALSE(stats3->MinLessThan(*stats1));
+}
+
+TEST(StatisticsComparison, withDouble) {
+  NodePtr node =
+      PrimitiveNode::Make("double_col", Repetition::REQUIRED, Type::DOUBLE);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats1 = makeStats<DoubleType, double>(&descr, {1.0, 2.0, 3.0});
+  auto stats2 = makeStats<DoubleType, double>(&descr, {0.5, 1.5, 2.5});
+
+  ASSERT_TRUE(stats1->HasMinMax());
+  ASSERT_TRUE(stats2->HasMinMax());
+
+  EXPECT_TRUE(stats1->MaxGreaterThan(*stats2));
+  EXPECT_FALSE(stats2->MaxGreaterThan(*stats1));
+
+  EXPECT_FALSE(stats1->MinLessThan(*stats2));
+  EXPECT_TRUE(stats2->MinLessThan(*stats1));
+}
+
+TEST(StatisticsComparison, withByteArray) {
+  NodePtr node = PrimitiveNode::Make(
+      "string_col",
+      Repetition::REQUIRED,
+      Type::BYTE_ARRAY,
+      ConvertedType::UTF8);
+  ColumnDescriptor descr(node, 0, 0);
+
+  auto stats1 = makeStats(&descr, {"apple", "zebra"});
+  auto stats2 = makeStats(&descr, {"banana", "mangomango"});
+
+  ASSERT_TRUE(stats1->HasMinMax());
+  ASSERT_TRUE(stats2->HasMinMax());
+
+  EXPECT_TRUE(stats1->MaxGreaterThan(*stats2));
+  EXPECT_FALSE(stats2->MaxGreaterThan(*stats1));
+
+  EXPECT_TRUE(stats1->MinLessThan(*stats2));
+  EXPECT_FALSE(stats2->MinLessThan(*stats1));
+}
 
 } // namespace test
 } // namespace facebook::velox::parquet::arrow

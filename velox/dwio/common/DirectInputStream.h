@@ -44,7 +44,7 @@ class DirectInputStream : public SeekableInputStream {
   bool Next(const void** data, int* size) override;
   void BackUp(int count) override;
   bool SkipInt64(int64_t count) override;
-  google::protobuf::int64 ByteCount() const override;
+  int64_t ByteCount() const override;
 
   void seekToPosition(PositionProvider& position) override;
   std::string getName() const override;

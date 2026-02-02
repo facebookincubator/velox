@@ -686,24 +686,22 @@ template <typename TExec, typename T>
 struct ArrayConcatFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec)
 
-  static constexpr int32_t kMinArity = 2;
-  static constexpr int32_t kMaxArity = 254;
+  static constexpr int32_t kMaxArity = 252;
 
   void call(
       out_type<Array<T>>& out,
+      const arg_type<Array<T>>& array1,
+      const arg_type<Array<T>>& array2,
       const arg_type<Variadic<Array<T>>>& arrays) {
-    VELOX_USER_CHECK_GE(
-        arrays.size(),
-        kMinArity,
-        "There must be {} or more arguments to concat",
-        kMinArity);
     VELOX_USER_CHECK_LE(
         arrays.size(), kMaxArity, "Too many arguments for concat function");
-    int64_t elementCount = 0;
+    int64_t elementCount = array1.size() + array2.size();
     for (const auto& array : arrays) {
       elementCount += array.value().size();
     }
     out.reserve(elementCount);
+    out.add_items(array1);
+    out.add_items(array2);
     for (const auto& array : arrays) {
       out.add_items(array.value());
     }

@@ -106,7 +106,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   // Returns runtime statistics. ExchangeSource is expected to report
   // background CPU time by including a runtime metric named
-  // ExchangeClient::kBackgroundCpuTimeMs.
+  // Operator::kBackgroundCpuTimeNanos.
   virtual folly::F14FastMap<std::string, int64_t> stats() const {
     VELOX_UNREACHABLE();
   }

@@ -468,19 +468,21 @@ std::vector<int32_t> SpatialJoinProbe::querySpatialIndex() {
 
 BufferPtr SpatialJoinProbe::makeBuildVectorIndices(vector_size_t vectorSize) {
   // Find the slice of candidates that are in this build vector.
-  size_t endIndex = candidateIndex_;
+  vector_size_t endIndex = candidateIndex_;
   for (; endIndex < candidateBuildRows_.size(); ++endIndex) {
     if (relativeBuildRow(endIndex) >= vectorSize) {
       break;
     }
   }
 
+  // Make an index vector to fit the candidates.  Populate each entry with its
+  // relative build row.
   vector_size_t indexCount =
       static_cast<vector_size_t>(endIndex - candidateIndex_);
   auto rowIndices = allocateIndices(indexCount, operatorCtx_->pool());
   auto rawIndices = rowIndices->asMutable<vector_size_t>();
-  for (size_t idx = candidateIndex_; idx < endIndex; ++idx) {
-    rawIndices[idx] = relativeBuildRow(idx);
+  for (vector_size_t idx = 0; idx < indexCount; ++idx) {
+    rawIndices[idx] = relativeBuildRow(idx + candidateIndex_);
   }
 
   return rowIndices;

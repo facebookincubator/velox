@@ -10,11 +10,12 @@ General Aggregate Functions
 .. spark:function:: avg(x) -> double|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.
-    When x is of type DECIMAL, the result type is DECIMAL,
-    and the intermediate results are varbinarys or (sum, count) pairs represented as row(decimal, bigint).
+    When ``x`` is of type DECIMAL(p, s), the result type is DECIMAL(p + 4, s + 4),
+    and the intermediate results are (sum, count) pairs represented as ROW(DECIMAL(p + 10, s), BIGINT).
+    The current implementation for DECIMAL matches Spark avg's default behavior with spark.sql.decimalOperations.allowPrecisionLoss=true.
     For all other input types, the result type is DOUBLE,
-    and the intermediate results are (sum, count) pairs represented as row(double, bigint).
-    When all inputs are nulls, the intermediate result is row(0, 0),
+    and the intermediate results are (sum, count) pairs represented as ROW(DOUBLE, BIGINT).
+    When all inputs are nulls, the intermediate result is ROW(0, 0),
     and the final result is null.
 
 .. spark:function:: bit_xor(x) -> bigint

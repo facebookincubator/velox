@@ -11,5 +11,6 @@ Testing Tools
     testing/join-fuzzer
     testing/memory-arbitration-fuzzer
     testing/row-number-fuzzer
+    testing/spatial-join-fuzzer
     testing/writer-fuzzer
     testing/spark-query-runner.rst

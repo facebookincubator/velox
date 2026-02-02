@@ -428,7 +428,6 @@ void SelectiveStructColumnReaderBase::read(
   VELOX_CHECK(!childSpecs.empty());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     const auto& childSpec = childSpecs[i];
-    VELOX_TRACE_HISTORY_PUSH("read %s", childSpec->fieldName().c_str());
 
     if (childSpec->deltaUpdate()) {
       // Will make LazyVector.
@@ -555,7 +554,6 @@ void SelectiveStructColumnReaderBase::getValues(
 
   setComplexNulls(rows, *result);
   for (const auto& childSpec : scanSpec_->children()) {
-    VELOX_TRACE_HISTORY_PUSH("getValues %s", childSpec->fieldName().c_str());
     if (!childSpec->keepValues()) {
       continue;
     }

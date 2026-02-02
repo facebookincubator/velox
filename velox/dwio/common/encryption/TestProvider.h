@@ -40,7 +40,7 @@ class TestEncryption {
 
   std::unique_ptr<folly::IOBuf> decrypt(std::string_view input) const {
     ++count_;
-    std::string key{input.begin(), key_.size()};
+    std::string key{input.cbegin(), key_.size()};
     DWIO_ENSURE_EQ(key_, key);
     auto decoded = velox::encoding::Base64::decodeUrl(
         std::string_view{

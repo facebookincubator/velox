@@ -360,6 +360,11 @@ class GroupingSet {
   // result.
   RowVectorPtr spillResultWithoutAggregates_{nullptr};
 
+  // Records the source rows to copy to 'output_' in order.
+  std::vector<const RowVector*> spillSources_;
+
+  std::vector<vector_size_t> spillSourceRows_;
+
   // The value of mayPushdown flag specified in addInput() for the
   // 'remainingInput_'.
   bool remainingMayPushdown_;

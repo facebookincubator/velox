@@ -21,7 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorStats.h"
-#include "velox/exec/OperatorTraceWriter.h"
+#include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
 
@@ -151,6 +151,11 @@ class Operator : public BaseRuntimeStatWriter {
       return std::nullopt;
     }
   };
+
+  /// The name for background cpu time metric if operator has background cpu
+  /// usages outside its driver thread.
+  static inline const std::string kBackgroundCpuTimeNanos =
+      "backgroundCpuTimeNanos";
 
   /// The name of the runtime spill stats collected and reported by operators
   /// that support spilling.
@@ -290,7 +295,7 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Traces input batch of the operator.
-  virtual void traceInput(const RowVectorPtr&);
+  virtual bool traceInput(const RowVectorPtr& input, ContinueFuture* future);
 
   /// Finishes tracing of the operator.
   virtual void finishTrace();
@@ -634,8 +639,8 @@ class Operator : public BaseRuntimeStatWriter {
   /// NOTE: only one of the two could be set for an operator for tracing .
   /// 'splitTracer_' is only set for table scan to record the processed split
   /// for now.
-  std::unique_ptr<trace::OperatorTraceInputWriter> inputTracer_{nullptr};
-  std::unique_ptr<trace::OperatorTraceSplitWriter> splitTracer_{nullptr};
+  std::unique_ptr<trace::TraceInputWriter> inputTracer_{nullptr};
+  std::unique_ptr<trace::TraceSplitWriter> splitTracer_{nullptr};
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this
@@ -666,12 +671,6 @@ class Operator : public BaseRuntimeStatWriter {
   bool shouldYield() const {
     return operatorCtx_->driverCtx()->driver->shouldYield();
   }
-
- private:
-  // Setup 'inputTracer_' to record the processed input vectors.
-  void setupInputTracer(const std::string& traceDir);
-  // Setup 'splitTracer_' for table scan to record the processed split.
-  void setupSplitTracer(const std::string& traceDir);
 };
 
 /// Given a row type returns indices for the specified subset of columns.

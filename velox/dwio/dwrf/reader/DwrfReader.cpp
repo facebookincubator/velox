@@ -39,24 +39,26 @@ using dwio::common::UnitLoaderFactory;
 class DwrfUnit : public LoadUnit {
  public:
   DwrfUnit(
-      const StripeReaderBase& stripeReaderBase,
+      std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      dwio::common::ColumnReaderStatistics& columnReaderStatistics,
+      std::shared_ptr<dwio::common::ColumnReaderStatistics>
+          columnReaderStatistics,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
-      const std::shared_ptr<BitSet>& projectedNodes,
+      std::shared_ptr<BitSet> projectedNodes,
       RowReaderOptions options,
-      const dwio::common::ColumnReaderOptions& columnReaderOptions)
-      : stripeReaderBase_{stripeReaderBase},
+      dwio::common::ColumnReaderOptions columnReaderOptions)
+      : stripeReaderBase_{readerBase},
+        memoryPool_(readerBase->memoryPool().shared_from_this()),
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStatistics_{&columnReaderStatistics},
+        columnReaderStatistics_{std::move(columnReaderStatistics)},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
-        projectedNodes_{projectedNodes},
+        projectedNodes_{std::move(projectedNodes)},
         options_{std::move(options)},
-        columnReaderOptions_{columnReaderOptions},
+        columnReaderOptions_{std::move(columnReaderOptions)},
         stripeInfo_{
-            stripeReaderBase.getReader().footer().stripes(stripeIndex_)} {}
+            stripeReaderBase_.getReader().footer().stripes(stripeIndex_)} {}
 
   ~DwrfUnit() override = default;
 
@@ -86,14 +88,25 @@ class DwrfUnit : public LoadUnit {
   void loadDecoders();
 
   // Immutables
-  const StripeReaderBase& stripeReaderBase_;
+  const StripeReaderBase stripeReaderBase_;
+  // Not used in DwrfUnit directly, it is to keep memory pool alive for
+  // readerBase
+  const std::shared_ptr<memory::MemoryPool> memoryPool_;
+
+  // SAFETY: This reference is safe despite DwrfUnit potentially outliving
+  // DwrfRowReader during async operations. The reference is only STORED (not
+  // dereferenced) during load() path. Actual dereferencing via
+  // getStrideIndex() only happens during synchronous data reading in
+  // ColumnReader::next(), where DwrfRowReader is guaranteed to be alive.
   const StrideIndexProvider& strideIndexProvider_;
-  dwio::common::ColumnReaderStatistics* const columnReaderStatistics_;
+
+  const std::shared_ptr<dwio::common::ColumnReaderStatistics>
+      columnReaderStatistics_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
   const RowReaderOptions options_;
-  const dwio::common::ColumnReaderOptions& columnReaderOptions_;
+  const dwio::common::ColumnReaderOptions columnReaderOptions_;
   const StripeInformationWrapper stripeInfo_;
 
   // Mutables
@@ -228,6 +241,15 @@ void makeProjectedNodes(
   }
 }
 
+const velox::common::ScanSpec* getChildScanSpec(
+    const velox::common::ScanSpec* scanSpec,
+    const TypeWrapper& nodeType,
+    int32_t childIdx) {
+  return scanSpec != nullptr && childIdx < nodeType.fieldNamesSize()
+      ? scanSpec->childByName(nodeType.fieldNames(childIdx))
+      : nullptr;
+}
+
 } // namespace
 
 DwrfRowReader::DwrfRowReader(
@@ -243,6 +265,8 @@ DwrfRowReader::DwrfRowReader(
                     reader->schema()))},
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
+      columnReaderStatistics_{
+          std::make_shared<dwio::common::ColumnReaderStatistics>()},
       currentUnit_{nullptr} {
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
@@ -331,7 +355,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
   for (auto stripe = firstStripe_; stripe < stripeCeiling_; ++stripe) {
     loadUnits.emplace_back(
         std::make_unique<DwrfUnit>(
-            /*stripeReaderBase=*/*this,
+            /*readerBase=*/readerBaseShared(),
             /*strideIndexProvider=*/*this,
             columnReaderStatistics_,
             stripe,
@@ -687,11 +711,14 @@ size_t DwrfRowReader::estimatedReaderMemory() const {
   return 2 * DwrfReader::getMemoryUse(getReader(), -1, *columnSelector_);
 }
 
-bool DwrfRowReader::shouldReadNode(uint32_t nodeId) const {
-  if (columnSelector_) {
-    return columnSelector_->shouldReadNode(nodeId);
-  }
-  return projectedNodes_->contains(nodeId);
+bool DwrfRowReader::shouldReadNode(
+    uint32_t nodeId,
+    const velox::common::ScanSpec* fieldScanSpec) const {
+  bool nodeIdSelected = (columnSelector_)
+      ? columnSelector_->shouldReadNode(nodeId)
+      : projectedNodes_->contains(nodeId);
+  return nodeIdSelected &&
+      !(fieldScanSpec != nullptr && !fieldScanSpec->readFromFile());
 }
 
 namespace {
@@ -714,6 +741,7 @@ std::optional<uint64_t> getStringOrBinaryColumnSize(
 std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     const FooterWrapper& fileFooter,
     const dwio::common::Statistics& stats,
+    const velox::common::ScanSpec* scanSpec,
     uint32_t nodeId) const {
   VELOX_CHECK_LT(nodeId, fileFooter.typesSize(), "Types missing in footer");
 
@@ -768,11 +796,16 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
           ? 0
           : 2 * valueCount * sizeof(vector_size_t);
       for (int32_t i = 0; i < nodeType.subtypesSize(); ++i) {
-        if (!shouldReadNode(nodeType.subtypes(i))) {
+        if (!shouldReadNode(
+                nodeType.subtypes(i),
+                getChildScanSpec(scanSpec, nodeType, i))) {
           continue;
         }
-        const auto subtypeEstimate =
-            estimatedRowSizeHelper(fileFooter, stats, nodeType.subtypes(i));
+        const auto subtypeEstimate = estimatedRowSizeHelper(
+            fileFooter,
+            stats,
+            getChildScanSpec(scanSpec, nodeType, i),
+            nodeType.subtypes(i));
         if (subtypeEstimate.has_value()) {
           totalEstimate += subtypeEstimate.value();
         } else {
@@ -809,8 +842,11 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   // Estimate with projections.
   constexpr uint32_t ROOT_NODE_ID = 0;
   const auto stats = reader.statistics();
-  const auto projectedSize =
-      estimatedRowSizeHelper(fileFooter, *stats, ROOT_NODE_ID);
+  const auto projectedSize = estimatedRowSizeHelper(
+      fileFooter,
+      *stats,
+      reader.readerOptions().scanSpec().get(),
+      ROOT_NODE_ID);
   if (projectedSize.has_value()) {
     estimatedRowSize_ = projectedSize.value() / fileFooter.numberOfRows();
     return estimatedRowSize_;

@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <thrift/lib/cpp2/FieldRef.h>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -91,7 +92,7 @@ PageHeader PageReader::readPageHeader() {
   pageDataStart_ = pageStart_ + result.readBytes;
   bufferStart_ = reinterpret_cast<const char*>(result.remainedData);
   bufferEnd_ = bufferStart_ + result.remainedDataBytes;
-  stats_.pageLoadTimeNs += result.readUs * 1'000;
+  stats_.pageLoadTimeNs.increment(result.readUs * 1'000);
   return pageHeader;
 }
 
@@ -120,7 +121,7 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
         bufferStart_,
         bufferEnd_);
   }
-  stats_.pageLoadTimeNs += readUs * 1'000;
+  stats_.pageLoadTimeNs.increment(readUs * 1'000);
   return copy->as<char>();
 }
 
@@ -323,20 +324,26 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
 }
 
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
-  dictionary_.numValues = *pageHeader.dictionary_page_header()->num_values();
-  dictionaryEncoding_ = *pageHeader.dictionary_page_header()->encoding();
-  dictionary_.sorted = pageHeader.dictionary_page_header()->is_sorted() &&
-      *pageHeader.dictionary_page_header()->is_sorted();
+  dictionary_.numValues = apache::thrift::can_throw(
+      *pageHeader.dictionary_page_header()->num_values());
+  dictionaryEncoding_ = apache::thrift::can_throw(
+      *pageHeader.dictionary_page_header()->encoding());
+  dictionary_.sorted = apache::thrift::can_throw(
+                           pageHeader.dictionary_page_header()->is_sorted()) &&
+      apache::thrift::can_throw(
+                           *pageHeader.dictionary_page_header()->is_sorted());
   VELOX_CHECK(
       dictionaryEncoding_ == Encoding::PLAIN_DICTIONARY ||
       dictionaryEncoding_ == Encoding::PLAIN);
 
   if (codec_ != common::CompressionKind::CompressionKind_NONE) {
-    pageData_ = readBytes(*pageHeader.compressed_page_size(), pageBuffer_);
+    pageData_ = readBytes(
+        apache::thrift::can_throw(*pageHeader.compressed_page_size()),
+        pageBuffer_);
     pageData_ = decompressData(
         pageData_,
-        *pageHeader.compressed_page_size(),
-        *pageHeader.uncompressed_page_size());
+        apache::thrift::can_throw(*pageHeader.compressed_page_size()),
+        apache::thrift::can_throw(*pageHeader.uncompressed_page_size()));
   }
 
   auto parquetType = type_->parquetType_.value();
@@ -376,7 +383,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.pageLoadTimeNs += readUs * 1'000;
+        stats_.pageLoadTimeNs.increment(readUs * 1'000);
       }
       if (type_->type()->isShortDecimal() &&
           parquetType == thrift::Type::INT32) {
@@ -416,7 +423,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.pageLoadTimeNs += readUs * 1'000;
+        stats_.pageLoadTimeNs.increment(readUs * 1'000);
       }
       // Expand the Parquet type length values to Velox type length.
       // We start from the end to allow in-place expansion.
@@ -449,7 +456,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           dwio::common::readBytes(
               numBytes, inputStream_.get(), strings, bufferStart_, bufferEnd_);
         }
-        stats_.pageLoadTimeNs += readUs * 1'000;
+        stats_.pageLoadTimeNs.increment(readUs * 1'000);
       }
       auto header = strings;
       for (auto i = 0; i < dictionary_.numValues; ++i) {
@@ -481,7 +488,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.pageLoadTimeNs += readUs * 1'000;
+        stats_.pageLoadTimeNs.increment(readUs * 1'000);
       }
       if (type_->type()->isShortDecimal()) {
         // Parquet decimal values have a fixed typeLength_ and are in big-endian

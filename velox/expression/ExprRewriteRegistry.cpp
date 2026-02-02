@@ -28,6 +28,16 @@ void ExprRewriteRegistry::clear() {
 
 core::TypedExprPtr ExprRewriteRegistry::rewrite(
     const core::TypedExprPtr& expr) {
+  const auto& inputs = expr->inputs();
+  VELOX_CHECK(
+      std::any_of(
+          inputs.begin(),
+          inputs.end(),
+          [](const core::TypedExprPtr& input) {
+            return !input->isConstantKind();
+          }),
+      "Expression should have at least one non-constant input.");
+
   core::TypedExprPtr result = expr;
   registry_.withRLock([&](const auto& list) {
     for (const auto& rewrite : list) {

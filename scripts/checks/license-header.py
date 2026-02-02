@@ -100,7 +100,7 @@ file_types = OrderedDict(
         "*.cmake": attrdict({"wrapper": wrapper_hash, "hashbang": False}),
         "*.cpp": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
         "*.hpp": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
-        "*.dockfile": attrdict({"wrapper": wrapper_hash, "hashbang": False}),
+        "*.dockerfile": attrdict({"wrapper": wrapper_hash, "hashbang": False}),
         "*.h": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
         "*.inc": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
         "*.java": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
@@ -110,6 +110,7 @@ file_types = OrderedDict(
         "*.thrift": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
         "*.txt": attrdict({"wrapper": wrapper_hash, "hashbang": True}),
         "*.yml": attrdict({"wrapper": wrapper_hash, "hashbang": False}),
+        "*.yaml": attrdict({"wrapper": wrapper_hash, "hashbang": False}),
         "*.cu": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
         "*.cuh": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
         "*.clcpp": attrdict({"wrapper": wrapper_chpp, "hashbang": False}),
@@ -119,7 +120,12 @@ file_types = OrderedDict(
 )
 
 file_pattern = regex.compile(
-    "|".join(["^" + fnmatch.translate(type) + "$" for type in file_types.keys()])
+    "|".join(
+        [
+            "^" + fnmatch.translate(type).replace(r"\z", r"\Z") + "$"
+            for type in file_types.keys()
+        ]
+    )
 )
 
 
@@ -228,7 +234,13 @@ def main():
             # If removing the header text, zero it out there.
             header_comment = ""
 
-        message(log_to, "Fix  : " + filepath)
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(
+                f"::error file={filepath},line=1,endLine=1,title=Missing license header::"
+                + "Please add the properly commented license header."
+            )
+        else:
+            message(log_to, "Fix  : " + filepath)
 
         if args.check:
             fail = True

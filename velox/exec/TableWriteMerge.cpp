@@ -22,6 +22,7 @@
 
 namespace facebook::velox::exec {
 namespace {
+
 bool isSameCommitContext(
     const folly::dynamic& first,
     const folly::dynamic& second) {
@@ -44,6 +45,7 @@ bool containsNonNullRows(const VectorPtr& vector) {
   }
   return false;
 }
+
 } // namespace
 
 TableWriteMerge::TableWriteMerge(

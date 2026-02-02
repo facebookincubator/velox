@@ -71,9 +71,10 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
         pool_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
-        std::is_sorted(requests.begin(), requests.end(), [](auto* x, auto* y) {
-          return x->region.offset < y->region.offset;
-        }));
+        std::is_sorted(
+            requests.cbegin(), requests.cend(), [](auto* x, auto* y) {
+              return x->region.offset < y->region.offset;
+            }));
     requests_.reserve(requests.size());
     for (auto i = 0; i < requests.size(); ++i) {
       requests_.push_back(std::move(*requests[i]));
@@ -204,12 +205,24 @@ class DirectBufferedInput : public BufferedInput {
     return executor_;
   }
 
+  const std::vector<std::shared_ptr<cache::CoalescedLoad>>&
+  testingCoalescedLoads() const {
+    return coalescedLoads_;
+  }
+
+  size_t testingStreamToCoalescedLoadSize() const {
+    return streamToCoalescedLoad_.rlock()->size();
+  }
+
   uint64_t nextFetchSize() const override {
     VELOX_NYI();
   }
 
+  /// Resets the buffered input for reuse across different operations.
+  void reset() override;
+
  private:
-  /// Constructor used by clone().
+  // Constructor used by clone().
   DirectBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       StringIdLease fileNum,
@@ -272,20 +285,17 @@ class DirectBufferedInput : public BufferedInput {
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
+  const io::ReaderOptions options_;
 
   // Regions that are candidates for loading.
   std::vector<LoadRequest> requests_;
-
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
-
   // Distinct coalesced loads in 'coalescedLoads_'.
   std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
-
-  io::ReaderOptions options_;
 };
 
 } // namespace facebook::velox::dwio::common

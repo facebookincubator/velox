@@ -1450,7 +1450,7 @@ TEST_F(ComparisonsTest, IPPrefixType) {
 }
 
 TEST_F(ComparisonsTest, IpAddressType) {
-  auto makeIpAdressFromString = [](const std::string& ipAddr) -> int128_t {
+  auto makeIpAdressFromString = [](std::string_view ipAddr) -> int128_t {
     auto ret = ipaddress::tryGetIPv6asInt128FromString(ipAddr);
     return ret.value();
   };

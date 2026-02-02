@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBufferManager.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -116,7 +117,7 @@ class OutputBufferManagerTest : public testing::Test {
     return task;
   }
 
-  std::unique_ptr<SerializedPage> makeSerializedPage(
+  std::unique_ptr<SerializedPageBase> makeSerializedPage(
       RowTypePtr rowType,
       vector_size_t size) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -437,7 +438,7 @@ class OutputBufferManagerTest : public testing::Test {
   const VectorSerde::Kind serdeKind_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
   std::shared_ptr<OutputBufferManager> bufferManager_;
   RowTypePtr rowType_;
@@ -1472,7 +1473,7 @@ TEST_P(
   std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
   iobuf->append(payloadSize);
 
-  auto page = std::make_unique<SerializedPage>(std::move(iobuf));
+  auto page = std::make_unique<PrestoSerializedPage>(std::move(iobuf));
 
   auto queue = std::make_shared<ExchangeQueue>(1, 0);
   std::vector<ContinuePromise> promises;

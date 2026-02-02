@@ -106,6 +106,15 @@ These functions support TIMESTAMP and DATE input types.
         SELECT datediff('2009-07-31', '2009-07-30'); -- 1
         SELECT datediff('2009-07-30', '2009-07-31'); -- -1
 
+.. spark:function:: dayname(date) -> varchar
+
+    Returns the three-letter abbreviated day name from the given date (Sun, Mon, Tue, Wed, Thu, Fri, Sat). ::
+
+        SELECT dayname('2009-07-30'); -- 'Thu'
+        SELECT dayname('2023-08-20'); -- 'Sun'
+        SELECT dayname('2023-08-21'); -- 'Mon'
+        SELECT dayname('1582-10-15'); -- 'Fri'
+
 .. spark:function:: dayofmonth(date) -> integer
 
     Returns the day of month of the date. ::
@@ -287,7 +296,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: timestampadd(unit, value, timestamp) -> timestamp
 
-    Adds an interval ``value`` of type ``unit`` to ``timestamp``.
+    Adds an int or bigint interval ``value`` of type ``unit`` to ``timestamp``.
     Subtraction can be performed by using a negative ``value``.
     Throws exception if ``unit`` is invalid.
     ``unit`` is case insensitive and must be one of the following:

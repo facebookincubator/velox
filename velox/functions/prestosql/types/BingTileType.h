@@ -86,10 +86,6 @@ class BingTileType final : public BigintType {
   static constexpr uint8_t kBingTileZoomOffset = 31 - kBingTileZoomBitWidth;
   static constexpr uint64_t kBits23Mask = (1 << 24) - 1;
   static constexpr uint64_t kBits5Mask = (1 << 6) - 1;
-  static constexpr double kMaxLatitude = 85.05112878;
-  static constexpr double kMinLatitude = -85.05112878;
-  static constexpr double kMaxLongitude = 180.0;
-  static constexpr double kMinLongitude = -180.0;
   static constexpr uint16_t kTilePixels = 256;
   static constexpr double kEarthRadiusKm = 6371.01;
 

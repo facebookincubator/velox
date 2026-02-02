@@ -29,8 +29,9 @@ void ValueSet::write(
     allocator_->extendWrite(position, stream);
   }
 
-  static const exec::ContainerRowSerdeOptions options{};
-  exec::ContainerRowSerde::serialize(vector, index, stream, options);
+  // Set isKey to false to avoid unnecessary sorting.
+  static const exec::ContainerRowSerdeOptions kOptions{/*isKey=*/false};
+  exec::ContainerRowSerde::serialize(vector, index, stream, kOptions);
   allocator_->finishWrite(stream, 0);
 }
 

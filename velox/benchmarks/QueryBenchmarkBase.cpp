@@ -204,15 +204,7 @@ void QueryBenchmarkBase::initialize() {
       std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
 
   // Add new values into the hive configuration...
-  auto configurationValues = std::unordered_map<std::string, std::string>();
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
-      std::to_string(FLAGS_max_coalesced_bytes);
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
-      FLAGS_max_coalesced_distance_bytes;
-  configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
-      std::to_string(FLAGS_parquet_prefetch_rowgroups);
-  auto properties = std::make_shared<const config::ConfigBase>(
-      std::move(configurationValues));
+  auto properties = makeConnectorProperties();
 
   // Create hive connector with config...
   connector::hive::HiveConnectorFactory factory;
@@ -221,6 +213,20 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
+}
+
+std::shared_ptr<config::ConfigBase>
+QueryBenchmarkBase::makeConnectorProperties() {
+  // Default behaviour identical to the original hard-coded version.
+  auto configurationValues = std::unordered_map<std::string, std::string>();
+  configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
+      std::to_string(FLAGS_max_coalesced_bytes);
+  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
+      FLAGS_max_coalesced_distance_bytes;
+  configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
+      std::to_string(FLAGS_parquet_prefetch_rowgroups);
+  return std::make_shared<config::ConfigBase>(
+      std::move(configurationValues), true);
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -244,13 +250,16 @@ void QueryBenchmarkBase::shutdown() {
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
+QueryBenchmarkBase::run(
+    const TpchPlan& tpchPlan,
+    const std::unordered_map<std::string, std::string>& queryConfigs) {
   int32_t repeat = 0;
   try {
     for (;;) {
       CursorParameters params;
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
+      params.queryConfigs = queryConfigs;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;

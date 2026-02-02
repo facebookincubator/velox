@@ -195,5 +195,7 @@ struct PARQUET_EXPORT SchemaManifest {
   }
 };
 
+std::shared_ptr<::arrow::KeyValueMetadata> fieldIdMetadata(int32_t field_id);
+
 } // namespace arrow
 } // namespace facebook::velox::parquet::arrow

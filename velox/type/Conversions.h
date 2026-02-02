@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/compile.h>
 #include <folly/Conv.h>
 #include <folly/Expected.h>
 #include <cctype>
@@ -24,6 +25,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/type/CppToType.h"
+#include "velox/type/StringView.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
@@ -596,14 +598,18 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
       }
       if ((val > -10'000'000 && val <= -0.001) ||
           (val >= 0.001 && val < 10'000'000) || val == 0.0) {
-        auto str = fmt::format("{}", val);
+        auto str = fmt::format(FMT_COMPILE("{}"), val);
         normalizeStandardNotation(str);
         return str;
       }
       // Precision of float is at most 8 significant decimal digits. Precision
       // of double is at most 17 significant decimal digits.
-      auto str =
-          fmt::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
+      std::string str;
+      if constexpr (std::is_same_v<T, float>) {
+        str = fmt::format(FMT_COMPILE("{:.7E}"), val);
+      } else {
+        str = fmt::format(FMT_COMPILE("{:.16E}"), val);
+      }
       normalizeScientificNotation(str);
       return str;
     }

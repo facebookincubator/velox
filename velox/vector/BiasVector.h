@@ -118,9 +118,9 @@ class BiasVector : public SimpleVector<T> {
     return BaseVector::isNullAt(idx);
   }
 
-  const T valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
-  const T valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     SimpleVector<T>::checkElementSize();
     return valueAtFast(idx);
   }
@@ -144,10 +144,6 @@ class BiasVector : public SimpleVector<T> {
 
   TypeKind valueType() const {
     return valueType_;
-  }
-
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + values_->capacity();
   }
 
   /**
@@ -198,6 +194,11 @@ class BiasVector : public SimpleVector<T> {
     return xsimd::batch<T>::load_unaligned(mem);
   }
 #endif
+
+  uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const override {
+    return BaseVector::retainedSizeImpl() + values_->capacity();
+  }
 
   TypeKind valueType_;
   BufferPtr values_;

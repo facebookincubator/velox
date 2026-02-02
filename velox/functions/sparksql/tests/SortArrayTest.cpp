@@ -158,7 +158,7 @@ TEST_F(SortArrayTest, array) {
 TEST_F(SortArrayTest, failOnMapTypeSort) {
   auto input = makeArrayOfMapVector(mapInput());
   const std::string kErrorMessage =
-      "Scalar function signature is not supported"_sv;
+      "Scalar function signature is not supported";
 
   VELOX_ASSERT_THROW(
       evaluate("sort_array(c0)", makeRowVector({input})), kErrorMessage);

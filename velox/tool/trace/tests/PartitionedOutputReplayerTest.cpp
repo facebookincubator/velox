@@ -24,10 +24,10 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 
@@ -238,8 +238,8 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
         });
 
     // Verified that the trace summary has been written properly.
-    const auto taskTraceDir =
-        exec::trace::getTaskTraceDirectory(traceRoot, *originalTask);
+    const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+        traceRoot, originalTask->queryCtx()->queryId(), originalTask->taskId());
     originalTask.reset();
 
     {

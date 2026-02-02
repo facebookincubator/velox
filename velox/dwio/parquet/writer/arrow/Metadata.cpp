@@ -18,6 +18,8 @@
 
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 
+#include <thrift/lib/cpp2/FieldRef.h>
+
 #include <algorithm>
 #include <cinttypes>
 #include <ostream>
@@ -96,29 +98,58 @@ static std::shared_ptr<Statistics> MakeTypedColumnStats(
   if (descr->column_order().get_order() == ColumnOrder::TYPE_DEFINED_ORDER) {
     return MakeStatistics<DType>(
         descr,
-        metadata.statistics()->min_value().value_or(""),
-        metadata.statistics()->max_value().value_or(""),
-        *metadata.num_values() -
-            metadata.statistics()->null_count().value_or(0),
-        metadata.statistics()->null_count().value_or(0),
-        metadata.statistics()->distinct_count().value_or(0),
-        metadata.statistics()->max_value().has_value() ||
-            metadata.statistics()->min_value().has_value(),
-        metadata.statistics()->null_count().has_value(),
-        metadata.statistics()->distinct_count().has_value());
+        apache::thrift::can_throw(metadata.statistics())
+            ->min_value()
+            .value_or(""),
+        apache::thrift::can_throw(metadata.statistics())
+            ->max_value()
+            .value_or(""),
+        apache::thrift::can_throw(*metadata.num_values()) -
+            apache::thrift::can_throw(metadata.statistics())
+                ->null_count()
+                .value_or(0),
+        apache::thrift::can_throw(metadata.statistics())
+            ->null_count()
+            .value_or(0),
+        apache::thrift::can_throw(metadata.statistics())
+            ->distinct_count()
+            .value_or(0),
+        apache::thrift::can_throw(metadata.statistics())
+                ->max_value()
+                .has_value() ||
+            apache::thrift::can_throw(metadata.statistics())
+                ->min_value()
+                .has_value(),
+        apache::thrift::can_throw(metadata.statistics())
+            ->null_count()
+            .has_value(),
+        apache::thrift::can_throw(metadata.statistics())
+            ->distinct_count()
+            .has_value());
   }
   // Default behavior
   return MakeStatistics<DType>(
       descr,
-      metadata.statistics()->min().value_or(""),
-      metadata.statistics()->max().value_or(""),
-      *metadata.num_values() - metadata.statistics()->null_count().value_or(0),
-      metadata.statistics()->null_count().value_or(0),
-      metadata.statistics()->distinct_count().value_or(0),
-      metadata.statistics()->max().has_value() ||
-          metadata.statistics()->min().has_value(),
-      metadata.statistics()->null_count().has_value(),
-      metadata.statistics()->distinct_count().has_value());
+      apache::thrift::can_throw(metadata.statistics())->min().value_or(""),
+      apache::thrift::can_throw(metadata.statistics())->max().value_or(""),
+      apache::thrift::can_throw(*metadata.num_values()) -
+          apache::thrift::can_throw(metadata.statistics())
+              ->null_count()
+              .value_or(0),
+      apache::thrift::can_throw(metadata.statistics())
+          ->null_count()
+          .value_or(0),
+      apache::thrift::can_throw(metadata.statistics())
+          ->distinct_count()
+          .value_or(0),
+      apache::thrift::can_throw(metadata.statistics())->max().has_value() ||
+          apache::thrift::can_throw(metadata.statistics())->min().has_value(),
+      apache::thrift::can_throw(metadata.statistics())
+          ->null_count()
+          .has_value(),
+      apache::thrift::can_throw(metadata.statistics())
+          ->distinct_count()
+          .has_value());
 }
 
 std::shared_ptr<Statistics> MakeColumnStats(
@@ -159,17 +190,24 @@ class ColumnCryptoMetaData::ColumnCryptoMetaDataImpl {
       : crypto_metadata_(crypto_metadata) {}
 
   bool encrypted_with_footer_key() const {
-    return crypto_metadata_->ENCRYPTION_WITH_FOOTER_KEY().has_value();
+    return crypto_metadata_->getType() ==
+        facebook::velox::parquet::thrift::ColumnCryptoMetaData::Type::
+            ENCRYPTION_WITH_FOOTER_KEY;
   }
   bool encrypted_with_column_key() const {
-    return crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY().has_value();
+    return crypto_metadata_->getType() ==
+        facebook::velox::parquet::thrift::ColumnCryptoMetaData::Type::
+            ENCRYPTION_WITH_COLUMN_KEY;
   }
   std::shared_ptr<schema::ColumnPath> path_in_schema() const {
     return std::make_shared<schema::ColumnPath>(
-        *crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY()->path_in_schema());
+        *crypto_metadata_->get_ENCRYPTION_WITH_COLUMN_KEY().path_in_schema());
   }
   const std::string& key_metadata() const {
-    return *crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY()->key_metadata();
+    return apache::thrift::can_throw(
+        crypto_metadata_->get_ENCRYPTION_WITH_COLUMN_KEY()
+            .key_metadata()
+            .value());
   }
 
  private:
@@ -217,20 +255,22 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
         descr_(descr),
         properties_(properties),
         writer_version_(writer_version) {
-    column_metadata_ = &*column->meta_data();
+    column_metadata_ = &apache::thrift::can_throw(*column->meta_data());
     if (column->crypto_metadata()) { // column metadata is encrypted
       facebook::velox::parquet::thrift::ColumnCryptoMetaData ccmd =
           *column->crypto_metadata();
 
-      if (ccmd.ENCRYPTION_WITH_COLUMN_KEY()) {
+      if (ccmd.getType() ==
+          facebook::velox::parquet::thrift::ColumnCryptoMetaData::Type::
+              ENCRYPTION_WITH_COLUMN_KEY) {
         if (file_decryptor != nullptr &&
             file_decryptor->properties() != nullptr) {
           // should decrypt metadata
           std::shared_ptr<schema::ColumnPath> path =
               std::make_shared<schema::ColumnPath>(
-                  *ccmd.ENCRYPTION_WITH_COLUMN_KEY()->path_in_schema());
-          std::string key_metadata =
-              *ccmd.ENCRYPTION_WITH_COLUMN_KEY()->key_metadata();
+                  *ccmd.get_ENCRYPTION_WITH_COLUMN_KEY().path_in_schema());
+          std::string key_metadata = apache::thrift::can_throw(
+              ccmd.get_ENCRYPTION_WITH_COLUMN_KEY().key_metadata().value());
 
           std::string aad_column_metadata = encryption::CreateModuleAad(
               file_decryptor->file_aad(),
@@ -241,11 +281,14 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
           auto decryptor = file_decryptor->GetColumnMetaDecryptor(
               path->ToDotString(), key_metadata, aad_column_metadata);
           auto len = static_cast<uint32_t>(
-              column->encrypted_column_metadata()->size());
+              apache::thrift::can_throw(*column->encrypted_column_metadata())
+                  .size());
           ThriftDeserializer deserializer(properties_);
           deserializer.DeserializeMessage(
               reinterpret_cast<const uint8_t*>(
-                  column->encrypted_column_metadata()->c_str()),
+                  apache::thrift::can_throw(
+                      *column->encrypted_column_metadata())
+                      .c_str()),
               &len,
               &decrypted_metadata_,
               decryptor);
@@ -285,7 +328,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   }
 
   inline const std::string& file_path() const {
-    return *column_->file_path();
+    return apache::thrift::can_throw(*column_->file_path());
   }
 
   inline Type::type type() const {
@@ -357,7 +400,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   }
 
   inline int64_t index_page_offset() const {
-    return *column_metadata_->index_page_offset();
+    return apache::thrift::can_throw(*column_metadata_->index_page_offset());
   }
 
   inline int64_t total_compressed_size() const {
@@ -391,6 +434,10 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
           *column_->offset_index_offset(), *column_->offset_index_length()};
     }
     return std::nullopt;
+  }
+
+  inline int32_t field_id() const {
+    return descr_->schema_node()->field_id();
   }
 
  private:
@@ -543,6 +590,10 @@ int64_t ColumnChunkMetaData::total_compressed_size() const {
   return impl_->total_compressed_size();
 }
 
+int32_t ColumnChunkMetaData::field_id() const {
+  return impl_->field_id();
+}
+
 std::unique_ptr<ColumnCryptoMetaData> ColumnChunkMetaData::crypto_metadata()
     const {
   return impl_->crypto_metadata();
@@ -601,11 +652,11 @@ class RowGroupMetaData::RowGroupMetaDataImpl {
   }
 
   inline int64_t total_compressed_size() const {
-    return *row_group_->total_compressed_size();
+    return apache::thrift::can_throw(*row_group_->total_compressed_size());
   }
 
   inline int64_t file_offset() const {
-    return *row_group_->file_offset();
+    return apache::thrift::can_throw(*row_group_->file_offset());
   }
 
   inline const SchemaDescriptor* schema() const {
@@ -844,7 +895,7 @@ class FileMetaData::FileMetaDataImpl {
     return *metadata_->version();
   }
   inline const std::string& created_by() const {
-    return *metadata_->created_by();
+    return apache::thrift::can_throw(*metadata_->created_by());
   }
   inline int num_schema_elements() const {
     return static_cast<int>(metadata_->schema()->size());
@@ -854,10 +905,11 @@ class FileMetaData::FileMetaDataImpl {
     return metadata_->encryption_algorithm().has_value();
   }
   inline EncryptionAlgorithm encryption_algorithm() {
-    return FromThrift(*metadata_->encryption_algorithm());
+    return FromThrift(
+        apache::thrift::can_throw(*metadata_->encryption_algorithm()));
   }
   inline const std::string& footer_signing_key_metadata() {
-    return *metadata_->footer_signing_key_metadata();
+    return apache::thrift::can_throw(*metadata_->footer_signing_key_metadata());
   }
 
   const ApplicationVersion& writer_version() const {
@@ -1043,7 +1095,8 @@ class FileMetaData::FileMetaDataImpl {
     if (metadata_->column_orders()) {
       column_orders.reserve(metadata_->column_orders()->size());
       for (auto column_order : *metadata_->column_orders()) {
-        if (column_order.TYPE_ORDER()) {
+        if (column_order.getType() ==
+            facebook::velox::parquet::thrift::ColumnOrder::Type::TYPE_ORDER) {
           column_orders.push_back(ColumnOrder::type_defined_);
         } else {
           column_orders.push_back(ColumnOrder::undefined_);
@@ -1061,7 +1114,9 @@ class FileMetaData::FileMetaDataImpl {
     if (metadata_->key_value_metadata()) {
       metadata = std::make_shared<KeyValueMetadata>();
       for (const auto& it : *metadata_->key_value_metadata()) {
-        metadata->Append(*it.key(), *it.value());
+        metadata->Append(
+            apache::thrift::can_throw(*it.key()),
+            apache::thrift::can_throw(*it.value()));
       }
     }
     key_value_metadata_ = std::move(metadata);
@@ -1223,11 +1278,12 @@ class FileCryptoMetaData::FileCryptoMetaDataImpl {
   }
 
   EncryptionAlgorithm encryption_algorithm() const {
-    return FromThrift(*metadata_.encryption_algorithm());
+    return FromThrift(
+        apache::thrift::can_throw(*metadata_.encryption_algorithm()));
   }
 
   const std::string& key_metadata() const {
-    return *metadata_.key_metadata();
+    return apache::thrift::can_throw(*metadata_.key_metadata());
   }
 
   void WriteTo(::arrow::io::OutputStream* dst) const {
@@ -1717,7 +1773,8 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
 
   // column metadata
   void SetStatistics(const EncodedStatistics& val) {
-    column_chunk_->meta_data()->statistics() = ToThrift(val);
+    apache::thrift::can_throw(*column_chunk_->meta_data()).statistics() =
+        ToThrift(val);
   }
 
   void Finish(
@@ -1754,8 +1811,8 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     auto add_encoding = [&thrift_encodings](
                             facebook::velox::parquet::thrift::Encoding value) {
       auto it =
-          std::find(thrift_encodings.begin(), thrift_encodings.end(), value);
-      if (it == thrift_encodings.end()) {
+          std::find(thrift_encodings.cbegin(), thrift_encodings.cend(), value);
+      if (it == thrift_encodings.cend()) {
         thrift_encodings.push_back(value);
       }
     };
@@ -1803,13 +1860,13 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
       facebook::velox::parquet::thrift::ColumnCryptoMetaData ccmd;
       if (encrypt_md->is_encrypted_with_footer_key()) {
         // encrypted with footer key
-        ccmd.ENCRYPTION_WITH_FOOTER_KEY() =
-            facebook::velox::parquet::thrift::EncryptionWithFooterKey();
+        ccmd.set_ENCRYPTION_WITH_FOOTER_KEY(
+            facebook::velox::parquet::thrift::EncryptionWithFooterKey());
       } else { // encrypted with column key
         facebook::velox::parquet::thrift::EncryptionWithColumnKey eck;
         eck.key_metadata() = encrypt_md->key_metadata();
         eck.path_in_schema() = column_->path()->ToDotVector();
-        ccmd.ENCRYPTION_WITH_COLUMN_KEY() = eck;
+        ccmd.set_ENCRYPTION_WITH_COLUMN_KEY(eck);
       }
       column_chunk_->crypto_metadata() = ccmd;
 
@@ -1862,7 +1919,9 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     return column_;
   }
   int64_t total_compressed_size() const {
-    return *column_chunk_->meta_data()->total_compressed_size();
+    return apache::thrift::can_throw(
+        *apache::thrift::can_throw(*column_chunk_->meta_data())
+             .total_compressed_size());
   }
 
  private:
@@ -2011,14 +2070,15 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
     int64_t file_offset = 0;
     int64_t total_compressed_size = 0;
     for (int i = 0; i < schema_->num_columns(); i++) {
-      if (!(*(*row_group_->columns())[i].file_offset() >= 0)) {
+      if (!(apache::thrift::can_throw(
+                *(*row_group_->columns())[i].file_offset()) >= 0)) {
         std::stringstream ss;
         ss << "Column " << i << " is not complete.";
         throw ParquetException(ss.str());
       }
       if (i == 0) {
         const facebook::velox::parquet::thrift::ColumnMetaData& first_col =
-            *(*row_group_->columns())[0].meta_data();
+            apache::thrift::can_throw(*(*row_group_->columns())[0].meta_data());
         // As per spec, file_offset for the row group points to the first
         // dictionary or data page of the column.
         if (first_col.dictionary_page_offset() &&
@@ -2231,7 +2291,7 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
     // ConvertedType/PhysicalType
     facebook::velox::parquet::thrift::TypeDefinedOrder type_defined_order;
     facebook::velox::parquet::thrift::ColumnOrder column_order;
-    column_order.TYPE_ORDER() = type_defined_order;
+    column_order.set_TYPE_ORDER(type_defined_order);
     metadata_->column_orders().ensure();
     metadata_->column_orders()->resize(schema_->num_columns(), column_order);
 

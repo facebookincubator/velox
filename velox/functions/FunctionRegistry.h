@@ -86,6 +86,19 @@ TypePtr resolveFunctionOrCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
 
+/// Like 'resolveFunctionOrCallableSpecialForm', but with support for applying
+/// type conversions if a function or a special form signature doesn't match
+/// 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve a function or a special form successfully. Contains one entry per
+/// argument. The entry is null if no coercion is required for that argument.
+/// The entry is not null if coercion is necessary.
+TypePtr resolveFunctionOrCallableSpecialFormWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
+
 /// Given the name of a special form and argument types, returns
 /// the return type if the special form exists and is supported, otherwise
 /// returns nullptr.
@@ -97,6 +110,19 @@ TypePtr resolveFunctionOrCallableSpecialForm(
 TypePtr resolveCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
+
+/// Like 'resolveCallableSpecialForm', but with support for applying
+/// type conversions if a special form signature doesn't match 'argTypes'
+/// exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve a special form successfully. Contains one entry per argument. The
+/// entry is null if no coercion is required for that argument. The entry is not
+/// null if coercion is necessary.
+TypePtr resolveCallableSpecialFormWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
 
 /// Given name of simple function and argument types, returns
 /// the return type if function exists otherwise returns nullptr

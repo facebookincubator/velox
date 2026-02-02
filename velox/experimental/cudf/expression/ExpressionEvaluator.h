@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/core/ITypedExpr.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
 #include <cudf/column/column.hpp>
@@ -62,14 +62,21 @@ using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr)>;
 
+struct CudfFunctionSpec {
+  CudfFunctionFactory factory;
+  std::vector<exec::FunctionSignaturePtr> signatures;
+};
+
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite = true);
 
 void registerCudfFunctions(
-    std::vector<std::string> aliases,
+    const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite = true);
 
 bool registerBuiltinFunctions(const std::string& prefix);
@@ -89,8 +96,6 @@ class CudfExpression {
 using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
 
 using CudfExpressionEvaluatorCanEvaluate =
-    std::function<bool(const core::TypedExprPtr& expr)>;
-using CudfExpressionEvaluatorCanEvaluateCompiled =
     std::function<bool(std::shared_ptr<velox::exec::Expr> expr)>;
 using CudfExpressionEvaluatorCreate =
     std::function<std::shared_ptr<CudfExpression>(
@@ -107,7 +112,6 @@ bool registerCudfExpressionEvaluator(
     const std::string& name,
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
-    CudfExpressionEvaluatorCanEvaluateCompiled canEvaluateCompiled,
     CudfExpressionEvaluatorCreate create,
     bool overwrite = true);
 
@@ -132,9 +136,6 @@ class FunctionExpression : public CudfExpression {
   // (does not recursively check children)
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
-  // TypedExpr-based shallow check for planner-time gating.
-  static bool canEvaluate(const core::TypedExprPtr& expr);
-
  private:
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
@@ -151,12 +152,11 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.
 /// \param expr Expression to check
-bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr);
-
-/// Lightweight check if an expression tree is supported by any CUDF evaluator
-/// before compiling to exec::Expr
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr);
-
-bool canBeEvaluatedByCudf(const std::vector<core::TypedExprPtr>& exprs);
+/// \param deep If true, recursively check all children in the expression tree;
+///             if false, only check if the top-level operation is supported
+///             (useful when delegating to subexpressions)
+bool canBeEvaluatedByCudf(
+    std::shared_ptr<velox::exec::Expr> expr,
+    bool deep = true);
 
 } // namespace facebook::velox::cudf_velox

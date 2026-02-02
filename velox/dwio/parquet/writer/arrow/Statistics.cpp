@@ -18,6 +18,8 @@
 
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 
+#include "velox/functions/lib/string/StringImpl.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -39,6 +41,9 @@
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/functions/lib/Utf8Utils.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/type/HugeInt.h"
 
 using arrow::default_memory_pool;
 using arrow::MemoryPool;
@@ -94,10 +99,16 @@ struct CompareHelper {
       "T is an unsigned numeric");
 
   constexpr static T DefaultMin() {
+    if constexpr (std::is_floating_point_v<T>) {
+      return std::numeric_limits<T>::infinity();
+    }
     return std::numeric_limits<T>::max();
   }
   constexpr static T DefaultMax() {
-    return std::numeric_limits<T>::lowest();
+    if constexpr (std::is_floating_point_v<T>) {
+      return -std::numeric_limits<T>::infinity();
+    }
+    return std::numeric_limits<T>::min();
   }
 
   // MSVC17 fix, isnan is not overloaded for IntegralType as per C++11
@@ -361,6 +372,7 @@ CleanStatistic(std::pair<T, T> min_max) {
 // In case of floating point types, the following rules are applied (as per
 // upstream parquet-mr):
 // - If any of min/max is NaN, return nothing.
+// - If min is infinity and max is -infinity, return nothing.
 // - If min is 0.0f, replace with -0.0f
 // - If max is -0.0f, replace with 0.0f
 template <typename T>
@@ -375,8 +387,8 @@ template <typename T>
     return ::std::nullopt;
   }
 
-  if (min == std::numeric_limits<T>::max() &&
-      max == std::numeric_limits<T>::lowest()) {
+  if (min == std::numeric_limits<T>::infinity() &&
+      max == -std::numeric_limits<T>::infinity()) {
     return ::std::nullopt;
   }
 
@@ -545,6 +557,17 @@ std::pair<ByteArray, ByteArray>
 TypedComparatorImpl<false, ByteArrayType>::GetMinMax(
     const ::arrow::Array& values) {
   return GetMinMaxBinaryHelper<false>(*this, values);
+}
+
+template <typename T>
+std::string encodeDecimalToBigEndian(T value) {
+  uint8_t buffer[sizeof(T)];
+  if constexpr (std::is_same_v<T, int64_t>) {
+    *reinterpret_cast<int64_t*>(buffer) = ::arrow::bit_util::ToBigEndian(value);
+  } else if constexpr (std::is_same_v<T, int128_t>) {
+    *reinterpret_cast<int128_t*>(buffer) = DecimalUtil::bigEndian(value);
+  }
+  return std::string(reinterpret_cast<const char*>(buffer), sizeof(T));
 }
 
 template <typename DType>
@@ -742,6 +765,56 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     return s;
   }
 
+  std::string IcebergLowerBoundInclusive(int32_t truncateTo) const override {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      if (descr_->logical_type()->is_decimal()) {
+        return encodeDecimalToBigEndian(min_);
+      }
+    }
+    if constexpr (std::is_same_v<T, int128_t>) {
+      return encodeDecimalToBigEndian(min_);
+    }
+    if constexpr (std::is_same_v<T, ByteArray>) {
+      const auto truncatedMin = functions::stringImpl::truncateUtf8(
+          std::string_view(min_), truncateTo);
+      std::string s;
+      this->PlainEncode(
+          ByteArray(
+              truncatedMin.size(),
+              reinterpret_cast<const uint8_t*>(truncatedMin.data())),
+          &s);
+      return s;
+    }
+    return EncodeMin();
+  }
+
+  std::optional<std::string> IcebergUpperBoundExclusive(
+      int32_t truncateTo) const override {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      if (descr_->logical_type()->is_decimal()) {
+        return encodeDecimalToBigEndian(max_);
+      }
+    }
+    if constexpr (std::is_same_v<T, int128_t>) {
+      return encodeDecimalToBigEndian(max_);
+    }
+    if constexpr (std::is_same_v<T, ByteArray>) {
+      const auto truncatedMax = functions::stringImpl::roundUpUtf8(
+          std::string_view(max_), truncateTo);
+      if (!truncatedMax.has_value()) {
+        return std::nullopt;
+      }
+      std::string s;
+      this->PlainEncode(
+          ByteArray(
+              truncatedMax->size(),
+              reinterpret_cast<const uint8_t*>(truncatedMax->data())),
+          &s);
+      return s;
+    }
+    return EncodeMax();
+  }
+
   EncodedStatistics Encode() override {
     EncodedStatistics s;
     if (HasMinMax()) {
@@ -767,6 +840,18 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   }
   int64_t num_values() const override {
     return num_values_;
+  }
+
+  bool MaxGreaterThan(const Statistics& other) const override {
+    const auto* typedOther =
+        dynamic_cast<const TypedStatisticsImpl<DType>*>(&other);
+    return comparator_->Compare(max_, typedOther->max_) ? false : true;
+  }
+
+  bool MinLessThan(const Statistics& other) const override {
+    const auto* typedOther =
+        dynamic_cast<const TypedStatisticsImpl<DType>*>(&other);
+    return comparator_->Compare(min_, typedOther->min_) ? true : false;
   }
 
  private:
