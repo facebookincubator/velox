@@ -36,7 +36,12 @@ RemoteVectorFunction::RemoteVectorFunction(
     const RemoteVectorFunctionMetadata& metadata)
     : functionName_(functionName),
       serdeFormat_(metadata.serdeFormat),
-      serde_(getSerde(serdeFormat_)) {
+      serde_(getSerde(serdeFormat_)),
+      serdeOptions_(
+          metadata.preserveEncoding
+              ? getSerdeOptions(serdeFormat_, metadata.preserveEncoding)
+              : nullptr),
+      preserveEncoding_(metadata.preserveEncoding) {
   std::vector<TypePtr> types;
   types.reserve(inputArgs.size());
   serializedInputTypes_.reserve(inputArgs.size());
@@ -91,8 +96,17 @@ void RemoteVectorFunction::applyRemote(
   requestInputs->pageFormat() = serdeFormat_;
 
   // TODO: serialize only active rows.
-  requestInputs->payload() = rowVectorToIOBuf(
-      remoteRowVector, rows.end(), *context.pool(), serde_.get());
+  if (preserveEncoding_) {
+    requestInputs->payload_ref() = rowVectorToIOBufBatch(
+        remoteRowVector,
+        rows.end(),
+        *context.pool(),
+        serde_.get(),
+        serdeOptions_.get());
+  } else {
+    requestInputs->payload_ref() = rowVectorToIOBuf(
+        remoteRowVector, rows.end(), *context.pool(), serde_.get());
+  }
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
 

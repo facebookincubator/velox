@@ -161,6 +161,18 @@ void addBetweenCondition(
       "At least one of the between condition bounds needs to be not constant: {}",
       betweenCondition->toString());
 }
+
+// Create a row vector wrapper without allocating any buffer.
+// We expect the child vectors to be directly set from probe inputs and join
+// outputs.
+inline RowVectorPtr createRowVector(
+    velox::memory::MemoryPool* pool,
+    const RowTypePtr& type,
+    vector_size_t numRows) {
+  std::vector<VectorPtr> children(type->size(), nullptr);
+  return std::make_shared<RowVector>(
+      pool, type, nullptr, numRows, std::move(children));
+}
 } // namespace
 
 IndexLookupJoin::IndexLookupJoin(
@@ -602,14 +614,8 @@ void IndexLookupJoin::prepareLookup(InputBatchState& batch) {
   const size_t numLookupRows = batch.lookupInputHasNullKeys
       ? batch.nonNullInputRows.countSelected()
       : batch.input->size();
-  if (batch.lookupInput == nullptr) {
-    batch.lookupInput =
-        BaseVector::create<RowVector>(lookupInputType_, numLookupRows, pool());
-  } else {
-    VectorPtr lookupInputVector = std::move(batch.lookupInput);
-    BaseVector::prepareForReuse(lookupInputVector, numLookupRows);
-    batch.lookupInput = std::static_pointer_cast<RowVector>(lookupInputVector);
-  }
+  batch.lookupInput = createRowVector(
+      pool(), lookupInputType_, static_cast<vector_size_t>(numLookupRows));
 
   if (!batch.lookupInputHasNullKeys) {
     for (auto i = 0; i < lookupInputType_->size(); ++i) {
@@ -691,7 +697,7 @@ void IndexLookupJoin::mergeLookupResults(InputBatchState& batch) {
     outputOffset += static_cast<vector_size_t>(result->size());
   }
 
-  batch.lookupResult = std::make_unique<connector::IndexSource::LookupResult>(
+  batch.lookupResult = std::make_unique<connector::IndexSource::Result>(
       std::move(mergedInputHits), std::move(mergedOutput));
   batch.partialOutputs.clear();
 }
@@ -789,8 +795,8 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
   }
 
   // Create the lookup result iterator.
-  batch.lookupResultIter = indexSource_->lookup(
-      connector::IndexSource::LookupRequest{batch.lookupInput});
+  batch.lookupResultIter =
+      indexSource_->lookup(connector::IndexSource::Request{batch.lookupInput});
 
   getLookupResults(batch);
 }
@@ -952,13 +958,7 @@ void IndexLookupJoin::finishInput(InputBatchState& batch) {
 }
 
 void IndexLookupJoin::prepareOutput(vector_size_t numOutputRows) {
-  if (output_ == nullptr) {
-    output_ = BaseVector::create<RowVector>(outputType_, numOutputRows, pool());
-  } else {
-    VectorPtr output = std::move(output_);
-    BaseVector::prepareForReuse(output, numOutputRows);
-    output_ = std::static_pointer_cast<RowVector>(output);
-  }
+  output_ = createRowVector(pool(), outputType_, numOutputRows);
 }
 
 RowVectorPtr IndexLookupJoin::produceOutputForInnerJoin(
@@ -1275,15 +1275,8 @@ bool IndexLookupJoin::applyFilterOnLookupResult(InputBatchState& batch) {
   // Prepare filter input vector
   filterRows_.resize(numResultRows);
   filterRows_.setAll();
-
-  if (!filterInput_) {
-    filterInput_ =
-        BaseVector::create<RowVector>(filterInputType_, numResultRows, pool());
-  } else {
-    VectorPtr filterInputVector = std::move(filterInput_);
-    BaseVector::prepareForReuse(filterInputVector, numResultRows);
-    filterInput_ = std::static_pointer_cast<RowVector>(filterInputVector);
-  }
+  filterInput_ = createRowVector(
+      pool(), filterInputType_, static_cast<vector_size_t>(numResultRows));
 
   // Populate filter input from probe input.
   for (const auto& projection : filterProbeInputProjections_) {

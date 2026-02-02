@@ -83,9 +83,9 @@ class SequenceVector : public SimpleVector<T> {
     }
   }
 
-  SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
-  SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
   }
 

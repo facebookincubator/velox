@@ -109,9 +109,9 @@ class FlatVector final : public SimpleVector<T> {
 
   virtual ~FlatVector() override = default;
 
-  SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
-  SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
   }
 

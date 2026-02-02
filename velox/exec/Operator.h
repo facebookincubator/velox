@@ -295,7 +295,7 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Traces input batch of the operator.
-  virtual void traceInput(const RowVectorPtr&);
+  virtual bool traceInput(const RowVectorPtr& input, ContinueFuture* future);
 
   /// Finishes tracing of the operator.
   virtual void finishTrace();
