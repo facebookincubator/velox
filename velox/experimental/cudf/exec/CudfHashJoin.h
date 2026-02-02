@@ -36,6 +36,7 @@
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
+class CudfExpression;
 
 /**
  * @brief Bridge for transferring build-side hash tables between build and probe
@@ -140,6 +141,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   RowVectorPtr getOutput() override;
 
+  void close() override;
+
   bool skipProbeOnEmptyBuild() const;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
@@ -165,6 +168,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  /** @brief Cached evaluator for post-join filter column */
+  std::shared_ptr<CudfExpression> filterEvaluator_;
 
   bool rightPrecomputed_{false};
 
