@@ -83,8 +83,8 @@ class IndexLookupJoin : public Operator {
       "clientNumErrorResults"};
 
  private:
-  using LookupResultIter = connector::IndexSource::LookupResultIterator;
-  using LookupResult = connector::IndexSource::LookupResult;
+  using ResultIterator = connector::IndexSource::ResultIterator;
+  using Result = connector::IndexSource::Result;
 
   // Contains the state of an input batch processing.
   struct InputBatchState {
@@ -103,14 +103,14 @@ class IndexLookupJoin : public Operator {
     // The reusable vector projected from 'input' as index lookup input.
     RowVectorPtr lookupInput;
     // Used to fetch lookup results for an input batch.
-    std::shared_ptr<LookupResultIter> lookupResultIter;
+    std::shared_ptr<ResultIterator> lookupResultIter;
     // Used for synchronization with the async fetch result from index source
     // through 'lookupResultIter'.
     ContinueFuture lookupFuture;
     // Used to store the lookup result fetched from 'lookupResultIter' for
     // output processing. We might split the output result into multiple output
     // batches based on the operator's output batch size limit.
-    std::unique_ptr<LookupResult> lookupResult;
+    std::unique_ptr<Result> lookupResult;
     // Specifies the indices of input row in 'input' that have matches in
     // 'output' from 'lookupResult'. This is only used in case
     // 'lookupInputHasNullKeys' is true in which 'inputHits' in 'lookupResult'
@@ -123,7 +123,7 @@ class IndexLookupJoin : public Operator {
     // When splitOutput_ is false, this tracks partially accumulated results
     // that are waiting for async operations to complete before continuing
     // accumulation.
-    std::vector<std::unique_ptr<LookupResult>> partialOutputs;
+    std::vector<std::unique_ptr<Result>> partialOutputs;
 
     InputBatchState() : lookupFuture(ContinueFuture::makeEmpty()) {}
 

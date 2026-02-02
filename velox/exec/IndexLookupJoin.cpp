@@ -63,6 +63,36 @@ void addLookupInputColumn(
   lookupInputNameSet.insert(columnName);
 }
 
+// Normalizes all join conditions into a unified representation by converting
+// equi-join keys (leftKeys/rightKeys) to EqualIndexLookupCondition objects.
+// Each leftKey/rightKey pair is converted to an EqualIndexLookupCondition
+// where:
+// - key: the index column expression (from rightKeys)
+// - value: the probe column expression (from leftKeys)
+// The resulting vector contains the converted equi-join conditions followed by
+// the original joinConditions.
+std::vector<core::IndexLookupConditionPtr> getJoinConditions(
+    const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
+    const std::vector<core::IndexLookupConditionPtr>& joinConditions) {
+  VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
+
+  std::vector<core::IndexLookupConditionPtr> normalizedConditions;
+  normalizedConditions.reserve(leftKeys.size() + joinConditions.size());
+
+  for (size_t i = 0; i < leftKeys.size(); ++i) {
+    normalizedConditions.push_back(
+        std::make_shared<core::EqualIndexLookupCondition>(
+            rightKeys[i], leftKeys[i]));
+  }
+
+  for (const auto& condition : joinConditions) {
+    normalizedConditions.push_back(condition);
+  }
+
+  return normalizedConditions;
+}
+
 // Validates one of between bound, and update the lookup input channels and type
 // to include the corresponding probe input column if the bound is not constant.
 bool addBetweenConditionBound(
@@ -131,6 +161,18 @@ void addBetweenCondition(
       "At least one of the between condition bounds needs to be not constant: {}",
       betweenCondition->toString());
 }
+
+// Create a row vector wrapper without allocating any buffer.
+// We expect the child vectors to be directly set from probe inputs and join
+// outputs.
+inline RowVectorPtr createRowVector(
+    velox::memory::MemoryPool* pool,
+    const RowTypePtr& type,
+    vector_size_t numRows) {
+  std::vector<VectorPtr> children(type->size(), nullptr);
+  return std::make_shared<RowVector>(
+      pool, type, nullptr, numRows, std::move(children));
+}
 } // namespace
 
 IndexLookupJoin::IndexLookupJoin(
@@ -157,7 +199,10 @@ IndexLookupJoin::IndexLookupJoin(
       lookupType_{joinNode->lookupSource()->outputType()},
       indexSourceNodeId_(joinNode->lookupSource()->id()),
       lookupTableHandle_{joinNode->lookupSource()->tableHandle()},
-      joinConditions_{joinNode->joinConditions()},
+      joinConditions_{getJoinConditions(
+          joinNode->leftKeys(),
+          joinNode->rightKeys(),
+          joinNode->joinConditions())},
       lookupColumnHandles_(joinNode->lookupSource()->assignments()),
       connectorQueryCtx_{operatorCtx_->createConnectorQueryCtx(
           lookupTableHandle_->connectorId(),
@@ -194,7 +239,6 @@ void IndexLookupJoin::initialize() {
 
   indexSource_ = connector_->createIndexSource(
       lookupInputType_,
-      numKeys_,
       joinConditions_,
       lookupOutputType_,
       lookupTableHandle_,
@@ -222,13 +266,13 @@ void IndexLookupJoin::initLookupInput() {
   VELOX_CHECK(lookupInputChannels_.empty());
 
   std::vector<std::string> lookupInputNames;
-  lookupInputNames.reserve(numKeys_ + joinConditions_.size());
+  lookupInputNames.reserve(joinConditions_.size());
   std::vector<TypePtr> lookupInputTypes;
-  lookupInputTypes.reserve(numKeys_ + joinConditions_.size());
-  lookupInputChannels_.reserve(numKeys_ + joinConditions_.size());
+  lookupInputTypes.reserve(joinConditions_.size());
+  lookupInputChannels_.reserve(joinConditions_.size());
 
   SCOPE_EXIT {
-    VELOX_CHECK_GE(lookupInputNames.size(), numKeys_ + joinConditions_.size());
+    VELOX_CHECK_GE(lookupInputNames.size(), joinConditions_.size());
     VELOX_CHECK_EQ(lookupInputNames.size(), lookupInputChannels_.size());
     lookupInputType_ =
         ROW(std::move(lookupInputNames), std::move(lookupInputTypes));
@@ -237,25 +281,6 @@ void IndexLookupJoin::initLookupInput() {
 
   folly::F14FastSet<std::string> lookupInputColumnSet;
   folly::F14FastSet<std::string> lookupIndexColumnSet;
-  // List probe columns used in join-equi caluse first.
-  for (auto keyIdx = 0; keyIdx < numKeys_; ++keyIdx) {
-    const auto probeKeyName = joinNode_->leftKeys()[keyIdx]->name();
-    const auto indexKeyName = joinNode_->rightKeys()[keyIdx]->name();
-    VELOX_USER_CHECK_EQ(lookupIndexColumnSet.count(indexKeyName), 0);
-    lookupIndexColumnSet.insert(indexKeyName);
-    const auto probeKeyChannel = probeType_->getChildIdx(probeKeyName);
-    const auto probeKeyType = probeType_->childAt(probeKeyChannel);
-    VELOX_USER_CHECK(
-        lookupType_->findChild(indexKeyName)->equivalent(*probeKeyType));
-    addLookupInputColumn(
-        indexKeyName,
-        probeKeyType,
-        probeKeyChannel,
-        lookupInputNames,
-        lookupInputTypes,
-        lookupInputChannels_,
-        lookupInputColumnSet);
-  }
 
   SCOPE_EXIT {
     VELOX_CHECK(lookupKeyOrConditionHashers_.empty());
@@ -263,19 +288,42 @@ void IndexLookupJoin::initLookupInput() {
     lookupKeyOrConditionHashers_ =
         createVectorHashers(probeType_, lookupInputChannels_);
   };
-  if (joinConditions_.empty()) {
-    return;
-  }
 
-  for (const auto& joinCondition : joinConditions_) {
-    const auto indexKeyName = getColumnName(joinCondition->key);
+  for (const auto& condition : joinConditions_) {
+    const auto indexKeyName = getColumnName(condition->key);
     VELOX_USER_CHECK_EQ(lookupIndexColumnSet.count(indexKeyName), 0);
     lookupIndexColumnSet.insert(indexKeyName);
     const auto indexKeyType = lookupType_->findChild(indexKeyName);
 
+    if (const auto equalCondition =
+            std::dynamic_pointer_cast<const core::EqualIndexLookupCondition>(
+                condition)) {
+      VELOX_CHECK(
+          !equalCondition->isFilter(),
+          "Constant equal condition in join not supported");
+      // Process as a join condition - value references a probe column.
+      const auto probeKeyName = getColumnName(equalCondition->value);
+      const auto probeKeyChannel = probeType_->getChildIdx(probeKeyName);
+      const auto probeKeyType = probeType_->childAt(probeKeyChannel);
+      VELOX_USER_CHECK(
+          indexKeyType->equivalent(*probeKeyType),
+          "Index key type {} must be equivalent to probe key type {}",
+          indexKeyType->toString(),
+          probeKeyType->toString());
+      addLookupInputColumn(
+          indexKeyName,
+          probeKeyType,
+          probeKeyChannel,
+          lookupInputNames,
+          lookupInputTypes,
+          lookupInputChannels_,
+          lookupInputColumnSet);
+      continue;
+    }
+
     if (const auto inCondition =
             std::dynamic_pointer_cast<const core::InIndexLookupCondition>(
-                joinCondition)) {
+                condition)) {
       const auto conditionInputName = getColumnName(inCondition->list);
       const auto conditionInputChannel =
           probeType_->getChildIdx(conditionInputName);
@@ -292,11 +340,12 @@ void IndexLookupJoin::initLookupInput() {
           lookupInputTypes,
           lookupInputChannels_,
           lookupInputColumnSet);
+      continue;
     }
 
     if (const auto betweenCondition =
             std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
-                joinCondition)) {
+                condition)) {
       addBetweenCondition(
           betweenCondition,
           probeType_,
@@ -305,22 +354,10 @@ void IndexLookupJoin::initLookupInput() {
           lookupInputTypes,
           lookupInputChannels_,
           lookupInputColumnSet);
+      continue;
     }
 
-    if (const auto equalCondition =
-            std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
-                joinCondition)) {
-      // Process an equal join condition by validating that the value is
-      // constant. Equal conditions only support constant values for filtering.
-      VELOX_USER_CHECK(
-          core::TypedExprs::isConstant(equalCondition->value),
-          "Equal condition value must be constant: {}",
-          equalCondition->toString());
-      VELOX_USER_CHECK(
-          core::TypedExprs::asConstant(equalCondition->value)
-              ->type()
-              ->equivalent(*indexKeyType));
-    }
+    VELOX_UNSUPPORTED("Unsupported join condition type");
   }
 }
 
@@ -577,14 +614,8 @@ void IndexLookupJoin::prepareLookup(InputBatchState& batch) {
   const size_t numLookupRows = batch.lookupInputHasNullKeys
       ? batch.nonNullInputRows.countSelected()
       : batch.input->size();
-  if (batch.lookupInput == nullptr) {
-    batch.lookupInput =
-        BaseVector::create<RowVector>(lookupInputType_, numLookupRows, pool());
-  } else {
-    VectorPtr lookupInputVector = std::move(batch.lookupInput);
-    BaseVector::prepareForReuse(lookupInputVector, numLookupRows);
-    batch.lookupInput = std::static_pointer_cast<RowVector>(lookupInputVector);
-  }
+  batch.lookupInput = createRowVector(
+      pool(), lookupInputType_, static_cast<vector_size_t>(numLookupRows));
 
   if (!batch.lookupInputHasNullKeys) {
     for (auto i = 0; i < lookupInputType_->size(); ++i) {
@@ -666,7 +697,7 @@ void IndexLookupJoin::mergeLookupResults(InputBatchState& batch) {
     outputOffset += static_cast<vector_size_t>(result->size());
   }
 
-  batch.lookupResult = std::make_unique<connector::IndexSource::LookupResult>(
+  batch.lookupResult = std::make_unique<connector::IndexSource::Result>(
       std::move(mergedInputHits), std::move(mergedOutput));
   batch.partialOutputs.clear();
 }
@@ -764,8 +795,8 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
   }
 
   // Create the lookup result iterator.
-  batch.lookupResultIter = indexSource_->lookup(
-      connector::IndexSource::LookupRequest{batch.lookupInput});
+  batch.lookupResultIter =
+      indexSource_->lookup(connector::IndexSource::Request{batch.lookupInput});
 
   getLookupResults(batch);
 }
@@ -927,13 +958,7 @@ void IndexLookupJoin::finishInput(InputBatchState& batch) {
 }
 
 void IndexLookupJoin::prepareOutput(vector_size_t numOutputRows) {
-  if (output_ == nullptr) {
-    output_ = BaseVector::create<RowVector>(outputType_, numOutputRows, pool());
-  } else {
-    VectorPtr output = std::move(output_);
-    BaseVector::prepareForReuse(output, numOutputRows);
-    output_ = std::static_pointer_cast<RowVector>(output);
-  }
+  output_ = createRowVector(pool(), outputType_, numOutputRows);
 }
 
 RowVectorPtr IndexLookupJoin::produceOutputForInnerJoin(
@@ -1250,15 +1275,8 @@ bool IndexLookupJoin::applyFilterOnLookupResult(InputBatchState& batch) {
   // Prepare filter input vector
   filterRows_.resize(numResultRows);
   filterRows_.setAll();
-
-  if (!filterInput_) {
-    filterInput_ =
-        BaseVector::create<RowVector>(filterInputType_, numResultRows, pool());
-  } else {
-    VectorPtr filterInputVector = std::move(filterInput_);
-    BaseVector::prepareForReuse(filterInputVector, numResultRows);
-    filterInput_ = std::static_pointer_cast<RowVector>(filterInputVector);
-  }
+  filterInput_ = createRowVector(
+      pool(), filterInputType_, static_cast<vector_size_t>(numResultRows));
 
   // Populate filter input from probe input.
   for (const auto& projection : filterProbeInputProjections_) {

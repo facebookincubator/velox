@@ -77,6 +77,9 @@ std::optional<int32_t> TypeCoercer::coercible(
     const TypePtr& fromType,
     const TypePtr& toType) {
   if (fromType->isUnKnown()) {
+    if (toType->isUnKnown()) {
+      return 0;
+    }
     return 1;
   }
 

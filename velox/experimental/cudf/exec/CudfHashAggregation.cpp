@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -24,6 +25,8 @@
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/SignatureBinder.h"
+#include "velox/type/Type.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -447,12 +450,6 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
   }
 }
 
-static const std::unordered_map<std::string, core::AggregationNode::Step>
-    companionStep = {
-        {"_partial", core::AggregationNode::Step::kPartial},
-        {"_merge", core::AggregationNode::Step::kIntermediate},
-        {"_merge_extract", core::AggregationNode::Step::kFinal}};
-
 /// \brief Convert companion function to step for the aggregation function
 ///
 /// Companion functions are functions that are registered in velox along with
@@ -461,24 +458,40 @@ static const std::unordered_map<std::string, core::AggregationNode::Step>
 /// the property of the aggregation function rather than the planNode.
 /// Companion functions allow us to override the planNode's step and use
 /// aggregations of different steps in the same planNode
+/// If an agg function name contains companionStep keyword, may cause error, now
+/// it does not exist.
 core::AggregationNode::Step getCompanionStep(
     std::string const& kind,
     core::AggregationNode::Step step) {
-  for (const auto& [k, v] : companionStep) {
-    if (kind.ends_with(k)) {
-      step = v;
-      break;
-    }
+  if (kind.ends_with("_merge")) {
+    return core::AggregationNode::Step::kIntermediate;
   }
+
+  if (kind.ends_with("_partial")) {
+    return core::AggregationNode::Step::kPartial;
+  }
+
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (kind.find("_merge_extract") != std::string::npos) {
+    return core::AggregationNode::Step::kFinal;
+  }
+
   return step;
 }
 
-std::string getOriginalName(std::string const& kind) {
-  for (const auto& [k, v] : companionStep) {
-    if (kind.ends_with(k)) {
-      return kind.substr(0, kind.length() - k.length());
-    }
+std::string getOriginalName(const std::string& kind) {
+  if (kind.ends_with("_merge")) {
+    return kind.substr(0, kind.size() - std::string("_merge").size());
   }
+
+  if (kind.ends_with("_partial")) {
+    return kind.substr(0, kind.size() - std::string("_partial").size());
+  }
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (auto pos = kind.find("_merge_extract"); pos != std::string::npos) {
+    return kind.substr(0, pos);
+  }
+
   return kind;
 }
 
@@ -965,6 +978,436 @@ void CudfHashAggregation::noMoreInput() {
 
 bool CudfHashAggregation::isFinished() {
   return finished_;
+}
+
+// Step-aware aggregation registry implementation
+StepAwareAggregationRegistry& getStepAwareAggregationRegistry() {
+  static StepAwareAggregationRegistry registry;
+  return registry;
+}
+
+bool registerAggregationFunctionForStep(
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
+    bool overwrite) {
+  auto& registry = getStepAwareAggregationRegistry();
+
+  if (!overwrite && registry.find(name) != registry.end() &&
+      registry[name].find(step) != registry[name].end()) {
+    return false;
+  }
+
+  registry[name][step] = signatures;
+  return true;
+}
+
+// Register step-aware builtin aggregation functions
+bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  // Register sum function (split by aggregation step)
+  auto sumSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kSingle,
+      sumSingleSignatures);
+
+  auto sumPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kPartial,
+      sumPartialSignatures);
+
+  auto sumFinalIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kFinal,
+      sumFinalIntermediateSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kIntermediate,
+      sumFinalIntermediateSignatures);
+
+  // Register count function (split by aggregation step)
+  auto countSinglePartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("varchar")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("boolean")
+          .build(),
+      FunctionSignatureBuilder().returnType("bigint").build()};
+
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kSingle,
+      countSinglePartialSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kPartial,
+      countSinglePartialSignatures);
+
+  auto countFinalIntermediateSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("bigint")
+                                                  .argumentType("bigint")
+                                                  .build()};
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kFinal,
+      countFinalIntermediateSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kIntermediate,
+      countFinalIntermediateSignatures);
+
+  // Register min function (same signatures for all steps)
+  auto minMaxSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("tinyint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("smallint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+
+  registerAggregationFunctionForStep(
+      prefix + "min", core::AggregationNode::Step::kSingle, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "min", core::AggregationNode::Step::kPartial, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "min", core::AggregationNode::Step::kFinal, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "min",
+      core::AggregationNode::Step::kIntermediate,
+      minMaxSignatures);
+
+  // Register max function (same signatures for all steps)
+  registerAggregationFunctionForStep(
+      prefix + "max", core::AggregationNode::Step::kSingle, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "max", core::AggregationNode::Step::kPartial, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "max", core::AggregationNode::Step::kFinal, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "max",
+      core::AggregationNode::Step::kIntermediate,
+      minMaxSignatures);
+
+  // Register avg function (different signatures for different steps)
+
+  // Single step: avg(input_type) -> double
+  auto avgSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kSingle,
+      avgSingleSignatures);
+
+  // Partial step: avg(input_type) -> row(sum input_type, count bigint)
+  auto avgPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kPartial,
+      avgPartialSignatures);
+
+  // Final step: avg(row(double, bigint)) -> double
+  auto avgFinalSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("row(double,bigint)")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg", core::AggregationNode::Step::kFinal, avgFinalSignatures);
+
+  // Intermediate step: avg(row(sum input_type, count bigint)) -> row(sum
+  // input_type, count bigint)
+  auto avgIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("row(double,bigint)")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kIntermediate,
+      avgIntermediateSignatures);
+
+  return true;
+}
+
+bool matchTypedCallAgainstSignatures(
+    const core::CallTypedExpr& call,
+    const std::vector<exec::FunctionSignaturePtr>& sigs) {
+  const auto n = call.inputs().size();
+  std::vector<TypePtr> argTypes;
+  argTypes.reserve(n);
+  for (const auto& input : call.inputs()) {
+    argTypes.push_back(input->type());
+  }
+  for (const auto& sig : sigs) {
+    std::vector<Coercion> coercions(n);
+    exec::SignatureBinder binder(*sig, argTypes);
+    if (!binder.tryBindWithCoercions(coercions)) {
+      continue;
+    }
+
+    // For simplicity we skip checking for constant agruments, this may be added
+    // in the future
+
+    return true;
+  }
+  return false;
+}
+
+// Step-aware aggregation validation function
+bool canAggregationBeEvaluatedByCudf(
+    const core::CallTypedExpr& call,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputTypes,
+    core::QueryCtx* queryCtx) {
+  // Check against step-aware aggregation registry
+  auto& stepAwareRegistry = getStepAwareAggregationRegistry();
+  auto funcIt = stepAwareRegistry.find(call.name());
+  if (funcIt == stepAwareRegistry.end()) {
+    return false;
+  }
+
+  auto stepIt = funcIt->second.find(step);
+  if (stepIt == funcIt->second.end()) {
+    return false;
+  }
+
+  // Validate against step-specific signatures from registry
+  return matchTypedCallAgainstSignatures(call, stepIt->second);
+}
+
+bool canBeEvaluatedByCudf(
+    const core::AggregationNode& aggregationNode,
+    core::QueryCtx* queryCtx) {
+  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
+      ? nullptr
+      : aggregationNode.sources()[0].get();
+
+  // Get the aggregation step from the node
+  auto step = aggregationNode.step();
+
+  // Check supported aggregation functions using step-aware aggregation registry
+  for (const auto& aggregate : aggregationNode.aggregates()) {
+    // Use step-aware validation that handles partial/final/intermediate steps
+    if (!canAggregationBeEvaluatedByCudf(
+            *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {
+      return false;
+    }
+
+    // `distinct` aggregations are not supported, in testing fails with "De-dup
+    // before aggregation is not yet supported"
+    if (aggregate.distinct) {
+      return false;
+    }
+
+    // `mask` is NOT supported (in testing do not appear to be be applied and
+    // return incorrect results )
+    if (aggregate.mask) {
+      return false;
+    }
+
+    // Check input expressions can be evaluated by CUDF, expand the input first
+    for (const auto& input : aggregate.call->inputs()) {
+      auto expandedInput = expandFieldReference(input, sourceNode);
+      std::vector<core::TypedExprPtr> exprs = {expandedInput};
+      if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+        return false;
+      }
+    }
+  }
+
+  // Check grouping key expressions
+  if (!canGroupingKeysBeEvaluatedByCudf(
+          aggregationNode.groupingKeys(), sourceNode, queryCtx)) {
+    return false;
+  }
+
+  return true;
+}
+
+core::TypedExprPtr expandFieldReference(
+    const core::TypedExprPtr& expr,
+    const core::PlanNode* sourceNode) {
+  // If this is a field reference and we have a source projection, expand it
+  if (expr->kind() == core::ExprKind::kFieldAccess && sourceNode) {
+    auto projectNode = dynamic_cast<const core::ProjectNode*>(sourceNode);
+    if (projectNode) {
+      auto fieldExpr =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr);
+      if (fieldExpr) {
+        // Find the corresponding projection expression
+        const auto& projections = projectNode->projections();
+        const auto& names = projectNode->names();
+        for (size_t i = 0; i < names.size(); ++i) {
+          if (names[i] == fieldExpr->name()) {
+            return projections[i];
+          }
+        }
+      }
+    }
+  }
+  return expr;
+}
+
+bool canGroupingKeysBeEvaluatedByCudf(
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const core::PlanNode* sourceNode,
+    core::QueryCtx* queryCtx) {
+  // Check grouping key expressions (with expansion)
+  for (const auto& groupingKey : groupingKeys) {
+    auto expandedKey = expandFieldReference(groupingKey, sourceNode);
+    std::vector<core::TypedExprPtr> exprs = {expandedKey};
+    if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 } // namespace facebook::velox::cudf_velox

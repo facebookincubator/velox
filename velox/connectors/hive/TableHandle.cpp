@@ -111,6 +111,7 @@ HiveTableHandle::HiveTableHandle(
     common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
+    std::vector<std::string> indexColumns,
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
     double sampleRate)
@@ -119,13 +120,36 @@ HiveTableHandle::HiveTableHandle(
       filterPushdownEnabled_(filterPushdownEnabled),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
-      sampleRate_{sampleRate},
+      sampleRate_(sampleRate),
       dataColumns_(dataColumns),
+      indexColumns_(std::move(indexColumns)),
       tableParameters_(tableParameters),
       filterColumnHandles_(std::move(filterColumnHandles)) {
   VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
 }
+
+HiveTableHandle::HiveTableHandle(
+    std::string connectorId,
+    const std::string& tableName,
+    bool filterPushdownEnabled,
+    common::SubfieldFilters subfieldFilters,
+    const core::TypedExprPtr& remainingFilter,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<std::string, std::string>& tableParameters,
+    std::vector<HiveColumnHandlePtr> filterColumnHandles,
+    double sampleRate)
+    : HiveTableHandle(
+          std::move(connectorId),
+          tableName,
+          filterPushdownEnabled,
+          std::move(subfieldFilters),
+          remainingFilter,
+          dataColumns,
+          /*indexColumns=*/{},
+          tableParameters,
+          std::move(filterColumnHandles),
+          sampleRate) {}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
@@ -223,6 +247,13 @@ folly::dynamic HiveTableHandle::serialize() const {
     }
     obj["filterColumnHandles"] = filterColumnHandles;
   }
+  if (!indexColumns_.empty()) {
+    folly::dynamic indexColumns = folly::dynamic::array;
+    for (const auto& column : indexColumns_) {
+      indexColumns.push_back(column);
+    }
+    obj["indexColumns"] = indexColumns;
+  }
 
   return obj;
 }
@@ -275,6 +306,13 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     }
   }
 
+  std::vector<std::string> indexColumns;
+  if (auto it = obj.find("indexColumns"); it != obj.items().end()) {
+    for (const auto& column : it->second) {
+      indexColumns.push_back(column.asString());
+    }
+  }
+
   return std::make_shared<const HiveTableHandle>(
       connectorId,
       tableName,
@@ -282,6 +320,7 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       std::move(subfieldFilters),
       remainingFilter,
       dataColumns,
+      std::move(indexColumns),
       tableParameters,
       std::move(filterColumnHandles),
       sampleRate);

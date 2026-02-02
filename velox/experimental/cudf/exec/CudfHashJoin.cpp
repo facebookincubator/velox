@@ -654,6 +654,37 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   return std::make_unique<cudf::table>(std::move(joinedCols));
 }
 
+std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
+    cudf::table_view leftTableView,
+    cudf::column_view leftIndicesCol,
+    cudf::table_view rightTableView,
+    cudf::column_view rightIndicesCol,
+    cudf::join_kind joinKind,
+    rmm::cuda_stream_view stream) {
+  auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
+      cudf::filter_join_indices(
+          leftTableView,
+          rightTableView,
+          leftIndicesCol,
+          rightIndicesCol,
+          tree_.back(),
+          joinKind,
+          stream);
+
+  auto filteredLeftIndicesSpan =
+      cudf::device_span<cudf::size_type const>{*filteredLeftJoinIndices};
+  auto filteredRightIndicesSpan =
+      cudf::device_span<cudf::size_type const>{*filteredRightJoinIndices};
+  auto filteredLeftIndicesCol = cudf::column_view{filteredLeftIndicesSpan};
+  auto filteredRightIndicesCol = cudf::column_view{filteredRightIndicesSpan};
+  return unfilteredOutput(
+      leftTableView,
+      filteredLeftIndicesCol,
+      rightTableView,
+      filteredRightIndicesCol,
+      stream);
+}
+
 std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     cudf::table_view leftTableView,
     rmm::cuda_stream_view stream) {
@@ -689,22 +720,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      auto filterFunc =
-          [stream](
-              std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
-              cudf::column_view filterColumn) {
-            auto filterTable =
-                std::make_unique<cudf::table>(std::move(joinedCols));
-            auto filteredTable =
-                cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
-            return filteredTable->release();
-          };
-      cudfOutputs.push_back(filteredOutput(
+      cudfOutputs.push_back(filteredOutputIndices(
           leftTableView,
           leftIndicesCol,
           rightTableView,
           rightIndicesCol,
-          filterFunc,
+          cudf::join_kind::INNER_JOIN,
           stream));
     } else {
       cudfOutputs.push_back(unfilteredOutput(
@@ -750,107 +771,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      auto filterFunc = [&leftJoinIndices,
-                         &rightJoinIndices,
-                         leftTableView,
-                         leftIndicesCol,
-                         rightTableView,
-                         rightIndicesCol,
-                         stream](
-                            std::vector<std::unique_ptr<cudf::column>>&&
-                                joinedCols,
-                            cudf::column_view filterColumn) {
-        auto leftColsSize = leftTableView.num_columns();
-        auto rightColsSize = rightTableView.num_columns();
-
-        cudf::groupby::groupby keysleftIndicesColGrouper(
-            cudf::table_view{{leftIndicesCol}},
-            cudf::null_policy::EXCLUDE,
-            cudf::sorted::NO);
-        std::vector<cudf::groupby::aggregation_request> requests;
-        requests.emplace_back(cudf::groupby::aggregation_request{});
-        requests.emplace_back(cudf::groupby::aggregation_request{});
-        requests[0].aggregations.push_back(
-            cudf::make_sum_aggregation<cudf::groupby_aggregation>());
-        requests[0].values = filterColumn;
-
-        auto zero_scalar =
-            cudf::numeric_scalar<cudf::size_type>(0, true, stream);
-        auto rowIndexColumn =
-            cudf::sequence(leftIndicesCol.size(), zero_scalar, stream);
-        requests[1].aggregations.push_back(
-            cudf::make_min_aggregation<cudf::groupby_aggregation>());
-        requests[1].values = rowIndexColumn->view();
-        auto result = keysleftIndicesColGrouper.aggregate(requests, stream);
-
-        auto uniqueFilter = std::move(result.second[0].results[0]);
-        auto zero_scalar_64 =
-            cudf::numeric_scalar<std::int64_t>(0, true, stream);
-        uniqueFilter =
-            cudf::replace_nulls(uniqueFilter->view(), zero_scalar_64, stream);
-        uniqueFilter = cudf::binary_operation(
-            uniqueFilter->view(),
-            zero_scalar_64,
-            cudf::binary_operator::EQUAL,
-            cudf::data_type{cudf::type_id::BOOL8},
-            stream);
-
-        auto minIndices = std::move(result.second[1].results[0]);
-        auto filteredMinIndicesTable = cudf::apply_boolean_mask(
-            cudf::table_view{{minIndices->view()}},
-            uniqueFilter->view(),
-            stream);
-        auto filteredMinIndices = filteredMinIndicesTable->get_column(0).view();
-        {
-          std::vector<std::unique_ptr<cudf::scalar>> nullScalars;
-          std::vector<std::reference_wrapper<cudf::scalar const>>
-              nullScalarRefs;
-          std::vector<cudf::column_view> rightColViews;
-          for (auto col = leftColsSize; col < joinedCols.size(); col++) {
-            nullScalars.emplace_back(
-                cudf::make_empty_scalar_like(joinedCols[col]->view(), stream));
-            nullScalarRefs.push_back(
-                std::reference_wrapper<cudf::scalar const>(
-                    *(nullScalars.back())));
-            rightColViews.push_back(joinedCols[col]->view());
-          }
-          auto nullifiedRightTable = cudf::scatter(
-              nullScalarRefs,
-              filteredMinIndices,
-              cudf::table_view(rightColViews),
-              stream);
-          auto nullifiedRightCols = nullifiedRightTable->release();
-          for (auto col = leftColsSize; col < joinedCols.size(); col++) {
-            joinedCols[col] = std::move(nullifiedRightCols[col - leftColsSize]);
-          }
-        }
-
-        // Update filter using scatter
-        auto true_scalar = cudf::numeric_scalar<bool>(true, true);
-        std::vector<std::reference_wrapper<cudf::scalar const>> source_scalars{
-            true_scalar};
-        auto filteredColumnTable = cudf::scatter(
-            source_scalars,
-            filteredMinIndices,
-            cudf::table_view{{filterColumn}},
-            stream);
-        auto updatedFilterColumn = filteredColumnTable->get_column(0).view();
-
-        // Apply the Filter
-        auto filterTable = std::make_unique<cudf::table>(std::move(joinedCols));
-        auto filteredTable =
-            cudf::apply_boolean_mask(*filterTable, updatedFilterColumn, stream);
-        stream.synchronize();
-
-        return filteredTable->release();
-      };
-
-      cudfOutputs.push_back(filteredOutput(
+      cudfOutputs.push_back(filteredOutputIndices(
           leftTableView,
           leftIndicesCol,
           rightTableView,
           rightIndicesCol,
-          filterFunc,
+          cudf::join_kind::LEFT_JOIN,
           stream));
     } else {
       cudfOutputs.push_back(unfilteredOutput(

@@ -28,6 +28,7 @@ velox_add_library(
   HiveConnectorSplit.cpp
   HiveDataSink.cpp
   HiveDataSource.cpp
+  HiveIndexReader.cpp
   HivePartitionName.cpp
   PartitionIdGenerator.cpp
   SplitReader.cpp
