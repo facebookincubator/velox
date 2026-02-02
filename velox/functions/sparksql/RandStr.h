@@ -15,10 +15,9 @@
  */
 #pragma once
 
-#include <random>
-
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/XORShiftRandom.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -31,7 +30,7 @@ constexpr int kPoolSize = 62;
 /// Spark SQL randstr(length, seed) - Returns a string of the specified
 /// length with characters chosen uniformly at random from 0-9, a-z, A-Z.
 /// Generator is initialized with (seed + sparkPartitionId) to match Spark's
-/// per-partition determinism. If seed is NULL constant, it is treated as 0.
+/// per-partition determinism using XORShift algorithm for Spark compatibility.
 ///
 /// Note: Spark's analyzer always provides a seed (either user-specified or
 /// auto-generated), so only the seeded variant is needed.
@@ -45,42 +44,34 @@ struct RandStrFunction {
   static constexpr bool is_deterministic = false;
 
   /// Initialize for seeded variant: randstr(length, seed).
-  /// The seed argument is validated as constant by the Constant<TSeed> wrapper.
-  /// A NULL seed constant (pointer is nullptr) is treated as 0 per Spark
-  /// semantics.
+  /// Both length and seed must be non-null constants.
   template <typename TLen, typename TSeed>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const TLen* length,
       const TSeed* seed) {
-    // With Constant<TLen>, length is guaranteed to be constant.
-    // nullptr means NULL constant, which is not allowed for length.
     VELOX_USER_CHECK_NOT_NULL(length, "length must not be null");
+    VELOX_USER_CHECK_NOT_NULL(seed, "seed must not be null");
     VELOX_USER_CHECK_GE(
         static_cast<int64_t>(*length), 0, "length must be non-negative");
-    // NULL seed constant (nullptr) is treated as 0 per Spark semantics.
-    generator_.seed(
-        (seed ? static_cast<int64_t>(*seed) : 0) + config.sparkPartitionId());
+    length_ = static_cast<int32_t>(*length);
+    generator_.setSeed(static_cast<int64_t>(*seed) + config.sparkPartitionId());
   }
 
-  /// Called for seeded variant. Uses the seeded generator for reproducibility.
+  /// Uses the seeded XORShift generator for Spark-compatible reproducibility.
   template <typename TLen, typename TSeed>
-  FOLLY_ALWAYS_INLINE bool callNullable(
-      out_type<Varchar>& out,
-      const TLen* length,
-      const TSeed* /*seed*/) {
-    // Length cannot be null (validated in initialize).
-    const auto len = static_cast<int32_t>(*length);
-    out.resize(len);
-    for (auto i = 0; i < len; ++i) {
-      out.data()[i] = detail::kPool[generator_() % detail::kPoolSize];
+  FOLLY_ALWAYS_INLINE void
+  call(out_type<Varchar>& out, TLen /*length*/, TSeed /*seed*/) {
+    out.resize(length_);
+    for (auto i = 0; i < length_; ++i) {
+      out.data()[i] = detail::kPool[generator_.nextInt(detail::kPoolSize)];
     }
-    return true;
   }
 
  private:
-  std::mt19937 generator_;
+  int32_t length_{0};
+  XORShiftRandom generator_;
 };
 
 } // namespace facebook::velox::functions::sparksql

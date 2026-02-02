@@ -88,17 +88,12 @@ TEST_F(RandStrTest, negativeLengthError) {
       "length must be non-negative");
 }
 
-TEST_F(RandStrTest, nullSeedTreatedAsZero) {
+TEST_F(RandStrTest, nonConstantSeedError) {
   setSparkPartitionId(0);
-  // When seed is null, it should be treated as 0.
-  // randstr(5, null) should produce the same result as randstr(5, 0).
-  auto withNullSeed = evaluateOnce<StringView>(
-      "randstr(5, cast(null as int))", makeRowVector(ROW({}), 1));
-  auto withZeroSeed = randstrSeed(5, 0, 0);
-
-  ASSERT_TRUE(withNullSeed.has_value());
-  ASSERT_TRUE(withZeroSeed.has_value());
-  EXPECT_EQ(withNullSeed.value(), withZeroSeed.value());
+  // Non-constant seed should throw an error.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<StringView>("randstr(5, c0)", std::optional<int32_t>(42)),
+      "seed must not be null");
 }
 
 } // namespace

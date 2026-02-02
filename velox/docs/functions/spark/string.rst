@@ -290,13 +290,14 @@ String Functions
 
     Returns a string of the specified ``length`` whose characters are chosen uniformly
     at random from the following pool of characters: 0-9, a-z, A-Z.
-    ``length`` must be a constant non-negative integer (SMALLINT or INT).
-    ``seed`` must be a constant integer (INT or BIGINT). If ``seed`` is null, it is
-    treated as 0.
+    Both ``length`` and ``seed`` must be non-null constants.
+    ``length`` must be a non-negative integer (SMALLINT or INT).
+    ``seed`` must be an integer (INT or BIGINT).
     With the same ``seed`` and partition, the function produces a reproducible sequence
     of outputs, though each row receives a different value from the sequence as the
     internal generator advances.
     The partition is determined by the ``spark_partition_id`` query configuration.
+    Uses XORShift random number generator matching Spark's implementation.
     Note: Spark's analyzer always provides a seed (either user-specified or
     auto-generated), so only the seeded variant is implemented.
     This function was added in Spark 4.0. ::
