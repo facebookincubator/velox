@@ -817,15 +817,7 @@ template <typename T>
 struct MonthNameFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Date>& date) {
-    const auto tm = getDateTime(date);
-    result.setNoCopy(StringView(kMonthNames_[tm.tm_mon]));
-  }
-
- private:
-  static constexpr std::string_view kMonthNames_[] = {
+  static constexpr std::string_view kMonthNames[] = {
       "Jan",
       "Feb",
       "Mar",
@@ -838,6 +830,13 @@ struct MonthNameFunction {
       "Oct",
       "Nov",
       "Dec"};
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    const auto tm = getDateTime(date);
+    result.setNoCopy(StringView(kMonthNames[tm.tm_mon]));
+  }
 };
 
 template <typename T>
