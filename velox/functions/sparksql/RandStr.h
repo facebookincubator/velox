@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <folly/Random.h>
 #include <random>
 
 #include "velox/core/QueryConfig.h"
@@ -29,11 +28,13 @@ constexpr char kPool[] =
 constexpr int kPoolSize = 62;
 } // namespace detail
 
-/// Spark SQL randstr(length[, seed]) - Returns a string of the specified
+/// Spark SQL randstr(length, seed) - Returns a string of the specified
 /// length with characters chosen uniformly at random from 0-9, a-z, A-Z.
-/// When seed is provided, generator is initialized with (seed +
-/// sparkPartitionId) to match Spark's per-partition determinism. If seed is
-/// NULL constant, it is treated as 0.
+/// Generator is initialized with (seed + sparkPartitionId) to match Spark's
+/// per-partition determinism. If seed is NULL constant, it is treated as 0.
+///
+/// Note: Spark's analyzer always provides a seed (either user-specified or
+/// auto-generated), so only the seeded variant is needed.
 ///
 /// Note: Even with a constant seed, different rows produce different outputs
 /// as the generator advances, so is_deterministic is set to false.
@@ -42,19 +43,6 @@ struct RandStrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   static constexpr bool is_deterministic = false;
-
-  /// Initialize for unseeded variant: randstr(length).
-  template <typename TLen>
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& /*config*/,
-      const TLen* length) {
-    // With Constant<TLen>, length is guaranteed to be constant.
-    // nullptr means NULL constant, which is not allowed for length.
-    VELOX_USER_CHECK_NOT_NULL(length, "length must not be null");
-    VELOX_USER_CHECK_GE(
-        static_cast<int64_t>(*length), 0, "length must be non-negative");
-  }
 
   /// Initialize for seeded variant: randstr(length, seed).
   /// The seed argument is validated as constant by the Constant<TSeed> wrapper.
@@ -74,20 +62,6 @@ struct RandStrFunction {
     // NULL seed constant (nullptr) is treated as 0 per Spark semantics.
     generator_.seed(
         (seed ? static_cast<int64_t>(*seed) : 0) + config.sparkPartitionId());
-  }
-
-  /// Called for unseeded variant. Uses folly::Random for non-deterministic
-  /// output.
-  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& out, int32_t length) {
-    out.resize(length);
-    for (auto i = 0; i < length; ++i) {
-      out.data()[i] =
-          detail::kPool[folly::Random::rand32() % detail::kPoolSize];
-    }
-  }
-
-  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& out, int16_t length) {
-    call(out, static_cast<int32_t>(length));
   }
 
   /// Called for seeded variant. Uses the seeded generator for reproducibility.

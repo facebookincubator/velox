@@ -27,12 +27,6 @@ class RandStrTest : public SparkFunctionBaseTest {
     options_.parseIntegerAsBigint = false;
   }
 
-  std::optional<StringView> randstrLen(int32_t len) {
-    setSparkPartitionId(0);
-    return evaluateOnce<StringView>(
-        fmt::format("randstr({})", len), makeRowVector(ROW({}), 1));
-  }
-
   std::optional<StringView>
   randstrSeed(int32_t len, int64_t seed, int32_t partitionIdx = 0) {
     setSparkPartitionId(partitionIdx);
@@ -42,11 +36,11 @@ class RandStrTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(RandStrTest, lengthAndCharset) {
-  auto s0 = randstrLen(0);
+  auto s0 = randstrSeed(0, 42);
   ASSERT_TRUE(s0.has_value());
   EXPECT_EQ(s0->size(), 0);
 
-  auto s5 = randstrLen(5);
+  auto s5 = randstrSeed(5, 42);
   ASSERT_TRUE(s5.has_value());
   EXPECT_EQ(s5->size(), 5);
 
@@ -74,21 +68,23 @@ TEST_F(RandStrTest, seededDeterminismAndPartition) {
   EXPECT_NE(a1.value(), b.value());
 }
 
-TEST_F(RandStrTest, unseededIsRandom) {
-  auto r1 = randstrLen(8);
-  auto r2 = randstrLen(8);
-  auto r3 = randstrLen(8);
+TEST_F(RandStrTest, differentSeedsProduceDifferentResults) {
+  auto r1 = randstrSeed(8, 111);
+  auto r2 = randstrSeed(8, 222);
+  auto r3 = randstrSeed(8, 333);
   ASSERT_TRUE(r1.has_value());
   ASSERT_TRUE(r2.has_value());
   ASSERT_TRUE(r3.has_value());
-  // Extremely unlikely to all match exactly.
-  EXPECT_FALSE(r1.value() == r2.value() && r1.value() == r3.value());
+  // Different seeds should produce different results.
+  EXPECT_NE(r1.value(), r2.value());
+  EXPECT_NE(r1.value(), r3.value());
+  EXPECT_NE(r2.value(), r3.value());
 }
 
 TEST_F(RandStrTest, negativeLengthError) {
   setSparkPartitionId(0);
   VELOX_ASSERT_THROW(
-      evaluateOnce<StringView>("randstr(-1)", makeRowVector(ROW({}), 1)),
+      evaluateOnce<StringView>("randstr(-1, 42)", makeRowVector(ROW({}), 1)),
       "length must be non-negative");
 }
 
