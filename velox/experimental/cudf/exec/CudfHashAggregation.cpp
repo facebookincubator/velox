@@ -578,10 +578,13 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     uint32_t inputIndex,
     VectorPtr constant,
     bool isGlobal,
-    const TypePtr& resultType) {
+    const TypePtr& resultType,
+    const std::vector<TypePtr>& rawInputTypes = {}) {
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
-    if (resultType->kind() == TypeKind::VARBINARY || resultType->isDecimal()) {
+    bool isDecimalInput =
+        rawInputTypes.size() == 1 && rawInputTypes[0]->isDecimal();
+    if (isDecimalInput) {
       return std::make_unique<DecimalSumAggregator>(
           step, inputIndex, constant, isGlobal, resultType);
     }
@@ -708,7 +711,13 @@ auto toAggregators(
         : outputType->childAt(numKeys + i);
 
     aggregators.push_back(createAggregator(
-        companionStep, kind, inputIndex, constant, isGlobal, resultType));
+        companionStep,
+        kind,
+        inputIndex,
+        constant,
+        isGlobal,
+        resultType,
+        aggregate.rawInputTypes));
   }
   return aggregators;
 }
@@ -734,8 +743,14 @@ auto toIntermediateAggregators(
     if (exec::isPartialOutput(companionStep)) {
       const auto resultType =
           exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
-      aggregators.push_back(createAggregator(
-          step, kind, inputIndex, constant, isGlobal, resultType));
+    aggregators.push_back(createAggregator(
+        step,
+        kind,
+        inputIndex,
+        constant,
+        isGlobal,
+        resultType,
+        aggregate.rawInputTypes));
     } else {
       // Final step aggregator will not use the intermediate aggregator.
       aggregators.push_back(nullptr);
