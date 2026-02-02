@@ -153,7 +153,7 @@ function(velox_add_library TARGET)
         )
       endif()
     endif()
-    # create alias for compatibility
+    # create an alias for compatibility
     if(NOT TARGET ${TARGET})
       add_library(${TARGET} ALIAS velox)
     endif()
