@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <gtest/gtest.h>
-
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -213,6 +213,31 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   }
 };
 
+TEST_F(PlanNodeTest, nestedLoopJoin) {
+  auto leftData = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      });
+
+  auto rightData = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  core::PlanNodeIdGenerator planNodeIdGenerator;
+  auto nextId = [&planNodeIdGenerator]() { return planNodeIdGenerator.next(); };
+
+  auto leftValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{leftData});
+  auto rightValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{rightData});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<NestedLoopJoinNode>(
+          nextId(), leftValues, rightValues, ROW({"a"}, VARCHAR())),
+      "Join output column type must match the input type: VARCHAR vs. INTEGER");
+}
+
 TEST_F(PlanNodeTest, indexLookupJoin) {
   const auto rowType = ROW({"name"}, {BIGINT()});
   const auto valueNode = std::make_shared<ValuesNode>("orderBy", rowData_);
@@ -346,6 +371,21 @@ TEST_F(PlanNodeTest, indexLookupJoin) {
             buildNode,
             outputTypeWithDuplicateMatchColumn),
         "");
+  }
+  {
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/false,
+            probeNode,
+            buildNode,
+            ROW({"c0", "c1"}, {VARCHAR(), BIGINT()})),
+        "Join output column type must match the input type: VARCHAR vs. BIGINT");
   }
 }
 
