@@ -943,6 +943,7 @@ TEST_P(AsyncDataCacheTest, cacheStats) {
   stats.allocClocks = 1320;
   stats.sumEvictScore = 123;
   stats.numStales = 100;
+  stats.shardMutexWaitClocks = 1320;
   ASSERT_EQ(
       stats.toString(),
       "Cache size: 2.56KB tinySize: 257B large size: 2.31KB\n"
@@ -950,7 +951,7 @@ TEST_P(AsyncDataCacheTest, cacheStats) {
       " num write wait: 244 empty entries: 20\n"
       "Cache access miss: 2041 hit: 46 hit bytes: 1.34KB eviction: 463 savable eviction: 0 eviction checks: 348 aged out: 10 stales: 100\n"
       "Prefetch entries: 30 bytes: 100B\n"
-      "Alloc Megaclocks 0");
+      "Alloc Megaclocks 0 Shard mutex wait Megaclocks: 0");
 
   CacheStats statsDelta = stats - stats;
   ASSERT_EQ(statsDelta.tinySize, 0);
@@ -975,6 +976,7 @@ TEST_P(AsyncDataCacheTest, cacheStats) {
   ASSERT_EQ(statsDelta.allocClocks, 0);
   ASSERT_EQ(statsDelta.sumEvictScore, 0);
   ASSERT_EQ(statsDelta.numStales, 0);
+  ASSERT_EQ(statsDelta.shardMutexWaitClocks, 0);
 
   constexpr uint64_t kRamBytes = 32 << 20;
   constexpr uint64_t kSsdBytes = 512UL << 20;
@@ -986,7 +988,7 @@ TEST_P(AsyncDataCacheTest, cacheStats) {
       " num write wait: 0 empty entries: 0\n"
       "Cache access miss: 0 hit: 0 hit bytes: 0B eviction: 0 savable eviction: 0 eviction checks: 0 aged out: 0 stales: 0\n"
       "Prefetch entries: 0 bytes: 0B\n"
-      "Alloc Megaclocks 0\n"
+      "Alloc Megaclocks 0 Shard mutex wait Megaclocks: 0\n"
       "Allocated pages: 0 cached pages: 0\n"
       "Backing: Memory Allocator[MMAP total capacity 64.00MB free capacity 64.00MB allocated pages 0 mapped pages 0 external mapped pages 0\n"
       "[size 1: 0(0MB) allocated 0 mapped]\n"
@@ -1010,7 +1012,7 @@ TEST_P(AsyncDataCacheTest, cacheStats) {
       " num write wait: 0 empty entries: 0\n"
       "Cache access miss: 0 hit: 0 hit bytes: 0B eviction: 0 savable eviction: 0 eviction checks: 0 aged out: 0 stales: 0\n"
       "Prefetch entries: 0 bytes: 0B\n"
-      "Alloc Megaclocks 0\n"
+      "Alloc Megaclocks 0 Shard mutex wait Megaclocks: 0\n"
       "Allocated pages: 0 cached pages: 0\n";
   ASSERT_EQ(cache_->toString(false), expectedShortCacheOutput);
 }
@@ -1031,7 +1033,7 @@ TEST_P(AsyncDataCacheTest, cacheStatsWithSsd) {
   ASSERT_EQ(deltaStats.ssdStats->bytesWritten, 1);
   ASSERT_EQ(deltaStats.ssdStats->bytesRead, 1);
   const std::string expectedDeltaCacheStats =
-      "Cache size: 0B tinySize: 0B large size: 0B\nCache entries: 0 read pins: 0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n num write wait: 0 empty entries: 0\nCache access miss: 0 hit: 234 hit bytes: 0B eviction: 1024 savable eviction: 0 eviction checks: 0 aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0";
+      "Cache size: 0B tinySize: 0B large size: 0B\nCache entries: 0 read pins: 0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n num write wait: 0 empty entries: 0\nCache access miss: 0 hit: 234 hit bytes: 0B eviction: 1024 savable eviction: 0 eviction checks: 0 aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0 Shard mutex wait Megaclocks: 0";
   ASSERT_EQ(deltaStats.toString(), expectedDeltaCacheStats);
 }
 
