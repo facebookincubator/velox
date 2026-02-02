@@ -64,6 +64,35 @@ TEST(TypeCoercerTest, unknown) {
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), ARRAY(INTEGER())));
 }
 
+TEST(TypeCoercerTest, noCost) {
+  auto assertNoCost = [](const TypePtr& type) {
+    SCOPED_TRACE(type->toString());
+    auto cost = TypeCoercer::coercible(type, type);
+    ASSERT_TRUE(cost.has_value());
+    EXPECT_EQ(cost.value(), 0);
+  };
+
+  assertNoCost(UNKNOWN());
+  assertNoCost(BOOLEAN());
+  assertNoCost(TINYINT());
+  assertNoCost(SMALLINT());
+  assertNoCost(INTEGER());
+  assertNoCost(BIGINT());
+  assertNoCost(REAL());
+  assertNoCost(DOUBLE());
+  assertNoCost(VARCHAR());
+  assertNoCost(VARBINARY());
+  assertNoCost(TIMESTAMP());
+  assertNoCost(DATE());
+
+  assertNoCost(ARRAY(INTEGER()));
+  assertNoCost(ARRAY(UNKNOWN()));
+  assertNoCost(MAP(INTEGER(), REAL()));
+  assertNoCost(MAP(UNKNOWN(), UNKNOWN()));
+  assertNoCost(ROW({INTEGER(), REAL()}));
+  assertNoCost(ROW({UNKNOWN(), UNKNOWN()}));
+}
+
 TEST(TypeCoercerTest, array) {
   ASSERT_TRUE(TypeCoercer::coercible(ARRAY(UNKNOWN()), ARRAY(INTEGER())));
   ASSERT_TRUE(

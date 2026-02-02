@@ -390,6 +390,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
         dataColumns_,
+        indexColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
         filterColumnHandles_);
   }

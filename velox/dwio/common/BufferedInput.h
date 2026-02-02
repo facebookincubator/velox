@@ -153,6 +153,12 @@ class BufferedInput {
 
   virtual uint64_t nextFetchSize() const;
 
+  /// Resets the buffered input for reuse. This is used by index lookup which
+  /// reuses the same BufferedInput across different index lookups. For
+  /// instance, Nimble file format with cluster index supports index lookup and
+  /// needs to reset the buffered input state between lookups.
+  virtual void reset();
+
  protected:
   static int adjustedReadPct(const cache::TrackingData& trackingData) {
     // When this method is called, there is one more reference that is already

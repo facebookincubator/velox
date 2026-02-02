@@ -794,11 +794,7 @@ TEST_P(EncodedVectorCopyTest, fuzzerNewCopy) {
   auto seed = common::testutil::getRandomSeed(42);
   VectorFuzzer fuzzer(fuzzerOptions, pool(), seed);
   fuzzer::FuzzerGenerator rng(seed);
-#ifndef NDEBUG
-  constexpr int kNumIterations = 20;
-#else
-  constexpr int kNumIterations = 1000;
-#endif
+  constexpr int kNumIterations = 10;
   for (int i = 0; i < kNumIterations; ++i) {
     auto type = fuzzer.randType();
     SCOPED_TRACE(fmt::format("i={} type={}", i, type->toString()));

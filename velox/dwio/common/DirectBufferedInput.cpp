@@ -244,6 +244,16 @@ std::shared_ptr<DirectCoalescedLoad> DirectBufferedInput::coalescedLoad(
       });
 }
 
+void DirectBufferedInput::reset() {
+  BufferedInput::reset();
+  for (auto& load : coalescedLoads_) {
+    load->cancel();
+  }
+  coalescedLoads_.clear();
+  streamToCoalescedLoad_.wlock()->clear();
+  requests_.clear();
+}
+
 std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
     uint64_t offset,
     uint64_t length,

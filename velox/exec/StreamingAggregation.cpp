@@ -365,11 +365,13 @@ RowVectorPtr StreamingAggregation::getOutput() {
 
   RowVectorPtr output;
 
+  // we do not respect minOutputBatchRows or outputDueToBatchBytes
+  // when noGroupsSpanBatches is set
   const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
   const bool outputDueToBatchBytes =
       numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
-  if ((noGroupsSpanBatches_ || numPrevGroups > 0) &&
-      (outputDueToBatchSize || outputDueToBatchBytes)) {
+  if (noGroupsSpanBatches_ ||
+      (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes))) {
     size_t numOutputGroups{0};
     if (noGroupsSpanBatches_) {
       numOutputGroups = numGroups_;
