@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -165,6 +166,14 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  /** @brief Precompute instructions for left (probe) table columns */
+  std::vector<PrecomputeInstruction> leftPrecomputeInstructions_;
+  /** @brief Precompute instructions for right (build) table columns */
+  std::vector<PrecomputeInstruction> rightPrecomputeInstructions_;
+  /** @brief Row type for probe table (needed for precomputation) */
+  RowTypePtr probeType_;
+  /** @brief Row type for build table (needed for precomputation) */
+  RowTypePtr buildType_;
 
   bool rightPrecomputed_{false};
 
@@ -308,6 +317,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,
       cudf::column_view rightIndicesCol,
+      cudf::table_view extendedLeftView,
+      cudf::table_view extendedRightView,
       cudf::join_kind joinKind,
       rmm::cuda_stream_view stream);
 };

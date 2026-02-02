@@ -573,6 +573,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   }
 }
 
+} // namespace
+
 std::vector<ColumnOrView> precomputeSubexpressions(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
@@ -621,8 +623,6 @@ std::vector<ColumnOrView> precomputeSubexpressions(
 
   return precomputedColumns;
 }
-
-} // namespace
 
 // Create tree from Expr
 // and collect precompute instructions for non-ast operations

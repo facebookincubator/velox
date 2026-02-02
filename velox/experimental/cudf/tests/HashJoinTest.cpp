@@ -3534,6 +3534,168 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
       "Replacement with cuDF operator failed");
 }
 
+// Tests for join filters that require precomputation (non-AST operations)
+TEST_P(MultiThreadedHashJoinTest, innerJoinWithStringFunctionFilter) {
+  // Create probe vectors with string data
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(
+            100, [](auto row) { return row % 2 == 0 ? "HELLO" : "hello"; }),
+    });
+  });
+
+  // Create build vectors with string data
+  std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(
+            100, [](auto row) { return row % 2 == 0 ? "hello" : "HELLO"; }),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Test with lower() function in join filter - requires precomputation
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .probeProjections({"c0 AS t_k", "c1 AS t_str"})
+      .buildKeys({"c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_k", "c1 AS u_str"})
+      .joinFilter("lower(t_str) = lower(u_str)")
+      .joinOutputLayout({"t_k", "t_str", "u_k", "u_str"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t, u "
+          "WHERE t.c0 = u.c0 AND lower(t.c1) = lower(u.c1)")
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, innerJoinWithUpperFunctionFilter) {
+  // Create probe vectors with mixed case strings
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(100, [](auto row) {
+          return row % 3 == 0 ? "World" : (row % 3 == 1 ? "WORLD" : "world");
+        }),
+    });
+  });
+
+  // Create build vectors with target string
+  std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(
+            100, [](auto /*row*/) { return "WORLD"; }),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Test with upper() function - requires precomputation
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .probeProjections({"c0 AS t_k", "c1 AS t_str"})
+      .buildKeys({"c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_k", "c1 AS u_str"})
+      .joinFilter("upper(t_str) = u_str")
+      .joinOutputLayout({"t_k", "t_str", "u_k", "u_str"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t, u "
+          "WHERE t.c0 = u.c0 AND upper(t.c1) = u.c1")
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, innerJoinWithLengthFunctionFilter) {
+  // Create probe vectors with strings of varying length
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(100, [](auto row) {
+          return std::string(row % 10 + 1, 'a'); // strings of length 1-10
+        }),
+    });
+  });
+
+  // Create build vectors with length threshold
+  std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<int64_t>(100, [](auto row) { return row % 10 + 1; }),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Test with length() function - requires precomputation
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .probeProjections({"c0 AS t_k", "c1 AS t_str"})
+      .buildKeys({"c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_k", "c1 AS u_len"})
+      .joinFilter("length(t_str) = u_len")
+      .joinOutputLayout({"t_k", "t_str", "u_k", "u_len"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t, u "
+          "WHERE t.c0 = u.c0 AND length(t.c1) = u.c1")
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, innerJoinWithMixedFilterPrecomputation) {
+  // Test combining AST-supported operations with precomputation
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(
+            100, [](auto row) { return row % 2 == 0 ? "ABC" : "abc"; }),
+        makeFlatVector<int64_t>(100, [](auto row) { return row * 10; }),
+    });
+  });
+
+  std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(100, [](auto /*row*/) { return "ABC"; }),
+        makeFlatVector<int64_t>(100, [](auto row) { return row * 10; }),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Combine string function (precomputation) with arithmetic comparison (AST)
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .probeProjections({"c0 AS t_k", "c1 AS t_str", "c2 AS t_val"})
+      .buildKeys({"c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_k", "c1 AS u_str", "c2 AS u_val"})
+      .joinFilter("upper(t_str) = u_str AND t_val = u_val")
+      .joinOutputLayout({"t_k", "t_str", "t_val", "u_k", "u_str", "u_val"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, t.c2, u.c0, u.c1, u.c2 FROM t, u "
+          "WHERE t.c0 = u.c0 AND upper(t.c1) = u.c1 AND t.c2 = u.c2")
+      .run();
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashJoinTest,
     MultiThreadedHashJoinTest,

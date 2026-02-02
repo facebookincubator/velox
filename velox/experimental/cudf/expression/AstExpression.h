@@ -74,6 +74,20 @@ cudf::ast::expression const& createAstTree(
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
     const bool allowPureAstOnly);
 
+/// Executes precompute instructions and returns computed columns.
+/// @param inputTableColumns The input table columns (will not be modified)
+/// @param precomputeInstructions Instructions for precomputation
+/// @param scalars Scalar values used in precompute operations
+/// @param inputRowSchema The schema of the input table
+/// @param stream CUDA stream for operations
+/// @return Vector of precomputed columns (either views or owned columns)
+std::vector<ColumnOrView> precomputeSubexpressions(
+    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    const std::vector<PrecomputeInstruction>& precomputeInstructions,
+    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema,
+    rmm::cuda_stream_view stream);
+
 // Evaluates the expression tree
 class ASTExpression : public CudfExpression {
  public:
