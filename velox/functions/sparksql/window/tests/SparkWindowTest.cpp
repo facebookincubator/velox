@@ -154,14 +154,12 @@ TEST_F(SparkAggregateWindowLimitMemoryTest, clearStringBuffersInTime) {
   // If we don't call 'prepareForReuse' in 'fillArgVectors', the string buffers
   // will accumulate and cause high memory usage.
   auto data = makeRowVector(
-      {"d", "p", "s"},
+      {"d", "p"},
       {
           // Payload Data.
           makeConstant(std::string(32 * 1024, 'a'), size),
           // Partition key.
-          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
-          // Sorting key.
-          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(size, [](auto row) { return row; })
       });
 
   createDuckDbTable({data});
@@ -175,10 +173,12 @@ TEST_F(SparkAggregateWindowLimitMemoryTest, clearStringBuffersInTime) {
                   // process all window partitions. In this way, if we don't clear
                   // the string buffers during the window function processing,
                   // the string buffers would accumulate to cause high memory usage.
+                  // TODO: remove the use of LIMIT clause
+                  // after fixing https://github.com/facebookincubator/velox/issues/16210
                   .limit(size - resultSize, resultSize, true)
                   .planNode();
 
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
+  const auto realResultSize = AssertQueryBuilder(plan)
       .serialExecution(true)
       // Because we set offset to 'size - resultSize' in the LIMIT clause,
       // the Window operator will produce intermediate results that will be
@@ -188,12 +188,9 @@ TEST_F(SparkAggregateWindowLimitMemoryTest, clearStringBuffersInTime) {
       // By limiting the memory consumed by input and intermediate results,
       // we can know that the reason why we can pass this test is that we clear
       // the string buffers in time during the window function processing.
-      .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
-      // TODO: remove the use of LIMIT clause and use `countResults`
-      // after fixing https://github.com/facebookincubator/velox/issues/16210
-      .assertResults(
-          fmt::format("SELECT *, first(d) over (partition by p) "
-          "FROM tmp ORDER BY s LIMIT 10 OFFSET {}", size - resultSize));
+      .config(core::QueryConfig::kPreferredOutputBatchRows, resultSize)
+      .countResults();
+  ASSERT_EQ(realResultSize, resultSize);
 }
 
 } // namespace
