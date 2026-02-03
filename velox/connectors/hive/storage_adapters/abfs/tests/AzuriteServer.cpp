@@ -32,7 +32,7 @@ std::string AzuriteServer::fileURI() const {
 
 // Return the hiveConfig for the Azurite instance.
 // Specify configOverride map to update the default config map.
-std::shared_ptr<const config::ConfigBase> AzuriteServer::hiveConfig(
+config::ConfigPtr AzuriteServer::hiveConfig(
     const std::unordered_map<std::string, std::string> configOverride) const {
   auto endpoint = fmt::format("http://127.0.0.1:{}/{}", port_, account_);
   std::unordered_map<std::string, std::string> config(

@@ -22,10 +22,6 @@
 
 #include <optional>
 
-namespace facebook::velox::config {
-class ConfigBase;
-}
-
 namespace facebook::velox::cudf_velox::connector::hive {
 
 class CudfHiveConfig {
@@ -123,64 +119,63 @@ class CudfHiveConfig {
   static constexpr const char* kWritev2PageHeadersSession =
       "parquet.writer.write_v2_page_headers";
 
-  CudfHiveConfig(std::shared_ptr<const config::ConfigBase> config) {
+  CudfHiveConfig(config::ConfigPtr config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for CudfHiveConfig initialization");
     config_ = std::move(config);
   }
 
-  const std::shared_ptr<const config::ConfigBase>& config() const {
+  const config::ConfigPtr& config() const {
     return config_;
   }
 
   uint64_t sortWriterFinishTimeSliceLimitMs(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
   std::size_t maxChunkReadLimit() const;
-  std::size_t maxChunkReadLimitSession(const config::ConfigBase* session) const;
+  std::size_t maxChunkReadLimitSession(const config::IConfig* session) const;
 
   std::size_t maxPassReadLimit() const;
-  std::size_t maxPassReadLimitSession(const config::ConfigBase* session) const;
+  std::size_t maxPassReadLimitSession(const config::IConfig* session) const;
 
   int64_t skipRows() const;
   std::optional<cudf::size_type> numRows() const;
 
   bool isConvertStringsToCategories() const;
   bool isConvertStringsToCategoriesSession(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
   bool isUsePandasMetadata() const;
-  bool isUsePandasMetadataSession(const config::ConfigBase* session) const;
+  bool isUsePandasMetadataSession(const config::IConfig* session) const;
 
   bool isUseArrowSchema() const;
-  bool isUseArrowSchemaSession(const config::ConfigBase* session) const;
+  bool isUseArrowSchemaSession(const config::IConfig* session) const;
 
   bool isAllowMismatchedCudfHiveSchemas() const;
   bool isAllowMismatchedCudfHiveSchemasSession(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
   cudf::data_type timestampType() const;
-  cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
+  cudf::data_type timestampTypeSession(const config::IConfig* session) const;
 
   bool useBufferedInput() const;
-  bool useBufferedInputSession(const config::ConfigBase* session) const;
+  bool useBufferedInputSession(const config::IConfig* session) const;
 
   bool useExperimentalCudfReader() const;
-  bool useExperimentalCudfReaderSession(
-      const config::ConfigBase* session) const;
+  bool useExperimentalCudfReaderSession(const config::IConfig* session) const;
 
   bool immutableFiles() const;
 
   bool writeTimestampsAsUTC() const;
-  bool writeTimestampsAsUTCSession(const config::ConfigBase* session) const;
+  bool writeTimestampsAsUTCSession(const config::IConfig* session) const;
 
   bool writeArrowSchema() const;
-  bool writeArrowSchemaSession(const config::ConfigBase* session) const;
+  bool writeArrowSchemaSession(const config::IConfig* session) const;
 
   bool writev2PageHeaders() const;
-  bool writev2PageHeadersSession(const config::ConfigBase* session) const;
+  bool writev2PageHeadersSession(const config::IConfig* session) const;
 
  private:
-  std::shared_ptr<const config::ConfigBase> config_;
+  config::ConfigPtr config_;
 };
 } // namespace facebook::velox::cudf_velox::connector::hive

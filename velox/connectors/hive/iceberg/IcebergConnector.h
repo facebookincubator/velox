@@ -33,7 +33,7 @@ class IcebergConnector final : public HiveConnector {
  public:
   IcebergConnector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* ioExecutor);
 
   /// Creates IcebergDataSink for writing to Iceberg tables.
@@ -78,7 +78,7 @@ class IcebergConnectorFactory final : public ConnectorFactory {
   /// @return Shared pointer to the newly created IcebergConnector instance
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* ioExecutor = nullptr,
       [[maybe_unused]] folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<IcebergConnector>(id, config, ioExecutor);

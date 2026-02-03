@@ -126,7 +126,7 @@ void configureRowReaderOptions(
     const RowTypePtr& rowType,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const config::ConfigBase* sessionProperties,
+    const config::IConfig* sessionProperties,
     folly::Executor* ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions);
 

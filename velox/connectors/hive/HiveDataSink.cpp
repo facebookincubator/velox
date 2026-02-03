@@ -215,7 +215,7 @@ std::shared_ptr<memory::MemoryPool> createSortPool(
 
 uint64_t getFinishTimeSliceLimitMsFromHiveConfig(
     const std::shared_ptr<const HiveConfig>& config,
-    const config::ConfigBase* sessions) {
+    const config::IConfig* sessions) {
   const uint64_t flushTimeSliceLimitMsFromConfig =
       config->sortWriterFinishTimeSliceLimitMs(sessions);
   // NOTE: if the flush time slice limit is set to 0, then we treat it as no

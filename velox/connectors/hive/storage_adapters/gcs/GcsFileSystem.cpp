@@ -70,7 +70,7 @@ std::shared_ptr<GcsOAuthCredentialsProvider> getCredentialsProviderByName(
 
 class GcsFileSystem::Impl {
  public:
-  Impl(const std::string& bucket, const config::ConfigBase* config)
+  Impl(const std::string& bucket, const config::IConfig* config)
       : bucket_(bucket),
         hiveConfig_(
             std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
@@ -153,7 +153,7 @@ class GcsFileSystem::Impl {
 
 GcsFileSystem::GcsFileSystem(
     const std::string& bucket,
-    std::shared_ptr<const config::ConfigBase> config)
+    config::ConfigPtr config)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(bucket, config.get());
 }

@@ -31,12 +31,12 @@ class AzureClientProvider {
   // Creates AzureBlobClient for file read operations.
   virtual std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& path,
-      const config::ConfigBase& config) = 0;
+      const config::IConfig& config) = 0;
 
   // Creates AzureDataLakeFileClient for file write operations.
   virtual std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& path,
-      const config::ConfigBase& config) = 0;
+      const config::IConfig& config) = 0;
 };
 
 } // namespace facebook::velox::filesystems
