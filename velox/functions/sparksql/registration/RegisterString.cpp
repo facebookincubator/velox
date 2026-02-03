@@ -41,7 +41,7 @@ void registerSparkStringFunctions(const std::string& prefix) {
 namespace sparksql {
 void registerStringFunctions(const std::string& prefix) {
   registerSparkStringFunctions(prefix);
-  // randstr(length, seed) - Spark's analyzer always provides a seed
+  // randstr(length, seed) - Spark's analyzer always provides a seed.
   registerFunction<
       RandStrFunction,
       Varchar,

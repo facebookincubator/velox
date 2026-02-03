@@ -93,7 +93,7 @@ TEST_F(RandStrTest, nonConstantSeedError) {
   // Non-constant seed should throw an error.
   VELOX_ASSERT_THROW(
       evaluateOnce<StringView>("randstr(5, c0)", std::optional<int32_t>(42)),
-      "seed must not be null");
+      "seed must be a constant value");
 }
 
 } // namespace

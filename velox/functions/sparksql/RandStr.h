@@ -48,7 +48,7 @@ struct RandStrFunction {
       const TLen* length,
       const TSeed* seed) {
     VELOX_USER_CHECK_NOT_NULL(length, "length must not be null");
-    VELOX_USER_CHECK_NOT_NULL(seed, "seed must not be null");
+    VELOX_USER_CHECK_NOT_NULL(seed, "seed must be a constant value");
     VELOX_USER_CHECK_GE(
         static_cast<int64_t>(*length), 0, "length must be non-negative");
     length_ = static_cast<int32_t>(*length);
