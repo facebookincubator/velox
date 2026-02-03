@@ -57,6 +57,15 @@ some languages. Specifically, this will return incorrect results for
 Lithuanian, Turkish and Azeri.</p>
 </div>
 <dl class="py function">
+<dt class="sig sig-object py" id="bit_length">
+<span class="sig-name descname"><span class="pre">bit_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#bit_length" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the bit length for the specified string column.</p>
+<blockquote>
+<div><p>SELECT bit_length(‘123’); – 24</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="chr">
 <span class="sig-name descname"><span class="pre">chr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#chr" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the Unicode code point <code class="docutils literal notranslate"><span class="pre">n</span></code> as a single character string.</p>
@@ -130,6 +139,12 @@ Note that the two strings must have the same length.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="longest_common_prefix">
+<span class="sig-name descname"><span class="pre">longest_common_prefix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">string2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#longest_common_prefix" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the longest common prefix between <code class="docutils literal notranslate"><span class="pre">string1</span></code> and <code class="docutils literal notranslate"><span class="pre">string2</span></code></p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="lower">
 <span class="sig-name descname"><span class="pre">lower</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#lower" title="Link to this definition">¶</a></dt>
 <dd><p>Converts <code class="docutils literal notranslate"><span class="pre">string</span></code> to lowercase.</p>
@@ -162,8 +177,8 @@ recognized whitespace characters.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="replaceFirst">
-<span class="sig-name descname"><span class="pre">replaceFirst</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replaceFirst" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="replace_first">
+<span class="sig-name descname"><span class="pre">replace_first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace_first" title="Link to this definition">¶</a></dt>
 <dd><p>Removes the first instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> with <code class="docutils literal notranslate"><span class="pre">replace</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">search</span></code> is an empty string, inserts <code class="docutils literal notranslate"><span class="pre">replace</span></code> in front of <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
@@ -617,6 +632,7 @@ specifying <code class="docutils literal notranslate"><span class="pre">form</sp
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">String Functions</a><ul>
+<li><a class="reference internal" href="#bit_length"><code class="docutils literal notranslate"><span class="pre">bit_length()</span></code></a></li>
 <li><a class="reference internal" href="#chr"><code class="docutils literal notranslate"><span class="pre">chr()</span></code></a></li>
 <li><a class="reference internal" href="#codepoint"><code class="docutils literal notranslate"><span class="pre">codepoint()</span></code></a></li>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
@@ -626,10 +642,11 @@ specifying <code class="docutils literal notranslate"><span class="pre">form</sp
 <li><a class="reference internal" href="#jarowinkler_similarity"><code class="docutils literal notranslate"><span class="pre">jarowinkler_similarity()</span></code></a></li>
 <li><a class="reference internal" href="#length"><code class="docutils literal notranslate"><span class="pre">length()</span></code></a></li>
 <li><a class="reference internal" href="#levenshtein_distance"><code class="docutils literal notranslate"><span class="pre">levenshtein_distance()</span></code></a></li>
+<li><a class="reference internal" href="#longest_common_prefix"><code class="docutils literal notranslate"><span class="pre">longest_common_prefix()</span></code></a></li>
 <li><a class="reference internal" href="#lower"><code class="docutils literal notranslate"><span class="pre">lower()</span></code></a></li>
 <li><a class="reference internal" href="#lpad"><code class="docutils literal notranslate"><span class="pre">lpad()</span></code></a></li>
 <li><a class="reference internal" href="#ltrim"><code class="docutils literal notranslate"><span class="pre">ltrim()</span></code></a></li>
-<li><a class="reference internal" href="#replaceFirst"><code class="docutils literal notranslate"><span class="pre">replaceFirst()</span></code></a></li>
+<li><a class="reference internal" href="#replace_first"><code class="docutils literal notranslate"><span class="pre">replace_first()</span></code></a></li>
 <li><a class="reference internal" href="#replace"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
 <li><a class="reference internal" href="#rpad"><code class="docutils literal notranslate"><span class="pre">rpad()</span></code></a></li>
 <li><a class="reference internal" href="#rtrim"><code class="docutils literal notranslate"><span class="pre">rtrim()</span></code></a></li>
