@@ -1493,6 +1493,40 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("double")
           .argumentType("double")
           .build()};
+
+  // Decimal avg signatures.
+  auto decimalAvgSingle = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType("decimal(a_precision, a_scale)")
+          .argumentType("decimal(a_precision, a_scale)")
+          .build()};
+  auto decimalAvgPartial = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType("varbinary")
+          .argumentType("decimal(a_precision, a_scale)")
+          .build()};
+  auto decimalAvgFinal = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType("decimal(a_precision, a_scale)")
+          .argumentType("varbinary")
+          .build()};
+  auto decimalAvgIntermediate = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("varbinary")
+          .argumentType("varbinary")
+          .build()};
+
+  avgSingleSignatures.insert(
+      avgSingleSignatures.end(),
+      decimalAvgSingle.begin(),
+      decimalAvgSingle.end());
+
   registerAggregationFunctionForStep(
       prefix + "avg",
       core::AggregationNode::Step::kSingle,
@@ -1520,19 +1554,34 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("row(double,bigint)")
           .argumentType("double")
           .build()};
+
+  avgPartialSignatures.insert(
+      avgPartialSignatures.end(),
+      decimalAvgPartial.begin(),
+      decimalAvgPartial.end());
+
   registerAggregationFunctionForStep(
       prefix + "avg",
       core::AggregationNode::Step::kPartial,
       avgPartialSignatures);
 
   // Final step: avg(row(double, bigint)) -> double
-  auto avgFinalSignatures = std::vector<exec::FunctionSignaturePtr>{
+  auto avgFinalIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .returnType("double")
           .argumentType("row(double,bigint)")
           .build()};
+
+  auto avgFinalSignatures = avgFinalIntermediateSignatures;
+  avgFinalSignatures.insert(
+      avgFinalSignatures.end(),
+      decimalAvgFinal.begin(),
+      decimalAvgFinal.end());
+
   registerAggregationFunctionForStep(
-      prefix + "avg", core::AggregationNode::Step::kFinal, avgFinalSignatures);
+      prefix + "avg",
+      core::AggregationNode::Step::kFinal,
+      avgFinalSignatures);
 
   // Intermediate step: avg(row(sum input_type, count bigint)) -> row(sum
   // input_type, count bigint)
@@ -1541,6 +1590,16 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("row(double,bigint)")
           .argumentType("row(double,bigint)")
           .build()};
+
+  // WHY DOES SUM NOT HAVE THE EQUIVALENT OF THE ABOVE?
+  // THE ABOVE THEN CLASHES WITH BELOW
+  // @mattgara HELP! :)
+  // auto avgIntermediateSignatures = avgFinalIntermediateSignatures;
+  avgIntermediateSignatures.insert(
+      avgIntermediateSignatures.end(),
+      decimalAvgIntermediate.begin(),
+      decimalAvgIntermediate.end());
+
   registerAggregationFunctionForStep(
       prefix + "avg",
       core::AggregationNode::Step::kIntermediate,
