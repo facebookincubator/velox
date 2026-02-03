@@ -64,6 +64,14 @@ class Exchange : public SourceOperator {
 
   bool isFinished() override;
 
+  std::shared_ptr<ExchangeClient> releaseExchangeClient() {
+    return std::move(exchangeClient_);
+  }
+
+  void resetExchangeClient() {
+    exchangeClient_.reset();
+  }
+
  protected:
   virtual VectorSerde* getSerde();
 

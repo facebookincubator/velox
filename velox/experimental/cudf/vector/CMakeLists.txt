@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_vector CudfVector.cpp)
+velox_add_library(velox_cudf_vector CudfVector.cpp)
 
-set_target_properties(velox_cudf_vector PROPERTIES CUDA_ARCHITECTURES native)
+if(VELOX_MONO_LIBRARY)
+  set_target_properties(velox PROPERTIES CUDA_ARCHITECTURES native)
+else()
+  set_target_properties(velox_cudf_vector PROPERTIES CUDA_ARCHITECTURES native)
+endif()
 
-target_link_libraries(velox_cudf_vector cudf::cudf velox_exception velox_common_base velox_vector)
+velox_link_libraries(velox_cudf_vector cudf::cudf velox_exception velox_common_base velox_vector)

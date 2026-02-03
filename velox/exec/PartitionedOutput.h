@@ -193,6 +193,10 @@ class PartitionedOutput : public Operator {
     return minCompressionRatio_;
   }
 
+  bool getEagerFlush() const {
+    return eagerFlush_;
+  }
+
  private:
   void initializeInput(RowVectorPtr input);
 

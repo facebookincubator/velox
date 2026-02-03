@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_cudf_exec
   CudfAssignUniqueId.cpp
   CudfConversion.cpp
@@ -29,9 +29,11 @@ add_library(
   VeloxCudfInterop.cpp
 )
 
-target_link_libraries(
+find_package(ucx REQUIRED)
+
+velox_link_libraries(
   velox_cudf_exec
-  PUBLIC cudf::cudf
+  PUBLIC cudf::cudf cuco::cuco velox_cudf_exchange
   PRIVATE
     arrow
     velox_arrow_bridge
@@ -43,4 +45,8 @@ target_link_libraries(
     velox_cudf_expression
 )
 
-target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
+if(VELOX_MONO_LIBRARY)
+  target_compile_options(velox PRIVATE -Wno-missing-field-initializers)
+else()
+  target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
+endif()
