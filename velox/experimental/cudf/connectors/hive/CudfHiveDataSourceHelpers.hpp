@@ -77,31 +77,6 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource);
 
 /**
- * @brief Converts a span of device buffers into a vector of corresponding
- * device spans
- *
- * @tparam T Type of output device spans
- * @param buffers Host span of device buffers
- * @return Device spans corresponding to the input device buffers
- */
-template <typename T>
-std::vector<cudf::device_span<T const>> makeDeviceSpans(
-    cudf::host_span<rmm::device_buffer const> buffers)
-  requires(sizeof(T) == 1)
-{
-  std::vector<cudf::device_span<T const>> deviceSpans(buffers.size());
-  std::transform(
-      buffers.begin(),
-      buffers.end(),
-      deviceSpans.begin(),
-      [](auto const& buffer) {
-        return cudf::device_span<T const>{
-            static_cast<T const*>(buffer.data()), buffer.size()};
-      });
-  return deviceSpans;
-}
-
-/**
  * @brief Converts a list of byte ranges into lists of device buffers, device
  * spans corresponding to each byte range, and a future to wait for all reads to
  * complete
