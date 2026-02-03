@@ -13,88 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/Expr.h"
-#include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
-#include "velox/vector/FunctionVector.h"
+#include "velox/functions/lib/TransformFunctionBase.h"
 
 namespace facebook::velox::functions {
 namespace {
 
 // See documentation at https://prestodb.io/docs/current/functions/array.html
-class TransformFunction : public exec::VectorFunction {
- public:
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& outputType,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
-
-    // Flatten input array.
-    exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
-    auto& decodedArray = *arrayDecoder.get();
-
-    auto flatArray = flattenArray(rows, args[0], decodedArray);
-
-    std::vector<VectorPtr> lambdaArgs = {flatArray->elements()};
-    auto newNumElements = flatArray->elements()->size();
-
-    SelectivityVector validRowsInReusedResult =
-        toElementRows<ArrayVector>(newNumElements, rows, flatArray.get());
-
-    // transformed elements
-    VectorPtr newElements;
-
-    auto elementToTopLevelRows = getElementToTopLevelRows(
-        newNumElements, rows, flatArray.get(), context.pool());
-
-    // loop over lambda functions and apply these to elements of the base array;
-    // in most cases there will be only one function and the loop will run once
-    auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
-    while (auto entry = it.next()) {
-      auto elementRows = toElementRows<ArrayVector>(
-          newNumElements, *entry.rows, flatArray.get());
-      auto wrapCapture = toWrapCapture<ArrayVector>(
-          newNumElements, entry.callable, *entry.rows, flatArray);
-
-      entry.callable->apply(
-          elementRows,
-          &validRowsInReusedResult,
-          wrapCapture,
-          &context,
-          lambdaArgs,
-          elementToTopLevelRows,
-          &newElements);
-    }
-
-    // Set nulls for rows not present in 'rows'.
-    BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
-
-    VectorPtr localResult = std::make_shared<ArrayVector>(
-        flatArray->pool(),
-        outputType,
-        std::move(newNulls),
-        rows.end(),
-        flatArray->offsets(),
-        flatArray->sizes(),
-        newElements);
-    context.moveOrCopyResult(localResult, rows, result);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // array(T), function(T, U) -> array(U)
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .typeVariable("U")
-                .returnType("array(U)")
-                .argumentType("array(T)")
-                .argumentType("function(T, U)")
-                .build()};
-  }
+class TransformFunction : public TransformFunctionBase {
+  // Inherits apply() and signatures() from base class.
+  // No additional lambda arguments needed for Presto.
 };
+
 } // namespace
 
 /// transform is null preserving for the array. But since an

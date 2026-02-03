@@ -15,11 +15,7 @@
  */
 
 #include "velox/common/base/BitUtil.h"
-#include "velox/expression/Expr.h"
-#include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
-#include "velox/vector/FunctionVector.h"
+#include "velox/functions/lib/TransformFunctionBase.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -30,24 +26,32 @@ namespace {
 ///
 /// See Spark documentation:
 /// https://spark.apache.org/docs/latest/api/sql/index.html#transform
-class TransformFunction : public exec::VectorFunction {
+class TransformFunction : public TransformFunctionBase {
  public:
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& outputType,
+  /// Returns both base signature and Spark-specific signature with index.
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    auto sigs = TransformFunctionBase::signatures();
+    // Add Spark-specific signature: array(T), function(T, integer, U) ->
+    // array(U). Spark uses IntegerType (32-bit) for the index parameter.
+    sigs.push_back(
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .typeVariable("U")
+            .returnType("array(U)")
+            .argumentType("array(T)")
+            .argumentType("function(T, integer, U)")
+            .build());
+    return sigs;
+  }
+
+ protected:
+  /// Adds index vector to lambda arguments if the lambda expects it.
+  void addIndexVector(
+      const std::vector<VectorPtr>& args,
+      const ArrayVectorPtr& flatArray,
+      vector_size_t numElements,
       exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
-
-    // Flatten input array.
-    exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
-    auto& decodedArray = *arrayDecoder.get();
-
-    auto flatArray = flattenArray(rows, args[0], decodedArray);
-    auto newNumElements = flatArray->elements()->size();
-
-    // Determine if we need to pass index to the lambda.
+      std::vector<VectorPtr>& lambdaArgs) const override {
     // Check the lambda function type to see if it expects 2 input arguments.
     // function(T, U) has 2 children (input T, output U) -> 1 input arg.
     // function(T, integer, U) has 3 children (input T, index integer, output U)
@@ -55,75 +59,9 @@ class TransformFunction : public exec::VectorFunction {
     auto functionType = args[1]->type();
     bool withIndex = functionType->size() == 3;
 
-    std::vector<VectorPtr> lambdaArgs = {flatArray->elements()};
-
-    // If lambda expects index, create index vector.
     if (withIndex) {
-      auto indexVector = createIndexVector(flatArray, newNumElements, context);
-      lambdaArgs.push_back(indexVector);
+      lambdaArgs.push_back(createIndexVector(flatArray, numElements, context));
     }
-
-    SelectivityVector validRowsInReusedResult =
-        toElementRows<ArrayVector>(newNumElements, rows, flatArray.get());
-
-    // Transformed elements.
-    VectorPtr newElements;
-
-    auto elementToTopLevelRows = getElementToTopLevelRows(
-        newNumElements, rows, flatArray.get(), context.pool());
-
-    // Loop over lambda functions and apply these to elements of the base array.
-    // In most cases there will be only one function and the loop will run once.
-    auto lambdaIt = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
-    while (auto entry = lambdaIt.next()) {
-      auto elementRows = toElementRows<ArrayVector>(
-          newNumElements, *entry.rows, flatArray.get());
-      auto wrapCapture = toWrapCapture<ArrayVector>(
-          newNumElements, entry.callable, *entry.rows, flatArray);
-
-      entry.callable->apply(
-          elementRows,
-          &validRowsInReusedResult,
-          wrapCapture,
-          &context,
-          lambdaArgs,
-          elementToTopLevelRows,
-          &newElements);
-    }
-
-    // Set nulls for rows not present in 'rows'.
-    BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
-
-    VectorPtr localResult = std::make_shared<ArrayVector>(
-        flatArray->pool(),
-        outputType,
-        std::move(newNulls),
-        rows.end(),
-        flatArray->offsets(),
-        flatArray->sizes(),
-        newElements);
-    context.moveOrCopyResult(localResult, rows, result);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {
-        // Signature 1: array(T), function(T, U) -> array(U) (element only)
-        exec::FunctionSignatureBuilder()
-            .typeVariable("T")
-            .typeVariable("U")
-            .returnType("array(U)")
-            .argumentType("array(T)")
-            .argumentType("function(T, U)")
-            .build(),
-        // Signature 2: array(T), function(T, integer, U) -> array(U) (element +
-        // index). Spark uses IntegerType (32-bit) for the index parameter.
-        exec::FunctionSignatureBuilder()
-            .typeVariable("T")
-            .typeVariable("U")
-            .returnType("array(U)")
-            .argumentType("array(T)")
-            .argumentType("function(T, integer, U)")
-            .build()};
   }
 
  private:
@@ -132,7 +70,7 @@ class TransformFunction : public exec::VectorFunction {
   /// the index vector will be [0, 1, 0, 1, 2].
   /// Spark uses IntegerType (32-bit) for the index.
   static VectorPtr createIndexVector(
-      const std::shared_ptr<ArrayVector>& flatArray,
+      const ArrayVectorPtr& flatArray,
       vector_size_t numElements,
       exec::EvalCtx& context) {
     auto* pool = context.pool();
