@@ -19,7 +19,6 @@
 #include <utility>
 #include <vector>
 
-#include "velox/exec/TaskDebuggerCursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -139,15 +138,19 @@ TEST_F(CustomTraceTest, customTrace) {
 }
 
 void assertCursorOutput(
-    const core::PlanFragment& plan,
-    const std::vector<core::PlanNodeId>& traceIds,
+    const core::PlanNodePtr& plan,
+    const std::vector<core::PlanNodeId>& breakpoints,
     const std::vector<RowVectorPtr>& expectation) {
-  TaskDebuggerCursor cursor(plan, traceIds);
+  auto cursor = TaskCursor::create({
+      .planNode = plan,
+      .serialExecution = true,
+      .breakpoints = breakpoints,
+  });
   size_t i = 0;
 
-  while (auto vectorOutput = cursor.step()) {
+  while (cursor->moveStep()) {
     if (i < expectation.size()) {
-      assertEqualVectors(vectorOutput, expectation[i++]);
+      assertEqualVectors(cursor->current(), expectation[i++]);
     } else {
       ADD_FAILURE() << "Cursor output is longer than expectation: " << i;
     }
@@ -190,7 +193,7 @@ TEST_F(CustomTraceTest, taskDebuggerCursor) {
                   .capturePlanNodeId(project3)
                   .project({"a * 10 as a"})
                   .capturePlanNodeId(project4)
-                  .planFragment();
+                  .planNode();
 
   // Test a series of combinations.
   assertCursorOutput(plan, {}, {output1, output2});
