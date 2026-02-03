@@ -27,6 +27,7 @@
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
+#include "velox/dwio/parquet/reader/TimeColumnReader.h"
 #include "velox/dwio/parquet/reader/TimestampColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
@@ -47,6 +48,22 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
     case TypeKind::HUGEINT:
+      if (fileType->type()->isTime()) {
+        const auto parquetType =
+            std::static_pointer_cast<const ParquetTypeWithId>(fileType)
+                ->parquetType_;
+        VELOX_CHECK(parquetType);
+        switch (parquetType.value()) {
+          case thrift::Type::INT32:
+            return std::make_unique<TimeColumnReader<int32_t>>(
+                requestedType, fileType, params, scanSpec);
+          case thrift::Type::INT64:
+            return std::make_unique<TimeColumnReader<int64_t>>(
+                requestedType, fileType, params, scanSpec);
+          default:
+            VELOX_UNREACHABLE();
+        }
+      }
       return std::make_unique<IntegerColumnReader>(
           requestedType, fileType, params, scanSpec);
 
