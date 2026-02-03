@@ -127,6 +127,13 @@ velox_link_libraries(
   velox_vector
 )
 
+if(${VELOX_ENABLE_CUDF})
+  velox_link_libraries(
+    velox_exec
+    velox_cudf_exchange
+    cudf::cudf)
+endif()
+
 velox_add_library(velox_cursor Cursor.cpp)
 
 velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)

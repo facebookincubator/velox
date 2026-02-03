@@ -206,7 +206,7 @@ bool isOpAndInputsSupported(
 //   kConstant = 1, "literal" for fixed_width and VARCHAR / function
 //   kCast = 2, "cast" or "try_cast" to int32, int64, double only / function
 //   kCoalesce = 3, unsupported/function
-//   kSwitch = 4, unsupported
+//   kSwitch = 4, special case: if(cond, 1, 0) only / function
 //   kLambda = 5, unsupported
 //   kTry = 6, unsupported
 //   kAnd = 7, "and" or "or" with multiple inputs
@@ -242,6 +242,8 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
         fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
     if (fieldExpr->field() == fieldName) {
       return true;
+      // } else if (!allowPureAstOnly ) {
+      //   return true;
     }
     LOG(WARNING) << "Field " << name << "not found, in expression "
                  << expr->toString();
@@ -313,6 +315,29 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
     return false;
   }
 
+  // Switch/If: only specific patterns supported in pure AST
+  if ((name == "switch" || name == "if") && len == 3) {
+    auto c1 = dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
+    auto c2 = dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
+
+    if (!c1 || !c2) {
+      return false;
+    }
+
+    const auto str1 = c1->toString();
+    const auto str2 = c2->toString();
+
+    // Pattern: if(cond, 1, 0) -> CAST_TO_INT64
+    if ((str1 == "1:BIGINT" && str2 == "0:BIGINT") ||
+        (str1 == "1:INTEGER" && str2 == "0:INTEGER")) {
+      return isOpAndInputsSupported(Op::CAST_TO_INT64, inputCudfDataTypes);
+    }
+
+    // Pattern: if(cond, x, 0.0) -> CAST_TO_FLOAT64 then MUL
+    if (str2 == "0:DOUBLE") {
+      return true;
+    }
+  }
   LOG(WARNING) << "Unsupported expression by AST: " << expr->toString();
   return false;
 }
@@ -537,8 +562,46 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       return tree.push(Operation{Op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::DOUBLE) {
       return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
+    } else if (!allowPureAstOnly) {
+      // TODO (dm): Similar to else block in switch/if, remove this once
+      // ASTEvaluator provides type based canEvaluate
+      auto node =
+          createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
+      return addPrecomputeInstructionOnSide(0, 0, name, "", node);
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
+    }
+  } else if (name == "switch" || name == "if") {
+    VELOX_CHECK_EQ(len, 3);
+    // check if input[1], input[2] are literals 1 and 0.
+    // then simplify as typecast bool to int
+    auto c1 = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
+    auto c2 = dynamic_cast<ConstantExpr*>(expr->inputs()[2].get());
+    if ((c1 and c1->toString() == "1:BIGINT" and c2 and
+         c2->toString() == "0:BIGINT") ||
+        (c1 and c1->toString() == "1:INTEGER" and c2 and
+         c2->toString() == "0:INTEGER")) {
+      auto const& op1 = pushExprToTree(expr->inputs()[0]);
+      return tree.push(Operation{Op::CAST_TO_INT64, op1});
+    } else if (c2 and c2->toString() == "0:DOUBLE") {
+      auto const& op1 = pushExprToTree(expr->inputs()[0]);
+      auto const& op1d = tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
+      auto const& op2 = pushExprToTree(expr->inputs()[1]);
+      return tree.push(Operation{Op::MUL, op1d, op2});
+    } else if (
+        c1 and c1->toString() == "1:INTEGER" and c2 and
+        c2->toString() == "0:INTEGER") {
+      return pushExprToTree(expr->inputs()[0]);
+    } else if (!allowPureAstOnly) {
+      // TODO (dm): This can be better handled by checking which function
+      // signatures are supported before dispatching. e.g. in this case, it
+      // would be better if ast never agreed to evaluate a top level switch on
+      // unsupported types
+      auto node =
+          createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
+      return addPrecomputeInstructionOnSide(0, 0, name, "", node);
+    } else {
+      VELOX_FAIL("Unsupported expression: " + name);
     }
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side

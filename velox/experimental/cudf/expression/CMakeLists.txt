@@ -12,17 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_cudf_expression
   AstExpression.cpp
   ExpressionEvaluator.cpp
   SubfieldFiltersToAst.cpp
 )
 
-target_link_libraries(
+velox_link_libraries(
   velox_cudf_expression
   PUBLIC cudf::cudf
   PRIVATE arrow velox_exception velox_common_base velox_cudf_vector
 )
 
-target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
+if(VELOX_MONO_LIBRARY)
+  target_compile_options(velox PRIVATE -Wno-missing-field-initializers)
+else()
+  target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
+endif()
