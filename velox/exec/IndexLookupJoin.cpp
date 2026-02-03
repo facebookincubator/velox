@@ -310,7 +310,7 @@ void IndexLookupJoin::initLookupInput() {
           indexKeyType->toString(),
           probeKeyType->toString());
       addLookupInputColumn(
-          indexKeyName,
+          probeKeyName,
           probeKeyType,
           probeKeyChannel,
           lookupInputNames,
