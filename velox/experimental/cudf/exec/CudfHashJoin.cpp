@@ -828,9 +828,41 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
+
+  // Precompute left (probe) table columns if needed (once, outside loop)
+  std::vector<std::unique_ptr<cudf::column>> leftOwnedColumns;
+  std::vector<ColumnOrView> leftPrecomputed;
+  cudf::table_view extendedLeftView = leftTableView;
+  if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
+    leftOwnedColumns = tableViewToColumns(leftTableView, stream);
+    leftPrecomputed = precomputeSubexpressions(
+        leftOwnedColumns,
+        leftPrecomputeInstructions_,
+        scalars_,
+        probeType_,
+        stream);
+    extendedLeftView = createExtendedTableView(leftTableView, leftPrecomputed);
+  }
+
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
+
+    // Precompute right (build) table columns if needed (per batch)
+    std::vector<std::unique_ptr<cudf::column>> rightOwnedColumns;
+    std::vector<ColumnOrView> rightPrecomputed;
+    cudf::table_view extendedRightView = rightTableView;
+    if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
+      rightOwnedColumns = tableViewToColumns(rightTableView, stream);
+      rightPrecomputed = precomputeSubexpressions(
+          rightOwnedColumns,
+          rightPrecomputeInstructions_,
+          scalars_,
+          buildType_,
+          stream);
+      extendedRightView =
+          createExtendedTableView(rightTableView, rightPrecomputed);
+    }
 
     VELOX_CHECK_NOT_NULL(hb);
     if (buildStream_.has_value()) {
@@ -853,14 +885,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      // TODO: Add precomputation support for left join
       cudfOutputs.push_back(filteredOutputIndices(
           leftTableView,
           leftIndicesCol,
           rightTableView,
           rightIndicesCol,
-          leftTableView, // Extended view (stub: using original for now)
-          rightTableView, // Extended view (stub: using original for now)
+          extendedLeftView,
+          extendedRightView,
           cudf::join_kind::LEFT_JOIN,
           stream));
     } else {
