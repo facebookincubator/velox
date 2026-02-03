@@ -939,8 +939,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::device_span<cudf::size_type const>{*rightJoinIndices}};
 
       // Create mask for valid (non-sentinel) right indices: index >= 0
-      auto zero_scalar =
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream);
+      auto zero_scalar = cudf::numeric_scalar<cudf::size_type>(0, true, stream);
       auto validMask = cudf::binary_operation(
           rightIdxCol,
           zero_scalar,
@@ -1003,8 +1002,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
       auto filteredRightIdxCol = cudf::column_view{filteredRightIndicesSpan};
 
       // Filter out -1 sentinel indices: keep only index >= 0
-      auto zero_scalar =
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream);
+      auto zero_scalar = cudf::numeric_scalar<cudf::size_type>(0, true, stream);
       auto validMask = cudf::binary_operation(
           filteredRightIdxCol,
           zero_scalar,
@@ -1012,8 +1010,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::data_type{cudf::type_id::BOOL8},
           stream);
       auto validIdxTable = cudf::apply_boolean_mask(
-          cudf::table_view{
-              std::vector<cudf::column_view>{filteredRightIdxCol}},
+          cudf::table_view{std::vector<cudf::column_view>{filteredRightIdxCol}},
           validMask->view(),
           stream);
       auto validIdxTableCols = validIdxTable->release();
@@ -1039,8 +1036,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
       // Build output using filtered indices
       auto filteredLeftIndicesSpan =
           cudf::device_span<cudf::size_type const>{*filteredLeftJoinIndices};
-      auto filteredLeftIndicesCol =
-          cudf::column_view{filteredLeftIndicesSpan};
+      auto filteredLeftIndicesCol = cudf::column_view{filteredLeftIndicesSpan};
       auto filteredRightIndicesCol =
           cudf::column_view{filteredRightIndicesSpan};
       cudfOutputs.push_back(unfilteredOutput(
