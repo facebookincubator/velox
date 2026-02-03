@@ -313,6 +313,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return traceCtxProvider_;
   }
 
+  void setTraceCtxProvider(TraceCtxProvider provider) {
+    traceCtxProvider_ = std::move(provider);
+  }
+
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
   }

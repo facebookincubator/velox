@@ -202,8 +202,15 @@ class TaskCursorBase : public TaskCursor {
           fmt::format("TaskCursorQuery_{}", cursorQueryId++));
     }
 
-    if (!params.queryConfigs.empty()) {
-      auto configCopy = params.queryConfigs;
+    // If query configs needs to be overwritten in queryCtx.
+    if (!params.queryConfigs.empty() || !params.breakpoints.empty()) {
+      auto configCopy = !params.queryConfigs.empty()
+          ? params.queryConfigs
+          : queryCtx_->queryConfig().rawConfigsCopy();
+
+      if (!params.breakpoints.empty()) {
+        configCopy.insert({core::QueryConfig::kQueryTraceEnabled, "true"});
+      }
       queryCtx_->testingOverrideConfigUnsafe(std::move(configCopy));
     }
 
@@ -364,6 +371,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     return current_ != nullptr;
   }
 
+  bool moveStep() override {
+    return moveNext();
+  }
+
   void setNoMoreSplits() override {
     VELOX_CHECK(!noMoreSplits_);
     noMoreSplits_ = true;
@@ -491,6 +502,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     return false;
   }
 
+  bool moveStep() override {
+    return moveNext();
+  }
+
   RowVectorPtr& current() override {
     return current_;
   }
@@ -507,6 +522,225 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   }
 
  private:
+  std::shared_ptr<exec::Task> task_;
+  bool noMoreSplits_{false};
+  RowVectorPtr current_;
+  std::exception_ptr error_;
+};
+
+/// A debugging cursor for interactive task execution.
+///
+/// The cursor uses a custom tracing context that pauses execution at traced
+/// operators, allowing inspection of input vectors before they are processed.
+///
+/// @note This class assumes serial (single-threaded) execution mode.
+class TaskDebuggerCursor : public TaskCursorBase {
+ public:
+  explicit TaskDebuggerCursor(const CursorParameters& params)
+      : TaskCursorBase(params, nullptr) {
+    // Installs the required trace provider.
+    queryCtx_->setTraceCtxProvider(
+        [&](core::QueryCtx&, const core::PlanFragment&) {
+          return std::make_unique<TaskDebuggerTraceCtx>(
+              params.breakpoints, traceState_);
+        });
+
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kSerial);
+  }
+
+  /// Ensures the task completes before cleanup.
+  ~TaskDebuggerCursor() {
+    if (task_) {
+      waitForTaskDriversToFinish(task_.get());
+    }
+  }
+
+  TaskDebuggerCursor(TaskDebuggerCursor&&) noexcept = default;
+  TaskDebuggerCursor& operator=(TaskDebuggerCursor&&) noexcept = default;
+
+  // no-op
+  void start() override {}
+
+  bool moveNext() override {
+    return advance(false);
+  }
+
+  bool moveStep() override {
+    return advance(true);
+  }
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
+  void setError(std::exception_ptr error) override {
+    error_ = error;
+    if (task_) {
+      task_->setError(error);
+    }
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
+ private:
+  // Advance to the next vector to produce, storing it in `current_`. If
+  // `isStep` is true, move to the next trace point or task output. If false,
+  // moves to the next task output.
+  //
+  // Returns false when the task is done producing output.
+  bool advance(bool isStep) {
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+
+    if (traceState_.traceData) {
+      traceState_.traceData = nullptr;
+      traceState_.tracePromise.setValue();
+    }
+
+    while (true) {
+      ContinueFuture future = ContinueFuture::makeEmpty();
+
+      if (auto vector = task_->next(&future)) {
+        current_ = vector;
+        return true;
+      }
+
+      // When we hit a tracing point, the driver will return nullptr, set a
+      // future, and the trace implementation will capture state in traceState_.
+      if (traceState_.traceData) {
+        if (isStep) {
+          current_ = traceState_.traceData;
+          return true;
+        }
+
+        // Signal the task driver to unblock.
+        traceState_.traceData = nullptr;
+        traceState_.tracePromise.setValue();
+      }
+
+      // Wait until the task future is unblocked.
+      if (future.valid()) {
+        future.wait();
+      } else {
+        // When no vector was produced and the future is not valid, it's the
+        // task signal that it has finished producing output.
+        VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
+        break;
+      }
+    }
+    return false;
+  }
+
+  /// Internal state for coordinating between the tracer and cursor.
+  ///
+  /// This struct manages the synchronization between the trace writer
+  /// (which produces intermediate results) and the cursor (which consumes
+  /// them).
+  struct TraceState {
+    /// Promise used to signal the tracer to continue after a partial result
+    /// has been consumed.
+    ContinuePromise tracePromise{ContinuePromise::makeEmpty()};
+
+    /// The most recent intermediate result from a traced operator.
+    RowVectorPtr traceData;
+  };
+
+  TraceState traceState_;
+
+  // Custom trace context implementation for the debugger.
+  //
+  // This trace context pauses execution at traced operators by blocking
+  // the trace writer until the cursor consumes the intermediate result.
+  class TaskDebuggerTraceCtx : public trace::TraceCtx {
+   public:
+    // Constructs a trace context for the specified plan nodes.
+    //
+    // @param tracedIds The plan node IDs to trace.
+    // @param traceState Reference to the shared trace state for coordination.
+    TaskDebuggerTraceCtx(
+        const std::vector<core::PlanNodeId>& tracedIds,
+        TraceState& traceState)
+        : TraceCtx(false),
+          tracedIds_(tracedIds.begin(), tracedIds.end()),
+          traceState_(traceState) {}
+
+    // Determines whether a given operator should be traced.
+    //
+    // @param op The operator to check.
+    // @return true if the operator's plan node ID is in the traced set.
+    bool shouldTrace(const Operator& op) const override {
+      return tracedIds_.contains(op.planNodeId());
+    }
+
+    // Creates an input trace writer for the given operator.
+    //
+    // @param op The operator to create a tracer for.
+    // @return A unique pointer to the trace input writer.
+    std::unique_ptr<trace::TraceInputWriter> createInputTracer(
+        Operator& op) const override {
+      return std::make_unique<TaskDebuggerTraceInputWriter>(
+          op.planNodeId(), traceState_);
+    }
+
+   private:
+    // Trace writer that captures input vectors and pauses execution.
+    //
+    // When an input vector is written, this writer stores it in the shared
+    // trace state and blocks until the cursor signals to continue.
+    class TaskDebuggerTraceInputWriter : public trace::TraceInputWriter {
+     public:
+      TaskDebuggerTraceInputWriter(
+          const core::PlanNodeId& planId,
+          TraceState& traceState)
+          : planId_(planId), traceState_(traceState) {}
+
+      // Writes an input vector and pauses execution.
+      //
+      // Stores the vector in the trace state and creates a future that
+      // blocks until the cursor consumes the result and signals continuation.
+      //
+      // @param vector The input vector to trace.
+      // @param future Output parameter set to a future that blocks until
+      //        the cursor is ready to continue.
+      // @return true to indicate the writer is blocked waiting for the future.
+      bool write(const RowVectorPtr& vector, ContinueFuture* future) override {
+        VELOX_CHECK(traceState_.tracePromise.isFulfilled());
+
+        traceState_.traceData = vector;
+        traceState_.tracePromise = ContinuePromise("TaskQueue::dequeue");
+        *future = traceState_.tracePromise.getFuture();
+        return true;
+      }
+
+      // Called when tracing is complete for this operator.
+      void finish() override {}
+
+     private:
+      const core::PlanNodeId planId_;
+      TraceState& traceState_;
+    };
+
+    std::unordered_set<core::PlanNodeId> tracedIds_;
+    TraceState& traceState_;
+  };
+
   std::shared_ptr<exec::Task> task_;
   bool noMoreSplits_{false};
   RowVectorPtr current_;
@@ -543,6 +777,13 @@ bool RowCursor::next() {
 }
 
 std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
+  if (!params.breakpoints.empty()) {
+    VELOX_CHECK(
+        params.serialExecution,
+        "Breakpoints are only supported in serial execution for now.");
+    return std::make_unique<TaskDebuggerCursor>(params);
+  }
+
   if (params.serialExecution) {
     return std::make_unique<SingleThreadedTaskCursor>(params);
   }

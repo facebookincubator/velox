@@ -83,10 +83,36 @@ struct CursorParameters {
   /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations
   /// in 'queryCtx' will be overridden by 'queryConfig'.
   std::unordered_map<std::string, std::string> queryConfigs;
+
+  /// Breakpoints enable step-by-step execution of a query plan, allowing users
+  /// to inspect intermediate results at operator boundaries containing
+  /// breakpoints. This is useful for debugging query execution and
+  /// understanding data flow through operators.
+  std::vector<core::PlanNodeId> breakpoints;
 };
 
 /// Abstract interface for iterating over query results. TaskCursor manages
 /// task execution and provides batch-level access to output vectors.
+///
+/// Example usage:
+/// @code
+///
+///   auto cursor = TaskCursor:create({
+///     .planNode = node,
+///   );
+///
+///   // Run through every output.
+///   while (cursor->moveNext()) {
+///     auto vector = cursor->current();
+///   }
+/// @endcode
+///
+/// If "breakpoints" are set in the CursorParameters input, then
+/// `cursor->moveStep()` will move the cursor to the next breakpoint, which is
+/// either the input of an operator with a breakpoint installed, or the next
+/// task output.
+///
+/// `cursor->moveNext()` will always move the cursor to the next task output.
 class TaskCursor {
  public:
   virtual ~TaskCursor() = default;
@@ -96,9 +122,18 @@ class TaskCursor {
   /// Starts the task if not started yet.
   virtual void start() = 0;
 
-  /// Fetches another batch from the task queue.
-  /// Starts the task if not started yet.
+  /// Fetches another batch from the task queue. Starts the task if not started
+  /// yet.
+  ///
+  /// @return Returns false is the task is done producing output.
   virtual bool moveNext() = 0;
+
+  /// Steps through execution, returning either the input to the next operator
+  /// with a breakpoint installed, or the next task output. If no breakpoints
+  /// are set, then moveStep() == moveNext().
+  ///
+  /// @return Returns false is the task is done producing output.
+  virtual bool moveStep() = 0;
 
   virtual RowVectorPtr& current() = 0;
 
