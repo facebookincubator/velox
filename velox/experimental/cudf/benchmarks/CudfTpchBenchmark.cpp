@@ -63,6 +63,8 @@ DEFINE_int32(
 
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
+DEFINE_bool(cudf_debug_enabled, false, "Enable debug printing");
+
 void CudfTpchBenchmark::initialize() {
   TpchBenchmark::initialize();
 
@@ -99,6 +101,7 @@ void CudfTpchBenchmark::initialize() {
   cudf_velox::CudfConfig::getInstance().memoryPercent =
       FLAGS_cudf_memory_percent;
 
+  cudf_velox::CudfConfig::getInstance().debugEnabled = FLAGS_cudf_debug_enabled;
   // Enable cuDF operators
   cudf_velox::registerCudf();
 
