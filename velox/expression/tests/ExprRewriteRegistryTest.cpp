@@ -25,7 +25,7 @@ class ExprRewriteRegistryTest : public testing::Test {};
 TEST_F(ExprRewriteRegistryTest, basic) {
   expression::ExprRewriteRegistry registry;
   expression::ExpressionRewrite testRewrite =
-      [&](const core::TypedExprPtr& input) {
+      [&](const core::TypedExprPtr& input, memory::MemoryPool* /*pool*/) {
         return std::make_shared<core::CallTypedExpr>(
             input->type(), "rewritten_expr", input, input);
       };
@@ -35,7 +35,7 @@ TEST_F(ExprRewriteRegistryTest, basic) {
       BIGINT(),
       "original_expr",
       std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"));
-  const auto rewritten = registry.rewrite(input);
+  const auto rewritten = registry.rewrite(input, nullptr);
   ASSERT_TRUE(rewritten->isCallKind());
   ASSERT_TRUE(rewritten->type()->isBigint());
   const auto rewrittenCall = rewritten->asUnchecked<core::CallTypedExpr>();
@@ -43,7 +43,7 @@ TEST_F(ExprRewriteRegistryTest, basic) {
   ASSERT_EQ(rewrittenCall->name(), "rewritten_expr");
 
   registry.clear();
-  const auto rewriteAfterClear = registry.rewrite(input);
+  const auto rewriteAfterClear = registry.rewrite(input, nullptr);
   ASSERT_TRUE(*rewriteAfterClear == *input);
 }
 

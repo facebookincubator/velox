@@ -32,7 +32,9 @@ class CoalesceRewrite {
   /// If there is a single input to COALESCE after pruning inputs, COALESCE is
   /// simplified to this expression. Otherwise, returns an optimized COALESCE
   /// expression with pruned inputs.
-  static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+  static core::TypedExprPtr rewrite(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/);
 
   static void registerRewrite();
 };
