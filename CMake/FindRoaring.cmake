@@ -12,36 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Check if target already exists to ensure idempotence
-if(TARGET Roaring::roaring)
-  message(STATUS "Found Roaring target already exists.")
-  set(Roaring_FOUND TRUE)
-  return()
-endif()
-
 # Check if roaring target exists (e.g., built by cudf)
 if(TARGET roaring)
-  add_library(Roaring::roaring ALIAS roaring)
-  set(Roaring_FOUND TRUE)
-  message(STATUS "Found Roaring target (creating alias Roaring::roaring).")
+  message(STATUS "Target roaring was already found.")
   return()
 endif()
 
 find_package(PkgConfig REQUIRED)
-
 pkg_check_modules(Roaring IMPORTED_TARGET roaring)
 
 if(Roaring_FOUND)
-  add_library(Roaring::roaring INTERFACE IMPORTED GLOBAL)
-  set_target_properties(Roaring::roaring PROPERTIES INTERFACE_LINK_LIBRARIES PkgConfig::Roaring)
-  message(STATUS "Found Roaring via pkg-config.")
+  add_library(roaring ALIAS PkgConfig::Roaring)
+  message(STATUS "Found roaring via pkg-config.")
   return()
 endif()
 
-set(Roaring_FOUND FALSE)
-
 if(Roaring_FIND_REQUIRED)
-  message(FATAL_ERROR "Failed to find Roaring.")
+  message(FATAL_ERROR "Failed to find roaring.")
 elseif(NOT Roaring_FIND_QUIETLY)
-  message(WARNING "Failed to find Roaring.")
+  message(WARNING "Failed to find roaring.")
 endif()
