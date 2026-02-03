@@ -144,7 +144,13 @@ VectorPtr BatchMaker::createVector<TypeKind::BIGINT>(
   return createScalar<int64_t>(
       size,
       gen,
-      [&gen]() { return Random::rand64(gen); },
+      [&gen, &type]() {
+        if (type->isTime()) {
+          // TIME is milliseconds since midnight.
+          return Random::rand64(0, 86400000, gen);
+        }
+        return Random::rand64(gen);
+      },
       pool,
       isNullAt,
       type);

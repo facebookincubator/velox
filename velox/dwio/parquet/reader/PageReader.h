@@ -283,7 +283,11 @@ class PageReader {
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         nullsFromFastPath = false;
-        deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
+        if (deltaBpDecoder32_) {
+          deltaBpDecoder32_->readWithVisitor<true>(nulls, visitor);
+        } else {
+          deltaBpDecoder64_->readWithVisitor<true>(nulls, visitor);
+        }
       } else {
         directDecoder_->readWithVisitor<true>(
             nulls, visitor, nullsFromFastPath);
@@ -293,7 +297,11 @@ class PageReader {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
-        deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
+        if (deltaBpDecoder32_) {
+          deltaBpDecoder32_->readWithVisitor<false>(nulls, visitor);
+        } else {
+          deltaBpDecoder64_->readWithVisitor<false>(nulls, visitor);
+        }
       } else {
         directDecoder_->readWithVisitor<false>(
             nulls, visitor, !this->type_->type()->isShortDecimal());
@@ -518,7 +526,8 @@ class PageReader {
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
-  std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
+  std::unique_ptr<DeltaBpDecoder<int32_t>> deltaBpDecoder32_;
+  std::unique_ptr<DeltaBpDecoder<int64_t>> deltaBpDecoder64_;
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
@@ -567,12 +576,18 @@ void PageReader::readWithVisitor(Visitor& visitor) {
     visitor.setNumValuesBias(numValuesBeforePage);
     visitor.setRows(pageRows);
     callDecoder(nulls, nullsFromFastPath, visitor);
-    if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED &&
-        deltaBpDecoder_->validValuesCount() == 0) {
-      VELOX_DCHECK(
-          deltaBpDecoder_->bufferStart() == pageData_ + encodedDataSize_,
-          "Once all data in the delta binary packed decoder has been read, "
-          "its buffer ptr should be moved to the end of the page.");
+    if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
+      auto validCount = deltaBpDecoder32_
+          ? deltaBpDecoder32_->validValuesCount()
+          : deltaBpDecoder64_->validValuesCount();
+      if (validCount == 0) {
+        auto bufStart = deltaBpDecoder32_ ? deltaBpDecoder32_->bufferStart()
+                                          : deltaBpDecoder64_->bufferStart();
+        VELOX_DCHECK(
+            bufStart == pageData_ + encodedDataSize_,
+            "Once all data in the delta binary packed decoder has been read, "
+            "its buffer ptr should be moved to the end of the page.");
+      }
     }
     if (currentVisitorRow_ < numVisitorRows_ || isMultiPage) {
       if (mayProduceNulls) {

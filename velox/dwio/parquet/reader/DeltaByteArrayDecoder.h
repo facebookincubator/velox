@@ -26,7 +26,7 @@ namespace facebook::velox::parquet {
 class DeltaLengthByteArrayDecoder {
  public:
   explicit DeltaLengthByteArrayDecoder(const char* start) {
-    lengthDecoder_ = std::make_unique<DeltaBpDecoder>(start);
+    lengthDecoder_ = std::make_unique<DeltaBpDecoder<int32_t>>(start);
     decodeLengths();
     bufferStart_ = lengthDecoder_->bufferStart();
   }
@@ -49,7 +49,7 @@ class DeltaLengthByteArrayDecoder {
   }
 
   const char* bufferStart_;
-  std::unique_ptr<DeltaBpDecoder> lengthDecoder_;
+  std::unique_ptr<DeltaBpDecoder<int32_t>> lengthDecoder_;
   int32_t numValidValues_{0};
   uint32_t lengthIdx_{0};
   std::vector<uint32_t> bufferedLength_;
@@ -60,7 +60,7 @@ class DeltaLengthByteArrayDecoder {
 class DeltaByteArrayDecoder {
  public:
   explicit DeltaByteArrayDecoder(const char* start) {
-    prefixLenDecoder_ = std::make_unique<DeltaBpDecoder>(start);
+    prefixLenDecoder_ = std::make_unique<DeltaBpDecoder<int32_t>>(start);
     int64_t numPrefix = prefixLenDecoder_->validValuesCount();
     bufferedPrefixLength_.resize(numPrefix);
     prefixLenDecoder_->readValues<uint32_t>(
@@ -169,8 +169,8 @@ class DeltaByteArrayDecoder {
     memcpy(lastValue_.data() + prefixLength, suffix.data(), suffix.size());
   }
 
-  std::unique_ptr<DeltaBpDecoder> prefixLenDecoder_;
-  std::unique_ptr<DeltaBpDecoder> suffixLenDecoder_;
+  std::unique_ptr<DeltaBpDecoder<int32_t>> prefixLenDecoder_;
+  std::unique_ptr<DeltaBpDecoder<int32_t>> suffixLenDecoder_;
   std::unique_ptr<DeltaLengthByteArrayDecoder> suffixDecoder_;
 
   std::string lastValue_;
