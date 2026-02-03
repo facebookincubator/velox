@@ -388,6 +388,16 @@ class VectorFuzzer {
     return DECIMAL(precision, scale);
   }
 
+  /// Generates varchar TypePtr with random length if stringVariableLength
+  /// was set in the options. Otherwise, returns unbounded varchar.
+  inline TypePtr randVarcharType() {
+    if (opts_.stringVariableLength) {
+      auto length = fuzzer::rand<int32_t>(rng_) % opts_.stringLength;
+      return VARCHAR(length);
+    }
+    return VARCHAR();
+  }
+
   void reSeed(size_t seed) {
     rng_.seed(seed);
   }
