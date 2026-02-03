@@ -29,6 +29,8 @@ if(Roaring_FOUND)
   return()
 endif()
 
+set(Roaring_FOUND FALSE)
+
 if(Roaring_FIND_REQUIRED)
   message(FATAL_ERROR "Failed to find Roaring.")
 elseif(NOT Roaring_FIND_QUIETLY)
