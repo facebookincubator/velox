@@ -33,6 +33,26 @@ const uint32_t kMaxVariadicArgs = 5;
 
 class ArgumentTypeFuzzerTest : public testing::Test {
  protected:
+  const std::vector<TypePtr> fuzzArgumentTypes(
+      const exec::FunctionSignature& signature,
+      const TypePtr& returnType) {
+    FuzzerGenerator seed{0};
+    ArgumentTypeFuzzer fuzzer{signature, returnType, seed};
+    bool ok = fuzzer.fuzzArgumentTypes(kMaxVariadicArgs);
+    VELOX_CHECK(
+        ok,
+        "Signature: {}, Return type: {}",
+        signature.toString(),
+        returnType->toString());
+    return fuzzer.argumentTypes();
+  };
+
+  TypePtr fuzzReturnType(const exec::FunctionSignature& signature) {
+    FuzzerGenerator seed{0};
+    ArgumentTypeFuzzer fuzzer{signature, seed};
+    return fuzzer.fuzzReturnType();
+  };
+
   void testFuzzingSuccess(
       const std::shared_ptr<exec::FunctionSignature>& signature,
       const TypePtr& returnType,
@@ -96,6 +116,24 @@ TEST_F(ArgumentTypeFuzzerTest, concreteSignature) {
     testFuzzingFailure(signature, ARRAY(ARRAY(REAL())));
     testFuzzingFailure(signature, ARRAY(DOUBLE()));
   }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("varchar(10)")
+                         .build();
+
+    testFuzzingSuccess(signature, BIGINT(), {VARCHAR(10)});
+  }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("varchar(10)")
+                         .build();
+
+    testFuzzingSuccess(signature, VARCHAR(), {VARCHAR(10)});
+  }
 }
 
 TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
@@ -153,6 +191,7 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
 
     verifyArgumentTypes(DECIMAL(10, 5), ARRAY(DECIMAL(10, 5)));
     verifyArgumentTypes(ARRAY(DOUBLE()), ARRAY(ARRAY(DOUBLE())));
+    verifyArgumentTypes(VARCHAR(10), ARRAY(VARCHAR(10)));
   }
 
   {
@@ -421,19 +460,6 @@ TEST_F(ArgumentTypeFuzzerTest, orderableConstraint) {
 }
 
 TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalArgumentTypes) {
-  auto fuzzArgumentTypes = [](const exec::FunctionSignature& signature,
-                              const TypePtr& returnType) {
-    FuzzerGenerator seed{0};
-    ArgumentTypeFuzzer fuzzer{signature, returnType, seed};
-    bool ok = fuzzer.fuzzArgumentTypes(kMaxVariadicArgs);
-    VELOX_CHECK(
-        ok,
-        "Signature: {}, Return type: {}",
-        signature.toString(),
-        returnType->toString());
-    return fuzzer.argumentTypes();
-  };
-
   // Argument type must match return type.
   auto signature = exec::FunctionSignatureBuilder()
                        .integerVariable("p")
@@ -599,12 +625,6 @@ TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalArgumentTypes) {
 }
 
 TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalReturnType) {
-  auto fuzzReturnType = [](const exec::FunctionSignature& signature) {
-    FuzzerGenerator seed{0};
-    ArgumentTypeFuzzer fuzzer{signature, seed};
-    return fuzzer.fuzzReturnType();
-  };
-
   // Return type can be any decimal.
   auto signature = exec::FunctionSignatureBuilder()
                        .integerVariable("p")
@@ -752,6 +772,199 @@ TEST_F(ArgumentTypeFuzzerTest, setdigestType) {
                   .build();
   testFuzzingSuccess(signature, SETDIGEST(), {VARCHAR()});
   testFuzzingSuccess(signature, SETDIGEST(), {VARCHAR()});
+}
+
+TEST_F(ArgumentTypeFuzzerTest, fuzzVarcharArgumentTypes) {
+  const uint32_t kDefaultMaxVarcharLength =
+      ArgumentTypeFuzzer::kDefaultMaxVarcharTypeLength;
+
+  // Argument type can be any varchar with type length less or equal the
+  // default.
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("x")
+                       .returnType("boolean")
+                       .argumentType("varchar(x)")
+                       .build();
+
+  auto argTypes = fuzzArgumentTypes(*signature, BOOLEAN());
+  ASSERT_EQ(1, argTypes.size());
+  EXPECT_TRUE(argTypes[0]->isVarchar());
+  EXPECT_LE(getVarcharLength(*argTypes[0]), kDefaultMaxVarcharLength);
+
+  // Argument type with a variable constant set.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x", "10")
+                  .returnType("boolean")
+                  .argumentType("varchar(x)")
+                  .build();
+
+  argTypes = fuzzArgumentTypes(*signature, BOOLEAN());
+  ASSERT_EQ(1, argTypes.size());
+  EXPECT_TRUE(argTypes[0]->isVarchar());
+  EXPECT_EQ(10, getVarcharLength(*argTypes[0]));
+
+  // Argument type with a variable constant set too large.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x", "200")
+                  .returnType("boolean")
+                  .argumentType("varchar(x)")
+                  .build();
+  argTypes = fuzzArgumentTypes(*signature, BOOLEAN());
+  ASSERT_EQ(1, argTypes.size());
+  EXPECT_TRUE(argTypes[0]->isVarchar());
+  EXPECT_EQ(200, getVarcharLength(*argTypes[0]));
+
+  // Multiple arguments. All must be the same as return type.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("varchar(x)")
+                  .argumentType("varchar(x)")
+                  .argumentType("varchar(x)")
+                  .argumentType("varchar(x)")
+                  .build();
+
+  argTypes = fuzzArgumentTypes(*signature, VARCHAR(10));
+  ASSERT_EQ(3, argTypes.size());
+  EXPECT_EQ(VARCHAR(10)->toString(), argTypes[0]->toString());
+  EXPECT_EQ(VARCHAR(10)->toString(), argTypes[1]->toString());
+  EXPECT_EQ(VARCHAR(10)->toString(), argTypes[2]->toString());
+
+  // Multiple arguments. Some have fixed precision, scale or both.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("varchar(x)")
+                  .argumentType("varchar(x)")
+                  .argumentType("varchar(20)")
+                  .build();
+
+  argTypes = fuzzArgumentTypes(*signature, VARCHAR(30));
+  ASSERT_EQ(2, argTypes.size());
+  EXPECT_EQ(VARCHAR(30)->toString(), argTypes[0]->toString());
+  EXPECT_EQ(VARCHAR(20)->toString(), argTypes[1]->toString());
+
+  // Multiple length variables.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x1")
+                  .integerVariable("x2")
+                  .returnType("bigint")
+                  .argumentType("varchar(x1)")
+                  .argumentType("varchar(x2)")
+                  .build();
+  argTypes = fuzzArgumentTypes(*signature, BIGINT());
+  ASSERT_EQ(2, argTypes.size());
+  EXPECT_TRUE(argTypes[0]->isVarchar());
+  EXPECT_TRUE(argTypes[1]->isVarchar());
+  EXPECT_LE(getVarcharLength(*argTypes[0]), kDefaultMaxVarcharLength);
+  EXPECT_LE(getVarcharLength(*argTypes[1]), kDefaultMaxVarcharLength);
+
+  // Varchar argument types are nested in complex types.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("varchar(x)")
+                  .argumentType("row(array(varchar(x)))")
+                  .build();
+  argTypes = fuzzArgumentTypes(*signature, VARCHAR(10));
+  ASSERT_EQ(1, argTypes.size());
+  EXPECT_TRUE(argTypes[0]->isRow());
+  EXPECT_TRUE(argTypes[0]->asRow().childAt(0)->isArray());
+  EXPECT_TRUE(
+      argTypes[0]->asRow().childAt(0)->asArray().elementType()->isVarchar());
+  EXPECT_EQ(
+      10,
+      getVarcharLength(
+          *argTypes[0]->asRow().childAt(0)->asArray().elementType()));
+}
+
+TEST_F(ArgumentTypeFuzzerTest, fuzzVarcharReturnType) {
+  const uint32_t kDefaultMaxVarcharLength =
+      ArgumentTypeFuzzer::kDefaultMaxVarcharTypeLength;
+
+  // Return type can be unbounded varchar.
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("varchar")
+                       .argumentType("varchar")
+                       .build();
+
+  auto returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isVarchar());
+  EXPECT_EQ(VARCHAR()->toString(), returnType->toString());
+
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("varchar(x)")
+                  .argumentType("bigint")
+                  .build();
+
+  returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isVarchar());
+  EXPECT_LE(getVarcharLength(*returnType), kDefaultMaxVarcharLength);
+
+  signature = exec::FunctionSignatureBuilder()
+                  .returnType("varchar(200)")
+                  .argumentType("bigint")
+                  .build();
+
+  returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isVarchar());
+  EXPECT_EQ(VARCHAR(200)->toString(), returnType->toString());
+
+  // Test with variable arity.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("varchar")
+                  .argumentType("varchar(x)")
+                  .variableArity("varchar(x)")
+                  .build();
+
+  returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isVarchar());
+  EXPECT_EQ(VARCHAR()->toString(), returnType->toString());
+
+  // Return type can only be VARCHAR(100).
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("varchar(100)")
+                  .argumentType("varchar(x)")
+                  .build();
+
+  returnType = fuzzReturnType(*signature);
+  EXPECT_EQ(VARCHAR(100)->toString(), returnType->toString());
+
+  // varchar return type is nested in complex types.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .returnType("row(array(varchar(x)))")
+                  .argumentType("varchar(x)")
+                  .argumentType("varchar(x)")
+                  .build();
+  returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isRow());
+  EXPECT_TRUE(returnType->asRow().childAt(0)->isArray());
+  EXPECT_TRUE(
+      returnType->asRow().childAt(0)->asArray().elementType()->isVarchar());
+
+  // Varchar return type is nested in complex types.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("x")
+                  .integerVariable("y")
+                  .returnType("row(array(varchar))")
+                  .argumentType("varchar(x)")
+                  .argumentType("varchar(y)")
+                  .build();
+  returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isRow());
+  EXPECT_TRUE(returnType->asRow().childAt(0)->isArray());
+  EXPECT_TRUE(
+      returnType->asRow().childAt(0)->asArray().elementType()->isVarchar());
+
+  // Return type can only be VARCHAR(1).
+  signature = exec::FunctionSignatureBuilder()
+                  .returnType("varchar(1)")
+                  .argumentType("bigint")
+                  .build();
+
+  returnType = fuzzReturnType(*signature);
+  EXPECT_EQ(VARCHAR(1)->toString(), returnType->toString());
 }
 
 } // namespace facebook::velox::fuzzer::test
