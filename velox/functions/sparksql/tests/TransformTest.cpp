@@ -33,7 +33,7 @@ class TransformTest : public SparkFunctionBaseTest {
   }
 };
 
-// Test transform with element-only lambda: transform(array, x -> x * 2)
+// Test transform with element-only lambda: transform(array, x -> x * 2).
 TEST_F(TransformTest, elementOnly) {
   auto input = makeArrayVectorFromJson<int64_t>({
       "[1, 2, 3]",

@@ -24,13 +24,13 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-/// Spark's transform function supporting both signatures:
+/// Spark's transform function supports both signatures:
 /// 1. transform(array, x -> expr) - element only
 /// 2. transform(array, (x, i) -> expr) - element + index (Spark-specific)
 ///
 /// See Spark documentation:
 /// https://spark.apache.org/docs/latest/api/sql/index.html#transform
-class SparkTransformFunction : public exec::VectorFunction {
+class TransformFunction : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
@@ -164,8 +164,8 @@ class SparkTransformFunction : public exec::VectorFunction {
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_spark_transform,
-    SparkTransformFunction::signatures(),
+    TransformFunction::signatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-    std::make_unique<SparkTransformFunction>());
+    std::make_unique<TransformFunction>());
 
 } // namespace facebook::velox::functions::sparksql
