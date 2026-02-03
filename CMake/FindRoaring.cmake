@@ -15,6 +15,15 @@
 # Check if target already exists to ensure idempotence
 if(TARGET Roaring::roaring)
   message(STATUS "Found Roaring target already exists.")
+  set(Roaring_FOUND TRUE)
+  return()
+endif()
+
+# Check if roaring target exists (e.g., built by cudf)
+if(TARGET roaring)
+  add_library(Roaring::roaring ALIAS roaring)
+  set(Roaring_FOUND TRUE)
+  message(STATUS "Found Roaring target (creating alias Roaring::roaring).")
   return()
 endif()
 
