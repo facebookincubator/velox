@@ -72,4 +72,31 @@ inline void encodedVectorCopy(
   encodedVectorCopy(options, source, {&range, 1}, target);
 }
 
+/// Non-void call to allow user's who don't want to define their own
+/// vectors to define them inline. Adds several different overloads to add
+/// various levels of convenience.
+inline VectorPtr encodedVectorCopy(
+    const EncodedVectorCopyOptions& options,
+    const VectorPtr& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  VectorPtr target;
+  encodedVectorCopy(options, source, ranges, target);
+  return target;
+}
+
+inline VectorPtr encodedVectorCopy(
+    const EncodedVectorCopyOptions& options,
+    const VectorPtr& source) {
+  VectorPtr target;
+  BaseVector::CopyRange range{0, 0, source->size()};
+  encodedVectorCopy(options, source, {&range, 1}, target);
+  return target;
+}
+
+inline VectorPtr encodedVectorCopy(const VectorPtr& source) {
+  BaseVector::CopyRange range{0, 0, source->size()};
+  return encodedVectorCopy(
+      {.pool = source->pool(), .reuseSource = false}, source, {&range, 1});
+}
+
 } // namespace facebook::velox
