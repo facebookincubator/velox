@@ -137,6 +137,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   // Columns to read.
   std::vector<std::string> readColumnNames_;
+  std::vector<column_index_t> readColumnIndices_;
 
   std::shared_ptr<io::IoStatistics> ioStats_;
   std::shared_ptr<filesystems::File::IoStats> fsStats_;
