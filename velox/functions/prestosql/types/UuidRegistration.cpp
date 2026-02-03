@@ -21,6 +21,7 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "velox/expression/CastExpr.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 
 namespace facebook::velox {

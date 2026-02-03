@@ -16,8 +16,14 @@
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <gflags/gflags.h>
 
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
+
+DEFINE_bool(use_spark_cast, false, "Use SparkCastExpr instead of CastExpr");
 
 using namespace facebook;
 
@@ -26,6 +32,15 @@ using namespace facebook::velox;
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+
+  if (FLAGS_use_spark_cast) {
+    exec::registerFunctionCallToSpecialForm(
+        expression::kCast,
+        std::make_unique<functions::sparksql::SparkCastCallToSpecialForm>());
+    exec::registerFunctionCallToSpecialForm(
+        expression::kTryCast,
+        std::make_unique<functions::sparksql::SparkTryCastCallToSpecialForm>());
+  }
 
   ExpressionBenchmarkBuilder benchmarkBuilder;
   const vector_size_t vectorSize = 1000;
