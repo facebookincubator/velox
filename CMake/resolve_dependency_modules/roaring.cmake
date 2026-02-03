@@ -28,7 +28,6 @@ velox_resolve_dependency_url(ROARING)
 
 block()
   set(ENABLE_ROARING_TESTS OFF)
-
   FetchContent_Declare(
     roaring
     URL ${VELOX_ROARING_SOURCE_URL}
@@ -36,7 +35,3 @@ block()
   )
   FetchContent_MakeAvailable(roaring)
 endblock()
-
-if(NOT TARGET Roaring::roaring)
-  add_library(Roaring::roaring ALIAS roaring)
-endif()

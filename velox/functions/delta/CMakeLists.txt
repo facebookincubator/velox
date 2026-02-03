@@ -21,7 +21,7 @@ velox_link_libraries(
   velox_expression
   velox_functions_util
   Folly::folly
-  Roaring::roaring
+  roaring
 )
 
 if(${VELOX_BUILD_TESTING})
