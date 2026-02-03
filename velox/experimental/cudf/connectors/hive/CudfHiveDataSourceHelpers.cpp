@@ -192,6 +192,10 @@ fetchByteRanges(
         next_chunk++;
       }
 
+      // Padding is necessary for input/output buffers of several
+      // compression/decompression kernels Such kernels operate on aligned data
+      // pointers, which require padding to the buffers so that the pointers can
+      // shift along the address space to satisfy their alignment requirement.
       constexpr size_t bufferPaddingMultiple = 8;
 
       if (io_size != 0) {
@@ -209,22 +213,33 @@ fetchByteRanges(
               static_cast<uint8_t*>(columnChunkBuffers.back().data()),
               stream));
         } else {
-          // Read the column chunk data to the host buffer and copy it to
-          // the device buffer
-          auto hostBuffer = dataSource->host_read(io_offset, io_size);
-          CUDF_CUDA_TRY(cudaMemcpyAsync(
-              columnChunkBuffers.back().data(),
-              hostBuffer->data(),
-              io_size,
-              cudaMemcpyHostToDevice,
-              stream.value()));
+          // Asynchronously read the column chunk data to the host buffer and
+          // copy it to the device buffer
+          readTasks.emplace_back(
+              std::async(
+                  std::launch::deferred,
+                  [dataSource,
+                   io_offset,
+                   io_size,
+                   stream,
+                   dest = columnChunkBuffers.back().data()]() {
+                    auto hostBuffer = dataSource->host_read(io_offset, io_size);
+                    CUDF_CUDA_TRY(cudaMemcpyAsync(
+                        dest,
+                        hostBuffer->data(),
+                        io_size,
+                        cudaMemcpyHostToDevice,
+                        stream.value()));
+                    return io_size;
+                  }));
         }
-        auto d_compdata =
+        auto chunkDeviceSpanPtr =
             static_cast<uint8_t const*>(columnChunkBuffers.back().data());
         do {
           columnChunkData[chunk] = cudf::device_span<uint8_t const>{
-              d_compdata, static_cast<size_t>(byteRanges[chunk].size())};
-          d_compdata += byteRanges[chunk].size();
+              chunkDeviceSpanPtr,
+              static_cast<size_t>(byteRanges[chunk].size())};
+          chunkDeviceSpanPtr += byteRanges[chunk].size();
         } while (++chunk != next_chunk);
       } else {
         chunk = next_chunk;
@@ -241,66 +256,6 @@ fetchByteRanges(
   return {
       std::move(columnChunkBuffers),
       std::move(columnChunkData),
-      std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
-}
-
-std::pair<std::vector<rmm::device_buffer>, std::future<void>>
-alternateFetchByteRanges(
-    std::shared_ptr<cudf::io::datasource> dataSource,
-    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  static std::mutex mutex;
-  std::vector<rmm::device_buffer> columnChunkBuffers(byteRanges.size());
-  std::vector<std::future<size_t>> readTasks{};
-  readTasks.reserve(byteRanges.size());
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    std::transform(
-        byteRanges.begin(),
-        byteRanges.end(),
-        columnChunkBuffers.begin(),
-        [&](const auto& byteRange) {
-          // Pad the buffer size to be a multiple of 8 bytes
-          constexpr size_t bufferPaddingMultiple = 8;
-          auto buffer = rmm::device_buffer(
-              cudf::util::round_up_safe<size_t>(
-                  byteRange.size(), bufferPaddingMultiple),
-              stream,
-              mr);
-          // Directly read the column chunk data to the device buffer if
-          // supported
-          if (dataSource->supports_device_read() and
-              dataSource->is_device_read_preferred(byteRange.size())) {
-            readTasks.emplace_back(dataSource->device_read_async(
-                byteRange.offset(),
-                byteRange.size(),
-                static_cast<uint8_t*>(buffer.data()),
-                stream));
-          } else {
-            // Read the column chunk data to the host buffer and copy it to
-            // the device buffer
-            auto hostBuffer =
-                dataSource->host_read(byteRange.offset(), byteRange.size());
-            CUDF_CUDA_TRY(cudaMemcpyAsync(
-                buffer.data(),
-                hostBuffer->data(),
-                byteRange.size(),
-                cudaMemcpyHostToDevice,
-                stream.value()));
-          }
-          return buffer;
-        });
-  }
-
-  auto syncFunction = [](decltype(readTasks) readTasks) {
-    for (auto& task : readTasks) {
-      task.get();
-    }
-  };
-
-  return {
-      std::move(columnChunkBuffers),
       std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
 }
 

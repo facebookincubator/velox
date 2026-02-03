@@ -203,29 +203,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // Fetch column chunk byte ranges
       nvtxRangePush("fetchByteRanges");
 
-      // TODO(mh): Using `alternateFetchByteRanges` if buffered input is used
-      // for now. We should only use one of fetch functions
-      const auto [columnChunkBuffers, columnChunkData, readTaskFuture] = [&]() {
-        if (cudfHiveConfig_->useBufferedInputSession(
-                connectorQueryCtx_->sessionProperties())) {
-          auto [columnChunkBuffers, readTaskFuture] = alternateFetchByteRanges(
+      const auto [columnChunkBuffers, columnChunkData, readTaskFuture] =
+          fetchByteRanges(
               dataSource_,
               columnChunkByteRanges,
               stream_,
               cudf::get_current_device_resource_ref());
-          auto deviceSpans = makeDeviceSpans<uint8_t>(columnChunkBuffers);
-          return std::tuple{
-              std::move(columnChunkBuffers),
-              std::move(deviceSpans),
-              std::move(readTaskFuture)};
-        } else {
-          return fetchByteRanges(
-              dataSource_,
-              columnChunkByteRanges,
-              stream_,
-              cudf::get_current_device_resource_ref());
-        }
-      }();
 
       // Wait for all pending reads to complete
       readTaskFuture.wait();
