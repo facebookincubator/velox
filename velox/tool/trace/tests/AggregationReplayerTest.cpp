@@ -287,6 +287,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
 
       FLAGS_task_id = task->taskId();
       FLAGS_driver_ids = "";
@@ -296,6 +297,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
     }
   }
 }
@@ -354,6 +356,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
 
       FLAGS_task_id = task->taskId();
       FLAGS_driver_ids = "";
@@ -363,6 +366,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
     }
   }
 }
