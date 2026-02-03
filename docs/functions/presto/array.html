@@ -368,6 +368,18 @@ T must be coercible to double. Returns bigint if T is coercible to bigint. Other
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_top_n">
+<span class="sig-name descname"><span class="pre">array_top_n</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">int)</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_top_n" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of the top <code class="docutils literal notranslate"><span class="pre">n</span></code> elements from a given <code class="docutils literal notranslate"><span class="pre">array</span></code>, sorted according to its natural descending order.
+If <code class="docutils literal notranslate"><span class="pre">n</span></code> is larger than the size of the given <code class="docutils literal notranslate"><span class="pre">array</span></code>, the returned list will be the same size as the input instead of <code class="docutils literal notranslate"><span class="pre">n</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_top_n</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">100</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_top_n</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">100</span><span class="p">],</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">100</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_top_n</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;zzz&#39;</span><span class="p">,</span> <span class="s1">&#39;zz&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;g&#39;</span><span class="p">,</span> <span class="s1">&#39;f&#39;</span><span class="p">],</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;zzz&#39;</span><span class="p">,</span> <span class="s1">&#39;zz&#39;</span><span class="p">,</span> <span class="s1">&#39;g&#39;</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="cardinality">
 <span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the cardinality (size) of the array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
@@ -670,6 +682,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
 <li><a class="reference internal" href="#array_subset"><code class="docutils literal notranslate"><span class="pre">array_subset()</span></code></a></li>
 <li><a class="reference internal" href="#array_sum"><code class="docutils literal notranslate"><span class="pre">array_sum()</span></code></a></li>
+<li><a class="reference internal" href="#array_top_n"><code class="docutils literal notranslate"><span class="pre">array_top_n()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#combinations"><code class="docutils literal notranslate"><span class="pre">combinations()</span></code></a></li>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
