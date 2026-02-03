@@ -35,7 +35,6 @@ namespace facebook::velox::functions {
 // vector function definition.
 // Higher order functions.
 void registerSparkArrayFunctions(const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, prefix + "transform");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "aggregate");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
@@ -52,6 +51,12 @@ void registerSparkArrayFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+
+// Register Spark-specific transform with index support.
+void registerSparkTransform(const std::string& prefix) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_transform, prefix + "transform");
+}
+
 template <typename T>
 inline void registerArrayConcatFunction(const std::string& prefix) {
   registerFunction<
@@ -216,6 +221,8 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions(prefix);
   registerArrayPrependFunctions(prefix);
   registerSparkArrayFunctions(prefix);
+  // Register Spark-specific transform with index support.
+  registerSparkTransform(prefix);
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(true), makeArraySortAsc);
