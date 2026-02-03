@@ -3538,20 +3538,26 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
 TEST_P(MultiThreadedHashJoinTest, innerJoinWithStringFunctionFilter) {
   // Create probe vectors with string data
   std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
-    return makeRowVector({
-        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-        makeFlatVector<std::string>(
-            100, [](auto row) { return row % 2 == 0 ? "HELLO" : "hello"; }),
-    });
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+          makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+          makeFlatVector<std::string>(
+              100, [](auto row) { return row % 2 == 0 ? "HELLO" : "hello"; }),
+        }
+    );
   });
 
   // Create build vectors with string data
   std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
-    return makeRowVector({
-        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-        makeFlatVector<std::string>(
-            100, [](auto row) { return row % 2 == 0 ? "hello" : "HELLO"; }),
-    });
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+          makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+          makeFlatVector<std::string>(
+              100, [](auto row) { return row % 2 == 0 ? "hello" : "HELLO"; }),
+        }
+    );
   });
 
   createDuckDbTable("t", probeVectors);
@@ -3561,17 +3567,15 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithStringFunctionFilter) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
-      .probeKeys({"c0"})
+      .probeKeys({"t0"})
       .probeVectors(std::move(probeVectors))
-      .probeProjections({"c0 AS t_k", "c1 AS t_str"})
-      .buildKeys({"c0"})
+      .buildKeys({"u0"})
       .buildVectors(std::move(buildVectors))
-      .buildProjections({"c0 AS u_k", "c1 AS u_str"})
-      .joinFilter("lower(t_str) = lower(u_str)")
-      .joinOutputLayout({"t_k", "t_str", "u_k", "u_str"})
+      .joinFilter("lower(t1) = lower(u1)")
+      .joinOutputLayout({"t0", "t1", "u0", "u1"})
       .referenceQuery(
-          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t, u "
-          "WHERE t.c0 = u.c0 AND lower(t.c1) = lower(u.c1)")
+          "SELECT t.t0, t.t1, u.u0, u.u1 FROM t, u "
+          "WHERE t.t0 = u.u0 AND lower(t.t1) = lower(u.u1)")
       .run();
 }
 
@@ -3602,14 +3606,14 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithUpperFunctionFilter) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
-      .probeKeys({"c0"})
+      .probeKeys({"t_c0"})
       .probeVectors(std::move(probeVectors))
-      .probeProjections({"c0 AS t_k", "c1 AS t_str"})
-      .buildKeys({"c0"})
+      .probeProjections({"c0 AS t_c0", "c1 AS t_str"})
+      .buildKeys({"u_c0"})
       .buildVectors(std::move(buildVectors))
-      .buildProjections({"c0 AS u_k", "c1 AS u_str"})
+      .buildProjections({"c0 AS u_c0", "c1 AS u_str"})
       .joinFilter("upper(t_str) = u_str")
-      .joinOutputLayout({"t_k", "t_str", "u_k", "u_str"})
+      .joinOutputLayout({"t_c0", "t_str", "u_c0", "u_str"})
       .referenceQuery(
           "SELECT t.c0, t.c1, u.c0, u.c1 FROM t, u "
           "WHERE t.c0 = u.c0 AND upper(t.c1) = u.c1")
@@ -3642,14 +3646,14 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithLengthFunctionFilter) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
-      .probeKeys({"c0"})
+      .probeKeys({"t_c0"})
       .probeVectors(std::move(probeVectors))
-      .probeProjections({"c0 AS t_k", "c1 AS t_str"})
-      .buildKeys({"c0"})
+      .probeProjections({"c0 AS t_c0", "c1 AS t_str"})
+      .buildKeys({"u_c0"})
       .buildVectors(std::move(buildVectors))
-      .buildProjections({"c0 AS u_k", "c1 AS u_len"})
+      .buildProjections({"c0 AS u_c0", "c1 AS u_len"})
       .joinFilter("length(t_str) = u_len")
-      .joinOutputLayout({"t_k", "t_str", "u_k", "u_len"})
+      .joinOutputLayout({"t_c0", "t_str", "u_c0", "u_len"})
       .referenceQuery(
           "SELECT t.c0, t.c1, u.c0, u.c1 FROM t, u "
           "WHERE t.c0 = u.c0 AND length(t.c1) = u.c1")
@@ -3682,14 +3686,14 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithMixedFilterPrecomputation) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
       .numDrivers(numDrivers_)
-      .probeKeys({"c0"})
+      .probeKeys({"t_c0"})
       .probeVectors(std::move(probeVectors))
-      .probeProjections({"c0 AS t_k", "c1 AS t_str", "c2 AS t_val"})
-      .buildKeys({"c0"})
+      .probeProjections({"c0 AS t_c0", "c1 AS t_str", "c2 AS t_val"})
+      .buildKeys({"u_c0"})
       .buildVectors(std::move(buildVectors))
-      .buildProjections({"c0 AS u_k", "c1 AS u_str", "c2 AS u_val"})
+      .buildProjections({"c0 AS u_c0", "c1 AS u_str", "c2 AS u_val"})
       .joinFilter("upper(t_str) = u_str AND t_val = u_val")
-      .joinOutputLayout({"t_k", "t_str", "t_val", "u_k", "u_str", "u_val"})
+      .joinOutputLayout({"t_c0", "t_str", "t_val", "u_c0", "u_str", "u_val"})
       .referenceQuery(
           "SELECT t.c0, t.c1, t.c2, u.c0, u.c1, u.c2 FROM t, u "
           "WHERE t.c0 = u.c0 AND upper(t.c1) = u.c1 AND t.c2 = u.c2")

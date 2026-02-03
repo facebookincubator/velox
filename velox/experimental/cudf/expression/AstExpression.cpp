@@ -345,7 +345,37 @@ struct AstContext {
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
+  // Determines which side (0=left, 1=right) an expression references by
+  // examining its field references. Returns -1 if no fields found.
+  int findExpressionSide(const std::shared_ptr<velox::exec::Expr>& expr) const;
 };
+
+int AstContext::findExpressionSide(
+    const std::shared_ptr<velox::exec::Expr>& expr) const {
+  using velox::exec::FieldReference;
+
+  // Check if this is a field reference
+  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
+    const auto fieldName = fieldExpr->inputs().empty()
+        ? fieldExpr->name()
+        : fieldExpr->inputs()[0]->name();
+    for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+      if (inputRowSchema[sideIdx].get()->containsChild(fieldName)) {
+        return static_cast<int>(sideIdx);
+      }
+    }
+    return -1;
+  }
+
+  // Recursively check children
+  for (const auto& input : expr->inputs()) {
+    int side = findExpressionSide(input);
+    if (side >= 0) {
+      return side;
+    }
+  }
+  return -1;
+}
 
 // get nested column indices
 std::vector<int> getNestedColumnIndices(
@@ -565,9 +595,14 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
     // Shallow check: only verify this operation is supported
     // Children will be recursively handled by createCudfExpression
-    auto node =
-        createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
-    return addPrecomputeInstructionOnSide(0, 0, name, "", node);
+    // Determine which side this expression references
+    int sideIdx = findExpressionSide(expr);
+    if (sideIdx < 0) {
+      sideIdx = 0; // Default to left side if no fields found
+    }
+    auto node = createCudfExpression(
+        expr, inputRowSchema[sideIdx], kAstEvaluatorName);
+    return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
   } else {
     VELOX_FAIL("Unsupported expression: " + name);
   }
