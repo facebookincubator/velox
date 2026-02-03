@@ -161,13 +161,99 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
       len - ender->footer_len - ender_len, ender->footer_len);
 }
 
-std::vector<rmm::device_buffer> fetchByteRanges(
+std::tuple<
+    std::vector<rmm::device_buffer>,
+    std::vector<cudf::device_span<uint8_t const>>,
+    std::future<void>>
+fetchByteRanges(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  static std::mutex mutex;
+  std::vector<cudf::device_span<uint8_t const>> columnChunkData(
+      byteRanges.size());
+  std::vector<std::future<size_t>> readTasks{};
+  std::vector<rmm::device_buffer> columnChunkBuffers{};
+  readTasks.reserve(byteRanges.size());
+  columnChunkBuffers.reserve(byteRanges.size());
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (size_t chunk = 0; chunk < byteRanges.size();) {
+      auto const io_offset = static_cast<size_t>(byteRanges[chunk].offset());
+      auto io_size = static_cast<size_t>(byteRanges[chunk].size());
+      size_t next_chunk = chunk + 1;
+      while (next_chunk < byteRanges.size()) {
+        size_t const next_offset = byteRanges[next_chunk].offset();
+        if (next_offset != io_offset + io_size) {
+          break;
+        }
+        io_size += byteRanges[next_chunk].size();
+        next_chunk++;
+      }
+
+      constexpr size_t bufferPaddingMultiple = 8;
+
+      if (io_size != 0) {
+        columnChunkBuffers.emplace_back(
+            cudf::util::round_up_safe(io_size, bufferPaddingMultiple),
+            stream,
+            mr);
+        // Directly read the column chunk data to the device buffer if
+        // supported
+        if (dataSource->supports_device_read() and
+            dataSource->is_device_read_preferred(io_size)) {
+          readTasks.emplace_back(dataSource->device_read_async(
+              io_offset,
+              io_size,
+              static_cast<uint8_t*>(columnChunkBuffers.back().data()),
+              stream));
+        } else {
+          // Read the column chunk data to the host buffer and copy it to
+          // the device buffer
+          auto hostBuffer = dataSource->host_read(io_offset, io_size);
+          CUDF_CUDA_TRY(cudaMemcpyAsync(
+              columnChunkBuffers.back().data(),
+              hostBuffer->data(),
+              io_size,
+              cudaMemcpyHostToDevice,
+              stream.value()));
+        }
+        auto d_compdata =
+            static_cast<uint8_t const*>(columnChunkBuffers.back().data());
+        do {
+          columnChunkData[chunk] = cudf::device_span<uint8_t const>{
+              d_compdata, static_cast<size_t>(byteRanges[chunk].size())};
+          d_compdata += byteRanges[chunk].size();
+        } while (++chunk != next_chunk);
+      } else {
+        chunk = next_chunk;
+      }
+    }
+  }
+
+  auto syncFunction = [](decltype(readTasks) readTasks) {
+    for (auto& task : readTasks) {
+      task.get();
+    }
+  };
+
+  return {
+      std::move(columnChunkBuffers),
+      std::move(columnChunkData),
+      std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
+}
+
+std::pair<std::vector<rmm::device_buffer>, std::future<void>>
+alternateFetchByteRanges(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   static std::mutex mutex;
   std::vector<rmm::device_buffer> columnChunkBuffers(byteRanges.size());
+  std::vector<std::future<size_t>> readTasks{};
+  readTasks.reserve(byteRanges.size());
   {
     std::lock_guard<std::mutex> lock(mutex);
     std::transform(
@@ -186,11 +272,11 @@ std::vector<rmm::device_buffer> fetchByteRanges(
           // supported
           if (dataSource->supports_device_read() and
               dataSource->is_device_read_preferred(byteRange.size())) {
-            std::ignore = dataSource->device_read_async(
+            readTasks.emplace_back(dataSource->device_read_async(
                 byteRange.offset(),
                 byteRange.size(),
                 static_cast<uint8_t*>(buffer.data()),
-                stream);
+                stream));
           } else {
             // Read the column chunk data to the host buffer and copy it to
             // the device buffer
@@ -206,7 +292,16 @@ std::vector<rmm::device_buffer> fetchByteRanges(
           return buffer;
         });
   }
-  return columnChunkBuffers;
+
+  auto syncFunction = [](decltype(readTasks) readTasks) {
+    for (auto& task : readTasks) {
+      task.get();
+    }
+  };
+
+  return {
+      std::move(columnChunkBuffers),
+      std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

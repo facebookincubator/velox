@@ -102,15 +102,39 @@ std::vector<cudf::device_span<T const>> makeDeviceSpans(
 }
 
 /**
- * @brief Fetches a list of byte ranges from the data source into device buffers
+ * @brief Converts a list of byte ranges into lists of device buffers, device
+ * spans corresponding to each byte range, and a future to wait for all reads to
+ * complete
  *
  * @param dataSource Data source
  * @param byteRanges Byte ranges to fetch
  * @param stream CUDA stream
  * @param mr Device memory resource
- * @return Device buffers containing the fetched byte ranges
+ * @return Device buffers, device spans corresponding to each byte range, and a
+ * future to wait for all reads to complete
  */
-std::vector<rmm::device_buffer> fetchByteRanges(
+std::tuple<
+    std::vector<rmm::device_buffer>,
+    std::vector<cudf::device_span<uint8_t const>>,
+    std::future<void>>
+fetchByteRanges(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/**
+ * @brief Converts a list of byte ranges into a list of device buffers and a
+ * future to wait for all reads to complete
+ *
+ * @param dataSource Data source
+ * @param byteRanges Byte ranges to fetch
+ * @param stream CUDA stream
+ * @param mr Device memory resource
+ * @return Device buffers and a future to wait for all reads to complete
+ */
+std::pair<std::vector<rmm::device_buffer>, std::future<void>>
+alternateFetchByteRanges(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
     rmm::cuda_stream_view stream,

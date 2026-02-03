@@ -89,8 +89,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
  private:
   // Create a CudfParquetReader with the given split.
-  CudfParquetReaderPtr createSplitReader();
-  CudfHybridScanReaderPtr createExperimentalSplitReader();
+  CudfParquetReaderPtr createOldSplitReader();
+  CudfHybridScanReaderPtr createSplitReader();
 
   // Clear split_ and splitReader after split has been fully processed.  Keep
   // readers around to hold adaptation.
@@ -125,8 +125,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   cudf::io::parquet_reader_options readerOptions_;
   std::shared_ptr<cudf::io::datasource> dataSource_;
   std::unique_ptr<std::once_flag> tableMaterialized_;
-  CudfParquetReaderPtr splitReader_;
-  CudfHybridScanReaderPtr exptSplitReader_;
+  CudfParquetReaderPtr oldSplitReader_;
+  CudfHybridScanReaderPtr splitReader_;
   bool useOldSplitReader_;
   rmm::cuda_stream_view stream_;
 

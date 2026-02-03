@@ -47,6 +47,7 @@
 #include <cudf/transform.hpp>
 
 #include <cuda_runtime.h>
+#include <nvtx3/nvtx3.hpp>
 
 #include <filesystem>
 #include <memory>
@@ -164,7 +165,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(
-      splitReader_ or exptSplitReader_, "No split reader present");
+      oldSplitReader_ or splitReader_, "No split reader present");
 
   std::unique_ptr<cudf::table> cudfTable;
   cudf::io::table_metadata metadata;
@@ -174,47 +175,67 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 
   if (useOldSplitReader_) {
     // Read table using the old cudf parquet reader
-    VELOX_CHECK_NOT_NULL(splitReader_, "Old cudf split reader not present");
+    VELOX_CHECK_NOT_NULL(oldSplitReader_, "Old cudf split reader not present");
 
-    if (not splitReader_->has_next()) {
+    if (not oldSplitReader_->has_next()) {
       return nullptr;
     }
 
-    auto tableWithMetadata = splitReader_->read_chunk();
+    auto tableWithMetadata = oldSplitReader_->read_chunk();
     cudfTable = std::move(tableWithMetadata.tbl);
     metadata = std::move(tableWithMetadata.metadata);
   } else {
     // Read table using the experimental parquet reader
-    VELOX_CHECK_NOT_NULL(
-        exptSplitReader_, "Experimental cudf split reader not present");
+    VELOX_CHECK_NOT_NULL(splitReader_, "cuDF hybrid scan reader not present");
 
     // TODO(mh): Replace this with chunked hybrid scan APIs when available in
     // the pinned cuDF version
     std::call_once(*tableMaterialized_, [&]() {
-      auto rowGroupIndices = exptSplitReader_->all_row_groups(readerOptions_);
+      auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
       if (readerOptions_.get_filter().has_value()) {
-        rowGroupIndices = exptSplitReader_->filter_row_groups_with_stats(
+        rowGroupIndices = splitReader_->filter_row_groups_with_stats(
             rowGroupIndices, readerOptions_, stream_);
       }
 
       // Get column chunk byte ranges to fetch
       const auto columnChunkByteRanges =
-          exptSplitReader_->all_column_chunks_byte_ranges(
+          splitReader_->all_column_chunks_byte_ranges(
               rowGroupIndices, readerOptions_);
 
       // Fetch column chunk byte ranges
-      const auto columnChunkBuffers = fetchByteRanges(
-          dataSource_,
-          columnChunkByteRanges,
-          stream_,
-          cudf::get_current_device_resource_ref());
+      nvtxRangePush("fetchByteRanges");
 
-      // Convert buffers to device spans
-      const auto columnChunkData = makeDeviceSpans<uint8_t>(columnChunkBuffers);
+      // TODO(mh): Using `alternateFetchByteRanges` if buffered input is used
+      // for now. We should only use one of fetch functions
+      const auto [columnChunkBuffers, columnChunkData, readTaskFuture] = [&]() {
+        if (cudfHiveConfig_->useBufferedInputSession(
+                connectorQueryCtx_->sessionProperties())) {
+          auto [columnChunkBuffers, readTaskFuture] = alternateFetchByteRanges(
+              dataSource_,
+              columnChunkByteRanges,
+              stream_,
+              cudf::get_current_device_resource_ref());
+          auto deviceSpans = makeDeviceSpans<uint8_t>(columnChunkBuffers);
+          return std::tuple{
+              std::move(columnChunkBuffers),
+              std::move(deviceSpans),
+              std::move(readTaskFuture)};
+        } else {
+          return fetchByteRanges(
+              dataSource_,
+              columnChunkByteRanges,
+              stream_,
+              cudf::get_current_device_resource_ref());
+        }
+      }();
+
+      // Wait for all pending reads to complete
+      readTaskFuture.wait();
+      nvtxRangePop();
 
       // Read table
-      auto tableWithMetadata = exptSplitReader_->materialize_all_columns(
+      auto tableWithMetadata = splitReader_->materialize_all_columns(
           rowGroupIndices, columnChunkData, readerOptions_, stream_);
       cudfTable = std::move(tableWithMetadata.tbl);
       metadata = std::move(tableWithMetadata.metadata);
@@ -356,17 +377,17 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VLOG(1) << "Adding split " << split_->toString();
 
   // Split reader already exists, reset
-  if (splitReader_ or exptSplitReader_) {
+  if (oldSplitReader_ or splitReader_) {
+    oldSplitReader_.reset();
     splitReader_.reset();
-    exptSplitReader_.reset();
     tableMaterialized_.reset();
   }
 
   // Create a cudf split reader
   if (useOldSplitReader_) {
-    splitReader_ = createSplitReader();
+    oldSplitReader_ = createOldSplitReader();
   } else {
-    exptSplitReader_ = createExperimentalSplitReader();
+    splitReader_ = createSplitReader();
   }
 
   tableMaterialized_ = std::make_unique<std::once_flag>();
@@ -495,7 +516,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
   }
 }
 
-CudfParquetReaderPtr CudfHiveDataSource::createSplitReader() {
+CudfParquetReaderPtr CudfHiveDataSource::createOldSplitReader() {
   setupCudfDataSourceAndOptions();
   stream_ = cudfGlobalStreamPool().get_stream();
 
@@ -508,33 +529,35 @@ CudfParquetReaderPtr CudfHiveDataSource::createSplitReader() {
       cudf::get_current_device_resource_ref());
 }
 
-CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
+CudfHybridScanReaderPtr CudfHiveDataSource::createSplitReader() {
   setupCudfDataSourceAndOptions();
   stream_ = cudfGlobalStreamPool().get_stream();
 
   // Create a hybrid scan reader
+  nvtxRangePush("fetchFooterBytes");
   auto const footerBytes = fetchFooterBytes(dataSource_);
-  auto exptSplitReader = std::make_unique<CudfHybridScanReader>(
+  nvtxRangePop();
+  auto splitReader = std::make_unique<CudfHybridScanReader>(
       cudf::host_span<uint8_t const>{footerBytes->data(), footerBytes->size()},
       readerOptions_);
 
   // Setup page index if available
-  auto const pageIndexByteRange = exptSplitReader->page_index_byte_range();
+  auto const pageIndexByteRange = splitReader->page_index_byte_range();
   if (not pageIndexByteRange.is_empty()) {
     auto const pageIndexBytes = dataSource_->host_read(
         pageIndexByteRange.offset(), pageIndexByteRange.size());
-    exptSplitReader->setup_page_index(
+    splitReader->setup_page_index(
         cudf::host_span<uint8_t const>{
             pageIndexBytes->data(), pageIndexBytes->size()});
   }
 
-  return exptSplitReader;
+  return splitReader;
 }
 
 void CudfHiveDataSource::resetSplit() {
   split_.reset();
+  oldSplitReader_.reset();
   splitReader_.reset();
-  exptSplitReader_.reset();
   tableMaterialized_.reset();
   dataSource_.reset();
 }
