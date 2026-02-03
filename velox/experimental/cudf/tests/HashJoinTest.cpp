@@ -3541,11 +3541,11 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithStringFunctionFilter) {
     return makeRowVector(
         {"t0", "t1"},
         {
-          makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-          makeFlatVector<std::string>(
-              100, [](auto row) { return row % 2 == 0 ? "HELLO" : "hello"; }),
-        }
-    );
+            makeFlatVector<int64_t>(
+                100, [batch](auto row) { return row + batch; }),
+            makeFlatVector<std::string>(
+                100, [](auto row) { return row % 2 == 0 ? "HELLO" : "hello"; }),
+        });
   });
 
   // Create build vectors with string data
@@ -3553,11 +3553,11 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithStringFunctionFilter) {
     return makeRowVector(
         {"u0", "u1"},
         {
-          makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-          makeFlatVector<std::string>(
-              100, [](auto row) { return row % 2 == 0 ? "hello" : "HELLO"; }),
-        }
-    );
+            makeFlatVector<int64_t>(
+                100, [batch](auto row) { return row + batch; }),
+            makeFlatVector<std::string>(
+                100, [](auto row) { return row % 2 == 0 ? "hello" : "HELLO"; }),
+        });
   });
 
   createDuckDbTable("t", probeVectors);
@@ -3584,9 +3584,12 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithUpperFunctionFilter) {
   std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
     return makeRowVector({
         makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-        makeFlatVector<std::string>(100, [](auto row) {
-          return row % 3 == 0 ? "World" : (row % 3 == 1 ? "WORLD" : "world");
-        }),
+        makeFlatVector<std::string>(
+            100,
+            [](auto row) {
+              return row % 3 == 0 ? "World"
+                                  : (row % 3 == 1 ? "WORLD" : "world");
+            }),
     });
   });
 
@@ -3594,8 +3597,7 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithUpperFunctionFilter) {
   std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
     return makeRowVector({
         makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-        makeFlatVector<std::string>(
-            100, [](auto /*row*/) { return "WORLD"; }),
+        makeFlatVector<std::string>(100, [](auto /*row*/) { return "WORLD"; }),
     });
   });
 
@@ -3625,9 +3627,11 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithLengthFunctionFilter) {
   std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
     return makeRowVector({
         makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
-        makeFlatVector<std::string>(100, [](auto row) {
-          return std::string(row % 10 + 1, 'a'); // strings of length 1-10
-        }),
+        makeFlatVector<std::string>(
+            100,
+            [](auto row) {
+              return std::string(row % 10 + 1, 'a'); // strings of length 1-10
+            }),
     });
   });
 

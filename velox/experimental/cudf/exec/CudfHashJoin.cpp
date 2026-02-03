@@ -59,8 +59,11 @@ std::vector<std::unique_ptr<cudf::column>> tableViewToColumns(
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.reserve(tableView.num_columns());
   for (cudf::size_type i = 0; i < tableView.num_columns(); ++i) {
-    columns.push_back(std::make_unique<cudf::column>(
-        tableView.column(i), stream, cudf::get_current_device_resource_ref()));
+    columns.push_back(
+        std::make_unique<cudf::column>(
+            tableView.column(i),
+            stream,
+            cudf::get_current_device_resource_ref()));
   }
   return columns;
 }

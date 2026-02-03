@@ -600,8 +600,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if (sideIdx < 0) {
       sideIdx = 0; // Default to left side if no fields found
     }
-    auto node = createCudfExpression(
-        expr, inputRowSchema[sideIdx], kAstEvaluatorName);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
     return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
   } else {
     VELOX_FAIL("Unsupported expression: " + name);
