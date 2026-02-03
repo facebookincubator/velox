@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/XORShiftRandom.h"
+#include "velox/functions/lib/XORShiftRandom.h"
 
 #include <gtest/gtest.h>
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
+using facebook::velox::functions::XORShiftRandom;
 
 class XORShiftRandomTest : public testing::Test {};
 

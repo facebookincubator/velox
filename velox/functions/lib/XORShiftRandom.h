@@ -17,7 +17,7 @@
 
 #include <cstdint>
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions {
 
 /// XORShift random number generator matching Spark's XORShiftRandom.
 /// Based on Marsaglia, G. (2003). Xorshift RNGs. Journal of Statistical
@@ -134,4 +134,4 @@ class XORShiftRandom {
   int64_t seed_{0};
 };
 
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::functions

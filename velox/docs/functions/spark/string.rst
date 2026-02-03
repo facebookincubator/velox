@@ -293,10 +293,11 @@ String Functions
     Both ``length`` and ``seed`` must be non-null constants.
     ``length`` must be a non-negative integer (SMALLINT or INT).
     ``seed`` must be an integer (INT or BIGINT).
-    With the same ``seed`` and partition, the function produces a reproducible sequence
+    With the same ``seed`` and partition ID, the function produces a reproducible sequence
     of outputs, though each row receives a different value from the sequence as the
     internal generator advances.
-    The partition is determined by the ``spark_partition_id`` query configuration.
+    The partition ID is retrieved from the ``spark_partition_id`` query configuration.
+    It's consistent with Spark's internal assignment for tasks.
     Uses XORShift random number generator matching Spark's implementation.
     Note: Spark's analyzer always provides a seed (either user-specified or
     auto-generated), so only the seeded variant is implemented.

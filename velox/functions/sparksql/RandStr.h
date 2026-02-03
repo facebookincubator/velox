@@ -19,7 +19,7 @@
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
-#include "velox/functions/sparksql/XORShiftRandom.h"
+#include "velox/functions/lib/XORShiftRandom.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -47,8 +47,9 @@ struct RandStrFunction {
       const core::QueryConfig& config,
       const TLen* length,
       const TSeed* seed) {
-    VELOX_USER_CHECK_NOT_NULL(length, "length must not be null");
-    VELOX_USER_CHECK_NOT_NULL(seed, "seed must be a constant value");
+    VELOX_USER_CHECK_NOT_NULL(
+        length, "length argument must be a constant value");
+    VELOX_USER_CHECK_NOT_NULL(seed, "seed argument must be a constant value");
     VELOX_USER_CHECK_GE(
         static_cast<int64_t>(*length), 0, "length must be non-negative");
     length_ = static_cast<int32_t>(*length);
@@ -76,7 +77,7 @@ struct RandStrFunction {
 
  private:
   int32_t length_{0};
-  XORShiftRandom generator_;
+  functions::XORShiftRandom generator_;
 };
 
 } // namespace facebook::velox::functions::sparksql
