@@ -36,6 +36,7 @@
 #include <cudf/io/types.hpp>
 
 #include <mutex>
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -136,8 +137,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   RowTypePtr readerOutputType_;
 
   // Columns to read.
+  std::unordered_set<std::string> readColumnSet_;
   std::vector<std::string> readColumnNames_;
-  std::vector<column_index_t> readColumnIndices_;
 
   std::shared_ptr<io::IoStatistics> ioStats_;
   std::shared_ptr<filesystems::File::IoStats> fsStats_;

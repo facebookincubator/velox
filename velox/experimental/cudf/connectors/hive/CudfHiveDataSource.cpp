@@ -88,6 +88,7 @@ CudfHiveDataSource::CudfHiveDataSource(
         outputName);
 
     auto* handle = static_cast<const hive::HiveColumnHandle*>(it->second.get());
+    readColumnSet_.emplace(handle->name());
     readColumnNames_.emplace_back(handle->name());
   }
 
@@ -101,11 +102,9 @@ CudfHiveDataSource::CudfHiveDataSource(
     subfieldFilters_.emplace(k.clone(), v->clone());
     // Add fields in the filter to the columns to read if not there
     for (const auto& [field, _] : subfieldFilters_) {
-      if (std::find(
-              readColumnNames_.begin(),
-              readColumnNames_.end(),
-              field.toString()) == readColumnNames_.end()) {
-        readColumnNames_.push_back(field.toString());
+      if (readColumnSet_.count(field.toString()) == 0) {
+        readColumnSet_.emplace(field.toString());
+        readColumnNames_.emplace_back(field.toString());
       }
     }
   }
@@ -116,11 +115,9 @@ CudfHiveDataSource::CudfHiveDataSource(
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
     for (const auto& field : remainingFilterExprSet_->distinctFields()) {
       // Add fields in the filter to the columns to read if not there
-      if (std::find(
-              readColumnNames_.begin(),
-              readColumnNames_.end(),
-              field->name()) == readColumnNames_.end()) {
-        readColumnNames_.push_back(field->name());
+      if (readColumnSet_.count(field->name()) == 0) {
+        readColumnSet_.emplace(field->name());
+        readColumnNames_.emplace_back(field->name());
       }
     }
 
