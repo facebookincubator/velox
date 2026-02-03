@@ -22,6 +22,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -252,6 +253,17 @@ TraceReplayRunner::TraceReplayRunner()
                   FLAGS_hive_connector_executor_hw_multiplier,
               std::make_shared<folly::NamedThreadFactory>(
                   "TraceReplayIoConnector"))) {}
+
+TraceReplayRunner::~TraceReplayRunner() {
+  // Explicitly unregister all connectors before the runner is destroyed.
+  // This ensures file handles are closed while folly::RequestContext is still
+  // valid, preventing use-after-free during program shutdown when the static
+  // connector map is destroyed after RequestContext.
+  const auto connectorsCopy = connector::getAllConnectors();
+  for (const auto& [connectorId, connector] : connectorsCopy) {
+    connector::unregisterConnector(connectorId);
+  }
+}
 
 void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
