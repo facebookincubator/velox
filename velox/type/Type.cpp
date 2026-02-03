@@ -83,6 +83,31 @@ std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type) {
   VELOX_FAIL("Type is not Decimal");
 }
 
+uint32_t getVarcharLength(const Type& type) {
+  if (type.isVarcharN()) {
+    const auto& varcharType = type.asVarcharN();
+    return varcharType.length();
+  }
+  return kVaryingLengthScalarTypeUnboundedLength;
+}
+
+uint32_t getVarbinaryLength(const Type& type) {
+  if (type.isVarbinaryN()) {
+    const auto& varbinaryType = type.asVarbinaryN();
+    return varbinaryType.length();
+  }
+  return kVaryingLengthScalarTypeUnboundedLength;
+}
+
+uint32_t getVaryingLengthScalarTypeLength(const Type& type) {
+  if (type.kind() == TypeKind::VARCHAR) {
+    return getVarcharLength(type);
+  } else if (type.kind() == TypeKind::VARBINARY) {
+    return getVarbinaryLength(type);
+  }
+  VELOX_FAIL("Type is not VarcharN or VarbinaryN");
+}
+
 namespace {
 struct OpaqueSerdeRegistry {
   struct Entry {
@@ -202,6 +227,18 @@ TypePtr Type::create(const folly::dynamic& obj) {
   auto typeName = obj["type"].asString();
   if (isDecimalName(typeName)) {
     return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
+  }
+  if (isVarcharName(typeName)) {
+    if (obj.find("length") != obj.items().end()) {
+      return VARCHAR(obj["length"].asInt());
+    }
+    return VARCHAR();
+  }
+  if (isVarbinaryName(typeName)) {
+    if (obj.find("length") != obj.items().end()) {
+      return VARBINARY(obj["length"].asInt());
+    }
+    return VARBINARY();
   }
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
@@ -1021,6 +1058,42 @@ VELOX_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 
 #undef VELOX_DEFINE_SCALAR_ACCESSOR
 
+template <>
+// static
+const std::shared_ptr<const VaryingLengthScalarType<TypeKind::VARCHAR>>
+VarcharNType::create() {
+  return std::make_shared<const VarcharNType>();
+}
+
+template <>
+// static
+const std::shared_ptr<const VaryingLengthScalarType<TypeKind::VARCHAR>>
+VarcharNType::create(uint32_t length) {
+  return std::make_shared<const VarcharNType>(length);
+}
+
+TypePtr VARCHAR(uint32_t length) {
+  return VarcharNType::create(length);
+}
+
+template <>
+// static
+const std::shared_ptr<const VaryingLengthScalarType<TypeKind::VARBINARY>>
+VarbinaryNType::create() {
+  return std::make_shared<const VarbinaryNType>();
+}
+
+template <>
+// static
+const std::shared_ptr<const VaryingLengthScalarType<TypeKind::VARBINARY>>
+VarbinaryNType::create(uint32_t length) {
+  return std::make_shared<const VarbinaryNType>(length);
+}
+
+TypePtr VARBINARY(uint32_t length) {
+  return VarbinaryNType::create(length);
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1443,6 +1516,24 @@ class FunctionParametricType {
   }
 };
 
+template <TypeKind KIND>
+class VaryingLengthParametricType {
+ public:
+  static TypePtr create(const std::vector<TypeParameter>& parameters) {
+    VELOX_USER_CHECK_EQ(1, parameters.size());
+    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kLongLiteral);
+    VELOX_USER_CHECK(parameters[0].longLiteral.has_value());
+
+    if constexpr (KIND == TypeKind::VARCHAR) {
+      return VARCHAR(parameters[0].longLiteral.value());
+    } else if constexpr (KIND == TypeKind::VARBINARY) {
+      return VARBINARY(parameters[0].longLiteral.value());
+    } else {
+      VELOX_UNSUPPORTED("Unknown TypeKind for varying length parametric type.");
+    }
+  }
+};
+
 using ParametricTypeMap = std::unordered_map<
     std::string,
     std::function<TypePtr(const std::vector<TypeParameter>& parameters)>>;
@@ -1454,6 +1545,8 @@ const ParametricTypeMap& parametricBuiltinTypes() {
       {"MAP", MapParametricType::create},
       {"ROW", RowParametricType::create},
       {"FUNCTION", FunctionParametricType::create},
+      {"VARCHAR", VaryingLengthParametricType<TypeKind::VARCHAR>::create},
+      {"VARBINARY", VaryingLengthParametricType<TypeKind::VARBINARY>::create},
   };
   return kTypes;
 }
@@ -1479,11 +1572,11 @@ bool hasType(const std::string& name) {
 TypePtr getType(
     const std::string& name,
     const std::vector<TypeParameter>& parameters) {
-  if (singletonBuiltInTypes().count(name)) {
+  if (parameters.size() == 0 && singletonBuiltInTypes().count(name)) {
     return singletonBuiltInTypes().at(name);
   }
 
-  if (parametricBuiltinTypes().count(name)) {
+  if (parameters.size() > 0 && parametricBuiltinTypes().count(name)) {
     return parametricBuiltinTypes().at(name)(parameters);
   }
 

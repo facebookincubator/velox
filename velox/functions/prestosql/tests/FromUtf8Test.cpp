@@ -39,11 +39,8 @@ class FromUtf8Test : public test::FunctionBaseTest {
   std::optional<std::string> fromUtf8(
       std::optional<std::string> value,
       std::optional<std::string> replacement) {
-    auto data = makeRowVector({
-        makeNullableFlatVector<std::string>({value}, VARBINARY()),
-        makeNullableFlatVector<std::string>({replacement}),
-    });
-    return evaluateOnce<std::string>("from_utf8(c0, c1)", data);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "from_utf8(c0, c1)", {VARBINARY(), VARCHAR()}, value, replacement);
   }
 
   static const char* kPound; // 2-byte pound sign.
