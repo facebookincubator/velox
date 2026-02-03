@@ -101,7 +101,7 @@ vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
 
   for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
     if (i < inMaps_.size() && inMaps_[i] != nullptr) {
-      size += bits::isBitSet(inMaps_[i]->asMutable<uint64_t>(), index);
+      size += bits::isBitSet(inMaps_[i]->as<uint64_t>(), index);
     } else {
       // By default assume the key exists.
       ++size;
@@ -130,7 +130,17 @@ void FlatMapVector::resize(vector_size_t newSize, bool setNotNull) {
 
         if (i < inMaps_.size() && inMaps_[i] != nullptr) {
           VELOX_CHECK(inMaps_[i]->unique(), "Resizing shared in map vector");
-          AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
+          if (inMaps_[i]->isView()) {
+            // Can't reallocate a view, must create new buffer.
+            auto newInMap = AlignedBuffer::allocate<bool>(newSize, pool_, 0);
+            memcpy(
+                newInMap->asMutable<uint64_t>(),
+                inMaps_[i]->as<uint64_t>(),
+                bits::nbytes(oldSize));
+            inMaps_[i] = std::move(newInMap);
+          } else {
+            AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
+          }
         }
       }
     }
@@ -546,7 +556,22 @@ void FlatMapVector::copyRanges(
       // Then we allocate a new key values vector and in map buffer.
       inMapsAt(channel, true) =
           AlignedBuffer::allocate<bool>(size(), pool(), false);
-      mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+
+      // Explicitly create FlatMapVector mapValues if source values are as
+      // BaseVector creates from type, not encoding.
+      if (valueType()->kind() == TypeKind::MAP &&
+          encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        mapValues_.back() = std::make_shared<FlatMapVector>(
+            pool_,
+            sourceFlatMap->mapValues_[i]->type(),
+            nullptr,
+            size(),
+            nullptr,
+            std::vector<VectorPtr>(),
+            std::vector<BufferPtr>());
+      } else {
+        mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+      }
     }
 
     // Finally, copy the map values and update the in map buffers.

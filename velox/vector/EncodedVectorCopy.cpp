@@ -26,6 +26,79 @@ namespace facebook::velox {
 
 namespace {
 
+/// Creates a vector matching the structure of a source vector, preserving
+/// FLAT_MAP encoding where the source uses it. For nested types (ROW, ARRAY,
+/// MAP), it recursively handles children to preserve encoding at each level.
+/// BaseVector::create builds from type, without reference to encodings.
+VectorPtr createTemplateVector(
+    const BaseVector* source,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(source);
+  auto* wrapped = source->wrappedVector();
+  const auto& type = source->type();
+
+  switch (type->kind()) {
+    case TypeKind::ROW: {
+      auto& rowType = type->as<TypeKind::ROW>();
+      auto* sourceRow = wrapped->as<RowVector>();
+      std::vector<VectorPtr> children;
+      children.reserve(rowType.size());
+      for (size_t i = 0; i < rowType.size(); ++i) {
+        children.push_back(
+            createTemplateVector(sourceRow->childAt(i).get(), size, pool));
+      }
+      return std::make_shared<RowVector>(
+          pool, type, nullptr, size, std::move(children));
+    }
+    case TypeKind::ARRAY: {
+      auto offsets = allocateOffsets(size, pool);
+      auto sizes = allocateSizes(size, pool);
+      auto* sourceArray = wrapped->as<ArrayVector>();
+      auto elements =
+          createTemplateVector(sourceArray->elements().get(), 0, pool);
+      return std::make_shared<ArrayVector>(
+          pool,
+          type,
+          nullptr,
+          size,
+          std::move(offsets),
+          std::move(sizes),
+          std::move(elements));
+    }
+    case TypeKind::MAP: {
+      // If source is FLAT_MAP, directly create FlatMapVector.
+      if (wrapped->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        return std::make_shared<FlatMapVector>(
+            pool,
+            type,
+            nullptr,
+            size,
+            nullptr,
+            std::vector<VectorPtr>{},
+            std::vector<BufferPtr>{});
+      }
+      // Otherwise create standard MapVector.
+      auto offsets = allocateOffsets(size, pool);
+      auto sizes = allocateSizes(size, pool);
+      auto* sourceMap = wrapped->as<MapVector>();
+      auto keys = createTemplateVector(sourceMap->mapKeys().get(), 0, pool);
+      auto values = createTemplateVector(sourceMap->mapValues().get(), 0, pool);
+      return std::make_shared<MapVector>(
+          pool,
+          type,
+          nullptr,
+          size,
+          std::move(offsets),
+          std::move(sizes),
+          std::move(keys),
+          std::move(values));
+    }
+    default:
+      return BaseVector::create(type, size, pool);
+  }
+}
+
 void copyImpl(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
@@ -622,13 +695,13 @@ void copyIntoConstant(
   VectorPtr alphabet;
   if (decodedSource.isConstantMapping()) {
     fillIndices(1, ranges, rawIndices);
-    alphabet = BaseVector::create(target->type(), 2, options.pool);
+    alphabet = createTemplateVector(decodedTarget.base(), 2, options.pool);
     alphabet->copy(decodedTarget.base(), 0, decodedTarget.index(0), 1);
     alphabet->copy(decodedSource.base(), 1, decodedSource.index(0), 1);
   } else {
     nulls = newNulls(size, options.pool, decodedSource.nulls(), ranges);
     auto baseRanges = toBaseRanges(decodedSource, ranges, 1, rawIndices);
-    alphabet = BaseVector::create(target->type(), 1, options.pool);
+    alphabet = createTemplateVector(decodedTarget.base(), 1, options.pool);
     alphabet->copy(decodedTarget.base(), 0, decodedTarget.index(0), 1);
     copyImpl(options, sourceBase, baseRanges, alphabet, true);
   }
@@ -904,6 +977,74 @@ void copyIntoArray(
   }
 }
 
+void copyIntoFlatMap(
+    const EncodedVectorCopyOptions& options,
+    const FlatMapVector& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    VectorPtr& target,
+    bool targetMutable) {
+  const auto size = targetSize(target->size(), ranges);
+  auto* targetFlatMap = target->asUnchecked<FlatMapVector>();
+
+  if (targetMutable) {
+    target->resize(size);
+    target->resetDataDependentFlags(nullptr);
+    targetFlatMap->copyRanges(&source, ranges);
+  } else {
+    auto targetFlatMapVector = target->asChecked<FlatMapVector>();
+    std::vector<VectorPtr> mapValues(targetFlatMapVector->mapValues().size());
+    auto pool = options.pool;
+    for (column_index_t i = 0; i < targetFlatMapVector->mapValues().size();
+         ++i) {
+      BaseVector::CopyRange fullRange{
+          0, 0, targetFlatMapVector->mapValues()[i]->size()};
+      mapValues[i] = createTemplateVector(
+          targetFlatMapVector->mapValues()[i].get(),
+          targetFlatMapVector->mapValues()[i]->size(),
+          options.pool);
+      copyImpl(
+          options,
+          targetFlatMapVector->mapValues()[i],
+          folly::Range(&fullRange, 1),
+          mapValues[i],
+          false);
+    }
+
+    std::vector<BufferPtr> inMaps(targetFlatMapVector->inMaps().size());
+    for (auto i = 0; i < targetFlatMapVector->inMaps().size(); ++i) {
+      inMaps[i] = AlignedBuffer::copy(pool, targetFlatMapVector->inMaps()[i]);
+    }
+
+    VectorPtr distinctKeys = createTemplateVector(
+        targetFlatMapVector->distinctKeys().get(),
+        targetFlatMapVector->distinctKeys()->size(),
+        options.pool);
+    if (targetFlatMapVector->distinctKeys()->size() > 0) {
+      BaseVector::CopyRange distinctKeysRange{
+          0, 0, targetFlatMapVector->distinctKeys()->size()};
+      copyImpl(
+          options,
+          targetFlatMapVector->distinctKeys(),
+          folly::Range(&distinctKeysRange, 1),
+          distinctKeys,
+          false);
+    }
+
+    auto copy = std::make_shared<FlatMapVector>(
+        pool,
+        source.type(),
+        AlignedBuffer::copy(pool, source.nulls()),
+        source.size(),
+        std::move(distinctKeys),
+        std::move(mapValues),
+        std::move(inMaps));
+    copy->resize(size);
+    copy->resetDataDependentFlags(nullptr);
+    copy->asUnchecked<FlatMapVector>()->copyRanges(&source, ranges);
+    target = std::move(copy);
+  }
+}
+
 void copyIntoComplex(
     const EncodedVectorCopyOptions& options,
     DecodedVector& decodedSource,
@@ -1042,9 +1183,47 @@ void copyIntoExisting(
       copyIntoComplex(
           options, decodedSource, sourceBase, ranges, target, targetMutable);
       break;
-    case VectorEncoding::Simple::FLAT_MAP:
-      VELOX_UNSUPPORTED(
-          "EncodedVectorCopy copyInto does not support FlatMapVector.");
+    case VectorEncoding::Simple::FLAT_MAP: {
+      if (decodedSource.isIdentityMapping()) {
+        copyIntoFlatMap(
+            options,
+            *source->asUnchecked<FlatMapVector>(),
+            ranges,
+            target,
+            targetMutable);
+      } else if (!decodedSource.isIdentityMapping()) {
+        const auto size = targetSize(target->size(), ranges);
+        BufferPtr nulls;
+        auto indices = allocateIndices(size, options.pool);
+        auto* rawIndices = indices->asMutable<vector_size_t>();
+        std::iota(rawIndices, rawIndices + target->size(), 0);
+        BaseVector::CopyRange baseRange;
+        baseRange.targetIndex = target->size();
+        if (decodedSource.isConstantMapping()) {
+          fillIndices(target->size(), ranges, rawIndices);
+          baseRange.sourceIndex = decodedSource.index(0);
+          baseRange.count = 1;
+        } else {
+          nulls = newNulls(size, options.pool, decodedSource.nulls(), ranges);
+          copyIndices(
+              decodedSource.indices(), ranges, target->size(), rawIndices);
+          baseRange.sourceIndex = 0;
+          baseRange.count = sourceBase->size();
+        }
+        copyImpl(
+            options,
+            sourceBase,
+            folly::Range(&baseRange, 1),
+            target,
+            targetMutable);
+        target = BaseVector::wrapInDictionary(
+            std::move(nulls), std::move(indices), size, target);
+      } else {
+        VELOX_UNSUPPORTED(
+            "Encountered unsupported encoding for copying FlatMapVector.");
+      }
+      break;
+    }
     case VectorEncoding::Simple::LAZY:
       copyIntoLazy(options, source, ranges, target, targetMutable);
       break;
@@ -1062,7 +1241,7 @@ void copyImpl(
     bool targetMutable) {
   if (ranges.empty()) {
     if (!target) {
-      target = BaseVector::create(source->type(), 0, options.pool);
+      target = createTemplateVector(source.get(), 0, options.pool);
     }
     return;
   }
