@@ -53,6 +53,7 @@
 #include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
 #include "velox/tool/trace/TopNRowNumberReplayer.h"
+#include "velox/tool/trace/TraceReplayerConfigPrompt.h"
 #include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
 
@@ -266,6 +267,10 @@ TraceReplayRunner::~TraceReplayRunner() {
 }
 
 void TraceReplayRunner::init() {
+  // Prompt user for configs interactively (unless --fast is set)
+  TraceReplayerConfigPrompt prompt;
+  prompt.run();
+
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
