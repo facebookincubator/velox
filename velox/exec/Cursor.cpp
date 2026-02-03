@@ -18,7 +18,9 @@
 
 #include <folly/system/HardwareConcurrency.h>
 #include <filesystem>
+
 #include "velox/common/file/FileSystems.h"
+#include "velox/vector/EncodedVectorCopy.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -296,14 +298,11 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           if (!vector || !copyResult) {
             return queue->enqueue(vector, future);
           }
-          // Make sure to load lazy vector if not loaded already.
-          for (auto& child : vector->children()) {
-            child->loadedVector();
-          }
-          auto copy = BaseVector::create<RowVector>(
-              vector->type(), vector->size(), queue->pool());
-          copy->copy(vector.get(), 0, 0, vector->size());
-          return queue->enqueue(std::move(copy), future);
+
+          VectorPtr copy = encodedVectorCopy(
+              {.pool = queue->pool(), .reuseSource = false}, vector);
+          return queue->enqueue(
+              std::static_pointer_cast<RowVector>(std::move(copy)), future);
         },
         0,
         std::move(spillDiskOpts),
