@@ -216,6 +216,11 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    */
   std::vector<std::unique_ptr<cudf::column>> rightMatchedFlags_;
 
+  /// Cached precomputed columns for right (build) tables
+  std::vector<std::vector<ColumnOrView>> cachedRightPrecomputed_;
+  /// Cached extended views for right tables (original + precomputed columns)
+  std::vector<cudf::table_view> cachedExtendedRightViews_;
+
   // For Right joins, only one driver collects the unmatched rows mask and
   // emits. This value is set true only for that driver. See noMoreInput
   bool isLastDriver_{false};

@@ -319,7 +319,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode),
       probeType_(joinNode_->sources()[0]->outputType()),
-      buildType_(joinNode_->sources()[0]->outputType()),
+      buildType_(joinNode_->sources()[1]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "CudfHashJoinProbe constructor";
@@ -707,7 +707,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
   auto& hbs = hashObject_.value().second;
 
   // Precompute left (probe) table columns if needed (once, outside loop)
-  std::vector<std::unique_ptr<cudf::column>> leftOwnedColumns;
   std::vector<ColumnOrView> leftPrecomputed;
   cudf::table_view extendedLeftView = leftTableView;
   if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
@@ -725,21 +724,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
 
-    // Precompute right (build) table columns if needed (per batch)
-    std::vector<std::unique_ptr<cudf::column>> rightOwnedColumns;
-    std::vector<ColumnOrView> rightPrecomputed;
-    cudf::table_view extendedRightView = rightTableView;
-    if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
-      auto rightColumnViews = tableViewToColumnViews(rightTableView);
-      rightPrecomputed = precomputeSubexpressions(
-          rightColumnViews,
-          rightPrecomputeInstructions_,
-          scalars_,
-          buildType_,
-          stream);
-      extendedRightView =
-          createExtendedTableView(rightTableView, rightPrecomputed);
-    }
+    // Use cached precomputed columns for right (build) table
+    cudf::table_view extendedRightView =
+        (joinNode_->filter() && !rightPrecomputeInstructions_.empty())
+        ? cachedExtendedRightViews_[i]
+        : rightTableView;
 
     // left = probe, right = build
     VELOX_CHECK_NOT_NULL(hb);
@@ -795,7 +784,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
   auto& hbs = hashObject_.value().second;
 
   // Precompute left (probe) table columns if needed (once, outside loop)
-  std::vector<std::unique_ptr<cudf::column>> leftOwnedColumns;
   std::vector<ColumnOrView> leftPrecomputed;
   cudf::table_view extendedLeftView = leftTableView;
   if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
@@ -813,21 +801,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
 
-    // Precompute right (build) table columns if needed (per batch)
-    std::vector<std::unique_ptr<cudf::column>> rightOwnedColumns;
-    std::vector<ColumnOrView> rightPrecomputed;
-    cudf::table_view extendedRightView = rightTableView;
-    if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
-      auto rightColumnViews = tableViewToColumnViews(rightTableView);
-      rightPrecomputed = precomputeSubexpressions(
-          rightColumnViews,
-          rightPrecomputeInstructions_,
-          scalars_,
-          buildType_,
-          stream);
-      extendedRightView =
-          createExtendedTableView(rightTableView, rightPrecomputed);
-    }
+    // Use cached precomputed columns for right (build) table
+    cudf::table_view extendedRightView =
+        (joinNode_->filter() && !rightPrecomputeInstructions_.empty())
+        ? cachedExtendedRightViews_[i]
+        : rightTableView;
 
     VELOX_CHECK_NOT_NULL(hb);
     if (buildStream_.has_value()) {
@@ -1365,6 +1343,33 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     }
     initStream.synchronize();
   }
+
+  // Precompute right table columns if filter exists (once when build is done)
+  if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
+    auto& rightTablesInit = hashObject_.value().first;
+    cachedRightPrecomputed_.clear();
+    cachedExtendedRightViews_.clear();
+    cachedRightPrecomputed_.reserve(rightTablesInit.size());
+    cachedExtendedRightViews_.reserve(rightTablesInit.size());
+
+    auto initStream = cudfGlobalStreamPool().get_stream();
+    for (auto& rt : rightTablesInit) {
+      auto rightTableView = rt->view();
+      auto rightColumnViews = tableViewToColumnViews(rightTableView);
+      auto rightPrecomputed = precomputeSubexpressions(
+          rightColumnViews,
+          rightPrecomputeInstructions_,
+          scalars_,
+          buildType_,
+          initStream);
+      auto extendedView =
+          createExtendedTableView(rightTableView, rightPrecomputed);
+      cachedRightPrecomputed_.push_back(std::move(rightPrecomputed));
+      cachedExtendedRightViews_.push_back(extendedView);
+    }
+    initStream.synchronize();
+  }
+
   auto& rightTables = hashObject_.value().first;
   // should be rightTable->numDistinct() but it needs compute,
   // so we use num_rows()
