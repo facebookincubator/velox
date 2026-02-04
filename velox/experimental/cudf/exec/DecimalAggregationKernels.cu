@@ -101,6 +101,28 @@ __global__ void unpackStateKernel(
   sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
 }
 
+template <typename SumT>
+__global__ void avgRoundKernel(
+    const SumT* sums,
+    const int64_t* counts,
+    SumT* out,
+    int32_t numRows) {
+  int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= numRows) {
+    return;
+  }
+  auto count = counts[idx];
+  if (count == 0) {
+    out[idx] = SumT{0};
+    return;
+  }
+  auto sum = sums[idx];
+  SumT absSum = sum < 0 ? -sum : sum;
+  SumT half = static_cast<SumT>(count / 2);
+  SumT rounded = (absSum + half) / static_cast<SumT>(count);
+  out[idx] = sum < 0 ? -rounded : rounded;
+}
+
 } // namespace
 
 DecimalSumStateColumns deserializeDecimalSumStateWithCount(
@@ -215,6 +237,47 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       std::move(charsBuf),
       0,
       rmm::device_buffer{});
+}
+
+std::unique_ptr<cudf::column> computeDecimalAverage(
+    const cudf::column_view& sumCol,
+    const cudf::column_view& countCol,
+    rmm::cuda_stream_view stream) {
+  CUDF_EXPECTS(
+      countCol.type().id() == cudf::type_id::INT64,
+      "Decimal average requires INT64 count column");
+  CUDF_EXPECTS(
+      sumCol.type().id() == cudf::type_id::DECIMAL64 ||
+          sumCol.type().id() == cudf::type_id::DECIMAL128,
+      "Decimal average requires DECIMAL64 or DECIMAL128 sum column");
+  CUDF_EXPECTS(
+      sumCol.size() == countCol.size(),
+      "Decimal average requires sum and count to be same size");
+
+  auto numRows = sumCol.size();
+  auto out = cudf::make_fixed_width_column(
+      sumCol.type(), numRows, cudf::mask_state::UNALLOCATED, stream);
+
+  if (numRows > 0) {
+    int32_t blockSize = 256;
+    int32_t gridSize = (numRows + blockSize - 1) / blockSize;
+    if (sumCol.type().id() == cudf::type_id::DECIMAL64) {
+      avgRoundKernel<<<gridSize, blockSize, 0, stream.value()>>>(
+          sumCol.data<int64_t>(),
+          countCol.data<int64_t>(),
+          out->mutable_view().data<int64_t>(),
+          numRows);
+    } else {
+      avgRoundKernel<<<gridSize, blockSize, 0, stream.value()>>>(
+          sumCol.data<__int128_t>(),
+          countCol.data<int64_t>(),
+          out->mutable_view().data<__int128_t>(),
+          numRows);
+    }
+    CUDF_CUDA_TRY(cudaGetLastError());
+  }
+
+  return out;
 }
 
 } // namespace facebook::velox::cudf_velox

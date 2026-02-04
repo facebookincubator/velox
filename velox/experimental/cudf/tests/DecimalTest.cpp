@@ -31,6 +31,17 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
+int64_t computeAvgRaw(const std::vector<int64_t>& values) {
+  int128_t sum = 0;
+  for (auto value : values) {
+    sum += value;
+  }
+  int128_t avg = 0;
+  facebook::velox::DecimalUtil::computeAverage(
+      avg, sum, values.size(), 0);
+  return static_cast<int64_t>(avg);
+}
+
 class CudfDecimalTest : public exec::test::OperatorTestBase {
  protected:
   void SetUp() override {
@@ -347,6 +358,279 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
   ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
   facebook::velox::test::assertEqualVectors(expected, cpuResult);
   facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgAndSumTimesDouble) {
+  auto rowType = ROW({
+      {"l_quantity", DECIMAL(15, 2)},
+  });
+
+  // Values chosen to keep the AVG and SUM exact in double.
+  auto input = makeRowVector(
+      {"l_quantity"},
+      {makeFlatVector<int64_t>(
+          {125, 250, 375, 400}, // 1.25, 2.50, 3.75, 4.00
+          DECIMAL(15, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  // Force CPU-only path to validate this fails without cuDF involvement.
+  unregisterCudf();
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"l_quantity * 2.0 AS qty2"})
+                  .singleAggregation(
+                      {},
+                      {"avg(qty2) AS avg_qty", "sum(qty2) AS sum_qty"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT avg(l_quantity * 2.0) AS avg_qty, "
+          "sum(l_quantity * 2.0) AS sum_qty "
+          "FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>(
+          {100, 200, 300, 400}, // 1.00, 2.00, 3.00, 4.00
+          DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"avg(d) AS avg_d"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"avg_d"},
+      {makeFlatVector<int64_t>({250}, DECIMAL(12, 2))}); // 2.50
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgDecimalInputRounds) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  // Sum = 1.60, count = 7 => 0.22857..., rounds to 0.23 at scale 2.
+  std::vector<int64_t> rawValues = {100, 10, 10, 10, 10, 10, 10};
+  auto input = makeRowVector(
+      {"d"}, {makeFlatVector<int64_t>(rawValues, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"avg(d) AS avg_d"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"avg_d"},
+      {makeFlatVector<int64_t>(
+          {computeAvgRaw(rawValues)}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgPartialFinalVarbinaryRounds) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  std::vector<int32_t> keys = {1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3};
+  std::vector<int64_t> values = {100, 10, 10, 10, 10, 10, 10, 100, 1, -100, -1};
+
+  auto input = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>(keys),
+          makeFlatVector<int64_t>(values, DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"avg(d) AS a"})
+                  .finalAggregation()
+                  .orderBy({"k"}, false)
+                  .planNode();
+
+  std::vector<std::pair<int32_t, std::vector<int64_t>>> groups = {
+      {1, {100, 10, 10, 10, 10, 10, 10}},
+      {2, {100, 1}},
+      {3, {-100, -1}},
+  };
+
+  auto expected = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>(
+              {computeAvgRaw(groups[0].second),
+               computeAvgRaw(groups[1].second),
+               computeAvgRaw(groups[2].second)},
+              DECIMAL(12, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgIntermediateVarbinaryRounds) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 3}),
+          makeFlatVector<int64_t>({100, 10, 100, -100}, DECIMAL(12, 2)),
+      });
+  auto input2 = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1, 2, 3}),
+          makeFlatVector<int64_t>(
+              {10, 10, 10, 10, 10, 1, -1}, DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"avg(d) AS a"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .orderBy({"k"}, false)
+                  .planNode();
+
+  std::vector<std::pair<int32_t, std::vector<int64_t>>> groups = {
+      {1, {100, 10, 10, 10, 10, 10, 10}},
+      {2, {100, 1}},
+      {3, {-100, -1}},
+  };
+
+  auto expected = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>(
+              {computeAvgRaw(groups[0].second),
+               computeAvgRaw(groups[1].second),
+               computeAvgRaw(groups[2].second)},
+              DECIMAL(12, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgGlobalPartialFinalVarbinaryRounds) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"d"}, {makeFlatVector<int64_t>({100, 10, 10}, DECIMAL(12, 2))});
+  auto input2 = makeRowVector(
+      {"d"}, {makeFlatVector<int64_t>({10, 10, 10, 10}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"avg(d) AS a"})
+                  .finalAggregation()
+                  .planNode();
+
+  std::vector<int64_t> allValues = {100, 10, 10, 10, 10, 10, 10};
+  auto expected = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>(
+          {computeAvgRaw(allValues)}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgGlobalIntermediateVarbinaryRounds) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"d"}, {makeFlatVector<int64_t>({100, 10, 10}, DECIMAL(12, 2))});
+  auto input2 = makeRowVector(
+      {"d"}, {makeFlatVector<int64_t>({10, 10, 10, 10}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"avg(d) AS a"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  std::vector<int64_t> allValues = {100, 10, 10, 10, 10, 10, 10};
+  auto expected = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>(
+          {computeAvgRaw(allValues)}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgGlobalSingleRounds) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>(
+          {100, 10, 10, 10, 10, 10, 10}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"avg(d) AS a"})
+                  .planNode();
+
+  std::vector<int64_t> allValues = {100, 10, 10, 10, 10, 10, 10};
+  auto expected = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>(
+          {computeAvgRaw(allValues)}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {

@@ -316,15 +316,28 @@ function install_gcs_sdk_cpp {
 
   # grpc
   github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
+  local cares_provider="package"
+  local cares_dir=""
+  for dir in /usr/lib64/cmake/c-ares /usr/lib/cmake/c-ares /usr/local/lib64/cmake/c-ares /usr/local/lib/cmake/c-ares; do
+    if [[ -f "${dir}/c-aresConfig.cmake" || -f "${dir}/c-ares-config.cmake" ]]; then
+      cares_dir="${dir}"
+      break
+    fi
+  done
+  if [[ -z "${cares_dir}" ]]; then
+    # Fall back to module mode if the CMake package config isn't available.
+    cares_provider="module"
+  fi
   cmake_install_dir grpc \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_ABSL_PROVIDER=package \
     -DgRPC_ZLIB_PROVIDER=package \
-    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER="${cares_provider}" \
     -DgRPC_RE2_PROVIDER=package \
     -DgRPC_SSL_PROVIDER=package \
     -DgRPC_PROTOBUF_PROVIDER=package \
-    -DgRPC_INSTALL=ON
+    -DgRPC_INSTALL=ON \
+    ${cares_dir:+-Dc-ares_DIR="${cares_dir}"}
 
   # crc32
   github_checkout google/crc32c "${CRC32_VERSION}" --depth 1

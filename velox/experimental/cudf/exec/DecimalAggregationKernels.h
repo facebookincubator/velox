@@ -43,4 +43,9 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& countCol,
     rmm::cuda_stream_view stream);
 
+std::unique_ptr<cudf::column> computeDecimalAverage(
+    const cudf::column_view& sumCol,
+    const cudf::column_view& countCol,
+    rmm::cuda_stream_view stream);
+
 } // namespace facebook::velox::cudf_velox

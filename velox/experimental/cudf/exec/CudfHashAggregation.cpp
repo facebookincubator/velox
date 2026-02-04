@@ -146,23 +146,50 @@ struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       return;
     }
 
-    auto& request = requests.emplace_back();
-    sumIdx_ = requests.size() - 1;
     if (step == core::AggregationNode::Step::kFinal &&
         tbl.column(inputIndex).type().id() == cudf::type_id::STRING) {
       auto scale = getDecimalPrecisionScale(*resultType).second;
-      decodedSum_ = cudf_velox::deserializeDecimalSumState(
-          tbl.column(inputIndex), scale, cudf::get_default_stream());
-      request.values = decodedSum_->view();
+      if (isAvg_) {
+        auto decoded = cudf_velox::deserializeDecimalSumStateWithCount(
+            tbl.column(inputIndex), scale, cudf::get_default_stream());
+        decodedSum_ = std::move(decoded.sum);
+        decodedCount_ = std::move(decoded.count);
+
+        sumIdx_ = requests.size();
+        auto& sumRequest = requests.emplace_back();
+        sumRequest.values = decodedSum_->view();
+        sumRequest.aggregations.push_back(
+            cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+
+        countIdx_ = requests.size();
+        auto& countRequest = requests.emplace_back();
+        countRequest.values = decodedCount_->view();
+        countRequest.aggregations.push_back(
+            cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+        return;
+      } else {
+        auto& request = requests.emplace_back();
+        sumIdx_ = requests.size() - 1;
+        decodedSum_ = cudf_velox::deserializeDecimalSumState(
+            tbl.column(inputIndex), scale, cudf::get_default_stream());
+        request.values = decodedSum_->view();
+        request.aggregations.push_back(
+            cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+        return;
+      }
     } else {
+      auto& request = requests.emplace_back();
+      sumIdx_ = requests.size() - 1;
       request.values = tbl.column(inputIndex);
-    }
-    request.aggregations.push_back(
-        cudf::make_sum_aggregation<cudf::groupby_aggregation>());
-    if (step == core::AggregationNode::Step::kPartial) {
       request.aggregations.push_back(
-          cudf::make_count_aggregation<cudf::groupby_aggregation>(
-              cudf::null_policy::EXCLUDE));
+          cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+      if (step == core::AggregationNode::Step::kPartial ||
+          (step == core::AggregationNode::Step::kSingle && isAvg_)) {
+        request.aggregations.push_back(
+            cudf::make_count_aggregation<cudf::groupby_aggregation>(
+                cudf::null_policy::EXCLUDE));
+      }
+      return;
     }
   }
 
@@ -170,6 +197,10 @@ struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
     auto col = std::move(results[sumIdx_].results[0]);
+    if (isAvg_ && step == core::AggregationNode::Step::kSingle) {
+      auto count = std::move(results[sumIdx_].results[1]);
+      return computeAvgColumn(std::move(col), std::move(count), stream);
+    }
     if (step == core::AggregationNode::Step::kPartial) {
       auto count = std::move(results[sumIdx_].results[1]);
       if (count->type().id() != cudf::type_id::INT64) {
@@ -186,6 +217,10 @@ struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       return cudf_velox::serializeDecimalSumState(
           col->view(), count->view(), stream);
     }
+    if (isAvg_ && step == core::AggregationNode::Step::kFinal) {
+      auto count = std::move(results[countIdx_].results[0]);
+      return computeAvgColumn(std::move(col), std::move(count), stream);
+    }
     auto const cudfResType = cudf_velox::veloxToCudfDataType(resultType);
     if (col->type() != cudfResType) {
       col = cudf::cast(*col, cudfResType, stream);
@@ -197,6 +232,22 @@ struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       rmm::cuda_stream_view stream) override {
+    if (step == core::AggregationNode::Step::kSingle && isAvg_) {
+      auto const sumAgg =
+          cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+      cudf::column_view inputCol = input.column(inputIndex);
+      auto sumScalar = cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream);
+      auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
+          cudf::null_policy::EXCLUDE);
+      auto countScalar = cudf::reduce(
+          inputCol,
+          *countAgg,
+          cudf::data_type{cudf::type_id::INT64},
+          stream);
+      auto sumCol = cudf::make_column_from_scalar(*sumScalar, 1, stream);
+      auto countCol = cudf::make_column_from_scalar(*countScalar, 1, stream);
+      return computeAvgColumn(std::move(sumCol), std::move(countCol), stream);
+    }
     auto const aggRequest =
         cudf::make_sum_aggregation<cudf::reduce_aggregation>();
     cudf::column_view inputCol = input.column(inputIndex);
@@ -250,26 +301,7 @@ struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         // convert to columns in order to perform division, as we cannot divide scalars directly
         auto sumCol = cudf::make_column_from_scalar(*sumScalar, 1, stream);
         auto countCol = cudf::make_column_from_scalar(*countScalar, 1, stream);
-        // in order for the division operator to behave correctly, we must cast count to be the
-        // same decimal size (64 or 128) as sum, but with a scale of zero (see implementation of
-        // fixed_point operator/() in cudf/fixed_point/fixed_point.hpp)
-        auto const cudfSumType = sumCol->type();
-        auto const cudfCountType = cudf::data_type{cudfSumType.id(), 0};
-        countCol = cudf::cast(countCol->view(), cudfCountType, stream);
-        // now the division (output as sum type)
-        auto avgCol = cudf::binary_operation(
-            sumCol->view(),
-            countCol->view(),
-            cudf::binary_operator::DIV,
-            cudfSumType,
-            stream);
-        // finally, cast back to the required output type if different from the sum type
-        auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
-        if (cudfOutType != cudfSumType) {
-          avgCol = cudf::cast(avgCol->view(), cudfOutType, stream);
-        }
-        // and return
-        return avgCol;
+        return computeAvgColumn(std::move(sumCol), std::move(countCol), stream);
       } else {
         // SUM
         decodedSum_ = cudf_velox::deserializeDecimalSumState(
@@ -294,6 +326,22 @@ struct DecimalSumOrAvgAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   }
 
  private:
+  std::unique_ptr<cudf::column> computeAvgColumn(
+      std::unique_ptr<cudf::column> sum,
+      std::unique_ptr<cudf::column> count,
+      rmm::cuda_stream_view stream) const {
+    if (count->type().id() != cudf::type_id::INT64) {
+      count = cudf::cast(*count, cudf::data_type{cudf::type_id::INT64}, stream);
+    }
+    auto avgCol = cudf_velox::computeDecimalAverage(
+        sum->view(), count->view(), stream);
+    auto const cudfOutType = cudf_velox::veloxToCudfDataType(resultType);
+    if (avgCol->type() != cudfOutType) {
+      avgCol = cudf::cast(avgCol->view(), cudfOutType, stream);
+    }
+    return avgCol;
+  }
+
   uint32_t sumIdx_{0};
   uint32_t countIdx_{0};
   const bool isAvg_{false};

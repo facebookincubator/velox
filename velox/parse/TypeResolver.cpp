@@ -139,6 +139,11 @@ CastTypedExprPtr makeTypedCast(const TypePtr& type, const TypedExprPtr& input) {
 
 std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
   std::vector<TypePtr> targetTypes;
+  if (type->isDecimal()) {
+    targetTypes.emplace_back(REAL());
+    targetTypes.emplace_back(DOUBLE());
+    return targetTypes;
+  }
   switch (type->kind()) {
     // We decide not to implicitly upcast booleans because it maybe funky.
     case TypeKind::BOOLEAN:
