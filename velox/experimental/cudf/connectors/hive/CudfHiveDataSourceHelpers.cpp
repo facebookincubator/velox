@@ -180,15 +180,15 @@ fetchByteRanges(
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (size_t chunk = 0; chunk < byteRanges.size();) {
-      auto const io_offset = static_cast<size_t>(byteRanges[chunk].offset());
-      auto io_size = static_cast<size_t>(byteRanges[chunk].size());
-      size_t next_chunk = chunk + 1;
-      while (next_chunk < byteRanges.size()) {
-        size_t const next_offset = byteRanges[next_chunk].offset();
-        if (next_offset != io_offset + io_size) {
+      auto const ioOffset = static_cast<size_t>(byteRanges[chunk].offset());
+      auto ioSize = static_cast<size_t>(byteRanges[chunk].size());
+      size_t nextChunk = chunk + 1;
+      while (nextChunk < byteRanges.size()) {
+        size_t const nextOffset = byteRanges[nextChunk].offset();
+        if (nextOffset != ioOffset + ioSize) {
           break;
         }
-        io_size += byteRanges[next_chunk].size();
+        ioSize += byteRanges[nextChunk].size();
         next_chunk++;
       }
 
@@ -206,10 +206,10 @@ fetchByteRanges(
         // Directly read the column chunk data to the device buffer if
         // supported
         if (dataSource->supports_device_read() and
-            dataSource->is_device_read_preferred(io_size)) {
+            dataSource->is_device_read_preferred(ioSize)) {
           readTasks.emplace_back(dataSource->device_read_async(
-              io_offset,
-              io_size,
+              ioOffset,
+              ioSize,
               static_cast<uint8_t*>(columnChunkBuffers.back().data()),
               stream));
         } else {
@@ -219,18 +219,18 @@ fetchByteRanges(
               std::async(
                   std::launch::deferred,
                   [dataSource,
-                   io_offset,
-                   io_size,
+                   ioOffset,
+                   ioSize,
                    stream,
                    dest = columnChunkBuffers.back().data()]() {
-                    auto hostBuffer = dataSource->host_read(io_offset, io_size);
+                    auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
                     CUDF_CUDA_TRY(cudaMemcpyAsync(
                         dest,
                         hostBuffer->data(),
-                        io_size,
+                        ioSize,
                         cudaMemcpyHostToDevice,
                         stream.value()));
-                    return io_size;
+                    return ioSize;
                   }));
         }
         auto chunkDeviceSpanPtr =
@@ -240,9 +240,9 @@ fetchByteRanges(
               chunkDeviceSpanPtr,
               static_cast<size_t>(byteRanges[chunk].size())};
           chunkDeviceSpanPtr += byteRanges[chunk].size();
-        } while (++chunk != next_chunk);
+        } while (++chunk != nextChunk);
       } else {
-        chunk = next_chunk;
+        chunk = nextChunk;
       }
     }
   }
