@@ -33,12 +33,12 @@ class RemoteThriftFunction : public RemoteVectorFunction {
       const RemoteThriftVectorFunctionMetadata& metadata)
       : RemoteVectorFunction(functionName, inputArgs, metadata),
         location_(metadata.location),
-        thriftClient_(getThriftClient(location_, &eventBase_)) {}
+        client_(createClient(metadata)) {}
 
   std::unique_ptr<remote::RemoteFunctionResponse> invokeRemoteFunction(
       const remote::RemoteFunctionRequest& request) const override {
     auto remoteResponse = std::make_unique<remote::RemoteFunctionResponse>();
-    thriftClient_->sync_invokeFunction(*remoteResponse, request);
+    client_->invokeFunction(*remoteResponse, request);
     return remoteResponse;
   }
 
@@ -47,10 +47,18 @@ class RemoteThriftFunction : public RemoteVectorFunction {
   }
 
  private:
+  std::unique_ptr<IRemoteFunctionClient> createClient(
+      const RemoteThriftVectorFunctionMetadata& metadata) {
+    if (metadata.clientFactory) {
+      return metadata.clientFactory(metadata.location, &eventBase_);
+    }
+    return getDefaultRemoteFunctionClient(metadata.location, &eventBase_);
+  }
+
   folly::SocketAddress location_;
   folly::EventBase eventBase_;
 
-  std::unique_ptr<RemoteFunctionClient> thriftClient_;
+  std::unique_ptr<IRemoteFunctionClient> client_;
 };
 
 std::shared_ptr<exec::VectorFunction> createRemoteFunction(
