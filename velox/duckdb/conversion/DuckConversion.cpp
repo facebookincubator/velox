@@ -141,6 +141,8 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       return VARCHAR();
     case LogicalTypeId::DATE:
       return DATE();
+    case LogicalTypeId::TIME:
+      return TIME();
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
     case LogicalTypeId::TIMESTAMP_TZ: {

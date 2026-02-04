@@ -155,8 +155,12 @@ Cast to Boolean
 From VARCHAR
 ^^^^^^^^^^^^
 
-The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case equivalents are allowed to be casted to boolean.
-Casting from other strings to boolean throws.
+*(ANSI compliant)*
+
+The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
+equivalents are allowed to be cast to boolean.
+Casting from invalid strings throws an error when ANSI mode is enabled,
+or returns NULL when ANSI mode is disabled.
 
 Valid examples
 
@@ -177,13 +181,13 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as boolean); -- NULL // Invalid argument
-  SELECT cast('nan' as boolean); -- NULL // Invalid argument
-  SELECT cast('infinity' as boolean); -- NULL // Invalid argument
-  SELECT cast('12' as boolean); -- NULL // Invalid argument
-  SELECT cast('-1' as boolean); -- NULL // Invalid argument
-  SELECT cast('tr' as boolean); -- NULL // Invalid argument
-  SELECT cast('tru' as boolean); -- NULL // Invalid argument
+  SELECT cast('1.7E308' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('nan' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('infinity' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('12' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-1' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tr' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tru' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to String
 --------------

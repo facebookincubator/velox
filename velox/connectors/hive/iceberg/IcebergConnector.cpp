@@ -18,6 +18,7 @@
 
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -49,6 +50,21 @@ IcebergConnector::IcebergConnector(
           std::string(kIcebergFunctionPrefixConfig),
           std::string(kDefaultIcebergFunctionPrefix))) {
   registerIcebergInternalFunctions(functionPrefix_);
+}
+
+std::unique_ptr<DataSource> IcebergConnector::createDataSource(
+    const RowTypePtr& outputType,
+    const ConnectorTableHandlePtr& tableHandle,
+    const ColumnHandleMap& columnHandles,
+    ConnectorQueryCtx* connectorQueryCtx) {
+  return std::make_unique<IcebergDataSource>(
+      outputType,
+      tableHandle,
+      columnHandles,
+      &fileHandleFactory_,
+      ioExecutor_,
+      connectorQueryCtx,
+      hiveConfig_);
 }
 
 std::unique_ptr<DataSink> IcebergConnector::createDataSink(
