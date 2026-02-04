@@ -244,6 +244,14 @@ constexpr std::string_view kMetricMemoryCacheNumWaitExclusive{
 constexpr std::string_view kMetricMemoryCacheNumAllocClocks{
     "velox.memory_cache_num_alloc_clocks"};
 
+constexpr std::string_view kMetricMemoryCacheNumShardMutexWaitClocks{
+    "velox.memory_cache_num_shard_mutex_wait_clocks"};
+
+/// Cumulative time in milliseconds spent waiting to acquire shard mutexes.
+/// Converted from raw clocks assuming ~3GHz CPU frequency.
+constexpr std::string_view kMetricMemoryCacheShardMutexWaitTimeMs{
+    "velox.memory_cache_shard_mutex_wait_time_ms"};
+
 constexpr std::string_view kMetricMemoryCacheNumAgedOutEntries{
     "velox.memory_cache_num_aged_out_entries"};
 
