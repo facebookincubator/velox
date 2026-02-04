@@ -572,8 +572,19 @@ TEST_F(CudfDecimalTest, decimalMultiplyDifferentScales) {
                   .project({"a * b AS prod"})
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults("SELECT a * b AS prod FROM tmp");
+  auto expected = makeRowVector(
+      {"prod"},
+      {makeFlatVector<int128_t>(
+          {
+              static_cast<int128_t>(12345) * static_cast<int128_t>(10),
+              static_cast<int128_t>(-2500) * static_cast<int128_t>(-25),
+              static_cast<int128_t>(100) * static_cast<int128_t>(3),
+          },
+          DECIMAL(20, 3))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 TEST_F(CudfDecimalTest, decimalDivideRounds) {
