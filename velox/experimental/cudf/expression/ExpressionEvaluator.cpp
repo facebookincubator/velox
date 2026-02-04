@@ -22,6 +22,7 @@
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -328,7 +329,7 @@ class BinaryFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     if (left_ == nullptr && right_ == nullptr) {
       // Ensure decimal promotion is respected by casting inputs to the output
-      // decimal type (e.g. DECIMAL64 -> DECIMAL128) before multiplication.
+      // decimal type (e.g. DECIMAL64 -> DECIMAL128) before binary operations.
       auto lhsView = asView(inputColumns[0]);
       auto rhsView = asView(inputColumns[1]);
       std::unique_ptr<cudf::column> lhsCast;
