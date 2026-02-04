@@ -19,17 +19,22 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <folly/json.h>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+#include "velox/dwio/parquet/writer/Writer.h"
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -319,17 +324,22 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
     VELOX_CHECK_NOT_NULL(info);
     // Following metadata (json format) is consumed by Presto CommitTaskData.
     // It contains the minimal subset of metadata.
-    // TODO: Complete metrics is missing now and this could lead to suboptimal
-    // query plan, will collect full iceberg metrics in following PR.
     // clang-format off
     folly::dynamic commitData = folly::dynamic::object(
     "path", (fs::path(info->writerParameters.writeDirectory()) /
                     info->writerParameters.writeFileName()).string())
       ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
+#ifdef VELOX_ENABLE_PARQUET
+      ("metrics", dataFileStats_[i]->toJson())
+      ("splitOffsets", dataFileStats_[i]->splitOffsetsAsJson())
+#else
       ("metrics",
         folly::dynamic::object("recordCount", info->numWrittenRows))
+#endif
       ("partitionSpecJson",
         icebergInsertTableHandle->partitionSpec() ? icebergInsertTableHandle->partitionSpec()->specId : 0)
+      // Sort order evolution is not supported. Set default id to 0 ( unsorted order).
+      ("sortOrderId", 0)
       ("fileFormat", "PARQUET")
       ("content", "DATA");
     // clang-format on
@@ -380,6 +390,7 @@ uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
 std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions() const {
   auto options = HiveDataSink::createWriterOptions();
+
   // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
   // - Timestamps must be stored with microsecond precision.
   // - Timestamps must NOT be adjusted to UTC timezone; they should be written
@@ -392,6 +403,15 @@ IcebergDataSink::createWriterOptions() const {
   // (TimestampPrecision::kMicroseconds).
   options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
   options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
+
+#ifdef VELOX_ENABLE_PARQUET
+  auto parquetStatsCollector = std::make_shared<IcebergParquetStatsCollector>(
+      insertTableHandle_->inputColumns());
+  options->dataFileStatsCollector = parquetStatsCollector;
+  auto parquetOptions = checkedPointerCast<parquet::WriterOptions>(options);
+  parquetOptions->parquetFieldIds = parquetStatsCollector->parquetFieldIds();
+#endif
+
   // Re-process configs to apply the serde parameters we just set.
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
@@ -412,6 +432,29 @@ folly::dynamic IcebergDataSink::makeCommitPartitionValue(
     }
   }
   return partitionValues;
+}
+
+void IcebergDataSink::closeInternal() {
+  VELOX_CHECK_NE(state_, State::kRunning);
+  VELOX_CHECK_NE(state_, State::kFinishing);
+
+  common::testutil::TestValue::adjust(
+      "facebook::velox::connector::hive::IcebergDataSink::closeInternal", this);
+
+  if (state_ == State::kClosed) {
+    for (int i = 0; i < writers_.size(); ++i) {
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
+          writerInfo_[i]->nonReclaimableSectionHolder.get());
+      writers_[i]->close();
+      dataFileStats_.push_back(writers_[i]->dataFileStats());
+    }
+  } else {
+    for (int i = 0; i < writers_.size(); ++i) {
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
+          writerInfo_[i]->nonReclaimableSectionHolder.get());
+      writers_[i]->abort();
+    }
+  }
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
