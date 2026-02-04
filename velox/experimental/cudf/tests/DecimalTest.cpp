@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -498,6 +499,146 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
   ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
   facebook::velox::test::assertEqualVectors(expected, cpuResult);
   facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalAddDifferentScales) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 1)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({12345, -2500, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({10, -25, 3}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a + b AS sum"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT a + b AS sum FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalSubtractDifferentScales) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 1)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({12345, -2500, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({10, -25, 3}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a - b AS diff"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT a - b AS diff FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalMultiplyDifferentScales) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 1)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({12345, -2500, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({10, -25, 3}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a * b AS prod"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT a * b AS prod FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalDivideRounds) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({200, 100, -200}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({300, 300, 300}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a / b AS div"})
+                  .planNode();
+
+  auto computeDiv = [](int64_t a, int64_t b) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::divideWithRoundUp<
+        __int128_t,
+        __int128_t,
+        __int128_t>(out, static_cast<__int128_t>(a), static_cast<__int128_t>(b), false, 2, 0);
+    return static_cast<int64_t>(out);
+  };
+
+  auto expected = makeRowVector(
+      {"div"},
+      {makeFlatVector<int64_t>(
+          {computeDiv(200, 300), computeDiv(100, 300), computeDiv(-200, 300)},
+          DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalDivideByZero) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({0}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a / b AS div"})
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      "Division by zero");
 }
 
 TEST_F(CudfDecimalTest, DISABLED_decimalAvgAndSumTimesDouble) {
