@@ -37,7 +37,9 @@
  * File format description for the parquet file format
  */
 
-namespace cpp parquet.format
+include "thrift/annotation/thrift.thrift"
+
+namespace cpp2 facebook.velox.parquet.thrift
 namespace java org.apache.parquet.format
 
 /**
@@ -579,8 +581,9 @@ struct DataPageHeaderV2 {
   Which means the section of the page between
   definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
   is compressed with the compression_codec.
-  If missing it is considered compressed */
-  7: optional bool is_compressed = 1;
+  If missing it is considered compressed.
+  Note: Code must use is_compressed().value_or(true) to handle the default. */
+  7: optional bool is_compressed;
 
   /** optional statistics for the data in this page **/
   8: optional Statistics statistics;

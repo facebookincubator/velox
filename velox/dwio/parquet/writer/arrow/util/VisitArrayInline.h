@@ -24,12 +24,11 @@
 
 namespace facebook::velox::parquet::arrow::util {
 
-#define ARRAY_VISIT_INLINE(TYPE_CLASS)                                         \
-  case ::arrow::TYPE_CLASS##Type::type_id:                                     \
-    return visitor->Visit(                                                     \
-        ::arrow::internal::checked_cast<                                       \
-            const typename TypeTraits<::arrow::TYPE_CLASS##Type>::ArrayType&>( \
-            array),                                                            \
+#define ARRAY_VISIT_INLINE(TYPE_CLASS)                                      \
+  case ::arrow::TYPE_CLASS##Type::type_id:                                  \
+    return visitor->Visit(                                                  \
+        ::arrow::internal::checked_cast<const typename ::arrow::TypeTraits< \
+            ::arrow::TYPE_CLASS##Type>::ArrayType&>(array),                 \
         std::forward<ARGS>(args)...);
 
 /// \brief Apply the visitors Visit() method specialized to the array type

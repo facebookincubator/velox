@@ -39,17 +39,17 @@ TEST_F(ParquetPageReaderTest, smallPage) {
       headerSize,
       stats);
   auto header = pageReader->readPageHeader();
-  EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
-  EXPECT_EQ(header.uncompressed_page_size, 16950);
-  EXPECT_EQ(header.compressed_page_size, 10759);
-  EXPECT_EQ(header.data_page_header.num_values, 21738);
+  EXPECT_EQ(*header.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*header.uncompressed_page_size(), 16950);
+  EXPECT_EQ(*header.compressed_page_size(), 10759);
+  EXPECT_EQ(*header.data_page_header()->num_values(), 21738);
 
   // expectedMinValue: "aaaa...aaaa"
   std::string expectedMinValue(39, 'a');
   // expectedMaxValue: "zzzz...zzzz"
   std::string expectedMaxValue(49, 'z');
-  auto minValue = header.data_page_header.statistics.min_value;
-  auto maxValue = header.data_page_header.statistics.max_value;
+  auto minValue = *header.data_page_header()->statistics()->min_value();
+  auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
   EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
@@ -71,17 +71,17 @@ TEST_F(ParquetPageReaderTest, largePage) {
       stats);
   auto header = pageReader->readPageHeader();
 
-  EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
-  EXPECT_EQ(header.uncompressed_page_size, 1050822);
-  EXPECT_EQ(header.compressed_page_size, 66759);
-  EXPECT_EQ(header.data_page_header.num_values, 970);
+  EXPECT_EQ(*header.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*header.uncompressed_page_size(), 1050822);
+  EXPECT_EQ(*header.compressed_page_size(), 66759);
+  EXPECT_EQ(*header.data_page_header()->num_values(), 970);
 
   // expectedMinValue: "aaaa...aaaa"
   std::string expectedMinValue(1295, 'a');
   // expectedMinValue: "zzzz...zzzz"
   std::string expectedMaxValue(2255, 'z');
-  auto minValue = header.data_page_header.statistics.min_value;
-  auto maxValue = header.data_page_header.statistics.max_value;
+  auto minValue = *header.data_page_header()->statistics()->min_value();
+  auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
   EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);

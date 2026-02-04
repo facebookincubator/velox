@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 #include <re2/re2.h>
 #include <optional>
@@ -34,7 +34,7 @@ class SemanticVersion {
 
   static std::optional<SemanticVersion> parse(const std::string& input);
 
-  bool shouldIgnoreStatistics(thrift::Type::type type) const;
+  bool shouldIgnoreStatistics(thrift::Type type) const;
 
   std::string toString() const;
 

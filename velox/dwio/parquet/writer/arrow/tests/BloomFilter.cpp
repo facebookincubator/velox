@@ -78,26 +78,34 @@ static constexpr uint32_t kBloomFilterHeaderSizeGuess = 256;
 
 static ::arrow::Status ValidateBloomFilterHeader(
     const facebook::velox::parquet::thrift::BloomFilterHeader& header) {
-  if (!header.algorithm.__isset.BLOCK) {
+  if (header.algorithm()->getType() !=
+      facebook::velox::parquet::thrift::BloomFilterAlgorithm::Type::BLOCK) {
     return ::arrow::Status::Invalid(
-        "Unsupported Bloom filter algorithm: ", header.algorithm, ".");
+        "Unsupported Bloom filter algorithm: ",
+        header.algorithm()->getType(),
+        ".");
   }
 
-  if (!header.hash.__isset.XXHASH) {
+  if (header.hash()->getType() !=
+      facebook::velox::parquet::thrift::BloomFilterHash::Type::XXHASH) {
     return ::arrow::Status::Invalid(
-        "Unsupported Bloom filter hash: ", header.hash, ".");
+        "Unsupported Bloom filter hash: ", header.hash()->getType(), ".");
   }
 
-  if (!header.compression.__isset.UNCOMPRESSED) {
+  if (header.compression()->getType() !=
+      facebook::velox::parquet::thrift::BloomFilterCompression::Type::
+          UNCOMPRESSED) {
     return ::arrow::Status::Invalid(
-        "Unsupported Bloom filter compression: ", header.compression, ".");
+        "Unsupported Bloom filter compression: ",
+        header.compression()->getType(),
+        ".");
   }
 
-  if (header.numBytes <= 0 ||
-      static_cast<uint32_t>(header.numBytes) >
+  if (*header.numBytes() <= 0 ||
+      static_cast<uint32_t>(*header.numBytes()) >
           BloomFilter::kMaximumBloomFilterBytes) {
     std::stringstream ss;
-    ss << "Bloom filter size is incorrect: " << header.numBytes
+    ss << "Bloom filter size is incorrect: " << *header.numBytes()
        << ". Must be in range (" << 0 << ", "
        << BloomFilter::kMaximumBloomFilterBytes << "].";
     return ::arrow::Status::Invalid(ss.str());
@@ -135,7 +143,7 @@ BlockSplitBloomFilter BlockSplitBloomFilter::Deserialize(
   }
   PARQUET_THROW_NOT_OK(ValidateBloomFilterHeader(header));
 
-  const int32_t bloom_filter_size = header.numBytes;
+  const int32_t bloom_filter_size = *header.numBytes();
   if (bloom_filter_size + header_size <= header_buf->size()) {
     // The bloom filter data is entirely contained in the buffer we just read
     // => just return it.
@@ -178,21 +186,21 @@ void BlockSplitBloomFilter::WriteTo(ArrowOutputStream* sink) const {
     throw ParquetException(
         "BloomFilter does not support Algorithm other than BLOCK");
   }
-  header.algorithm.__set_BLOCK(
+  header.algorithm()->set_BLOCK(
       facebook::velox::parquet::thrift::SplitBlockAlgorithm());
   if (ARROW_PREDICT_FALSE(hash_strategy_ != HashStrategy::XXHASH)) {
     throw ParquetException(
         "BloomFilter does not support Hash other than XXHASH");
   }
-  header.hash.__set_XXHASH(facebook::velox::parquet::thrift::XxHash());
+  header.hash()->set_XXHASH(facebook::velox::parquet::thrift::XxHash());
   if (ARROW_PREDICT_FALSE(
           compression_strategy_ != CompressionStrategy::UNCOMPRESSED)) {
     throw ParquetException(
         "BloomFilter does not support Compression other than UNCOMPRESSED");
   }
-  header.compression.__set_UNCOMPRESSED(
+  header.compression()->set_UNCOMPRESSED(
       facebook::velox::parquet::thrift::Uncompressed());
-  header.__set_numBytes(num_bytes_);
+  header.numBytes() = num_bytes_;
 
   ThriftSerializer serializer;
   serializer.Serialize(&header, sink);

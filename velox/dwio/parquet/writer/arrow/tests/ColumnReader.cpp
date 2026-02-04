@@ -213,34 +213,35 @@ namespace {
 template <typename H>
 EncodedStatistics ExtractStatsFromHeader(const H& header) {
   EncodedStatistics page_statistics;
-  if (!header.__isset.statistics) {
+  if (!header.statistics()) {
     return page_statistics;
   }
-  const facebook::velox::parquet::thrift::Statistics& stats = header.statistics;
+  const facebook::velox::parquet::thrift::Statistics& stats =
+      *header.statistics();
   // Use the new V2 min-max statistics over the former one if it is filled
-  if (stats.__isset.max_value || stats.__isset.min_value) {
+  if (stats.max_value() || stats.min_value()) {
     // TODO: check if the column_order is TYPE_DEFINED_ORDER.
-    if (stats.__isset.max_value) {
-      page_statistics.set_max(stats.max_value);
+    if (stats.max_value()) {
+      page_statistics.set_max(*stats.max_value());
     }
-    if (stats.__isset.min_value) {
-      page_statistics.set_min(stats.min_value);
+    if (stats.min_value()) {
+      page_statistics.set_min(*stats.min_value());
     }
-  } else if (stats.__isset.max || stats.__isset.min) {
+  } else if (stats.max() || stats.min()) {
     // TODO: check created_by to see if it is corrupted for some types.
     // TODO: check if the sort_order is SIGNED.
-    if (stats.__isset.max) {
-      page_statistics.set_max(stats.max);
+    if (stats.max()) {
+      page_statistics.set_max(*stats.max());
     }
-    if (stats.__isset.min) {
-      page_statistics.set_min(stats.min);
+    if (stats.min()) {
+      page_statistics.set_min(*stats.min());
     }
   }
-  if (stats.__isset.null_count) {
-    page_statistics.set_null_count(stats.null_count);
+  if (stats.null_count()) {
+    page_statistics.set_null_count(*stats.null_count());
   }
-  if (stats.__isset.distinct_count) {
-    page_statistics.set_distinct_count(stats.distinct_count);
+  if (stats.distinct_count()) {
+    page_statistics.set_distinct_count(*stats.distinct_count());
   }
   return page_statistics;
 }
@@ -400,19 +401,20 @@ void SerializedPageReader::UpdateDecryption(
 
 bool SerializedPageReader::ShouldSkipPage(
     EncodedStatistics* data_page_statistics) {
-  const PageType::type page_type = LoadEnumSafe(&current_page_header_.type);
+  const PageType::type page_type =
+      LoadEnumSafe(&current_page_header_.type().value());
   if (page_type == PageType::DATA_PAGE) {
     const facebook::velox::parquet::thrift::DataPageHeader& header =
-        current_page_header_.data_page_header;
-    CheckNumValuesInHeader(header.num_values);
+        *current_page_header_.data_page_header();
+    CheckNumValuesInHeader(*header.num_values());
     *data_page_statistics = ExtractStatsFromHeader(header);
-    seen_num_values_ += header.num_values;
+    seen_num_values_ += *header.num_values();
     if (data_page_filter_) {
       const EncodedStatistics* filter_statistics =
           data_page_statistics->is_set() ? data_page_statistics : nullptr;
       DataPageStats data_page_stats(
           filter_statistics,
-          header.num_values,
+          *header.num_values(),
           /*num_rows=*/std::nullopt);
       if (data_page_filter_(data_page_stats)) {
         return true;
@@ -420,31 +422,31 @@ bool SerializedPageReader::ShouldSkipPage(
     }
   } else if (page_type == PageType::DATA_PAGE_V2) {
     const facebook::velox::parquet::thrift::DataPageHeaderV2& header =
-        current_page_header_.data_page_header_v2;
-    CheckNumValuesInHeader(header.num_values);
-    if (header.num_rows < 0) {
+        *current_page_header_.data_page_header_v2();
+    CheckNumValuesInHeader(*header.num_values());
+    if (*header.num_rows() < 0) {
       throw ParquetException("Invalid page header (negative number of rows)");
     }
-    if (header.definition_levels_byte_length < 0 ||
-        header.repetition_levels_byte_length < 0) {
+    if (*header.definition_levels_byte_length() < 0 ||
+        *header.repetition_levels_byte_length() < 0) {
       throw ParquetException(
           "Invalid page header (negative levels byte length)");
     }
     *data_page_statistics = ExtractStatsFromHeader(header);
-    seen_num_values_ += header.num_values;
+    seen_num_values_ += *header.num_values();
     if (data_page_filter_) {
       const EncodedStatistics* filter_statistics =
           data_page_statistics->is_set() ? data_page_statistics : nullptr;
       DataPageStats data_page_stats(
-          filter_statistics, header.num_values, header.num_rows);
+          filter_statistics, *header.num_values(), *header.num_rows());
       if (data_page_filter_(data_page_stats)) {
         return true;
       }
     }
   } else if (page_type == PageType::DICTIONARY_PAGE) {
     const facebook::velox::parquet::thrift::DictionaryPageHeader& dict_header =
-        current_page_header_.dictionary_page_header;
-    CheckNumValuesInHeader(dict_header.num_values);
+        *current_page_header_.dictionary_page_header();
+    CheckNumValuesInHeader(*dict_header.num_values());
   } else {
     // We don't know what this page type is. We're allowed to skip non-data
     // pages.
@@ -503,8 +505,8 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
     // Advance the stream offset
     PARQUET_THROW_NOT_OK(stream_->Advance(header_size));
 
-    int compressed_len = current_page_header_.compressed_page_size;
-    int uncompressed_len = current_page_header_.uncompressed_page_size;
+    int compressed_len = *current_page_header_.compressed_page_size();
+    int uncompressed_len = *current_page_header_.uncompressed_page_size();
     if (compressed_len < 0 || uncompressed_len < 0) {
       throw ParquetException("Invalid page header");
     }
@@ -531,14 +533,15 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
       ParquetException::EofException(ss.str());
     }
 
-    const PageType::type page_type = LoadEnumSafe(&current_page_header_.type);
+    const PageType::type page_type =
+        LoadEnumSafe(&current_page_header_.type().value());
 
     if (properties_.page_checksum_verification() &&
-        current_page_header_.__isset.crc && PageCanUseChecksum(page_type)) {
+        current_page_header_.crc() && PageCanUseChecksum(page_type)) {
       // verify crc
       uint32_t checksum = ::arrow::internal::crc32(
           /* prev */ 0, page_buffer->data(), compressed_len);
-      if (static_cast<int32_t>(checksum) != current_page_header_.crc) {
+      if (static_cast<int32_t>(checksum) != *current_page_header_.crc()) {
         throw ParquetException(
             "could not verify page integrity, CRC checksum verification failed for "
             "page_ordinal " +
@@ -562,48 +565,46 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
     if (page_type == PageType::DICTIONARY_PAGE) {
       crypto_ctx_.start_decrypt_with_dictionary_page = false;
       const facebook::velox::parquet::thrift::DictionaryPageHeader&
-          dict_header = current_page_header_.dictionary_page_header;
-      bool is_sorted =
-          dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
+          dict_header = *current_page_header_.dictionary_page_header();
+      bool is_sorted = dict_header.is_sorted().value_or(false);
 
       page_buffer = DecompressIfNeeded(
           std::move(page_buffer), compressed_len, uncompressed_len);
 
       return std::make_shared<DictionaryPage>(
           page_buffer,
-          dict_header.num_values,
-          LoadEnumSafe(&dict_header.encoding),
+          *dict_header.num_values(),
+          LoadEnumSafe(&dict_header.encoding().value()),
           is_sorted);
     } else if (page_type == PageType::DATA_PAGE) {
       ++page_ordinal_;
       const facebook::velox::parquet::thrift::DataPageHeader& header =
-          current_page_header_.data_page_header;
+          *current_page_header_.data_page_header();
       page_buffer = DecompressIfNeeded(
           std::move(page_buffer), compressed_len, uncompressed_len);
 
       return std::make_shared<DataPageV1>(
           page_buffer,
-          header.num_values,
-          LoadEnumSafe(&header.encoding),
-          LoadEnumSafe(&header.definition_level_encoding),
-          LoadEnumSafe(&header.repetition_level_encoding),
+          *header.num_values(),
+          LoadEnumSafe(&header.encoding().value()),
+          LoadEnumSafe(&header.definition_level_encoding().value()),
+          LoadEnumSafe(&header.repetition_level_encoding().value()),
           uncompressed_len,
           data_page_statistics);
     } else if (page_type == PageType::DATA_PAGE_V2) {
       ++page_ordinal_;
       const facebook::velox::parquet::thrift::DataPageHeaderV2& header =
-          current_page_header_.data_page_header_v2;
+          *current_page_header_.data_page_header_v2();
 
       // Arrow prior to 3.0.0 set is_compressed to false but still compressed.
       bool is_compressed =
-          (header.__isset.is_compressed ? header.is_compressed : false) ||
-          always_compressed_;
+          header.is_compressed().value_or(false) || always_compressed_;
 
       // Uncompress if needed
       int levels_byte_len;
       if (AddWithOverflow(
-              header.definition_levels_byte_length,
-              header.repetition_levels_byte_length,
+              *header.definition_levels_byte_length(),
+              *header.repetition_levels_byte_length(),
               &levels_byte_len)) {
         throw ParquetException("Levels size too large (corrupt file?)");
       }
@@ -619,12 +620,12 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
 
       return std::make_shared<DataPageV2>(
           page_buffer,
-          header.num_values,
-          header.num_nulls,
-          header.num_rows,
-          LoadEnumSafe(&header.encoding),
-          header.definition_levels_byte_length,
-          header.repetition_levels_byte_length,
+          *header.num_values(),
+          *header.num_nulls(),
+          *header.num_rows(),
+          LoadEnumSafe(&header.encoding().value()),
+          *header.definition_levels_byte_length(),
+          *header.repetition_levels_byte_length(),
           uncompressed_len,
           is_compressed,
           data_page_statistics);

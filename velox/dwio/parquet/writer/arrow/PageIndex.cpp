@@ -18,6 +18,8 @@
 
 #include "velox/dwio/parquet/writer/arrow/PageIndex.h"
 
+#include <thrift/lib/cpp2/FieldRef.h>
+
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
@@ -110,18 +112,18 @@ class TypedColumnIndexImpl : public TypedColumnIndex<DType> {
       : column_index_(std::move(column_index)) {
     // Make sure the number of pages is valid and it does not overflow to
     // int32_t.
-    const size_t num_pages = column_index_.null_pages.size();
+    const size_t num_pages = column_index_.null_pages()->size();
     if (num_pages >= static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-        column_index_.min_values.size() != num_pages ||
-        column_index_.max_values.size() != num_pages ||
-        (column_index_.__isset.null_counts &&
-         column_index_.null_counts.size() != num_pages)) {
+        column_index_.min_values()->size() != num_pages ||
+        column_index_.max_values()->size() != num_pages ||
+        (column_index_.null_counts() &&
+         column_index_.null_counts()->size() != num_pages)) {
       throw ParquetException("Invalid column index");
     }
 
     const size_t num_non_null_pages = static_cast<size_t>(std::accumulate(
-        column_index_.null_pages.cbegin(),
-        column_index_.null_pages.cend(),
+        column_index_.null_pages()->cbegin(),
+        column_index_.null_pages()->cend(),
         0,
         [](int32_t num_non_null_pages, bool null_page) {
           return num_non_null_pages + (null_page ? 0 : 1);
@@ -137,40 +139,40 @@ class TypedColumnIndexImpl : public TypedColumnIndex<DType> {
     // Note that null page are skipped.
     auto plain_decoder = MakeTypedDecoder<DType>(Encoding::PLAIN, &descr);
     for (size_t i = 0; i < num_pages; ++i) {
-      if (!column_index_.null_pages[i]) {
+      if (!(*column_index_.null_pages())[i]) {
         // The check on `num_pages` has guaranteed the cast below is safe.
         non_null_page_indices_.emplace_back(static_cast<int32_t>(i));
         Decode<DType>(
-            plain_decoder, column_index_.min_values[i], &min_values_, i);
+            plain_decoder, (*column_index_.min_values())[i], &min_values_, i);
         Decode<DType>(
-            plain_decoder, column_index_.max_values[i], &max_values_, i);
+            plain_decoder, (*column_index_.max_values())[i], &max_values_, i);
       }
     }
     VELOX_DCHECK_EQ(num_non_null_pages, non_null_page_indices_.size());
   }
 
   const std::vector<bool>& null_pages() const override {
-    return column_index_.null_pages;
+    return *column_index_.null_pages();
   }
 
   const std::vector<std::string>& encoded_min_values() const override {
-    return column_index_.min_values;
+    return *column_index_.min_values();
   }
 
   const std::vector<std::string>& encoded_max_values() const override {
-    return column_index_.max_values;
+    return *column_index_.max_values();
   }
 
   BoundaryOrder::type boundary_order() const override {
-    return LoadEnumSafe(&column_index_.boundary_order);
+    return LoadEnumSafe(&*column_index_.boundary_order());
   }
 
   bool has_null_counts() const override {
-    return column_index_.__isset.null_counts;
+    return column_index_.null_counts().has_value();
   }
 
   const std::vector<int64_t>& null_counts() const override {
-    return column_index_.null_counts;
+    return apache::thrift::can_throw(*column_index_.null_counts());
   }
 
   const std::vector<int32_t>& non_null_page_indices() const override {
@@ -199,13 +201,13 @@ class OffsetIndexImpl : public OffsetIndex {
  public:
   explicit OffsetIndexImpl(
       const facebook::velox::parquet::thrift::OffsetIndex& offset_index) {
-    page_locations_.reserve(offset_index.page_locations.size());
-    for (const auto& page_location : offset_index.page_locations) {
+    page_locations_.reserve(offset_index.page_locations()->size());
+    for (const auto& page_location : *offset_index.page_locations()) {
       page_locations_.emplace_back(
           PageLocation{
-              page_location.offset,
-              page_location.compressed_page_size,
-              page_location.first_row_index});
+              *page_location.offset(),
+              *page_location.compressed_page_size(),
+              *page_location.first_row_index()});
     }
   }
 
@@ -514,8 +516,8 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
     /// Initialize the null_counts vector as set. Invalid null_counts vector
     /// from any page will invalidate the null_counts vector of the column
     /// index.
-    column_index_.__isset.null_counts = true;
-    column_index_.boundary_order =
+    column_index_.null_counts() = {};
+    column_index_.boundary_order() =
         facebook::velox::parquet::thrift::BoundaryOrder::UNORDERED;
   }
 
@@ -530,15 +532,15 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
     state_ = BuilderState::kStarted;
 
     if (stats.all_null_value) {
-      column_index_.null_pages.emplace_back(true);
-      column_index_.min_values.emplace_back("");
-      column_index_.max_values.emplace_back("");
+      column_index_.null_pages()->emplace_back(true);
+      column_index_.min_values()->emplace_back("");
+      column_index_.max_values()->emplace_back("");
     } else if (stats.has_min && stats.has_max) {
-      const size_t page_ordinal = column_index_.null_pages.size();
+      const size_t page_ordinal = column_index_.null_pages()->size();
       non_null_page_indices_.emplace_back(page_ordinal);
-      column_index_.min_values.emplace_back(stats.min());
-      column_index_.max_values.emplace_back(stats.max());
-      column_index_.null_pages.emplace_back(false);
+      column_index_.min_values()->emplace_back(stats.min());
+      column_index_.max_values()->emplace_back(stats.max());
+      column_index_.null_pages()->emplace_back(false);
     } else {
       /// This is a non-null page but it lacks of meaningful min/max values.
       /// Discard the column index.
@@ -546,11 +548,10 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       return;
     }
 
-    if (column_index_.__isset.null_counts && stats.has_null_count) {
-      column_index_.null_counts.emplace_back(stats.null_count);
+    if (column_index_.null_counts() && stats.has_null_count) {
+      column_index_.null_counts()->emplace_back(stats.null_count);
     } else {
-      column_index_.__isset.null_counts = false;
-      column_index_.null_counts.clear();
+      column_index_.null_counts().reset();
     }
   }
 
@@ -573,8 +574,8 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
     state_ = BuilderState::kFinished;
 
     /// Clear null_counts vector because at least one page does not provide it.
-    if (!column_index_.__isset.null_counts) {
-      column_index_.null_counts.clear();
+    if (!column_index_.null_counts()) {
+      column_index_.null_counts().reset();
     }
 
     /// Decode min/max values according to the data type.
@@ -586,14 +587,20 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
     for (size_t i = 0; i < non_null_page_count; ++i) {
       auto page_ordinal = non_null_page_indices_.at(i);
       Decode<DType>(
-          decoder, column_index_.min_values.at(page_ordinal), &min_values, i);
+          decoder,
+          column_index_.min_values()->at(page_ordinal),
+          &min_values,
+          i);
       Decode<DType>(
-          decoder, column_index_.max_values.at(page_ordinal), &max_values, i);
+          decoder,
+          column_index_.max_values()->at(page_ordinal),
+          &max_values,
+          i);
     }
 
     /// Decide the boundary order from decoded min/max values.
     auto boundary_order = DetermineBoundaryOrder(min_values, max_values);
-    column_index_.__set_boundary_order(ToThrift(boundary_order));
+    column_index_.boundary_order() = ToThrift(boundary_order);
   }
 
   void WriteTo(::arrow::io::OutputStream* sink) const override {
@@ -681,10 +688,10 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
     state_ = BuilderState::kStarted;
 
     facebook::velox::parquet::thrift::PageLocation page_location;
-    page_location.__set_offset(offset);
-    page_location.__set_compressed_page_size(compressed_page_size);
-    page_location.__set_first_row_index(first_row_index);
-    offset_index_.page_locations.emplace_back(std::move(page_location));
+    page_location.offset() = offset;
+    page_location.compressed_page_size() = compressed_page_size;
+    page_location.first_row_index() = first_row_index;
+    offset_index_.page_locations()->emplace_back(std::move(page_location));
   }
 
   void Finish(int64_t final_position) override {
@@ -697,8 +704,8 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
       case BuilderState::kStarted: {
         /// Adjust page offsets according the final position.
         if (final_position > 0) {
-          for (auto& page_location : offset_index_.page_locations) {
-            page_location.__set_offset(page_location.offset + final_position);
+          for (auto& page_location : *offset_index_.page_locations()) {
+            page_location.offset() = *page_location.offset() + final_position;
           }
         }
         state_ = BuilderState::kFinished;
