@@ -15,7 +15,9 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -26,8 +28,13 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/DecimalUtil.h"
 
+#include <cudf/column/column_factories.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/utilities/default_stream.hpp>
+
 #include <cuda_runtime_api.h>
 #include <optional>
+#include <type_traits>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -41,6 +48,138 @@ int64_t computeAvgRaw(const std::vector<int64_t>& values) {
   facebook::velox::DecimalUtil::computeAverage(
       avg, sum, values.size(), 0);
   return static_cast<int64_t>(avg);
+}
+
+constexpr int kBitsPerWord = 8 * sizeof(cudf::bitmask_type);
+
+std::pair<rmm::device_buffer, cudf::size_type> makeNullMask(
+    const std::vector<bool>& valid,
+    rmm::cuda_stream_view stream) {
+  auto numBits = static_cast<cudf::size_type>(valid.size());
+  if (numBits == 0) {
+    return {rmm::device_buffer{}, 0};
+  }
+  auto maskBytes = cudf::bitmask_allocation_size_bytes(numBits);
+  auto numWords = maskBytes / sizeof(cudf::bitmask_type);
+  std::vector<cudf::bitmask_type> host(numWords, 0);
+  cudf::size_type nullCount = 0;
+  for (cudf::size_type i = 0; i < numBits; ++i) {
+    if (valid[i]) {
+      auto word = i / kBitsPerWord;
+      auto bit = i % kBitsPerWord;
+      host[word] |= (cudf::bitmask_type{1} << bit);
+    } else {
+      ++nullCount;
+    }
+  }
+  rmm::device_buffer mask(maskBytes, stream);
+  if (!host.empty()) {
+    auto status = cudaMemcpyAsync(
+        mask.data(),
+        host.data(),
+        host.size() * sizeof(cudf::bitmask_type),
+        cudaMemcpyHostToDevice,
+        stream.value());
+    VELOX_CHECK_EQ(0, static_cast<int>(status));
+    stream.synchronize();
+  }
+  return {std::move(mask), nullCount};
+}
+
+template <typename T>
+std::unique_ptr<cudf::column> makeFixedWidthColumn(
+    cudf::data_type type,
+    const std::vector<T>& values,
+    const std::vector<bool>* valid,
+    rmm::cuda_stream_view stream) {
+  auto col = cudf::make_fixed_width_column(
+      type,
+      static_cast<cudf::size_type>(values.size()),
+      cudf::mask_state::UNALLOCATED,
+      stream);
+  if (!values.empty()) {
+    auto status = cudaMemcpyAsync(
+        col->mutable_view().data<T>(),
+        values.data(),
+        values.size() * sizeof(T),
+        cudaMemcpyHostToDevice,
+        stream.value());
+    VELOX_CHECK_EQ(0, static_cast<int>(status));
+    stream.synchronize();
+  }
+  if (valid) {
+    auto [mask, nullCount] = makeNullMask(*valid, stream);
+    col->set_null_mask(std::move(mask), nullCount);
+  }
+  return col;
+}
+
+template <typename T>
+std::unique_ptr<cudf::column> makeDecimalColumn(
+    const std::vector<T>& values,
+    int32_t scale,
+    const std::vector<bool>* valid,
+    rmm::cuda_stream_view stream) {
+  cudf::type_id typeId =
+      std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
+                                 : cudf::type_id::DECIMAL128;
+  cudf::data_type type{typeId, -scale};
+  return makeFixedWidthColumn(type, values, valid, stream);
+}
+
+std::unique_ptr<cudf::column> makeInt64Column(
+    const std::vector<int64_t>& values,
+    const std::vector<bool>* valid,
+    rmm::cuda_stream_view stream) {
+  return makeFixedWidthColumn(
+      cudf::data_type{cudf::type_id::INT64}, values, valid, stream);
+}
+
+template <typename T>
+std::vector<T> copyColumnData(
+    const cudf::column_view& view,
+    rmm::cuda_stream_view stream) {
+  std::vector<T> host(view.size());
+  if (view.size() == 0) {
+    return host;
+  }
+  auto status = cudaMemcpyAsync(
+      host.data(),
+      view.data<T>(),
+      view.size() * sizeof(T),
+      cudaMemcpyDeviceToHost,
+      stream.value());
+  VELOX_CHECK_EQ(0, static_cast<int>(status));
+  stream.synchronize();
+  return host;
+}
+
+std::vector<cudf::bitmask_type> copyNullMask(
+    const cudf::column_view& view,
+    rmm::cuda_stream_view stream) {
+  auto numWords = cudf::num_bitmask_words(view.size());
+  std::vector<cudf::bitmask_type> host(numWords, 0);
+  if (!view.nullable() || numWords == 0) {
+    return host;
+  }
+  auto status = cudaMemcpyAsync(
+      host.data(),
+      view.null_mask(),
+      host.size() * sizeof(cudf::bitmask_type),
+      cudaMemcpyDeviceToHost,
+      stream.value());
+  VELOX_CHECK_EQ(0, static_cast<int>(status));
+  stream.synchronize();
+  return host;
+}
+
+bool isValidAt(const std::vector<cudf::bitmask_type>& mask, size_t idx) {
+  if (mask.empty()) {
+    return true;
+  }
+  auto word = idx / kBitsPerWord;
+  auto bit = idx % kBitsPerWord;
+  return (mask[word] >> bit) & 1;
 }
 
 class CudfDecimalTest : public exec::test::OperatorTestBase {
@@ -1075,6 +1214,233 @@ TEST_F(CudfDecimalTest, decimalSumGlobalIntermediateVarbinaryAllNulls) {
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {
+  auto stream = cudf::get_default_stream();
+  std::vector<int64_t> sums = {100, -200, 300};
+  std::vector<int64_t> counts = {1, 2, 0};
+  std::vector<bool> sumValid = {true, false, true};
+  std::vector<bool> countValid = {true, true, true};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+  auto sumOnly =
+      deserializeDecimalSumState(stateCol->view(), 2, stream);
+
+  auto stateMask = copyNullMask(stateCol->view(), stream);
+  auto sumMask = copyNullMask(sumOnly->view(), stream);
+  EXPECT_EQ(stateMask, sumMask);
+
+  auto outSum = copyColumnData<__int128_t>(sumOnly->view(), stream);
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(sumMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outSum[i], static_cast<__int128_t>(sums[i]));
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
+  auto stream = cudf::get_default_stream();
+  std::vector<__int128_t> sums = {
+      static_cast<__int128_t>(123450),
+      static_cast<__int128_t>(-25000),
+      static_cast<__int128_t>(100000),
+  };
+  std::vector<int64_t> counts = {2, 1, 0};
+  std::vector<bool> sumValid = {true, true, true};
+  std::vector<bool> countValid = {true, false, true};
+
+  auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+  auto sumOnly =
+      deserializeDecimalSumState(stateCol->view(), 3, stream);
+
+  auto stateMask = copyNullMask(stateCol->view(), stream);
+  auto sumMask = copyNullMask(sumOnly->view(), stream);
+  EXPECT_EQ(stateMask, sumMask);
+
+  auto outSum = copyColumnData<__int128_t>(sumOnly->view(), stream);
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(sumMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outSum[i], sums[i]);
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
+  auto stream = cudf::get_default_stream();
+  std::vector<int64_t> sums = {100, 105, 250, -125};
+  std::vector<int64_t> counts = {4, 2, 0, 2};
+  std::vector<bool> sumValid = {true, true, true, true};
+  std::vector<bool> countValid = {true, false, true, true};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
+
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::divideWithRoundUp<
+        __int128_t,
+        __int128_t,
+        int64_t>(out, sum, count, false, 0, 0);
+    return static_cast<int64_t>(out);
+  };
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(avgMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
+  auto stream = cudf::get_default_stream();
+  std::vector<__int128_t> sums = {
+      static_cast<__int128_t>(123450),
+      static_cast<__int128_t>(-25000),
+      static_cast<__int128_t>(100000),
+  };
+  std::vector<int64_t> counts = {3, 2, 0};
+  std::vector<bool> sumValid = {true, true, true};
+  std::vector<bool> countValid = {true, true, true};
+
+  auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
+
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::divideWithRoundUp<
+        __int128_t,
+        __int128_t,
+        int64_t>(out, sum, count, false, 0, 0);
+    return out;
+  };
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(avgMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal64) {
+  auto stream = cudf::get_default_stream();
+  std::vector<int64_t> sums = {100, -200, 300, 400};
+  std::vector<int64_t> counts = {1, 0, 2, 3};
+  std::vector<bool> sumValid = {true, true, false, true};
+  std::vector<bool> countValid = {true, true, true, false};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+  auto stateMask = copyNullMask(stateCol->view(), stream);
+
+  auto decoded =
+      deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream);
+  auto outSumView = decoded.sum->view();
+  auto outCountView = decoded.count->view();
+  auto outSum = copyColumnData<__int128_t>(outSumView, stream);
+  auto outCount = copyColumnData<int64_t>(outCountView, stream);
+  auto outSumMask = copyNullMask(outSumView, stream);
+  auto outCountMask = copyNullMask(outCountView, stream);
+
+  EXPECT_EQ(stateMask, outSumMask);
+  EXPECT_EQ(stateMask, outCountMask);
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(stateMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outSum[i], static_cast<__int128_t>(sums[i]));
+      EXPECT_EQ(outCount[i], counts[i]);
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal128) {
+  auto stream = cudf::get_default_stream();
+  std::vector<__int128_t> sums = {
+      static_cast<__int128_t>(123450),
+      static_cast<__int128_t>(-25000),
+      static_cast<__int128_t>(100000),
+  };
+  std::vector<int64_t> counts = {2, 1, 0};
+  std::vector<bool> sumValid = {true, false, true};
+  std::vector<bool> countValid = {true, true, true};
+
+  auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+  auto stateMask = copyNullMask(stateCol->view(), stream);
+
+  auto decoded =
+      deserializeDecimalSumStateWithCount(stateCol->view(), 3, stream);
+  auto outSumView = decoded.sum->view();
+  auto outCountView = decoded.count->view();
+  auto outSum = copyColumnData<__int128_t>(outSumView, stream);
+  auto outCount = copyColumnData<int64_t>(outCountView, stream);
+  auto outSumMask = copyNullMask(outSumView, stream);
+  auto outCountMask = copyNullMask(outCountView, stream);
+
+  EXPECT_EQ(stateMask, outSumMask);
+  EXPECT_EQ(stateMask, outCountMask);
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(stateMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outSum[i], sums[i]);
+      EXPECT_EQ(outCount[i], counts[i]);
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, cudfVarbinaryArrowRoundTrip) {
+  auto input = makeRowVector(
+      {"bin"},
+      {makeNullableFlatVector<std::string>(
+          {std::string("abc"), std::nullopt, std::string("xyz")},
+          VARBINARY())});
+
+  auto stream = cudf::get_default_stream();
+  auto cudfTable = with_arrow::toCudfTable(input, pool(), stream);
+  auto roundTrip =
+      with_arrow::toVeloxColumn(cudfTable->view(), pool(), "rt_", stream);
+
+  ASSERT_EQ(roundTrip->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+
+  auto expected = makeRowVector(
+      {"rt_0"},
+      {makeNullableFlatVector<std::string>(
+          {std::string("abc"), std::nullopt, std::string("xyz")},
+          VARCHAR())});
+
+  facebook::velox::test::assertEqualVectors(expected, roundTrip);
 }
 
 } // namespace
