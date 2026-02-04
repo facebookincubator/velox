@@ -235,6 +235,12 @@ TEST_F(SparkCastExprTest, invalidDate) {
 }
 
 TEST_F(SparkCastExprTest, stringToDate) {
+  // Set up scope guard to restore ANSI mode after test
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   // Valid dates.
   testCast<std::string, int32_t>(
       "date",
@@ -250,7 +256,7 @@ TEST_F(SparkCastExprTest, stringToDate) {
       VARCHAR(),
       DATE());
 
-  // Invalid dates return null.
+  // ANSI OFF: Invalid dates return null.
   testCast<std::string, int32_t>(
       "date",
       {"2012-Oct-23", /*Invalid format*/
@@ -260,6 +266,30 @@ TEST_F(SparkCastExprTest, stringToDate) {
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
       VARCHAR(),
       DATE());
+
+  // ANSI ON: Invalid dates throw exceptions.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(
+      testCast<std::string, int32_t>(
+          "date", {"2012-Oct-23"}, {std::nullopt}, VARCHAR(), DATE()),
+      "Invalid date format");
+
+  VELOX_ASSERT_THROW(
+      testCast<std::string, int32_t>(
+          "date", {"2015/03/18"}, {std::nullopt}, VARCHAR(), DATE()),
+      "Invalid date format");
+
+  VELOX_ASSERT_THROW(
+      testCast<std::string, int32_t>(
+          "date", {"2015-13-01"}, {std::nullopt}, VARCHAR(), DATE()),
+      "Invalid date format");
+
+  VELOX_ASSERT_THROW(
+      testCast<std::string, int32_t>(
+          "date", {"2015-02-30"}, {std::nullopt}, VARCHAR(), DATE()),
+      "Invalid date format");
 }
 
 TEST_F(SparkCastExprTest, stringToTimestamp) {
