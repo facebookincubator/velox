@@ -6663,6 +6663,71 @@ TEST_F(DateTimeFunctionsTest, localtime) {
   EXPECT_EQ(localVal, 32400000); // 9 AM UTC
 }
 
+TEST_F(DateTimeFunctionsTest, localtimestamp) {
+  const auto localtimestamp = [&](int64_t sessionStartTime,
+                                  const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    auto rowVector = makeRowVector({});
+    rowVector->resize(1);
+    auto result = evaluate("localtimestamp()", rowVector);
+    DecodedVector decoded(*result);
+    return decoded.valueAt<Timestamp>(0);
+  };
+
+  auto utcVal = localtimestamp(0, std::nullopt);
+  EXPECT_EQ(utcVal, Timestamp::fromMillis(0));
+
+  auto localVal = localtimestamp(1758499200000, "America/Los_Angeles");
+  EXPECT_EQ(localVal, Timestamp::fromMillis(1758499200000));
+
+  localVal = localtimestamp(1710061200000, "America/Los_Angeles");
+  EXPECT_EQ(localVal, Timestamp::fromMillis(1710061200000));
+}
+
+TEST_F(DateTimeFunctionsTest, currentTime) {
+  const auto callCurrentTime = [&](int64_t sessionStartTime,
+                                   const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    auto rowVector = makeRowVector({});
+    rowVector->resize(1);
+
+    auto result = evaluate("current_time()", rowVector);
+    DecodedVector decoded(*result);
+    return decoded.valueAt<int64_t>(0);
+  };
+
+  // Test without timezone
+  EXPECT_THROW(
+      {
+        try {
+          callCurrentTime(0, std::nullopt);
+        } catch (const VeloxException& e) {
+          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
+          throw;
+        }
+      },
+      VeloxException);
+
+  // Test with timezone America/Los_Angeles
+  auto laPacked = callCurrentTime(1758499200000, "America/Los_Angeles");
+  auto millisUtc = util::unpackMillisUtc(laPacked);
+  auto zoneOffset = util::unpackZoneOffset(laPacked);
+
+  EXPECT_EQ(millisUtc, 17 * 60 * 60 * 1000);
+  EXPECT_GE(zoneOffset, 0);
+  EXPECT_LE(zoneOffset, 2 * util::kTimeZoneBias);
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffTime) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int64_t> time1,

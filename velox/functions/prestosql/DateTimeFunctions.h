@@ -2113,4 +2113,59 @@ struct LocalTimeFunction {
   int64_t localTimeSinceMidnight_;
 };
 
+template <typename T>
+struct LocalTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    result_ = Timestamp::fromMillis(config.sessionStartTimeMs());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
+    result = result_;
+  }
+
+ private:
+  Timestamp result_;
+};
+
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+    auto localTimeMs =
+        timeZone_->to_local(std::chrono::milliseconds(sessionStartTimeMs))
+            .count();
+    auto timeSinceMidnight = localTimeMs % kMillisInDay;
+    if (timeSinceMidnight < 0) {
+      timeSinceMidnight += kMillisInDay;
+    }
+
+    auto offsetMs = localTimeMs - sessionStartTimeMs;
+    auto offsetMinutes = static_cast<int16_t>(offsetMs / (60 * 1000));
+
+    auto encodedOffset = util::biasEncode(offsetMinutes);
+    result_ = util::pack(timeSinceMidnight, encodedOffset);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    result = result_;
+  }
+
+ private:
+  int64_t result_;
+  const tz::TimeZone* timeZone_ = nullptr;
+};
+
 } // namespace facebook::velox::functions

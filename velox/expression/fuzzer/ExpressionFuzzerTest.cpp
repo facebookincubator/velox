@@ -452,6 +452,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
+    "localtimestamp", // Same as localtime - cannot use parenthesis in Presto
+    "current_time", // Same as localtime - cannot use parenthesis in Presto
     "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
     // Fuzzer and the underlying engine are confused about SetDigest functions
     // (since KHLL is a user defined type), and tries to pass a
