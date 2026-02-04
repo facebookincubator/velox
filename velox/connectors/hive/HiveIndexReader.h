@@ -100,7 +100,7 @@ class HiveIndexReader {
   // declared before rowReader_.
   std::unique_ptr<dwio::common::RowReader> createRowReader();
 
-  // Initializes indexColumnSpecs_ and requestColumnIndices_ from join
+  // Initializes joinIndexColumnSpecs_ and requestColumnIndices_ from join
   // conditions.
   void initJoinConditions();
 
@@ -139,7 +139,7 @@ class HiveIndexReader {
   const std::vector<core::IndexLookupConditionPtr> joinConditions_;
 
   // Cached ScanSpec children for index columns used in join conditions.
-  std::vector<common::ScanSpec*> indexColumnSpecs_;
+  std::vector<common::ScanSpec*> joinIndexColumnSpecs_;
   // Request column indices for each join condition (for probe side columns).
   // For EqualIndexLookupCondition, stores {valueIndex}.
   // For BetweenIndexLookupCondition, stores {lowerIndex, upperIndex}.
@@ -154,7 +154,14 @@ class HiveIndexReader {
   // Indexed by join condition index and then by column index within that
   // condition (0 for equal condition value, 0/1 for between condition
   // lower/upper).
-  std::vector<std::vector<DecodedVector>> decodedVectors_;
+  std::vector<std::vector<DecodedVector>> decodedRequestVectors_;
+
+  // For BetweenIndexLookupCondition with constant bounds, stores the constant
+  // values directly. The outer vector is indexed by join condition index. The
+  // inner vector has size 2 for between conditions (lower, upper). If a bound
+  // is a constant, the corresponding optional contains the value; otherwise
+  // it's std::nullopt and the value should be decoded from request.
+  std::vector<std::vector<std::optional<variant>>> constantBoundValues_;
 };
 
 } // namespace facebook::velox::connector::hive

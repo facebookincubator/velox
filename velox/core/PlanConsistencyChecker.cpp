@@ -163,6 +163,8 @@ class Checker : public PlanNodeVisitor {
       checkInputs(node.joinCondition(), rowType);
     }
 
+    verifyOutputNames(node);
+
     visitSources(&node, ctx);
   }
 

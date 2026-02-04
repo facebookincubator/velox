@@ -25,6 +25,7 @@ add_library(
   TableScanReplayer.cpp
   TableWriterReplayer.cpp
   TopNRowNumberReplayer.cpp
+  TraceReplayerConfigPrompt.cpp
   TraceReplayRunner.cpp
   TraceReplayTaskRunner.cpp
   UnnestReplayer.cpp
