@@ -130,7 +130,10 @@ FROM centos9 AS adapters
 
 COPY scripts/setup-centos-adapters.sh /
 
-RUN bash /setup-centos-adapters.sh install_cuda && \
+ARG CUDA_VERSION
+ENV CUDA_VERSION=${CUDA_VERSION:-12.9}
+
+RUN bash /setup-centos-adapters.sh install_cuda ${CUDA_VERSION} && \
       dnf clean all
 
 RUN bash /setup-centos-adapters.sh install_adapters_deps_from_dnf && \
