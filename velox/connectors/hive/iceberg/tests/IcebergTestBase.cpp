@@ -277,8 +277,6 @@ IcebergTestBase::extractPartitionKeys(const std::string& filePath) {
 std::vector<std::shared_ptr<ConnectorSplit>>
 IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
-  std::unordered_map<std::string, std::string> customSplitInfo;
-  customSplitInfo["table_format"] = "hive-iceberg";
 
   auto files = listFiles(directory);
   for (const auto& filePath : files) {
@@ -295,7 +293,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
             file->size(),
             partitionKeys,
             std::nullopt,
-            customSplitInfo,
+            std::unordered_map<std::string, std::string>{},
             nullptr,
             /*cacheable=*/true,
             std::vector<IcebergDeleteFile>()));
