@@ -133,7 +133,7 @@ COPY scripts/setup-centos-adapters.sh /
 ARG CUDA_VERSION
 ENV CUDA_VERSION=${CUDA_VERSION:-12.9}
 
-RUN bash /setup-centos-adapters.sh install_cuda ${CUDA_VERSION} && \
+RUN bash /setup-centos-adapters.sh install_cuda && \
       dnf clean all
 
 RUN bash /setup-centos-adapters.sh install_adapters_deps_from_dnf && \
