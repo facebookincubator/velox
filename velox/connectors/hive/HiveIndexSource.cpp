@@ -271,8 +271,11 @@ std::vector<std::string> HiveIndexSource::initJoinConditions(
         filters_.find(subfield) == filters_.end(),
         "Unexpected filter found on index column {}",
         columnName);
-    VELOX_CHECK(!condition->isFilter());
-    // Non-filter conditions are kept as join conditions.
+    VELOX_CHECK(
+        !condition->isFilter(),
+        "Join condition on index column '{}' cannot be a filter condition",
+        columnName);
+
     joinConditions_.push_back(condition);
     joinColumns.push_back(columnName);
   }
