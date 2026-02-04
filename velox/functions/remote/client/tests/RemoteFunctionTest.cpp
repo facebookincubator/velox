@@ -16,9 +16,11 @@
 
 #include <folly/SocketAddress.h>
 #include <folly/init/Init.h>
+#include <gflags/gflags.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
+#include <thrift/lib/cpp/transport/TTransportException.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -36,6 +38,9 @@
 #include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/VectorStream.h"
+
+DECLARE_int32(remote_function_retry_count);
+DECLARE_int32(remote_function_retry_max_backoff_sec);
 
 using ::apache::thrift::ThriftServer;
 using ::facebook::velox::test::assertEqualVectors;
@@ -147,6 +152,9 @@ class RemoteFunctionTest
     OpaqueType::registerSerialization<Foo>(
         "Foo", Foo::serialize, Foo::deserialize);
   }
+
+ private:
+  gflags::FlagSaver flagSaver_;
 };
 
 TEST_P(RemoteFunctionTest, simple) {
@@ -250,6 +258,9 @@ TEST_P(RemoteFunctionTest, opaque) {
 }
 
 TEST_P(RemoteFunctionTest, connectionError) {
+  // Disable retries for faster test execution.
+  FLAGS_remote_function_retry_count = 0;
+
   auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   auto func = [&]() {
     evaluate<SimpleVector<int64_t>>(
@@ -338,6 +349,8 @@ class MockRemoteFunctionTest : public functions::test::FunctionBaseTest {
   }
 
  protected:
+  // Saves and restores gflags values between tests (e.g., retry settings).
+  gflags::FlagSaver flagSaver_;
   std::shared_ptr<testing::NiceMock<MockRemoteFunctionClient>> mockClient_;
 };
 
@@ -391,6 +404,88 @@ TEST_F(MockRemoteFunctionTest, mockClientThrowsException) {
       evaluate<SimpleVector<int64_t>>(
           "mock_throwing(c0)", makeRowVector({inputVector})),
       "Mock connection error");
+}
+
+TEST_F(MockRemoteFunctionTest, retryOnTransportError) {
+  // Register a mock remote function.
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_retry", signatures);
+
+  // Configure retry settings to minimize test time.
+  FLAGS_remote_function_retry_count = 3;
+  FLAGS_remote_function_retry_max_backoff_sec = 1;
+
+  int callCount = 0;
+
+  // Set up the mock to fail once with a transport error, then succeed.
+  EXPECT_CALL(*mockClient_, invokeFunction(testing::_, testing::_))
+      .WillOnce([&callCount](
+                    remote::RemoteFunctionResponse&,
+                    const remote::RemoteFunctionRequest&) {
+        ++callCount;
+        throw apache::thrift::transport::TTransportException(
+            apache::thrift::transport::TTransportException::NOT_OPEN,
+            "Connection refused");
+      })
+      .WillOnce([this, &callCount](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest&) {
+        ++callCount;
+        auto resultVector = makeRowVector({makeFlatVector<int64_t>({2, 4, 6})});
+        setMockResponse(response, resultVector);
+      });
+
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "mock_retry(c0, c0)", makeRowVector({inputVector}));
+
+  // Verify the function succeeded after retry.
+  auto expected = makeFlatVector<int64_t>({2, 4, 6});
+  assertEqualVectors(expected, results);
+
+  // Verify the mock was called twice (one failure + one success).
+  EXPECT_EQ(callCount, 2);
+}
+
+TEST_F(MockRemoteFunctionTest, retryExhausted) {
+  // Register a mock remote function.
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_retry_exhausted", signatures);
+
+  // Configure retry settings to minimize test time.
+  FLAGS_remote_function_retry_count = 2;
+  FLAGS_remote_function_retry_max_backoff_sec = 1;
+
+  int callCount = 0;
+
+  // Set up the mock to always fail with transport errors.
+  EXPECT_CALL(*mockClient_, invokeFunction(testing::_, testing::_))
+      .WillRepeatedly([&callCount](
+                          remote::RemoteFunctionResponse&,
+                          const remote::RemoteFunctionRequest&) {
+        ++callCount;
+        throw apache::thrift::transport::TTransportException(
+            apache::thrift::transport::TTransportException::NOT_OPEN,
+            "Connection refused");
+      });
+
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+
+  // Verify the exception is propagated after retries are exhausted.
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "mock_retry_exhausted(c0)", makeRowVector({inputVector})),
+      "Connection refused");
+
+  // Verify the mock was called retry_count + 1 times (initial + retries).
+  EXPECT_EQ(callCount, FLAGS_remote_function_retry_count + 1);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
