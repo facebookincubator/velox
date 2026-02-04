@@ -112,6 +112,8 @@ std::unique_ptr<cudf::table> toCudfTable(
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
   // in the null mask.
   ArrowOptions arrowOptions{true, true};
+  // libcudf does not support Arrow binary; export VARBINARY as UTF-8.
+  arrowOptions.exportVarbinaryAsString = true;
   ArrowArray arrowArray;
   exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),

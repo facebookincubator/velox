@@ -308,6 +308,9 @@ const char* exportArrowFormatStr(
       }
       return "u"; // utf-8 string
     case TypeKind::VARBINARY:
+      if (options.exportVarbinaryAsString) {
+        return "u"; // utf-8 string (binary payload)
+      }
       if (options.exportToStringView) {
         return "vz";
       }
