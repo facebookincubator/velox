@@ -315,6 +315,7 @@ TEST_F(TableWriterReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  resetHiveConnector();
 
   const auto traceOutputDir = TempDirectoryPath::create();
   FLAGS_task_id = task->taskId();
@@ -326,6 +327,7 @@ TEST_F(TableWriterReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  resetHiveConnector();
 }
 
 TEST_F(TableWriterReplayerTest, basic) {
