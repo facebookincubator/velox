@@ -189,7 +189,7 @@ fetchByteRanges(
           break;
         }
         ioSize += byteRanges[nextChunk].size();
-        next_chunk++;
+        nextChunk++;
       }
 
       // Padding is necessary for input/output buffers of several
@@ -198,9 +198,9 @@ fetchByteRanges(
       // shift along the address space to satisfy their alignment requirement.
       constexpr size_t bufferPaddingMultiple = 8;
 
-      if (io_size != 0) {
+      if (ioSize != 0) {
         columnChunkBuffers.emplace_back(
-            cudf::util::round_up_safe(io_size, bufferPaddingMultiple),
+            cudf::util::round_up_safe(ioSize, bufferPaddingMultiple),
             stream,
             mr);
         // Directly read the column chunk data to the device buffer if
