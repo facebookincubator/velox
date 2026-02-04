@@ -613,7 +613,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
 } // namespace
 
 std::vector<ColumnOrView> precomputeSubexpressions(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    const std::vector<cudf::column_view>& inputColumnViews,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
@@ -632,7 +632,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
     // If a compiled cudf node is available, evaluate it directly.
     if (cudf_expression) {
       auto result = cudf_expression->eval(
-          inputTableColumns,
+          inputColumnViews,
           stream,
           cudf::get_current_device_resource_ref(),
           /*finalize=*/true);
@@ -644,13 +644,13 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           std::stoi(ins_name.substr(5)); // "fill " is 5 characters
       auto newColumn = cudf::make_column_from_scalar(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
-          inputTableColumns[dependent_column_index]->size(),
+          inputColumnViews[dependent_column_index].size(),
           stream,
           cudf::get_current_device_resource_ref());
       precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.
-      auto view = inputTableColumns[dependent_column_index]->view().child(
+      auto view = inputColumnViews[dependent_column_index].child(
           nested_dependent_column_indices[0]);
       precomputedColumns.push_back(view);
     } else {
@@ -714,25 +714,20 @@ void ASTExpression::close() {
 }
 
 ColumnOrView ASTExpression::eval(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    std::vector<cudf::column_view> inputColumnViews,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   auto precomputedColumns = precomputeSubexpressions(
-      inputTableColumns,
+      inputColumnViews,
       precomputeInstructions_,
       scalars_,
       inputRowSchema_,
       stream);
 
   // Make table_view from input columns and precomputed columns
-  std::vector<cudf::column_view> allColumnViews;
-  allColumnViews.reserve(inputTableColumns.size() + precomputedColumns.size());
-
-  for (const auto& col : inputTableColumns) {
-    allColumnViews.push_back(col->view());
-  }
-
+  std::vector<cudf::column_view> allColumnViews(inputColumnViews);
+  allColumnViews.reserve(inputColumnViews.size() + precomputedColumns.size());
   for (auto& precomputedCol : precomputedColumns) {
     allColumnViews.push_back(asView(precomputedCol));
   }
@@ -743,12 +738,12 @@ ColumnOrView ASTExpression::eval(
     if (auto colRefPtr = dynamic_cast<cudf::ast::column_reference const*>(
             &cudfTree_.back())) {
       auto columnIndex = colRefPtr->get_column_index();
-      if (columnIndex < inputTableColumns.size()) {
-        return inputTableColumns[columnIndex]->view();
+      if (columnIndex < inputColumnViews.size()) {
+        return inputColumnViews[columnIndex];
       } else {
         // Referencing a precomputed column return as it is (view or owned)
         return std::move(
-            precomputedColumns[columnIndex - inputTableColumns.size()]);
+            precomputedColumns[columnIndex - inputColumnViews.size()]);
       }
     } else {
       if (CudfConfig::getInstance().debugEnabled) {

@@ -52,22 +52,6 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-/// Creates columns from a table view for precomputation
-std::vector<std::unique_ptr<cudf::column>> tableViewToColumns(
-    cudf::table_view tableView,
-    rmm::cuda_stream_view stream) {
-  std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.reserve(tableView.num_columns());
-  for (cudf::size_type i = 0; i < tableView.num_columns(); ++i) {
-    columns.push_back(
-        std::make_unique<cudf::column>(
-            tableView.column(i),
-            stream,
-            cudf::get_current_device_resource_ref()));
-  }
-  return columns;
-}
-
 /// Creates extended table view by appending precomputed columns
 cudf::table_view createExtendedTableView(
     cudf::table_view originalView,
@@ -418,10 +402,6 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     }
   }
 
-  // Store row types for precomputation
-  probeType_ = probeType;
-  buildType_ = buildType;
-
   // Setup filter in case it exists
   if (joinNode_->filter()) {
     // simplify expression
@@ -437,7 +417,6 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // create ast tree
     std::vector<PrecomputeInstruction> rightPrecomputeInstructions;
     std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
-    static constexpr bool kAllowPureAstOnly = false;
     if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
       createAstTree(
           exprs.exprs()[0],
@@ -447,7 +426,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           probeType,
           rightPrecomputeInstructions,
           leftPrecomputeInstructions,
-          kAllowPureAstOnly);
+          false);
     } else {
       createAstTree(
           exprs.exprs()[0],
@@ -457,7 +436,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           buildType,
           leftPrecomputeInstructions,
           rightPrecomputeInstructions,
-          kAllowPureAstOnly);
+          false);
     }
     // Store precompute instructions for use during join execution
     leftPrecomputeInstructions_ = std::move(leftPrecomputeInstructions);
@@ -663,8 +642,13 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
   auto filterEvaluator = createCudfExpression(
       exprs.exprs()[0], facebook::velox::type::concatRowTypes(rowTypes));
+  std::vector<cudf::column_view> inputViews;
+  inputViews.reserve(joinedCols.size());
+  for (auto& col : joinedCols) {
+    inputViews.push_back(col->view());
+  }
   auto filterColumns = filterEvaluator->eval(
-      joinedCols, stream, cudf::get_current_device_resource_ref());
+      inputViews, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
@@ -736,9 +720,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
   std::vector<ColumnOrView> leftPrecomputed;
   cudf::table_view extendedLeftView = leftTableView;
   if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
-    leftOwnedColumns = tableViewToColumns(leftTableView, stream);
+    auto leftColumnViews = tableViewToColumnViews(leftTableView);
     leftPrecomputed = precomputeSubexpressions(
-        leftOwnedColumns,
+        leftColumnViews,
         leftPrecomputeInstructions_,
         scalars_,
         probeType_,
@@ -755,9 +739,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     std::vector<ColumnOrView> rightPrecomputed;
     cudf::table_view extendedRightView = rightTableView;
     if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
-      rightOwnedColumns = tableViewToColumns(rightTableView, stream);
+      auto rightColumnViews = tableViewToColumnViews(rightTableView);
       rightPrecomputed = precomputeSubexpressions(
-          rightOwnedColumns,
+          rightColumnViews,
           rightPrecomputeInstructions_,
           scalars_,
           buildType_,
@@ -824,9 +808,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
   std::vector<ColumnOrView> leftPrecomputed;
   cudf::table_view extendedLeftView = leftTableView;
   if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
-    leftOwnedColumns = tableViewToColumns(leftTableView, stream);
+    auto leftColumnViews = tableViewToColumnViews(leftTableView);
     leftPrecomputed = precomputeSubexpressions(
-        leftOwnedColumns,
+        leftColumnViews,
         leftPrecomputeInstructions_,
         scalars_,
         probeType_,
@@ -843,9 +827,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     std::vector<ColumnOrView> rightPrecomputed;
     cudf::table_view extendedRightView = rightTableView;
     if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
-      rightOwnedColumns = tableViewToColumns(rightTableView, stream);
+      auto rightColumnViews = tableViewToColumnViews(rightTableView);
       rightPrecomputed = precomputeSubexpressions(
-          rightOwnedColumns,
+          rightColumnViews,
           rightPrecomputeInstructions_,
           scalars_,
           buildType_,
