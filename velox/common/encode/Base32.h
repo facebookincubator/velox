@@ -53,6 +53,20 @@ class Base32 {
       const char* input,
       const size_t inputSize);
 
+  /// Encodes the specified text into Base32.
+  static std::string encode(std::string_view text);
+
+  /// Encodes the specified number of characters from the 'input'.
+  static std::string encode(const char* input, size_t inputSize);
+
+  /// Encodes the specified number of characters from the 'input' and writes
+  /// the result to the 'outputBuffer'. The output must have enough space as
+  /// returned by calculateEncodedSize().
+  static void encode(const char* input, size_t inputSize, char* outputBuffer);
+
+  /// Calculates the encoded size based on input 'inputSize'.
+  static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
+
   // Constants defining the size in bytes of binary and encoded blocks for
   // Base32 encoding. Size of a binary block in bytes (5 bytes = 40 bits).
   static const int kBinaryBlockByteSize = 5;
@@ -65,6 +79,13 @@ class Base32 {
   static folly::Expected<uint8_t, Status> base32ReverseLookup(
       char encodedChar,
       const ReverseIndex& reverseIndex);
+
+  // Encodes the specified data using the provided charset.
+  static void encodeImpl(
+      const char* input,
+      size_t inputSize,
+      const Charset& charset,
+      char* outputBuffer);
 
   // Decodes the specified data using the provided reverse lookup table.
   static folly::Expected<size_t, Status> decodeImpl(

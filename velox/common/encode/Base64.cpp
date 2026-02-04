@@ -142,7 +142,7 @@ std::string Base64::encodeImpl(
 // static
 size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
   return BaseEncoderUtils::calculateEncodedSize(
-      inputSize, withPadding, kBinaryBlockByteSize, kEncodedBlockByteSize);
+      inputSize, withPadding, kBase64BlockSizes);
 }
 
 // static
@@ -326,10 +326,7 @@ Expected<size_t> Base64::calculateDecodedSize(
     const char* input,
     size_t& inputSize) {
   return BaseEncoderUtils::calculateDecodedSize(
-      std::string_view(input, inputSize),
-      inputSize,
-      kBinaryBlockByteSize,
-      kEncodedBlockByteSize);
+      std::string_view(input, inputSize), inputSize, kBase64BlockSizes);
 }
 
 // static

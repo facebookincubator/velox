@@ -23,6 +23,15 @@
 
 namespace facebook::velox::encoding {
 
+/// Describes the binary and encoded block sizes for a base encoding codec.
+struct CodecBlockSizes {
+  int binaryBlockByteSize;
+  int encodedBlockByteSize;
+};
+
+static constexpr CodecBlockSizes kBase64BlockSizes{3, 4};
+static constexpr CodecBlockSizes kBase32BlockSizes{5, 8};
+
 /// Shared utility functions for base encoding schemes (e.g. Base64, Base32).
 /// Provides common operations for padding detection, charset validation,
 /// reverse lookup, and encoded size calculation.
@@ -126,86 +135,20 @@ class BaseEncoderUtils {
   /// @param input The encoded input string (used to detect trailing padding).
   /// @param inputSize The length of the encoded input. Modified on return to
   ///   exclude padding characters.
-  /// @param binaryBlockByteSize Number of bytes per binary block
-  ///   (3 for Base64, 5 for Base32).
-  /// @param encodedBlockByteSize Number of characters per encoded block
-  ///   (4 for Base64, 8 for Base32).
+  /// @param blockSizes The binary and encoded block sizes for the codec.
   static Expected<size_t> calculateDecodedSize(
       std::string_view input,
       size_t& inputSize,
-      int binaryBlockByteSize,
-      int encodedBlockByteSize) {
-    if (inputSize == 0) {
-      return 0;
-    }
-
-    // Check if the input string is padded.
-    if (isPadded(input)) {
-      // If padded, ensure that the string length is a multiple of the encoded
-      // block size.
-      if (inputSize % encodedBlockByteSize != 0) {
-        return folly::makeUnexpected(
-            Status::UserError("decode() - invalid input string length."));
-      }
-
-      auto decodedSize =
-          (inputSize * binaryBlockByteSize) / encodedBlockByteSize;
-      auto paddingCount = numPadding(input);
-      inputSize -= paddingCount;
-
-      // Adjust the needed size by deducting the bytes corresponding to the
-      // padding from the calculated size.
-      return decodedSize -
-          ((paddingCount * binaryBlockByteSize) + (encodedBlockByteSize - 1)) /
-          encodedBlockByteSize;
-    }
-
-    // If not padded, calculate extra bytes, if any.
-    auto extraBytes = inputSize % encodedBlockByteSize;
-    auto decodedSize = (inputSize / encodedBlockByteSize) * binaryBlockByteSize;
-
-    // Adjust the needed size for extra bytes, if present.
-    if (extraBytes) {
-      if (extraBytes == 1) {
-        return folly::makeUnexpected(
-            Status::UserError("decode() - invalid input string length."));
-      }
-      decodedSize += (extraBytes * binaryBlockByteSize) / encodedBlockByteSize;
-    }
-
-    return decodedSize;
-  }
+      const CodecBlockSizes& blockSizes);
 
   /// Calculates the encoded output size based on input size and block sizes.
   /// @param inputSize Size of the input data in bytes.
   /// @param includePadding Whether to include padding in the output.
-  /// @param binaryBlockByteSize Number of bytes per binary block
-  ///   (3 for Base64, 5 for Base32).
-  /// @param encodedBlockByteSize Number of characters per encoded block
-  ///   (4 for Base64, 8 for Base32).
+  /// @param blockSizes The binary and encoded block sizes for the codec.
   static size_t calculateEncodedSize(
       size_t inputSize,
       bool includePadding,
-      int binaryBlockByteSize,
-      int encodedBlockByteSize) {
-    if (inputSize == 0) {
-      return 0;
-    }
-
-    // Calculate the output size assuming that we are including padding.
-    size_t encodedSize =
-        ((inputSize + binaryBlockByteSize - 1) / binaryBlockByteSize) *
-        encodedBlockByteSize;
-
-    if (!includePadding) {
-      // If padding was not requested, compute the exact number of encoded
-      // characters needed: ceil(inputSize * encodedBlockByteSize /
-      // binaryBlockByteSize).
-      return (inputSize * encodedBlockByteSize + binaryBlockByteSize - 1) /
-          binaryBlockByteSize;
-    }
-    return encodedSize;
-  }
+      const CodecBlockSizes& blockSizes);
 };
 
 } // namespace facebook::velox::encoding
