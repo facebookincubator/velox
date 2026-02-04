@@ -770,7 +770,7 @@ class HiveDataSink : public DataSink {
   /// Called by rotateWriter() and closeInternal().
   void finalizeWriterFile(size_t index);
 
-  void closeInternal();
+  virtual void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. HiveDataSink
   // owns the lifetime of these objects, and therefore must destroy them last.
