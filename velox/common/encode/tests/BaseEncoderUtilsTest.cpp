@@ -20,24 +20,52 @@
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox::encoding {
+namespace {
 
-class BaseEncoderUtilsTest : public ::testing::Test {};
+void testCalculateDecodedSize(
+    const std::string& input,
+    size_t initialInputSize,
+    int binaryBlockByteSize,
+    int encodedBlockByteSize,
+    size_t expectedDecodedSize,
+    size_t expectedInputSize) {
+  size_t inputSize = initialInputSize;
+  EXPECT_EQ(
+      expectedDecodedSize,
+      BaseEncoderUtils::calculateDecodedSize(
+          input, inputSize, binaryBlockByteSize, encodedBlockByteSize)
+          .value());
+  EXPECT_EQ(expectedInputSize, inputSize);
+}
 
-TEST_F(BaseEncoderUtilsTest, isPadded) {
+void testCalculateDecodedSizeError(
+    const std::string& input,
+    size_t initialInputSize,
+    int binaryBlockByteSize,
+    int encodedBlockByteSize) {
+  size_t inputSize = initialInputSize;
+  EXPECT_EQ(
+      Status::UserError("decode() - invalid input string length."),
+      BaseEncoderUtils::calculateDecodedSize(
+          input, inputSize, binaryBlockByteSize, encodedBlockByteSize)
+          .error());
+}
+
+TEST(BaseEncoderUtilsTest, isPadded) {
   EXPECT_TRUE(BaseEncoderUtils::isPadded("ABC="));
   EXPECT_TRUE(BaseEncoderUtils::isPadded("AB=="));
   EXPECT_FALSE(BaseEncoderUtils::isPadded("ABC"));
   EXPECT_FALSE(BaseEncoderUtils::isPadded(""));
 }
 
-TEST_F(BaseEncoderUtilsTest, numPadding) {
+TEST(BaseEncoderUtilsTest, numPadding) {
   EXPECT_EQ(0, BaseEncoderUtils::numPadding("ABC"));
   EXPECT_EQ(1, BaseEncoderUtils::numPadding("ABC="));
   EXPECT_EQ(2, BaseEncoderUtils::numPadding("AB=="));
   EXPECT_EQ(0, BaseEncoderUtils::numPadding(""));
 }
 
-TEST_F(BaseEncoderUtilsTest, reverseLookup) {
+TEST(BaseEncoderUtilsTest, reverseLookup) {
   // Build a simple reverse index for testing.
   std::array<uint8_t, 256> reverseIndex{};
   reverseIndex.fill(255);
@@ -56,7 +84,7 @@ TEST_F(BaseEncoderUtilsTest, reverseLookup) {
           "decode() - invalid input string: invalid character 'Z'"));
 }
 
-TEST_F(BaseEncoderUtilsTest, calculateEncodedSizeBase64) {
+TEST(BaseEncoderUtilsTest, calculateEncodedSizeBase64) {
   // Base64: binaryBlockByteSize=3, encodedBlockByteSize=4.
   EXPECT_EQ(0, BaseEncoderUtils::calculateEncodedSize(0, true, 3, 4));
   EXPECT_EQ(4, BaseEncoderUtils::calculateEncodedSize(1, true, 3, 4));
@@ -72,7 +100,7 @@ TEST_F(BaseEncoderUtilsTest, calculateEncodedSizeBase64) {
   EXPECT_EQ(6, BaseEncoderUtils::calculateEncodedSize(4, false, 3, 4));
 }
 
-TEST_F(BaseEncoderUtilsTest, calculateEncodedSizeBase32) {
+TEST(BaseEncoderUtilsTest, calculateEncodedSizeBase32) {
   // Base32: binaryBlockByteSize=5, encodedBlockByteSize=8.
   EXPECT_EQ(0, BaseEncoderUtils::calculateEncodedSize(0, true, 5, 8));
   EXPECT_EQ(8, BaseEncoderUtils::calculateEncodedSize(1, true, 5, 8));
@@ -88,89 +116,46 @@ TEST_F(BaseEncoderUtilsTest, calculateEncodedSizeBase32) {
   EXPECT_EQ(8, BaseEncoderUtils::calculateEncodedSize(5, false, 5, 8));
 }
 
-TEST_F(BaseEncoderUtilsTest, calculateDecodedSizeBase64) {
+TEST(BaseEncoderUtilsTest, calculateDecodedSizeBase64) {
   // Base64: binaryBlockByteSize=3, encodedBlockByteSize=4.
 
   // Empty input.
-  size_t inputSize = 0;
-  EXPECT_EQ(
-      0, BaseEncoderUtils::calculateDecodedSize("", inputSize, 3, 4).value());
+  testCalculateDecodedSize("", 0, 3, 4, 0, 0);
 
   // Padded input: "SGVsbG8sIFdvcmxkIQ==" (20 chars, 2 padding).
-  inputSize = 20;
-  EXPECT_EQ(
-      13,
-      BaseEncoderUtils::calculateDecodedSize(
-          "SGVsbG8sIFdvcmxkIQ==", inputSize, 3, 4)
-          .value());
-  EXPECT_EQ(18, inputSize);
+  testCalculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", 20, 3, 4, 13, 18);
 
   // Unpadded input: "SGVsbG8sIFdvcmxkIQ" (18 chars).
-  inputSize = 18;
-  EXPECT_EQ(
-      13,
-      BaseEncoderUtils::calculateDecodedSize(
-          "SGVsbG8sIFdvcmxkIQ", inputSize, 3, 4)
-          .value());
-  EXPECT_EQ(18, inputSize);
+  testCalculateDecodedSize("SGVsbG8sIFdvcmxkIQ", 18, 3, 4, 13, 18);
 
   // Invalid padded input: length not a multiple of encodedBlockByteSize.
-  inputSize = 21;
-  EXPECT_EQ(
-      Status::UserError("decode() - invalid input string length."),
-      BaseEncoderUtils::calculateDecodedSize(
-          "SGVsbG8sIFdvcmxkIQ===", inputSize, 3, 4)
-          .error());
+  testCalculateDecodedSizeError("SGVsbG8sIFdvcmxkIQ===", 21, 3, 4);
 
   // Single extra byte (invalid for Base64 unpadded).
-  inputSize = 1;
-  EXPECT_EQ(
-      Status::UserError("decode() - invalid input string length."),
-      BaseEncoderUtils::calculateDecodedSize("A", inputSize, 3, 4).error());
+  testCalculateDecodedSizeError("A", 1, 3, 4);
 }
 
-TEST_F(BaseEncoderUtilsTest, calculateDecodedSizeBase32) {
+TEST(BaseEncoderUtilsTest, calculateDecodedSizeBase32) {
   // Base32: binaryBlockByteSize=5, encodedBlockByteSize=8.
 
   // Empty input.
-  size_t inputSize = 0;
-  EXPECT_EQ(
-      0, BaseEncoderUtils::calculateDecodedSize("", inputSize, 5, 8).value());
+  testCalculateDecodedSize("", 0, 5, 8, 0, 0);
 
   // Padded input: 8 chars with 6 padding (single byte encoded).
-  inputSize = 8;
-  EXPECT_EQ(
-      1,
-      BaseEncoderUtils::calculateDecodedSize("ME======", inputSize, 5, 8)
-          .value());
-  EXPECT_EQ(2, inputSize);
+  testCalculateDecodedSize("ME======", 8, 5, 8, 1, 2);
 
   // Padded input: 8 chars with 1 padding (4 bytes encoded).
-  inputSize = 8;
-  EXPECT_EQ(
-      4,
-      BaseEncoderUtils::calculateDecodedSize("MFRGIZL=", inputSize, 5, 8)
-          .value());
-  EXPECT_EQ(7, inputSize);
+  testCalculateDecodedSize("MFRGIZL=", 8, 5, 8, 4, 7);
 
   // Unpadded input: 2 chars (single byte).
-  inputSize = 2;
-  EXPECT_EQ(
-      1, BaseEncoderUtils::calculateDecodedSize("ME", inputSize, 5, 8).value());
-  EXPECT_EQ(2, inputSize);
+  testCalculateDecodedSize("ME", 2, 5, 8, 1, 2);
 
   // Invalid padded input: length not a multiple of 8.
-  inputSize = 9;
-  EXPECT_EQ(
-      Status::UserError("decode() - invalid input string length."),
-      BaseEncoderUtils::calculateDecodedSize("ME======X", inputSize, 5, 8)
-          .error());
+  testCalculateDecodedSizeError("ME======X", 9, 5, 8);
 
   // Single extra byte (invalid for Base32 unpadded).
-  inputSize = 1;
-  EXPECT_EQ(
-      Status::UserError("decode() - invalid input string length."),
-      BaseEncoderUtils::calculateDecodedSize("M", inputSize, 5, 8).error());
+  testCalculateDecodedSizeError("M", 1, 5, 8);
 }
 
+} // namespace
 } // namespace facebook::velox::encoding
