@@ -27,12 +27,14 @@ SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
     folly::Synchronized<OperatorStats>* opStats,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* spillFsStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numSubPartitions_(numSubPartitions),
       numPartitionKeys_{node->partitionKeys().size()},
       pool_(pool),
-      spillStats_(spillStats) {
+      spillStats_(spillStats),
+      spillFsStats_(spillFsStats) {
   VELOX_CHECK_NOT_NULL(pool_);
   data_.reset();
 
@@ -51,7 +53,8 @@ SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
         spillConfig,
         nonReclaimableSection,
         opStats,
-        spillStats);
+        spillStats,
+        spillFsStats);
   }
 }
 
