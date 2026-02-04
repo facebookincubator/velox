@@ -71,8 +71,7 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const bool allowPureAstOnly);
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
 
 /// Executes precompute instructions and returns computed columns.
 /// @param inputColumnViews The input columns as views

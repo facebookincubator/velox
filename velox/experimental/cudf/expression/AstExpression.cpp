@@ -329,7 +329,6 @@ struct AstContext {
       precomputeInstructions;
   const std::shared_ptr<velox::exec::Expr>
       rootExpr; // Track the root expression
-  bool allowPureAstOnly;
 
   cudf::ast::expression const& pushExprToTree(
       const std::shared_ptr<velox::exec::Expr>& expr);
@@ -585,16 +584,14 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         auto side = static_cast<cudf::ast::table_reference>(sideIdx);
         if (fieldExpr->field() == fieldName) {
           return tree.push(cudf::ast::column_reference(columnIndex, side));
-        } else if (!allowPureAstOnly) {
+        } else {
           return addPrecomputeInstruction(
               fieldName, "nested_column", fieldExpr->field());
-        } else {
-          VELOX_FAIL("Unsupported type for nested column operation");
         }
       }
     }
     VELOX_FAIL("Field not found, " + name);
-  } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+  } else if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
     // Shallow check: only verify this operation is supported
     // Children will be recursively handled by createCudfExpression
     // Determine which side this expression references
@@ -669,14 +666,8 @@ cudf::ast::expression const& createAstTree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precomputeInstructions) {
-  static constexpr bool kAllowPureAstOnly = false;
   AstContext context{
-      tree,
-      scalars,
-      {inputRowSchema},
-      {precomputeInstructions},
-      expr,
-      kAllowPureAstOnly};
+      tree, scalars, {inputRowSchema}, {precomputeInstructions}, expr};
   return context.pushExprToTree(expr);
 }
 
@@ -687,15 +678,13 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const bool allowPureAstOnly) {
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions) {
   AstContext context{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
       {leftPrecomputeInstructions, rightPrecomputeInstructions},
-      expr,
-      allowPureAstOnly};
+      expr};
   return context.pushExprToTree(expr);
 }
 

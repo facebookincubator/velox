@@ -425,8 +425,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           buildType,
           probeType,
           rightPrecomputeInstructions,
-          leftPrecomputeInstructions,
-          false);
+          leftPrecomputeInstructions);
     } else {
       createAstTree(
           exprs.exprs()[0],
@@ -435,8 +434,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           probeType,
           buildType,
           leftPrecomputeInstructions,
-          rightPrecomputeInstructions,
-          false);
+          rightPrecomputeInstructions);
     }
     // Store precompute instructions for use during join execution
     leftPrecomputeInstructions_ = std::move(leftPrecomputeInstructions);
