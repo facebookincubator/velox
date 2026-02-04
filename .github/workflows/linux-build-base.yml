@@ -383,3 +383,107 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fedora-debug-default-gcc
+
+  asan-ubsan-adapters:
+    name: Linux debug with adapters - testing asan and ubsan
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: 16-core-ubuntu
+    container:
+      image: ghcr.io/facebookincubator/velox-dev:adapters
+      volumes:
+        - /usr:/host_usr
+        - /opt:/host_opt
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+      faiss_SOURCE: BUNDLED
+    concurrency:
+      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Free Disk Space
+        run: |
+          # Re-used from free-disk-space github action.
+          getAvailableSpace() { echo $(df -a $1 | awk 'NR > 1 {avail+=$4} END {print avail}'); }
+          # Show before
+          echo "Original available disk space: " $(getAvailableSpace)
+          # Remove DotNet.
+          rm -rf /host_usr/share/dotnet || true
+          # Remove android
+          rm -rf /host_usr/local/lib/android || true
+          # Remove CodeQL
+          rm -rf /host_opt/hostedtoolcache/CodeQL || true
+          # Show after
+          echo "New available disk space: " $(getAvailableSpace)
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-asan-ubsan-adapters
+
+      - name: Zero Ccache Statistics
+        run: |
+          ccache -sz
+
+      - name: Make Asan/Ubsan Build (release plus -O1)
+        env:
+          MAKEFLAGS: NUM_THREADS=12 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=5
+        run: |
+          # VELOX_BUILD_SHARED is turned off due producing a SEGV if the shared library is used.
+          # Revist once PR 16019 lands that removes thrift.
+          EXTRA_CMAKE_FLAGS=(
+            "-DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS=ON"
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_EXAMPLES=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_GEO=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_ENABLE_HDFS=ON"
+            "-DVELOX_ENABLE_S3=ON"
+            "-DVELOX_ENABLE_GCS=ON"
+            "-DVELOX_ENABLE_ABFS=ON"
+            "-DVELOX_BUILD_SHARED=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=OFF"
+          )
+          clang++ --version
+          dnf install -y compiler-rt
+          CC=clang CXX=clang++ make EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+
+      - name: Ccache after
+        run: ccache -s
+
+      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-asan-ubsan-adapters
+
+      - name: Run Tests
+        env:
+          LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
+          LSAN_OPTIONS: detect_leaks=0
+        working-directory: _build/release
+        run: |
+          # Can be removed after images are rebuild
+          if [ -f "/opt/miniforge/etc/profile.d/conda.sh" ]; then
+            source "/opt/miniforge/etc/profile.d/conda.sh"
+            conda activate adapters
+          fi
+          # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
+          wget https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar -O /usr/local/hadoop/share/hadoop/mapreduce/mockito-core-2.23.4.jar
+
+          export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
+          ctest -j 12 --output-on-failure --no-tests=error --label-exclude cuda_driver
