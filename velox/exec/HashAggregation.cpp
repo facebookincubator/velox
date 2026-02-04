@@ -114,7 +114,8 @@ void HashAggregation::initialize() {
       &nonReclaimableSection_,
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 
   aggregationNode_.reset();
 }

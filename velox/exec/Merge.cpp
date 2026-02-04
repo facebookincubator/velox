@@ -118,7 +118,8 @@ void Merge::maybeSetupOutputSpiller() {
       HashBitRange{},
       sortingKeys_,
       &spillConfig_.value(),
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 }
 
 void Merge::spill() {

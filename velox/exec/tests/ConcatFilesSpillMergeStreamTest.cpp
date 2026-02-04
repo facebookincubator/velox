@@ -73,7 +73,8 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
         HashBitRange{},
         sortingKeys_,
         &spillConfig_,
-        &spillStats_);
+        &spillStats_,
+        /*fsStats=*/nullptr);
     for (const auto& vector : sortedVectors) {
       spiller->spill(SpillPartitionId(0), vector);
     }
