@@ -179,6 +179,13 @@ option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
 # is broken if you use ninja.
 option(VELOX_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." OFF)
 
+# Enable the address and undefined behavior sanitizers. They can run together.
+option(
+  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+  "Builds velox with Clang ASAN and UBSAN sanitizer flags"
+  OFF
+)
+
 if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
@@ -516,10 +523,7 @@ endif()
 
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
 # -latomic not found because it is added right after the compiler exe.
-if(
-  "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-  AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_GREATER_EQUAL 15
-)
+if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_EQUAL 15)
   set(CMAKE_EXE_LINKER_FLAGS "-latomic")
 endif()
 
@@ -743,7 +747,29 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
+# Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
+# Also only eligible with the type release build to avoid full debug symbols.
+if(
+  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+  AND CMAKE_BUILD_TYPE STREQUAL "Release"
+  AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+  AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+)
+  set(
+    CMAKE_CXX_FLAGS
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+  )
+  # Skip alignment errors and member access check for now.
+  # https://github.com/facebookincubator/velox/issues/15811
+  # https://github.com/facebookincubator/velox/issues/15810
+  set(
+    CMAKE_EXE_LINKER_FLAGS
+    "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=vptr"
+  )
+endif()
+
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
+message("FINAL CMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
 
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
