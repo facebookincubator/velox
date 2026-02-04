@@ -293,6 +293,7 @@ std::unordered_set<std::string> skipFunctions = {
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
+    "l2_norm", // Velox-only function, not available in Presto
     "t_cdf", // New function, not yet widely deployed in Presto instances
     "inverse_t_cdf", // New function, not yet widely deployed in Presto
                      // instances
