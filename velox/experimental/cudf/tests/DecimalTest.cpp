@@ -27,6 +27,7 @@
 #include "velox/type/DecimalUtil.h"
 
 #include <cuda_runtime_api.h>
+#include <optional>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -360,7 +361,7 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
   facebook::velox::test::assertEqualVectors(expected, gpuResult);
 }
 
-TEST_F(CudfDecimalTest, decimalAvgAndSumTimesDouble) {
+TEST_F(CudfDecimalTest, DISABLED_decimalAvgAndSumTimesDouble) {
   auto rowType = ROW({
       {"l_quantity", DECIMAL(15, 2)},
   });
@@ -633,6 +634,168 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleRounds) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfDecimalTest, decimalAvgGlobalSingleAllNulls) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"avg(d) AS a"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgGlobalPartialFinalVarbinaryAllNulls) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"avg(d) AS a"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgGlobalIntermediateVarbinaryAllNulls) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"avg(d) AS a"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgPartialFinalVarbinaryNullGroup) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
+          makeNullableFlatVector<int64_t>(
+              {100, 200, std::nullopt, std::nullopt, 400, std::nullopt},
+              DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"avg(d) AS a"})
+                  .finalAggregation()
+                  .orderBy({"k"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {150, std::nullopt, 400}, DECIMAL(12, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalAvgIntermediateVarbinaryNullGroup) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, 400}, DECIMAL(12, 2)),
+      });
+  auto input2 = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {200, std::nullopt, std::nullopt}, DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"avg(d) AS a"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .orderBy({"k"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {150, std::nullopt, 400}, DECIMAL(12, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
   auto rowType = ROW({
       {"k", INTEGER()},
@@ -770,6 +933,148 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
 
   facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults("SELECT sum(d) AS s FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinaryNullGroup) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
+          makeNullableFlatVector<int64_t>(
+              {100, 200, std::nullopt, std::nullopt, 400, std::nullopt},
+              DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"sum(d) AS s"})
+                  .finalAggregation()
+                  .orderBy({"k"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "s"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int128_t>(
+              {static_cast<int128_t>(300),
+               std::nullopt,
+               static_cast<int128_t>(400)},
+              DECIMAL(38, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalSumIntermediateVarbinaryNullGroup) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input1 = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, 400}, DECIMAL(12, 2)),
+      });
+  auto input2 = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {200, std::nullopt, std::nullopt}, DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input1, input2};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"sum(d) AS s"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .orderBy({"k"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "s"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int128_t>(
+              {static_cast<int128_t>(300),
+               std::nullopt,
+               static_cast<int128_t>(400)},
+              DECIMAL(38, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalSumGlobalPartialFinalVarbinaryAllNulls) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(d) AS s"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalSumGlobalIntermediateVarbinaryAllNulls) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(d) AS s"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 2))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 } // namespace

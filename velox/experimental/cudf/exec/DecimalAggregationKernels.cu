@@ -15,14 +15,19 @@
  */
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 
+#include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/detail/null_mask.hpp>
+#include <cudf/detail/valid_if.cuh>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/error.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime.h>
 
 #include <cstdint>
 #include <limits>
+#include <thrust/iterator/counting_iterator.h>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -123,6 +128,39 @@ __global__ void avgRoundKernel(
   out[idx] = sum < 0 ? -rounded : rounded;
 }
 
+struct StateValidPredicate {
+  cudf::column_device_view sum;
+  cudf::column_device_view count;
+
+  __device__ bool operator()(cudf::size_type idx) const {
+    if (sum.is_null(idx) || count.is_null(idx)) {
+      return false;
+    }
+    return count.element<int64_t>(idx) != 0;
+  }
+};
+
+std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
+    const cudf::column_view& sumCol,
+    const cudf::column_view& countCol,
+    rmm::cuda_stream_view stream) {
+  auto numRows = sumCol.size();
+  if (numRows == 0) {
+    return {rmm::device_buffer{}, 0};
+  }
+  auto sumDeviceView = cudf::column_device_view::create(sumCol, stream);
+  auto countDeviceView = cudf::column_device_view::create(countCol, stream);
+  StateValidPredicate pred{*sumDeviceView, *countDeviceView};
+  auto begin = thrust::make_counting_iterator<cudf::size_type>(0);
+  auto end = begin + numRows;
+  return cudf::detail::valid_if(
+      begin,
+      end,
+      pred,
+      stream,
+      cudf::get_current_device_resource_ref());
+}
+
 } // namespace
 
 DecimalSumStateColumns deserializeDecimalSumStateWithCount(
@@ -165,6 +203,16 @@ DecimalSumStateColumns deserializeDecimalSumStateWithCount(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
+  if (stateCol.nullable()) {
+    auto nullMask = cudf::detail::copy_bitmask(
+        stateCol, stream, cudf::get_current_device_resource_ref());
+    auto nullCount = stateCol.null_count();
+    sumCol->set_null_mask(std::move(nullMask), nullCount);
+    auto countMask = cudf::detail::copy_bitmask(
+        stateCol, stream, cudf::get_current_device_resource_ref());
+    countCol->set_null_mask(std::move(countMask), nullCount);
+  }
+
   DecimalSumStateColumns result;
   result.sum = std::move(sumCol);
   result.count = std::move(countCol);
@@ -187,6 +235,9 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal sum state requires INT64 count column");
   auto numRows = sumCol.size();
+  CUDF_EXPECTS(
+      numRows == countCol.size(),
+      "Decimal sum state requires sum and count to be same size");
   CUDF_EXPECTS(
       numRows <= std::numeric_limits<int32_t>::max(),
       "Too many rows to serialize decimal sum state");
@@ -231,12 +282,14 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
+  auto [nullMask, nullCount] =
+      buildStateValidityMask(sumCol, countCol, stream);
   return cudf::make_strings_column(
       static_cast<cudf::size_type>(numRows),
       std::move(offsetsCol),
       std::move(charsBuf),
-      0,
-      rmm::device_buffer{});
+      nullCount,
+      std::move(nullMask));
 }
 
 std::unique_ptr<cudf::column> computeDecimalAverage(
@@ -277,6 +330,13 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
+  auto [nullMask, nullCount] =
+      buildStateValidityMask(sumCol, countCol, stream);
+  if (nullCount > 0) {
+    out->set_null_mask(std::move(nullMask), nullCount);
+  } else if (nullMask.size() > 0) {
+    out->set_null_mask(std::move(nullMask), 0);
+  }
   return out;
 }
 
