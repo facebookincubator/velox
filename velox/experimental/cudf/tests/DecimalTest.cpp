@@ -587,6 +587,308 @@ TEST_F(CudfDecimalTest, decimalMultiplyDifferentScales) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfDecimalTest, decimalCompareDecimalDecimal) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({120, -250, 10}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({110, -250, 30}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a = b AS eq",
+                      "a != b AS neq",
+                      "a < b AS lt",
+                      "a <= b AS lte",
+                      "a > b AS gt",
+                      "a >= b AS gte",
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"eq", "neq", "lt", "lte", "gt", "gte"},
+      {
+          makeNullableFlatVector<bool>(
+              {false, true, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, true, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, false, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, true, false}, BOOLEAN()),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalCompareWithLiteral) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>(
+          {120, 110, 130, std::nullopt}, DECIMAL(10, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a = CAST('1.20' AS DECIMAL(10, 2)) AS eq_r",
+                      "a != CAST('1.20' AS DECIMAL(10, 2)) AS neq_r",
+                      "a < CAST('1.20' AS DECIMAL(10, 2)) AS lt_r",
+                      "a <= CAST('1.20' AS DECIMAL(10, 2)) AS lte_r",
+                      "a > CAST('1.20' AS DECIMAL(10, 2)) AS gt_r",
+                      "a >= CAST('1.20' AS DECIMAL(10, 2)) AS gte_r",
+                      "CAST('1.20' AS DECIMAL(10, 2)) = a AS eq_l",
+                      "CAST('1.20' AS DECIMAL(10, 2)) != a AS neq_l",
+                      "CAST('1.20' AS DECIMAL(10, 2)) < a AS lt_l",
+                      "CAST('1.20' AS DECIMAL(10, 2)) <= a AS lte_l",
+                      "CAST('1.20' AS DECIMAL(10, 2)) > a AS gt_l",
+                      "CAST('1.20' AS DECIMAL(10, 2)) >= a AS gte_l",
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"eq_r",
+       "neq_r",
+       "lt_r",
+       "lte_r",
+       "gt_r",
+       "gte_r",
+       "eq_l",
+       "neq_l",
+       "lt_l",
+       "lte_l",
+       "gt_l",
+       "gte_l"},
+      {
+          makeNullableFlatVector<bool>(
+              {true, false, false, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, true, true, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, true, false, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, true, false, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, false, true, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, false, true, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, false, false, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, true, true, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, false, true, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, false, true, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {false, true, false, std::nullopt}, BOOLEAN()),
+          makeNullableFlatVector<bool>(
+              {true, true, false, std::nullopt}, BOOLEAN()),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalBinaryNullPropagation) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, 300, std::nullopt}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int64_t>(
+              {200, 200, std::nullopt, std::nullopt}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a + b AS sum",
+                      "a / b AS div",
+                      "a = b AS eq",
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"sum", "div", "eq"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {300, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(11, 2)),
+          makeNullableFlatVector<int64_t>(
+              {50, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(12, 2)),
+          makeNullableFlatVector<bool>(
+              {false, std::nullopt, std::nullopt, std::nullopt}, BOOLEAN()),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalMultiplyDoubleCast) {
+  auto rowType = ROW({
+      {"d", DECIMAL(10, 2)},
+      {"x", DOUBLE()},
+  });
+
+  auto input = makeRowVector(
+      {"d", "x"},
+      {
+          makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)),
+          makeFlatVector<double>({2.0, -4.0, 0.0}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto expected = makeRowVector(
+      {"prod"},
+      {makeFlatVector<double>({2.5, 10.0, 0.0})});
+
+  auto runAndAssert = [&](bool useCudf) {
+    if (!useCudf) {
+      unregisterCudf();
+    }
+  auto plan = exec::test::PlanBuilder()
+                    .values(vectors)
+                    .project({"cast(d as double) * x AS prod"})
+                    .planNode();
+    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                      .copyResults(pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  runAndAssert(true);
+  runAndAssert(false);
+}
+
+TEST_F(CudfDecimalTest, decimalMultiplyRealCast) {
+  auto rowType = ROW({
+      {"d", DECIMAL(10, 2)},
+      {"x", REAL()},
+  });
+
+  auto input = makeRowVector(
+      {"d", "x"},
+      {
+          makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)),
+          makeFlatVector<float>({2.0f, -4.0f, 0.0f}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto expected = makeRowVector(
+      {"prod"},
+      {makeFlatVector<float>({2.5f, 10.0f, 0.0f})});
+
+  auto runAndAssert = [&](bool useCudf) {
+    if (!useCudf) {
+      unregisterCudf();
+    }
+  auto plan = exec::test::PlanBuilder()
+                    .values(vectors)
+                    .project({"cast(d as real) * x AS prod"})
+                    .planNode();
+    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                      .copyResults(pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  runAndAssert(true);
+  runAndAssert(false);
+}
+
+TEST_F(CudfDecimalTest, decimalCastToDoubleProjection) {
+  auto rowType = ROW({
+      {"d", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto expected = makeRowVector(
+      {"d_double"},
+      {makeFlatVector<double>({1.25, -2.5, 0.5})});
+
+  auto runAndAssert = [&](bool useCudf) {
+    if (!useCudf) {
+      unregisterCudf();
+    }
+    auto plan = exec::test::PlanBuilder()
+                    .values(vectors)
+                    .project({"cast(d as double) AS d_double"})
+                    .planNode();
+    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                      .copyResults(pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  runAndAssert(true);
+  runAndAssert(false);
+}
+
+TEST_F(CudfDecimalTest, decimalCastToRealProjection) {
+  auto rowType = ROW({
+      {"d", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto expected = makeRowVector(
+      {"d_real"},
+      {makeFlatVector<float>({1.25f, -2.5f, 0.5f})});
+
+  auto runAndAssert = [&](bool useCudf) {
+    if (!useCudf) {
+      unregisterCudf();
+    }
+    auto plan = exec::test::PlanBuilder()
+                    .values(vectors)
+                    .project({"cast(d as real) AS d_real"})
+                    .planNode();
+    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                      .copyResults(pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  runAndAssert(true);
+  runAndAssert(false);
+}
+
 TEST_F(CudfDecimalTest, decimalDivideRounds) {
   auto rowType = ROW({
       {"a", DECIMAL(10, 2)},
