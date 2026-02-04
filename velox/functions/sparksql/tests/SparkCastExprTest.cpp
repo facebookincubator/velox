@@ -278,7 +278,7 @@ TEST_F(SparkCastExprTest, stringToDate) {
   auto testInvalidDate = [this](const std::string& value) {
     auto input = makeRowVector({makeFlatVector<std::string>({value})});
     VELOX_ASSERT_THROW(
-        evaluateCast(VARCHAR(), DATE(), input, false), "Invalid date format");
+        (evaluateCast(VARCHAR(), DATE(), input, false)), "Invalid date format");
   };
 
   testInvalidDate("2012-Oct-23");
