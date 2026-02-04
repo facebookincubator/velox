@@ -108,6 +108,19 @@ If key size != value size will throw exception that key and value must have the 
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="map_from_entries">
+<span class="sig-name descname"><span class="pre">map_from_entries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(struct(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_from_entries" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a map created from the given array of entries. Throws exception if duplicate key or NULL
+key is found. Returns NULL if NULL entry exists.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_from_entries</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">struct</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">),</span> <span class="n">struct</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;null&#39;</span><span class="p">)));</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="mi">2</span> <span class="o">-&gt;</span> <span class="s1">&#39;null&#39;</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">map_from_entries</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">struct</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">),</span> <span class="n">null</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="n">null</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">map_from_entries</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">struct</span><span class="p">(</span><span class="n">null</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">)));</span> <span class="o">--</span> <span class="s2">&quot;map key cannot be null&quot;</span>
+<span class="n">SELECT</span> <span class="n">map_from_entries</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">struct</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">),</span> <span class="n">struct</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">)));</span> <span class="o">--</span> <span class="s2">&quot;Duplicate map keys (1) are not allowed&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="map_keys">
 <span class="sig-name descname"><span class="pre">map_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(K</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_keys" title="Link to this definition">¶</a></dt>
 <dd><p>Returns all the keys in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
@@ -168,6 +181,7 @@ is set to false. Otherwise, returns -1 for null input.</p>
 <li><a class="reference internal" href="#map_entries"><code class="docutils literal notranslate"><span class="pre">map_entries()</span></code></a></li>
 <li><a class="reference internal" href="#map_filter"><code class="docutils literal notranslate"><span class="pre">map_filter()</span></code></a></li>
 <li><a class="reference internal" href="#map_from_arrays"><code class="docutils literal notranslate"><span class="pre">map_from_arrays()</span></code></a></li>
+<li><a class="reference internal" href="#map_from_entries"><code class="docutils literal notranslate"><span class="pre">map_from_entries()</span></code></a></li>
 <li><a class="reference internal" href="#map_keys"><code class="docutils literal notranslate"><span class="pre">map_keys()</span></code></a></li>
 <li><a class="reference internal" href="#map_values"><code class="docutils literal notranslate"><span class="pre">map_values()</span></code></a></li>
 <li><a class="reference internal" href="#map_zip_with"><code class="docutils literal notranslate"><span class="pre">map_zip_with()</span></code></a></li>
