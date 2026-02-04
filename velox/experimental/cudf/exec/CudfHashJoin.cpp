@@ -238,10 +238,10 @@ void CudfHashJoinBuild::noMoreInput() {
     }
   }
 
-  auto buildType = joinNode_->sources()[1]->outputType();
   auto rightKeys = joinNode_->rightKeys();
 
   auto buildKeyIndices = std::vector<cudf::size_type>(rightKeys.size());
+  auto buildType = joinNode_->sources()[1]->outputType();
   for (size_t i = 0; i < buildKeyIndices.size(); i++) {
     buildKeyIndices[i] = static_cast<cudf::size_type>(
         buildType->getChildIdx(rightKeys[i]->name()));
@@ -318,22 +318,22 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           operatorId,
           fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode),
+      probeType_(joinNode_->sources()[0]->outputType()),
+      buildType_(joinNode_->sources()[0]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "CudfHashJoinProbe constructor";
   }
-  auto probeType = joinNode_->sources()[0]->outputType();
-  auto buildType = joinNode_->sources()[1]->outputType();
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
 
   if (CudfConfig::getInstance().debugEnabled) {
-    for (int i = 0; i < probeType->names().size(); i++) {
-      VLOG(1) << "Left column " << i << ": " << probeType->names()[i];
+    for (int i = 0; i < probeType_->names().size(); i++) {
+      VLOG(1) << "Left column " << i << ": " << probeType_->names()[i];
     }
 
-    for (int i = 0; i < buildType->names().size(); i++) {
-      VLOG(1) << "Right column " << i << ": " << buildType->names()[i];
+    for (int i = 0; i < buildType_->names().size(); i++) {
+      VLOG(1) << "Right column " << i << ": " << buildType_->names()[i];
     }
 
     for (int i = 0; i < leftKeys.size(); i++) {
@@ -347,18 +347,18 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     }
   }
 
-  auto const probeTableNumColumns = probeType->size();
+  auto const probeTableNumColumns = probeType_->size();
   leftKeyIndices_ = std::vector<cudf::size_type>(leftKeys.size());
   for (size_t i = 0; i < leftKeyIndices_.size(); i++) {
     leftKeyIndices_[i] = static_cast<cudf::size_type>(
-        probeType->getChildIdx(leftKeys[i]->name()));
+        probeType_->getChildIdx(leftKeys[i]->name()));
     VELOX_CHECK_LT(leftKeyIndices_[i], probeTableNumColumns);
   }
-  auto const buildTableNumColumns = buildType->size();
+  auto const buildTableNumColumns = buildType_->size();
   rightKeyIndices_ = std::vector<cudf::size_type>(rightKeys.size());
   for (size_t i = 0; i < rightKeyIndices_.size(); i++) {
     rightKeyIndices_[i] = static_cast<cudf::size_type>(
-        buildType->getChildIdx(rightKeys[i]->name()));
+        buildType_->getChildIdx(rightKeys[i]->name()));
     VELOX_CHECK_LT(rightKeyIndices_[i], buildTableNumColumns);
   }
 
@@ -372,14 +372,14 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     if (CudfConfig::getInstance().debugEnabled) {
       VLOG(1) << "Output column " << i << ": " << outputName;
     }
-    auto channel = probeType->getChildIdxIfExists(outputName);
+    auto channel = probeType_->getChildIdxIfExists(outputName);
     if (channel.has_value()) {
       leftColumnIndicesToGather_.push_back(
           static_cast<cudf::size_type>(channel.value()));
       leftColumnOutputIndices_.push_back(i);
       continue;
     }
-    channel = buildType->getChildIdxIfExists(outputName);
+    channel = buildType_->getChildIdxIfExists(outputName);
     if (channel.has_value()) {
       rightColumnIndicesToGather_.push_back(
           static_cast<cudf::size_type>(channel.value()));
@@ -415,30 +415,25 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // in whole tables
 
     // create ast tree
-    std::vector<PrecomputeInstruction> rightPrecomputeInstructions;
-    std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
     if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
       createAstTree(
           exprs.exprs()[0],
           tree_,
           scalars_,
-          buildType,
-          probeType,
-          rightPrecomputeInstructions,
-          leftPrecomputeInstructions);
+          buildType_,
+          probeType_,
+          rightPrecomputeInstructions_,
+          leftPrecomputeInstructions_);
     } else {
       createAstTree(
           exprs.exprs()[0],
           tree_,
           scalars_,
-          probeType,
-          buildType,
-          leftPrecomputeInstructions,
-          rightPrecomputeInstructions);
+          probeType_,
+          buildType_,
+          leftPrecomputeInstructions_,
+          rightPrecomputeInstructions_);
     }
-    // Store precompute instructions for use during join execution
-    leftPrecomputeInstructions_ = std::move(leftPrecomputeInstructions);
-    rightPrecomputeInstructions_ = std::move(rightPrecomputeInstructions);
   }
 }
 
@@ -633,9 +628,7 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
       std::make_move_iterator(rightCols.begin()),
       std::make_move_iterator(rightCols.end()));
 
-  auto probeType = joinNode_->sources()[0]->outputType();
-  auto buildType = joinNode_->sources()[1]->outputType();
-  std::vector<velox::RowTypePtr> rowTypes{probeType, buildType};
+  std::vector<velox::RowTypePtr> rowTypes{probeType_, buildType_};
   exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
   auto filterEvaluator = createCudfExpression(
@@ -1210,12 +1203,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
         std::vector<std::unique_ptr<cudf::column>> outCols(outputType_->size());
         // Left side nulls (types derive from probe schema at the matching
         // channel indices)
-        auto probeType = joinNode_->sources()[0]->outputType();
         for (int li = 0; li < leftColumnOutputIndices_.size(); ++li) {
           auto outIdx = leftColumnOutputIndices_[li];
           auto probeChannel = leftColumnIndicesToGather_[li];
           auto leftCudfType =
-              veloxToCudfTypeId(probeType->childAt(probeChannel));
+              veloxToCudfTypeId(probeType_->childAt(probeChannel));
           auto nullScalar = cudf::make_default_constructed_scalar(
               cudf::data_type{leftCudfType});
           outCols[outIdx] = cudf::make_column_from_scalar(
