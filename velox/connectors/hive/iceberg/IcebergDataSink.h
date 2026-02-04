@@ -24,6 +24,12 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
+#endif
+
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -110,6 +116,18 @@ class IcebergDataSink : public HiveDataSink {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const std::string& functionPrefix);
 
+  /// Returns the statistics for all written data files.
+  ///
+  /// Multiple entries are returned because a single write session from
+  /// an IcebergDataSink::appendData can generate multiple data files if the
+  /// input row batch spans multiple partitions or if file rotation is triggered
+  /// (e.g., reaching file size limits). Each entry in the returned vector
+  /// corresponds to one individual data file.
+  const std::vector<dwio::common::IcebergDataFileStatisticsPtr>& dataFileStats()
+      const {
+    return dataFileStats_;
+  }
+
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
   /// in the format expected by Presto and Spark for Iceberg tables.
@@ -193,6 +211,8 @@ class IcebergDataSink : public HiveDataSink {
   // Returns nullptr for null partition values.
   folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
 
+  void closeInternal() override;
+
   // Iceberg partition specification defining how the table is partitioned.
   // Contains partition fields with source column names, transform types
   // (e.g., identity, year, month, day, hour, bucket, truncate), transform
@@ -239,6 +259,15 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+  // Statistics for all data files written by this sink. These statistics
+  // are populated during closeInternal(). These metrics are subsequently used
+  // to construct Iceberg commit messages.
+  std::vector<dwio::common::IcebergDataFileStatisticsPtr> dataFileStats_;
+
+  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
+
+  const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
