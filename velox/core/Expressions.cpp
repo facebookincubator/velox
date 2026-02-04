@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/core/Expressions.h"
+#include <folly/hash/Hash.h>
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/vector/ComplexVector.h"
@@ -424,7 +425,8 @@ uint64_t hashImpl(const TypePtr& type, const Variant& value) {
 } // namespace
 
 size_t ConstantTypedExpr::localHash() const {
-  static const size_t kBaseHash = std::hash<const char*>()("ConstantTypedExpr");
+  static const size_t kBaseHash =
+      folly::hasher<std::string_view>()("ConstantTypedExpr");
 
   uint64_t h;
 
