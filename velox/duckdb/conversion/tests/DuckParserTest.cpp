@@ -414,8 +414,9 @@ TEST(DuckParserTest, cast) {
       "cast(\"str_col\" as INTERVAL DAY TO SECOND)",
       parseExpr("cast(str_col as interval day to second)")->toString());
 
-  // Unsupported casts for now.
-  EXPECT_THROW(parseExpr("cast('2020-01-01' as TIME)"), std::runtime_error);
+  EXPECT_EQ(
+      "cast(2020-01-01 as TIME)",
+      parseExpr("cast('2020-01-01' as TIME)")->toString());
 
   // Complex types.
   EXPECT_EQ(
