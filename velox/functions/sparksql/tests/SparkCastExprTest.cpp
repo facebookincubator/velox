@@ -272,23 +272,23 @@ TEST_F(SparkCastExprTest, stringToDate) {
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
   VELOX_ASSERT_THROW(
-      testCast<std::string, int32_t>(
-          "date", {"2012-Oct-23"}, {std::nullopt}, VARCHAR(), DATE()),
+      (testCast<std::string, int32_t>(
+          "date", {"2012-Oct-23"}, {std::nullopt}, VARCHAR(), DATE())),
       "Invalid date format");
 
   VELOX_ASSERT_THROW(
-      testCast<std::string, int32_t>(
-          "date", {"2015/03/18"}, {std::nullopt}, VARCHAR(), DATE()),
+      (testCast<std::string, int32_t>(
+          "date", {"2015/03/18"}, {std::nullopt}, VARCHAR(), DATE())),
       "Invalid date format");
 
   VELOX_ASSERT_THROW(
-      testCast<std::string, int32_t>(
-          "date", {"2015-13-01"}, {std::nullopt}, VARCHAR(), DATE()),
+      (testCast<std::string, int32_t>(
+          "date", {"2015-13-01"}, {std::nullopt}, VARCHAR(), DATE())),
       "Invalid date format");
 
   VELOX_ASSERT_THROW(
-      testCast<std::string, int32_t>(
-          "date", {"2015-02-30"}, {std::nullopt}, VARCHAR(), DATE()),
+      (testCast<std::string, int32_t>(
+          "date", {"2015-02-30"}, {std::nullopt}, VARCHAR(), DATE())),
       "Invalid date format");
 }
 
