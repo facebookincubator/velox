@@ -41,7 +41,8 @@ class ArrayJoinTest : public FunctionBaseTest {
       const StringView& delimiter,
       const StringView& expected,
       bool isDate = false,
-      bool isJson = false) {
+      bool isJson = false,
+      bool isVarbinary = false) {
     auto arrayVector = makeNullableArrayVector(
         std::vector<std::vector<std::optional<T>>>{array});
     if (isDate) {
@@ -50,6 +51,10 @@ class ArrayJoinTest : public FunctionBaseTest {
     } else if (isJson) {
       arrayVector = makeNullableArrayVector(
           std::vector<std::vector<std::optional<T>>>{array}, ARRAY(JSON()));
+    } else if (isVarbinary) {
+      arrayVector = makeNullableArrayVector(
+          std::vector<std::vector<std::optional<T>>>{array},
+          ARRAY(VARBINARY()));
     }
     auto delimiterVector = makeFlatVector<StringView>({delimiter});
     auto expectedVector = makeFlatVector<StringView>({expected});
@@ -64,7 +69,8 @@ class ArrayJoinTest : public FunctionBaseTest {
       const StringView& replacement,
       const StringView& expected,
       bool isDate = false,
-      bool isJson = false) {
+      bool isJson = false,
+      bool isVarbinary = false) {
     auto arrayVector = makeNullableArrayVector(
         std::vector<std::vector<std::optional<T>>>{array});
     if (isDate) {
@@ -73,6 +79,10 @@ class ArrayJoinTest : public FunctionBaseTest {
     } else if (isJson) {
       arrayVector = makeNullableArrayVector(
           std::vector<std::vector<std::optional<T>>>{array}, ARRAY(JSON()));
+    } else if (isVarbinary) {
+      arrayVector = makeNullableArrayVector(
+          std::vector<std::vector<std::optional<T>>>{array},
+          ARRAY(VARBINARY()));
     }
     auto delimiterVector = makeFlatVector<StringView>({delimiter});
     auto replacementVector = makeFlatVector<StringView>({replacement});
@@ -110,6 +120,36 @@ TEST_F(ArrayJoinTest, varcharTest) {
 
   testArrayJoinReplacement<StringView>(
       {"a"_sv, "b"_sv, std::nullopt, "c"_sv}, "-"_sv, "z"_sv, "a-b-z-c"_sv);
+}
+
+TEST_F(ArrayJoinTest, varbinaryTest) {
+  testArrayJoinNoReplacement<StringView>(
+      {"hello"_sv, "world"_sv, std::nullopt, "test"_sv},
+      ","_sv,
+      "hello,world,test"_sv,
+      false,
+      false,
+      true);
+  testArrayJoinNoReplacement<StringView>({}, ","_sv, ""_sv, false, false, true);
+  testArrayJoinNoReplacement<StringView>(
+      {"binary"_sv, "data"_sv}, "-"_sv, "binary-data"_sv, false, false, true);
+
+  testArrayJoinReplacement<StringView>(
+      {"a"_sv, std::nullopt, "b"_sv},
+      ","_sv,
+      "null"_sv,
+      "a,null,b"_sv,
+      false,
+      false,
+      true);
+  testArrayJoinReplacement<StringView>(
+      {std::nullopt, std::nullopt},
+      ","_sv,
+      "empty"_sv,
+      "empty,empty"_sv,
+      false,
+      false,
+      true);
 }
 
 TEST_F(ArrayJoinTest, boolTest) {
