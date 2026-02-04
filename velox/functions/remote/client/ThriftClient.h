@@ -24,8 +24,51 @@ namespace facebook::velox::functions {
 using RemoteFunctionClient =
     apache::thrift::Client<remote::RemoteFunctionService>;
 
+/// Abstract interface for the remote function client, enabling dependency
+/// injection and mocking in tests.
+class IRemoteFunctionClient {
+ public:
+  virtual ~IRemoteFunctionClient() = default;
+
+  /// Invokes the remote function synchronously.
+  virtual void invokeFunction(
+      remote::RemoteFunctionResponse& response,
+      const remote::RemoteFunctionRequest& request) = 0;
+};
+
+/// Default implementation that wraps the actual thrift client.
+class ThriftRemoteFunctionClient : public IRemoteFunctionClient {
+ public:
+  explicit ThriftRemoteFunctionClient(
+      std::unique_ptr<RemoteFunctionClient> client)
+      : client_(std::move(client)) {}
+
+  void invokeFunction(
+      remote::RemoteFunctionResponse& response,
+      const remote::RemoteFunctionRequest& request) override {
+    client_->sync_invokeFunction(response, request);
+  }
+
+ private:
+  std::unique_ptr<RemoteFunctionClient> client_;
+};
+
+/// Factory function type for creating remote function clients.
+/// Parameters: location (socket address), eventBase (for async operations)
+/// Returns: A unique_ptr to an IRemoteFunctionClient implementation.
+using RemoteFunctionClientFactory = std::function<std::unique_ptr<
+    IRemoteFunctionClient>(folly::SocketAddress, folly::EventBase*)>;
+
 std::unique_ptr<RemoteFunctionClient> getThriftClient(
     folly::SocketAddress location,
     folly::EventBase* eventBase);
+
+/// Default factory that creates ThriftRemoteFunctionClient instances.
+inline std::unique_ptr<IRemoteFunctionClient> getDefaultRemoteFunctionClient(
+    folly::SocketAddress location,
+    folly::EventBase* eventBase) {
+  return std::make_unique<ThriftRemoteFunctionClient>(
+      getThriftClient(location, eventBase));
+}
 
 } // namespace facebook::velox::functions
