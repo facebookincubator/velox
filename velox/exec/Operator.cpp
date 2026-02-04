@@ -453,6 +453,15 @@ void Operator::recordSpillStats() {
             RuntimeCounter::Unit::kNanos});
   }
   lockedSpillStats->reset();
+
+  // Collect filesystem I/O stats for spilling.
+  if (spillFsStats_) {
+    const auto fsStatsMap = spillFsStats_->stats();
+    for (const auto& [statName, statValue] : fsStatsMap) {
+      lockedStats->addRuntimeStat(
+          statName, RuntimeCounter(statValue.sum, statValue.unit));
+    }
+  }
 }
 
 std::string Operator::toString() const {

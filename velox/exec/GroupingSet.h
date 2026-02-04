@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/TreeOfLosers.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/AggregateInfo.h"
 #include "velox/exec/AggregationMasks.h"
 #include "velox/exec/DistinctAggregations.h"
@@ -45,7 +46,8 @@ class GroupingSet {
       tsan_atomic<bool>* nonReclaimableSection,
       const core::QueryConfig* queryConfig,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<common::SpillStats>* spillStats,
+      filesystems::File::IoStats* spillFsStats);
 
   ~GroupingSet();
 
@@ -289,42 +291,42 @@ class GroupingSet {
   // 'toIntermediate'.
   std::vector<Accumulator> accumulators(bool excludeToIntermediate);
 
-  std::vector<column_index_t> keyChannels_;
-
   // A subset of grouping keys on which the input is clustered.
   const std::vector<column_index_t> preGroupedKeyChannels_;
 
+  const bool isGlobal_;
+  const bool isPartial_;
+  const bool isRawInput_;
+  const bool ignoreNullKeys_;
+  const bool isAdaptive_;
+  // List of global grouping set numbers, if being used with a GROUPING SET.
+  const std::vector<vector_size_t> globalGroupingSets_;
+  // Indicates if this grouping set and the associated hash aggregation operator
+  // is under non-reclaimable execution section or not.
+  tsan_atomic<bool>* const nonReclaimableSection_;
+
+  const common::SpillConfig* const spillConfig_;
+  const core::QueryConfig* const queryConfig_;
+  memory::MemoryPool* const pool_;
+  folly::Synchronized<common::SpillStats>* const spillStats_;
+  filesystems::File::IoStats* const spillFsStats_{nullptr};
+
+  std::vector<column_index_t> keyChannels_;
   // Provides the column projections for extracting the grouping keys from
   // 'table_' for output. The vector index is the output channel and the value
   // is the corresponding column index stored in 'table_'.
   std::vector<column_index_t> groupingKeyOutputProjections_;
-
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
-  const bool isGlobal_;
-  const bool isPartial_;
-  const bool isRawInput_;
-  const core::QueryConfig* const queryConfig_;
-  memory::MemoryPool* const pool_;
 
   std::vector<AggregateInfo> aggregates_;
   AggregationMasks masks_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;
   std::vector<std::unique_ptr<DistinctAggregations>> distinctAggregations_;
 
-  const bool ignoreNullKeys_;
-
   uint64_t numInputRows_ = 0;
 
-  // List of global grouping set numbers, if being used with a GROUPING SET.
-  const std::vector<vector_size_t> globalGroupingSets_;
   // Column for groupId for a GROUPING SET.
   std::optional<column_index_t> groupIdChannel_;
-
-  const common::SpillConfig* const spillConfig_;
-
-  // Indicates if this grouping set and the associated hash aggregation operator
-  // is under non-reclaimable execution section or not.
-  tsan_atomic<bool>* const nonReclaimableSection_;
 
   // Boolean indicating whether accumulators for a global aggregation (i.e.
   // aggregation with no grouping keys) have been initialized.
@@ -342,7 +344,6 @@ class GroupingSet {
   // aggregation
   HashStringAllocator stringAllocator_;
   memory::AllocationPool rows_;
-  const bool isAdaptive_;
 
   bool noMoreInput_{false};
 
@@ -413,8 +414,6 @@ class GroupingSet {
   // Temporary for case where an aggregate in toIntermediate() outputs post-init
   // state of aggregate for all rows.
   std::vector<char*> firstGroup_;
-
-  folly::Synchronized<common::SpillStats>* const spillStats_;
 };
 
 class AggregationInputSpiller : public SpillerBase {
@@ -427,7 +426,8 @@ class AggregationInputSpiller : public SpillerBase {
       const HashBitRange& hashBitRange,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<common::SpillStats>* spillStats,
+      filesystems::File::IoStats* spillFsStats);
 
   void spill();
 
@@ -449,7 +449,8 @@ class AggregationOutputSpiller : public SpillerBase {
       RowContainer* container,
       RowTypePtr rowType,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<common::SpillStats>* spillStats,
+      filesystems::File::IoStats* spillFsStats);
 
   void spill(const RowContainerIterator& startRowIter);
 
