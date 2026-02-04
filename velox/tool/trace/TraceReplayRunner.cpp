@@ -107,6 +107,12 @@ DEFINE_uint64(
     0,
     "Specify the query memory capacity limit in GB. If it is zero, then there is no limit.");
 DEFINE_bool(copy_results, false, "Copy the replaying results.");
+DEFINE_bool(
+    cursor_copy_result,
+    false,
+    "Enable per-batch copying in TaskCursor. When false (default), avoids "
+    "expensive deep copies of complex nested types during output consumption. "
+    "Only enable for debugging or when output vectors need to be retained.");
 DEFINE_string(
     function_prefix,
     "",
@@ -488,6 +494,6 @@ void TraceReplayRunner::run() {
     return;
   }
   VELOX_USER_CHECK(!FLAGS_task_id.empty(), "--task_id must be provided");
-  createReplayer()->run(FLAGS_copy_results);
+  createReplayer()->run(FLAGS_copy_results, FLAGS_cursor_copy_result);
 }
 } // namespace facebook::velox::tool::trace

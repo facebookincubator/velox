@@ -29,10 +29,11 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::tool::trace {
 
-RowVectorPtr TableScanReplayer::run(bool copyResults) {
+RowVectorPtr TableScanReplayer::run(bool copyResults, bool cursorCopyResult) {
   TraceReplayTaskRunner traceTaskRunner(createPlan(), createQueryCtx());
   auto [task, result] = traceTaskRunner.maxDrivers(driverIds_.size())
                             .splits(replayPlanNodeId_, getSplits())
+                            .cursorCopyResult(cursorCopyResult)
                             .run(copyResults);
   printStats(task);
   return result;
