@@ -1011,4 +1011,39 @@ TEST_F(BinaryFunctionsTest, fromBase32) {
       fromBase32("NBSWY3DPEB3W64"), "Invalid input length 14");
 }
 
+TEST_F(BinaryFunctionsTest, toBase32) {
+  const auto toBase32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("to_base32(cast(c0 as varbinary))", value);
+  };
+
+  // Null handling.
+  EXPECT_EQ(std::nullopt, toBase32(std::nullopt));
+
+  // Empty input.
+  EXPECT_EQ("", toBase32(""));
+
+  // Basic encoding tests covering all trailing-byte counts (1-5 bytes).
+  EXPECT_EQ("ME======", toBase32("a"));
+  EXPECT_EQ("MFRA====", toBase32("ab"));
+  EXPECT_EQ("MFRGG===", toBase32("abc"));
+  EXPECT_EQ("MFRGGZA=", toBase32("abcd"));
+  EXPECT_EQ("MFRGGZDF", toBase32("abcde"));
+
+  // Longer strings.
+  EXPECT_EQ("NBSWY3DPEB3W64TMMQ======", toBase32("hello world"));
+  EXPECT_EQ("GEZDGNA=", toBase32("1234"));
+  EXPECT_EQ("NZXQ====", toBase32("no"));
+  EXPECT_EQ("O5SQ====", toBase32("we"));
+  EXPECT_EQ("MRRDE===", toBase32("db2"));
+  EXPECT_EQ("MNQWWZI=", toBase32("cake"));
+  EXPECT_EQ("NNSWK3Q=", toBase32("keen"));
+
+  // Round-trip test: decode(encode(x)) == x.
+  const auto fromBase32 = [&](const std::optional<std::string>& value) {
+    return evaluateOnce<std::string>("from_base32(c0)", VARCHAR(), value);
+  };
+  auto encoded = toBase32("hello world");
+  EXPECT_EQ("hello world", fromBase32(encoded));
+}
+
 } // namespace
