@@ -103,14 +103,9 @@ struct ToPrettyStringVarbinaryFunction {
         auto end =
             fmt::format_to(pos, "{:02X}", static_cast<int>(input->data()[i]));
         int count = end - pos;
-        if (count != 2) {
-          // Malformed input
-          VELOX_USER_FAIL(
-              "to_pretty_string(VARBINARY): failed to format byte at index {} (value: {}). Expected 2 chars, got {}.",
+        VELOX_USER_RETURN_NE(count, 2, "to_pretty_string(VARBINARY): failed to format byte at index {} (value: {}).",
               i,
-              static_cast<int>(input->data()[i]),
-              count);
-        }
+              static_cast<int>(input->data()[i]));
 
         pos += 2;
         *pos++ = ' ';
@@ -154,7 +149,7 @@ struct ToPrettyStringTimestampFunction {
             Timestamp::tsToStringView(inputValue, options_, result.data());
         result.resize(stringView.size());
       } catch (const std::exception& e) {
-        VELOX_USER_FAIL("Invalid timestamp in to_pretty_string: {}", e.what());
+        return Status::Invalid("Invalid timestamp in to_pretty_string: {}", e.what());
       }
     } else {
       result.setNoCopy(detail::kNull);
