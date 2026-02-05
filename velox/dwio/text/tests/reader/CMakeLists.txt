@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_text_reader_test TextReaderTest.cpp)
+add_executable(velox_text_reader_test TextReaderTest.cpp
+)
 
 add_test(
   NAME velox_text_reader_test
@@ -23,3 +24,14 @@ add_test(
 target_link_libraries(velox_text_reader_test velox_dwio_text_reader_register ${TEST_LINK_LIBS})
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+add_executable(velox_text_reader_benchmark TextReaderBenchmark.cpp)
+
+target_link_libraries(
+        velox_text_reader_benchmark
+        velox_dwio_text_reader_register
+        velox_file
+        velox_memory
+        Folly::folly
+        Folly::follybenchmark
+)
