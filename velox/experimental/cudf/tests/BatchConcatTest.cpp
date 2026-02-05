@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -52,39 +68,8 @@ class CudfBatchConcatTest : public OperatorTestBase {
   }
 };
 
-// Tests that concat works when input batches are smaller than the target
-// batch size.
-TEST_F(CudfBatchConcatTest, lesserThanTargetRowsPassesAtEnd) {
-  int32_t minTarget = 100;
-  updateCudfConfig(minTarget, std::nullopt);
-
-  auto data = makeRowVector({makeFlatSequence<int64_t>(0, 50)});
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  auto plan =
-      PlanBuilder(generator)
-          .values({data})
-          .addNode([&](auto id, auto source) {
-            return std::make_shared<core::CudfBatchConcatNode>(id, source);
-          })
-          .planNode();
-
-  exec::CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = 1;
-  auto [cursor, batches] = exec::test::readCursor(
-      params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
-
-  ASSERT_EQ(batches.size(), 1);
-  ASSERT_EQ(batches[0]->size(), 50);
-}
-
-// Tests that concat works when input batches sum to more than the target
-// and the output is drained in pieces.
-TEST_F(CudfBatchConcatTest, fragmentationAndDraining) {
-  int32_t minTarget = 30;
-  int32_t maxBatch = 20;
-  updateCudfConfig(minTarget, maxBatch);
+TEST_F(CudfBatchConcatTest, fragmentedInputGetsConcatenated) {
+  updateCudfConfig(/*min=*/30, /*max=*/20);
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
@@ -92,15 +77,17 @@ TEST_F(CudfBatchConcatTest, fragmentationAndDraining) {
   }
 
   auto generator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto sourcePlan = createFragmentedPlan(vectors, generator);
 
-  // Correct argument order: (sourcePlan, generator)
-  auto plan =
-      PlanBuilder(sourcePlan, generator)
-          .addNode([&](auto id, auto source) {
-            return std::make_shared<core::CudfBatchConcatNode>(id, source);
-          })
-          .planNode();
+  std::vector<core::PlanNodePtr> sources;
+  for (const auto& vec : vectors) {
+    sources.push_back(PlanBuilder(generator).values({vec}).planNode());
+  }
+
+  auto plan = PlanBuilder(generator)
+                  .localPartitionRoundRobin(sources)
+                  .limit(0, 100, false)
+                  .filter("c0 >= 0") // forces FilterProject
+                  .planNode();
 
   exec::CursorParameters params;
   params.planNode = plan;
@@ -108,18 +95,16 @@ TEST_F(CudfBatchConcatTest, fragmentationAndDraining) {
   auto [cursor, batches] = exec::test::readCursor(
       params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
 
+  // correctness
   ASSERT_EQ(batches.size(), 3);
-  for (const auto& b : batches) {
-    ASSERT_EQ(b->size(), 20);
-  }
+
+  ASSERT_EQ(batches[0]->size(), 20);
+  ASSERT_EQ(batches[1]->size(), 20);
+  ASSERT_EQ(batches[2]->size(), 20);
 }
 
-// Tests if the last fragmented batch smaller than targetRows_ is
-// rebuffered and concatenated with upcoming rows correctly.
-TEST_F(CudfBatchConcatTest, fragmentationRebuffersSmallTrailingBatch) {
-  int32_t minTarget = 50;
-  int32_t maxBatch = 40;
-  updateCudfConfig(minTarget, maxBatch);
+TEST_F(CudfBatchConcatTest, fragmentedInputDoesNotGetConcatenated) {
+  updateCudfConfig(/*min=*/1e5, 1e7);
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
@@ -127,15 +112,16 @@ TEST_F(CudfBatchConcatTest, fragmentationRebuffersSmallTrailingBatch) {
   }
 
   auto generator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto sourcePlan = createFragmentedPlan(vectors, generator);
 
-  // Correct argument order: (sourcePlan, generator)
-  auto plan =
-      PlanBuilder(sourcePlan, generator)
-          .addNode([&](auto id, auto source) {
-            return std::make_shared<core::CudfBatchConcatNode>(id, source);
-          })
-          .planNode();
+  std::vector<core::PlanNodePtr> sources;
+  for (const auto& vec : vectors) {
+    sources.push_back(PlanBuilder(generator).values({vec}).planNode());
+  }
+
+  auto plan = PlanBuilder(generator)
+                  .localPartitionRoundRobin(sources)
+                  .filter("c0 >= 0") // forces FilterProject
+                  .planNode();
 
   exec::CursorParameters params;
   params.planNode = plan;
@@ -143,7 +129,6 @@ TEST_F(CudfBatchConcatTest, fragmentationRebuffersSmallTrailingBatch) {
   auto [cursor, batches] = exec::test::readCursor(
       params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
 
-  ASSERT_EQ(batches.size(), 2);
-  ASSERT_EQ(batches[0]->size(), 40);
-  ASSERT_EQ(batches[1]->size(), 20);
+  // correctness
+  ASSERT_EQ(batches.size(), 6);
 }

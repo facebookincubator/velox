@@ -227,31 +227,34 @@ bool CompileState::compile(bool allowCpuFallback) {
       isSupportedGpuOperator);
 
   // Operators which break batch continuity and need concat before next operator
+  // LocalPartition is not included since it is meant to break batches.
   auto breaksBatchContinuity = [](const exec::Operator* op) {
     return isAnyOf<
-        exec::LocalPartition,
         exec::HashProbe,
         exec::HashBuild,
         exec::HashAggregation,
         exec::StreamingAggregation,
         exec::Limit,
         exec::OrderBy,
-        exec::TopN,
-        CudfOperator>(op);
+        exec::TopN>(op);
   };
 
   // Operators which are stateless and thus concat can safely be inserted before
-  auto isStatelessOperator = [](const exec::Operator* op) {
-    return isAnyOf<exec::FilterProject>(op);
+  auto NoOperatorBuffering = [](const exec::Operator* op) {
+    return isAnyOf<
+        exec::FilterProject,
+        exec::HashProbe,
+        exec::HashAggregation,
+        exec::StreamingAggregation>(op);
   };
 
   // Determines if concat is needed before an operator
-  auto needsConcat = [breaksBatchContinuity, isStatelessOperator](
+  auto needsConcat = [breaksBatchContinuity, NoOperatorBuffering](
                          const exec::Operator* currentOp,
                          const exec::Operator* nextOp) {
     // Add concat if current breaks batch and next is stateless
     return currentOp != nullptr && nextOp != nullptr &&
-        breaksBatchContinuity(currentOp) && isStatelessOperator(nextOp);
+        breaksBatchContinuity(currentOp) && NoOperatorBuffering(nextOp);
   };
 
   auto acceptsGpuInput = [isFilterProjectSupported,
@@ -553,8 +556,6 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  exec::Operator::registerOperator(
-      std::make_unique<CudfBatchConcatTranslator>());
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);

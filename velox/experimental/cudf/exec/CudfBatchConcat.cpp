@@ -1,19 +1,24 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_velox {
-
-std::unique_ptr<exec::Operator> CudfBatchConcatTranslator::toOperator(
-    exec::DriverCtx* ctx,
-    int32_t id,
-    const core::PlanNodePtr& node) {
-  if (auto batchConcatNode =
-          std::dynamic_pointer_cast<const core::CudfBatchConcatNode>(node)) {
-    return std::make_unique<CudfBatchConcat>(id, ctx, batchConcatNode);
-  }
-  return nullptr;
-}
 
 CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
@@ -39,6 +44,7 @@ void CudfBatchConcat::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfBatchConcat::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   // Drain the queue if there is any output to be flushed
   if (!outputQueue_.empty()) {
     auto table = std::move(outputQueue_.front());
@@ -58,20 +64,22 @@ RowVectorPtr CudfBatchConcat::getOutput() {
     buffer_.clear();
     currentNumRows_ = 0;
 
-    for (size_t i = 0; i < tables.size(); ++i) {
-      bool isLast = (i == tables.size() - 1);
-      auto rowCount = tables[i]->num_rows();
+    for (auto it = tables.begin(); it + 1 != tables.end(); ++it) {
+      outputQueue_.push(std::move(*it));
+    }
 
-      // Do not push the last batch into the queue if it is smaller than
-      // targetRows_ But push it if it is the final batch
-      if (isLast && !noMoreInput_ && rowCount < targetRows_) {
-        currentNumRows_ = rowCount;
-        buffer_.push_back(
-            std::make_shared<CudfVector>(
-                pool(), outputType_, rowCount, std::move(tables[i]), stream));
-      } else {
-        outputQueue_.push(std::move(tables[i]));
-      }
+    // If last table is a smaller batch and we still expect more input and keep
+    // it in buffer.
+    auto& last = tables.back();
+    auto rowCount = last->num_rows();
+
+    if (!noMoreInput_ && rowCount < targetRows_) {
+      currentNumRows_ = rowCount;
+      buffer_.push_back(
+          std::make_shared<CudfVector>(
+              pool(), outputType_, rowCount, std::move(last), stream));
+    } else {
+      outputQueue_.push(std::move(last));
     }
 
     // Return the first batch from the new queue
