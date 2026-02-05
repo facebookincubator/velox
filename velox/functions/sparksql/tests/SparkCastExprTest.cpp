@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
@@ -465,6 +466,94 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
     testCast<std::string, bool>("boolean", {"on"}, {std::nullopt});
     testCast<std::string, bool>("boolean", {"off"}, {std::nullopt});
   }
+}
+
+TEST_F(SparkCastExprTest, stringToBoolean) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Test common valid cases for both ANSI modes.
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    // Valid strings for true (case-insensitive): t, true, y, yes, 1.
+    testCast<std::string, bool>(
+        "boolean",
+        {"t", "T", "true", "TRUE", "TrUe", "y", "Y", "yes", "YES", "YeS", "1"},
+        {true, true, true, true, true, true, true, true, true, true, true});
+
+    // Valid strings for false (case-insensitive): f, false, n, no, 0.
+    testCast<std::string, bool>(
+        "boolean",
+        {"f", "F", "false", "FALSE", "FaLsE", "n", "N", "no", "NO", "nO", "0"},
+        {false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false});
+
+    // Whitespace should be trimmed.
+    testCast<std::string, bool>(
+        "boolean",
+        {" true", "false ", " 1 ", "  yes  ", "  no  "},
+        {true, false, true, true, false});
+
+    // NULL values should remain NULL.
+    testCast<std::string, bool>(
+        "boolean",
+        {"true", std::nullopt, "false", std::nullopt},
+        {true, std::nullopt, false, std::nullopt});
+  }
+
+  // Test invalid strings with ANSI off - should return NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  testCast<std::string, bool>(
+      "boolean",
+      {"invalid", "tru", "2", "-1", "on", "off", "nan", "", " "},
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+
+  testCast<std::string, bool>(
+      "boolean",
+      {"true", "invalid", "false", std::nullopt, "1", "2", "0"},
+      {true, std::nullopt, false, std::nullopt, true, std::nullopt, false});
+
+  // Test invalid strings with ANSI on - should throw.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(evaluate("cast(c0 as boolean)", input), "Cannot cast");
+  };
+
+  testInvalidString("invalid");
+  testInvalidString("tru");
+  testInvalidString("2");
+  testInvalidString("-1");
+  testInvalidString("on");
+  testInvalidString("off");
+  testInvalidString("");
+  testInvalidString(" ");
+  testInvalidString("nan");
 }
 
 TEST_F(SparkCastExprTest, primitiveValidCornerCases) {

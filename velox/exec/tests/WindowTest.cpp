@@ -893,7 +893,8 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
         spillEnabled ? &spillConfig : nullptr,
         &nonReclaimableSection_,
         &opStats,
-        &spillStats);
+        &spillStats,
+        nullptr);
 
     TestScopedSpillInjection scopedSpillInjection(0);
     const auto data = usePrefixSort ? prefixSortData : nonPrefixSortData;

@@ -59,7 +59,8 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
   /// write to file. 'fileOptions' specifies the file layout on remote storage
   /// which is storage system specific. 'pool' is used for buffering and
   /// constructing the result data read from 'this'. 'stats' is used to collect
-  /// the spill write stats.
+  /// the spill write stats. 'fsStats' is used to collect filesystem
+  /// internal stats.
   ///
   /// When writing sorted spill runs, the caller is responsible for buffering
   /// and sorting the data. write is called multiple times, followed by flush().
@@ -73,7 +74,8 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
       const std::string& fileCreateConfig,
       const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats);
+      folly::Synchronized<common::SpillStats>* stats,
+      filesystems::File::IoStats* fsStats);
 
   /// Finishes this file writer and returns the written spill files info.
   ///
@@ -123,7 +125,8 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
       const SpillFileInfo& fileInfo,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats);
+      folly::Synchronized<common::SpillStats>* stats,
+      filesystems::File::IoStats* fsStats = nullptr);
 
   uint32_t id() const {
     return id_;
@@ -152,7 +155,8 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
       const std::vector<SpillSortKey>& sortingKeys,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats);
+      folly::Synchronized<common::SpillStats>* stats,
+      filesystems::File::IoStats* fsStats);
 
   // Records spill read stats at the end of read input.
   void updateFinalStats() override;

@@ -30,8 +30,8 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/type/parser/TypeParser.h"
 
 using namespace facebook::velox::runner;
 
@@ -64,7 +64,7 @@ RowTypePtr parseBatchRowType(Batch batch) {
     std::replace(parsedTypeString.begin(), parsedTypeString.end(), '<', '(');
     std::replace(parsedTypeString.begin(), parsedTypeString.end(), '>', ')');
     std::replace(parsedTypeString.begin(), parsedTypeString.end(), ':', ' ');
-    types.push_back(parseType(parsedTypeString));
+    types.push_back(functions::prestosql::parseType(parsedTypeString));
   }
 
   return ROW(std::move(names), std::move(types));

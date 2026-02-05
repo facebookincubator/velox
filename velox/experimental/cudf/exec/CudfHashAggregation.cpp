@@ -663,7 +663,7 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     return std::make_unique<ApproxDistinctAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
   } else {
-    VELOX_NYI("Aggregation not yet supported");
+    VELOX_NYI("Aggregation not yet supported, kind: {}", kind);
   }
 }
 

@@ -333,7 +333,8 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       HashBitRange(
           startPartitionBit, startPartitionBit + config->numPartitionBits),
       config,
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
   spillInputIndicesBuffers_.resize(numPartitions);
@@ -1379,7 +1380,8 @@ HashBuildSpiller::HashBuildSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* spillFsStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -1389,7 +1391,8 @@ HashBuildSpiller::HashBuildSpiller(
           spillConfig->maxSpillRunRows,
           parentId,
           spillConfig,
-          spillStats),
+          spillStats,
+          spillFsStats),
       spillProbeFlag_(needRightSideJoin(joinType)) {
   VELOX_CHECK(container_->accumulators().empty());
 }
