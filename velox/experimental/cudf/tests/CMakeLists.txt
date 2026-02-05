@@ -367,13 +367,13 @@ target_link_libraries(
 
 target_link_libraries(
   velox_cudf_batch_concat_test
-  velox_cudf_exec
   velox_exec
   velox_exec_test_lib
   velox_test_util
   gtest
   gtest_main
   fmt::fmt
+  velox_cudf_exec
 )
 
 add_subdirectory(utils)
