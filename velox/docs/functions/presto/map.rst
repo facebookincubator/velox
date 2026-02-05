@@ -228,6 +228,29 @@ Map Functions
         SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- ['c', 'b']
         SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 0) --- []
 
+.. function:: map_top_n_keys(map(K,V), n, function(K,V,U)) -> array(K)
+
+    Returns the top N keys of the map sorted by the transform function in descending order.
+    The lambda function is applied to each (key, value) pair and produces an orderable value of type U.
+    Keys are then sorted based on these transformed values, and the top N keys are returned.
+    U must be an orderable type. ``n`` must be a non-negative BIGINT value. ::
+
+        SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> k); -- [3, 2]
+        SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> v); -- [3, 2]
+        SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> -k); -- [1, 2]
+
+    .. note::
+
+        Due to a signature mismatch between the Java and C++ implementations, certain queries
+        with lambda functions may fail when using Presto Java without sidecar mode enabled.
+        For example, the following query will fail in Presto Java::
+
+            SELECT map_top_n_keys(MAP(ARRAY['cat', 'leopard', 'mouse'], ARRAY[1, 2, 3]), 2, (k, v) -> length(k));
+            -- Error: Unexpected parameters for function map_top_n_keys
+
+        This query works correctly in Velox (C++) but requires sidecar mode to be enabled
+        when running through Presto Java to delegate execution to the Velox engine.
+
 .. function:: map_top_n_values(map(K,V), n) -> array(V)
 
     Returns top N values from a map, by sorting its values in descending order. Both keys and values should be orderable.
