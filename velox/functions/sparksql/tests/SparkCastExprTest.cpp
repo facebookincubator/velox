@@ -1021,5 +1021,105 @@ TEST_F(SparkCastExprTest, recursiveTryCast) {
       }));
 }
 
+TEST_F(SparkCastExprTest, stringToIntegerAnsi) {
+  // Use scope guard to ensure ANSI mode is reset even if test fails.
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Test with ANSI mode disabled (default) - allows decimals, returns NULL on
+  // error.
+  {
+    // Valid integers.
+    testCast<std::string, int64_t>(
+        "bigint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+    testCast<std::string, int32_t>(
+        "integer", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+    testCast<std::string, int16_t>(
+        "smallint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+    testCast<std::string, int8_t>(
+        "tinyint", {"12", "-45", "+78", "  99  "}, {12, -45, 78, 99});
+
+    // Decimals - should truncate with ANSI OFF.
+    testCast<std::string, int64_t>(
+        "bigint", {"123.45", "-456.78", "789.99"}, {123, -456, 789});
+    testCast<std::string, int32_t>(
+        "integer", {"123.45", "-456.78", "789.99"}, {123, -456, 789});
+
+    // Invalid strings - should return NULL with ANSI OFF.
+    testCast<std::string, int64_t>(
+        "bigint",
+        {"abc", "", "12a34", "+", "-", "  "},
+        {std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt});
+
+    // Overflow - should return NULL with ANSI OFF.
+    testCast<std::string, int8_t>(
+        "tinyint",
+        {"128", "-129", "1000"},
+        {std::nullopt, std::nullopt, std::nullopt});
+    testCast<std::string, int16_t>(
+        "smallint", {"32768", "-32769"}, {std::nullopt, std::nullopt});
+  }
+
+  // Test with ANSI mode enabled - no decimals allowed, throws on error.
+  {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSparkAnsiEnabled, "true"},
+    });
+
+    // Valid integers - should work.
+    testCast<std::string, int64_t>(
+        "bigint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+    testCast<std::string, int32_t>(
+        "integer", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+    testCast<std::string, int16_t>(
+        "smallint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+    testCast<std::string, int8_t>(
+        "tinyint", {"12", "-45", "+78", "  99  "}, {12, -45, 78, 99});
+
+    // Decimals - should throw with ANSI ON.
+    auto testDecimalThrows =
+        [this](const std::string& type, const std::string& value) {
+          auto input = makeRowVector({makeFlatVector<std::string>({value})});
+          VELOX_ASSERT_THROW(
+              (evaluate(fmt::format("cast(c0 as {})", type), input)),
+              "Cannot cast");
+        };
+
+    testDecimalThrows("bigint", "123.45");
+    testDecimalThrows("integer", "456.78");
+    testDecimalThrows("smallint", "78.9");
+    testDecimalThrows("tinyint", "12.3");
+
+    // Invalid strings - should throw with ANSI ON.
+    auto testInvalidThrows =
+        [this](const std::string& type, const std::string& value) {
+          auto input = makeRowVector({makeFlatVector<std::string>({value})});
+          VELOX_ASSERT_THROW(
+              (evaluate(fmt::format("cast(c0 as {})", type), input)), "");
+        };
+
+    testInvalidThrows("bigint", "abc");
+    testInvalidThrows("integer", "");
+    testInvalidThrows("smallint", "12a34");
+    testInvalidThrows("tinyint", "+");
+    testInvalidThrows("bigint", "-");
+
+    // Overflow - should throw with ANSI ON.
+    testInvalidThrows("tinyint", "128");
+    testInvalidThrows("tinyint", "-129");
+    testInvalidThrows("smallint", "32768");
+    testInvalidThrows("smallint", "-32769");
+    testInvalidThrows("integer", "2147483648");
+    testInvalidThrows("integer", "-2147483649");
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::test
