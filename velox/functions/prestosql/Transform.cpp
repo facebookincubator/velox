@@ -16,25 +16,17 @@
 #include "velox/functions/lib/TransformFunctionBase.h"
 
 namespace facebook::velox::functions {
-namespace {
-
-// See documentation at https://prestodb.io/docs/current/functions/array.html
-class TransformFunction : public TransformFunctionBase {
-  // Inherits apply() and signatures() from base class.
-  // No additional lambda arguments needed for Presto.
-};
-
-} // namespace
 
 /// transform is null preserving for the array. But since an
 /// expr tree with a lambda depends on all named fields, including
 /// captures, a null in a capture does not automatically make a
 /// null result.
 
+// See documentation at https://prestodb.io/docs/current/functions/array.html
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_transform,
-    TransformFunction::signatures(),
+    TransformFunctionBase::signatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-    std::make_unique<TransformFunction>());
+    std::make_unique<TransformFunctionBase>());
 
 } // namespace facebook::velox::functions

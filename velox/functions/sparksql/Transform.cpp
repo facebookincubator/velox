@@ -44,8 +44,8 @@ class TransformFunction : public TransformFunctionBase {
     return sigs;
   }
 
- protected:
-  /// Adds index vector to lambda arguments if the lambda expects it.
+ private:
+  // Adds index vector to lambda arguments if the lambda expects it.
   void addIndexVector(
       const std::vector<VectorPtr>& args,
       const ArrayVectorPtr& flatArray,
@@ -61,11 +61,10 @@ class TransformFunction : public TransformFunctionBase {
     }
   }
 
- private:
-  /// Creates an index vector where each element contains its position within
-  /// its respective array. For example, if we have arrays [a, b] and [c, d, e],
-  /// the index vector will be [0, 1, 0, 1, 2].
-  /// Spark uses IntegerType (32-bit) for the index.
+  // Creates an index vector where each element contains its position within
+  // its respective array. For example, if we have arrays [a, b] and [c, d, e],
+  // the index vector will be [0, 1, 0, 1, 2].
+  // Spark uses IntegerType (32-bit) for the index.
   static VectorPtr createIndexVector(
       const ArrayVectorPtr& flatArray,
       vector_size_t numElements,
