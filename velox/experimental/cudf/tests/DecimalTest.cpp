@@ -789,24 +789,24 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCast) {
   runAndAssert(false);
 }
 
-TEST_F(CudfDecimalTest, decimalMultiplyRealCast) {
+TEST_F(CudfDecimalTest, decimalMultiplyDoubleCastRight) {
   auto rowType = ROW({
       {"d", DECIMAL(10, 2)},
-      {"x", REAL()},
+      {"x", DOUBLE()},
   });
 
   auto input = makeRowVector(
       {"d", "x"},
       {
           makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)),
-          makeFlatVector<float>({2.0f, -4.0f, 0.0f}),
+          makeFlatVector<double>({2.0, -4.0, 0.0}),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
 
   auto expected = makeRowVector(
       {"prod"},
-      {makeFlatVector<float>({2.5f, 10.0f, 0.0f})});
+      {makeFlatVector<double>({2.5, 10.0, 0.0})});
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -814,7 +814,7 @@ TEST_F(CudfDecimalTest, decimalMultiplyRealCast) {
     }
   auto plan = exec::test::PlanBuilder()
                     .values(vectors)
-                    .project({"cast(d as real) * x AS prod"})
+                    .project({"x * cast(d as double) AS prod"})
                     .planNode();
     auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
                       .copyResults(pool());
