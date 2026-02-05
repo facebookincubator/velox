@@ -711,6 +711,95 @@ TEST_F(CudfDecimalTest, decimalCompareWithLiteral) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfDecimalTest, decimalLogicalAndOrProject) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {100, 200, 300, 400, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>(
+              {250, 150, 350, 100, 500}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "(a > CAST('1.00' AS DECIMAL(10, 2)) "
+                      "AND b < CAST('2.00' AS DECIMAL(10, 2))) AS and2",
+                      "(a > CAST('1.00' AS DECIMAL(10, 2)) "
+                      "AND b < CAST('3.00' AS DECIMAL(10, 2)) "
+                      "AND a < CAST('4.00' AS DECIMAL(10, 2))) AS and3",
+                      "(a < CAST('1.00' AS DECIMAL(10, 2)) "
+                      "OR b > CAST('3.00' AS DECIMAL(10, 2)) "
+                      "OR a = CAST('2.00' AS DECIMAL(10, 2))) AS or3",
+                  })
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT "
+          "(a > CAST('1.00' AS DECIMAL(10, 2)) "
+          " AND b < CAST('2.00' AS DECIMAL(10, 2))) AS and2, "
+          "(a > CAST('1.00' AS DECIMAL(10, 2)) "
+          " AND b < CAST('3.00' AS DECIMAL(10, 2)) "
+          " AND a < CAST('4.00' AS DECIMAL(10, 2))) AS and3, "
+          "(a < CAST('1.00' AS DECIMAL(10, 2)) "
+          " OR b > CAST('3.00' AS DECIMAL(10, 2)) "
+          " OR a = CAST('2.00' AS DECIMAL(10, 2))) AS or3 "
+          "FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalLogicalAndOrFilter) {
+  auto rowType = ROW({
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {100, 200, 300, 400, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>(
+              {250, 150, 350, 100, 500}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  const std::string filter =
+      "((a between CAST('1.50' AS DECIMAL(10, 2)) AND "
+      "CAST('3.50' AS DECIMAL(10, 2)) "
+      "AND b < CAST('3.00' AS DECIMAL(10, 2)) "
+      "AND a > CAST('1.00' AS DECIMAL(10, 2))) "
+      "OR a = CAST('4.00' AS DECIMAL(10, 2)) "
+      "OR a = CAST('5.00' AS DECIMAL(10, 2)))";
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .filter(filter)
+                  .project({"a", "b"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT a, b FROM tmp WHERE "
+          "((a between CAST('1.50' AS DECIMAL(10, 2)) AND "
+          "CAST('3.50' AS DECIMAL(10, 2)) "
+          "AND b < CAST('3.00' AS DECIMAL(10, 2)) "
+          "AND a > CAST('1.00' AS DECIMAL(10, 2))) "
+          "OR a = CAST('4.00' AS DECIMAL(10, 2)) "
+          "OR a = CAST('5.00' AS DECIMAL(10, 2)))");
+}
+
 TEST_F(CudfDecimalTest, decimalBinaryNullPropagation) {
   auto rowType = ROW({
       {"a", DECIMAL(10, 2)},

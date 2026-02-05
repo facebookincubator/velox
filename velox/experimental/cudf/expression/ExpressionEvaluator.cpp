@@ -797,6 +797,85 @@ class UnaryFunction : public CudfFunction {
   const cudf::unary_operator op_;
 };
 
+class LogicalFunction : public CudfFunction {
+ public:
+  LogicalFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::binary_operator op)
+      : op_(op) {
+    VELOX_CHECK_GE(
+        expr->inputs().size(),
+        2,
+        "Logical function expects at least 2 inputs");
+    literals_.reserve(expr->inputs().size());
+    for (const auto& input : expr->inputs()) {
+      auto constExpr =
+          std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input);
+      if (constExpr) {
+        literals_.push_back(
+            VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+                createCudfScalar,
+                constExpr->value()->typeKind(),
+                constExpr->value()));
+      } else {
+        literals_.push_back(nullptr);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    size_t rowCount = 0;
+    if (!inputColumns.empty()) {
+      rowCount = asView(inputColumns[0]).size();
+    }
+    if (rowCount == 0 && inputColumns.empty()) {
+      rowCount = 1;
+    }
+
+    std::vector<std::unique_ptr<cudf::column>> literalColumns;
+    literalColumns.reserve(literals_.size());
+    std::vector<cudf::column_view> operands;
+    operands.reserve(literals_.size());
+
+    size_t columnIndex = 0;
+    for (const auto& literal : literals_) {
+      if (literal) {
+        auto column =
+            cudf::make_column_from_scalar(*literal, rowCount, stream);
+        operands.push_back(column->view());
+        literalColumns.push_back(std::move(column));
+      } else {
+        VELOX_CHECK_LT(columnIndex, inputColumns.size());
+        operands.push_back(asView(inputColumns[columnIndex++]));
+      }
+    }
+
+    VELOX_CHECK(!operands.empty());
+    if (operands.size() == 1) {
+      if (!literalColumns.empty()) {
+        return std::move(literalColumns[0]);
+      }
+      return operands[0];
+    }
+
+    auto result = cudf::binary_operation(
+        operands[0], operands[1], op_, kBoolType, stream, mr);
+    for (size_t i = 2; i < operands.size(); ++i) {
+      result = cudf::binary_operation(
+          result->view(), operands[i], op_, kBoolType, stream, mr);
+    }
+    return result;
+  }
+
+ private:
+  static constexpr cudf::data_type kBoolType{cudf::type_id::BOOL8};
+  const cudf::binary_operator op_;
+  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+};
+
 class BetweenFunction : public CudfFunction {
  public:
   BetweenFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1443,6 +1522,30 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("T")
            .argumentType("T")
            .variableArity("T")
+           .build()});
+
+  registerCudfFunction(
+      "and",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_AND);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .variableArity("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "or",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_OR);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .variableArity("boolean")
            .build()});
 
   registerCudfFunction(
