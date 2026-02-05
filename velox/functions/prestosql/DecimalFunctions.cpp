@@ -289,6 +289,30 @@ struct DecimalFloorFunction {
 };
 
 template <typename TExec>
+struct DecimalCeilFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/) {
+    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+  }
+
+  template <typename R, typename A>
+  void call(R& out, const A& a) {
+    const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
+    // the reverse of floor
+    const auto increment = (a % rescaleFactor) < 0 ? 0 : 1;
+    out = a / rescaleFactor + increment;
+  }
+
+ private:
+  uint8_t scale_;
+};
+
+template <typename TExec>
 struct DecimalTruncateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
@@ -559,6 +583,35 @@ void registerDecimalFloor(const std::string& prefix) {
       DecimalFloorFunction,
       ShortDecimal<P2, S2>,
       ShortDecimal<P1, S1>>({prefix + "floor"}, constraints);
+}
+
+void registerDecimalCeil(const std::string& prefix) {
+  std::vector<exec::SignatureVariable> constraints = {
+      exec::SignatureVariable(
+          P2::name(),
+          fmt::format(
+              "min(38, {p} - {s} + min({s}, 1) + 1)", // @TODO seves 1/28/26 verify the +1
+              fmt::arg("p", P1::name()),
+              fmt::arg("s", S1::name())),
+          exec::ParameterType::kIntegerParameter),
+      exec::SignatureVariable(
+          S2::name(), "0", exec::ParameterType::kIntegerParameter),
+  };
+
+  registerFunction<
+      DecimalCeilFunction,
+      LongDecimal<P2, S2>,
+      LongDecimal<P1, S1>>({prefix + "ceil"}, constraints);
+
+  registerFunction<
+      DecimalCeilFunction,
+      ShortDecimal<P2, S2>,
+      LongDecimal<P1, S1>>({prefix + "ceil"}, constraints);
+
+  registerFunction<
+      DecimalCeilFunction,
+      ShortDecimal<P2, S2>,
+      ShortDecimal<P1, S1>>({prefix + "ceil"}, constraints);
 }
 
 void registerDecimalRound(const std::string& prefix) {
