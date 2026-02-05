@@ -50,6 +50,23 @@
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (!expr) {
+    return false;
+  }
+  if (expr->type() && expr->type()->isDecimal()) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsDecimalType(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
 void CudfHashJoinBridge::setHashTable(
     std::optional<CudfHashJoinBridge::hash_type> hashObject) {
   if (CudfConfig::getInstance().debugEnabled) {
@@ -382,6 +399,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // simplify expression
     exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
     VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+    useAstFilter_ = CudfConfig::getInstance().astExpressionEnabled &&
+        !containsDecimalType(exprs.exprs()[0]);
 
     // We don't need to get tables that contain conditional comparison columns
     // We'll pass the entire table. The ast will handle finding the required
@@ -389,34 +408,36 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // and the column locations in that schema translate to column locations
     // in whole tables
 
-    // create ast tree
-    std::vector<PrecomputeInstruction> rightPrecomputeInstructions;
-    std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
-    static constexpr bool kAllowPureAstOnly = true;
-    if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
-      createAstTree(
-          exprs.exprs()[0],
-          tree_,
-          scalars_,
-          buildType,
-          probeType,
-          rightPrecomputeInstructions,
-          leftPrecomputeInstructions,
-          kAllowPureAstOnly);
-    } else {
-      createAstTree(
-          exprs.exprs()[0],
-          tree_,
-          scalars_,
-          probeType,
-          buildType,
-          leftPrecomputeInstructions,
-          rightPrecomputeInstructions,
-          kAllowPureAstOnly);
-    }
-    if (leftPrecomputeInstructions.size() > 0 ||
-        rightPrecomputeInstructions.size() > 0) {
-      VELOX_NYI("Filters that require precomputation are not yet supported");
+    if (useAstFilter_) {
+      // create ast tree
+      std::vector<PrecomputeInstruction> rightPrecomputeInstructions;
+      std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
+      static constexpr bool kAllowPureAstOnly = true;
+      if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
+        createAstTree(
+            exprs.exprs()[0],
+            tree_,
+            scalars_,
+            buildType,
+            probeType,
+            rightPrecomputeInstructions,
+            leftPrecomputeInstructions,
+            kAllowPureAstOnly);
+      } else {
+        createAstTree(
+            exprs.exprs()[0],
+            tree_,
+            scalars_,
+            probeType,
+            buildType,
+            leftPrecomputeInstructions,
+            rightPrecomputeInstructions,
+            kAllowPureAstOnly);
+      }
+      if (leftPrecomputeInstructions.size() > 0 ||
+          rightPrecomputeInstructions.size() > 0) {
+        VELOX_NYI("Filters that require precomputation are not yet supported");
+      }
     }
   }
 }
@@ -710,13 +731,33 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      cudfOutputs.push_back(filteredOutputIndices(
-          leftTableView,
-          leftIndicesCol,
-          rightTableView,
-          rightIndicesCol,
-          cudf::join_kind::INNER_JOIN,
-          stream));
+      if (useAstFilter_) {
+        cudfOutputs.push_back(filteredOutputIndices(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            cudf::join_kind::INNER_JOIN,
+            stream));
+      } else {
+        auto filterFunc = [stream](
+                              std::vector<std::unique_ptr<cudf::column>>&&
+                                  joinedCols,
+                              cudf::column_view filterColumn) {
+          auto filterTable =
+              std::make_unique<cudf::table>(std::move(joinedCols));
+          auto filteredTable =
+              cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
+          return filteredTable->release();
+        };
+        cudfOutputs.push_back(filteredOutput(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            filterFunc,
+            stream));
+      }
     } else {
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
@@ -761,13 +802,33 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      cudfOutputs.push_back(filteredOutputIndices(
-          leftTableView,
-          leftIndicesCol,
-          rightTableView,
-          rightIndicesCol,
-          cudf::join_kind::LEFT_JOIN,
-          stream));
+      if (useAstFilter_) {
+        cudfOutputs.push_back(filteredOutputIndices(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            cudf::join_kind::LEFT_JOIN,
+            stream));
+      } else {
+        auto filterFunc = [stream](
+                              std::vector<std::unique_ptr<cudf::column>>&&
+                                  joinedCols,
+                              cudf::column_view filterColumn) {
+          auto filterTable =
+              std::make_unique<cudf::table>(std::move(joinedCols));
+          auto filteredTable =
+              cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
+          return filteredTable->release();
+        };
+        cudfOutputs.push_back(filteredOutput(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            filterFunc,
+            stream));
+      }
     } else {
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
@@ -907,6 +968,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
 
     if (joinNode_->filter()) {
+    if (!useAstFilter_) {
+      VELOX_NYI("Join filter requires AST for semi joins");
+    }
       leftJoinIndices = cudf::mixed_left_semi_join(
           leftTableView.select(leftKeyIndices_),
           rightTableView.select(rightKeyIndices_),
@@ -959,6 +1023,9 @@ CudfHashJoinProbe::rightSemiFilterJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightJoinIndices;
   if (joinNode_->filter()) {
+    if (!useAstFilter_) {
+      VELOX_NYI("Join filter requires AST for semi joins");
+    }
     rightJoinIndices = cudf::mixed_left_semi_join(
         rightTableView.select(rightKeyIndices_),
         leftTableView.select(leftKeyIndices_),
@@ -1030,6 +1097,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
   if (joinNode_->filter()) {
+    if (!useAstFilter_) {
+      VELOX_NYI("Join filter requires AST for anti joins");
+    }
     leftJoinIndices = cudf::mixed_left_anti_join(
         leftTableView.select(leftKeyIndices_),
         rightTableView.select(rightKeyIndices_),

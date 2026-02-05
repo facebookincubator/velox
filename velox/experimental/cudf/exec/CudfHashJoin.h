@@ -185,6 +185,7 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   /** @brief Output column positions for right table columns */
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
+  bool useAstFilter_{true};
 
   // Copied from HashProbe.h
   // Indicates whether to skip probe input data processing or not. It only

@@ -825,16 +825,18 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCastRight) {
   runAndAssert(false);
 }
 
-TEST_F(CudfDecimalTest, decimalAstRecursiveDecimalCastToReal) {
+TEST_F(CudfDecimalTest, decimalAstRecursiveMixedScaleAdd) {
   auto rowType = ROW({
-      {"d", DECIMAL(10, 2)},
+      {"a", DECIMAL(10, 2)},
+      {"b", DECIMAL(10, 1)},
       {"x", DOUBLE()},
   });
 
   auto input = makeRowVector(
-      {"d", "x"},
+      {"a", "b", "x"},
       {
-          makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({12345, -2500, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({10, -25, 3}, DECIMAL(10, 1)),
           makeFlatVector<double>({2.0, -4.0, 0.0}),
       });
 
@@ -842,11 +844,11 @@ TEST_F(CudfDecimalTest, decimalAstRecursiveDecimalCastToReal) {
 
   auto expected = makeRowVector(
       {"prod"},
-      {makeFlatVector<double>({2.5, 10.0, 0.0})});
+      {makeFlatVector<double>({126.45, -31.5, 1.3})});
 
   auto plan = exec::test::PlanBuilder()
                   .values(vectors)
-                  .project({"cast(cast(d as real) as double) * x AS prod"})
+                  .project({"cast(a + b as double) + x AS prod"})
                   .planNode();
 
   auto result =
