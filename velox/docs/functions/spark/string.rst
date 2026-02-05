@@ -468,6 +468,8 @@ String Functions
 
     - It prints binary values using the hex format.
 
+    ::
+
         SELECT to_pretty_string(4); -- "4"
         SELECT to_pretty_string(cast("1.0" as float)); -- "1.0"
         SELECT to_pretty_string("spark"); -- "spark"
